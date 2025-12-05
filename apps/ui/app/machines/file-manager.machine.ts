@@ -443,6 +443,8 @@ export const fileManagerMachine = setup({
       fileTree: () => new Map(),
       openFiles: () => new Map(),
       lastWrittenPath: undefined,
+      lastWrittenData: undefined,
+      lastWriteSource: undefined,
       lastOpenedPath: undefined,
       error: undefined,
     }),
@@ -494,6 +496,76 @@ export const fileManagerMachine = setup({
       lastDeletedPath({ event }) {
         assertEvent(event, 'deleteFile');
         return event.path;
+      },
+    }),
+
+    removeDeletedFileFromTree: assign({
+      fileTree({ context }) {
+        const { lastDeletedPath, fileTree } = context;
+
+        if (!lastDeletedPath) {
+          return fileTree;
+        }
+
+        const newTree = new Map(fileTree);
+        newTree.delete(lastDeletedPath);
+        return newTree;
+      },
+    }),
+
+    removeDeletedFileFromOpenFiles: assign({
+      openFiles({ context }) {
+        const { lastDeletedPath, openFiles } = context;
+
+        if (!lastDeletedPath) {
+          return openFiles;
+        }
+
+        if (openFiles.has(lastDeletedPath)) {
+          const newMap = new Map(openFiles);
+          newMap.delete(lastDeletedPath);
+          return newMap;
+        }
+
+        return openFiles;
+      },
+    }),
+
+    removeRenamedOldPathFromTree: assign({
+      fileTree({ context }) {
+        const { lastRenamedOldPath, fileTree } = context;
+
+        if (!lastRenamedOldPath) {
+          return fileTree;
+        }
+
+        const newTree = new Map(fileTree);
+        newTree.delete(lastRenamedOldPath);
+        return newTree;
+      },
+    }),
+
+    updateOpenFilesAfterRename: assign({
+      openFiles({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, openFiles } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return openFiles;
+        }
+
+        // If old path was open, move content to new path
+        if (openFiles.has(lastRenamedOldPath)) {
+          const content = openFiles.get(lastRenamedOldPath);
+          const newMap = new Map(openFiles);
+          newMap.delete(lastRenamedOldPath);
+          if (content) {
+            newMap.set(lastRenamedNewPath, content);
+          }
+
+          return newMap;
+        }
+
+        return openFiles;
       },
     }),
 
@@ -838,7 +910,12 @@ export const fileManagerMachine = setup({
           },
           {
             target: 'ready',
-            actions: ['updateFileTree', 'emitFileRenamed'],
+            actions: [
+              'updateFileTree',
+              'removeRenamedOldPathFromTree',
+              'updateOpenFilesAfterRename',
+              'emitFileRenamed',
+            ],
           },
         ],
       },
@@ -890,7 +967,12 @@ export const fileManagerMachine = setup({
           },
           {
             target: 'ready',
-            actions: ['updateFileTree', 'emitFileDeleted'],
+            actions: [
+              'updateFileTree',
+              'removeDeletedFileFromTree',
+              'removeDeletedFileFromOpenFiles',
+              'emitFileDeleted',
+            ],
           },
         ],
       },
