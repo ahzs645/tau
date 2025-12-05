@@ -15,12 +15,25 @@ type FileEntry = {
   isLoaded: boolean;
 };
 
+/**
+ * The source of the file write.
+ */
+/**
+ * The source of the file write operation.
+ * - 'editor': Write originated from user typing in the Monaco editor
+ * - 'file-tree': Write originated from file tree operations (create file, upload, etc.)
+ * - 'external': Write originated from external source (e.g., chat AI)
+ */
+type FileWriteSource = 'editor' | 'file-tree' | 'external';
+
 type FileManagerContext = {
   worker: Worker | undefined;
   wrappedWorker: Remote<FileWorker> | undefined;
   fileTree: Map<string, FileEntry>;
   error: Error | undefined;
   lastWrittenPath: string | undefined;
+  lastWrittenData: Uint8Array | undefined;
+  lastWriteSource: FileWriteSource | undefined;
   openFiles: Map<string, Uint8Array>;
   lastOpenedPath: string | undefined;
   lastRenamedOldPath: string | undefined;
@@ -259,7 +272,7 @@ type FileManagerEventInternal =
   | { type: 'initialize' }
   | { type: 'setRoot'; path: string }
   | { type: 'loadDirectory'; path: string }
-  | { type: 'writeFile'; path: string; data: Uint8Array }
+  | { type: 'writeFile'; path: string; data: Uint8Array; source: FileWriteSource }
   | { type: 'writeFiles'; files: Record<string, { content: Uint8Array }> }
   | { type: 'readFile'; path: string }
   | { type: 'renameFile'; oldPath: string; newPath: string }
@@ -276,7 +289,7 @@ type FileManagerInput = {
 };
 
 type FileManagerEmitted =
-  | { type: 'fileWritten'; path: string }
+  | { type: 'fileWritten'; path: string; data: Uint8Array; source: FileWriteSource }
   | { type: 'fileRead'; path: string; data: Uint8Array }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
   | { type: 'fileDeleted'; path: string };
@@ -362,6 +375,37 @@ export const fileManagerMachine = setup({
       },
     }),
 
+    setLastWrittenData: assign({
+      lastWrittenData({ event }) {
+        assertEvent(event, 'writeFile');
+        return event.data;
+      },
+      lastWriteSource({ event }) {
+        assertEvent(event, 'writeFile');
+        return event.source;
+      },
+    }),
+
+    updateOpenFileAfterWrite: assign({
+      openFiles({ context }) {
+        const { lastWrittenPath, lastWrittenData, lastWriteSource, openFiles } = context;
+
+        if (!lastWrittenPath || !lastWrittenData) {
+          return openFiles;
+        }
+
+        // For file-tree operations, always add to openFiles (user explicitly created the file)
+        // For other sources (editor, external), only update if already open
+        if (lastWriteSource === 'file-tree' || openFiles.has(lastWrittenPath)) {
+          const newMap = new Map(openFiles);
+          newMap.set(lastWrittenPath, lastWrittenData);
+          return newMap;
+        }
+
+        return openFiles;
+      },
+    }),
+
     addOpenFile: assign({
       openFiles({ context, event }) {
         assertActorDoneEvent(event);
@@ -414,6 +458,8 @@ export const fileManagerMachine = setup({
     emitFileWritten: emit(({ context }) => ({
       type: 'fileWritten' as const,
       path: context.lastWrittenPath ?? '',
+      data: context.lastWrittenData ?? new Uint8Array(),
+      source: context.lastWriteSource ?? 'editor',
     })),
 
     emitFileRead: emit(({ context, event }) => {
@@ -511,6 +557,8 @@ export const fileManagerMachine = setup({
     fileTree: new Map(),
     error: undefined,
     lastWrittenPath: undefined,
+    lastWrittenData: undefined,
+    lastWriteSource: undefined,
     openFiles: new Map(),
     lastOpenedPath: undefined,
     lastRenamedOldPath: undefined,
@@ -601,7 +649,7 @@ export const fileManagerMachine = setup({
     },
 
     writingFile: {
-      entry: ['clearError'],
+      entry: ['clearError', 'setLastWrittenData'],
       invoke: {
         id: 'writeFileActor',
         src: 'writeFileActor',
@@ -648,7 +696,7 @@ export const fileManagerMachine = setup({
           },
           {
             target: 'ready',
-            actions: ['updateFileTree', 'emitFileWritten'],
+            actions: ['updateFileTree', 'updateOpenFileAfterWrite', 'emitFileWritten'],
           },
         ],
       },
@@ -866,4 +914,4 @@ export const fileManagerMachine = setup({
 });
 
 export type FileManagerMachine = typeof fileManagerMachine;
-export type { FileManagerEmitted };
+export type { FileManagerEmitted, FileWriteSource };

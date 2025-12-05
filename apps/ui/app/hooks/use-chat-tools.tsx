@@ -65,7 +65,7 @@ export function useChatTools(): UseChatToolsReturn {
             throw new Error('No result received from file edit service');
           }
 
-          await fileManager.writeFile(resolvedPath, encodeTextFile(result.editedContent));
+          await fileManager.writeFile(resolvedPath, encodeTextFile(result.editedContent), { source: 'external' });
 
           // Wait for CAD processing to complete
           const cadSnapshot = await waitFor(cadActor, (state) => state.value === 'ready' || state.value === 'error');

@@ -493,6 +493,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
           type: 'writeFile',
           path: newFilePath,
           data: encodeTextFile(content),
+          source: 'file-tree',
         });
 
         // Open file in fileExplorer
@@ -532,6 +533,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
         type: 'writeFile',
         path: gitkeepPath,
         data: encodeTextFile(''),
+        source: 'file-tree',
       });
 
       setTimeout(() => {
@@ -615,6 +617,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
             type: 'writeFile',
             path: filePath,
             data: uint8Array,
+            source: 'file-tree',
           });
 
           // Open file in fileExplorer
