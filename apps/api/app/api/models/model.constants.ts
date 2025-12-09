@@ -97,15 +97,15 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         },
       },
     },
-    'claude-4.1-opus': {
-      id: 'anthropic-claude-opus-4.1',
-      name: 'Opus 4.1',
-      slug: 'claude-opus-4.1',
+    'claude-4.5-opus': {
+      id: 'anthropic-claude-opus-4.5',
+      name: 'Opus 4.5',
+      slug: 'claude-opus-4.5',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
       },
-      model: 'claude-opus-4-1-20250805',
+      model: 'claude-opus-4-5-20251101',
       support: {
         toolChoice: false,
       },
@@ -115,10 +115,10 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         contextWindow: 200_000,
         maxTokens: 32_000,
         cost: {
-          inputTokens: 15,
-          outputTokens: 75,
-          cachedReadTokens: 1.5,
-          cachedWriteTokens: 18.75,
+          inputTokens: 5,
+          outputTokens: 25,
+          cachedReadTokens: 0.5,
+          cachedWriteTokens: 6.25,
         },
       },
       configuration: {
