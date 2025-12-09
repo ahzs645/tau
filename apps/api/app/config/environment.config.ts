@@ -17,7 +17,6 @@ const environmentSchema = z.object({
   // Chat & LLMs
   OPENAI_API_KEY: z.string(),
   ANTHROPIC_API_KEY: z.string(),
-  SAMBA_API_KEY: z.string().optional(),
   MORPH_API_KEY: z.string().optional(),
   GOOGLE_VERTEX_AI_CREDENTIALS: jsonCodec(
     z.object({
@@ -35,7 +34,6 @@ const environmentSchema = z.object({
     }),
   ),
   TAVILY_API_KEY: z.string().optional(),
-  CEREBRAS_API_KEY: z.string().optional(),
   LANGSMITH_TRACING: z.string().optional(),
   LANGSMITH_ENDPOINT: z.string().optional(),
   LANGSMITH_PROJECT: z.string().optional(),
