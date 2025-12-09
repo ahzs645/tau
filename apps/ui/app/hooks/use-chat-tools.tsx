@@ -70,9 +70,12 @@ export function useChatTools(): UseChatToolsReturn {
           // Wait for CAD processing to complete
           const cadSnapshot = await waitFor(cadActor, (state) => state.value === 'ready' || state.value === 'error');
 
+          // Get the kernel errors for the edited file from the per-file errors map
+          const kernelErrors = cadSnapshot.context.kernelErrors.get(resolvedPath);
+
           const output: FileEditOutput = {
             codeErrors: cadSnapshot.context.codeErrors,
-            kernelError: cadSnapshot.context.kernelError,
+            kernelErrors,
           };
 
           // Important: Don't await addToolOutput to avoid deadlocks

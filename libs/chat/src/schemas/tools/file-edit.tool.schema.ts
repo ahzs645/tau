@@ -11,23 +11,31 @@ const codeErrorSchema: z.ZodType<CodeError> = z
   })
   .meta({ id: 'CodeError' });
 
+const errorLocationSchema = z.object({
+  fileName: z.string(),
+  startLineNumber: z.number(),
+  startColumn: z.number(),
+  endLineNumber: z.number().optional(),
+  endColumn: z.number().optional(),
+});
+
 const kernelErrorSchema: z.ZodType<KernelError> = z
   .object({
     message: z.string(),
-    startLineNumber: z.number(),
-    startColumn: z.number(),
-    endLineNumber: z.number().optional(),
-    endColumn: z.number().optional(),
-    stack: z.string(),
-    stackFrames: z.array(
+    location: errorLocationSchema.optional(),
+    stack: z.string().optional(),
+    stackFrames: z
+      .array(
       z.object({
-        fileName: z.string(),
-        functionName: z.string(),
-        lineNumber: z.number(),
-        columnNumber: z.number(),
-        source: z.string(),
+          fileName: z.string().optional(),
+          functionName: z.string().optional(),
+          lineNumber: z.number().optional(),
+          columnNumber: z.number().optional(),
+          source: z.string().optional(),
       }),
-    ),
+      )
+      .optional(),
+    type: z.enum(['compilation', 'runtime', 'kernel', 'unknown']).optional(),
   })
   .meta({ id: 'KernelError' });
 
@@ -38,7 +46,7 @@ export const fileEditInputSchema = z.object({
 
 export const fileEditOutputSchema = z.object({
   codeErrors: z.array(codeErrorSchema),
-  kernelError: kernelErrorSchema.optional(),
+  kernelErrors: z.array(kernelErrorSchema).optional(),
 });
 
 export type FileEditInput = z.infer<typeof fileEditInputSchema>;

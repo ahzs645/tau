@@ -9,12 +9,18 @@ export type KernelStackFrame = {
   source?: string;
 };
 
-export type KernelError = {
-  message: string;
+// Location information for errors that can point to a specific code location
+export type ErrorLocation = {
+  fileName: string;
   startLineNumber: number;
   startColumn: number;
   endLineNumber?: number;
   endColumn?: number;
+};
+
+export type KernelError = {
+  message: string;
+  location?: ErrorLocation;
   stack?: string;
   stackFrames?: KernelStackFrame[];
   type?: 'compilation' | 'runtime' | 'kernel' | 'unknown';
@@ -28,7 +34,7 @@ export type KernelSuccessResult<T> = {
 
 export type KernelErrorResult = {
   success: false;
-  error: KernelError;
+  errors: KernelError[];
 };
 
 export type KernelProvider = (typeof kernelProviders)[number];

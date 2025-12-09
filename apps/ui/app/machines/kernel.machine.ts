@@ -49,7 +49,7 @@ const workers = {
 
 const determineWorkerActor = fromPromise<
   | { type: 'workerDetermined'; worker: KernelProvider; parameters: Record<string, unknown>; file: GeometryFile }
-  | { type: 'kernelError'; error: KernelError },
+  | { type: 'kernelError'; errors: KernelError[] },
   { context: KernelContext; event: { file: GeometryFile; parameters: Record<string, unknown> } }
 >(async ({ input }) => {
   const { context, event } = input;
@@ -84,17 +84,18 @@ const determineWorkerActor = fromPromise<
   // No worker found
   return {
     type: 'kernelError',
-    error: {
-      message: `No kernel can handle file: ${event.file.filename}`,
-      startLineNumber: 0,
-      startColumn: 0,
-      type: 'runtime',
-    },
+    errors: [
+      {
+        message: `No kernel can handle file: ${event.file.filename}`,
+        location: { fileName: event.file.filename, startLineNumber: 0, startColumn: 0 },
+        type: 'runtime',
+      },
+    ],
   };
 });
 
 const createWorkersActor = fromPromise<
-  { type: 'kernelInitialized' } | { type: 'kernelError'; error: KernelError },
+  { type: 'kernelInitialized' } | { type: 'kernelError'; errors: KernelError[] },
   { context: KernelContext }
 >(async ({ input }) => {
   const { context } = input;
@@ -125,7 +126,12 @@ const createWorkersActor = fromPromise<
     if (!context.fileManagerRef) {
       return {
         type: 'kernelError',
-        error: { message: 'File manager actor not initialized', startLineNumber: 0, startColumn: 0, type: 'runtime' },
+        errors: [
+          {
+            message: 'File manager actor not initialized',
+            type: 'runtime',
+          },
+        ],
       };
     }
 
@@ -136,7 +142,12 @@ const createWorkersActor = fromPromise<
     if (!wrappedFileManager) {
       return {
         type: 'kernelError',
-        error: { message: 'File manager worker not initialized', startLineNumber: 0, startColumn: 0, type: 'runtime' },
+        errors: [
+          {
+            message: 'File manager worker not initialized',
+            type: 'runtime',
+          },
+        ],
       };
     }
 
@@ -218,12 +229,12 @@ const createWorkersActor = fromPromise<
     const errorMessage = error instanceof Error ? error.message : 'Failed to initialize workers';
     return {
       type: 'kernelError',
-      error: {
-        message: errorMessage,
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'kernel',
-      },
+      errors: [
+        {
+          message: errorMessage,
+          type: 'kernel',
+        },
+      ],
     };
   }
 });
@@ -238,7 +249,7 @@ const parseParametersActor = fromPromise<
     }
   | {
       type: 'kernelError';
-      error: KernelError;
+      errors: KernelError[];
     },
   {
     context: KernelContext;
@@ -253,12 +264,13 @@ const parseParametersActor = fromPromise<
   if (!selectedWorker) {
     return {
       type: 'kernelError',
-      error: {
-        message: 'No worker selected',
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'compilation',
-      },
+      errors: [
+        {
+          message: 'No worker selected',
+          location: { fileName: file.filename, startLineNumber: 0, startColumn: 0 },
+          type: 'compilation',
+        },
+      ],
     };
   }
 
@@ -267,12 +279,13 @@ const parseParametersActor = fromPromise<
   if (!wrappedWorker) {
     return {
       type: 'kernelError',
-      error: {
-        message: `${selectedWorker} worker not initialized`,
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'compilation',
-      },
+      errors: [
+        {
+          message: `${selectedWorker} worker not initialized`,
+          location: { fileName: file.filename, startLineNumber: 0, startColumn: 0 },
+          type: 'compilation',
+        },
+      ],
     };
   }
 
@@ -297,7 +310,7 @@ const parseParametersActor = fromPromise<
     // If extraction fails, return error from the worker
     return {
       type: 'kernelError',
-      error: parametersResult.error,
+      errors: parametersResult.errors,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Error extracting parameters';
@@ -321,7 +334,7 @@ const evaluateCodeActor = fromPromise<
     }
   | {
       type: 'kernelError';
-      error: KernelError;
+      errors: KernelError[];
     },
   {
     context: KernelContext;
@@ -340,12 +353,13 @@ const evaluateCodeActor = fromPromise<
   if (!selectedWorker) {
     return {
       type: 'kernelError',
-      error: {
-        message: 'No worker selected',
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'runtime',
-      },
+      errors: [
+        {
+          message: 'No worker selected',
+          location: { fileName: file.filename, startLineNumber: 0, startColumn: 0 },
+          type: 'runtime',
+        },
+      ],
     };
   }
 
@@ -354,12 +368,13 @@ const evaluateCodeActor = fromPromise<
   if (!wrappedWorker) {
     return {
       type: 'kernelError',
-      error: {
-        message: `${selectedWorker} worker not initialized`,
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'runtime',
-      },
+      errors: [
+        {
+          message: `${selectedWorker} worker not initialized`,
+          location: { fileName: file.filename, startLineNumber: 0, startColumn: 0 },
+          type: 'runtime',
+        },
+      ],
     };
   }
 
@@ -375,12 +390,13 @@ const evaluateCodeActor = fromPromise<
 
   return {
     type: 'kernelError',
-    error: result.error,
+    errors: result.errors,
   };
 });
 
 const exportGeometryActor = fromPromise<
-  { type: 'geometryExported'; blob: Blob; format: ExportFormat } | { type: 'geometryExportFailed'; error: KernelError },
+  | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
+  | { type: 'geometryExportFailed'; errors: KernelError[] },
   { context: KernelContext; event: { format: ExportFormat } }
 >(async ({ input }) => {
   const { context, event } = input;
@@ -391,12 +407,12 @@ const exportGeometryActor = fromPromise<
   if (!selectedWorker) {
     return {
       type: 'geometryExportFailed',
-      error: {
-        message: 'No worker selected',
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'runtime',
-      },
+      errors: [
+        {
+          message: 'No worker selected',
+          type: 'runtime',
+        },
+      ],
     };
   }
 
@@ -405,12 +421,12 @@ const exportGeometryActor = fromPromise<
   if (!wrappedWorker) {
     return {
       type: 'geometryExportFailed',
-      error: {
-        message: `${selectedWorker} worker not initialized`,
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'runtime',
-      },
+      errors: [
+        {
+          message: `${selectedWorker} worker not initialized`,
+          type: 'runtime',
+        },
+      ],
     };
   }
 
@@ -419,12 +435,12 @@ const exportGeometryActor = fromPromise<
     if (!supportedFormats.includes(format)) {
       return {
         type: 'geometryExportFailed',
-        error: {
-          message: `Unsupported export format: ${format}`,
-          startLineNumber: 0,
-          startColumn: 0,
-          type: 'runtime',
-        },
+        errors: [
+          {
+            message: `Unsupported export format: ${format}`,
+            type: 'runtime',
+          },
+        ],
       };
     }
 
@@ -440,29 +456,29 @@ const exportGeometryActor = fromPromise<
 
       return {
         type: 'geometryExportFailed',
-        error: {
-          message: 'No geometry data to export',
-          startLineNumber: 0,
-          startColumn: 0,
-          type: 'runtime',
-        },
+        errors: [
+          {
+            message: 'No geometry data to export',
+            type: 'runtime',
+          },
+        ],
       };
     }
 
     return {
       type: 'geometryExportFailed',
-      error: result.error,
+      errors: result.errors,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to export geometry';
     return {
       type: 'geometryExportFailed',
-      error: {
-        message: errorMessage,
-        startLineNumber: 0,
-        startColumn: 0,
-        type: 'runtime',
-      },
+      errors: [
+        {
+          message: errorMessage,
+          type: 'runtime',
+        },
+      ],
     };
   }
 });

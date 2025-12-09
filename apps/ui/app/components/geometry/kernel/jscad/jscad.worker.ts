@@ -76,9 +76,10 @@ function isModuleWithEntryPoint(module: unknown): module is {
  *
  * @param error - The error to format (Error, string, or unknown)
  * @param fallbackMessage - Message to use if error cannot be parsed
+ * @param fileName - Optional filename for location context
  * @returns KernelErrorResult with formatted error information
  */
-function createJscadKernelError(error: unknown, fallbackMessage: string): KernelErrorResult {
+function createJscadKernelError(error: unknown, fallbackMessage: string, fileName?: string): KernelErrorResult {
   let message = fallbackMessage;
   let stack: string | undefined;
   let kernelStackFrames: KernelStackFrame[] = [];
@@ -113,12 +114,14 @@ function createJscadKernelError(error: unknown, fallbackMessage: string): Kernel
     message = error;
   }
 
+  // Only include location if we have a fileName and meaningful position data
+  const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
+
   const kernelError: KernelError = {
     message,
+    location: hasLocation ? { fileName, startLineNumber, startColumn } : undefined,
     stack,
     stackFrames: kernelStackFrames.length > 0 ? kernelStackFrames : undefined,
-    startLineNumber,
-    startColumn,
     type,
   };
 
@@ -260,7 +263,7 @@ class JscadWorker extends KernelWorker {
         jsonSchema,
       });
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to extract parameters');
+      return createJscadKernelError(error, 'Failed to extract parameters', filename);
     }
   }
 
@@ -325,7 +328,7 @@ class JscadWorker extends KernelWorker {
           data: error,
           operation: 'computeGeometry',
         });
-        return createJscadKernelError(error, 'Failed to execute JSCAD code');
+        return createJscadKernelError(error, 'Failed to execute JSCAD code', filename);
       }
 
       // Store shapes in memory for export with LRU cleanup
@@ -362,7 +365,7 @@ class JscadWorker extends KernelWorker {
 
       return createKernelSuccess(geometries);
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to compute JSCAD geometry');
+      return createJscadKernelError(error, 'Failed to compute JSCAD geometry', filename);
     }
   }
 
@@ -374,10 +377,9 @@ class JscadWorker extends KernelWorker {
       // Check if geometry exists in memory
       const shapes = this.shapesMemory[geometryId];
       if (!shapes || shapes.length === 0) {
+        // System error - no location needed
         return createKernelError({
           message: `Geometry ${geometryId} not computed yet. Please compute geometry before exporting.`,
-          startLineNumber: 0,
-          startColumn: 0,
           type: 'runtime',
         });
       }
@@ -390,10 +392,9 @@ class JscadWorker extends KernelWorker {
         // In a more sophisticated implementation, you could merge multiple geometries
         const blob = gltfBlobs[0];
         if (!blob) {
+          // System error - no location needed
           return createKernelError({
             message: 'Failed to generate GLTF from computed geometry',
-            startLineNumber: 0,
-            startColumn: 0,
             type: 'runtime',
           });
         }
@@ -408,10 +409,9 @@ class JscadWorker extends KernelWorker {
 
       // STL and STL-binary formats are not yet implemented for JSCAD
       // This would require installing and using @jscad/stl-serializer
+      // System error - no location needed
       return createKernelError({
         message: `Export format '${fileType}' is not yet implemented for JSCAD. Only 'glb' and 'gltf' formats are currently supported.`,
-        startLineNumber: 0,
-        startColumn: 0,
         type: 'runtime',
       });
     } catch (error) {

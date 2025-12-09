@@ -117,6 +117,43 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
     }
   }, [monaco, cadActor]);
 
+  // Get kernel errors for active file from CAD machine (errors stored per-file as an array)
+  const kernelErrors = useSelector(cadActor, (state) => {
+    if (!activeFile) {
+      return undefined;
+    }
+
+    return state.context.kernelErrors.get(activeFile.path);
+  });
+
+  // Show kernel errors as Monaco markers - only for the active file
+  useEffect(() => {
+    if (!monaco || !activeFile) {
+      return;
+    }
+
+    const uri = monaco.Uri.file(`/${activeFile.path}`);
+    const model = monaco.editor.getModel(uri);
+
+    if (!model) {
+      return;
+    }
+
+    // Map kernel errors to Monaco markers (only for errors with location info)
+    const markers = (kernelErrors ?? [])
+      .filter((kernelError) => kernelError.location)
+      .map((kernelError) => ({
+        startLineNumber: kernelError.location!.startLineNumber,
+        startColumn: kernelError.location!.startColumn,
+        endLineNumber: kernelError.location!.endLineNumber ?? kernelError.location!.startLineNumber,
+        endColumn: kernelError.location!.endColumn ?? kernelError.location!.startColumn + 1,
+        message: kernelError.message,
+        severity: monaco.MarkerSeverity.Error,
+      }));
+
+    monaco.editor.setModelMarkers(model, 'kernel', markers);
+  }, [monaco, kernelErrors, activeFile]);
+
   // Subscribe to file writes and update Monaco model for non-editor sources
   useEffect(() => {
     if (!monaco) {
