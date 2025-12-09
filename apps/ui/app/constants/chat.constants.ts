@@ -1,1 +1,1 @@
-export const defaultChatModel = 'openai-gpt-4.1';
+export const defaultChatModel = 'anthropic-claude-opus-4.5';
