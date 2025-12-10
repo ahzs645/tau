@@ -531,21 +531,38 @@ export const fileManagerMachine = setup({
       },
     }),
 
-    removeRenamedOldPathFromTree: assign({
+    // Optimistically transform paths in fileTree and openFiles immediately
+    // This provides instant UI feedback before filesystem operation completes
+    optimisticRenameInTree: assign({
       fileTree({ context }) {
-        const { lastRenamedOldPath, fileTree } = context;
+        const { lastRenamedOldPath, lastRenamedNewPath, fileTree } = context;
 
-        if (!lastRenamedOldPath) {
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
           return fileTree;
         }
 
-        const newTree = new Map(fileTree);
-        newTree.delete(lastRenamedOldPath);
+        const newTree = new Map<string, FileEntry>();
+        const prefix = `${lastRenamedOldPath}/`;
+
+        for (const [path, entry] of fileTree.entries()) {
+          if (path === lastRenamedOldPath) {
+            // Exact match - file rename (e.g., test.txt -> test2.txt)
+            // Transform to new path with updated name
+            const newName = lastRenamedNewPath.split('/').pop() ?? lastRenamedNewPath;
+            newTree.set(lastRenamedNewPath, { ...entry, path: lastRenamedNewPath, name: newName });
+          } else if (path.startsWith(prefix)) {
+            // Nested paths - directory rename (e.g., folder/file.txt -> newFolder/file.txt)
+            const relativePath = path.slice(lastRenamedOldPath.length);
+            const newFilePath = `${lastRenamedNewPath}${relativePath}`;
+            newTree.set(newFilePath, { ...entry, path: newFilePath });
+          } else {
+            // Unrelated paths - keep as-is
+            newTree.set(path, entry);
+          }
+        }
+
         return newTree;
       },
-    }),
-
-    updateOpenFilesAfterRename: assign({
       openFiles({ context }) {
         const { lastRenamedOldPath, lastRenamedNewPath, openFiles } = context;
 
@@ -553,19 +570,25 @@ export const fileManagerMachine = setup({
           return openFiles;
         }
 
-        // If old path was open, move content to new path
-        if (openFiles.has(lastRenamedOldPath)) {
-          const content = openFiles.get(lastRenamedOldPath);
-          const newMap = new Map(openFiles);
-          newMap.delete(lastRenamedOldPath);
-          if (content) {
-            newMap.set(lastRenamedNewPath, content);
-          }
+        const newMap = new Map<string, Uint8Array>();
+        const prefix = `${lastRenamedOldPath}/`;
 
-          return newMap;
+        for (const [path, content] of openFiles.entries()) {
+          if (path === lastRenamedOldPath) {
+            // Exact match (file rename)
+            newMap.set(lastRenamedNewPath, content);
+          } else if (path.startsWith(prefix)) {
+            // Nested file (directory rename)
+            const relativePath = path.slice(lastRenamedOldPath.length);
+            const newFilePath = `${lastRenamedNewPath}${relativePath}`;
+            newMap.set(newFilePath, content);
+          } else {
+            // Unrelated path
+            newMap.set(path, content);
+          }
         }
 
-        return openFiles;
+        return newMap;
       },
     }),
 
@@ -614,6 +637,27 @@ export const fileManagerMachine = setup({
     isFileDeleteFailed({ event }) {
       assertActorDoneEvent(event);
       return event.output.type === 'fileDeleteFailed';
+    },
+
+    // Guard to skip no-op renames (same path)
+    isSamePathRename({ event }) {
+      assertEvent(event, 'renameFile');
+      return event.oldPath === event.newPath;
+    },
+
+    // Guard to check if source and destination directories are different (move vs simple rename)
+    isDifferentDirectory({ context }) {
+      const { lastRenamedOldPath, lastRenamedNewPath } = context;
+      if (!lastRenamedOldPath || !lastRenamedNewPath) {
+        return false;
+      }
+
+      const getParentDir = (path: string): string => {
+        const lastSlashIndex = path.lastIndexOf('/');
+        return lastSlashIndex > 0 ? path.slice(0, lastSlashIndex) : '';
+      };
+
+      return getParentDir(lastRenamedOldPath) !== getParentDir(lastRenamedNewPath);
     },
   },
 }).createMachine({
@@ -711,9 +755,16 @@ export const fileManagerMachine = setup({
         readFile: {
           target: 'readingFile',
         },
-        renameFile: {
-          target: 'renamingFile',
-        },
+        renameFile: [
+          {
+            // Skip no-op rename (same path) - stay in ready
+            guard: 'isSamePathRename',
+            target: 'ready',
+          },
+          {
+            target: 'renamingFile',
+          },
+        ],
         deleteFile: {
           target: 'deletingFile',
         },
@@ -865,7 +916,8 @@ export const fileManagerMachine = setup({
     },
 
     renamingFile: {
-      entry: ['clearError', 'setLastRenamedPaths'],
+      // Optimistically update UI immediately, then verify with filesystem
+      entry: ['clearError', 'setLastRenamedPaths', 'optimisticRenameInTree'],
       invoke: {
         id: 'renameFileActor',
         src: 'renameFileActor',
@@ -880,18 +932,18 @@ export const fileManagerMachine = setup({
             actions: ['setError'],
           },
           {
-            target: 'reloadingAfterRename',
+            target: 'reloadingSourceAfterRename',
           },
         ],
       },
     },
 
-    reloadingAfterRename: {
+    reloadingSourceAfterRename: {
       invoke: {
         id: 'readDirectoryActor',
         src: 'readDirectoryActor',
         input({ context }) {
-          // Extract parent directory from old path (files stay in same dir when renamed)
+          // Extract parent directory from old path (source directory)
           let parentPath = '';
           if (context.lastRenamedOldPath) {
             const lastSlashIndex = context.lastRenamedOldPath.lastIndexOf('/');
@@ -909,13 +961,48 @@ export const fileManagerMachine = setup({
             actions: ['setError'],
           },
           {
+            // If source and destination are in different directories, reload destination too
+            guard: 'isDifferentDirectory',
+            target: 'reloadingDestinationAfterRename',
+            // Paths already transformed optimistically, just verify with filesystem
+            actions: ['updateFileTree'],
+          },
+          {
+            // Same directory (simple rename) - go directly to ready
             target: 'ready',
-            actions: [
-              'updateFileTree',
-              'removeRenamedOldPathFromTree',
-              'updateOpenFilesAfterRename',
-              'emitFileRenamed',
-            ],
+            // Paths already transformed optimistically, just verify with filesystem
+            actions: ['updateFileTree', 'emitFileRenamed'],
+          },
+        ],
+      },
+    },
+
+    reloadingDestinationAfterRename: {
+      invoke: {
+        id: 'readDirectoryActor',
+        src: 'readDirectoryActor',
+        input({ context }) {
+          // Extract parent directory from new path (destination directory)
+          let parentPath = '';
+          if (context.lastRenamedNewPath) {
+            const lastSlashIndex = context.lastRenamedNewPath.lastIndexOf('/');
+            if (lastSlashIndex > 0) {
+              parentPath = context.lastRenamedNewPath.slice(0, lastSlashIndex);
+            }
+          }
+
+          return { context, path: parentPath };
+        },
+        onDone: [
+          {
+            target: 'error',
+            guard: 'isDirectoryReadFailed',
+            actions: ['setError'],
+          },
+          {
+            target: 'ready',
+            // Paths already transformed optimistically, just verify with filesystem
+            actions: ['updateFileTree', 'emitFileRenamed'],
           },
         ],
       },
@@ -989,6 +1076,28 @@ export const fileManagerMachine = setup({
         },
         loadDirectory: {
           target: 'loadingDirectory',
+        },
+        // Allow file operations to recover from error state
+        writeFile: {
+          target: 'writingFile',
+        },
+        writeFiles: {
+          target: 'writingFiles',
+        },
+        readFile: {
+          target: 'readingFile',
+        },
+        renameFile: [
+          {
+            guard: 'isSamePathRename',
+            target: 'error',
+          },
+          {
+            target: 'renamingFile',
+          },
+        ],
+        deleteFile: {
+          target: 'deletingFile',
         },
       },
     },
