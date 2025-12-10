@@ -55,7 +55,12 @@ export const fileExplorerMachine = setup({
 
       const existingFile = context.openFiles.find((f) => f.path === event.path);
       if (existingFile) {
-        // File already open, just set as active
+        // File already open and active - nothing to do
+        if (context.activeFilePath === event.path) {
+          return;
+        }
+
+        // File open but not active - set as active and emit
         enqueue.assign({
           activeFilePath: event.path,
         });
