@@ -221,7 +221,7 @@ export function ChatMessageToolFileEdit({
             <Filename targetFile={targetFile} chatStatus={status} toolStatus={part.state} />
           </div>
           {hasContent ? (
-            <div className="h-[100px] overflow-hidden border-t">
+            <div className="max-h-24 overflow-hidden border-t">
               <CodeViewer language="typescript" text={lastFourLines} className="overflow-x-auto p-3 text-xs" />
             </div>
           ) : null}
