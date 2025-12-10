@@ -26,13 +26,13 @@ const kernelErrorSchema: z.ZodType<KernelError> = z
     stack: z.string().optional(),
     stackFrames: z
       .array(
-      z.object({
+        z.object({
           fileName: z.string().optional(),
           functionName: z.string().optional(),
           lineNumber: z.number().optional(),
           columnNumber: z.number().optional(),
           source: z.string().optional(),
-      }),
+        }),
       )
       .optional(),
     type: z.enum(['compilation', 'runtime', 'kernel', 'unknown']).optional(),
