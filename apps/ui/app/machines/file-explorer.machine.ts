@@ -186,7 +186,10 @@ export const fileExplorerMachine = setup({
       });
 
       // Emit fileOpened for the renamed file so CAD machine updates its reference
-      if (newActiveFilePath && (context.activeFilePath === oldPath || context.activeFilePath?.startsWith(`${oldPath}/`))) {
+      if (
+        newActiveFilePath &&
+        (context.activeFilePath === oldPath || context.activeFilePath?.startsWith(`${oldPath}/`))
+      ) {
         enqueue.emit({
           type: 'fileOpened' as const,
           path: newActiveFilePath,
