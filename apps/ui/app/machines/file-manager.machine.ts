@@ -592,6 +592,68 @@ export const fileManagerMachine = setup({
       },
     }),
 
+    // Revert optimistic rename when filesystem operation fails
+    // This reverses the path transformation to restore consistency with filesystem
+    revertOptimisticRename: assign({
+      fileTree({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, fileTree } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return fileTree;
+        }
+
+        // Reverse transformation: newPath -> oldPath
+        const revertedTree = new Map<string, FileEntry>();
+        const prefix = `${lastRenamedNewPath}/`;
+
+        for (const [path, entry] of fileTree.entries()) {
+          if (path === lastRenamedNewPath) {
+            // Exact match - revert file rename
+            const oldName = lastRenamedOldPath.split('/').pop() ?? lastRenamedOldPath;
+            revertedTree.set(lastRenamedOldPath, { ...entry, path: lastRenamedOldPath, name: oldName });
+          } else if (path.startsWith(prefix)) {
+            // Nested paths - revert directory rename
+            const relativePath = path.slice(lastRenamedNewPath.length);
+            const oldFilePath = `${lastRenamedOldPath}${relativePath}`;
+            revertedTree.set(oldFilePath, { ...entry, path: oldFilePath });
+          } else {
+            // Unrelated paths - keep as-is
+            revertedTree.set(path, entry);
+          }
+        }
+
+        return revertedTree;
+      },
+      openFiles({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, openFiles } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return openFiles;
+        }
+
+        // Reverse transformation: newPath -> oldPath
+        const revertedMap = new Map<string, Uint8Array>();
+        const prefix = `${lastRenamedNewPath}/`;
+
+        for (const [path, content] of openFiles.entries()) {
+          if (path === lastRenamedNewPath) {
+            // Exact match - revert file rename
+            revertedMap.set(lastRenamedOldPath, content);
+          } else if (path.startsWith(prefix)) {
+            // Nested file - revert directory rename
+            const relativePath = path.slice(lastRenamedNewPath.length);
+            const oldFilePath = `${lastRenamedOldPath}${relativePath}`;
+            revertedMap.set(oldFilePath, content);
+          } else {
+            // Unrelated path
+            revertedMap.set(path, content);
+          }
+        }
+
+        return revertedMap;
+      },
+    }),
+
     emitFileRenamed: emit(({ context }) => ({
       type: 'fileRenamed' as const,
       oldPath: context.lastRenamedOldPath ?? '',
@@ -929,7 +991,8 @@ export const fileManagerMachine = setup({
           {
             target: 'error',
             guard: 'isFileRenameFailed',
-            actions: ['setError'],
+            // Revert optimistic changes when rename fails
+            actions: ['setError', 'revertOptimisticRename'],
           },
           {
             target: 'reloadingSourceAfterRename',
