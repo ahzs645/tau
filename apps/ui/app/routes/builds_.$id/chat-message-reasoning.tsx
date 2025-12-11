@@ -1,5 +1,6 @@
 import type { ReasoningUIPart } from 'ai';
 import { ChevronRight } from 'lucide-react';
+import { useState } from 'react';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
@@ -15,6 +16,8 @@ type ChatMessageReasoningProperties = {
 };
 
 export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningProperties): React.JSX.Element {
+  const [isOpen, setIsOpen] = useState(false);
+
   return (
     <>
       {/* Show the collapsible section there is reasoning content */}
@@ -22,7 +25,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
         // Force open if content is empty, otherwise let state handle it.
         // This ensures the reasoning content is initially visible during generation,
         // then collapses when the content is generated.
-        <Collapsible className="group/collapsible" open={!hasContent}>
+        <Collapsible className="group/collapsible" open={hasContent ? isOpen : true} onOpenChange={setIsOpen}>
           <CollapsibleTrigger asChild>
             <Button
               variant="ghost"
