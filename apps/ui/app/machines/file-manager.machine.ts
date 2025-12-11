@@ -15,12 +15,25 @@ type FileEntry = {
   isLoaded: boolean;
 };
 
+/**
+ * The source of the file write.
+ */
+/**
+ * The source of the file write operation.
+ * - 'editor': Write originated from user typing in the Monaco editor
+ * - 'file-tree': Write originated from file tree operations (create file, upload, etc.)
+ * - 'external': Write originated from external source (e.g., chat AI)
+ */
+type FileWriteSource = 'editor' | 'file-tree' | 'external';
+
 type FileManagerContext = {
   worker: Worker | undefined;
   wrappedWorker: Remote<FileWorker> | undefined;
   fileTree: Map<string, FileEntry>;
   error: Error | undefined;
   lastWrittenPath: string | undefined;
+  lastWrittenData: Uint8Array | undefined;
+  lastWriteSource: FileWriteSource | undefined;
   openFiles: Map<string, Uint8Array>;
   lastOpenedPath: string | undefined;
   lastRenamedOldPath: string | undefined;
@@ -259,7 +272,7 @@ type FileManagerEventInternal =
   | { type: 'initialize' }
   | { type: 'setRoot'; path: string }
   | { type: 'loadDirectory'; path: string }
-  | { type: 'writeFile'; path: string; data: Uint8Array }
+  | { type: 'writeFile'; path: string; data: Uint8Array; source: FileWriteSource }
   | { type: 'writeFiles'; files: Record<string, { content: Uint8Array }> }
   | { type: 'readFile'; path: string }
   | { type: 'renameFile'; oldPath: string; newPath: string }
@@ -276,7 +289,7 @@ type FileManagerInput = {
 };
 
 type FileManagerEmitted =
-  | { type: 'fileWritten'; path: string }
+  | { type: 'fileWritten'; path: string; data: Uint8Array; source: FileWriteSource }
   | { type: 'fileRead'; path: string; data: Uint8Array }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
   | { type: 'fileDeleted'; path: string };
@@ -362,6 +375,37 @@ export const fileManagerMachine = setup({
       },
     }),
 
+    setLastWrittenData: assign({
+      lastWrittenData({ event }) {
+        assertEvent(event, 'writeFile');
+        return event.data;
+      },
+      lastWriteSource({ event }) {
+        assertEvent(event, 'writeFile');
+        return event.source;
+      },
+    }),
+
+    updateOpenFileAfterWrite: assign({
+      openFiles({ context }) {
+        const { lastWrittenPath, lastWrittenData, lastWriteSource, openFiles } = context;
+
+        if (!lastWrittenPath || !lastWrittenData) {
+          return openFiles;
+        }
+
+        // For file-tree operations, always add to openFiles (user explicitly created the file)
+        // For other sources (editor, external), only update if already open
+        if (lastWriteSource === 'file-tree' || openFiles.has(lastWrittenPath)) {
+          const newMap = new Map(openFiles);
+          newMap.set(lastWrittenPath, lastWrittenData);
+          return newMap;
+        }
+
+        return openFiles;
+      },
+    }),
+
     addOpenFile: assign({
       openFiles({ context, event }) {
         assertActorDoneEvent(event);
@@ -399,6 +443,8 @@ export const fileManagerMachine = setup({
       fileTree: () => new Map(),
       openFiles: () => new Map(),
       lastWrittenPath: undefined,
+      lastWrittenData: undefined,
+      lastWriteSource: undefined,
       lastOpenedPath: undefined,
       error: undefined,
     }),
@@ -414,6 +460,8 @@ export const fileManagerMachine = setup({
     emitFileWritten: emit(({ context }) => ({
       type: 'fileWritten' as const,
       path: context.lastWrittenPath ?? '',
+      data: context.lastWrittenData ?? new Uint8Array(),
+      source: context.lastWriteSource ?? 'editor',
     })),
 
     emitFileRead: emit(({ context, event }) => {
@@ -448,6 +496,161 @@ export const fileManagerMachine = setup({
       lastDeletedPath({ event }) {
         assertEvent(event, 'deleteFile');
         return event.path;
+      },
+    }),
+
+    removeDeletedFileFromTree: assign({
+      fileTree({ context }) {
+        const { lastDeletedPath, fileTree } = context;
+
+        if (!lastDeletedPath) {
+          return fileTree;
+        }
+
+        const newTree = new Map(fileTree);
+        newTree.delete(lastDeletedPath);
+        return newTree;
+      },
+    }),
+
+    removeDeletedFileFromOpenFiles: assign({
+      openFiles({ context }) {
+        const { lastDeletedPath, openFiles } = context;
+
+        if (!lastDeletedPath) {
+          return openFiles;
+        }
+
+        if (openFiles.has(lastDeletedPath)) {
+          const newMap = new Map(openFiles);
+          newMap.delete(lastDeletedPath);
+          return newMap;
+        }
+
+        return openFiles;
+      },
+    }),
+
+    // Optimistically transform paths in fileTree and openFiles immediately
+    // This provides instant UI feedback before filesystem operation completes
+    optimisticRenameInTree: assign({
+      fileTree({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, fileTree } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return fileTree;
+        }
+
+        const newTree = new Map<string, FileEntry>();
+        const prefix = `${lastRenamedOldPath}/`;
+
+        for (const [path, entry] of fileTree.entries()) {
+          if (path === lastRenamedOldPath) {
+            // Exact match - file rename (e.g., test.txt -> test2.txt)
+            // Transform to new path with updated name
+            const newName = lastRenamedNewPath.split('/').pop() ?? lastRenamedNewPath;
+            newTree.set(lastRenamedNewPath, { ...entry, path: lastRenamedNewPath, name: newName });
+          } else if (path.startsWith(prefix)) {
+            // Nested paths - directory rename (e.g., folder/file.txt -> newFolder/file.txt)
+            const relativePath = path.slice(lastRenamedOldPath.length);
+            const newFilePath = `${lastRenamedNewPath}${relativePath}`;
+            newTree.set(newFilePath, { ...entry, path: newFilePath });
+          } else {
+            // Unrelated paths - keep as-is
+            newTree.set(path, entry);
+          }
+        }
+
+        return newTree;
+      },
+      openFiles({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, openFiles } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return openFiles;
+        }
+
+        const newMap = new Map<string, Uint8Array>();
+        const prefix = `${lastRenamedOldPath}/`;
+
+        for (const [path, content] of openFiles.entries()) {
+          if (path === lastRenamedOldPath) {
+            // Exact match (file rename)
+            newMap.set(lastRenamedNewPath, content);
+          } else if (path.startsWith(prefix)) {
+            // Nested file (directory rename)
+            const relativePath = path.slice(lastRenamedOldPath.length);
+            const newFilePath = `${lastRenamedNewPath}${relativePath}`;
+            newMap.set(newFilePath, content);
+          } else {
+            // Unrelated path
+            newMap.set(path, content);
+          }
+        }
+
+        return newMap;
+      },
+    }),
+
+    // Revert optimistic rename when filesystem operation fails
+    // This reverses the path transformation to restore consistency with filesystem
+    revertOptimisticRename: assign({
+      fileTree({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, fileTree } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return fileTree;
+        }
+
+        // Reverse transformation: newPath -> oldPath
+        const revertedTree = new Map<string, FileEntry>();
+        const prefix = `${lastRenamedNewPath}/`;
+
+        for (const [path, entry] of fileTree.entries()) {
+          if (path === lastRenamedNewPath) {
+            // Exact match - revert file rename
+            const oldName = lastRenamedOldPath.split('/').pop() ?? lastRenamedOldPath;
+            revertedTree.set(lastRenamedOldPath, { ...entry, path: lastRenamedOldPath, name: oldName });
+          } else if (path.startsWith(prefix)) {
+            // Nested paths - revert directory rename
+            const relativePath = path.slice(lastRenamedNewPath.length);
+            const oldFilePath = `${lastRenamedOldPath}${relativePath}`;
+            revertedTree.set(oldFilePath, { ...entry, path: oldFilePath });
+          } else {
+            // Unrelated paths - keep as-is
+            revertedTree.set(path, entry);
+          }
+        }
+
+        return revertedTree;
+      },
+      openFiles({ context }) {
+        const { lastRenamedOldPath, lastRenamedNewPath, openFiles } = context;
+
+        if (!lastRenamedOldPath || !lastRenamedNewPath) {
+          return openFiles;
+        }
+
+        // Reverse transformation: newPath -> oldPath
+        const revertedMap = new Map<string, Uint8Array>();
+        const prefix = `${lastRenamedNewPath}/`;
+
+        for (const [path, content] of openFiles.entries()) {
+          if (path === lastRenamedNewPath) {
+            // Exact match - revert file rename
+            revertedMap.set(lastRenamedOldPath, content);
+          } else if (path.startsWith(prefix)) {
+            // Nested file - revert directory rename
+            const relativePath = path.slice(lastRenamedNewPath.length);
+            const oldFilePath = `${lastRenamedOldPath}${relativePath}`;
+            revertedMap.set(oldFilePath, content);
+          } else {
+            // Unrelated path
+            revertedMap.set(path, content);
+          }
+        }
+
+        return revertedMap;
       },
     }),
 
@@ -497,6 +700,27 @@ export const fileManagerMachine = setup({
       assertActorDoneEvent(event);
       return event.output.type === 'fileDeleteFailed';
     },
+
+    // Guard to skip no-op renames (same path)
+    isSamePathRename({ event }) {
+      assertEvent(event, 'renameFile');
+      return event.oldPath === event.newPath;
+    },
+
+    // Guard to check if source and destination directories are different (move vs simple rename)
+    isDifferentDirectory({ context }) {
+      const { lastRenamedOldPath, lastRenamedNewPath } = context;
+      if (!lastRenamedOldPath || !lastRenamedNewPath) {
+        return false;
+      }
+
+      const getParentDir = (path: string): string => {
+        const lastSlashIndex = path.lastIndexOf('/');
+        return lastSlashIndex > 0 ? path.slice(0, lastSlashIndex) : '';
+      };
+
+      return getParentDir(lastRenamedOldPath) !== getParentDir(lastRenamedNewPath);
+    },
   },
 }).createMachine({
   id: 'fileManager',
@@ -511,6 +735,8 @@ export const fileManagerMachine = setup({
     fileTree: new Map(),
     error: undefined,
     lastWrittenPath: undefined,
+    lastWrittenData: undefined,
+    lastWriteSource: undefined,
     openFiles: new Map(),
     lastOpenedPath: undefined,
     lastRenamedOldPath: undefined,
@@ -591,9 +817,16 @@ export const fileManagerMachine = setup({
         readFile: {
           target: 'readingFile',
         },
-        renameFile: {
-          target: 'renamingFile',
-        },
+        renameFile: [
+          {
+            // Skip no-op rename (same path) - stay in ready
+            guard: 'isSamePathRename',
+            target: 'ready',
+          },
+          {
+            target: 'renamingFile',
+          },
+        ],
         deleteFile: {
           target: 'deletingFile',
         },
@@ -601,7 +834,7 @@ export const fileManagerMachine = setup({
     },
 
     writingFile: {
-      entry: ['clearError'],
+      entry: ['clearError', 'setLastWrittenData'],
       invoke: {
         id: 'writeFileActor',
         src: 'writeFileActor',
@@ -648,7 +881,7 @@ export const fileManagerMachine = setup({
           },
           {
             target: 'ready',
-            actions: ['updateFileTree', 'emitFileWritten'],
+            actions: ['updateFileTree', 'updateOpenFileAfterWrite', 'emitFileWritten'],
           },
         ],
       },
@@ -745,7 +978,8 @@ export const fileManagerMachine = setup({
     },
 
     renamingFile: {
-      entry: ['clearError', 'setLastRenamedPaths'],
+      // Optimistically update UI immediately, then verify with filesystem
+      entry: ['clearError', 'setLastRenamedPaths', 'optimisticRenameInTree'],
       invoke: {
         id: 'renameFileActor',
         src: 'renameFileActor',
@@ -757,21 +991,22 @@ export const fileManagerMachine = setup({
           {
             target: 'error',
             guard: 'isFileRenameFailed',
-            actions: ['setError'],
+            // Revert optimistic changes when rename fails
+            actions: ['setError', 'revertOptimisticRename'],
           },
           {
-            target: 'reloadingAfterRename',
+            target: 'reloadingSourceAfterRename',
           },
         ],
       },
     },
 
-    reloadingAfterRename: {
+    reloadingSourceAfterRename: {
       invoke: {
         id: 'readDirectoryActor',
         src: 'readDirectoryActor',
         input({ context }) {
-          // Extract parent directory from old path (files stay in same dir when renamed)
+          // Extract parent directory from old path (source directory)
           let parentPath = '';
           if (context.lastRenamedOldPath) {
             const lastSlashIndex = context.lastRenamedOldPath.lastIndexOf('/');
@@ -789,7 +1024,47 @@ export const fileManagerMachine = setup({
             actions: ['setError'],
           },
           {
+            // If source and destination are in different directories, reload destination too
+            guard: 'isDifferentDirectory',
+            target: 'reloadingDestinationAfterRename',
+            // Paths already transformed optimistically, just verify with filesystem
+            actions: ['updateFileTree'],
+          },
+          {
+            // Same directory (simple rename) - go directly to ready
             target: 'ready',
+            // Paths already transformed optimistically, just verify with filesystem
+            actions: ['updateFileTree', 'emitFileRenamed'],
+          },
+        ],
+      },
+    },
+
+    reloadingDestinationAfterRename: {
+      invoke: {
+        id: 'readDirectoryActor',
+        src: 'readDirectoryActor',
+        input({ context }) {
+          // Extract parent directory from new path (destination directory)
+          let parentPath = '';
+          if (context.lastRenamedNewPath) {
+            const lastSlashIndex = context.lastRenamedNewPath.lastIndexOf('/');
+            if (lastSlashIndex > 0) {
+              parentPath = context.lastRenamedNewPath.slice(0, lastSlashIndex);
+            }
+          }
+
+          return { context, path: parentPath };
+        },
+        onDone: [
+          {
+            target: 'error',
+            guard: 'isDirectoryReadFailed',
+            actions: ['setError'],
+          },
+          {
+            target: 'ready',
+            // Paths already transformed optimistically, just verify with filesystem
             actions: ['updateFileTree', 'emitFileRenamed'],
           },
         ],
@@ -842,7 +1117,12 @@ export const fileManagerMachine = setup({
           },
           {
             target: 'ready',
-            actions: ['updateFileTree', 'emitFileDeleted'],
+            actions: [
+              'updateFileTree',
+              'removeDeletedFileFromTree',
+              'removeDeletedFileFromOpenFiles',
+              'emitFileDeleted',
+            ],
           },
         ],
       },
@@ -860,10 +1140,32 @@ export const fileManagerMachine = setup({
         loadDirectory: {
           target: 'loadingDirectory',
         },
+        // Allow file operations to recover from error state
+        writeFile: {
+          target: 'writingFile',
+        },
+        writeFiles: {
+          target: 'writingFiles',
+        },
+        readFile: {
+          target: 'readingFile',
+        },
+        renameFile: [
+          {
+            guard: 'isSamePathRename',
+            target: 'error',
+          },
+          {
+            target: 'renamingFile',
+          },
+        ],
+        deleteFile: {
+          target: 'deletingFile',
+        },
       },
     },
   },
 });
 
 export type FileManagerMachine = typeof fileManagerMachine;
-export type { FileManagerEmitted };
+export type { FileManagerEmitted, FileWriteSource };

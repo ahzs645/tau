@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { ChevronDown } from 'lucide-react';
 import {
   CodeBlock,
@@ -12,27 +12,37 @@ import { CopyButton } from '#components/copy-button.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 
-export function CollapsibleCodeBlock({
-  language,
-  title,
-  text,
-  children,
-  collapsedLineCount = 4,
-  className = '',
-  containerClassName = '-mx-3',
-}: {
+type CollapsibleCodeBlockProps = {
   readonly language: string;
   readonly title?: string;
   readonly text: string;
-  readonly children: React.ReactNode;
   readonly collapsedLineCount?: number;
   readonly className?: string;
   readonly containerClassName?: string;
-}): React.JSX.Element {
+};
+
+/**
+ * A collapsible code block with syntax highlighting.
+ * Shows a preview of the first N lines when collapsed, full code when expanded.
+ *
+ * Memoized to prevent unnecessary re-renders during streaming -
+ * only re-renders when the actual text content or language changes.
+ */
+export const CollapsibleCodeBlock = memo(function ({
+  language,
+  title,
+  text,
+  collapsedLineCount = 4,
+  className = '',
+  containerClassName = '',
+}: CollapsibleCodeBlockProps): React.JSX.Element {
   const [isExpanded, setIsExpanded] = useState(false);
-  const lines = text.split('\n');
+  const lines = useMemo(() => text.split('\n'), [text]);
   const collapsedText = useMemo(() => lines.slice(0, collapsedLineCount).join('\n'), [lines, collapsedLineCount]);
   const shouldShowToggle = lines.length > collapsedLineCount;
+
+  // Determine which text to display based on expanded state
+  const displayText = isExpanded ? text : collapsedText;
 
   return (
     <CodeBlock className={containerClassName} variant="standard">
@@ -49,7 +59,7 @@ export function CollapsibleCodeBlock({
       <div className={cn('relative leading-0', shouldShowToggle && !isExpanded ? 'max-h-32 overflow-y-auto' : '')}>
         <CodeBlockContent className="px-3">
           <Pre language={language} className={cn('text-xs', className)}>
-            {isExpanded ? children : collapsedText}
+            {displayText}
           </Pre>
         </CodeBlockContent>
         {shouldShowToggle ? (
@@ -66,4 +76,4 @@ export function CollapsibleCodeBlock({
       </div>
     </CodeBlock>
   );
-}
+});

@@ -19,6 +19,35 @@ import { fileEditMachine } from '#machines/file-edit.machine.js';
 import { decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 
+/**
+ * Type guard to check if an error is a CodeError (has startLineNumber directly)
+ */
+function isCodeError(error: CodeError | KernelError): error is CodeError {
+  return 'startLineNumber' in error && typeof error.startLineNumber === 'number';
+}
+
+/**
+ * Get line number from an error, handling both CodeError and KernelError types
+ */
+function getErrorLineNumber(error: CodeError | KernelError): number | undefined {
+  if (isCodeError(error)) {
+    return error.startLineNumber;
+  }
+
+  return error.location?.startLineNumber;
+}
+
+/**
+ * Get column number from an error, handling both CodeError and KernelError types
+ */
+function getErrorColumn(error: CodeError | KernelError): number | undefined {
+  if (isCodeError(error)) {
+    return error.startColumn;
+  }
+
+  return error.location?.startColumn;
+}
+
 function ErrorSection({
   type,
   errors,
@@ -66,15 +95,19 @@ function ErrorSection({
       <CollapsibleContent className="border-t">
         <div className="space-y-2 px-2 py-2 text-xs">
           {errors.map((error) => {
-            const key = `${error.startLineNumber}-${error.message}`;
+            const lineNumber = getErrorLineNumber(error);
+            const column = getErrorColumn(error);
+            const key = `${lineNumber ?? 'unknown'}-${error.message}`;
 
             return (
               <div key={key} className="flex items-start text-xs">
-                <div className="flex flex-row items-center gap-1 text-muted-foreground">
-                  <div className="shrink-0 font-mono">
-                    {error.startLineNumber}:{error.startColumn}
+                {lineNumber !== undefined && column !== undefined && (
+                  <div className="flex flex-row items-center gap-1 text-muted-foreground">
+                    <div className="shrink-0 font-mono">
+                      {lineNumber}:{column}
+                    </div>
                   </div>
-                </div>
+                )}
                 <div className="ml-2 flex-1 font-mono">{error.message}</div>
               </div>
             );
@@ -159,7 +192,7 @@ export function ChatMessageToolFileEdit({
           throw new Error('No content received from file edit service');
         }
 
-        void fileManager.writeFile(resolvedPath, encodeTextFile(result.editedContent));
+        void fileManager.writeFile(resolvedPath, encodeTextFile(result.editedContent), { source: 'external' });
       }
 
       if (snapshot.matches('error')) {
@@ -188,7 +221,7 @@ export function ChatMessageToolFileEdit({
             <Filename targetFile={targetFile} chatStatus={status} toolStatus={part.state} />
           </div>
           {hasContent ? (
-            <div className="h-[100px] overflow-hidden border-t">
+            <div className="max-h-24 overflow-hidden border-t">
               <CodeViewer language="typescript" text={lastFourLines} className="overflow-x-auto p-3 text-xs" />
             </div>
           ) : null}
@@ -282,17 +315,7 @@ export function ChatMessageToolFileEdit({
                 isInitiallyOpen
                 className="border-t"
                 type="kernel"
-                errors={
-                  result.kernelError
-                    ? [
-                        {
-                          startLineNumber: result.kernelError.startLineNumber,
-                          startColumn: result.kernelError.startColumn,
-                          message: result.kernelError.message,
-                        },
-                      ]
-                    : []
-                }
+                errors={result.kernelErrors ?? []}
                 icon={Bug}
               />
 

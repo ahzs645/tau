@@ -24,6 +24,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
   const fileManager = useFileManager();
   const { fileManagerRef } = useFileManager();
   const [forceOpenBinary, setForceOpenBinary] = useState(false);
+
   // Get active file path from file explorer
   const activeFilePath = useSelector(fileExplorerActor, (state) => {
     return state.context.activeFilePath;
@@ -75,7 +76,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       }
 
       // Encode string → Uint8Array and write directly to fileManager
-      void fileManager.writeFile(activeFile.path, encodeTextFile(value ?? ''));
+      void fileManager.writeFile(activeFile.path, encodeTextFile(value ?? ''), { source: 'editor' });
     },
     [activeFile, fileManager],
   );
@@ -115,6 +116,81 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       cadActor.send({ type: 'setCodeErrors', errors: [] });
     }
   }, [monaco, cadActor]);
+
+  // Get kernel errors for active file from CAD machine (errors stored per-file as an array)
+  const kernelErrors = useSelector(cadActor, (state) => {
+    if (!activeFile) {
+      return undefined;
+    }
+
+    return state.context.kernelErrors.get(activeFile.path);
+  });
+
+  // Show kernel errors as Monaco markers - only for the active file
+  useEffect(() => {
+    if (!monaco || !activeFile) {
+      return;
+    }
+
+    const uri = monaco.Uri.file(`/${activeFile.path}`);
+    const model = monaco.editor.getModel(uri);
+
+    if (!model) {
+      return;
+    }
+
+    // Map kernel errors to Monaco markers (only for errors with location info)
+    const markers = (kernelErrors ?? [])
+      .filter((kernelError) => kernelError.location)
+      .map((kernelError) => ({
+        startLineNumber: kernelError.location!.startLineNumber,
+        startColumn: kernelError.location!.startColumn,
+        endLineNumber: kernelError.location!.endLineNumber ?? kernelError.location!.startLineNumber,
+        endColumn: kernelError.location!.endColumn ?? kernelError.location!.startColumn + 1,
+        message: kernelError.message,
+        severity: monaco.MarkerSeverity.Error,
+      }));
+
+    monaco.editor.setModelMarkers(model, 'kernel', markers);
+  }, [monaco, kernelErrors, activeFile]);
+
+  // Subscribe to file writes and update Monaco model for non-editor sources
+  useEffect(() => {
+    if (!monaco) {
+      return;
+    }
+
+    const subscription = fileManagerRef.on('fileWritten', (emittedEvent) => {
+      // Skip Monaco updates for editor typing to avoid recursion
+      if (emittedEvent.source === 'editor') {
+        return;
+      }
+
+      const { path, data, source } = emittedEvent;
+      const newContent = decodeTextFile(data);
+      const uri = monaco.Uri.file(`/${path}`);
+
+      // Find existing Monaco model for this file
+      const existingModel = monaco.editor.getModel(uri);
+
+      if (existingModel) {
+        // Update existing model if content is different
+        if (existingModel.getValue() !== newContent) {
+          existingModel.setValue(newContent);
+        }
+      } else if (source === 'file-tree') {
+        // For file-tree operations (user created/uploaded), create a new model
+        // External sources (chat AI) should not auto-open files that weren't already open
+        const extension = getFileExtension(path);
+        const language = languageFromExtension[extension as keyof typeof languageFromExtension];
+        monaco.editor.createModel(newContent, language, uri);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [monaco, fileManagerRef]);
 
   return (
     <div className={cn('flex h-full flex-col bg-background', className)}>

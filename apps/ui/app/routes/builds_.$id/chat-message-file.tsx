@@ -2,27 +2,47 @@ import { useState } from 'react';
 import type { FileUIPart } from 'ai';
 import { File } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
+import { Dialog, DialogContent, DialogTrigger } from '#components/ui/dialog.js';
 
 export function ChatMessageFile({ part }: { readonly part: FileUIPart }): React.ReactNode {
   const [imageError, setImageError] = useState(false);
   const isImage = part.mediaType.startsWith('image/');
+  const [open, setOpen] = useState(false);
 
-  // Render images with preview
+  // Render images with preview and dialog enlargement on click
   if (isImage && !imageError) {
+    // Use inline component, or if hoisting is preferred, move it outside.
     return (
-      <div className="flex flex-col gap-2">
-        <div className="relative max-w-20 overflow-hidden rounded-lg border bg-background">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
           <img
             src={part.url}
             alt={part.filename ?? 'Uploaded image'}
-            className="h-auto w-full object-contain"
+            className="size-12 cursor-pointer rounded-lg border bg-background object-contain"
             loading="lazy"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(true);
+            }}
             onError={() => {
               setImageError(true);
             }}
           />
-        </div>
-      </div>
+        </DialogTrigger>
+        {open ? (
+          <DialogContent className="flex max-h-[80vh]! max-w-[80vw]! items-center justify-center border-none bg-transparent p-0 shadow-none">
+            <img
+              src={part.url}
+              alt={part.filename ?? 'Uploaded image'}
+              className="size-full rounded-lg bg-background object-contain"
+              onError={() => {
+                setImageError(true);
+              }}
+            />
+          </DialogContent>
+        ) : null}
+      </Dialog>
     );
   }
 

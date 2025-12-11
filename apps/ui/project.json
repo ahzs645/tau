@@ -10,7 +10,7 @@
       "outputs": ["{projectRoot}/build", "{projectRoot}/.netlify"],
       "options": {
         "env": {
-          "NODE_OPTIONS": "--max-old-space-size=4096"
+          "NODE_OPTIONS": "--max-old-space-size=8192"
         }
       }
     },

@@ -10,7 +10,6 @@ import { metaConfig } from '#constants/meta.constants.js';
 import { Page } from '#components/layout/page.js';
 import { themeSessionResolver } from '#sessions.server.js';
 import { cn } from '#utils/ui.utils.js';
-import { markdownViewerLinks } from '#components/markdown/markdown-viewer.js';
 import { Toaster } from '#components/ui/sonner.js';
 import { webManifestLinks } from '#routes/manifest[.webmanifest].js';
 import { getModels } from '#hooks/use-models.js';
@@ -26,7 +25,7 @@ import { BuildManagerProvider } from '#hooks/use-build-manager.js';
 import { ChatManagerProvider } from '#hooks/use-chat-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 
-export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks, ...markdownViewerLinks];
+export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
 
 export const meta: MetaFunction = () => [
   { title: metaConfig.name },

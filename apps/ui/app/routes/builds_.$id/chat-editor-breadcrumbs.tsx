@@ -15,6 +15,10 @@ export function ChatEditorBreadcrumbs(): ReactNode {
     name: state.context.activeFilePath?.split('/').pop() ?? '',
   }));
 
+  if (!activeFile.path) {
+    return null;
+  }
+
   return (
     <div className="flex flex-row items-center justify-between py-1 pr-0.25 pl-3 text-muted-foreground">
       <div className="flex min-w-0 flex-1 flex-row items-center gap-0.5 overflow-hidden">

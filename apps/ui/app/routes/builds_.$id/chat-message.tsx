@@ -47,6 +47,9 @@ const getMessageContent = (message: MyUIMessage): string => {
 export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties): React.JSX.Element {
   const message = useChatSelector((state) => state.messagesById.get(messageId));
   const displayMessage = useChatSelector((state) => state.messageEdits[messageId] ?? state.messagesById.get(messageId));
+  const fileParts = useChatSelector(
+    (state) => state.messagesById.get(messageId)?.parts.filter((part) => part.type === 'file') ?? [],
+  );
   const { editMessage, retryMessage, startEditingMessage, exitEditMode } = useChatActions();
   const [isEditing, setIsEditing] = useState(false);
 
@@ -109,6 +112,13 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             )}
             onClick={handleEditClick}
           >
+            {fileParts.length > 0 ? (
+              <div className="flex flex-row gap-2">
+                {fileParts.map((part) => (
+                  <ChatMessageFile key={part.url} part={part} />
+                ))}
+              </div>
+            ) : null}
             {displayMessage.parts.map((part, index) => {
               switch (part.type) {
                 case 'text': {
@@ -143,7 +153,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'file': {
-                  return <ChatMessageFile key={part.url} part={part} />;
+                  // Files are rendered at the top of the message
+                  return null;
                 }
 
                 case 'dynamic-tool': {

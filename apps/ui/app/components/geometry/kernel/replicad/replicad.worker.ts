@@ -96,10 +96,9 @@ try {
       const result = await runInCjsContext(editedText, {});
       return createKernelSuccess((result ?? {}) as string | undefined);
     } catch {
+      // System error - no location needed
       return createKernelError({
         message: 'Failed to extract default name from code',
-        startLineNumber: 0,
-        startColumn: 0,
         type: 'runtime',
       });
     }
@@ -182,15 +181,8 @@ try {
         jsonSchema,
       });
     } catch (error) {
-      const kernelError = await this.formatKernelError(error);
-      return createKernelError({
-        message: kernelError.message,
-        startLineNumber: kernelError.startLineNumber,
-        startColumn: kernelError.startColumn,
-        stack: kernelError.stack,
-        stackFrames: kernelError.stackFrames,
-        type: kernelError.type,
-      });
+      const kernelError = await this.formatKernelError(error, filename);
+      return createKernelError(kernelError);
     }
   }
 
@@ -228,10 +220,8 @@ try {
           data: error,
           operation: 'computeGeometry',
         });
-        return {
-          success: false,
-          error: await this.formatKernelError(error),
-        };
+        const kernelError = await this.formatKernelError(error, filename);
+        return createKernelError(kernelError);
       }
 
       const renderStartTime = performance.now();
@@ -278,10 +268,8 @@ try {
       };
     } catch (error) {
       this.error('Error in computeGeometry', { data: error, operation: 'computeGeometry' });
-      return {
-        success: false,
-        error: await this.formatKernelError(error),
-      };
+      const kernelError = await this.formatKernelError(error, filename);
+      return createKernelError(kernelError);
     }
   }
 
@@ -298,10 +286,9 @@ try {
     const config = meshConfig ?? { linearTolerance: 0.01, angularTolerance: 30 };
     try {
       if (!this.shapesMemory[geometryId]) {
+        // System error - no location needed
         return createKernelError({
           message: `Geometry ${geometryId} not computed yet`,
-          startLineNumber: 0,
-          startColumn: 0,
           type: 'runtime',
         });
       }
@@ -355,11 +342,10 @@ try {
       }));
       return createKernelSuccess(result);
     } catch (error) {
+      // Export errors don't have file context, so omit location
       const kernelError = await this.formatKernelError(error);
       return createKernelError({
         message: kernelError.message,
-        startLineNumber: kernelError.startLineNumber,
-        startColumn: kernelError.startColumn,
         stack: kernelError.stack,
         stackFrames: kernelError.stackFrames,
         type: kernelError.type,
@@ -491,7 +477,7 @@ return main(replicad, __inputParams || dp)
     };
   }
 
-  private async formatKernelError(error: unknown): Promise<KernelError> {
+  private async formatKernelError(error: unknown, fileName?: string): Promise<KernelError> {
     this.debug('Formatting kernel error', { data: error, operation: 'formatKernelError' });
     let message = 'Unknown error occurred';
     let stack: string | undefined;
@@ -544,12 +530,14 @@ return main(replicad, __inputParams || dp)
       type = 'runtime';
     }
 
+    // Only include location if we have a fileName and meaningful position data
+    const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
+
     return {
       message,
+      location: hasLocation ? { fileName, startLineNumber, startColumn } : undefined,
       stack,
       stackFrames: kernelStackFrames.length > 0 ? kernelStackFrames : undefined,
-      startLineNumber,
-      startColumn,
       type,
     };
   }

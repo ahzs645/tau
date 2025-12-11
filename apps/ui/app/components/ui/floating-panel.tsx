@@ -528,9 +528,7 @@ function FloatingPanelErrorContent({
             collapsedLineCount={3}
             className="text-left text-destructive/80"
             containerClassName="w-full"
-          >
-            {errorStack}
-          </CollapsibleCodeBlock>
+          />
         ) : errorMessage ? (
           <div className="w-full rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left">
             <p className="text-xs font-medium text-destructive/80">{errorMessage}</p>

@@ -4,6 +4,7 @@ import { useActorRef } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
+import type { FileWriteSource } from '#machines/file-manager.machine.js';
 
 export type FileEntry = {
   path: string;
@@ -13,10 +14,14 @@ export type FileEntry = {
   isLoaded: boolean;
 };
 
+type WriteFileOptions = {
+  source: FileWriteSource;
+};
+
 type FileManagerContextType = {
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   loadDirectory: (path: string) => void;
-  writeFile: (path: string, data: Uint8Array) => Promise<void>;
+  writeFile: (path: string, data: Uint8Array, options: WriteFileOptions) => Promise<void>;
   writeFiles: (files: Record<string, { content: Uint8Array }>) => Promise<void>;
   readFile: (path: string) => Promise<Uint8Array>;
   getZippedDirectory: (path: string) => Promise<Blob>;
@@ -53,8 +58,8 @@ export function FileManagerProvider({
   );
 
   const writeFile = useCallback(
-    async (path: string, data: Uint8Array) => {
-      actorRef.send({ type: 'writeFile', path, data });
+    async (path: string, data: Uint8Array, options: WriteFileOptions) => {
+      actorRef.send({ type: 'writeFile', path, data, source: options.source });
       await waitFor(actorRef, (state) => state.matches('ready'));
     },
     [actorRef],

@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { useKeydown } from '#hooks/use-keydown.js';
 
 type ChatMessageReasoningProperties = {
   readonly part: ReasoningUIPart;
@@ -17,25 +16,7 @@ type ChatMessageReasoningProperties = {
 };
 
 export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningProperties): React.JSX.Element {
-  const [isOpen, setIsOpen] = useState<true | undefined>();
-
-  // These combinations provide the most natural experience for the user.
-  useKeydown(
-    {
-      key: 'ArrowRight',
-    },
-    () => {
-      setIsOpen(true);
-    },
-  );
-  useKeydown(
-    {
-      key: 'ArrowLeft',
-    },
-    () => {
-      setIsOpen(undefined);
-    },
-  );
+  const [isOpen, setIsOpen] = useState(false);
 
   return (
     <>
@@ -44,7 +25,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
         // Force open if content is empty, otherwise let state handle it.
         // This ensures the reasoning content is initially visible during generation,
         // then collapses when the content is generated.
-        <Collapsible className="group/collapsible" open={hasContent ? isOpen : true}>
+        <Collapsible className="group/collapsible" open={hasContent ? isOpen : true} onOpenChange={setIsOpen}>
           <CollapsibleTrigger asChild>
             <Button
               variant="ghost"

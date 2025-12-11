@@ -66,8 +66,7 @@ class TauWorker extends KernelWorker {
       const errorMessage = error instanceof Error ? error.message : 'Failed to convert file';
       return createKernelError({
         message: errorMessage,
-        startColumn: 0,
-        startLineNumber: 0,
+        location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
         type: 'runtime',
       });
     }
@@ -80,10 +79,9 @@ class TauWorker extends KernelWorker {
     try {
       const glbData = this.glbDataMemory[geometryId];
       if (!glbData) {
+        // System error - no location needed
         return createKernelError({
           message: `Geometry ${geometryId} not computed yet. Please build geometries before exporting.`,
-          startColumn: 0,
-          startLineNumber: 0,
           type: 'runtime',
         });
       }
@@ -104,10 +102,9 @@ class TauWorker extends KernelWorker {
     } catch (error) {
       this.error('Error exporting geometry', { data: error, operation: 'exportGeometry' });
       const errorMessage = error instanceof Error ? error.message : 'Failed to export geometry';
+      // Export error - no specific file location
       return createKernelError({
         message: errorMessage,
-        startColumn: 0,
-        startLineNumber: 0,
         type: 'runtime',
       });
     }

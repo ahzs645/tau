@@ -39,8 +39,18 @@ export function ChatContextActions({
   onSelectItem,
   ...properties
 }: ChatContextActionsProperties): React.JSX.Element {
-  const { cadRef: cadActor, graphicsRef: graphicsActor } = useBuild();
-  const kernelError = useSelector(cadActor, (state) => state.context.kernelError);
+  const { cadRef: cadActor, graphicsRef: graphicsActor, fileExplorerRef } = useBuild();
+  // Get the active file path from file explorer
+  const activeFilePath = useSelector(fileExplorerRef, (state) => state.context.activeFilePath);
+  // Get the kernel error for the active file
+  const kernelError = useSelector(cadActor, (state) => {
+    if (!activeFilePath) {
+      return undefined;
+    }
+
+    return state.context.kernelErrors.get(activeFilePath);
+  });
+
   const codeErrors = useSelector(cadActor, (state) => state.context.codeErrors);
   const isScreenshotReady = useSelector(graphicsActor, (state) => state.context.isScreenshotReady);
 
@@ -141,18 +151,30 @@ ${errors.join('\n')}
   }, [addText, codeErrors, asPopoverMenu, onClose]);
 
   const handleAddKernelError = useCallback(() => {
-    if (kernelError) {
-      const locationInfo = ` (Line ${kernelError.startLineNumber}:${kernelError.startColumn}`;
+    if (!kernelError || kernelError.length === 0) {
+      return;
+    }
 
-      const markdownKernelError = `
-# Kernel error${locationInfo}
-${kernelError.message}
-${kernelError.stack ? `\n\`\`\`\n${kernelError.stack}\n\`\`\`` : ''}
-`;
-      addText(markdownKernelError);
-      if (asPopoverMenu) {
-        onClose?.();
-      }
+    // Format all kernel errors
+    const errorsMarkdown = kernelError
+      .map((error, index) => {
+        const locationInfo = error.location
+          ? ` (Line ${error.location.startLineNumber}:${error.location.startColumn})`
+          : '';
+
+        const headerPrefix = kernelError.length > 1 ? `## Error ${index + 1}` : '# Kernel error';
+
+        return `${headerPrefix}${locationInfo}
+${error.message}
+${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
+      })
+      .join('\n\n');
+
+    const header = kernelError.length > 1 ? `# Kernel errors (${kernelError.length})\n\n` : '';
+    addText(`${header}${errorsMarkdown}\n`);
+
+    if (asPopoverMenu) {
+      onClose?.();
     }
   }, [addText, kernelError, asPopoverMenu, onClose]);
 
@@ -184,11 +206,11 @@ ${kernelError.stack ? `\n\`\`\`\n${kernelError.stack}\n\`\`\`` : ''}
       },
       {
         id: 'add-kernel-error',
-        label: 'Kernel error',
+        label: kernelError && kernelError.length > 1 ? `Kernel errors (${kernelError.length})` : 'Kernel error',
         group: 'Code',
         icon: <AlertCircle className="mr-2 size-4" />,
         action: handleAddKernelError,
-        disabled: kernelError === undefined,
+        disabled: !kernelError || kernelError.length === 0,
       },
     ],
     [

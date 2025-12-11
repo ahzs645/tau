@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo } from 'react';
+import { useState, useRef, useEffect, useCallback, memo, useImperativeHandle } from 'react';
 import { ArrowUp, X, Square, CircuitBoard, ChevronDown, Paperclip, Wrench } from 'lucide-react';
 import type { ClassValue } from 'clsx';
 import type { ToolSelection } from '@taucad/chat';
@@ -16,6 +16,7 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
+import { LoadingSpinner } from '#components/ui/loading-spinner.js';
 import { cn } from '#utils/ui.utils.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { ChatContextActions } from '#components/chat/chat-context-actions.js';
@@ -30,7 +31,12 @@ import { ChatContextActions } from '#components/chat/chat-context-actions.js';
  */
 const focusTrapAttribute = 'data-chat-textarea-focustrap';
 
+export type ChatTextareaHandle = {
+  focus: () => void;
+};
+
 export type ChatTextareaProperties = {
+  readonly ref?: React.Ref<ChatTextareaHandle>;
   readonly onSubmit: ({
     content,
     model,
@@ -60,6 +66,7 @@ export const cancelChatStreamKeyCombination = {
 } satisfies KeyCombination;
 
 export const ChatTextarea = memo(function ({
+  ref,
   onSubmit,
   enableAutoFocus = true,
   onEscapePressed,
@@ -68,12 +75,13 @@ export const ChatTextarea = memo(function ({
   enableContextActions = true,
   enableKernelSelector = true,
   mode = 'main',
-}: ChatTextareaProperties): React.JSX.Element {
+}: ChatTextareaProperties) {
   const [isDragging, setIsDragging] = useState(false);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [atSymbolPosition, setAtSymbolPosition] = useState<number>(-1);
   const [contextSearchQuery, setContextSearchQuery] = useState<string>('');
   const [selectedMenuIndex, setSelectedMenuIndex] = useState<number>(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputReference = useRef<HTMLInputElement>(null);
   const textareaReference = useRef<HTMLTextAreaElement>(null);
   const { selectedModel } = useModels();
@@ -133,20 +141,25 @@ export const ChatTextarea = memo(function ({
 
   const handleSubmit = async () => {
     // If there is no text or images, do not submit
-    if (inputText.trim().length === 0) {
+    if (inputText.trim().length === 0 || isSubmitting) {
       return;
     }
 
-    // The useChat hook will handle cancelling any ongoing stream
-    await onSubmit({
-      content: inputText,
-      model: selectedModel?.id ?? '',
-      metadata: {
-        toolChoice: selectedToolChoice,
-      },
-      imageUrls: images,
-    });
-    // Draft will be cleared by the machine's submit action
+    setIsSubmitting(true);
+    try {
+      // The useChat hook will handle cancelling any ongoing stream
+      await onSubmit({
+        content: inputText,
+        model: selectedModel?.id ?? '',
+        metadata: {
+          toolChoice: selectedToolChoice,
+        },
+        imageUrls: images,
+      });
+      // Draft will be cleared by the machine's submit action
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCancelClick = () => {
@@ -273,6 +286,9 @@ export const ChatTextarea = memo(function ({
       textareaReference.current.selectionEnd = textareaReference.current.value.length;
     }
   }, [textareaReference]);
+
+  // Expose focus method via ref
+  useImperativeHandle(ref, () => ({ focus: focusInput }), [focusInput]);
 
   /**
    * Handle paste event to add images to the chat
@@ -786,10 +802,10 @@ export const ChatTextarea = memo(function ({
               <Button
                 size="icon"
                 className="size-7 rounded-full"
-                disabled={inputText.trim().length === 0}
+                disabled={inputText.trim().length === 0 || isSubmitting}
                 onClick={handleSubmit}
               >
-                <ArrowUp className="size-5" />
+                {isSubmitting ? <LoadingSpinner className="size-4" /> : <ArrowUp className="size-5" />}
               </Button>
             </TooltipTrigger>
             <TooltipContent className="flex items-center gap-2 align-baseline">

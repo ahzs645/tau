@@ -19,7 +19,7 @@ export type CadContext = {
   };
   defaultParameters: Record<string, unknown>;
   geometries: Geometry[];
-  kernelError: KernelError | undefined;
+  kernelErrors: Map<string, KernelError[]>;
   codeErrors: CodeError[];
   kernelRef: ActorRefFrom<typeof kernelMachine>;
   exportedBlob: Blob | undefined;
@@ -45,7 +45,7 @@ type CadEvent =
 type CadEmitted =
   | { type: 'geometryEvaluated'; geometries: Geometry[] }
   | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
-  | { type: 'exportFailed'; error: KernelError };
+  | { type: 'exportFailed'; errors: KernelError[] };
 
 type CadInput = {
   shouldInitializeKernelOnStart: boolean;
@@ -128,9 +128,22 @@ export const cadMachine = setup({
     }),
     setGeometries: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryComputed');
+
+      // Clear error for the current file when geometry is successfully computed
+      const currentFileName = context.file?.filename;
+
       enqueue.assign({
         geometries: event.geometries,
-        kernelError: undefined,
+        kernelErrors({ context }) {
+          if (currentFileName && context.kernelErrors.has(currentFileName)) {
+            const newErrors = new Map(context.kernelErrors);
+            newErrors.delete(currentFileName);
+
+            return newErrors;
+          }
+
+          return context.kernelErrors;
+        },
       });
       enqueue.emit({
         type: 'geometryEvaluated' as const,
@@ -148,9 +161,25 @@ export const cadMachine = setup({
       }
     }),
     setKernelError: assign({
-      kernelError({ event }) {
+      kernelErrors({ context, event }) {
         assertEvent(event, 'kernelError');
-        return event.error;
+
+        const { errors } = event;
+
+        // Use the full file path from context.file as the key
+        // This ensures errors are stored with the same path format used by file explorer
+        // (e.g., "New Folder/garbage-3.kcl" not just "garbage-3.kcl")
+        const currentFilePath = context.file?.filename;
+        if (!currentFilePath) {
+          return context.kernelErrors;
+        }
+
+        // Replace all errors for the current file with the new errors
+        // This ensures old errors are cleared when new compilation happens
+        const newErrorsMap = new Map(context.kernelErrors);
+        newErrorsMap.set(currentFilePath, errors);
+
+        return newErrorsMap;
       },
     }),
     setCodeErrors: assign({
@@ -169,11 +198,24 @@ export const cadMachine = setup({
         return event.jsonSchema;
       },
     }),
-    setExportedBlob: enqueueActions(({ enqueue, event }) => {
+    setExportedBlob: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryExported');
+
+      // Clear error for the current file when export is successful
+      const currentFileName = context.file?.filename;
+
       enqueue.assign({
         exportedBlob: event.blob,
-        kernelError: undefined,
+        kernelErrors({ context }) {
+          if (currentFileName && context.kernelErrors.has(currentFileName)) {
+            const newErrors = new Map(context.kernelErrors);
+            newErrors.delete(currentFileName);
+
+            return newErrors;
+          }
+
+          return context.kernelErrors;
+        },
       });
       enqueue.emit({
         type: 'geometryExported' as const,
@@ -188,7 +230,7 @@ export const cadMachine = setup({
       });
       enqueue.emit({
         type: 'exportFailed' as const,
-        error: event.error,
+        errors: event.errors,
       });
     }),
     initializeKernel: enqueueActions(({ enqueue, context, self }) => {
@@ -209,10 +251,11 @@ export const cadMachine = setup({
         file: event.file,
         parameters: event.parameters,
         codeErrors: [],
-        kernelError: undefined,
         geometries: [],
         exportedBlob: undefined,
         jsonSchema: undefined,
+        // Note: We don't clear kernelErrors here - they persist per-file
+        // so when switching back to a file with an error, it will still show
       });
     }),
   },
@@ -221,6 +264,11 @@ export const cadMachine = setup({
     isKernelNotInitialized: ({ context }) => !context.isKernelInitialized,
     isKernelInitializing: ({ context }) => context.isKernelInitializing,
     hasModel: ({ context }) => context.file !== undefined,
+    // Detects file switches vs content changes - file switches should render immediately
+    isDifferentFile({ context, event }) {
+      assertEvent(event, 'setFile');
+      return context.file?.filename !== event.file.filename;
+    },
   },
   delays: {
     fileDebounce: 500,
@@ -242,7 +290,7 @@ export const cadMachine = setup({
     parameters: {},
     defaultParameters: {},
     geometries: [],
-    kernelError: undefined,
+    kernelErrors: new Map(),
     codeErrors: [],
     kernelRef: spawn(kernelMachine, {
       input: { fileManagerRef: input.fileManagerRef },
@@ -335,10 +383,19 @@ export const cadMachine = setup({
           target: 'initializing',
           actions: 'initializeModel',
         },
-        setFile: {
-          target: 'bufferingFile',
-          actions: 'setFile',
-        },
+        setFile: [
+          {
+            // File switch - render immediately without debounce
+            guard: 'isDifferentFile',
+            target: 'rendering',
+            actions: 'setFile',
+          },
+          {
+            // Same file content change - debounce
+            target: 'bufferingFile',
+            actions: 'setFile',
+          },
+        ],
         setParameters: {
           target: 'bufferingParameters',
           actions: 'setParameters',
@@ -380,11 +437,20 @@ export const cadMachine = setup({
           target: 'initializing',
           actions: 'initializeModel',
         },
-        setFile: {
-          target: 'bufferingFile',
-          actions: 'setFile',
-          reenter: true, // Reset debounce timer when new file comes in
-        },
+        setFile: [
+          {
+            // File switch - render immediately without debounce
+            guard: 'isDifferentFile',
+            target: 'rendering',
+            actions: 'setFile',
+          },
+          {
+            // Same file content change - reset debounce timer
+            target: 'bufferingFile',
+            actions: 'setFile',
+            reenter: true,
+          },
+        ],
         setParameters: {
           target: 'bufferingParameters',
           actions: 'setParameters',
@@ -406,10 +472,19 @@ export const cadMachine = setup({
           target: 'initializing',
           actions: 'initializeModel',
         },
-        setFile: {
-          target: 'bufferingFile',
-          actions: 'setFile',
-        },
+        setFile: [
+          {
+            // File switch - render immediately without debounce
+            guard: 'isDifferentFile',
+            target: 'rendering',
+            actions: 'setFile',
+          },
+          {
+            // Same file content change - go to file buffering
+            target: 'bufferingFile',
+            actions: 'setFile',
+          },
+        ],
         setParameters: {
           target: 'bufferingParameters',
           actions: 'setParameters',
@@ -438,10 +513,20 @@ export const cadMachine = setup({
           target: 'error',
           actions: 'setKernelError',
         },
-        setFile: {
-          actions: 'setFile',
-          target: 'bufferingFile',
-        },
+        setFile: [
+          {
+            // File switch - reenter rendering immediately
+            guard: 'isDifferentFile',
+            target: 'rendering',
+            actions: 'setFile',
+            reenter: true,
+          },
+          {
+            // Same file content change - debounce
+            target: 'bufferingFile',
+            actions: 'setFile',
+          },
+        ],
         setParameters: {
           actions: 'setParameters',
           target: 'bufferingParameters',
@@ -466,10 +551,19 @@ export const cadMachine = setup({
           target: 'initializing',
           actions: 'initializeModel',
         },
-        setFile: {
-          target: 'bufferingFile',
-          actions: 'setFile',
-        },
+        setFile: [
+          {
+            // File switch - render immediately without debounce
+            guard: 'isDifferentFile',
+            target: 'rendering',
+            actions: 'setFile',
+          },
+          {
+            // Same file content change - debounce
+            target: 'bufferingFile',
+            actions: 'setFile',
+          },
+        ],
         setParameters: {
           target: 'bufferingParameters',
           actions: 'setParameters',

@@ -6,7 +6,14 @@ export const createKernelSuccess = <T>(data: T): KernelSuccessResult<T> => ({
   data,
 });
 
+// Create a single kernel error result
 export const createKernelError = (error: KernelError): KernelErrorResult => ({
   success: false,
-  error,
+  errors: [error],
+});
+
+// Create multiple kernel errors result
+export const createKernelErrors = (errors: KernelError[]): KernelErrorResult => ({
+  success: false,
+  errors,
 });

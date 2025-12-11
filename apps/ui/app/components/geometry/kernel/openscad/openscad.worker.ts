@@ -59,8 +59,8 @@ class OpenScadWorker extends KernelWorker {
         const error = instance.formatException?.(result);
         return createKernelError({
           message: `Failed to build geometry: ${error}`,
-          startColumn: 0,
-          startLineNumber: 0,
+          // OpenSCAD doesn't provide line info, so we include location with filename only
+          location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
         });
       }
 
@@ -86,7 +86,10 @@ class OpenScadWorker extends KernelWorker {
     } catch (error) {
       this.error('Error extracting parameters', { data: error });
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return createKernelError({ message: errorMessage, startColumn: 0, startLineNumber: 0 });
+      return createKernelError({
+        message: errorMessage,
+        location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
+      });
     }
   }
 
@@ -127,8 +130,7 @@ class OpenScadWorker extends KernelWorker {
         const error = instance.formatException?.(result);
         return createKernelError({
           message: `Failed to build geometry: ${error}`,
-          startColumn: 0,
-          startLineNumber: 0,
+          location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
         });
       }
 
@@ -146,7 +148,10 @@ class OpenScadWorker extends KernelWorker {
     } catch (error) {
       this.error('Error while building geometries from code', { data: error });
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return createKernelError({ message: errorMessage, startColumn: 0, startLineNumber: 0 });
+      return createKernelError({
+        message: errorMessage,
+        location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
+      });
     }
   }
 
@@ -157,10 +162,9 @@ class OpenScadWorker extends KernelWorker {
     try {
       const offData = this.offDataMemory[geometryId];
       if (!offData) {
+        // System error - no location needed
         return createKernelError({
           message: `Geometry ${geometryId} not computed yet. Please build geometries before exporting.`,
-          startColumn: 0,
-          startLineNumber: 0,
         });
       }
 
@@ -191,16 +195,12 @@ class OpenScadWorker extends KernelWorker {
         }
 
         default: {
-          return createKernelError({
-            message: `Unsupported export format: ${fileType}`,
-            startColumn: 0,
-            startLineNumber: 0,
-          });
+          return createKernelError({ message: `Unsupported export format: ${fileType}` });
         }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return createKernelError({ message: errorMessage, startColumn: 0, startLineNumber: 0 });
+      return createKernelError({ message: errorMessage });
     }
   }
 

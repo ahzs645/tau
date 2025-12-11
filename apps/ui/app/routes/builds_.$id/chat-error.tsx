@@ -35,7 +35,7 @@ export const ChatError = memo(function ({
     <Collapsible
       open={isOpen}
       className={cn(
-        'group/collapsible flex flex-col justify-center rounded-md border border-destructive/20 bg-destructive/10 text-sm select-none',
+        'group/collapsible flex flex-col justify-center rounded-md border border-destructive/20 bg-destructive/10 text-sm',
         className,
       )}
       onOpenChange={onOpenChange}
@@ -58,8 +58,8 @@ export const ChatError = memo(function ({
           </div>
         </div>
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-2">
-        <CodeViewer text={errorMessage} language="json" className="overflow-x-scroll text-xs whitespace-pre-wrap" />
+      <CollapsibleContent className="overflow-x-scroll px-2 pb-2">
+        <CodeViewer text={errorMessage} language="json" className="text-xs whitespace-pre-wrap" />
       </CollapsibleContent>
     </Collapsible>
   );

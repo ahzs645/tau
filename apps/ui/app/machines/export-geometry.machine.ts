@@ -45,9 +45,11 @@ const cadListener = fromCallback<ExportGeometryEvent, { cadRef: ActorRefFrom<typ
 
     // Subscribe to export failure events
     const errorSubscription = cadRef.on('exportFailed', (event) => {
+      // Get first error message if available
+      const firstError = event.errors[0];
       sendBack({
         type: 'exportFailed',
-        error: event.error.message,
+        error: firstError?.message ?? 'Export failed',
       });
     });
 

@@ -27,7 +27,8 @@ type FileExplorerContext = {
 type FileExplorerEvent =
   | { type: 'openFile'; path: string }
   | { type: 'closeFile'; path: string }
-  | { type: 'setActiveFile'; path: string | undefined }
+  | { type: 'renameFile'; oldPath: string; newPath: string }
+  | { type: 'setActiveFile'; path: string }
   | { type: 'closeAll' };
 
 type FileExplorerEmitted = { type: 'fileOpened'; path: string };
@@ -55,7 +56,12 @@ export const fileExplorerMachine = setup({
 
       const existingFile = context.openFiles.find((f) => f.path === event.path);
       if (existingFile) {
-        // File already open, just set as active
+        // File already open and active - nothing to do
+        if (context.activeFilePath === event.path) {
+          return;
+        }
+
+        // File open but not active - set as active and emit
         enqueue.assign({
           activeFilePath: event.path,
         });
@@ -108,20 +114,23 @@ export const fileExplorerMachine = setup({
       });
     }),
 
-    setActiveFile: enqueueActions(({ enqueue, event }) => {
+    setActiveFile: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'setActiveFile');
+
+      // Already active - nothing to do
+      if (context.activeFilePath === event.path) {
+        return;
+      }
 
       enqueue.assign({
         activeFilePath: event.path,
       });
 
       // Emit fileOpened for the new active file
-      if (event.path) {
-        enqueue.emit({
-          type: 'fileOpened' as const,
-          path: event.path,
-        });
-      }
+      enqueue.emit({
+        type: 'fileOpened' as const,
+        path: event.path,
+      });
     }),
 
     closeAll: enqueueActions(({ enqueue }) => {
@@ -129,6 +138,63 @@ export const fileExplorerMachine = setup({
         openFiles: [],
         activeFilePath: undefined,
       });
+    }),
+
+    // Rename a file atomically without triggering fallback behavior
+    // This updates the path in place, preserving the file's position and active state
+    renameFile: enqueueActions(({ enqueue, event, context }) => {
+      assertEvent(event, 'renameFile');
+
+      const { oldPath, newPath } = event;
+
+      // Update the path in openFiles
+      const updatedOpenFiles = context.openFiles.map((file) => {
+        if (file.path === oldPath) {
+          return {
+            ...file,
+            path: newPath,
+            name: newPath.split('/').pop() ?? newPath,
+          };
+        }
+
+        // Also handle nested files (for directory renames)
+        if (file.path.startsWith(`${oldPath}/`)) {
+          const relativePath = file.path.slice(oldPath.length);
+          const newFilePath = `${newPath}${relativePath}`;
+          return {
+            ...file,
+            path: newFilePath,
+            name: newFilePath.split('/').pop() ?? newFilePath,
+          };
+        }
+
+        return file;
+      });
+
+      // Update activeFilePath if it was the renamed file or a nested file
+      let newActiveFilePath = context.activeFilePath;
+      if (context.activeFilePath === oldPath) {
+        newActiveFilePath = newPath;
+      } else if (context.activeFilePath?.startsWith(`${oldPath}/`)) {
+        const relativePath = context.activeFilePath.slice(oldPath.length);
+        newActiveFilePath = `${newPath}${relativePath}`;
+      }
+
+      enqueue.assign({
+        openFiles: updatedOpenFiles,
+        activeFilePath: newActiveFilePath,
+      });
+
+      // Emit fileOpened for the renamed file so CAD machine updates its reference
+      if (
+        newActiveFilePath &&
+        (context.activeFilePath === oldPath || context.activeFilePath?.startsWith(`${oldPath}/`))
+      ) {
+        enqueue.emit({
+          type: 'fileOpened' as const,
+          path: newActiveFilePath,
+        });
+      }
     }),
   },
 }).createMachine({
@@ -146,6 +212,9 @@ export const fileExplorerMachine = setup({
         },
         closeFile: {
           actions: 'closeFile',
+        },
+        renameFile: {
+          actions: 'renameFile',
         },
         setActiveFile: {
           actions: 'setActiveFile',

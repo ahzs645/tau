@@ -1,4 +1,6 @@
+/* eslint-disable complexity -- Complexity is acceptable for this file */
 import { useCallback, useState, useRef, useMemo, useEffect, memo } from 'react';
+import { flushSync } from 'react-dom';
 import type { ItemInstance } from '@headless-tree/core';
 import {
   FilePlus,
@@ -77,6 +79,19 @@ type TreeItemData = {
 const rootId = '';
 const defaultHiddenPatterns = ['.gitkeep', '**/.gitkeep'];
 
+type PendingFolder = {
+  parentPath: string; // '' for root
+  error: string | undefined;
+};
+
+type PendingFile = {
+  parentPath: string; // '' for root
+  extension: string;
+  defaultName: string;
+  content: string;
+  error: string | undefined;
+};
+
 function isHiddenFile(path: string, patterns: string[]): boolean {
   return patterns.some((pattern) => minimatch(path, pattern));
 }
@@ -104,9 +119,43 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
       }
     });
 
+    // Event-driven toasts for file operations
+    const fileRenamedSub = fileManagerRef.on('fileRenamed', (event) => {
+      const oldName = event.oldPath.split('/').pop() ?? event.oldPath;
+      const newName = event.newPath.split('/').pop() ?? event.newPath;
+      if (oldName === newName) {
+        toast.success(`Moved: ${newName}`);
+      } else {
+        toast.success(`Renamed: ${oldName} → ${newName}`);
+      }
+    });
+
+    const fileDeletedSub = fileManagerRef.on('fileDeleted', (event) => {
+      const fileName = event.path.split('/').pop() ?? event.path;
+      toast.success(`Deleted: ${fileName}`);
+    });
+
+    const fileWrittenSub = fileManagerRef.on('fileWritten', (event) => {
+      // Only show toast for file-tree operations (user-initiated creates/uploads)
+      if (event.source === 'file-tree') {
+        const fileName = event.path.split('/').pop() ?? event.path;
+        // Check if it's a .gitkeep (folder creation marker)
+        if (fileName === '.gitkeep') {
+          const folderPath = event.path.replace('/.gitkeep', '');
+          const folderName = folderPath.split('/').pop() ?? folderPath;
+          toast.success(`Created folder: ${folderName}`);
+        } else {
+          toast.success(`Created: ${fileName}`);
+        }
+      }
+    });
+
     return () => {
       fileOpenedSub.unsubscribe();
       buildLoadedSub.unsubscribe();
+      fileRenamedSub.unsubscribe();
+      fileDeletedSub.unsubscribe();
+      fileWrittenSub.unsubscribe();
     };
   }, [buildRef, fileExplorerRef, fileManagerRef, cadRef, buildId]);
 
@@ -172,6 +221,9 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
   const hiddenFilePatterns = useMemo(() => defaultHiddenPatterns, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadTargetPath, setUploadTargetPath] = useState<string | undefined>(undefined);
+  const [pendingFolder, setPendingFolder] = useState<PendingFolder | undefined>(undefined);
+  const [pendingFile, setPendingFile] = useState<PendingFile | undefined>(undefined);
+  const pendingFileInputRef = useRef<HTMLInputElement>(null);
 
   // Build virtual folder structure from flat file paths
   const allPaths = useMemo(() => {
@@ -307,15 +359,6 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
         targetFolder = parts.join('/');
       }
 
-      // Track which files were open before rename
-      const wasOpenMap = new Map<string, boolean>();
-      for (const item of draggedItems) {
-        wasOpenMap.set(
-          item.getId(),
-          openFiles.some((f) => f.path === item.getId()),
-        );
-      }
-
       // Move each dragged item
       for (const item of draggedItems) {
         const oldPath = item.getId();
@@ -326,43 +369,12 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
           continue;
         }
 
-        if (item.isFolder()) {
-          // Move folder: rename all files inside it
-          const nested = fileTree.filter((f) => f.path.startsWith(`${oldPath}/`));
-          for (const file of nested) {
-            const relativePath = file.path.slice(oldPath.length + 1);
-            const newFilePath = `${newPath}/${relativePath}`;
+        // Move file/folder in fileManager
+        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
 
-            // Rename file in fileManager
-            fileManagerRef.send({
-              type: 'renameFile',
-              oldPath: file.path,
-              newPath: newFilePath,
-            });
-
-            // Update file explorer if file was open
-            if (openFiles.some((f) => f.path === file.path)) {
-              fileExplorerRef.send({ type: 'closeFile', path: file.path });
-              fileExplorerRef.send({ type: 'openFile', path: newFilePath });
-            }
-          }
-        } else {
-          // Move file
-          fileManagerRef.send({
-            type: 'renameFile',
-            oldPath,
-            newPath,
-          });
-
-          // Update file explorer if file was open
-          if (wasOpenMap.get(oldPath)) {
-            fileExplorerRef.send({ type: 'closeFile', path: oldPath });
-            fileExplorerRef.send({ type: 'openFile', path: newPath });
-          }
-        }
+        // Update file explorer paths atomically (no close/open to avoid fallback behavior)
+        fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
       }
-
-      toast.success(`Moved ${draggedItems.length} item${draggedItems.length > 1 ? 's' : ''}`);
     },
     onRename(item, newName) {
       const oldPath = item.getId();
@@ -378,44 +390,25 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
         // Remember if folder was expanded
         const wasExpanded = item.isExpanded();
 
-        // Rename all nested files
-        const nested = fileTree.filter((f) => f.path.startsWith(`${oldPath}/`));
-        for (const file of nested) {
-          const relativePath = file.path.slice(oldPath.length + 1);
-          const newFilePath = `${newPath}/${relativePath}`;
+        // Rename the folder directly - LightningFS supports directory rename natively
+        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
 
-          // Rename file in fileManager
-          fileManagerRef.send({
-            type: 'renameFile',
-            oldPath: file.path,
-            newPath: newFilePath,
-          });
-
-          // Update file explorer if file was open
-          if (openFiles.some((f) => f.path === file.path)) {
-            fileExplorerRef.send({ type: 'closeFile', path: file.path });
-            fileExplorerRef.send({ type: 'openFile', path: newFilePath });
-          }
-        }
+        // Update file explorer paths atomically (no close/open to avoid fallback behavior)
+        fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
 
         // Keep folder expanded after rename
         if (wasExpanded) {
-          setTimeout(() => {
-            setExpandedItems((previous) => {
-              const withoutOld = previous.filter((p) => p !== oldPath);
-              return [...withoutOld, newPath];
-            });
-          }, 100);
+          setExpandedItems((previous) => {
+            const withoutOld = previous.filter((p) => p !== oldPath);
+            return [...withoutOld, newPath];
+          });
         }
       } else {
         // Rename file in fileManager
         fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
 
-        // Update file explorer if file was open
-        if (openFiles.some((f) => f.path === oldPath)) {
-          fileExplorerRef.send({ type: 'closeFile', path: oldPath });
-          fileExplorerRef.send({ type: 'openFile', path: newPath });
-        }
+        // Update file explorer path atomically (no close/open to avoid fallback behavior)
+        fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
       }
     },
     onPrimaryAction(item) {
@@ -477,74 +470,55 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
 
   const handleCreateFile = useCallback(
     (template: KernelConfiguration | undefined) => {
-      try {
-        const content = template?.emptyCode ?? '';
-        const extension = template?.mainFile.split('.').pop() ?? 'txt';
-        let counter = 1;
-        let newFilePath = `Untitled.${extension}`;
+      const content = template?.emptyCode ?? '';
+      const extension = template?.mainFile.split('.').pop() ?? 'txt';
 
-        while (allPaths.has(newFilePath)) {
-          counter++;
-          newFilePath = `Untitled ${counter}.${extension}`;
+      // Determine parent path based on focused item
+      let parentPath = '';
+      if (focusedItem) {
+        const focusedItemInstance = tree.getItemInstance(focusedItem);
+        if (focusedItemInstance.isFolder()) {
+          // Focused item is a folder - create inside it
+          parentPath = focusedItem;
+          // Expand the folder so user can see the pending input
+          setExpandedItems((previous) => (previous.includes(focusedItem) ? previous : [...previous, focusedItem]));
+        } else {
+          // Focused item is a file - create in its parent folder
+          const lastSlashIndex = focusedItem.lastIndexOf('/');
+          parentPath = lastSlashIndex > 0 ? focusedItem.slice(0, lastSlashIndex) : '';
         }
-
-        // Write file to fileManager
-        fileManagerRef.send({
-          type: 'writeFile',
-          path: newFilePath,
-          data: encodeTextFile(content),
-        });
-
-        // Open file in fileExplorer
-        fileExplorerRef.send({ type: 'openFile', path: newFilePath });
-
-        // Auto-expand root and select new file
-        setTimeout(() => {
-          setSelectedItems([newFilePath]);
-          tree.getItemInstance(newFilePath).startRenaming();
-        }, 100);
-
-        toast.success(`Created: ${newFilePath}`);
-      } catch (error) {
-        console.error('Error creating file:', error);
-        toast.error('Failed to create file. Please try again.');
       }
+
+      setPendingFile({
+        parentPath,
+        extension,
+        defaultName: template?.mainFile.split('.').slice(0, -1).join('.') ?? '',
+        content,
+        error: undefined,
+      });
     },
-    [allPaths, fileManagerRef, fileExplorerRef, tree],
+    [focusedItem, tree],
   );
 
   const handleCreateFolder = useCallback(() => {
-    try {
-      let counter = 1;
-      let folderName = 'New Folder';
-      let folderPath = folderName;
-
-      while (allPaths.has(folderPath)) {
-        counter++;
-        folderName = `New Folder ${counter}`;
-        folderPath = folderName;
+    // Determine parent path based on focused item
+    let parentPath = '';
+    if (focusedItem) {
+      const focusedItemInstance = tree.getItemInstance(focusedItem);
+      if (focusedItemInstance.isFolder()) {
+        // Focused item is a folder - create inside it
+        parentPath = focusedItem;
+        // Expand the folder so user can see the pending input
+        setExpandedItems((previous) => (previous.includes(focusedItem) ? previous : [...previous, focusedItem]));
+      } else {
+        // Focused item is a file - create in its parent folder
+        const lastSlashIndex = focusedItem.lastIndexOf('/');
+        parentPath = lastSlashIndex > 0 ? focusedItem.slice(0, lastSlashIndex) : '';
       }
-
-      const gitkeepPath = `${folderPath}/.gitkeep`;
-
-      // Write folder marker file to fileManager
-      fileManagerRef.send({
-        type: 'writeFile',
-        path: gitkeepPath,
-        data: encodeTextFile(''),
-      });
-
-      setTimeout(() => {
-        setExpandedItems((previous) => [...previous, folderPath]);
-        tree.getItemInstance(folderPath).startRenaming();
-      }, 100);
-
-      toast.success(`Created folder: ${folderPath}`);
-    } catch (error) {
-      console.error('Error creating folder:', error);
-      toast.error('Failed to create folder. Please try again.');
     }
-  }, [allPaths, fileManagerRef, tree]);
+
+    setPendingFolder({ parentPath, error: undefined });
+  }, [focusedItem, tree]);
 
   const handleDelete = useCallback(
     (items: Array<ItemInstance<TreeItemData>>) => {
@@ -575,8 +549,6 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
             fileExplorerRef.send({ type: 'closeFile', path });
           }
         }
-
-        toast.success(`Deleted ${count} ${itemWord}`);
       }
     },
     [fileExplorerRef, fileManagerRef, fileTree],
@@ -601,7 +573,6 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
 
       const targetItem = uploadTargetPath ? tree.getItemInstance(uploadTargetPath) : undefined;
       const directory = targetItem?.isFolder() ? uploadTargetPath : '';
-      let successCount = 0;
 
       for (const file of files) {
         try {
@@ -615,19 +586,14 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
             type: 'writeFile',
             path: filePath,
             data: uint8Array,
+            source: 'file-tree',
           });
 
           // Open file in fileExplorer
           fileExplorerRef.send({ type: 'openFile', path: filePath });
-
-          successCount++;
         } catch (error) {
           console.error(`Error uploading file ${file.name}:`, error);
         }
-      }
-
-      if (successCount > 0) {
-        toast.success(`Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`);
       }
 
       if (fileInputRef.current) {
@@ -695,24 +661,41 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
                     </DropdownMenuTrigger>
                   </TooltipTrigger>
                 </Button>
-                <DropdownMenuContent align="end">
+                <DropdownMenuContent
+                  align="end"
+                  onCloseAutoFocus={(event) => {
+                    // Prevent Radix from restoring focus to trigger
+                    event.preventDefault();
+                    // Focus the pending file input (exists because we used flushSync)
+                    pendingFileInputRef.current?.focus();
+                  }}
+                >
                   <DropdownMenuLabel>New File</DropdownMenuLabel>
                   <DropdownMenuItem
-                    onClick={() => {
-                      handleCreateFile(undefined);
+                    onSelect={() => {
+                      // Use flushSync to ensure component renders synchronously
+                      // so it exists when onCloseAutoFocus fires
+                      flushSync(() => {
+                        handleCreateFile(undefined);
+                      });
                     }}
                   >
+                    <FileExtensionIcon filename="file.txt" className="size-4" />
                     Blank
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   {kernelConfigurations.map((kernel) => (
                     <DropdownMenuItem
                       key={kernel.id}
-                      onClick={() => {
-                        handleCreateFile(kernel);
+                      onSelect={() => {
+                        // Use flushSync to ensure component renders synchronously
+                        flushSync(() => {
+                          handleCreateFile(kernel);
+                        });
                       }}
                     >
-                      {kernel.name} ({kernel.mainFile})
+                      <FileExtensionIcon filename={kernel.mainFile} className="size-4" />
+                      {kernel.name}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -780,25 +763,139 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
             </div>
           )}
 
-          {tree.getItems().length > 0 ? (
+          {tree.getItems().length > 0 || pendingFolder !== undefined || pendingFile !== undefined ? (
             <div {...tree.getContainerProps()} className="flex min-h-0 flex-col gap-0.5 outline-none">
               <AssistiveTreeDescription tree={tree} />
+              {/* Pending folder at root level */}
+              {pendingFolder?.parentPath === '' ? (
+                <PendingFolderInput
+                  parentPath=""
+                  error={pendingFolder.error}
+                  allPaths={allPaths}
+                  level={0}
+                  onSubmit={(name) => {
+                    const gitkeepPath = `${name}/.gitkeep`;
+                    fileManagerRef.send({
+                      type: 'writeFile',
+                      path: gitkeepPath,
+                      data: encodeTextFile(''),
+                      source: 'file-tree',
+                    });
+                    setPendingFolder(undefined);
+                    setExpandedItems((previous) => [...previous, name]);
+                  }}
+                  onCancel={() => {
+                    setPendingFolder(undefined);
+                  }}
+                  onError={(error) => {
+                    setPendingFolder((previous) => (previous ? { ...previous, error } : undefined));
+                  }}
+                />
+              ) : null}
+              {/* Pending file at root level */}
+              {pendingFile?.parentPath === '' ? (
+                <PendingFileInput
+                  inputRef={pendingFileInputRef}
+                  parentPath=""
+                  extension={pendingFile.extension}
+                  defaultName={pendingFile.defaultName}
+                  error={pendingFile.error}
+                  allPaths={allPaths}
+                  level={0}
+                  onSubmit={(filename) => {
+                    fileManagerRef.send({
+                      type: 'writeFile',
+                      path: filename,
+                      data: encodeTextFile(pendingFile.content),
+                      source: 'file-tree',
+                    });
+                    fileExplorerRef.send({ type: 'openFile', path: filename });
+                    setPendingFile(undefined);
+                  }}
+                  onCancel={() => {
+                    setPendingFile(undefined);
+                  }}
+                  onError={(error) => {
+                    setPendingFile((previous) => (previous ? { ...previous, error } : undefined));
+                  }}
+                />
+              ) : null}
               {tree.getItems().map((item) => {
                 if (item.getId() === rootId) {
                   return null;
                 }
 
+                const itemId = item.getId();
+                const itemLevel = item.getItemMeta().level;
+
                 return (
-                  <TreeItem
-                    key={item.getId()}
-                    item={item}
-                    isActive={activeFilePath === item.getId()}
-                    isOpen={openFiles.some((f) => f.path === item.getId())}
-                    searchQuery={tree.getState().search ?? ''}
-                    onDelete={handleDelete}
-                    onDuplicate={handleDuplicate}
-                    onUpload={handleUploadClick}
-                  />
+                  <div key={itemId}>
+                    <TreeItem
+                      item={item}
+                      isActive={activeFilePath === itemId}
+                      isOpen={openFiles.some((f) => f.path === itemId)}
+                      searchQuery={tree.getState().search ?? ''}
+                      onDelete={handleDelete}
+                      onDuplicate={handleDuplicate}
+                      onUpload={handleUploadClick}
+                    />
+                    {/* Pending folder inside this folder */}
+                    {pendingFolder && pendingFolder.parentPath === itemId && item.isFolder() ? (
+                      <PendingFolderInput
+                        parentPath={pendingFolder.parentPath}
+                        error={pendingFolder.error}
+                        allPaths={allPaths}
+                        level={itemLevel + 1}
+                        onSubmit={(name) => {
+                          const folderPath = `${pendingFolder.parentPath}/${name}`;
+                          const gitkeepPath = `${folderPath}/.gitkeep`;
+                          fileManagerRef.send({
+                            type: 'writeFile',
+                            path: gitkeepPath,
+                            data: encodeTextFile(''),
+                            source: 'file-tree',
+                          });
+                          setPendingFolder(undefined);
+                          setExpandedItems((previous) => [...previous, folderPath]);
+                        }}
+                        onCancel={() => {
+                          setPendingFolder(undefined);
+                        }}
+                        onError={(error) => {
+                          setPendingFolder((previous) => (previous ? { ...previous, error } : undefined));
+                        }}
+                      />
+                    ) : null}
+                    {/* Pending file inside this folder */}
+                    {pendingFile && pendingFile.parentPath === itemId && item.isFolder() ? (
+                      <PendingFileInput
+                        inputRef={pendingFileInputRef}
+                        parentPath={pendingFile.parentPath}
+                        extension={pendingFile.extension}
+                        defaultName={pendingFile.defaultName}
+                        error={pendingFile.error}
+                        allPaths={allPaths}
+                        level={itemLevel + 1}
+                        onSubmit={(filename) => {
+                          const filePath = `${pendingFile.parentPath}/${filename}`;
+                          fileManagerRef.send({
+                            type: 'writeFile',
+                            path: filePath,
+                            data: encodeTextFile(pendingFile.content),
+                            source: 'file-tree',
+                          });
+                          fileExplorerRef.send({ type: 'openFile', path: filePath });
+                          setPendingFile(undefined);
+                        }}
+                        onCancel={() => {
+                          setPendingFile(undefined);
+                        }}
+                        onError={(error) => {
+                          setPendingFile((previous) => (previous ? { ...previous, error } : undefined));
+                        }}
+                      />
+                    ) : null}
+                  </div>
                 );
               })}
               <div style={tree.getDragLineStyle()} className="h-0.5 rounded-full bg-primary" />
@@ -838,142 +935,147 @@ function TreeItem({
   const isFocused = item.isFocused();
   const isRenaming = item.isRenaming();
   const isFolder = item.isFolder();
-  const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle text selection when entering rename mode
-  useEffect(() => {
-    if (isRenaming && renameInputRef.current) {
-      const input = renameInputRef.current;
+  // Rename input - NOT wrapped by ContextMenu to avoid focus interference
+  if (isRenaming) {
+    const renameInputProps = item.getRenameInputProps() as React.InputHTMLAttributes<HTMLInputElement>;
+    return (
+      <div
+        className="flex h-7 items-center rounded-md border border-primary py-1 pr-1 pl-2"
+        style={{ paddingLeft: `${paddingLeft}px` }}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {isFolder ? (
+            item.isExpanded() ? (
+              <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <Folder className="size-4 shrink-0 text-muted-foreground" />
+            )
+          ) : (
+            <FileExtensionIcon filename={item.getItemName()} className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <input
+            className="h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
+            autoCorrect="off"
+            {...renameInputProps}
+            onFocus={(event) => {
+              // Call the library's onFocus handler first if it exists
+              renameInputProps.onFocus?.(event);
 
-      // Small delay to ensure input is fully focused
-      setTimeout(() => {
-        input.focus();
+              // Then select text: for folders select all, for files select name without extension
+              const input = event.currentTarget;
+              if (isFolder) {
+                input.setSelectionRange(0, input.value.length);
+              } else {
+                const lastDotIndex = input.value.lastIndexOf('.');
+                const endIndex = lastDotIndex > 0 ? lastDotIndex : input.value.length;
+                input.setSelectionRange(0, endIndex);
+              }
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
-        // For folders, select all text. For files, select without extension
-        if (isFolder) {
-          input.setSelectionRange(0, input.value.length, 'backward');
-        } else {
-          const lastDotIndex = input.value.lastIndexOf('.');
-          const endIndex = lastDotIndex > 0 ? lastDotIndex : input.value.length;
-          input.setSelectionRange(0, endIndex, 'backward');
-        }
-
-        input.scrollLeft = 0;
-      }, 0);
-    }
-  }, [isRenaming, isFolder]);
-
+  // Normal view - wrapped by ContextMenu
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        {isRenaming ? (
-          <div
-            className="flex h-7 items-center rounded-md border border-primary py-1 pr-1 pl-2"
-            style={{ paddingLeft: `${paddingLeft}px` }}
-          >
-            <input
-              ref={renameInputRef}
-              className="h-full flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
-              {...item.getRenameInputProps()}
-            />
-          </div>
-        ) : (
-          <div
-            {...item.getProps()}
-            className={cn(
-              'group/file relative flex h-7 w-full cursor-pointer items-center justify-between rounded-md py-1 pr-1 pl-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-              isActive && !isSelected && 'bg-sidebar-accent',
-              isSelected && 'bg-sidebar-accent/70 text-sidebar-accent-foreground',
-              item.isMatchingSearch() && 'bg-primary/20',
-              item.isDragTarget() && 'bg-primary/30 ring-1 ring-primary',
-              'border border-transparent',
-              isFocused && !isActive && !isSelected && 'border-neutral',
-            )}
-            style={{ paddingLeft: `${paddingLeft}px` }}
-          >
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              {isFolder ? (
-                item.isExpanded() ? (
-                  <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Folder className="size-4 shrink-0 text-muted-foreground" />
-                )
+        <div
+          {...item.getProps()}
+          className={cn(
+            'group/file relative flex h-7 w-full cursor-pointer items-center justify-between rounded-md py-1 pr-1 pl-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            isActive && !isSelected && 'bg-sidebar-accent',
+            isSelected && 'bg-sidebar-accent/70 text-sidebar-accent-foreground',
+            item.isMatchingSearch() && 'bg-primary/20',
+            item.isDragTarget() && 'bg-primary/30 ring-1 ring-primary',
+            'border border-transparent',
+            isFocused && !isActive && !isSelected && 'border-neutral',
+          )}
+          style={{ paddingLeft: `${paddingLeft}px` }}
+        >
+          <div className="flex min-w-0 flex-1 grow items-center gap-2">
+            {isFolder ? (
+              item.isExpanded() ? (
+                <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
               ) : (
-                <FileExtensionIcon filename={item.getItemName()} className="size-3.5 shrink-0 text-muted-foreground" />
-              )}
-              <span className={cn('truncate', isOpen && 'font-medium', isActive && 'text-primary')}>
-                <HighlightText text={item.getItemName()} searchTerm={searchQuery} />
-              </span>
-              {hasGitChanges ? (
-                <span
-                  aria-label={`File has changes: ${data.gitStatus ?? ''}`}
-                  className="size-2 shrink-0 rounded-full bg-yellow"
-                  title={`File status: ${data.gitStatus ?? ''}`}
-                />
-              ) : null}
-            </div>
-            {isFolder ? null : (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    className="absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                    }}
-                  >
-                    <MoreHorizontal className="size-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      item.startRenaming();
-                    }}
-                  >
-                    <FileEdit className="size-4" />
-                    Rename
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onUpload(item.getId());
-                    }}
-                  >
-                    <Upload className="size-4" />
-                    Upload Files
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDuplicate([item]);
-                    }}
-                  >
-                    <Copy className="size-4" />
-                    Duplicate
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDelete([item]);
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                <Folder className="size-4 shrink-0 text-muted-foreground" />
+              )
+            ) : (
+              <FileExtensionIcon filename={item.getItemName()} className="size-3.5 shrink-0 text-muted-foreground" />
             )}
+            <span className={cn('truncate', isOpen && 'font-medium', isActive && 'text-primary')}>
+              <HighlightText text={item.getItemName()} searchTerm={searchQuery} />
+            </span>
+            {hasGitChanges ? (
+              <span
+                aria-label={`File has changes: ${data.gitStatus ?? ''}`}
+                className="size-2 shrink-0 rounded-full bg-yellow"
+                title={`File status: ${data.gitStatus ?? ''}`}
+              />
+            ) : null}
           </div>
-        )}
+          {isFolder ? null : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  className="absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <MoreHorizontal className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem
+                  onSelect={() => {
+                    item.startRenaming();
+                  }}
+                >
+                  <FileEdit className="size-4" />
+                  Rename
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onUpload(item.getId());
+                  }}
+                >
+                  <Upload className="size-4" />
+                  Upload Files
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDuplicate([item]);
+                  }}
+                >
+                  <Copy className="size-4" />
+                  Duplicate
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete([item]);
+                  }}
+                >
+                  <Trash2 className="size-4" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem
-          onClick={() => {
+          onSelect={() => {
             item.startRenaming();
           }}
         >
@@ -1021,5 +1123,228 @@ function TreeItem({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+type PendingFolderInputProps = {
+  readonly parentPath: string;
+  readonly error: string | undefined;
+  readonly allPaths: Set<string>;
+  readonly level: number;
+  readonly onSubmit: (name: string) => void;
+  readonly onCancel: () => void;
+  readonly onError: (error: string | undefined) => void;
+};
+
+function PendingFolderInput({
+  parentPath,
+  error,
+  allPaths,
+  level,
+  onSubmit,
+  onCancel,
+  onError,
+}: PendingFolderInputProps): React.JSX.Element {
+  const [value, setValue] = useState('');
+  const paddingLeft = level * 16 + 8;
+
+  const validate = useCallback(
+    (name: string): string | undefined => {
+      const trimmedName = name.trim();
+      if (!trimmedName) {
+        return 'A file or folder name must be provided.';
+      }
+
+      const fullPath = parentPath ? `${parentPath}/${trimmedName}` : trimmedName;
+      if (allPaths.has(fullPath)) {
+        return `A file or folder ${trimmedName} already exists at this location. Please choose a different name.`;
+      }
+
+      return undefined;
+    },
+    [parentPath, allPaths],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const validationError = validate(value);
+        if (validationError) {
+          onError(validationError);
+        } else {
+          onSubmit(value.trim());
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancel();
+      }
+    },
+    [value, validate, onSubmit, onCancel, onError],
+  );
+
+  const handleBlur = useCallback(() => {
+    // Cancel on blur (user clicked elsewhere)
+    onCancel();
+  }, [onCancel]);
+
+  return (
+    <div className="flex w-full flex-col gap-0.5">
+      <div
+        className="flex h-7 w-full items-center rounded-md border border-primary py-1 pr-1"
+        style={{ paddingLeft: `${paddingLeft}px` }}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Folder className="size-4 shrink-0 text-muted-foreground" />
+          <input
+            autoFocus
+            value={value}
+            className="h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
+            placeholder="Folder name"
+            onChange={(event) => {
+              setValue(event.target.value);
+              // Clear error when user types
+              if (error) {
+                onError(undefined);
+              }
+            }}
+            onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
+          />
+        </div>
+      </div>
+      {error ? (
+        <div
+          className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
+          style={{ marginLeft: `${paddingLeft}px` }}
+        >
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type PendingFileInputProps = {
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  readonly inputRef: React.RefObject<HTMLInputElement | null>;
+  readonly parentPath: string;
+  readonly extension: string;
+  readonly defaultName: string;
+  readonly error: string | undefined;
+  readonly allPaths: Set<string>;
+  readonly level: number;
+  readonly onSubmit: (name: string) => void;
+  readonly onCancel: () => void;
+  readonly onError: (error: string | undefined) => void;
+};
+
+function PendingFileInput({
+  inputRef,
+  parentPath,
+  extension,
+  defaultName,
+  error,
+  allPaths,
+  level,
+  onSubmit,
+  onCancel,
+  onError,
+}: PendingFileInputProps): React.JSX.Element {
+  const fullDefaultName = defaultName ? `${defaultName}.${extension}` : '';
+  const [value, setValue] = useState(fullDefaultName);
+  const paddingLeft = level * 16 + 8;
+
+  // Handle focus to select filename without extension
+  const handleFocus = useCallback((event: React.FocusEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    // Select only the name part, not the extension
+    const lastDotIndex = input.value.lastIndexOf('.');
+    const endIndex = lastDotIndex > 0 ? lastDotIndex : input.value.length;
+    input.setSelectionRange(0, endIndex);
+  }, []);
+
+  const validate = useCallback(
+    (filename: string): string | undefined => {
+      const trimmedName = filename.trim();
+      if (!trimmedName) {
+        return 'A file name must be provided.';
+      }
+
+      const fullPath = parentPath ? `${parentPath}/${trimmedName}` : trimmedName;
+      if (allPaths.has(fullPath)) {
+        return `A file ${trimmedName} already exists at this location. Please choose a different name.`;
+      }
+
+      return undefined;
+    },
+    [parentPath, allPaths],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const validationError = validate(value);
+        if (validationError) {
+          onError(validationError);
+        } else {
+          onSubmit(value.trim());
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancel();
+      }
+    },
+    [value, validate, onSubmit, onCancel, onError],
+  );
+
+  const handleBlur = useCallback(() => {
+    // Cancel on blur (user clicked elsewhere)
+    onCancel();
+  }, [onCancel]);
+
+  // Get the current extension from the value for the icon
+  const currentExtension = value.includes('.') ? (value.split('.').pop() ?? extension) : extension;
+
+  return (
+    <div className="flex w-full flex-col gap-0.5">
+      <div
+        className="flex h-7 w-full items-center rounded-md border border-primary py-1 pr-1"
+        style={{ paddingLeft: `${paddingLeft}px` }}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <FileExtensionIcon
+            filename={`file.${currentExtension}`}
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+          <input
+            ref={inputRef}
+            autoFocus
+            value={value}
+            className="h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
+            placeholder="New File"
+            onChange={(event) => {
+              setValue(event.target.value);
+              // Clear error when user types
+              if (error) {
+                onError(undefined);
+              }
+            }}
+            onFocus={handleFocus}
+            onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
+          />
+        </div>
+      </div>
+      {error ? (
+        <div
+          className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
+          style={{ marginLeft: `${paddingLeft}px` }}
+        >
+          {error}
+        </div>
+      ) : null}
+    </div>
   );
 }
