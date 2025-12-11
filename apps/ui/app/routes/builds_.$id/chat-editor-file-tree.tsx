@@ -1299,14 +1299,10 @@ function PendingFileInput({
     [value, validate, onSubmit, onCancel, onError],
   );
 
-  const handleBlur = useCallback(
-    (event: React.FocusEvent<HTMLInputElement>) => {
-      const relatedTarget = event.relatedTarget as HTMLElement | undefined;
-      // Cancel on blur (user clicked elsewhere)
-      onCancel();
-    },
-    [onCancel],
-  );
+  const handleBlur = useCallback(() => {
+    // Cancel on blur (user clicked elsewhere)
+    onCancel();
+  }, [onCancel]);
 
   // Get the current extension from the value for the icon
   const currentExtension = value.includes('.') ? (value.split('.').pop() ?? extension) : extension;
