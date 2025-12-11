@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import type { VirtuosoHandle } from 'react-virtuoso';
 import { XIcon, MessageCircle } from 'lucide-react';
@@ -7,7 +7,7 @@ import { ChatMessage } from '#routes/builds_.$id/chat-message.js';
 import { ScrollDownButton } from '#routes/builds_.$id/scroll-down-button.js';
 import { ChatError } from '#routes/builds_.$id/chat-error.js';
 import { ChatStatus } from '#routes/builds_.$id/chat-status.js';
-import type { ChatTextareaProperties } from '#components/chat/chat-textarea.js';
+import type { ChatTextareaProperties, ChatTextareaHandle } from '#components/chat/chat-textarea.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
@@ -76,11 +76,28 @@ export const ChatHistory = memo(function (props: {
   const { sendMessage } = useChatActions();
   const { kernel } = useKernel();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const chatTextareaRef = useRef<ChatTextareaHandle>(null);
   const toggleChatHistory = useCallback(() => {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
   const { formattedKeyCombination } = useKeydown(toggleChatHistoryKeyCombination, toggleChatHistory);
+
+  // State to trigger focus on the textarea when a new chat is created
+  const [shouldFocusTextarea, setShouldFocusTextarea] = useState(false);
+
+  // Focus the textarea when the flag is set (after React's render cycle completes)
+  useEffect(() => {
+    if (shouldFocusTextarea) {
+      chatTextareaRef.current?.focus();
+      setShouldFocusTextarea(false);
+    }
+  }, [shouldFocusTextarea]);
+
+  // Callback for when a new chat is created
+  const handleNewChat = useCallback(() => {
+    setShouldFocusTextarea(true);
+  }, []);
 
   // Memoize the onSubmit callback to prevent unnecessary re-renders
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
@@ -147,7 +164,7 @@ export const ChatHistory = memo(function (props: {
       >
         {/* Header with search */}
         <FloatingPanelContentHeader>
-          <ChatHistorySelector />
+          <ChatHistorySelector onNewChat={handleNewChat} />
         </FloatingPanelContentHeader>
 
         {/* Main chat content area */}
@@ -177,7 +194,13 @@ export const ChatHistory = memo(function (props: {
         {/* Chat input area */}
         <div className="relative mx-2 mb-2">
           <ChatStatus className="absolute inset-x-0 -top-7" />
-          <ChatTextarea mode="main" className="rounded-sm" enableAutoFocus={false} onSubmit={onSubmit} />
+          <ChatTextarea
+            ref={chatTextareaRef}
+            mode="main"
+            className="rounded-sm"
+            enableAutoFocus={false}
+            onSubmit={onSubmit}
+          />
         </div>
       </FloatingPanelContent>
     </FloatingPanel>

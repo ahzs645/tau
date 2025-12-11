@@ -26,7 +26,7 @@ const newChatKeyCombination = {
   shiftKey: true,
 } satisfies KeyCombination;
 
-export function ChatHistorySelector(): ReactNode {
+export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => void }): ReactNode {
   const { buildRef, buildId, setLastChatId } = useBuild();
   const { chats, createChat, updateChatName, deleteChat, isLoading: isChatsLoading } = useChats(buildId);
 
@@ -51,7 +51,10 @@ export function ChatHistorySelector(): ReactNode {
 
     // Set as active chat
     setLastChatId(newChat.id);
-  }, [createChat, setLastChatId]);
+
+    // Notify parent that a new chat was created
+    onNewChat?.();
+  }, [createChat, setLastChatId, onNewChat]);
 
   const { formattedKeyCombination } = useKeydown(newChatKeyCombination, handleAddChat);
 

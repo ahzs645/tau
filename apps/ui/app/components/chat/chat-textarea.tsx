@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo } from 'react';
+import { useState, useRef, useEffect, useCallback, memo, useImperativeHandle } from 'react';
 import { ArrowUp, X, Square, CircuitBoard, ChevronDown, Paperclip, Wrench } from 'lucide-react';
 import type { ClassValue } from 'clsx';
 import type { ToolSelection } from '@taucad/chat';
@@ -31,7 +31,12 @@ import { ChatContextActions } from '#components/chat/chat-context-actions.js';
  */
 const focusTrapAttribute = 'data-chat-textarea-focustrap';
 
+export type ChatTextareaHandle = {
+  focus: () => void;
+};
+
 export type ChatTextareaProperties = {
+  readonly ref?: React.Ref<ChatTextareaHandle>;
   readonly onSubmit: ({
     content,
     model,
@@ -61,6 +66,7 @@ export const cancelChatStreamKeyCombination = {
 } satisfies KeyCombination;
 
 export const ChatTextarea = memo(function ({
+  ref,
   onSubmit,
   enableAutoFocus = true,
   onEscapePressed,
@@ -69,7 +75,7 @@ export const ChatTextarea = memo(function ({
   enableContextActions = true,
   enableKernelSelector = true,
   mode = 'main',
-}: ChatTextareaProperties): React.JSX.Element {
+}: ChatTextareaProperties) {
   const [isDragging, setIsDragging] = useState(false);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [atSymbolPosition, setAtSymbolPosition] = useState<number>(-1);
@@ -280,6 +286,9 @@ export const ChatTextarea = memo(function ({
       textareaReference.current.selectionEnd = textareaReference.current.value.length;
     }
   }, [textareaReference]);
+
+  // Expose focus method via ref
+  useImperativeHandle(ref, () => ({ focus: focusInput }), [focusInput]);
 
   /**
    * Handle paste event to add images to the chat
