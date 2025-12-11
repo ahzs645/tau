@@ -18,8 +18,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         cost: {
-          inputTokens: 1.25, // Verify from official pricing
-          outputTokens: 10, // Verify from official pricing
+          inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
+          outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
           cachedReadTokens: 0,
           cachedWriteTokens: 0,
         },
@@ -27,7 +27,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       configuration: {
         streaming: true,
         temperature: 0,
-        // New: thinkingLevel: 'high', // if you want to enable extended thinking
+        // Note: This is the non-thinking config. For extended thinking, create a
+        // separate model entry with thinkingLevel: 'high' (requires temperature: 1).
       },
     },
   },
