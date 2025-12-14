@@ -257,7 +257,10 @@ export const ChatTextareaMobile = memo(function ({
                 {/* Tool Selector */}
                 <ChatToolSelector isNested value={selectedToolChoice} onValueChange={setDraftToolChoice}>
                   {() => (
-                    <div className={menuItemClassName}>
+                    <div
+                      // Tool selector hidden for now until it's hooked up in backend.
+                      className={cn(menuItemClassName, 'hidden')}
+                    >
                       <span className="flex w-full items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Wrench className="size-4" />

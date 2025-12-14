@@ -210,9 +210,9 @@ export const ChatTextareaDesktop = memo(function ({
                   asChild
                   variant="outline"
                   size="sm"
-                  className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground"
+                  className="h-7 cursor-pointer! rounded-full pr-2 text-muted-foreground hover:text-foreground"
                 >
-                  <span className="flex max-w-24 shrink-0 flex-row items-center gap-2 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
+                  <span className="flex max-w-24 shrink-0 flex-row items-center gap-1 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
                     <span className="hidden truncate text-xs @[22rem]:block">{selectedModel?.name ?? 'Offline'}</span>
                     <span className="relative flex size-4 items-center justify-center">
                       <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
@@ -245,9 +245,9 @@ export const ChatTextareaDesktop = memo(function ({
                     asChild
                     variant="outline"
                     size="sm"
-                    className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground"
+                    className="h-7 cursor-pointer! rounded-full pr-2 text-muted-foreground hover:text-foreground"
                   >
-                    <span className="flex max-w-24 shrink-0 flex-row items-center gap-2 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
+                    <span className="flex max-w-24 shrink-0 flex-row items-center gap-1 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
                       <span className="hidden truncate text-xs @[22rem]:block">
                         {selectedKernel?.name ?? 'OpenSCAD'}
                       </span>
@@ -278,7 +278,7 @@ export const ChatTextareaDesktop = memo(function ({
                   variant="outline"
                   size="sm"
                   className={cn(
-                    'h-7 rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7',
+                    'h-7 rounded-full pr-2 text-muted-foreground hover:text-foreground @max-[22rem]:w-7',
                     selectedTools.length > 0 && 'px-2 @max-[22rem]:w-auto',
                     // eslint-disable-next-line no-warning-comments -- keeping this file clean.
                     'hidden', // TODO: add back when MCP is added.

@@ -242,7 +242,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   >
                     {({ selectedModel }) => (
                       <Button variant="ghost" size="sm" className="group w-full justify-start rounded-sm p-2">
-                        <div className="flex w-full flex-row items-center justify-between gap-2 text-sm font-normal">
+                        <div className="flex w-full flex-row items-center justify-between gap-1 text-sm font-normal">
                           <span>{selectedModel?.name ?? 'Offline'}</span>
                           <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90" />
                         </div>
