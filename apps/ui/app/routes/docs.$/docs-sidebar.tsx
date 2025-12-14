@@ -200,6 +200,7 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
 
   return (
     <ComboBoxResponsive<Framework>
+      searchPlaceHolder="Search frameworks..."
       isSearchEnabled={false}
       groupedItems={groupedItems}
       renderLabel={(framework) => {

@@ -321,6 +321,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
                 <div className="border-t p-3">
                   <div className="flex items-center gap-2">
                     <ComboBoxResponsive
+                      searchPlaceHolder="Search formats..."
                       title="Export Format"
                       description="Select a format to export the model"
                       groupedItems={[
