@@ -323,20 +323,36 @@ export const ChatTextareaMobile = memo(function ({
         onPointerDown={handlePointerDown}
       >
         <ChatTextareaMobileImages images={images} onRemoveImage={removeImage} />
-        <Textarea
-          ref={textareaReference}
-          className={cn(
-            'p-0 py-0.5',
-            'size-full h-auto max-h-48 min-h-4 resize-none rounded-none border-none bg-transparent dark:bg-transparent',
-            'shadow-none ring-0 focus-visible:ring-0 focus-visible:outline-none',
-          )}
-          rows={1}
-          autoFocus={enableAutoFocus}
-          value={inputText}
-          placeholder="Ask Tau to build anything..."
-          onChange={handleTextChange}
-          onKeyDown={handleTextareaKeyDown}
-        />
+        {/*
+         * Grid overlay technique for cross-browser textarea auto-resize.
+         * Safari doesn't support `field-sizing: content`, so we stack a hidden div
+         * and textarea in the same grid cell. The hidden div expands naturally with
+         * content, and the textarea inherits that height via the grid.
+         */}
+        <div className="grid max-h-48">
+          {/* Hidden div that expands naturally with content - drives the grid cell size */}
+          <div
+            className="invisible py-0.5 text-base wrap-break-word whitespace-pre-wrap [grid-area:1/1]"
+            aria-hidden="true"
+          >
+            {inputText || 'A'}
+          </div>
+          <Textarea
+            ref={textareaReference}
+            className={cn(
+              'p-0 py-0.5',
+              'h-full min-h-4 w-full resize-none overflow-hidden rounded-none border-none bg-transparent dark:bg-transparent',
+              'shadow-none ring-0 focus-visible:ring-0 focus-visible:outline-none',
+              '[grid-area:1/1]',
+            )}
+            rows={1}
+            autoFocus={enableAutoFocus}
+            value={inputText}
+            placeholder="Ask Tau to build anything..."
+            onChange={handleTextChange}
+            onKeyDown={handleTextareaKeyDown}
+          />
+        </div>
       </div>
 
       {/* Context Menu */}
