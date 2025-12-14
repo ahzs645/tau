@@ -367,7 +367,7 @@ export const ChatTextareaMobile = memo(function ({
       <ChatTextareaSubmitButton
         status={status}
         isSubmitting={isSubmitting}
-        isDisabled={inputText.trim().length === 0}
+        isDisabled={inputText.trim().length === 0 && images.length === 0}
         formattedCancelKeyCombination={formattedCancelKeyCombination}
         onSubmit={handleSubmit}
         onCancel={handleCancelClick}

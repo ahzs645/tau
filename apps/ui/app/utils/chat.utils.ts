@@ -45,6 +45,8 @@ export function createMessage({
   metadata: MyMetadata;
   imageUrls?: string[];
 }): MyUIMessage {
+  const trimmedContent = content.trim();
+
   return {
     id: id ?? generatePrefixedId(idPrefix.message),
     role,
@@ -55,10 +57,15 @@ export function createMessage({
         url,
         mediaType: extractMimeTypeFromDataUrl(url),
       })),
-      {
-        type: 'text' as const,
-        text: content.trim(),
-      },
+      // Only add text part if there is text content
+      ...(trimmedContent.length > 0
+        ? [
+            {
+              type: 'text' as const,
+              text: trimmedContent,
+            },
+          ]
+        : []),
     ],
     metadata: { ...metadata, createdAt: Date.now() },
   };

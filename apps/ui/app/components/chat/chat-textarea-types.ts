@@ -174,7 +174,7 @@ export function useChatTextareaLogic({
 
   const handleSubmit = async (): Promise<void> => {
     // If there is no text or images, do not submit
-    if (inputText.trim().length === 0 || isSubmitting) {
+    if ((inputText.trim().length === 0 && images.length === 0) || isSubmitting) {
       return;
     }
 
