@@ -12,12 +12,14 @@ type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'childr
   readonly onClose?: () => void;
   readonly children: (props: { selectedModel?: Model }) => ReactNode;
   readonly popoverProperties?: React.ComponentProps<typeof ComboBoxResponsive>['popoverProperties'];
+  readonly isNested?: boolean;
 };
 
 export const ChatModelSelector = memo(function ({
   onSelect,
   onClose,
   children,
+  isNested,
   ...properties
 }: ChatModelSelectorProps): React.JSX.Element {
   const { selectedModel, setSelectedModelId, data: models = [] } = useModels();
@@ -75,6 +77,7 @@ export const ChatModelSelector = memo(function ({
       getValue={(item) => item.id}
       placeholder="Select a model"
       defaultValue={selectedModel}
+      isNested={isNested}
       onSelect={handleSelectModel}
       onClose={onClose}
     >

@@ -1,20 +1,26 @@
 import { memo, useState } from 'react';
-import { Plus, ChevronDown, Paperclip, CircuitBoard, Wrench } from 'lucide-react';
+import { Plus, CircuitBoard, Wrench, Paperclip, ChevronRight } from 'lucide-react';
 import type { ToolSelection } from '@taucad/chat';
-import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
-import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
-import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
+import { kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { Textarea } from '#components/ui/textarea.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { cn } from '#utils/ui.utils.js';
+import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
+import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
+import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
 import { ChatContextActions } from '#components/chat/chat-context-actions.js';
 import { ChatTextareaContextMenu } from '#components/chat/chat-textarea-context-menu.js';
 import { ChatTextareaMobileImages } from '#components/chat/chat-textarea-mobile-images.js';
 import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-button.js';
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '#components/ui/drawer.js';
+import { Drawer, DrawerContent, DrawerDescription, DrawerTitle, DrawerTrigger } from '#components/ui/drawer.js';
+import { Command, CommandGroup, CommandItem, CommandList } from '#components/ui/command.js';
 import type { useModels } from '#hooks/use-models.js';
+
+// Styled div that looks like CommandItem but works as a trigger for nested drawers
+const menuItemClassName =
+  "relative flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5 [&_svg:not([class*='text-'])]:text-muted-foreground";
 
 type ChatTextareaMobileProperties = {
   readonly className?: string;
@@ -66,6 +72,26 @@ type ChatTextareaMobileProperties = {
   readonly setAtSymbolPosition: (position: number) => void;
   readonly setContextSearchQuery: (query: string) => void;
   readonly setSelectedMenuIndex: (index: number) => void;
+};
+
+const getToolModeLabel = (value?: ToolSelection): string => {
+  if (!value || value === 'auto') {
+    return 'Auto';
+  }
+
+  if (value === 'none') {
+    return 'No tools';
+  }
+
+  if (value === 'any') {
+    return 'Any tool';
+  }
+
+  if (Array.isArray(value)) {
+    return `${value.length} tool${value.length === 1 ? '' : 's'}`;
+  }
+
+  return 'Auto';
 };
 
 /**
@@ -123,6 +149,8 @@ export const ChatTextareaMobile = memo(function ({
 }: ChatTextareaMobileProperties): React.JSX.Element {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
+  const selectedKernel = kernelConfigurations.find((k) => k.id === 'openscad');
+
   const handleDrawerAddImage = (image: string): void => {
     handleAddImage(image);
     setIsDrawerOpen(false);
@@ -149,7 +177,7 @@ export const ChatTextareaMobile = memo(function ({
         'focus-within:border-primary',
         'h-auto min-h-9 p-1.25 md:min-h-10',
         className,
-        'rounded-2xl', // Overriding all parents
+        'rounded-2xl',
       )}
       onBlur={handleTextareaBlur}
     >
@@ -166,114 +194,102 @@ export const ChatTextareaMobile = memo(function ({
           </Button>
         </DrawerTrigger>
         <DrawerContent data-chat-textarea-focustrap={focusTrapAttribute}>
-          <DrawerHeader>
-            <DrawerTitle>Chat options</DrawerTitle>
-          </DrawerHeader>
-          <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-2">
-            {/* Model Selector */}
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-muted-foreground">Model</span>
-              <ChatModelSelector
-                data-chat-textarea-focustrap={focusTrapAttribute}
-                popoverProperties={{
-                  align: 'start',
-                }}
-                onSelect={() => {
-                  setIsDrawerOpen(false);
-                  focusInput();
-                }}
-              >
-                {(_properties) => (
-                  <Button variant="outline" className="h-10 w-full justify-between rounded-xl text-left">
-                    <span className="flex items-center gap-2">
-                      <CircuitBoard className="size-5" />
-                      <span>{selectedModel?.name ?? 'Offline'}</span>
-                    </span>
-                    <ChevronDown className="size-4" />
-                  </Button>
-                )}
-              </ChatModelSelector>
-            </div>
-
-            {/* Kernel Selector */}
-            {enableKernelSelector ? (
-              <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium text-muted-foreground">Kernel</span>
-                <ChatKernelSelector
+          <DrawerTitle className="sr-only">Chat Options</DrawerTitle>
+          <DrawerDescription className="sr-only">Configure chat settings and add context</DrawerDescription>
+          <Command className="bg-transparent">
+            <CommandList className="max-h-none">
+              {/* Settings Group */}
+              <CommandGroup heading="Settings">
+                {/* Model Selector */}
+                <ChatModelSelector
+                  isNested
                   data-chat-textarea-focustrap={focusTrapAttribute}
-                  popoverProperties={{
-                    align: 'start',
-                  }}
+                  popoverProperties={{ align: 'start' }}
                   onSelect={() => {
                     setIsDrawerOpen(false);
                     focusInput();
                   }}
                 >
-                  {({ selectedKernel }) => (
-                    <Button variant="outline" className="h-10 w-full justify-between rounded-xl text-left">
-                      <span className="flex items-center gap-2">
-                        <SvgIcon id={selectedKernel?.id ?? 'openscad'} className="size-5" />
-                        <span>{selectedKernel?.name ?? 'OpenSCAD'}</span>
+                  {() => (
+                    <div className={menuItemClassName}>
+                      <span className="flex w-full items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CircuitBoard className="size-4" />
+                          <div className="flex flex-col items-start">
+                            <span>{selectedModel?.name ?? 'Select model'}</span>
+                            <span className="text-xs text-muted-foreground">AI model for responses</span>
+                          </div>
+                        </div>
+                        <ChevronRight className="size-4 text-muted-foreground" />
                       </span>
-                      <ChevronDown className="size-4" />
-                    </Button>
+                    </div>
                   )}
-                </ChatKernelSelector>
-              </div>
-            ) : null}
+                </ChatModelSelector>
 
-            {/* Tool Selector */}
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-muted-foreground">Tools</span>
-              <ChatToolSelector value={selectedToolChoice} onValueChange={setDraftToolChoice}>
-                {({ selectedMode, selectedTools, toolMetadata }) => (
-                  <Button variant="outline" className="h-10 w-full justify-between rounded-xl text-left">
-                    <span className="flex items-center gap-2">
-                      {selectedMode === 'custom' && selectedTools.length > 0 ? (
-                        <span className="flex items-center gap-1">
-                          {selectedTools.map((tool) => {
-                            const Icon = toolMetadata[tool]?.icon;
-                            if (!Icon) {
-                              return null;
-                            }
-
-                            return <Icon key={tool} className="size-5" />;
-                          })}
+                {/* Kernel Selector */}
+                {enableKernelSelector ? (
+                  <ChatKernelSelector
+                    isNested
+                    data-chat-textarea-focustrap={focusTrapAttribute}
+                    popoverProperties={{ align: 'start' }}
+                    onSelect={() => {
+                      setIsDrawerOpen(false);
+                      focusInput();
+                    }}
+                  >
+                    {({ selectedKernel: kernel }) => (
+                      <div className={menuItemClassName}>
+                        <span className="flex w-full items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <SvgIcon id={kernel?.id ?? selectedKernel?.id ?? 'openscad'} className="size-4" />
+                            <div className="flex flex-col items-start">
+                              <span>{kernel?.name ?? selectedKernel?.name ?? 'OpenSCAD'}</span>
+                              <span className="text-xs text-muted-foreground">CAD kernel for code execution</span>
+                            </div>
+                          </div>
+                          <ChevronRight className="size-4 text-muted-foreground" />
                         </span>
-                      ) : (
-                        <Wrench className="size-5" />
-                      )}
-                      <span>
-                        {selectedMode === 'auto' && 'Auto'}
-                        {selectedMode === 'none' && 'No tools'}
-                        {selectedMode === 'any' && 'Any tool'}
-                        {selectedMode === 'custom' && 'Custom'}
+                      </div>
+                    )}
+                  </ChatKernelSelector>
+                ) : null}
+
+                {/* Tool Selector */}
+                <ChatToolSelector isNested value={selectedToolChoice} onValueChange={setDraftToolChoice}>
+                  {() => (
+                    <div className={menuItemClassName}>
+                      <span className="flex w-full items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Wrench className="size-4" />
+                          <div className="flex flex-col items-start">
+                            <span>{getToolModeLabel(selectedToolChoice)}</span>
+                            <span className="text-xs text-muted-foreground">Tool usage mode</span>
+                          </div>
+                        </div>
+                        <ChevronRight className="size-4 text-muted-foreground" />
                       </span>
-                    </span>
-                    <ChevronDown className="size-4" />
-                  </Button>
-                )}
-              </ChatToolSelector>
-            </div>
+                    </div>
+                  )}
+                </ChatToolSelector>
+              </CommandGroup>
 
-            {/* Upload Image */}
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-muted-foreground">Attachments</span>
-              <Button
-                variant="outline"
-                className="h-10 w-full justify-start gap-2 rounded-xl text-left"
-                onClick={handleDrawerFileSelect}
-              >
-                <Paperclip className="size-5" />
-                <span>Upload an image</span>
-              </Button>
-            </div>
+              {/* Actions Group */}
+              <CommandGroup heading="Actions">
+                {/* Upload Image */}
+                <CommandItem className="cursor-pointer" value="upload-image" onSelect={handleDrawerFileSelect}>
+                  <span className="flex w-full items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Paperclip className="size-4" />
+                      <div className="flex flex-col items-start">
+                        <span>Upload image</span>
+                        <span className="text-xs text-muted-foreground">Attach an image to your message</span>
+                      </div>
+                    </div>
+                  </span>
+                </CommandItem>
 
-            {/* Context Actions */}
-            {enableContextActions ? (
-              <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium text-muted-foreground">Context</span>
-                <div className="rounded-xl border p-2">
+                {/* Context Actions - inline as menu items */}
+                {enableContextActions ? (
                   <ChatContextActions
                     asPopoverMenu
                     data-chat-textarea-focustrap={focusTrapAttribute}
@@ -283,10 +299,10 @@ export const ChatTextareaMobile = memo(function ({
                       setIsDrawerOpen(false);
                     }}
                   />
-                </div>
-              </div>
-            ) : null}
-          </div>
+                ) : null}
+              </CommandGroup>
+            </CommandList>
+          </Command>
         </DrawerContent>
       </Drawer>
 
@@ -294,7 +310,6 @@ export const ChatTextareaMobile = memo(function ({
       <div
         className={cn('flex flex-1 flex-col overflow-auto')}
         onClick={(event) => {
-          // Only focus if clicking outside the textarea (e.g., on padding)
           if (event.target !== textareaReference.current) {
             focusInput();
           }
@@ -304,10 +319,7 @@ export const ChatTextareaMobile = memo(function ({
         onDrop={handleDrop}
         onPointerDown={handlePointerDown}
       >
-        {/* Images preview (compact) - tap to open full dialog */}
         <ChatTextareaMobileImages images={images} onRemoveImage={removeImage} />
-
-        {/* Input */}
         <Textarea
           ref={textareaReference}
           className={cn(
@@ -324,7 +336,7 @@ export const ChatTextareaMobile = memo(function ({
         />
       </div>
 
-      {/* Context Menu - hidden on mobile but still functional via @ typing */}
+      {/* Context Menu */}
       {showContextMenu ? (
         <ChatTextareaContextMenu
           searchQuery={contextSearchQuery}
