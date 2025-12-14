@@ -196,6 +196,7 @@ export const ChatHistory = memo(function (props: {
           <ChatStatus className="absolute inset-x-0 -top-7" />
           <ChatTextarea
             ref={chatTextareaRef}
+            enableMinimalMobileUI
             mode="main"
             className="rounded-sm"
             enableAutoFocus={false}
