@@ -183,9 +183,11 @@ export const ChatHistory = memo(function (props: {
               </div>
             ),
             Footer: () => (
-              <div className="px-4">
-                <ChatError isOpen={isErrorCollapsibleOpen} onOpenChange={setIsErrorCollapsibleOpen} />
-              </div>
+              <ChatError
+                className="mx-4 mb-2"
+                isOpen={isErrorCollapsibleOpen}
+                onOpenChange={setIsErrorCollapsibleOpen}
+              />
             ),
           }}
         />
