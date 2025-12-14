@@ -83,7 +83,7 @@ import { LoadingSpinner } from '#components/ui/loading-spinner.js';
 import { InlineTextEditor } from '#components/inline-text-editor.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
-import type { ChatTextareaProperties } from '#components/chat/chat-textarea.js';
+import type { ChatTextareaProperties } from '#components/chat/chat-textarea-types.js';
 import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { ChatProvider } from '#hooks/use-chat.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';

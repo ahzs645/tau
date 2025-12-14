@@ -5,7 +5,7 @@ import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { createInitialBuild } from '#constants/build.constants.js';
-import type { ChatTextareaProperties } from '#components/chat/chat-textarea.js';
+import type { ChatTextareaProperties } from '#components/chat/chat-textarea-types.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { Button } from '#components/ui/button.js';
