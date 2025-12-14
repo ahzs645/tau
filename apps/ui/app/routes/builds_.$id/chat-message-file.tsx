@@ -31,11 +31,11 @@ export function ChatMessageFile({ part }: { readonly part: FileUIPart }): React.
           />
         </DialogTrigger>
         {open ? (
-          <DialogContent className="flex max-h-[80vh]! max-w-[80vw]! items-center justify-center border-none bg-transparent p-0 shadow-none">
+          <DialogContent className="flex aspect-auto max-h-[80vh]! max-w-[80vw]! items-center justify-center overflow-hidden rounded-lg border bg-transparent p-0 shadow-none">
             <img
               src={part.url}
               alt={part.filename ?? 'Uploaded image'}
-              className="size-full rounded-lg bg-background object-contain"
+              className="size-full rounded-lg bg-background object-cover"
               onError={() => {
                 setImageError(true);
               }}
