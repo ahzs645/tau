@@ -4,7 +4,35 @@ import { ConfigService } from '@nestjs/config';
 import { WebSocket } from 'ws';
 import type { Environment } from '#config/environment.config.js';
 
-const zooBaseUrl = 'wss://api.zoo.dev';
+/**
+ * RFC 6455 close codes that are reserved and must not be sent in a close frame.
+ * - 1005: No Status Rcvd - must not be sent
+ * - 1006: Abnormal Closure - must not be sent
+ * - 1015: TLS Handshake - must not be sent
+ */
+const forbiddenCloseCodes = new Set([1005, 1006, 1015]);
+
+/**
+ * Validates a WebSocket close code according to RFC 6455.
+ * Returns the original code if valid, otherwise returns 1011 (Internal Error).
+ *
+ * Valid codes: 1000-4999, excluding 1005, 1006, 1015
+ * @param code - The close code to validate (may be undefined)
+ * @returns A valid close code safe to send in a WebSocket close frame
+ */
+function getSafeCloseCode(code: number | undefined): number {
+  // Missing or out of valid range (1000-4999)
+  if (code === undefined || code < 1000 || code > 4999) {
+    return 1011;
+  }
+
+  // Forbidden/reserved codes that must not be sent
+  if (forbiddenCloseCodes.has(code)) {
+    return 1011;
+  }
+
+  return code;
+}
 
 @Injectable()
 export class KernelsService {
@@ -122,9 +150,8 @@ export class KernelsService {
       this.logger.debug(`Zoo WebSocket closed: code=${event.code}, reason=${event.reason}`);
 
       if (!clientClosed && clientSocket.readyState === WebSocket.OPEN) {
-        // Use a valid close code - some codes like 1006 are reserved and cannot be sent
-        // Use 1001 (Going Away) as a generic "upstream closed" indicator
-        const closeCode = event.code >= 1000 && event.code <= 1003 ? event.code : 1001;
+        // Forward the close code if valid per RFC 6455, otherwise use 1011 (Internal Error)
+        const closeCode = getSafeCloseCode(event.code);
         clientSocket.close(closeCode, event.reason || 'Upstream connection closed');
       }
     });
