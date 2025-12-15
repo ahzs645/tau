@@ -9,6 +9,7 @@ import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { ConfigService } from '@nestjs/config';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from '@fastify/helmet';
+import websocket from '@fastify/websocket';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { AppModule } from '#app.module.js';
@@ -25,6 +26,14 @@ async function bootstrap() {
     disableRequestLogging: true, // Disables automatic 'incoming request'/'request completed' logs - these are handled by custom loggers.
     logger: getFastifyLoggingConfig(),
   });
+
+  // In production, register @fastify/websocket BEFORE NestFactory.create()
+  // so it's available when KernelsGateway.onModuleInit() registers WebSocket routes.
+  // In dev mode, vite-plugin-node doesn't support WebSockets, so we use a standalone server instead.
+  if (import.meta.env.PROD) {
+    await fastifyAdapter.getInstance().register(websocket);
+  }
+
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, fastifyAdapter, {
     bufferLogs: true, // Buffer logs until pino logger is ready. This ensures all logs are consistently formatted.
   });

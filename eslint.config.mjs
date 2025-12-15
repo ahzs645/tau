@@ -261,6 +261,7 @@ const config = [
             'Catch',
             'ZodSerializerDto',
             'Sse',
+            'WebSocketGateway',
           ],
         },
       ],

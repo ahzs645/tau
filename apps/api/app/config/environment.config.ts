@@ -48,6 +48,9 @@ const environmentSchema = z.object({
   GITHUB_CLIENT_SECRET: z.string(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+
+  // Kernel Integrations
+  ZOO_API_KEY: z.string().describe('Zoo.dev API key for KCL kernel proxy'),
   /* eslint-enable @typescript-eslint/naming-convention -- renabling */
 });
 
