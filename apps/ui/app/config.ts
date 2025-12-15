@@ -29,9 +29,9 @@ const environmentSchema = z.preprocess(
   z.object({
     /* eslint-disable @typescript-eslint/naming-convention -- environment variables are not camelCase */
     TAU_API_URL: z.url(),
+    TAU_WEBSOCKET_URL: z.url().describe('WebSocket URL for the API (e.g., wss://api.tau.new or ws://localhost:4001)'),
     TAU_FRONTEND_URL: z.url(),
     NODE_ENV: z.enum(['development', 'production', 'test']),
-    ZOO_API_KEY: z.string().optional().describe('To be removed in favor of integrations.'),
     GITHUB_API_TOKEN: z.string().optional().describe('GitHub API token for the GitHub API client.'),
     /* eslint-enable @typescript-eslint/naming-convention -- environment variables are not camelCase */
   }),

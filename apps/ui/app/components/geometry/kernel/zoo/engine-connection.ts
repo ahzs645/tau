@@ -123,7 +123,8 @@ export class EngineConnection {
         this.context = await new this.wasmModule.Context(this, this.fileSystemManager);
 
         try {
-          const url = new URL('/ws/modeling/commands', this.baseUrl);
+          // Use baseUrl directly - it may be a proxy URL or direct Zoo URL
+          const url = new URL(this.baseUrl);
           url.searchParams.set('video_res_width', '256');
           url.searchParams.set('video_res_height', '256');
 

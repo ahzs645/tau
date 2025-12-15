@@ -204,7 +204,7 @@ const createWorkersActor = fromPromise<
         {},
       ),
       wrappedZooWorker.initializeEntry(proxy({ onLog }), transfer({ fileManagerPort: zooPort }, [zooPort]), {
-        apiKey: ENV.ZOO_API_KEY ?? '',
+        baseUrl: `${ENV.TAU_WEBSOCKET_URL}/v1/kernels/zoo`,
       }),
       wrappedTauWorker.initializeEntry(proxy({ onLog }), transfer({ fileManagerPort: tauPort }, [tauPort]), {}),
       wrappedJscadWorker.initializeEntry(proxy({ onLog }), transfer({ fileManagerPort: jscadPort }, [jscadPort]), {}),

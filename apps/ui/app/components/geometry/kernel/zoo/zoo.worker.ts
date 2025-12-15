@@ -22,7 +22,8 @@ import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js
 import { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
 
 type ZooOptions = {
-  apiKey: string;
+  /** Base URL for the Zoo API proxy (e.g., wss://api.tau.new/v1/kernels/zoo) */
+  baseUrl: string;
 };
 
 class ZooWorker extends KernelWorker<ZooOptions> {
@@ -371,7 +372,8 @@ class ZooWorker extends KernelWorker<ZooOptions> {
 
   private async getKclUtilsInstance(): Promise<KclUtils> {
     this.kclUtils ??= new KclUtils({
-      apiKey: this.options.apiKey,
+      apiKey: '', // API key is injected by the server-side proxy
+      baseUrl: this.options.baseUrl,
       fileSystemManager: this.fileSystemManager,
     });
     return this.kclUtils;

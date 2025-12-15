@@ -12,6 +12,7 @@ primary_region = 'syd'
 [env]
   NODE_ENV = 'production'
   TAU_API_URL = 'https://api.tau.new'
+  TAU_WEBSOCKET_URL = 'wss://api.tau.new'
   TAU_FRONTEND_URL = 'https://tau.new'
 
 [http_service]
