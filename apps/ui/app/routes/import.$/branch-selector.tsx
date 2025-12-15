@@ -1,9 +1,17 @@
+import { useMemo } from 'react';
 import { GitBranch, ChevronDown } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
+
+type Branch = {
+  name: string;
+  sha: string;
+  updatedAt: number;
+};
 
 type BranchSelectorProperties = {
-  readonly branches: Array<{ name: string; sha: string }>;
+  readonly branches: Branch[];
   readonly selectedBranch: string;
   readonly isDisabled?: boolean;
   readonly isLoadingMore?: boolean;
@@ -11,15 +19,44 @@ type BranchSelectorProperties = {
   readonly onLoadMore?: () => void;
 };
 
+type BranchGroup = {
+  name: string;
+  items: Branch[];
+};
+
+/**
+ * Check if a branch is a default branch (main/master)
+ */
+function isDefaultBranch(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return lowerName === 'main' || lowerName === 'master';
+}
+
 export function BranchSelector(properties: BranchSelectorProperties): React.JSX.Element {
   const { branches, selectedBranch, isDisabled, isLoadingMore, onSelect, onLoadMore } = properties;
 
-  const groupedBranches = [
-    {
-      name: 'Branches',
-      items: branches,
-    },
-  ];
+  // Group branches: Default first, then by last commit time
+  const groupedBranches = useMemo((): BranchGroup[] => {
+    // Separate default branches (main/master) from others
+    const defaultBranches = branches.filter((branch) => isDefaultBranch(branch.name));
+    const otherBranches = branches.filter((branch) => !isDefaultBranch(branch.name));
+
+    const groups: BranchGroup[] = [];
+
+    // Add default branches first if any exist
+    if (defaultBranches.length > 0) {
+      groups.push({
+        name: 'Default',
+        items: defaultBranches,
+      });
+    }
+
+    // Add other branches grouped by temporal horizon
+    const temporalGroups = groupItemsByTimeHorizon(otherBranches);
+    groups.push(...temporalGroups);
+
+    return groups;
+  }, [branches]);
 
   return (
     <ComboBoxResponsive

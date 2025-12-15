@@ -1,11 +1,10 @@
-import { useLoaderData, useNavigate } from 'react-router';
+import { useLoaderData, useLocation, useNavigate } from 'react-router';
 import type { MetaDescriptor } from 'react-router';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useRef } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { AlertCircle, ChevronDown, FileCode, RotateCcw, XCircle } from 'lucide-react';
+import { AlertCircle, RotateCcw, X, XCircle } from 'lucide-react';
 import { fromPromise } from 'xstate';
 import type { Route } from './+types/route.js';
-import type { TreeViewElement } from '#components/magicui/file-tree.js';
 import type { Handle } from '#types/matches.types.js';
 import { importGitHubMachine } from '#machines/import-github.machine.js';
 import { LoadingSpinner } from '#components/ui/loading-spinner.js';
@@ -13,13 +12,15 @@ import { Progress } from '#components/ui/progress.js';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
-import { Tree, Folder, File } from '#components/magicui/file-tree.js';
 import { formatFileSize } from '#components/geometry/converter/converter-utils.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { RepositoryCard } from '#routes/import/repository-card.js';
-import { BranchSelector } from '#routes/import/branch-selector.js';
-import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { RepositoryCard } from '#routes/import.$/repository-card.js';
+import { BranchSelector } from '#routes/import.$/branch-selector.js';
+import { FileSelector } from '#components/files/file-selector.js';
+import { SuggestedClones } from '#routes/import.$/suggested-clones.js';
 import { inspect } from '#machines/inspector.js';
+import { CopyButton } from '#components/copy-button.js';
+import { ImportViewer } from '#routes/import.$/import-viewer.js';
 
 export const handle: Handle = {
   enableOverflowY: true,
@@ -66,70 +67,6 @@ function parseGitHubUrl(url: string): { owner: string; repo: string } | undefine
 /**
  * Build hierarchical file tree from flat file list
  */
-function buildFileTree(files: Map<string, { filename: string; content: Uint8Array }>): TreeViewElement[] {
-  const fileNames = [...files.keys()];
-  const tree = new Map<string, TreeViewElement>();
-  const rootFolders: TreeViewElement[] = [];
-
-  for (const filename of fileNames) {
-    const parts = filename.split('/');
-    let currentPath = '';
-
-    for (let index = 0; index < parts.length; index++) {
-      const part = parts[index];
-      if (!part) {
-        continue;
-      }
-
-      const parentPath = currentPath;
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
-      const isFile = index === parts.length - 1;
-
-      if (tree.has(currentPath)) {
-        continue;
-      }
-
-      const element: TreeViewElement = {
-        id: currentPath,
-        name: part,
-        isSelectable: true,
-        children: isFile ? undefined : [],
-      };
-
-      tree.set(currentPath, element);
-
-      if (parentPath) {
-        const parent = tree.get(parentPath);
-        parent?.children?.push(element);
-      } else {
-        rootFolders.push(element);
-      }
-    }
-  }
-
-  return rootFolders;
-}
-
-/**
- * Recursively render file tree elements
- */
-function renderFileTree(elements: TreeViewElement[]): React.ReactNode {
-  return elements.map((element) => {
-    if (element.children && element.children.length > 0) {
-      return (
-        <Folder key={element.id} element={element.name} value={element.id}>
-          {renderFileTree(element.children)}
-        </Folder>
-      );
-    }
-
-    return (
-      <File key={element.id} value={element.id}>
-        <span className="truncate">{element.name}</span>
-      </File>
-    );
-  });
-}
 
 export function meta({ loaderData }: Route.MetaArgs): MetaDescriptor[] {
   const repo = `${loaderData.owner}/${loaderData.repo} ${loaderData.ref === 'main' ? '' : `@ ${loaderData.ref}`}`;
@@ -139,17 +76,66 @@ export function meta({ loaderData }: Route.MetaArgs): MetaDescriptor[] {
 }
 
 /**
- * Client loader that validates GitHub URL
+ * Normalize a GitHub URL from the path.
+ * Browser may normalize https:// to https:/ in URL paths.
+ */
+function normalizeGitHubUrl(splatPath: string): string {
+  let repoUrl = splatPath;
+
+  // Handle various URL formats and normalize to https://github.com/...
+
+  // Handle fully encoded protocol (https%3A%2F%2F or https%3a%2f%2f)
+  if (repoUrl.startsWith('https%3A%2F%2F') || repoUrl.startsWith('https%3a%2f%2f')) {
+    repoUrl = repoUrl.replace(/^https%3[Aa]%2[Ff]%2[Ff]/, 'https://');
+  }
+
+  if (repoUrl.startsWith('http%3A%2F%2F') || repoUrl.startsWith('http%3a%2f%2f')) {
+    repoUrl = repoUrl.replace(/^http%3[Aa]%2[Ff]%2[Ff]/, 'http://');
+  }
+
+  // Handle partially encoded colon (https%3A// or https%3a//)
+  if (repoUrl.startsWith('https%3A//') || repoUrl.startsWith('https%3a//')) {
+    repoUrl = repoUrl.replace(/^https%3[Aa]\/\//, 'https://');
+  }
+
+  if (repoUrl.startsWith('http%3A//') || repoUrl.startsWith('http%3a//')) {
+    repoUrl = repoUrl.replace(/^http%3[Aa]\/\//, 'http://');
+  }
+
+  // Fix URL normalization (browser might normalize https:// to https:/)
+  if (repoUrl.startsWith('https:/') && !repoUrl.startsWith('https://')) {
+    repoUrl = repoUrl.replace('https:/', 'https://');
+  }
+
+  if (repoUrl.startsWith('http:/') && !repoUrl.startsWith('http://')) {
+    repoUrl = repoUrl.replace('http:/', 'http://');
+  }
+
+  // Handle bare domain (github.com/owner/repo) - add https://
+  if (repoUrl.startsWith('github.com/')) {
+    repoUrl = `https://${repoUrl}`;
+  }
+
+  return repoUrl;
+}
+
+/**
+ * Splat route loader for /import/*
+ *
+ * Handles path-based GitHub URLs like:
+ * - /import/https://github.com/owner/repo
+ * - /import/https://github.com/owner/repo?ref=main&main=file.scad
  */
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
-export function loader({ request }: Route.LoaderArgs) {
+export function loader({ request, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
-  const repoUrl = url.searchParams.get('repo');
+  const splatPath = (params as { '*'?: string })['*'] ?? '';
+
   const ref = url.searchParams.get('ref') ?? 'main';
   const mainFile = url.searchParams.get('main') ?? '';
 
-  // If no repo URL provided, return defaults for entering details state
-  if (!repoUrl) {
+  // If no splat path, return defaults for entering details state
+  if (!splatPath) {
     return {
       owner: '',
       repo: '',
@@ -157,6 +143,9 @@ export function loader({ request }: Route.LoaderArgs) {
       mainFile: '',
     } satisfies GitHubRepoInfo;
   }
+
+  // Normalize the GitHub URL from the path
+  const repoUrl = normalizeGitHubUrl(splatPath);
 
   const parsed = parseGitHubUrl(repoUrl);
   if (!parsed) {
@@ -245,9 +234,89 @@ export default function ImportRoute(): React.JSX.Element {
   const repoMetadata = useSelector(importActorRef, (snapshot) => snapshot.context.repoMetadata);
   const branches = useSelector(importActorRef, (snapshot) => snapshot.context.branches);
   const selectedBranch = useSelector(importActorRef, (snapshot) => snapshot.context.selectedBranch);
+  const repoFiles = useSelector(importActorRef, (snapshot) => snapshot.context.repoFiles);
+  const isLoadingFiles = useSelector(importActorRef, (snapshot) => snapshot.context.isLoadingFiles);
   const fetchErrors = useSelector(importActorRef, (snapshot) => snapshot.context.fetchErrors);
   const hasMoreBranches = useSelector(importActorRef, (snapshot) => snapshot.context.hasMoreBranches);
   const isLoadingMoreBranches = useSelector(importActorRef, (snapshot) => snapshot.context.isLoadingMoreBranches);
+
+  // Track if this is the initial mount to avoid syncing on first render
+  const isInitialMount = useRef(true);
+  const location = useLocation();
+
+  // Sync location changes to machine (for back/forward navigation)
+  // This is the single source of truth for URL → Machine state
+  useEffect(() => {
+    // Skip on initial mount - let the loader data initialize the machine
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      // But still send initial location to ensure machine has correct state
+      importActorRef.send({
+        type: 'syncLocation',
+        owner,
+        repo,
+        ref,
+        mainFile,
+      });
+      return;
+    }
+
+    // Send location changes to machine
+    importActorRef.send({
+      type: 'syncLocation',
+      owner,
+      repo,
+      ref,
+      mainFile,
+    });
+  }, [location.pathname, location.search, owner, repo, ref, mainFile, importActorRef]);
+
+  // Listen to machine's URL events and update browser URL
+  useEffect(() => {
+    const subscription = importActorRef.on('urlReplaced', (event) => {
+      // Normalize URLs for comparison (handle all format variants)
+      const normalizeForCompare = (url: string): string =>
+        url
+          // Remove protocol variations to compare just the path
+          .replace('/import/https%3A%2F%2Fgithub.com/', '/import/github.com/')
+          .replace('/import/https%3A//github.com/', '/import/github.com/')
+          .replace('/import/https://github.com/', '/import/github.com/')
+          .replace('/import/https:/github.com/', '/import/github.com/');
+
+      const currentUrl = globalThis.location.pathname + globalThis.location.search;
+
+      if (normalizeForCompare(currentUrl) !== normalizeForCompare(event.url)) {
+        globalThis.history.replaceState(null, '', event.url);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [importActorRef]);
+
+  useEffect(() => {
+    const subscription = importActorRef.on('urlPushed', (event) => {
+      // Normalize URLs for comparison (handle all format variants)
+      const normalizeForCompare = (url: string): string =>
+        url
+          // Remove protocol variations to compare just the path
+          .replace('/import/https%3A%2F%2Fgithub.com/', '/import/github.com/')
+          .replace('/import/https%3A//github.com/', '/import/github.com/')
+          .replace('/import/https://github.com/', '/import/github.com/')
+          .replace('/import/https:/github.com/', '/import/github.com/');
+
+      const currentUrl = globalThis.location.pathname + globalThis.location.search;
+
+      if (normalizeForCompare(currentUrl) !== normalizeForCompare(event.url)) {
+        globalThis.history.pushState(null, '', event.url);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [importActorRef]);
 
   // Navigate when build is created
   useEffect(() => {
@@ -255,8 +324,6 @@ export default function ImportRoute(): React.JSX.Element {
       void navigate(`/builds/${buildId}`);
     }
   }, [state, buildId, navigate]);
-
-  const fileTree = useMemo(() => buildFileTree(files), [files]);
 
   switch (true) {
     case state.matches('enteringDetails') ||
@@ -286,19 +353,36 @@ export default function ImportRoute(): React.JSX.Element {
                 <label htmlFor="repo-url" className="text-sm font-medium">
                   Repository URL
                 </label>
-                <Input
-                  id="repo-url"
-                  type="url"
-                  placeholder="https://github.com/owner/repo"
-                  value={repoUrl}
-                  className="font-mono text-sm"
-                  onChange={(event) => {
-                    importActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
-                  }}
-                />
+                <div className="group relative">
+                  <Input
+                    id="repo-url"
+                    type="url"
+                    placeholder="https://github.com/owner/repo"
+                    value={repoUrl}
+                    className="pr-8 font-mono text-sm"
+                    onChange={(event) => {
+                      importActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
+                    }}
+                  />
+                  {repoUrl.length > 0 ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 p-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                      type="button"
+                      aria-label="Clear URL"
+                      onClick={() => {
+                        // Clear URL - machine will emit urlPushed to update browser URL
+                        importActorRef.send({ type: 'updateRepoUrl', url: '' });
+                      }}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  ) : undefined}
+                </div>
               </div>
 
-              {/* Repository Preview Card */}
+              {/* Repository Preview Card or Suggested Clones */}
               {isValidRepo ? (
                 <>
                   <RepositoryCard
@@ -348,41 +432,109 @@ export default function ImportRoute(): React.JSX.Element {
                     </div>
                   ) : undefined}
 
-                  {/* Branch Selector */}
-                  {branches.length > 0 ? (
-                    <div className="space-y-2 rounded-lg border bg-sidebar p-6">
-                      <label className="text-sm font-medium">Branch</label>
-                      <BranchSelector
-                        branches={branches}
-                        selectedBranch={selectedBranch}
-                        isLoadingMore={isLoadingMoreBranches}
-                        onSelect={(branch) => {
-                          importActorRef.send({ type: 'selectBranch', branch });
-                        }}
-                        onLoadMore={
-                          hasMoreBranches
-                            ? () => {
-                                importActorRef.send({ type: 'loadMoreBranches' });
-                              }
-                            : undefined
-                        }
-                      />
+                  {/* Branch & Main File Selectors */}
+                  {branches.length > 0 || repoFiles.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {/* Branch Selector */}
+                      {branches.length > 0 ? (
+                        <div className="space-y-2 rounded-lg border bg-sidebar p-6">
+                          <label className="text-sm font-medium">Branch</label>
+                          <BranchSelector
+                            branches={branches}
+                            selectedBranch={selectedBranch}
+                            isLoadingMore={isLoadingMoreBranches}
+                            onSelect={(branch) => {
+                              importActorRef.send({ type: 'selectBranch', branch });
+                            }}
+                            onLoadMore={
+                              hasMoreBranches
+                                ? () => {
+                                    importActorRef.send({ type: 'loadMoreBranches' });
+                                  }
+                                : undefined
+                            }
+                          />
+                        </div>
+                      ) : undefined}
+
+                      {/* Main File Selector */}
+                      {repoFiles.length > 0 || isLoadingFiles ? (
+                        <div className="space-y-2 rounded-lg border bg-sidebar p-6">
+                          <label className="text-sm font-medium">Main File</label>
+                          <FileSelector
+                            files={repoFiles}
+                            selectedFile={selectedMainFile}
+                            isLoading={isLoadingFiles}
+                            popoverProperties={{
+                              side: 'top',
+                            }}
+                            onSelect={(file) => {
+                              importActorRef.send({ type: 'selectMainFile', file });
+                            }}
+                          />
+                        </div>
+                      ) : undefined}
                     </div>
                   ) : undefined}
 
-                  {/* Start Import Button */}
-                  <Button
-                    className="w-full"
-                    size="lg"
-                    disabled={isCheckingOrFetching || !repoMetadata}
-                    onClick={() => {
-                      importActorRef.send({ type: 'startImport' });
-                    }}
-                  >
-                    Start Import
-                  </Button>
+                  {/* Start Import Button and Short Link */}
+                  <div className="flex gap-2">
+                    <Button
+                      className="flex-1"
+                      size="lg"
+                      disabled={isCheckingOrFetching || !repoMetadata}
+                      onClick={() => {
+                        importActorRef.send({ type: 'startImport' });
+                      }}
+                    >
+                      Start Import
+                    </Button>
+                    <CopyButton
+                      size="icon"
+                      className="size-11"
+                      variant="outline"
+                      tooltip="Copy short link"
+                      readyToCopyText=""
+                      copiedText=""
+                      getText={() => {
+                        // Build short URL with /i instead of /import
+                        // Use repoUrl from machine context (not browser URL) to avoid https:/ normalization
+                        const parameters = new URLSearchParams();
+
+                        if (selectedBranch && selectedBranch !== 'main') {
+                          parameters.set('ref', selectedBranch);
+                        }
+
+                        const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
+
+                        return `${globalThis.location.origin}/i/${repoUrl}${queryString}`;
+                      }}
+                    />
+                  </div>
                 </>
-              ) : undefined}
+              ) : (
+                <SuggestedClones
+                  onSelect={(repository) => {
+                    // Use github.com without protocol to avoid browser normalizing // to /
+                    const repoUrl = `github.com/${repository.owner}/${repository.repo}`;
+                    const parameters = new URLSearchParams();
+
+                    if (repository.ref !== 'main') {
+                      parameters.set('ref', repository.ref);
+                    }
+
+                    if (repository.mainFile) {
+                      parameters.set('main', repository.mainFile);
+                    }
+
+                    const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
+                    const targetUrl = `/import/${repoUrl}${queryString}`;
+
+                    // Use React Router navigate for proper history management
+                    void navigate(targetUrl);
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -394,7 +546,7 @@ export default function ImportRoute(): React.JSX.Element {
 
       return (
         <div className="flex h-full items-center justify-center px-4 pt-8 pb-16">
-          <div className="w-full max-w-3xl space-y-6">
+          <div className="w-full max-w-5xl space-y-6">
             <div className="flex flex-col items-center gap-4">
               <div className="flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
                 <SvgIcon id="github" className="size-8 text-primary" />
@@ -414,75 +566,45 @@ export default function ImportRoute(): React.JSX.Element {
               </div>
             </div>
 
-            <div className="grid gap-6 md:grid-cols-2">
-              {/* Left: File Tree */}
-              <div className="space-y-3">
-                <h2 className="text-sm font-medium">Repository Files ({fileNames.length})</h2>
-                <div className="max-h-96 overflow-auto rounded-md border bg-sidebar p-2">
-                  <Tree elements={fileTree} className="h-full">
-                    {renderFileTree(fileTree)}
-                  </Tree>
-                </div>
+            <div className="flex flex-col gap-6 md:flex-row">
+              {/* Left: CAD Preview */}
+              <div className="h-[60vh] flex-1 overflow-hidden rounded-lg border bg-sidebar">
+                <ImportViewer files={files} mainFile={selectedMainFile} owner={owner} repo={repo} />
               </div>
 
               {/* Right: Main File Selection */}
-              <div className="space-y-3">
-                <h2 className="text-sm font-medium">Main File</h2>
-                <div className="space-y-4 rounded-md border bg-sidebar p-4">
-                  <ComboBoxResponsive
-                    groupedItems={[
-                      {
-                        name: 'Files',
-                        items: fileNames.map((name) => ({ name })),
-                      },
-                    ]}
-                    renderLabel={(file, selected) => (
-                      <div className="flex items-center gap-2">
-                        <FileCode className="size-4" />
-                        <span className={selected?.name === file.name ? 'font-medium' : ''}>{file.name}</span>
-                      </div>
-                    )}
-                    getValue={(file) => file.name}
-                    defaultValue={selectedMainFile ? { name: selectedMainFile } : undefined}
+              <div className="flex w-full flex-col justify-start gap-4 md:w-64">
+                <div className="space-y-3">
+                  <h2 className="text-sm font-medium">Main File</h2>
+                  <FileSelector
+                    files={fileNames.map((path) => ({ path }))}
+                    selectedFile={selectedMainFile}
                     placeholder="Select main file..."
-                    searchPlaceHolder="Search files..."
                     title="Select Main File"
                     description="Choose the main entry file for your project"
-                    emptyListMessage="No files found"
-                    withVirtualization={fileNames.length > 50}
-                    virtualizationHeight={300}
-                    className="w-full"
-                    onSelect={(filename) => {
-                      importActorRef.send({ type: 'selectMainFile', filename });
+                    emptyMessage="No files found"
+                    onSelect={(file) => {
+                      importActorRef.send({ type: 'selectMainFile', file });
                     }}
-                  >
-                    <Button variant="outline" className="w-full justify-between">
-                      {selectedMainFile ? (
-                        <span className="truncate">{selectedMainFile}</span>
-                      ) : (
-                        <span className="text-muted-foreground">Select main file...</span>
-                      )}
-                      <ChevronDown className="size-4 shrink-0" />
-                    </Button>
-                  </ComboBoxResponsive>
-
-                  {selectedMainFile ? (
-                    <div className="rounded-md bg-muted/50 p-3 text-xs">
-                      <div className="font-medium">Selected:</div>
-                      <div className="mt-1 break-all text-muted-foreground">{selectedMainFile}</div>
-                    </div>
-                  ) : undefined}
-
-                  <Button
-                    className="w-full"
-                    disabled={!selectedMainFile}
-                    onClick={() => {
-                      importActorRef.send({ type: 'confirmImport' });
-                    }}
-                  >
-                    Import Project
-                  </Button>
+                  />
                 </div>
+
+                {selectedMainFile ? (
+                  <div className="rounded-md bg-muted/50 p-3 text-xs">
+                    <div className="font-medium">Selected:</div>
+                    <div className="mt-1 break-all text-muted-foreground">{selectedMainFile}</div>
+                  </div>
+                ) : undefined}
+
+                <Button
+                  className="w-full"
+                  disabled={!selectedMainFile}
+                  onClick={() => {
+                    importActorRef.send({ type: 'confirmImport' });
+                  }}
+                >
+                  Import Project
+                </Button>
               </div>
             </div>
           </div>
