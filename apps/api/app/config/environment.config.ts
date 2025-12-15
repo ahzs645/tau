@@ -51,6 +51,7 @@ const environmentSchema = z.object({
 
   // Kernel Integrations
   ZOO_API_KEY: z.string().describe('Zoo.dev API key for KCL kernel proxy'),
+  ZOO_WEBSOCKET_URL: z.string().describe('Zoo.dev API URL for KCL kernel proxy').default('wss://api.zoo.dev'),
   /* eslint-enable @typescript-eslint/naming-convention -- renabling */
 });
 

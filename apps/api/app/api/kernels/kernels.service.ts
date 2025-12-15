@@ -10,9 +10,11 @@ const zooBaseUrl = 'wss://api.zoo.dev';
 export class KernelsService {
   private readonly logger = new Logger(KernelsService.name);
   private readonly zooApiKey: string;
+  private readonly zooWebsocketUrl: string;
 
   public constructor(private readonly configService: ConfigService<Environment, true>) {
     this.zooApiKey = this.configService.get('ZOO_API_KEY', { infer: true });
+    this.zooWebsocketUrl = this.configService.get('ZOO_WEBSOCKET_URL', { infer: true });
   }
 
   /**
@@ -22,7 +24,7 @@ export class KernelsService {
    */
   public createZooProxy(clientSocket: WebSocket, queryParameters: URLSearchParams): void {
     // Build the Zoo API WebSocket URL with query parameters
-    const zooUrl = new URL('/ws/modeling/commands', zooBaseUrl);
+    const zooUrl = new URL('/ws/modeling/commands', this.zooWebsocketUrl);
     for (const [key, value] of queryParameters.entries()) {
       zooUrl.searchParams.set(key, value);
     }
