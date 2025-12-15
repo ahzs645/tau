@@ -39,7 +39,7 @@ export function CommunityBuildGrid({
 
   return (
     <>
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {displayedBuilds.map((build) => (
           <BuildProvider
             key={build.id}
@@ -195,9 +195,9 @@ function ProjectCard({
   }, [navigate, id]);
 
   return (
-    <Card className="group relative flex flex-col overflow-hidden pt-0">
-      <div className="cursor-pointer" onClick={handleCardClick}>
-        <div className="inset-0 aspect-video h-fit w-full overflow-hidden bg-muted group-hover:bg-accent/70">
+    <Card className="group relative flex flex-col overflow-hidden py-0">
+      <div className="flex flex-1 cursor-pointer flex-col" onClick={handleCardClick}>
+        <div className="inset-0 aspect-video h-fit w-full overflow-hidden bg-muted group-hover:bg-accent/70 sm:aspect-video">
           {!showPreview && (
             <img src={thumbnail || '/placeholder.svg'} alt={name} className="size-full object-cover" loading="lazy" />
           )}
@@ -226,15 +226,20 @@ function ProjectCard({
               </div>
             </div>
           ) : null}
-          <Button variant="overlay" size="icon" className="absolute top-2 right-2 z-10" onClick={handlePreviewToggle}>
-            <Eye className={showPreview ? 'size-4 text-primary' : 'size-4'} />
+          <Button
+            variant="overlay"
+            size="icon"
+            className="absolute top-1 right-1 z-10 size-7 sm:top-2 sm:right-2 sm:size-9"
+            onClick={handlePreviewToggle}
+          >
+            <Eye className={showPreview ? 'size-3.5 text-primary sm:size-4' : 'size-3.5 sm:size-4'} />
           </Button>
         </div>
-        <div className="flex h-28 flex-col justify-between pt-4">
-          <CardHeader>
+        <div className="flex flex-1 flex-col sm:pt-4">
+          <CardHeader className="max-md:p-2">
             <div className="flex items-center justify-between">
-              <CardTitle>{name}</CardTitle>
-              <div className="flex flex-wrap gap-1">
+              <CardTitle className="line-clamp-1 text-sm sm:text-base">{name}</CardTitle>
+              <div className="hidden flex-wrap gap-1 sm:flex">
                 {kernels.map((kernel) => {
                   const kernelConfiguration = kernelConfigurations.find((k) => k.id === kernel);
                   if (!kernelConfiguration) {
@@ -257,27 +262,27 @@ function ProjectCard({
                 })}
               </div>
             </div>
-            <CardDescription className="line-clamp-2">{description}</CardDescription>
+            <CardDescription className="line-clamp-1 text-xs sm:line-clamp-2 sm:text-sm">{description}</CardDescription>
           </CardHeader>
-          <CardFooter className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <CardFooter className="mt-auto flex items-center justify-between gap-1.5 p-2 pt-1 sm:gap-2 sm:p-4 sm:pt-2">
+            <div className="hidden items-center gap-2 sm:flex">
               <Avatar className="size-6">
                 <AvatarImage src={author.avatar} alt={author.name} />
-                <AvatarFallback>{author.name.charAt(0)}</AvatarFallback>
+                <AvatarFallback className="text-xs">{author.name.charAt(0)}</AvatarFallback>
               </Avatar>
               <span className="line-clamp-1 text-sm text-muted-foreground">{author.name}</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-end sm:gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="outline"
                     size="sm"
-                    className="group flex items-center gap-1 text-sm text-muted-foreground hover:text-yellow"
+                    className="group flex h-7 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-yellow sm:h-8 sm:px-3 sm:text-sm"
                     onClick={handleStar}
                   >
                     {stars}
-                    <Star />
+                    <Star className="size-3.5 sm:size-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Star this project</TooltipContent>
@@ -287,12 +292,16 @@ function ProjectCard({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-primary"
+                    className="flex h-7 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-primary sm:h-8 sm:px-3 sm:text-sm"
                     disabled={isForking}
                     onClick={handleFork}
                   >
-                    <span className="text-sm">Remix</span>
-                    {isForking ? <LoadingSpinner /> : <ArrowRight />}
+                    <span className="text-xs sm:text-sm">Remix</span>
+                    {isForking ? (
+                      <LoadingSpinner className="size-3.5 sm:size-4" />
+                    ) : (
+                      <ArrowRight className="size-3.5 sm:size-4" />
+                    )}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{isForking ? 'Remixing project...' : 'Remix this project'}</TooltipContent>
