@@ -1,7 +1,7 @@
-import { useCallback, useContext, useEffect, useState, useMemo } from 'react';
+import { useCallback, useContext, useEffect, useState, useMemo, useRef } from 'react';
 import type { ActorRefFrom } from 'xstate';
 import { AuthUIContext } from '@daveyplate/better-auth-ui';
-import { Loader2, GitBranch, User } from 'lucide-react';
+import { Loader2, GitBranch, User, MoreHorizontal } from 'lucide-react';
 import type { GitRepository } from '@taucad/types';
 import type { gitMachine } from '#machines/git.machine.js';
 import { Button } from '#components/ui/button.js';
@@ -9,6 +9,7 @@ import { toast } from '#components/ui/sonner.js';
 import { getGitHubAccessToken } from '#lib/git-auth.js';
 import { cn } from '#utils/ui.utils.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
+import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
 
 type RepositorySelectorProperties = {
   readonly gitRef: ActorRefFrom<typeof gitMachine>;
@@ -16,13 +17,21 @@ type RepositorySelectorProperties = {
   readonly onCancel?: () => void;
 };
 
+type GitRepositoryWithTimestamp = GitRepository & { updatedAt: number };
+
+const REPOS_PER_PAGE = 30;
+
 export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositorySelectorProperties): React.ReactNode {
-  const [repositories, setRepositories] = useState<GitRepository[]>([]);
+  const [repositories, setRepositories] = useState<GitRepositoryWithTimestamp[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<GitRepository | undefined>();
   const [selectedScope, setSelectedScope] = useState<string | undefined>();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const { hooks } = useContext(AuthUIContext);
   const { data: session } = hooks.useSession();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Extract unique scopes (owners) from repositories
   const scopes = useMemo(() => {
@@ -39,39 +48,57 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
     return repositories.filter((repo) => repo.owner === selectedScope);
   }, [repositories, selectedScope]);
 
-  useEffect(() => {
-    async function fetchRepositories(): Promise<void> {
-      try {
-        const token = await getGitHubAccessToken();
-        const response = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated', {
+  // Group repositories by time horizon
+  const groupedRepositories = useMemo(() => {
+    return groupItemsByTimeHorizon(filteredRepositories);
+  }, [filteredRepositories]);
+
+  const fetchRepositories = useCallback(async (page: number, isInitial: boolean): Promise<void> => {
+    try {
+      if (isInitial) {
+        setIsLoading(true);
+      } else {
+        setIsLoadingMore(true);
+      }
+
+      const token = await getGitHubAccessToken();
+      const response = await fetch(
+        `https://api.github.com/user/repos?per_page=${REPOS_PER_PAGE}&page=${page}&sort=updated&direction=desc`,
+        {
           headers: {
             Authorization: `Bearer ${token}`,
-
             Accept: 'application/vnd.github.v3+json',
           },
-        });
+        },
+      );
 
-        if (!response.ok) {
-          throw new Error('Failed to fetch repositories');
-        }
+      if (!response.ok) {
+        throw new Error('Failed to fetch repositories');
+      }
 
-        const data = (await response.json()) as Array<{
-          owner: { login: string };
-          name: string;
-          clone_url: string;
-          default_branch?: string;
-          private: boolean;
-        }>;
-        const repos: GitRepository[] = data.map((repo) => ({
-          owner: repo.owner.login,
-          name: repo.name,
-          url: repo.clone_url,
-          branch: repo.default_branch ?? 'main',
-          isPrivate: repo.private,
-        }));
+      const data = (await response.json()) as Array<{
+        owner: { login: string };
+        name: string;
+        clone_url: string;
+        default_branch?: string;
+        private: boolean;
+        updated_at: string;
+      }>;
 
+      const repos: GitRepositoryWithTimestamp[] = data.map((repo) => ({
+        owner: repo.owner.login,
+        name: repo.name,
+        url: repo.clone_url,
+        branch: repo.default_branch ?? 'main',
+        isPrivate: repo.private,
+        updatedAt: new Date(repo.updated_at).getTime(),
+      }));
+
+      // Check if there are more pages
+      setHasMore(repos.length === REPOS_PER_PAGE);
+
+      if (isInitial) {
         setRepositories(repos);
-
         // Default to the first scope
         if (repos.length > 0) {
           const firstScope = repos[0]?.owner;
@@ -79,15 +106,49 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
             setSelectedScope(firstScope);
           }
         }
-      } catch {
-        toast.error('Failed to load repositories');
-      } finally {
-        setIsLoading(false);
+      } else {
+        setRepositories((previous) => [...previous, ...repos]);
       }
+    } catch {
+      toast.error('Failed to load repositories');
+    } finally {
+      setIsLoading(false);
+      setIsLoadingMore(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRepositories(1, true);
+  }, [fetchRepositories]);
+
+  const handleLoadMore = useCallback(() => {
+    if (!isLoadingMore && hasMore) {
+      const nextPage = currentPage + 1;
+      setCurrentPage(nextPage);
+      void fetchRepositories(nextPage, false);
+    }
+  }, [currentPage, fetchRepositories, hasMore, isLoadingMore]);
+
+  // Infinite scroll handler
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
     }
 
-    void fetchRepositories();
-  }, []);
+    const handleScroll = (): void => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      // Load more when scrolled to 80% of the container
+      if (scrollTop + clientHeight >= scrollHeight * 0.8 && hasMore && !isLoadingMore) {
+        handleLoadMore();
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [handleLoadMore, hasMore, isLoadingMore]);
 
   const handleSelectRepo = useCallback(
     async (repo: GitRepository) => {
@@ -161,30 +222,54 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
         </div>
       )}
 
-      <div className="flex flex-col gap-2 overflow-y-auto px-3">
-        {filteredRepositories.map((repo) => (
-          <button
-            key={`${repo.owner}/${repo.name}`}
-            type="button"
-            className={cn(
-              'flex items-center justify-between rounded-md border p-3 text-left transition-colors hover:bg-muted',
-              selectedRepo?.name === repo.name && 'border-primary bg-muted',
-            )}
-            onClick={() => {
-              void handleSelectRepo(repo);
-            }}
-          >
-            <div className="flex flex-col gap-1">
-              <span className="text-sm font-medium">
-                {repo.owner}/{repo.name}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {repo.branch} • {repo.isPrivate ? 'Private' : 'Public'}
-              </span>
+      <div ref={scrollContainerRef} className="flex flex-col gap-4 overflow-y-auto">
+        {groupedRepositories.map((group) => (
+          <div key={group.name} className="flex flex-col gap-2">
+            <h5 className="px-3 text-xs font-medium text-muted-foreground">{group.name}</h5>
+            <div className="flex flex-col gap-2 px-3">
+              {group.items.map((repo) => (
+                <button
+                  key={`${repo.owner}/${repo.name}`}
+                  type="button"
+                  className={cn(
+                    'flex items-center justify-between rounded-md border p-3 text-left transition-colors hover:bg-muted',
+                    selectedRepo?.name === repo.name && 'border-primary bg-muted',
+                  )}
+                  onClick={() => {
+                    void handleSelectRepo(repo);
+                  }}
+                >
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm font-medium">
+                      {repo.owner}/{repo.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {repo.branch} • {repo.isPrivate ? 'Private' : 'Public'}
+                    </span>
+                  </div>
+                  <GitBranch className="size-4 text-muted-foreground" />
+                </button>
+              ))}
             </div>
-            <GitBranch className="size-4 text-muted-foreground" />
-          </button>
+          </div>
         ))}
+
+        {/* Load More / Loading indicator */}
+        {hasMore ? (
+          <div className="flex justify-center py-2">
+            {isLoadingMore ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                <span>Loading more...</span>
+              </div>
+            ) : (
+              <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={handleLoadMore}>
+                <MoreHorizontal className="size-4" />
+                <span>Load More</span>
+              </Button>
+            )}
+          </div>
+        ) : null}
       </div>
     </div>
   );

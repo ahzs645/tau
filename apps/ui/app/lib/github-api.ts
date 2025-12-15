@@ -3,6 +3,27 @@ import { metaConfig } from '#constants/meta.constants.js';
 import { ENV } from '#config.js';
 
 /**
+ * GraphQL response type for branches query
+ */
+type BranchesGraphqlResponse = {
+  repository: {
+    refs: {
+      pageInfo: {
+        hasNextPage: boolean;
+        endCursor: string | undefined;
+      };
+      nodes: Array<{
+        name: string;
+        target: {
+          oid: string;
+          committedDate?: string;
+        };
+      }>;
+    };
+  };
+};
+
+/**
  * GitHub API client singleton
  * Provides authenticated access to GitHub API with proper typing
  */
@@ -59,32 +80,172 @@ class GitHubApiClient {
   }
 
   /**
-   * Get list of branches for a repository
+   * Get list of branches for a repository with commit timestamps
+   * Uses GraphQL API to fetch ALL branches with their last commit date
+   * Since GitHub's TAG_COMMIT_DATE ordering only works for tags (not branches),
+   * we fetch all branches and sort client-side by commit date
+   * The default branch is always fetched and included at the start
    */
   public async listBranches(
     owner: string,
     repo: string,
-    page = 1,
+    _page = 1,
+    cursor?: string,
   ): Promise<{
-    branches: Array<{ name: string; sha: string }>;
+    branches: Array<{ name: string; sha: string; updatedAt: number }>;
     hasMore: boolean;
+    endCursor: string | undefined;
   }> {
-    const perPage = 100;
-    const { data } = await this.octokit.repos.listBranches({
+    // Fetch all branches by paginating through all results
+    // GitHub's refs API doesn't properly sort branches by commit date,
+    // so we need to fetch all and sort client-side
+    const allBranches: Array<{ name: string; sha: string; updatedAt: number }> = [];
+    let currentCursor: string | undefined = cursor;
+    let hasNextPage = true;
+    let defaultBranchName: string | undefined;
+
+    // For the first page, also fetch the default branch info
+    const isFirstPage = cursor === undefined;
+
+    while (hasNextPage) {
+      const query =
+        isFirstPage && allBranches.length === 0
+          ? `
+            query($owner: String!, $repo: String!, $first: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                defaultBranchRef {
+                  name
+                  target {
+                    ... on Commit {
+                      oid
+                      committedDate
+                    }
+                  }
+                }
+                refs(refPrefix: "refs/heads/", first: $first, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  nodes {
+                    name
+                    target {
+                      ... on Commit {
+                        oid
+                        committedDate
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `
+          : `
+            query($owner: String!, $repo: String!, $first: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                refs(refPrefix: "refs/heads/", first: $first, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  nodes {
+                    name
+                    target {
+                      ... on Commit {
+                        oid
+                        committedDate
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `;
+
+      type BranchesWithDefaultResponse = BranchesGraphqlResponse & {
+        repository: {
+          defaultBranchRef?: {
+            name: string;
+            target: {
+              oid: string;
+              committedDate?: string;
+            };
+          };
+        };
+      };
+
+      // eslint-disable-next-line no-await-in-loop -- intentional pagination
+      const response = await this.octokit.graphql<BranchesWithDefaultResponse>(query, {
+        owner,
+        repo,
+        first: 100,
+        after: currentCursor,
+      });
+
+      // Capture default branch name on first request
+      if (isFirstPage && allBranches.length === 0 && response.repository.defaultBranchRef) {
+        defaultBranchName = response.repository.defaultBranchRef.name;
+      }
+
+      const branches = response.repository.refs.nodes
+        .filter((node) => node.target.committedDate !== undefined)
+        .map((node) => ({
+          name: node.name,
+          sha: node.target.oid,
+          updatedAt: new Date(node.target.committedDate!).getTime(),
+        }));
+
+      allBranches.push(...branches);
+
+      hasNextPage = response.repository.refs.pageInfo.hasNextPage;
+      currentCursor = response.repository.refs.pageInfo.endCursor ?? undefined;
+    }
+
+    // Sort all branches by commit date (most recent first)
+    allBranches.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    // Move default branch to the start if it exists
+    if (defaultBranchName) {
+      const defaultBranchIndex = allBranches.findIndex((b) => b.name === defaultBranchName);
+      if (defaultBranchIndex > 0) {
+        const defaultBranch = allBranches[defaultBranchIndex];
+        if (defaultBranch) {
+          allBranches.splice(defaultBranchIndex, 1);
+          allBranches.unshift(defaultBranch);
+        }
+      }
+    }
+
+    // Since we fetch all branches at once, there's no more to load
+    return {
+      branches: allBranches,
+      hasMore: false,
+      endCursor: undefined,
+    };
+  }
+
+  /**
+   * List files in a repository tree (without downloading content)
+   * Uses the Git Trees API with recursive option
+   * Filters to only include files (blobs), not directories (trees)
+   */
+  public async listFiles(owner: string, repo: string, ref: string): Promise<Array<{ path: string; size: number }>> {
+    // Get the tree for the ref
+    const { data } = await this.octokit.git.getTree({
       owner,
       repo,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- GitHub API uses snake_case
-      per_page: perPage,
-      page,
+      tree_sha: ref,
+      recursive: 'true',
     });
 
-    return {
-      branches: data.map((branch) => ({
-        name: branch.name,
-        sha: branch.commit.sha,
-      })),
-      hasMore: data.length === perPage,
-    };
+    // Filter to only blobs (files) and map to path/size
+    return data.tree
+      .filter((item) => item.type === 'blob')
+      .map((item) => ({
+        path: item.path,
+        size: item.size ?? 0,
+      }));
   }
 
   /**
