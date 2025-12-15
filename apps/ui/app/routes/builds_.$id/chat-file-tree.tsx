@@ -55,7 +55,7 @@ export const ChatFileTree = memo(function (props: {
   const { formattedKeyCombination } = useKeydown(toggleFileTreeKeyCombination, toggleFileTree);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="left" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelClose
         icon={XIcon}
         tooltipContent={(isOpen) => (
