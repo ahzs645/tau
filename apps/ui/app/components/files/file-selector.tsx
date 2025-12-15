@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useIsMobile } from '#hooks/use-mobile.js';
@@ -17,6 +17,7 @@ type FileItem = {
 };
 
 type FileSelectorProps = {
+  readonly popoverProperties?: React.ComponentProps<typeof PopoverContent>;
   readonly files: FileItem[];
   readonly selectedFile: string | undefined;
   readonly onSelect: (file: string) => void;
@@ -160,6 +161,7 @@ function getBreadcrumbs(path: string): Array<{ name: string; path: string }> {
 
 /**
  * Breadcrumb navigation component
+ * Keeps "Files" root fixed, makes the rest scrollable with auto-scroll to current level
  */
 function BreadcrumbNav({
   currentPath,
@@ -169,13 +171,45 @@ function BreadcrumbNav({
   readonly onNavigate: (path: string) => void;
 }): React.JSX.Element {
   const crumbs = getBreadcrumbs(currentPath);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const currentCrumbRef = useRef<HTMLButtonElement>(null);
+
+  // Auto-scroll to show the current (last) breadcrumb when path changes
+  useEffect(() => {
+    if (currentCrumbRef.current && scrollContainerRef.current) {
+      currentCrumbRef.current.scrollIntoView({ behavior: 'instant', inline: 'end', block: 'nearest' });
+    }
+  }, [currentPath]);
+
+  // Enable horizontal scrolling with mouse wheel
+  useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) {
+      return;
+    }
+
+    const handleWheel = (event: WheelEvent): void => {
+      // Only handle vertical scroll when there's horizontal overflow
+      if (event.deltaY !== 0 && scrollContainer.scrollWidth > scrollContainer.clientWidth) {
+        event.preventDefault();
+        scrollContainer.scrollLeft += event.deltaY;
+      }
+    };
+
+    scrollContainer.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      scrollContainer.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
 
   return (
-    <div className="flex items-center gap-1 border-b px-2 py-1.5 text-sm">
+    <div className="flex items-center border-b text-sm">
+      {/* Fixed "Files" root button */}
       <button
         type="button"
         className={cn(
-          'rounded px-1.5 py-0.5 hover:bg-muted',
+          'my-1.5 ml-2 shrink-0 rounded-xs px-1 py-0.5 hover:bg-muted',
           currentPath === '' && 'font-medium text-foreground',
           currentPath !== '' && 'text-muted-foreground',
         )}
@@ -185,24 +219,36 @@ function BreadcrumbNav({
       >
         Files
       </button>
-      {crumbs.map((crumb, index) => (
-        <div key={crumb.path} className="flex items-center gap-1">
-          <ChevronRight className="size-3 text-muted-foreground" />
-          <button
-            type="button"
-            className={cn(
-              'max-w-32 truncate rounded px-1.5 py-0.5 hover:bg-muted',
-              index === crumbs.length - 1 && 'font-medium text-foreground',
-              index !== crumbs.length - 1 && 'text-muted-foreground',
-            )}
-            onClick={() => {
-              onNavigate(crumb.path);
-            }}
-          >
-            {crumb.name}
-          </button>
+      {/* Scrollable path segments with snap behavior */}
+      {crumbs.length > 0 ? (
+        <div
+          ref={scrollContainerRef}
+          className="mr-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {crumbs.map((crumb, index) => {
+            const isLast = index === crumbs.length - 1;
+            return (
+              <div key={crumb.path} className="my-1.5 flex shrink-0 snap-start items-center gap-0.5">
+                <ChevronRight className="size-3 text-muted-foreground" />
+                <button
+                  ref={isLast ? currentCrumbRef : undefined}
+                  type="button"
+                  className={cn(
+                    'max-w-32 shrink-0 truncate rounded-xs px-1 py-0.5 hover:bg-muted',
+                    isLast && 'font-medium text-foreground',
+                    !isLast && 'text-muted-foreground',
+                  )}
+                  onClick={() => {
+                    onNavigate(crumb.path);
+                  }}
+                >
+                  {crumb.name}
+                </button>
+              </div>
+            );
+          })}
         </div>
-      ))}
+      ) : undefined}
     </div>
   );
 }
@@ -355,6 +401,7 @@ export function FileSelector({
   searchPlaceholder = 'Search files...',
   emptyMessage = 'No files found.',
   virtualizationThreshold = 50,
+  popoverProperties,
 }: FileSelectorProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState('');
@@ -367,14 +414,26 @@ export function FileSelector({
   // Get items at current path
   const currentItems = useMemo(() => getItemsAtPath(tree, currentPath), [tree, currentPath]);
 
-  // Reset path when opening
-  const handleOpenChange = useCallback((isOpen: boolean) => {
-    setOpen(isOpen);
-    if (isOpen) {
-      setCurrentPath('');
-      setSearchQuery('');
-    }
-  }, []);
+  // Open at the same level as the selected file
+  const handleOpenChange = useCallback(
+    (isOpen: boolean) => {
+      setOpen(isOpen);
+      if (isOpen) {
+        // Navigate to the parent directory of the selected file
+        if (selectedFile) {
+          const parts = selectedFile.split('/');
+          // Remove the filename to get the directory path
+          parts.pop();
+          setCurrentPath(parts.join('/'));
+        } else {
+          setCurrentPath('');
+        }
+
+        setSearchQuery('');
+      }
+    },
+    [selectedFile],
+  );
 
   // Handle file selection
   const handleSelect = useCallback(
@@ -455,7 +514,9 @@ export function FileSelector({
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
-      <PopoverContent className={cn('w-[300px] p-0', className)}>{content}</PopoverContent>
+      <PopoverContent {...popoverProperties} className={cn('w-[300px] p-0', className)}>
+        {content}
+      </PopoverContent>
     </Popover>
   );
 }
