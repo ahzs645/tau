@@ -204,7 +204,9 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
 
   return (
     <>
-      <div className={cn('wrap w-full flex-1 truncate', isGeneratingName && 'animate-pulse')}>{activeChat?.name}</div>
+      <div className={cn('wrap ml-0.5 w-full flex-1 truncate', isGeneratingName && 'animate-pulse')}>
+        {activeChat?.name}
+      </div>
       <FloatingPanelContentHeaderActions className="h-7.75">
         <Tooltip>
           <ComboBoxResponsive
