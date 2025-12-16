@@ -358,7 +358,7 @@ function FileSelectorList({
 
   // Show empty message when no items match
   if (filteredItems.length === 0) {
-    return <div className="py-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>;
+    return <div className="p-1 py-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>;
   }
 
   if (filteredItems.length > virtualizationThreshold) {
@@ -367,13 +367,20 @@ function FileSelectorList({
         style={{ height: '300px' }}
         totalCount={filteredItems.length}
         itemContent={renderItem}
-        className="overflow-y-auto"
+        // Virtuoso's List component doesn't handle vertical padding correctly due to
+        // absolute positioning used for virtualization. Use Header/Footer for vertical
+        // spacing and px-1 on List for horizontal padding.
+        components={{
+          List: (properties) => <div {...properties} className="px-1" />,
+          Header: () => <div className="h-1" />,
+          Footer: () => <div className="h-1" />,
+        }}
       />
     );
   }
 
   return (
-    <>
+    <div className="p-1">
       {filteredItems.map((item) => (
         <FileSelectorItem
           key={item.path}
@@ -383,7 +390,7 @@ function FileSelectorList({
           onSelect={onSelect}
         />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -480,7 +487,7 @@ export function FileSelector({
     <Command shouldFilter={false} className="flex flex-col">
       <BreadcrumbNav currentPath={currentPath} onNavigate={handleNavigate} />
       <CommandInput placeholder={searchPlaceholder} value={searchQuery} onValueChange={setSearchQuery} />
-      <CommandList className="max-h-[300px] p-1">
+      <CommandList className="max-h-[300px]">
         <FileSelectorList
           items={currentItems}
           selectedFile={selectedFile}
