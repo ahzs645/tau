@@ -1,7 +1,7 @@
-import { Edit, History, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Copy, Edit, History, MoreHorizontal, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { NavLink } from 'react-router';
+import { NavLink, useNavigate } from 'react-router';
 import type { Build } from '@taucad/types';
 import {
   DropdownMenu,
@@ -31,7 +31,8 @@ export function NavHistory(): ReactNode {
   const [visibleCount, setVisibleCount] = useState(buildsPerPage);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
-  const { builds, deleteBuild, updateName } = useBuilds();
+  const { builds, deleteBuild, duplicateBuild, updateName } = useBuilds();
+  const navigate = useNavigate();
 
   // Filter builds based on search query
   const filteredBuilds = useMemo(() => {
@@ -104,6 +105,21 @@ export function NavHistory(): ReactNode {
     }
   };
 
+  const handleDuplicate = async (buildId: string) => {
+    const build = builds.find((b) => b.id === buildId);
+    const newBuild = await duplicateBuild(buildId);
+    if (build) {
+      toast.success(`Duplicated ${build.name}`, {
+        action: {
+          label: 'Open',
+          onClick() {
+            void navigate(`/builds/${newBuild.id}`);
+          },
+        },
+      });
+    }
+  };
+
   const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(event.target.value);
     // Reset visible count when searching to show all results
@@ -156,6 +172,7 @@ export function NavHistory(): ReactNode {
                 onRename={handleRename}
                 onRenameSubmit={handleRenameSubmit}
                 onRenameCancel={handleRenameCancel}
+                onDuplicate={handleDuplicate}
                 onDelete={handleDelete}
               />
             ))}
@@ -199,10 +216,19 @@ type NavHistoryItemProps = {
   readonly onRename: (buildId: string) => void;
   readonly onRenameSubmit: (buildId: string, newName: string) => Promise<void>;
   readonly onRenameCancel: () => void;
+  readonly onDuplicate: (buildId: string) => Promise<void>;
   readonly onDelete: (buildId: string) => Promise<void>;
 };
 
-function NavHistoryItem({ build, isEditing, onRename, onRenameSubmit, onRenameCancel, onDelete }: NavHistoryItemProps) {
+function NavHistoryItem({
+  build,
+  isEditing,
+  onRename,
+  onRenameSubmit,
+  onRenameCancel,
+  onDuplicate,
+  onDelete,
+}: NavHistoryItemProps) {
   const { isMobile } = useSidebar();
   const [editValue, setEditValue] = useState(build.name);
 
@@ -225,6 +251,12 @@ function NavHistoryItem({ build, isEditing, onRename, onRenameSubmit, onRenameCa
     event.preventDefault();
     event.stopPropagation();
     onRename(build.id);
+  };
+
+  const handleDuplicateClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void onDuplicate(build.id);
   };
 
   const handleDeleteClick = (event: React.MouseEvent) => {
@@ -290,6 +322,10 @@ function NavHistoryItem({ build, isEditing, onRename, onRenameSubmit, onRenameCa
             <DropdownMenuItem onClick={handleRenameClick}>
               <Edit className="text-muted-foreground" />
               <span>Rename</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleDuplicateClick}>
+              <Copy className="text-muted-foreground" />
+              <span>Duplicate</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
