@@ -1,4 +1,4 @@
-import type { ErrorLocation, KernelError, KernelErrorResult, KernelStackFrame } from '@taucad/types';
+import type { ErrorLocation, KernelError, KernelErrorResult, KernelErrorType, KernelStackFrame } from '@taucad/types';
 import { KclError, KclWasmError, extractWasmKclError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { createKernelError } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { sourceRangeToLineColumn } from '#components/geometry/kernel/zoo/source-range-utils.js';
@@ -68,7 +68,7 @@ export function convertKclErrorToKernelError(kclError: KclError, code?: string, 
   }
 
   // Determine error type based on KCL error kind
-  let errorType: 'compilation' | 'runtime' | 'kernel' | 'unknown' = 'unknown';
+  let errorType: KernelErrorType = 'unknown';
   switch (kclError.kind) {
     case 'lexical':
     case 'syntax':
@@ -88,6 +88,12 @@ export function convertKclErrorToKernelError(kclError: KclError, code?: string, 
     case 'io':
     case 'unexpected': {
       errorType = 'kernel';
+      break;
+    }
+
+    case 'connection':
+    case 'auth': {
+      errorType = 'connection';
       break;
     }
 

@@ -18,12 +18,14 @@ export type ErrorLocation = {
   endColumn?: number;
 };
 
+export type KernelErrorType = 'compilation' | 'runtime' | 'kernel' | 'connection' | 'unknown';
+
 export type KernelError = {
   message: string;
   location?: ErrorLocation;
   stack?: string;
   stackFrames?: KernelStackFrame[];
-  type?: 'compilation' | 'runtime' | 'kernel' | 'unknown';
+  type?: KernelErrorType;
 };
 
 // Result pattern types for kernel operations

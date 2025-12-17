@@ -3,7 +3,7 @@ import type { Models } from '@kittycad/lib';
 import type { Context } from '@taucad/kcl-wasm-lib';
 import { decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack';
 import { binaryToUuid } from '#utils/binary.utils.js';
-import { KclError, KclAuthError } from '#components/geometry/kernel/zoo/kcl-errors.js';
+import { KclError, KclAuthError, KclConnectionError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import type { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- required
@@ -250,8 +250,8 @@ export class EngineConnection {
     }
   };
 
-  private readonly onWebSocketClose = (_event: CloseEvent): void => {
-    clg.debug('WebSocket disconnected');
+  private readonly onWebSocketClose = (event: CloseEvent): void => {
+    clg.debug('WebSocket disconnected', { code: event.code, reason: event.reason });
     this.isConnected = false;
 
     // Remove all event listeners
@@ -273,11 +273,47 @@ export class EngineConnection {
     if (initContext && !initContext.resolved) {
       initContext.resolved = true;
       clearTimeout(initContext.authTimeoutId);
-      initContext.reject(new KclAuthError('Invalid Zoo API key. Please check that your Zoo API key is correct.', 401));
+
+      // Determine the appropriate error based on close code
+      // https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code
+      const error = this.createConnectionError(event.code, event.reason);
+      initContext.reject(error);
     }
 
     void this.cleanup();
   };
+
+  /**
+   * Create an appropriate error based on WebSocket close code
+   */
+  private createConnectionError(code: number, reason: string): KclError {
+    // Service unavailable or network issues (1006 = abnormal closure, often network issues)
+    if (code === 1006) {
+      return KclConnectionError.apiUnavailable(
+        'The connection was closed unexpectedly. Please check your network connection and try again.',
+      );
+    }
+
+    // Server going away (1001) or internal error (1011)
+    if (code === 1001 || code === 1011) {
+      return KclConnectionError.apiUnavailable(reason || 'The server is temporarily unavailable.');
+    }
+
+    // Policy violation (1008) or protocol error (1002) - likely auth issues
+    if (code === 1008 || code === 1002) {
+      return new KclAuthError(reason || 'Invalid Zoo API key. Please check that your Zoo API key is correct.', 401);
+    }
+
+    // Normal closure without successful auth - likely auth failure
+    if (code === 1000) {
+      return new KclAuthError('Invalid Zoo API key. Please check that your Zoo API key is correct.', 401);
+    }
+
+    // Default to connection error for other cases
+    return KclConnectionError.webSocketFailed(
+      reason || `Connection closed with code ${code}. Please check your network and try again.`,
+    );
+  }
 
   private readonly onWebSocketError = (event: Event): void => {
     clg.error('WebSocket error:', event);
@@ -287,11 +323,28 @@ export class EngineConnection {
       initContext.resolved = true;
       clearTimeout(initContext.authTimeoutId);
 
+      // WebSocket errors during connection typically mean the API is unreachable
       if (event.target instanceof WebSocket) {
-        const readyStateText = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][event.target.readyState] ?? 'UNKNOWN';
-        initContext.reject(KclError.simple('io', `WebSocket error in state: ${readyStateText}`));
+        const { readyState } = event.target;
+        // CONNECTING (0) state error means we couldn't establish a connection at all
+        if (readyState === 0) {
+          initContext.reject(
+            KclConnectionError.apiUnavailable(
+              'Unable to connect to the Zoo CAD API. Please check your network connection and ensure the service is accessible.',
+            ),
+          );
+        } else {
+          const readyStateText = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][readyState] ?? 'UNKNOWN';
+          initContext.reject(
+            KclConnectionError.webSocketFailed(`Connection error occurred in state: ${readyStateText}`),
+          );
+        }
       } else {
-        initContext.reject(KclError.simple('io', 'WebSocket connection failed'));
+        initContext.reject(
+          KclConnectionError.apiUnavailable(
+            'Failed to establish a WebSocket connection. The Zoo CAD API may be unavailable.',
+          ),
+        );
       }
     }
   };
