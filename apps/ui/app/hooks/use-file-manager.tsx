@@ -51,24 +51,36 @@ export function FileManagerProvider({
   }, [actorRef, rootDirectory]);
 
   const loadDirectory = useCallback(
-    (path: string) => {
+    async (path: string) => {
+      // Ensure the actor is ready before loading the directory
+      await waitFor(actorRef, (state) => state.matches('ready'));
+      // Send the load directory event
       actorRef.send({ type: 'loadDirectory', path });
+      // Ensure the directory is loaded before returning
+      await waitFor(actorRef, (state) => state.context.openFiles.has(path));
     },
     [actorRef],
   );
 
   const writeFile = useCallback(
     async (path: string, data: Uint8Array, options: WriteFileOptions) => {
-      actorRef.send({ type: 'writeFile', path, data, source: options.source });
+      // Ensure the actor is ready before writing the file
       await waitFor(actorRef, (state) => state.matches('ready'));
+      // Send the write file event
+      actorRef.send({ type: 'writeFile', path, data, source: options.source });
+      // Ensure the file is written before returning
+      await waitFor(actorRef, (state) => state.context.openFiles.has(path));
     },
     [actorRef],
   );
 
   const readFile = useCallback(
     async (path: string): Promise<Uint8Array> => {
+      // Ensure the actor is ready before reading the file
+      await waitFor(actorRef, (state) => state.matches('ready'));
+      // Send the read file event
       actorRef.send({ type: 'readFile', path });
-
+      // Ensure the file is read before returning
       const snapshot = await waitFor(actorRef, (state) => state.context.openFiles.has(path));
       const file = snapshot.context.openFiles.get(path);
 
@@ -96,6 +108,7 @@ export function FileManagerProvider({
 
   const writeFiles = useCallback(
     async (files: Record<string, { content: Uint8Array }>) => {
+      await waitFor(actorRef, (state) => state.matches('ready'));
       actorRef.send({ type: 'writeFiles', files });
       await waitFor(actorRef, (state) => state.matches('ready'));
     },
