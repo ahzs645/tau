@@ -5,6 +5,7 @@ import { decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpa
 import { binaryToUuid } from '#utils/binary.utils.js';
 import { KclError, KclAuthError, KclConnectionError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import type { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
+import { createZooLogger } from '#components/geometry/kernel/zoo/zoo-logs.js';
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- required
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
@@ -28,39 +29,7 @@ type InitializationContext = {
 const authTimeout = 10_000; // 10 second timeout
 const commandTimeout = 30_000; // 30 second timeout
 
-const consoleColors = {
-  info: '\u001B[32m',
-  error: '\u001B[31m',
-  warn: '\u001B[33m',
-  debug: '\u001B[34m',
-  trace: '\u001B[35m',
-  req: '\u001B[36m',
-  res: '\u001B[36m',
-};
-
-const clg = {
-  info(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.info}[INFO]\u001B[0m : ${message}`, ...args);
-  },
-  error(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.error}[ERROR]\u001B[0m: ${message}`, ...args);
-  },
-  warn(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.warn}[WARN]\u001B[0m: ${message}`, ...args);
-  },
-  debug(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.debug}[DEBUG]\u001B[0m: ${message}`, ...args);
-  },
-  trace(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.trace}[TRACE]\u001B[0m: ${message}`, ...args);
-  },
-  req(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.req}[REQ]\u001B[0m  : ${message}`, ...args);
-  },
-  res(message: string, ...args: unknown[]): void {
-    console.log(`${consoleColors.res}[RES]\u001B[0m  : ${message}`, ...args);
-  },
-};
+const log = createZooLogger('EngineConnection');
 
 // Isomorphic WebSocket implementation that works in both Node.js and browser
 const getWebSocket = async (): Promise<typeof WebSocket> => {
@@ -236,7 +205,7 @@ export class EngineConnection {
 
   // Store event listeners as arrow functions so they can be properly removed
   private readonly onWebSocketOpen = (_event: Event): void => {
-    clg.debug('WebSocket connected');
+    log.debug('WebSocket connected');
 
     // Send authentication headers in the exact format expected by the server
     if (this.websocket?.readyState === 1) {
@@ -251,7 +220,7 @@ export class EngineConnection {
   };
 
   private readonly onWebSocketClose = (event: CloseEvent): void => {
-    clg.debug('WebSocket disconnected', { code: event.code, reason: event.reason });
+    log.debug('WebSocket disconnected', { code: event.code, reason: event.reason });
     this.isConnected = false;
 
     // Remove all event listeners
@@ -316,7 +285,7 @@ export class EngineConnection {
   }
 
   private readonly onWebSocketError = (event: Event): void => {
-    clg.error('WebSocket error:', event);
+    log.error('WebSocket error:', event);
 
     const initContext = this.initializationContext;
     if (initContext && !initContext.resolved) {
@@ -354,7 +323,7 @@ export class EngineConnection {
   };
 
   private async sendCommand(command: WebSocketRequest): Promise<unknown> {
-    clg.req(JSON.stringify(command, null, 2));
+    log.req(JSON.stringify(command, null, 2));
 
     // Create promise and store in pendingCommands
     const { promise, resolve, reject } = this.createPromise();
@@ -400,15 +369,15 @@ export class EngineConnection {
       message = msgpackDecode(binaryData) as WebSocketResponse;
       message.request_id &&= binaryToUuid(message.request_id);
 
-      clg.debug('Received binary msgpack message, deserialized successfully');
+      log.debug('Received binary msgpack message, deserialized successfully');
     } else if (typeof event.data === 'string') {
       message = JSON.parse(event.data) as WebSocketResponse;
     } else {
-      clg.warn('Received unknown message type:', typeof event.data);
+      log.warn('Received unknown message type:', typeof event.data);
       return;
     }
 
-    clg.res('Received message:', message.request_id);
+    log.res('Received message:', message.request_id);
 
     // Handle authentication success
     const initContext = this.initializationContext;
@@ -419,7 +388,7 @@ export class EngineConnection {
       message.success &&
       message.resp.type === 'modeling_session_data'
     ) {
-      clg.debug('Authentication successful');
+      log.debug('Authentication successful');
       initContext.resolved = true;
       this.isConnected = true;
       clearTimeout(initContext.authTimeoutId);
@@ -431,7 +400,7 @@ export class EngineConnection {
       try {
         void this.context.sendResponse(msgpackEncode(message));
       } catch (error) {
-        clg.error('Error sending response to WASM:', error);
+        log.error('Error sending response to WASM:', error);
       }
     }
 
@@ -460,7 +429,7 @@ export class EngineConnection {
             }
 
             default: {
-              clg.warn('Unknown response type:', message.resp.type);
+              log.warn('Unknown response type:', message.resp.type);
               pending.resolve(message);
             }
           }
@@ -474,7 +443,7 @@ export class EngineConnection {
     }
 
     if (message.success && message.resp.type === 'modeling_batch') {
-      clg.debug('Processing batch response with individual commands...');
+      log.debug('Processing batch response with individual commands...');
 
       // Process each individual response in the batch
       for (const [commandId, response] of Object.entries(message.resp.data.responses)) {
@@ -499,7 +468,7 @@ export class EngineConnection {
         // Process this individual response
         const pendingCommand = this.pendingCommands.get(commandId);
         if (pendingCommand) {
-          clg.debug(`Resolving batch command: ${commandId}`);
+          log.debug(`Resolving batch command: ${commandId}`);
           clearTimeout(pendingCommand.timeout);
           this.pendingCommands.delete(commandId);
           pendingCommand.resolve(individualResponse);
@@ -510,14 +479,14 @@ export class EngineConnection {
       if (message.request_id) {
         const batchCommand = this.pendingCommands.get(message.request_id);
         if (batchCommand) {
-          clg.debug(`Resolving batch request: ${message.request_id}`);
+          log.debug(`Resolving batch request: ${message.request_id}`);
           clearTimeout(batchCommand.timeout);
           this.pendingCommands.delete(message.request_id);
           batchCommand.resolve(message);
         } else {
-          clg.warn(`Batch request ${message.request_id} not found in pending commands`);
+          log.warn(`Batch request ${message.request_id} not found in pending commands`);
           const pendingCommands = [...this.pendingCommands.keys()];
-          clg.warn(
+          log.warn(
             `Current pending commands: ${pendingCommands.length} pending commands: ${pendingCommands.join(', ')}`,
           );
         }
@@ -529,7 +498,7 @@ export class EngineConnection {
       // This appears to be a bug in the auth handshake.
       // TODO: Remove this once the auth handshake is fixed.
       if (message.errors[0]?.error_code === 'auth_token_missing') {
-        clg.debug('Received auth_token_missing - ignoring as auth may succeed later');
+        log.debug('Received auth_token_missing - ignoring as auth may succeed later');
         return;
       }
 
@@ -538,10 +507,10 @@ export class EngineConnection {
           return `  - ${error.error_code}: ${error.message}`;
         })
         .join('\n');
-      clg.error(errorsString);
+      log.error(errorsString);
       if (message.request_id) {
         const pendingCommand = this.pendingCommands.get(message.request_id);
-        clg.error(
+        log.error(
           `Error in response to request ${message.request_id}:\n${errorsString}\n\nPending command:\n${JSON.stringify(
             pendingCommand,
             null,
@@ -549,13 +518,13 @@ export class EngineConnection {
           )}`,
         );
       } else {
-        clg.error(`Error from server:\n${errorsString}`);
+        log.error(`Error from server:\n${errorsString}`);
       }
     }
   }
 
   private send(message: WebSocketRequest): void {
-    clg.req(JSON.stringify(message, null, 2));
+    log.req(JSON.stringify(message, null, 2));
     if (this.websocket && this.websocket.readyState === 1) {
       this.websocket.send(JSON.stringify(message));
     } else {

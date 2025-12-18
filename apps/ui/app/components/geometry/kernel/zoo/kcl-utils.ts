@@ -21,6 +21,9 @@ import {
   KclWasmError,
   extractWasmKclError,
 } from '#components/geometry/kernel/zoo/kcl-errors.js';
+import { createZooLogger } from '#components/geometry/kernel/zoo/zoo-logs.js';
+
+const log = createZooLogger('KclUtils');
 
 type OutputFormat3d = Models['OutputFormat3d_type'];
 
@@ -191,12 +194,12 @@ export class KclUtils {
 
           default: {
             // Skip non-literal values (Plane, Face, Sketch, etc.)
-            console.debug(`Skipping non-literal KCL variable ${name} of type ${kclValue.type}`);
+            log.debug(`Skipping non-literal KCL variable ${name} of type ${kclValue.type}`);
             break;
           }
         }
       } catch (error) {
-        console.warn(`Failed to process KCL variable ${name}:`, error);
+        log.warn(`Failed to process KCL variable ${name}:`, error);
       }
     }
 
@@ -337,7 +340,7 @@ export class KclUtils {
 
       return result;
     } catch (error) {
-      console.error('KCL mock execution error details:', error);
+      log.error('KCL mock execution error details:', error);
 
       // Check if this is a WASM KclError
       const wasmError = extractWasmKclError(error);
@@ -386,7 +389,7 @@ export class KclUtils {
 
       return result;
     } catch (error) {
-      console.error('KCL execution error details:', error);
+      log.error('KCL execution error details:', error);
 
       // Check if this is a WASM KclError
       const wasmError = extractWasmKclError(error);
@@ -491,7 +494,7 @@ export class KclUtils {
       // Reset execution state
       this.hasExecutedProgram = false;
     } catch (error) {
-      console.warn('Failed to clear memory:', error);
+      log.warn('Failed to clear memory:', error);
     }
   }
 
