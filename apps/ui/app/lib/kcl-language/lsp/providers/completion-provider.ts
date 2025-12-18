@@ -104,7 +104,6 @@ export function createCompletionProvider(
         // 2. Get stdlib symbols (built-in functions from parsed stdlib sources)
         // This provides stdlib completions when LSP returns null
         if (symbolService.hasStdlib) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- TypeScript confirms these types
           const stdlibSymbols: KclSymbol[] = symbolService.getStdlibSymbols();
           log('Symbol service returned', stdlibSymbols.length, 'stdlib symbols');
           addSymbolsToSuggestions(stdlibSymbols, { isStdlib: true });

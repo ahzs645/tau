@@ -55,8 +55,8 @@ export function createDefinitionProvider(
       if (wordInfo) {
         const { word } = wordInfo;
         const quotedPathMatch = /^["'](.+\.kcl)["']$/.exec(word);
-        if (quotedPathMatch) {
-          const [, importPath] = quotedPathMatch;
+        if (quotedPathMatch?.[1]) {
+          const importPath = quotedPathMatch[1];
           log('Word is a quoted import path:', importPath);
           const targetUri = resolveImportPathToUri(uri, importPath);
           log('Resolved import path to URI:', targetUri);

@@ -19,7 +19,7 @@ type RepositorySelectorProperties = {
 
 type GitRepositoryWithTimestamp = GitRepository & { updatedAt: number };
 
-const REPOS_PER_PAGE = 30;
+const reposPerPage = 30;
 
 export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositorySelectorProperties): React.ReactNode {
   const [repositories, setRepositories] = useState<GitRepositoryWithTimestamp[]>([]);
@@ -63,7 +63,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
 
       const token = await getGitHubAccessToken();
       const response = await fetch(
-        `https://api.github.com/user/repos?per_page=${REPOS_PER_PAGE}&page=${page}&sort=updated&direction=desc`,
+        `https://api.github.com/user/repos?per_page=${reposPerPage}&page=${page}&sort=updated&direction=desc`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -95,7 +95,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
       }));
 
       // Check if there are more pages
-      setHasMore(repos.length === REPOS_PER_PAGE);
+      setHasMore(repos.length === reposPerPage);
 
       if (isInitial) {
         setRepositories(repos);

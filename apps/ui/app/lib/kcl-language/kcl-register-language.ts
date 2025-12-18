@@ -549,7 +549,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
         const successSourceFiles = result.sourceFiles;
         if (!stdlibProcessed && successSourceFiles) {
           log('Processing stdlib from successful mock execution...');
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- TypeScript confirms service.processStdlibSources exists
+
           await service.processStdlibSources(successSourceFiles);
           stdlibProcessed = true;
         }
@@ -565,7 +565,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
           const errorSourceFiles = errorObject.sourceFiles;
           if (!stdlibProcessed && errorSourceFiles) {
             log('Processing stdlib from error mock execution...');
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- TypeScript confirms service.processStdlibSources exists
+
             await service.processStdlibSources(errorSourceFiles);
             stdlibProcessed = true;
           }

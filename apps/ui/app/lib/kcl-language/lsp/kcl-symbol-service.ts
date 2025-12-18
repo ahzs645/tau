@@ -13,7 +13,6 @@ import type { VariableDeclaration } from '@taucad/kcl-wasm-lib/bindings/Variable
 import type { FunctionExpression } from '@taucad/kcl-wasm-lib/bindings/FunctionExpression';
 import type { Parameter } from '@taucad/kcl-wasm-lib/bindings/Parameter';
 import type { ImportStatement } from '@taucad/kcl-wasm-lib/bindings/ImportStatement';
-
 import type { LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 
@@ -162,35 +161,48 @@ export class KclSymbolService {
 
     log('Processing stdlib source files...');
     const stdlibEntries = Object.values(sourceFiles).filter(
-      (source): source is ModuleSource => source !== undefined && source.path.type === 'Std',
+      (source): source is ModuleSource => source.path.type === 'Std',
     );
 
     log('Found', stdlibEntries.length, 'stdlib modules');
 
     const allSymbols: KclSymbol[] = [];
 
-    for (const entry of stdlibEntries) {
-      const moduleName = entry.path.type === 'Std' ? entry.path.value : 'unknown';
-      const uri = `std://${moduleName}`;
+    // Capture parseFunction to satisfy TypeScript in async callback
+    const parseFn = this.parseFunction;
 
-      try {
-        const parseResult = await this.parseFunction(entry.source);
-        const lineOffsets = computeLineOffsets(entry.source);
-        const symbols = extractSymbolsFromProgram(parseResult.program, uri, entry.source, lineOffsets);
+    // Parse all stdlib modules in parallel
+    const parseResults = await Promise.all(
+      stdlibEntries.map(async (entry) => {
+        const moduleName = entry.path.type === 'Std' ? entry.path.value : 'unknown';
+        const uri = `std://${moduleName}`;
 
-        // Mark all stdlib symbols with their module for better documentation
-        for (const symbol of symbols) {
-          // Only include exported functions and variables (top-level symbols)
-          if (symbol.kind === 'function' || symbol.kind === 'variable') {
-            symbol.importPath = `std::${moduleName}`;
-            allSymbols.push(symbol);
+        try {
+          const parseResult = await parseFn(entry.source);
+          const lineOffsets = computeLineOffsets(entry.source);
+          const symbols = extractSymbolsFromProgram(parseResult.program, uri, entry.source, lineOffsets);
+
+          // Mark all stdlib symbols with their module for better documentation
+          const moduleSymbols: KclSymbol[] = [];
+          for (const symbol of symbols) {
+            // Only include exported functions and variables (top-level symbols)
+            if (symbol.kind === 'function' || symbol.kind === 'variable') {
+              symbol.importPath = `std::${moduleName}`;
+              moduleSymbols.push(symbol);
+            }
           }
-        }
 
-        log('Parsed stdlib module:', moduleName, 'symbols:', symbols.length);
-      } catch (error) {
-        log('Failed to parse stdlib module:', moduleName, error);
-      }
+          log('Parsed stdlib module:', moduleName, 'symbols:', symbols.length);
+          return moduleSymbols;
+        } catch (error) {
+          log('Failed to parse stdlib module:', moduleName, error);
+          return [];
+        }
+      }),
+    );
+
+    for (const moduleSymbols of parseResults) {
+      allSymbols.push(...moduleSymbols);
     }
 
     this.stdlibSymbols = allSymbols;
@@ -262,7 +274,7 @@ export class KclSymbolService {
         log('Extracted', symbols.length, 'symbols from AST');
 
         // Try mock execution for variable values
-        if (this.mockExecuteFunction && program) {
+        if (this.mockExecuteFunction) {
           try {
             const execResult = await this.mockExecuteFunction(program, uriToPath(uri));
             variables = execResult.variables;
@@ -377,12 +389,7 @@ export class KclSymbolService {
   /**
    * Get the symbol that a usage refers to
    */
-  public getDefinitionForUsage(
-    uri: string,
-    line: number,
-    column: number,
-    word: string,
-  ): KclSymbol | undefined {
+  public getDefinitionForUsage(uri: string, line: number, column: number, word: string): KclSymbol | undefined {
     // First check if we're on a declaration
     const symbolAtPosition = this.getSymbolAtPosition(uri, line, column);
     if (symbolAtPosition) {
@@ -502,10 +509,7 @@ export class KclSymbolService {
    * @param fileManager The file manager for reading files
    * @returns Array of resolved symbol definitions from imported files
    */
-  public async getImportedSymbolsForCompletion(
-    uri: string,
-    fileManager: LspFileManager,
-  ): Promise<KclSymbol[]> {
+  public async getImportedSymbolsForCompletion(uri: string, fileManager: LspFileManager): Promise<KclSymbol[]> {
     const imports = this.getImports(uri);
     log('getImportedSymbolsForCompletion: resolving', imports.length, 'imports');
 
@@ -562,11 +566,15 @@ export class KclSymbolService {
  */
 function computeLineOffsets(content: string): number[] {
   const offsets: number[] = [0];
-  for (let i = 0; i < content.length; i++) {
-    if (content[i] === '\n') {
-      offsets.push(i + 1);
+  let index = 0;
+  for (const char of content) {
+    if (char === '\n') {
+      offsets.push(index + 1);
     }
+
+    index += 1;
   }
+
   return offsets;
 }
 
@@ -579,8 +587,10 @@ function offsetToPosition(lineOffsets: number[], offset: number): { line: number
     if (lineOffsets[i]! > offset) {
       break;
     }
+
     line = i + 1;
   }
+
   const lineStart = lineOffsets[line - 1] ?? 0;
   const column = offset - lineStart + 1;
   return { line, column };
@@ -636,7 +646,7 @@ function resolveImportPath(currentFileUri: string, importPath: string): string {
  * Escape special regex characters
  */
 function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
 /**
@@ -673,9 +683,11 @@ function extractSymbolFromBodyItem(
     case 'VariableDeclaration': {
       return extractVariableSymbol(item, uri, content, lineOffsets);
     }
+
     case 'ImportStatement': {
       return extractImportSymbol(item, uri, lineOffsets);
     }
+
     default: {
       return undefined;
     }
@@ -694,7 +706,7 @@ function extractVariableSymbol(
   const symbols: KclSymbol[] = [];
   const declaration = item as unknown as Node<VariableDeclaration>;
   const declarator = declaration.declaration;
-  const name = declarator.id.name;
+  const { name } = declarator.id;
   const isExported = declaration.visibility === 'export';
 
   const position = offsetToPosition(lineOffsets, declarator.id.start);
@@ -721,14 +733,14 @@ function extractVariableSymbol(
     });
 
     // Add parameter symbols
-    for (const param of parameters) {
-      const paramPosition = offsetToPosition(lineOffsets, param.range.start);
+    for (const parameter of parameters) {
+      const parameterPosition = offsetToPosition(lineOffsets, parameter.range.start);
       symbols.push({
-        name: param.name,
+        name: parameter.name,
         kind: 'parameter',
-        range: param.range,
-        lineNumber: paramPosition.line,
-        column: paramPosition.column,
+        range: parameter.range,
+        lineNumber: parameterPosition.line,
+        column: parameterPosition.column,
         value: undefined,
         isExported: false,
         parameters: undefined,
@@ -904,28 +916,23 @@ function extractImportSymbol(
   const pathValue = importStmt.path;
   let importPath = '';
 
-  if (pathValue && typeof pathValue === 'object') {
-    if ('filename' in pathValue && pathValue.type === 'Kcl') {
-      // Local KCL file: { type: 'Kcl', filename: 'bench-parts.kcl' }
-      importPath = pathValue.filename;
-    } else if ('path' in pathValue) {
-      if (pathValue.type === 'Std' && Array.isArray(pathValue.path)) {
-        // Stdlib import: { type: 'Std', path: ['std', 'module'] }
-        importPath = pathValue.path.join('/');
-      } else if (pathValue.type === 'Foreign' && typeof pathValue.path === 'string') {
-        // Foreign import: { type: 'Foreign', path: '...' }
-        importPath = pathValue.path;
-      }
+  if ('filename' in pathValue) {
+    // Local KCL file: { type: 'Kcl', filename: 'bench-parts.kcl' }
+    importPath = pathValue.filename;
+  } else if ('path' in pathValue) {
+    if (pathValue.type === 'Std' && Array.isArray(pathValue.path)) {
+      // Stdlib import: { type: 'Std', path: ['std', 'module'] }
+      importPath = pathValue.path.join('/');
+    } else if (pathValue.type === 'Foreign' && typeof pathValue.path === 'string') {
+      // Foreign import: { type: 'Foreign', path: '...' }
+      importPath = pathValue.path;
     }
   }
 
-  log('extractImportSymbol: path type:', pathValue?.type, 'extracted path:', importPath);
+  log('extractImportSymbol: path type:', pathValue.type, 'extracted path:', importPath);
 
   // Extract selector (imported names)
-  const selector = importStmt.selector;
-  if (!selector || typeof selector !== 'object') {
-    return symbols;
-  }
+  const { selector } = importStmt;
 
   log('extractImportSymbol: selector type:', selector.type);
 
@@ -933,9 +940,9 @@ function extractImportSymbol(
     case 'None': {
       // Module import: `import divider from "bench-parts.kcl"`
       // The 'alias' contains the imported name (e.g., 'divider')
-      const alias = selector.alias;
+      const { alias } = selector;
       if (alias && 'name' in alias) {
-        const name = alias.name;
+        const { name } = alias;
         const position = offsetToPosition(lineOffsets, alias.start);
         log('extractImportSymbol: None selector, alias:', name, 'importPath:', importPath);
 
@@ -960,41 +967,39 @@ function extractImportSymbol(
 
     case 'List': {
       // Named imports: `import { foo, bar } from "module.kcl"`
-      const items = selector.items;
+      const { items } = selector;
       if (Array.isArray(items)) {
         for (const importItem of items) {
           // ImportItem has: name: Node<Identifier>, alias: Node<Identifier> | null
           const nameNode = importItem.name;
-          if (nameNode && 'name' in nameNode) {
-            const name = nameNode.name;
-            const position = offsetToPosition(lineOffsets, nameNode.start);
-            log('extractImportSymbol: List item:', name, 'importPath:', importPath);
+          const { name } = nameNode;
+          const position = offsetToPosition(lineOffsets, nameNode.start);
+          log('extractImportSymbol: List item:', name, 'importPath:', importPath);
 
-            symbols.push({
-              name,
-              kind: 'import',
-              range: { start: nameNode.start, end: nameNode.end },
-              lineNumber: position.line,
-              column: position.column,
-              value: undefined,
-              isExported,
-              parameters: undefined,
-              returnType: undefined,
-              containingFunction: undefined,
-              importPath,
-              uri,
-            });
-          }
+          symbols.push({
+            name,
+            kind: 'import',
+            range: { start: nameNode.start, end: nameNode.end },
+            lineNumber: position.line,
+            column: position.column,
+            value: undefined,
+            isExported,
+            parameters: undefined,
+            returnType: undefined,
+            containingFunction: undefined,
+            importPath,
+            uri,
+          });
         }
       }
 
       break;
     }
 
-    case 'Glob': {
-      // Wildcard import: `import * from "..."`
+    default: {
+      // Glob or other import types: `import * from "..."`
       // No specific symbol name to extract
-      log('extractImportSymbol: Glob selector (wildcard import), skipping');
+      log('extractImportSymbol: Glob/other selector (wildcard import), skipping');
       break;
     }
   }
@@ -1014,49 +1019,63 @@ export function formatKclValue(value: KclValue): string {
     case 'Number': {
       return String(value.value);
     }
+
     case 'String': {
       return `"${value.value}"`;
     }
+
     case 'Bool': {
       return String(value.value);
     }
+
     case 'Tuple':
     case 'HomArray': {
-      return `[${value.value.map(formatKclValue).join(', ')}]`;
+      return `[${value.value.map((v) => formatKclValue(v)).join(', ')}]`;
     }
+
     case 'Object': {
       const entries = Object.entries(value.value)
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => `${k}: ${formatKclValue(v!)}`);
       return `{ ${entries.join(', ')} }`;
     }
+
     case 'Function': {
       return 'fn(...)';
     }
+
     case 'Module': {
       return `module`;
     }
+
     case 'Plane': {
       return 'Plane';
     }
+
     case 'Face': {
       return 'Face';
     }
+
     case 'Sketch': {
       return 'Sketch';
     }
+
     case 'Solid': {
       return 'Solid';
     }
+
     case 'Helix': {
       return 'Helix';
     }
+
     case 'Uuid': {
       return `uuid("${value.value}")`;
     }
+
     case 'KclNone': {
       return 'none';
     }
+
     default: {
       return String(value.type);
     }
@@ -1071,25 +1090,32 @@ export function getKclValueType(value: KclValue): string {
     case 'Number': {
       return 'number';
     }
+
     case 'String': {
       return 'string';
     }
+
     case 'Bool': {
       return 'boolean';
     }
+
     case 'Tuple':
     case 'HomArray': {
       return 'array';
     }
+
     case 'Object': {
       return 'object';
     }
+
     case 'Function': {
       return 'function';
     }
+
     case 'Module': {
       return 'module';
     }
+
     default: {
       return value.type;
     }
@@ -1105,6 +1131,7 @@ function formatTypeForDisplay(type: string): string {
     const name = type.slice(1);
     return name.charAt(0).toUpperCase() + name.slice(1);
   }
+
   return type;
 }
 
@@ -1114,50 +1141,64 @@ function formatTypeForDisplay(type: string): string {
 export function formatSymbolHover(symbol: KclSymbol): string[] {
   const lines: string[] = [];
 
-  if (symbol.kind === 'variable') {
-    const type = symbol.value ? getKclValueType(symbol.value) : 'unknown';
-    lines.push(`\`\`\`kcl\n(var) ${symbol.name}: ${type}\n\`\`\``);
+  switch (symbol.kind) {
+    case 'variable': {
+      const type = symbol.value ? getKclValueType(symbol.value) : 'unknown';
+      lines.push(`\`\`\`kcl\n(var) ${symbol.name}: ${type}\n\`\`\``);
 
-    if (symbol.value) {
-      lines.push(`*@default* — \`${formatKclValue(symbol.value)}\``);
-    }
-  } else if (symbol.kind === 'function') {
-    const params = symbol.parameters ?? [];
-    const paramStrings = params.map((p) => {
-      let str = p.isLabeled ? '' : '@';
-      str += p.name;
-      if (p.type) {
-        str += `: ${formatTypeForDisplay(p.type)}`;
+      if (symbol.value) {
+        lines.push(`*@default* — \`${formatKclValue(symbol.value)}\``);
       }
-      if (p.hasDefault) {
-        str += ' = ...';
+
+      break;
+    }
+
+    case 'function': {
+      const parameters = symbol.parameters ?? [];
+      const parameterStrings = parameters.map((p) => {
+        let string_ = p.isLabeled ? '' : '@';
+        string_ += p.name;
+        if (p.type) {
+          string_ += `: ${formatTypeForDisplay(p.type)}`;
+        }
+
+        if (p.hasDefault) {
+          string_ += ' = ...';
+        }
+
+        return string_;
+      });
+
+      let signature = `(fn) ${symbol.name}(${parameterStrings.join(', ')})`;
+      if (symbol.returnType) {
+        signature += `: ${symbol.returnType}`;
       }
-      return str;
-    });
 
-    let signature = `(fn) ${symbol.name}(${paramStrings.join(', ')})`;
-    if (symbol.returnType) {
-      signature += `: ${symbol.returnType}`;
+      lines.push(`\`\`\`kcl\n${signature}\n\`\`\``);
+
+      break;
     }
 
-    lines.push(`\`\`\`kcl\n${signature}\n\`\`\``);
-  } else if (symbol.kind === 'parameter') {
-    let paramStr = '';
-    if (symbol.containingFunction) {
-      // Find the parameter info from the parent function if available
-      paramStr = `(param) ${symbol.name}`;
-    } else {
-      paramStr = `(param) ${symbol.name}`;
+    case 'parameter': {
+      const parameterString = `(param) ${symbol.name}`;
+
+      lines.push(`\`\`\`kcl\n${parameterString}\n\`\`\``);
+      if (symbol.containingFunction) {
+        lines.push(`*Parameter of function \`${symbol.containingFunction}\`*`);
+      }
+
+      break;
     }
-    lines.push(`\`\`\`kcl\n${paramStr}\n\`\`\``);
-    if (symbol.containingFunction) {
-      lines.push(`*Parameter of function \`${symbol.containingFunction}\`*`);
+
+    case 'import': {
+      lines.push(`\`\`\`kcl\n(import) ${symbol.name}\n\`\`\``);
+      if (symbol.importPath) {
+        lines.push(`*from* \`"${symbol.importPath}"\``);
+      }
+
+      break;
     }
-  } else if (symbol.kind === 'import') {
-    lines.push(`\`\`\`kcl\n(import) ${symbol.name}\n\`\`\``);
-    if (symbol.importPath) {
-      lines.push(`*from* \`"${symbol.importPath}"\``);
-    }
+    // No default
   }
 
   return lines;
@@ -1170,9 +1211,6 @@ let symbolServiceInstance: KclSymbolService | undefined;
  * Get the singleton KCL Symbol Service instance
  */
 export function getKclSymbolService(): KclSymbolService {
-  if (!symbolServiceInstance) {
-    symbolServiceInstance = new KclSymbolService();
-  }
+  symbolServiceInstance ??= new KclSymbolService();
   return symbolServiceInstance;
 }
-
