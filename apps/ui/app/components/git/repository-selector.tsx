@@ -32,6 +32,9 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
   const { hooks } = useContext(AuthUIContext);
   const { data: session } = hooks.useSession();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Ref to prevent duplicate requests from rapid scroll events.
+  // React state updates are async, so we use a ref for synchronous guard checks.
+  const isLoadingMoreRef = useRef(false);
 
   // Extract unique scopes (owners) from repositories
   const scopes = useMemo(() => {
@@ -58,6 +61,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
       if (isInitial) {
         setIsLoading(true);
       } else {
+        isLoadingMoreRef.current = true;
         setIsLoadingMore(true);
       }
 
@@ -114,6 +118,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
     } finally {
       setIsLoading(false);
       setIsLoadingMore(false);
+      isLoadingMoreRef.current = false;
     }
   }, []);
 
@@ -122,12 +127,14 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
   }, [fetchRepositories]);
 
   const handleLoadMore = useCallback(() => {
-    if (!isLoadingMore && hasMore) {
+    // Use ref for synchronous guard to prevent duplicate requests from rapid scroll events
+    if (!isLoadingMoreRef.current && hasMore) {
+      isLoadingMoreRef.current = true;
       const nextPage = currentPage + 1;
       setCurrentPage(nextPage);
       void fetchRepositories(nextPage, false);
     }
-  }, [currentPage, fetchRepositories, hasMore, isLoadingMore]);
+  }, [currentPage, fetchRepositories, hasMore]);
 
   // Infinite scroll handler
   useEffect(() => {
@@ -139,7 +146,8 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
     const handleScroll = (): void => {
       const { scrollTop, scrollHeight, clientHeight } = container;
       // Load more when scrolled to 80% of the container
-      if (scrollTop + clientHeight >= scrollHeight * 0.8 && hasMore && !isLoadingMore) {
+      // Use ref for synchronous guard to prevent duplicate requests from rapid scroll events
+      if (scrollTop + clientHeight >= scrollHeight * 0.8 && hasMore && !isLoadingMoreRef.current) {
         handleLoadMore();
       }
     };
@@ -148,7 +156,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
     return () => {
       container.removeEventListener('scroll', handleScroll);
     };
-  }, [handleLoadMore, hasMore, isLoadingMore]);
+  }, [handleLoadMore, hasMore]);
 
   const handleSelectRepo = useCallback(
     async (repo: GitRepository) => {
