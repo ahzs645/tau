@@ -45,13 +45,14 @@ export function registerKclNavigation(
   // Subscribe to file explorer events to jump to position after file opens
   const unsubscribe = fileExplorerRef.on('fileOpened', (event: { path: string }) => {
     if (pendingNavigation && event.path === pendingNavigation.path) {
+      // Capture navigation info to avoid race condition if another navigation
+      // request arrives before the timeout fires
+      const capturedNavigation = pendingNavigation;
+      pendingNavigation = undefined;
+
       // Small delay to ensure the editor has mounted and model is ready
       setTimeout(() => {
-        if (!pendingNavigation) {
-          return;
-        }
-
-        const targetUri = monaco.Uri.file(`/${pendingNavigation.path}`);
+        const targetUri = monaco.Uri.file(`/${capturedNavigation.path}`);
         const targetModel = monaco.editor.getModel(targetUri);
 
         if (targetModel) {
@@ -59,14 +60,12 @@ export function registerKclNavigation(
           const targetEditor = editors.find((editorInstance) => editorInstance.getModel() === targetModel);
 
           if (targetEditor) {
-            const position = new monaco.Position(pendingNavigation.lineNumber, pendingNavigation.column);
+            const position = new monaco.Position(capturedNavigation.lineNumber, capturedNavigation.column);
             targetEditor.setPosition(position);
             targetEditor.revealPositionInCenter(position);
             targetEditor.focus();
           }
         }
-
-        pendingNavigation = undefined;
       }, 100);
     }
   });
