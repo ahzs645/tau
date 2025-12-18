@@ -1,33 +1,45 @@
 /**
  * A map that stores promises and resolves them when values are set.
  * Used for matching LSP responses to their requests by ID.
+ *
+ * Entries are automatically removed from the map when resolved to prevent memory leaks.
  */
 
-type PromiseMapEntry<V> =
-  | { status: 'pending'; resolve: (item: V) => void; promise: Promise<V> }
-  | { status: 'resolved' };
+type PromiseMapEntry<V> = {
+  resolve: (item: V) => void;
+  promise: Promise<V>;
+};
 
 export class PromiseMap<K, V> {
   private readonly map = new Map<K, PromiseMapEntry<V>>();
 
-  public get(key: K): Promise<V> | undefined {
+  /**
+   * Get or create a promise for the given key.
+   * The promise will resolve when `set()` is called with the same key.
+   */
+  public get(key: K): Promise<V> {
     const existingEntry = this.map.get(key);
-    const entry = existingEntry ?? this.createEntry(key);
-
-    if (entry.status === 'pending') {
-      return entry.promise;
+    if (existingEntry) {
+      return existingEntry.promise;
     }
 
-    return undefined;
+    const entry = this.createEntry(key);
+    return entry.promise;
   }
 
+  /**
+   * Resolve the promise for the given key with the provided value.
+   * If no promise exists for the key, this is a no-op (the value is discarded).
+   */
   public set(key: K, value: V): this {
-    const entry = this.createEntry(key, value);
+    const entry = this.map.get(key);
 
-    if (entry.status === 'pending') {
-      this.map.set(key, { status: 'resolved' });
+    if (entry) {
+      // Remove entry from map before resolving to prevent memory leaks
+      this.map.delete(key);
       entry.resolve(value);
     }
+    // If no entry exists, no one is waiting for this value - discard it
 
     return this;
   }
@@ -36,14 +48,9 @@ export class PromiseMap<K, V> {
     return this.map.size;
   }
 
-  private createEntry(key: K, value?: V): PromiseMapEntry<V> {
-    const existingEntry = this.map.get(key);
-    if (existingEntry) {
-      return existingEntry;
-    }
-
+  private createEntry(key: K): PromiseMapEntry<V> {
     let resolve: (item: V) => void = () => {
-      // Placeholder
+      // Placeholder - will be replaced by Promise constructor
     };
 
     const promise = new Promise<V>((_resolve) => {
@@ -51,14 +58,9 @@ export class PromiseMap<K, V> {
     });
 
     const entry: PromiseMapEntry<V> = {
-      status: 'pending',
       resolve,
       promise,
     };
-
-    if (value !== undefined) {
-      entry.resolve(value);
-    }
 
     this.map.set(key, entry);
 
