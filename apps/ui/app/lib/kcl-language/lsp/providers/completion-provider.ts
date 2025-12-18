@@ -175,16 +175,16 @@ export function createCompletionProvider(
  */
 /**
  * Extract label text from an LSP CompletionItem label.
+ * In LSP 3.17, CompletionItem.label is always a string.
+ * CompletionItemLabelDetails (used for labelDetails property) only has detail and description fields.
  */
 function getLabelText(label: string | LSP.CompletionItemLabelDetails): string {
   if (typeof label === 'string') {
     return label;
   }
 
-  // CompletionItemLabelDetails has a 'label' property (LSP 3.17+)
-  // Cast to extended type that includes the label field
-  const labelDetails = label as { label?: string; detail?: string; description?: string };
-  return labelDetails.label ?? '';
+  // CompletionItemLabelDetails only has detail and description, no label field
+  return label.detail ?? label.description ?? '';
 }
 
 function convertLspCompletionItem(
