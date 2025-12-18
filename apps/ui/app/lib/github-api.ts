@@ -24,6 +24,32 @@ type BranchesGraphqlResponse = {
 };
 
 /**
+ * Error thrown when GitHub's Git Trees API returns a truncated response.
+ * This occurs when the repository tree exceeds ~100,000 entries or 7MB response size.
+ *
+ * Callers should catch this error and implement alternative strategies:
+ * - Use Repository Contents API for incremental directory traversal
+ * - Use GraphQL API with pagination
+ * - Clone the repository locally
+ * - Filter to a specific subdirectory
+ */
+export class GitHubTreeTruncatedError extends Error {
+  public readonly owner: string;
+  public readonly repo: string;
+  public readonly ref: string;
+  public readonly partialCount: number;
+
+  public constructor(owner: string, repo: string, ref: string, partialCount: number, message: string) {
+    super(message);
+    this.name = 'GitHubTreeTruncatedError';
+    this.owner = owner;
+    this.repo = repo;
+    this.ref = ref;
+    this.partialCount = partialCount;
+  }
+}
+
+/**
  * GitHub API client singleton
  * Provides authenticated access to GitHub API with proper typing
  */
@@ -228,6 +254,10 @@ class GitHubApiClient {
    * List files in a repository tree (without downloading content)
    * Uses the Git Trees API with recursive option
    * Filters to only include files (blobs), not directories (trees)
+   *
+   * @throws {GitHubTreeTruncatedError} When the tree is too large (>100k entries or >7MB response)
+   *         and GitHub returns a truncated result. Callers should handle this error and consider
+   *         alternative strategies for large repositories.
    */
   public async listFiles(owner: string, repo: string, ref: string): Promise<Array<{ path: string; size: number }>> {
     // Get the tree for the ref
@@ -238,6 +268,23 @@ class GitHubApiClient {
       tree_sha: ref,
       recursive: 'true',
     });
+
+    // Check if the tree response was truncated due to size limits
+    // GitHub truncates trees exceeding ~100,000 entries or 7MB response size
+    if (data.truncated) {
+      throw new GitHubTreeTruncatedError(
+        owner,
+        repo,
+        ref,
+        data.tree.length,
+        'The repository tree is too large and was truncated by GitHub. ' +
+          'Consider using one of the following alternative strategies:\n' +
+          '1. Use the Repository Contents API to traverse directories incrementally\n' +
+          '2. Use the GraphQL API with pagination for more control\n' +
+          '3. Clone the repository locally using git\n' +
+          '4. Filter to a specific subdirectory if you only need part of the tree',
+      );
+    }
 
     // Filter to only blobs (files) and map to path/size
     return data.tree
