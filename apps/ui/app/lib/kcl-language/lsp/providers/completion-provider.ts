@@ -85,7 +85,7 @@ export function createCompletionProvider(
             const labelText = getLabelText(item.label);
             if (!seenLabels.has(labelText)) {
               seenLabels.add(labelText);
-              suggestions.push(convertLspCompletionItem(monaco, item, model));
+              suggestions.push(convertLspCompletionItem(monaco, item, wordRange));
             }
           }
         } else {
@@ -190,7 +190,7 @@ function getLabelText(label: string | LSP.CompletionItemLabelDetails): string {
 function convertLspCompletionItem(
   monaco: typeof Monaco,
   item: LSP.CompletionItem,
-  model: Monaco.editor.ITextModel,
+  wordRange: Monaco.IRange,
 ): Monaco.languages.CompletionItem {
   const labelText = getLabelText(item.label);
   const insertText = item.insertText ?? labelText;
@@ -200,8 +200,8 @@ function convertLspCompletionItem(
     range = lspToMonacoRange(monaco, item.textEdit.range);
   }
 
-  // Use model's full range if no range specified
-  const defaultRange = range ?? model.getFullModelRange();
+  // Use word range (or zero-width cursor position) if no textEdit.range specified
+  const defaultRange = range ?? wordRange;
 
   return {
     label: labelText,
