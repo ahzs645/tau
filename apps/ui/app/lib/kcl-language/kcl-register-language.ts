@@ -739,12 +739,14 @@ export function disposeKclLsp(): void {
   for (const disposable of monacoDisposables) {
     disposable.dispose();
   }
+
   monacoDisposables.length = 0;
 
   // Dispose content change subscriptions
   for (const disposable of contentChangeDisposables.values()) {
     disposable.dispose();
   }
+
   contentChangeDisposables.clear();
 
   // Clean up LSP client
