@@ -313,7 +313,7 @@ function ItemList<T>({
         {isSearchEnabled ? (
           <CommandInput placeholder={searchPlaceHolder} value={search} onValueChange={setSearch} />
         ) : null}
-        <CommandList className="p-1">
+        <CommandList>
           {filteredItems.length === 0 ? (
             <CommandEmpty>{emptyListMessage}</CommandEmpty>
           ) : (
@@ -321,9 +321,13 @@ function ItemList<T>({
               style={{ height: `${virtualizationHeight}px` }}
               totalCount={filteredItems.length}
               itemContent={renderItem}
-              className="overflow-y-auto"
               endReached={onLoadMore}
+              // Virtuoso's List component doesn't handle vertical padding correctly due to
+              // absolute positioning used for virtualization. Use Header/Footer for vertical
+              // spacing and px-1 on List for horizontal padding.
               components={{
+                List: (properties) => <div {...properties} className="px-1" />,
+                Header: () => <div className="h-1" />,
                 Footer: isLoadingMore
                   ? () => (
                       <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
@@ -331,7 +335,7 @@ function ItemList<T>({
                         <span>Loading more...</span>
                       </div>
                     )
-                  : undefined,
+                  : () => <div className="h-1" />,
               }}
             />
           )}
