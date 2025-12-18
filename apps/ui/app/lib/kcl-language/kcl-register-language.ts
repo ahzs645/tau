@@ -436,8 +436,11 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
   // Register Monaco language providers
   const languageId = codeLanguages.kcl;
 
-  // Completion provider
-  monaco.languages.registerCompletionItemProvider(languageId, createCompletionProvider(monaco, lspClient));
+  // Completion provider (with symbol service for user-defined completions)
+  monaco.languages.registerCompletionItemProvider(
+    languageId,
+    createCompletionProvider(monaco, lspClient, symbolService),
+  );
 
   // Hover provider (with symbol service for enhanced hover)
   monaco.languages.registerHoverProvider(languageId, createHoverProvider(monaco, lspClient, symbolService));
@@ -521,11 +524,64 @@ async function initializeSymbolServiceWasm(): Promise<void> {
     type MockExecutionResult = {
       variables: Partial<Record<string, KclValue>>;
       errors: unknown[];
+      sourceFiles?: Record<
+        string | number,
+        { path: { type: 'Main' } | { type: 'Local'; value: string } | { type: 'Std'; value: string }; source: string }
+      >;
     };
 
-    symbolService.setMockExecuteFunction(async (program, path) => {
-      const result = (await mockContext.executeMock(JSON.stringify(program), path, '{}', false)) as MockExecutionResult;
-      return { variables: result.variables, errors: result.errors };
+    // Flag to track if we've processed stdlib
+    let stdlibProcessed = false;
+
+    // Capture reference to symbolService for closure (we know it's defined from guard above)
+    const service = symbolService;
+
+    service.setMockExecuteFunction(async (program, path) => {
+      try {
+        const result = (await mockContext.executeMock(
+          JSON.stringify(program),
+          path,
+          '{}',
+          false,
+        )) as MockExecutionResult;
+
+        // Process stdlib from successful result if available and not already done
+        const successSourceFiles = result.sourceFiles;
+        if (!stdlibProcessed && successSourceFiles) {
+          log('Processing stdlib from successful mock execution...');
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- TypeScript confirms service.processStdlibSources exists
+          await service.processStdlibSources(successSourceFiles);
+          stdlibProcessed = true;
+        }
+
+        return { variables: result.variables, errors: result.errors, sourceFiles: result.sourceFiles };
+      } catch (error) {
+        // Mock execution can throw but still contain partial results
+        // The error object may contain sourceFiles which we need for stdlib
+        if (error && typeof error === 'object') {
+          const errorObject = error as MockExecutionResult;
+
+          // Process stdlib from error result if available and not already done
+          const errorSourceFiles = errorObject.sourceFiles;
+          if (!stdlibProcessed && errorSourceFiles) {
+            log('Processing stdlib from error mock execution...');
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- TypeScript confirms service.processStdlibSources exists
+            await service.processStdlibSources(errorSourceFiles);
+            stdlibProcessed = true;
+          }
+
+          // Re-throw with variables and sourceFiles attached for the symbol service to extract
+          const errorData = {
+            variables: errorObject.variables,
+            errors: errorObject.errors,
+            sourceFiles: errorObject.sourceFiles,
+          };
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- Intentionally throwing data object for symbol service
+          throw errorData;
+        }
+
+        throw error;
+      }
     });
 
     log(' Symbol service WASM initialized with mock execution');
@@ -545,8 +601,13 @@ function setupDocumentSync(monaco: typeof Monaco, client: KclLspClient): void {
   const languageId = codeLanguages.kcl;
 
   // Handle existing models (might be created before LSP was ready)
-  for (const model of monaco.editor.getModels()) {
-    if (model.getLanguageId() === languageId) {
+  const allModels = monaco.editor.getModels();
+  log('setupDocumentSync: found', allModels.length, 'models total');
+  for (const model of allModels) {
+    const modelLanguage = model.getLanguageId();
+    log('setupDocumentSync: model', model.uri.toString(), 'language:', modelLanguage);
+    if (modelLanguage === languageId) {
+      log('setupDocumentSync: syncing KCL model', model.uri.toString());
       syncDocumentOpen(client, model);
     }
   }
@@ -583,14 +644,16 @@ function syncDocumentOpen(client: KclLspClient, model: Monaco.editor.ITextModel)
   const uri = model.uri.toString();
   const text = model.getValue();
 
-  log(' syncDocumentOpen called for:', uri);
+  log('syncDocumentOpen called for:', uri, '(text length:', text.length, ')');
+  log('syncDocumentOpen: openedDocuments:', [...openedDocuments]);
 
   // Skip if already opened (prevents duplicates)
   if (openedDocuments.has(uri)) {
-    log(' Document already opened, skipping:', uri);
+    log('syncDocumentOpen: Document already opened, skipping:', uri);
     return;
   }
 
+  log('syncDocumentOpen: Document NOT in openedDocuments, sending didOpen');
   openedDocuments.add(uri);
   documentVersions.set(uri, 1);
   client.textDocumentDidOpen({
@@ -602,7 +665,7 @@ function syncDocumentOpen(client: KclLspClient, model: Monaco.editor.ITextModel)
     },
   });
 
-  log(' Opened document:', uri, '(text length:', text.length, ')');
+  log('syncDocumentOpen: Sent textDocument/didOpen for:', uri);
 
   // Update symbol service with document content
   if (symbolService) {

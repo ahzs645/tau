@@ -87,15 +87,26 @@ export type ParseFunction = (code: string) => Promise<{
 }>;
 
 /**
- * Mock execution function interface - matches KclUtils.executeMockKcl signature
+ * Module source from WASM - contains stdlib and user file sources
  */
-export type MockExecuteFunction = (
-  program: Program,
-  path: string,
-) => Promise<{
+export type ModuleSource = {
+  path: { type: 'Main' } | { type: 'Local'; value: string } | { type: 'Std'; value: string };
+  source: string;
+};
+
+/**
+ * Mock execution result interface - includes sourceFiles for stdlib
+ */
+export type MockExecuteResult = {
   variables: Partial<Record<string, KclValue>>;
   errors: unknown[];
-}>;
+  sourceFiles?: Record<string | number, ModuleSource>;
+};
+
+/**
+ * Mock execution function interface - matches KclUtils.executeMockKcl signature
+ */
+export type MockExecuteFunction = (program: Program, path: string) => Promise<MockExecuteResult>;
 
 /**
  * KCL Symbol Service
@@ -107,6 +118,10 @@ export class KclSymbolService {
   private readonly cache = new Map<string, DocumentCache>();
   private parseFunction: ParseFunction | undefined;
   private mockExecuteFunction: MockExecuteFunction | undefined;
+
+  /** Cached stdlib symbols - parsed once from sourceFiles */
+  private stdlibSymbols: KclSymbol[] = [];
+  private stdlibProcessed = false;
 
   /**
    * Set the parse function (from KclUtils)
@@ -127,6 +142,67 @@ export class KclSymbolService {
    */
   public get isInitialized(): boolean {
     return this.parseFunction !== undefined;
+  }
+
+  /**
+   * Check if stdlib has been processed
+   */
+  public get hasStdlib(): boolean {
+    return this.stdlibProcessed;
+  }
+
+  /**
+   * Process stdlib source files and cache their symbols.
+   * This should be called once with the sourceFiles from mock execution.
+   */
+  public async processStdlibSources(sourceFiles: Record<string | number, ModuleSource>): Promise<void> {
+    if (this.stdlibProcessed || !this.parseFunction) {
+      return;
+    }
+
+    log('Processing stdlib source files...');
+    const stdlibEntries = Object.values(sourceFiles).filter(
+      (source): source is ModuleSource => source !== undefined && source.path.type === 'Std',
+    );
+
+    log('Found', stdlibEntries.length, 'stdlib modules');
+
+    const allSymbols: KclSymbol[] = [];
+
+    for (const entry of stdlibEntries) {
+      const moduleName = entry.path.type === 'Std' ? entry.path.value : 'unknown';
+      const uri = `std://${moduleName}`;
+
+      try {
+        const parseResult = await this.parseFunction(entry.source);
+        const lineOffsets = computeLineOffsets(entry.source);
+        const symbols = extractSymbolsFromProgram(parseResult.program, uri, entry.source, lineOffsets);
+
+        // Mark all stdlib symbols with their module for better documentation
+        for (const symbol of symbols) {
+          // Only include exported functions and variables (top-level symbols)
+          if (symbol.kind === 'function' || symbol.kind === 'variable') {
+            symbol.importPath = `std::${moduleName}`;
+            allSymbols.push(symbol);
+          }
+        }
+
+        log('Parsed stdlib module:', moduleName, 'symbols:', symbols.length);
+      } catch (error) {
+        log('Failed to parse stdlib module:', moduleName, error);
+      }
+    }
+
+    this.stdlibSymbols = allSymbols;
+    this.stdlibProcessed = true;
+    log('Stdlib processing complete. Total symbols:', allSymbols.length);
+  }
+
+  /**
+   * Get all stdlib symbols for completion
+   */
+  public getStdlibSymbols(): KclSymbol[] {
+    return this.stdlibSymbols;
   }
 
   /**
@@ -403,6 +479,78 @@ export class KclSymbolService {
       return undefined;
     }
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Completion Support
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Get all symbols suitable for completion from the current document.
+   * Returns variables, functions, and parameters (excluding imports which need resolution).
+   */
+  public getCompletableSymbols(uri: string): KclSymbol[] {
+    const symbols = this.getSymbols(uri);
+    // Return all symbols except imports (imports are handled separately via resolution)
+    return symbols.filter((symbol) => symbol.kind !== 'import');
+  }
+
+  /**
+   * Get all imported symbols resolved to their actual definitions.
+   * This reads imported files and returns the actual symbol definitions.
+   *
+   * @param uri The URI of the current document
+   * @param fileManager The file manager for reading files
+   * @returns Array of resolved symbol definitions from imported files
+   */
+  public async getImportedSymbolsForCompletion(
+    uri: string,
+    fileManager: LspFileManager,
+  ): Promise<KclSymbol[]> {
+    const imports = this.getImports(uri);
+    log('getImportedSymbolsForCompletion: resolving', imports.length, 'imports');
+
+    // Filter to imports with valid paths
+    const validImports = imports.filter((importSymbol) => Boolean(importSymbol.importPath));
+
+    // Resolve all imports in parallel
+    const resolveResults = await Promise.all(
+      validImports.map(async (importSymbol) => {
+        try {
+          // Resolve the import path relative to the current file
+          const importUri = resolveImportPath(uri, importSymbol.importPath!);
+          const importFilePath = uriToPath(importUri);
+
+          // Read and parse the imported file
+          const content = await fileManager.readFile(importFilePath);
+          const contentString = new TextDecoder().decode(content);
+          await this.updateDocument(importUri, contentString, 1);
+
+          // Find the symbol in the imported file
+          const resolvedSymbol = this.findSymbolByName(importUri, importSymbol.name);
+          if (resolvedSymbol) {
+            // Add the import path to the resolved symbol for documentation
+            return {
+              ...resolvedSymbol,
+              importPath: importSymbol.importPath,
+            };
+          }
+
+          return undefined;
+        } catch (error) {
+          log('Error resolving import for completion:', importSymbol.name, error);
+
+          return undefined;
+        }
+      }),
+    );
+
+    // Filter out undefined results
+    const resolvedSymbols = resolveResults.filter((symbol): symbol is KclSymbol => symbol !== undefined);
+
+    log('getImportedSymbolsForCompletion: resolved', resolvedSymbols.length, 'symbols');
+
+    return resolvedSymbols;
+  }
 }
 
 // ============================================================================
@@ -612,34 +760,121 @@ function extractVariableSymbol(
 }
 
 /**
- * Extract parameter information from function parameters
+ * Extract parameter information from function parameters.
+ *
+ * Special handling for unlabeled parameters:
+ * In KCL, `fn foo(@plane)` means the parameter is unlabeled with type `@plane`.
+ * When `labeled === false`, the type is implicit from the parameter name.
  */
 function extractParameters(parameters: Parameter[], _uri: string, _lineOffsets: number[]): KclParameterInfo[] {
-  return parameters.map((param) => {
-    const typeStr = param.param_type ? formatType(param.param_type) : undefined;
+  return parameters.map((parameter) => {
+    let typeString: string | undefined;
+
+    if (parameter.param_type) {
+      typeString = formatType(parameter.param_type);
+    } else if (parameter.labeled === false) {
+      // Unlabeled parameter: the type is @{identifier.name}
+      // e.g., `fn divider(@plane)` has type `@plane`
+      typeString = `@${parameter.identifier.name}`;
+    }
 
     return {
-      name: param.identifier.name,
-      type: typeStr,
-      isLabeled: param.labeled !== false,
-      hasDefault: param.default_value !== undefined && param.default_value !== null,
-      range: { start: param.identifier.start, end: param.identifier.end },
+      name: parameter.identifier.name,
+      type: typeString,
+      isLabeled: parameter.labeled !== false,
+      hasDefault: parameter.default_value !== undefined && parameter.default_value !== null,
+      range: { start: parameter.identifier.start, end: parameter.identifier.end },
     };
   });
 }
 
 /**
- * Format a type node to string (simplified)
+ * Format a type node to string.
+ *
+ * Type structure (Node<Type>):
+ * - { type: 'Primitive', p_type: 'Named', id: Node<Identifier> } -> @plane
+ * - { type: 'Primitive', p_type: 'String' } -> string
+ * - { type: 'Primitive', p_type: 'Number' } -> number
+ * - { type: 'Primitive', p_type: 'bool' } -> bool
+ * - { type: 'Array', ty: Type, len: ArrayLen } -> array
+ * - { type: 'Union', tys: Array<Node<Type>> } -> union
  */
 function formatType(typeNode: Node<unknown>): string {
-  // Type node structure varies - return a simplified representation
-  const typeValue = typeNode as { name?: string; type?: string };
+  const typeValue = typeNode as {
+    type?: string;
+    p_type?: string;
+    id?: { name?: string; type?: string };
+    name?: string;
+    ty?: unknown;
+    tys?: unknown[];
+  };
+
+  // Handle outer Type wrapper
+  if (typeValue.type === 'Primitive') {
+    // Handle PrimitiveType - Named type like @plane
+    if (typeValue.p_type === 'Named' && typeValue.id?.name) {
+      return `@${typeValue.id.name}`;
+    }
+
+    if (typeValue.p_type) {
+      // Built-in types
+      switch (typeValue.p_type) {
+        case 'String': {
+          return 'string';
+        }
+
+        case 'Number': {
+          return 'number';
+        }
+
+        case 'bool': {
+          return 'bool';
+        }
+
+        case 'Any': {
+          return 'any';
+        }
+
+        case 'None': {
+          return 'none';
+        }
+
+        case 'TagDecl': {
+          return 'tag';
+        }
+
+        case 'ImportedGeometry': {
+          return 'geometry';
+        }
+
+        case 'Function': {
+          return 'function';
+        }
+
+        default: {
+          return typeValue.p_type;
+        }
+      }
+    }
+  }
+
+  if (typeValue.type === 'Array') {
+    return 'array';
+  }
+
+  if (typeValue.type === 'Union') {
+    return 'union';
+  }
+
+  // Fallback for other cases
   if (typeValue.name) {
     return typeValue.name;
   }
+
   if (typeValue.type) {
     return typeValue.type;
   }
+
   return 'unknown';
 }
 
@@ -862,6 +1097,18 @@ export function getKclValueType(value: KclValue): string {
 }
 
 /**
+ * Format a type string for display.
+ * Converts @typename to Typename (e.g., @plane -> Plane) to match KCL LSP builtin format.
+ */
+function formatTypeForDisplay(type: string): string {
+  if (type.startsWith('@')) {
+    const name = type.slice(1);
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
+  return type;
+}
+
+/**
  * Format a symbol for hover display (OpenSCAD-style)
  */
 export function formatSymbolHover(symbol: KclSymbol): string[] {
@@ -880,7 +1127,7 @@ export function formatSymbolHover(symbol: KclSymbol): string[] {
       let str = p.isLabeled ? '' : '@';
       str += p.name;
       if (p.type) {
-        str += `: ${p.type}`;
+        str += `: ${formatTypeForDisplay(p.type)}`;
       }
       if (p.hasDefault) {
         str += ' = ...';

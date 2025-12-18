@@ -147,7 +147,14 @@ export class KclLspClient {
   }
 
   public textDocumentDidOpen(parameters: LSP.DidOpenTextDocumentParams): void {
+    log(
+      'textDocumentDidOpen called for:',
+      parameters.textDocument.uri,
+      'text length:',
+      parameters.textDocument.text.length,
+    );
     this.notify('textDocument/didOpen', parameters);
+    log('textDocumentDidOpen notification sent');
   }
 
   public textDocumentDidChange(parameters: LSP.DidChangeTextDocumentParams): void {
@@ -169,13 +176,28 @@ export class KclLspClient {
   public async textDocumentCompletion(
     parameters: LSP.CompletionParams,
   ): Promise<LSP.CompletionItem[] | LSP.CompletionList | undefined> {
-    log('textDocumentCompletion called, capabilities:', this.serverCapabilities.completionProvider);
+    log('textDocumentCompletion called for uri:', parameters.textDocument.uri);
+    log('textDocumentCompletion position:', JSON.stringify(parameters.position));
+    log('textDocumentCompletion capabilities:', this.serverCapabilities.completionProvider);
     if (!this.serverCapabilities.completionProvider) {
       log('No completion provider capability - returning undefined');
       return undefined;
     }
 
-    return this.request('textDocument/completion', parameters);
+    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- LSP can return null
+    const result = await this.request<LSP.CompletionItem[] | LSP.CompletionList | null>(
+      'textDocument/completion',
+      parameters,
+    );
+
+    log('textDocumentCompletion result type:', result === null ? 'null' : Array.isArray(result) ? 'array' : 'object');
+    if (result && 'items' in result) {
+      log('textDocumentCompletion items count:', result.items.length);
+    } else if (Array.isArray(result)) {
+      log('textDocumentCompletion array length:', result.length);
+    }
+
+    return result ?? undefined;
   }
 
   public async completionItemResolve(parameters: LSP.CompletionItem): Promise<LSP.CompletionItem> {

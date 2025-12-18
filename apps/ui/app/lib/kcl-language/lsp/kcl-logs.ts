@@ -6,7 +6,7 @@
  */
 
 /** Master debug flag - set to true to enable logging across all KCL LSP components */
-export const isDebugEnabled = true;
+export const isDebugEnabled = false;
 
 /**
  * Create a scoped logger for a specific component.
