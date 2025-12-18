@@ -17,7 +17,7 @@ export class PromiseMap<K, V> {
    * Get or create a promise for the given key.
    * The promise will resolve when `set()` is called with the same key.
    */
-  public get(key: K): Promise<V> {
+  public async get(key: K): Promise<V> {
     const existingEntry = this.map.get(key);
     if (existingEntry) {
       return existingEntry.promise;

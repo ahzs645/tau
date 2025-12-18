@@ -181,6 +181,7 @@ let isWasmReady = false;
 let resolveWasmReady: () => void = () => {
   // Placeholder - replaced by handleInitEvent
 };
+
 let wasmReadyPromise: Promise<void> = new Promise<void>((resolve) => {
   resolveWasmReady = resolve;
 });
@@ -265,30 +266,25 @@ async function handleCallEvent(data: Uint8Array): Promise<void> {
   // If this is a request (has an ID), wait for the response
   if (json.id !== null && json.id !== undefined) {
     log('Waiting for response to request id:', json.id);
-    const responsePromise = fromServer.responses.get(json.id);
-    if (responsePromise) {
-      try {
-        const response = await responsePromise;
-        log('Got response for id:', json.id, response);
-        const encoded = encodeMessage(response as JSONRPCResponse);
-        globalThis.postMessage(encoded);
-        log('Response sent to client');
-      } catch (error: unknown) {
-        console.error('[KCL LSP Worker] Error getting response:', error);
-        // Send JSON-RPC error response back to client per spec
-        const errorResponse: JSONRPCResponse = {
-          jsonrpc: '2.0',
-          id: json.id,
-          error: {
-            code: -32603,
-            message: error instanceof Error ? error.message : 'Internal error',
-          },
-        };
-        globalThis.postMessage(encodeMessage(errorResponse));
-        log('Error response sent to client');
-      }
-    } else {
-      log('No response promise created for id:', json.id);
+    try {
+      const response = await fromServer.responses.get(json.id);
+      log('Got response for id:', json.id, response);
+      const encoded = encodeMessage(response as JSONRPCResponse);
+      globalThis.postMessage(encoded);
+      log('Response sent to client');
+    } catch (error: unknown) {
+      console.error('[KCL LSP Worker] Error getting response:', error);
+      // Send JSON-RPC error response back to client per spec
+      const errorResponse: JSONRPCResponse = {
+        jsonrpc: '2.0',
+        id: json.id,
+        error: {
+          code: -32_603,
+          message: error instanceof Error ? error.message : 'Internal error',
+        },
+      };
+      globalThis.postMessage(encodeMessage(errorResponse));
+      log('Error response sent to client');
     }
   }
 }
