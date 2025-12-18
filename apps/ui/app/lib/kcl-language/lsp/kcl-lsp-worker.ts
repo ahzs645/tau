@@ -174,8 +174,16 @@ const intoServer = new Queue<Uint8Array>();
 const fromServer = new StreamDemuxer();
 const fileSystemBridge = new FileSystemBridge();
 let isWasmReady = false;
-let wasmReadyPromise: Promise<void> | undefined;
-let resolveWasmReady: () => void;
+
+// Initialize wasmReadyPromise and resolveWasmReady at declaration to ensure
+// resolveWasmReady is always defined when called (lines 204, 213, 238).
+// handleInitEvent will replace these with fresh instances.
+let resolveWasmReady: () => void = () => {
+  // Placeholder - replaced by handleInitEvent
+};
+let wasmReadyPromise: Promise<void> = new Promise<void>((resolve) => {
+  resolveWasmReady = resolve;
+});
 
 async function initializeWasm(wasmUrl: string): Promise<void> {
   log('Fetching WASM from:', wasmUrl);
@@ -244,7 +252,7 @@ async function handleCallEvent(data: Uint8Array): Promise<void> {
   log('Call event received:', json.method, 'id:', json.id);
 
   // Wait for WASM to be ready
-  if (!isWasmReady && wasmReadyPromise) {
+  if (!isWasmReady) {
     log('Waiting for WASM to be ready...');
     await wasmReadyPromise;
     log('WASM is ready, processing request');
@@ -267,6 +275,17 @@ async function handleCallEvent(data: Uint8Array): Promise<void> {
         log('Response sent to client');
       } catch (error: unknown) {
         console.error('[KCL LSP Worker] Error getting response:', error);
+        // Send JSON-RPC error response back to client per spec
+        const errorResponse: JSONRPCResponse = {
+          jsonrpc: '2.0',
+          id: json.id,
+          error: {
+            code: -32603,
+            message: error instanceof Error ? error.message : 'Internal error',
+          },
+        };
+        globalThis.postMessage(encodeMessage(errorResponse));
+        log('Error response sent to client');
       }
     } else {
       log('No response promise created for id:', json.id);
