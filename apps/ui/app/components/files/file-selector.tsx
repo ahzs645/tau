@@ -124,7 +124,8 @@ function sortNodes(a: TreeNode, b: TreeNode): number {
 }
 
 /**
- * Format bytes to human-readable size
+ * Format bytes to human-readable size.
+ * Supports sizes up to Quettabytes (QB, ~10^30 bytes).
  */
 function formatBytes(bytes: number): string {
   if (bytes === 0) {
@@ -132,8 +133,9 @@ function formatBytes(bytes: number): string {
   }
 
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  // SI byte units: B, KB, MB, GB, TB, PB, EB, ZB, YB, RB, QB
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB', 'RB', 'QB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
 
   return `${Number.parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
 }
