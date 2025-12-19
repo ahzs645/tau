@@ -196,7 +196,9 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
                   <span>{formatCount(repo.forks)}</span>
                 </div>
               </div>
-              <div className="hidden truncate text-right font-mono text-[10px] sm:block">{repo.mainFile.split('/').pop()}</div>
+              <div className="hidden truncate text-right font-mono text-[10px] sm:block">
+                {repo.mainFile.split('/').pop()}
+              </div>
             </div>
           </button>
         ))}
