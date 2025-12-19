@@ -432,6 +432,20 @@ export default function ImportRoute(): React.JSX.Element {
                     </div>
                   ) : undefined}
 
+                  {/* File Tree Errors - Show when file listing fails (e.g., truncation for large repos) */}
+                  {repoMetadata && !isCheckingOrFetching && fetchErrors.files ? (
+                    <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
+                      <AlertCircle className="size-5 shrink-0" />
+                      <div className="flex flex-col gap-1">
+                        <div className="font-semibold">Could Not List Files</div>
+                        <div className="text-sm">
+                          <div>{fetchErrors.files.message}</div>
+                          <div className="mt-1">You can still proceed with the import.</div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : undefined}
+
                   {/* Branch & Main File Selectors */}
                   {branches.length > 0 || repoFiles.length > 0 ? (
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
