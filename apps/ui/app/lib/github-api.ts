@@ -3,6 +3,17 @@ import { metaConfig } from '#constants/meta.constants.js';
 import { ENV } from '#config.js';
 
 /**
+ * Branch node from GraphQL response
+ */
+type BranchNode = {
+  name: string;
+  target: {
+    oid: string;
+    committedDate?: string;
+  };
+};
+
+/**
  * GraphQL response type for branches query
  */
 type BranchesGraphqlResponse = {
@@ -12,13 +23,23 @@ type BranchesGraphqlResponse = {
         hasNextPage: boolean;
         endCursor: string | undefined;
       };
-      nodes: Array<{
-        name: string;
-        target: {
-          oid: string;
-          committedDate?: string;
-        };
-      }>;
+      nodes: BranchNode[];
+    };
+  };
+};
+
+/**
+ * GraphQL response type for branches query with default branch info
+ * Used on the first page request to include the repository's default branch
+ */
+export type BranchesWithDefaultResponse = BranchesGraphqlResponse & {
+  repository: {
+    defaultBranchRef?: {
+      name: string;
+      target: {
+        oid: string;
+        committedDate?: string;
+      };
     };
   };
 };
@@ -107,39 +128,46 @@ class GitHubApiClient {
 
   /**
    * Get list of branches for a repository with commit timestamps
-   * Uses GraphQL API to fetch ALL branches with their last commit date
-   * Since GitHub's TAG_COMMIT_DATE ordering only works for tags (not branches),
-   * we fetch all branches and sort client-side by commit date
-   * The default branch is always fetched and included at the start
+   * Uses GraphQL API with cursor-based pagination
+   * On the first page (no cursor), the default branch is included and placed first
+   * Branches within each page are sorted by commit date (most recent first)
+   *
+   * Note: Cross-page sorting by commit date is not possible since GitHub's
+   * TAG_COMMIT_DATE ordering only works for tags. Consider fetching all pages
+   * client-side if full sorting is required.
    */
   public async listBranches(
     owner: string,
     repo: string,
-    _page = 1,
+    pageSize = 100,
     cursor?: string,
   ): Promise<{
     branches: Array<{ name: string; sha: string; updatedAt: number }>;
     hasMore: boolean;
     endCursor: string | undefined;
   }> {
-    // Fetch all branches by paginating through all results
-    // GitHub's refs API doesn't properly sort branches by commit date,
-    // so we need to fetch all and sort client-side
-    const allBranches: Array<{ name: string; sha: string; updatedAt: number }> = [];
-    let currentCursor: string | undefined = cursor;
-    let hasNextPage = true;
-    let defaultBranchName: string | undefined;
-
-    // For the first page, also fetch the default branch info
     const isFirstPage = cursor === undefined;
 
-    while (hasNextPage) {
-      const query =
-        isFirstPage && allBranches.length === 0
-          ? `
-            query($owner: String!, $repo: String!, $first: Int!, $after: String) {
-              repository(owner: $owner, name: $repo) {
-                defaultBranchRef {
+    // On first page, also fetch the default branch info
+    const query = isFirstPage
+      ? `
+          query($owner: String!, $repo: String!, $first: Int!, $after: String) {
+            repository(owner: $owner, name: $repo) {
+              defaultBranchRef {
+                name
+                target {
+                  ... on Commit {
+                    oid
+                    committedDate
+                  }
+                }
+              }
+              refs(refPrefix: "refs/heads/", first: $first, after: $after) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                nodes {
                   name
                   target {
                     ... on Commit {
@@ -148,105 +176,75 @@ class GitHubApiClient {
                     }
                   }
                 }
-                refs(refPrefix: "refs/heads/", first: $first, after: $after) {
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
-                  nodes {
-                    name
-                    target {
-                      ... on Commit {
-                        oid
-                        committedDate
-                      }
+              }
+            }
+          }
+        `
+      : `
+          query($owner: String!, $repo: String!, $first: Int!, $after: String) {
+            repository(owner: $owner, name: $repo) {
+              refs(refPrefix: "refs/heads/", first: $first, after: $after) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                nodes {
+                  name
+                  target {
+                    ... on Commit {
+                      oid
+                      committedDate
                     }
                   }
                 }
               }
             }
-          `
-          : `
-            query($owner: String!, $repo: String!, $first: Int!, $after: String) {
-              repository(owner: $owner, name: $repo) {
-                refs(refPrefix: "refs/heads/", first: $first, after: $after) {
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
-                  nodes {
-                    name
-                    target {
-                      ... on Commit {
-                        oid
-                        committedDate
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          `;
+          }
+        `;
 
-      type BranchesWithDefaultResponse = BranchesGraphqlResponse & {
-        repository: {
-          defaultBranchRef?: {
-            name: string;
-            target: {
-              oid: string;
-              committedDate?: string;
-            };
-          };
-        };
-      };
+    const response = await this.octokit.graphql<BranchesWithDefaultResponse>(query, {
+      owner,
+      repo,
+      first: pageSize,
+      after: cursor,
+    });
 
-      // eslint-disable-next-line no-await-in-loop -- intentional pagination
-      const response = await this.octokit.graphql<BranchesWithDefaultResponse>(query, {
-        owner,
-        repo,
-        first: 100,
-        after: currentCursor,
-      });
+    // Type guard to check if a branch node has a valid committed date
+    const hasCommittedDate = (
+      node: BranchNode,
+    ): node is BranchNode & { target: { oid: string; committedDate: string } } => {
+      return node.target.committedDate !== undefined;
+    };
 
-      // Capture default branch name on first request
-      if (isFirstPage && allBranches.length === 0 && response.repository.defaultBranchRef) {
-        defaultBranchName = response.repository.defaultBranchRef.name;
-      }
+    // Map branches, filtering out those without commit dates
+    const branches = response.repository.refs.nodes
+      .filter((node) => hasCommittedDate(node))
+      .map((node) => ({
+        name: node.name,
+        sha: node.target.oid,
+        updatedAt: new Date(node.target.committedDate).getTime(),
+      }));
 
-      const branches = response.repository.refs.nodes
-        .filter((node) => node.target.committedDate !== undefined)
-        .map((node) => ({
-          name: node.name,
-          sha: node.target.oid,
-          updatedAt: new Date(node.target.committedDate!).getTime(),
-        }));
+    // Sort branches within this page by commit date (most recent first)
+    branches.sort((a, b) => b.updatedAt - a.updatedAt);
 
-      allBranches.push(...branches);
-
-      hasNextPage = response.repository.refs.pageInfo.hasNextPage;
-      currentCursor = response.repository.refs.pageInfo.endCursor ?? undefined;
-    }
-
-    // Sort all branches by commit date (most recent first)
-    allBranches.sort((a, b) => b.updatedAt - a.updatedAt);
-
-    // Move default branch to the start if it exists
-    if (defaultBranchName) {
-      const defaultBranchIndex = allBranches.findIndex((b) => b.name === defaultBranchName);
+    // On first page, move default branch to the start if it exists
+    if (isFirstPage && response.repository.defaultBranchRef) {
+      const defaultBranchName = response.repository.defaultBranchRef.name;
+      const defaultBranchIndex = branches.findIndex((b) => b.name === defaultBranchName);
       if (defaultBranchIndex > 0) {
-        const defaultBranch = allBranches[defaultBranchIndex];
+        const defaultBranch = branches[defaultBranchIndex];
         if (defaultBranch) {
-          allBranches.splice(defaultBranchIndex, 1);
-          allBranches.unshift(defaultBranch);
+          branches.splice(defaultBranchIndex, 1);
+          branches.unshift(defaultBranch);
         }
       }
     }
 
-    // Since we fetch all branches at once, there's no more to load
     return {
-      branches: allBranches,
-      hasMore: false,
-      endCursor: undefined,
+      branches,
+      hasMore: response.repository.refs.pageInfo.hasNextPage,
+      endCursor: response.repository.refs.pageInfo.endCursor,
     };
   }
 
