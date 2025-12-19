@@ -64,9 +64,8 @@ export class Queue<T> {
 
   public async return_(): Promise<IteratorResult<T, never>> {
     log('return_() called');
-    return new Promise(() => {
-      // Empty - never resolves
-    });
+    this.close();
+    return { done: true as const, value: undefined as never };
   }
 
   public async throw_(error: Error): Promise<IteratorResult<T, never>> {
