@@ -210,7 +210,7 @@ export const ChatTextareaDesktop = memo(function ({
                   asChild
                   variant="outline"
                   size="sm"
-                  className="h-7 cursor-pointer! rounded-full pr-2 text-muted-foreground hover:text-foreground"
+                  className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @[22rem]:pr-2"
                 >
                   <span className="flex max-w-24 shrink-0 flex-row items-center gap-1 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
                     <span className="hidden truncate text-xs @[22rem]:block">{selectedModel?.name ?? 'Offline'}</span>
@@ -245,7 +245,7 @@ export const ChatTextareaDesktop = memo(function ({
                     asChild
                     variant="outline"
                     size="sm"
-                    className="h-7 cursor-pointer! rounded-full pr-2 text-muted-foreground hover:text-foreground"
+                    className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @[22rem]:pr-2"
                   >
                     <span className="flex max-w-24 shrink-0 flex-row items-center gap-1 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
                       <span className="hidden truncate text-xs @[22rem]:block">

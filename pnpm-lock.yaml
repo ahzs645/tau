@@ -340,6 +340,9 @@ importers:
       isomorphic-git:
         specifier: ^1.34.2
         version: 1.34.2
+      json-rpc-2.0:
+        specifier: ^1.7.1
+        version: 1.7.1
       json-schema-default:
         specifier: ^1.0.2
         version: 1.0.2
@@ -472,6 +475,9 @@ importers:
       vaul:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@19.0.4(@types/react@19.0.12))(@types/react@19.0.12)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      vscode-languageserver-protocol:
+        specifier: ^3.17.5
+        version: 3.17.5
       ws:
         specifier: ^8.18.3
         version: 8.18.3
@@ -11474,6 +11480,9 @@ packages:
 
   json-parse-helpfulerror@1.0.3:
     resolution: {integrity: sha512-XgP0FGR77+QhUxjXkwOMkC94k3WtqEBfcnjWqhRd82qTat4SWKRE+9kUnynz/shm3I4ea2+qISvTIeGTNU7kJg==}
+
+  json-rpc-2.0@1.7.1:
+    resolution: {integrity: sha512-JqZjhjAanbpkXIzFE7u8mE/iFblawwlXtONaCvRqI+pyABVz7B4M1EUNpyVW+dZjqgQ2L5HFmZCmOCgUKm00hg==}
 
   json-schema-compare@0.2.2:
     resolution: {integrity: sha512-c4WYmDKyJXhs7WWvAWm3uIYnfyWFoIp+JEoX34rctVvEkMYCPGhXtvmFFXiffBbxfZsvQ0RNnV5H7GvDF5HCqQ==}
@@ -28460,6 +28469,8 @@ snapshots:
   json-parse-helpfulerror@1.0.3:
     dependencies:
       jju: 1.4.0
+
+  json-rpc-2.0@1.7.1: {}
 
   json-schema-compare@0.2.2:
     dependencies:

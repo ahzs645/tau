@@ -33,9 +33,9 @@ export default function NotFoundPage(): React.JSX.Element {
             <p className="text-lg font-medium">Looks like you&apos;re lost!</p>
           </div>
 
-          <p className="mb-4 text-muted-foreground">
-            The <InlineCode>{location.pathname}</InlineCode> page you&apos;re looking for doesn&apos;t exist or has been
-            moved to a different location.
+          <p className="mb-4 wrap-break-word text-muted-foreground">
+            The <InlineCode className="break-all whitespace-pre-wrap">{location.pathname}</InlineCode> page you&apos;re
+            looking for doesn&apos;t exist or has been moved to a different location.
           </p>
 
           <div className="space-y-2">

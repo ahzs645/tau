@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import type React from 'react';
 import { ChevronRight, RefreshCcw } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
@@ -6,6 +6,24 @@ import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { CodeViewer } from '#components/code/code-viewer.js';
 import { cn } from '#utils/ui.utils.js';
+import { ChatErrorUnauthorized } from '#routes/builds_.$id/chat-error-unauthorized.js';
+
+type ParsedError = {
+  code?: string;
+  error?: string;
+  statusCode?: number;
+  path?: string;
+  requestId?: string;
+};
+
+function parseErrorMessage(message: string): { parsed: ParsedError | undefined; formatted: string } {
+  try {
+    const parsed = JSON.parse(message) as ParsedError;
+    return { parsed, formatted: JSON.stringify(parsed, null, 2) };
+  } catch {
+    return { parsed: undefined, formatted: message };
+  }
+}
 
 export const ChatError = memo(function ({
   isOpen = false,
@@ -19,16 +37,21 @@ export const ChatError = memo(function ({
   const error = useChatSelector((state) => state.error);
   const { regenerate } = useChatActions();
 
+  const { parsed, formatted } = useMemo(() => {
+    if (!error) {
+      return { parsed: undefined, formatted: '' };
+    }
+
+    return parseErrorMessage(error.message);
+  }, [error]);
+
   if (!error) {
     return null;
   }
 
-  let errorMessage: string;
-
-  try {
-    errorMessage = JSON.stringify(JSON.parse(error.message), null, 2);
-  } catch {
-    errorMessage = error.message;
+  // Handle UNAUTHORIZED errors with dedicated component
+  if (parsed?.code === 'UNAUTHORIZED') {
+    return <ChatErrorUnauthorized className={className} />;
   }
 
   return (
@@ -59,7 +82,7 @@ export const ChatError = memo(function ({
           </div>
         </CollapsibleTrigger>
         <CollapsibleContent className="overflow-x-scroll px-2 pb-2">
-          <CodeViewer text={errorMessage} language="json" className="text-xs whitespace-pre-wrap" />
+          <CodeViewer text={formatted} language="json" className="text-xs whitespace-pre-wrap" />
         </CollapsibleContent>
       </Collapsible>
     </div>

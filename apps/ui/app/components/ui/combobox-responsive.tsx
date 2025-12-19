@@ -227,36 +227,63 @@ function ItemList<T>({
 }) {
   const [search, setSearch] = React.useState('');
 
-  // Flatten all items from all groups for virtualization
-  const flattenedItems = React.useMemo(() => {
-    return groupedItems.flatMap((group) =>
-      group.items.map((item) => ({
+  type FlatItem = { type: 'item'; item: T; groupName: string; value: string } | { type: 'header'; groupName: string };
+
+  // Flatten all items from all groups for virtualization, including group headers
+  const flattenedItems = React.useMemo((): FlatItem[] => {
+    return groupedItems.flatMap((group) => [
+      { type: 'header' as const, groupName: group.name },
+      ...group.items.map((item) => ({
+        type: 'item' as const,
         item,
         groupName: group.name,
         value: getValue(item),
       })),
-    );
+    ]);
   }, [groupedItems, getValue]);
 
   // Filter items based on search
-  const filteredItems = React.useMemo(() => {
+  const filteredItems = React.useMemo((): FlatItem[] => {
     if (!search || !withVirtualization) {
       return flattenedItems;
     }
 
     const searchLower = search.toLowerCase();
+
+    // Filter items and track which groups still have items
+    const filteredItemEntries = flattenedItems.filter(
+      (entry) =>
+        entry.type === 'item' &&
+        (entry.value.toLowerCase().includes(searchLower) || entry.groupName.toLowerCase().includes(searchLower)),
+    );
+
+    // Get unique group names that have matching items
+    const groupsWithItems = new Set(filteredItemEntries.map((entry) => (entry as { groupName: string }).groupName));
+
+    // Include headers only for groups that have matching items
     return flattenedItems.filter(
-      ({ value, groupName }) =>
-        value.toLowerCase().includes(searchLower) || groupName.toLowerCase().includes(searchLower),
+      (entry) =>
+        (entry.type === 'header' && groupsWithItems.has(entry.groupName)) ||
+        (entry.type === 'item' &&
+          (entry.value.toLowerCase().includes(searchLower) || entry.groupName.toLowerCase().includes(searchLower))),
     );
   }, [flattenedItems, search, withVirtualization]);
 
-  // Render individual item
+  // Render individual item or group header
   const renderItem = React.useCallback(
     (index: number) => {
       const itemData = filteredItems[index];
       if (!itemData) {
         return undefined;
+      }
+
+      // Render group header
+      if (itemData.type === 'header') {
+        return (
+          <div key={`header-${itemData.groupName}`} className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+            {itemData.groupName}
+          </div>
+        );
       }
 
       const { item, value } = itemData;
@@ -286,7 +313,7 @@ function ItemList<T>({
         {isSearchEnabled ? (
           <CommandInput placeholder={searchPlaceHolder} value={search} onValueChange={setSearch} />
         ) : null}
-        <CommandList className="p-1">
+        <CommandList>
           {filteredItems.length === 0 ? (
             <CommandEmpty>{emptyListMessage}</CommandEmpty>
           ) : (
@@ -294,9 +321,13 @@ function ItemList<T>({
               style={{ height: `${virtualizationHeight}px` }}
               totalCount={filteredItems.length}
               itemContent={renderItem}
-              className="overflow-y-auto"
               endReached={onLoadMore}
+              // Virtuoso's List component doesn't handle vertical padding correctly due to
+              // absolute positioning used for virtualization. Use Header/Footer for vertical
+              // spacing and px-1 on List for horizontal padding.
               components={{
+                List: (properties) => <div {...properties} className="px-1" />,
+                Header: () => <div className="h-1" />,
                 Footer: isLoadingMore
                   ? () => (
                       <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
@@ -304,7 +335,7 @@ function ItemList<T>({
                         <span>Loading more...</span>
                       </div>
                     )
-                  : undefined,
+                  : () => <div className="h-1" />,
               }}
             />
           )}

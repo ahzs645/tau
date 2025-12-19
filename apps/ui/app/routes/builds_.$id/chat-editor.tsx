@@ -8,6 +8,7 @@ import { CodeEditor } from '#components/code/code-editor.js';
 import { cn } from '#utils/ui.utils.js';
 import { HammerAnimation } from '#components/hammer-animation.js';
 import { registerMonaco } from '#lib/monaco.js';
+import { setKclLspFileManager } from '#lib/kcl-language/kcl-register-language.js';
 import { ChatEditorBreadcrumbs } from '#routes/builds_.$id/chat-editor-breadcrumbs.js';
 import { useBuild } from '#hooks/use-build.js';
 import { ChatEditorTabs } from '#routes/builds_.$id/chat-editor-tabs.js';
@@ -93,6 +94,15 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       void registerMonaco(monaco);
     }
   }, [monaco]);
+
+  // Set file manager on the KCL LSP client for import resolution
+  useEffect(() => {
+    setKclLspFileManager({
+      readFile: async (path: string) => fileManager.readFile(path),
+      exists: async (path: string) => fileManager.exists(path),
+      readdir: async (path: string) => fileManager.readdir(path),
+    });
+  }, [fileManager]);
 
   const handleValidate = useCallback(() => {
     const errors = monaco?.editor.getModelMarkers({});
@@ -205,6 +215,8 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
             className="h-full bg-background"
             defaultLanguage={activeFile.language}
             defaultValue={editorContent}
+            fileExplorerRef={fileExplorerActor}
+            fileManager={fileManager}
             path={activeFile.path}
             onChange={handleCodeChange}
             onValidate={handleValidate}

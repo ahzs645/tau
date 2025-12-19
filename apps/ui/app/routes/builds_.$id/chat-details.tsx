@@ -1,4 +1,4 @@
-import { XIcon, Info, ChevronDown, FileCode } from 'lucide-react';
+import { XIcon, Info } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
@@ -15,7 +15,7 @@ import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
 import { Textarea } from '#components/ui/textarea.js';
 import { Tags, TagsTrigger } from '#components/ui/input-tags.js';
-import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { FileSelector } from '#components/files/file-selector.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { useBuild } from '#hooks/use-build.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
@@ -201,44 +201,16 @@ export function ChatDetails({
 
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">Main File:</label>
-                <ComboBoxResponsive
-                  groupedItems={[
-                    {
-                      name: 'Files',
-                      items: availableFiles.map((filename) => ({ name: filename })),
-                    },
-                  ]}
-                  renderLabel={(file, selected) => (
-                    <div className="flex items-center gap-2">
-                      <FileCode className="size-4" />
-                      <span className={selected?.name === file.name ? 'font-medium' : ''}>{file.name}</span>
-                    </div>
-                  )}
-                  getValue={(file) => file.name}
-                  defaultValue={mainFile ? { name: mainFile } : undefined}
+                <FileSelector
+                  files={availableFiles.map((path) => ({ path }))}
+                  selectedFile={mainFile}
                   placeholder="Select main file..."
-                  searchPlaceHolder="Search files..."
                   title="Select Main File"
                   description="Choose the main file for your build"
-                  isDisabled={() => availableFiles.length === 0}
-                  emptyListMessage="No files available"
-                  withVirtualization={availableFiles.length > 20}
-                  virtualizationHeight={300}
-                  className="w-full"
+                  emptyMessage="No files available"
+                  isDisabled={availableFiles.length === 0}
                   onSelect={handleMainFileChange}
-                >
-                  <Button variant="outline" className="w-full justify-between font-normal">
-                    {mainFile ? (
-                      <div className="flex items-center gap-2 truncate">
-                        <FileCode className="size-4 shrink-0" />
-                        <span className="truncate text-left">{mainFile}</span>
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground">Select main file...</span>
-                    )}
-                    <ChevronDown className="size-4 shrink-0" />
-                  </Button>
-                </ComboBoxResponsive>
+                />
               </div>
             </div>
 

@@ -72,7 +72,7 @@ export function ChatExplorerTree({
   const { formattedKeyCombination: formattedEditorKeyCombination } = useKeydown(keyCombinationEditor, toggleEditor);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="left" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelClose
         icon={XIcon}
         tooltipContent={(isOpen) => (

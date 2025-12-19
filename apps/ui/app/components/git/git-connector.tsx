@@ -3,6 +3,7 @@ import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import { AuthUIContext } from '@daveyplate/better-auth-ui';
 import { Loader2 } from 'lucide-react';
+import { Link } from 'react-router';
 import type { gitMachine } from '#machines/git.machine.js';
 import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
@@ -11,6 +12,7 @@ import { requestGitHubRepoAccess, hasGitHubRepoAccess } from '#lib/git-auth.js';
 import { GitTrigger } from '#components/git/git-trigger.js';
 import { GitWorkspace } from '#components/git/git-workspace.js';
 import { RepositorySelector } from '#components/git/repository-selector.js';
+import { useAuthLinks } from '#hooks/use-auth-links.js';
 
 type GitConnectorProperties = {
   readonly gitRef: ActorRefFrom<typeof gitMachine>;
@@ -161,6 +163,8 @@ type LoginPromptProperties = {
 };
 
 function LoginPrompt({ onClose }: LoginPromptProperties): React.ReactNode {
+  const { signIn } = useAuthLinks();
+
   return (
     <div className="flex flex-col gap-6">
       <div className="rounded-md border bg-muted/30 p-4">
@@ -178,7 +182,7 @@ function LoginPrompt({ onClose }: LoginPromptProperties): React.ReactNode {
       </div>
       <div className="flex gap-2">
         <Button asChild className="w-full">
-          <a href="/auth/sign-in">Sign in with GitHub</a>
+          <Link to={signIn}>Sign in with GitHub</Link>
         </Button>
         <Button variant="outline" onClick={onClose}>
           Cancel

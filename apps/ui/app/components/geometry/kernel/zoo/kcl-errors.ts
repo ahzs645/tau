@@ -29,6 +29,7 @@ export type KclErrorKind =
   | 'unexpected'
   | 'auth'
   | 'export'
+  | 'connection'
   | 'unknown';
 
 export class KclError extends Error {
@@ -71,6 +72,38 @@ export class KclExportError extends KclError {
     const defaultSourceRange: SourceRange = [0, 0, 0];
     super('export', message, sourceRange ?? defaultSourceRange);
     this.exportType = exportType;
+  }
+}
+
+// Connection error for WebSocket/API availability issues
+export class KclConnectionError extends KclError {
+  /**
+   * Create an error for when the Zoo API is unavailable
+   */
+  public static apiUnavailable(details?: string): KclConnectionError {
+    const baseMessage =
+      'The Zoo CAD API is currently unavailable. This could be due to network issues or the service being temporarily down.';
+    const message = details ? `${baseMessage} Details: ${details}` : baseMessage;
+    return new KclConnectionError(message, { isApiUnavailable: true, statusCode: 503 });
+  }
+
+  /**
+   * Create an error for WebSocket connection failures
+   */
+  public static webSocketFailed(details?: string): KclConnectionError {
+    const baseMessage = 'Failed to establish a connection to the Zoo CAD API.';
+    const message = details ? `${baseMessage} ${details}` : baseMessage;
+    return new KclConnectionError(message, { isApiUnavailable: true });
+  }
+
+  public readonly statusCode?: number;
+  public readonly isApiUnavailable: boolean;
+
+  public constructor(message: string, options?: { statusCode?: number; isApiUnavailable?: boolean }) {
+    const defaultSourceRange: SourceRange = [0, 0, 0];
+    super('connection', message, defaultSourceRange);
+    this.statusCode = options?.statusCode;
+    this.isApiUnavailable = options?.isApiUnavailable ?? false;
   }
 }
 

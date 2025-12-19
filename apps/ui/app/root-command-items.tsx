@@ -6,10 +6,12 @@ import type { UIMatch } from 'react-router';
 import { useCommandPaletteItems } from '#components/layout/command-palette.js';
 import type { CommandPaletteItem } from '#components/layout/command-palette.js';
 import { useBuilds } from '#hooks/use-builds.js';
+import { useAuthLinks } from '#hooks/use-auth-links.js';
 
 export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
   const { data: authData } = useAuthenticate({ enabled: false });
   const { builds } = useBuilds();
+  const { signIn, signOut } = useAuthLinks();
   const location = useLocation();
 
   // Extract current build ID from pathname (e.g., /builds/abc123)
@@ -70,7 +72,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         label: 'Sign in',
         group: 'Settings',
         icon: <LogIn />,
-        link: '/auth/sign-in',
+        link: signIn,
         visible: !authData,
       },
       {
@@ -78,11 +80,11 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         label: 'Sign out',
         group: 'Settings',
         icon: <LogOut />,
-        link: '/auth/sign-out',
+        link: signOut,
         visible: Boolean(authData),
       },
     ],
-    [authData, recentBuilds],
+    [authData, recentBuilds, signIn, signOut],
   );
 
   return undefined;

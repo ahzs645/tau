@@ -380,6 +380,27 @@ export class IndexedDbStorageProvider implements StorageProvider {
     });
   }
 
+  public async duplicateResourceChats(
+    sourceResourceId: string,
+    targetResourceId: string,
+  ): Promise<Record<string, string>> {
+    const chats = await this.getChatsForResource(sourceResourceId);
+
+    const duplicatedChats = await Promise.all(
+      chats.map(async (chat) => {
+        const newChat = await this.createChat(targetResourceId, {
+          name: chat.name,
+          messages: chat.messages,
+          draft: chat.draft,
+          messageEdits: chat.messageEdits,
+        });
+        return { oldId: chat.id, newId: newChat.id };
+      }),
+    );
+
+    return Object.fromEntries(duplicatedChats.map(({ oldId, newId }) => [oldId, newId]));
+  }
+
   // ============================================================================
   // Database Management
   // ============================================================================

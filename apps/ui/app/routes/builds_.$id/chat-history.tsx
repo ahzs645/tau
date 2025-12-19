@@ -142,7 +142,7 @@ export const ChatHistory = memo(function (props: {
   }, []);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="left" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelClose
         icon={XIcon}
         tooltipContent={(isOpen) => (

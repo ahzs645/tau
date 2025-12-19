@@ -3,32 +3,62 @@ import type { EditorProps } from '@monaco-editor/react';
 import { Theme, useTheme } from 'remix-themes';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { shikiToMonaco } from '@shikijs/monaco';
+import type { AnyActorRef } from 'xstate';
 import type { CompletionRegistration, Monaco, StandaloneCodeEditor } from 'monacopilot';
 import { cn } from '#utils/ui.utils.js';
 import { highlighter } from '#lib/shiki.js';
 import { configureMonaco, registerCompletions } from '#lib/monaco.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
+import { registerKclNavigation } from '#lib/kcl-language/lsp/kcl-navigation-service.js';
+import { decodeTextFile } from '#utils/filesystem.utils.js';
+
+type FileManagerApi = {
+  readFile: (path: string) => Promise<Uint8Array>;
+};
 
 type CodeEditorProperties = EditorProps & {
   readonly onChange: (value: string) => void;
+  /** Optional file explorer actor for KCL navigation */
+  readonly fileExplorerRef?: AnyActorRef;
+  /** Optional file manager for KCL navigation */
+  readonly fileManager?: FileManagerApi;
 };
 
 await configureMonaco();
 
-export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.JSX.Element {
+export function CodeEditor({
+  className,
+  fileExplorerRef,
+  fileManager,
+  ...rest
+}: CodeEditorProperties): React.JSX.Element {
   const [theme] = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
   const editorRef = useRef<StandaloneCodeEditor | undefined>(undefined);
+  const navigationDisposableRef = useRef<{ dispose: () => void } | undefined>(undefined);
 
-  const handleMount = useCallback((editor: StandaloneCodeEditor, monaco: Monaco) => {
-    completionRef.current = registerCompletions(editor, monaco);
-    editorRef.current = editor;
-  }, []);
+  const handleMount = useCallback(
+    (editor: StandaloneCodeEditor, monaco: Monaco) => {
+      completionRef.current = registerCompletions(editor, monaco);
+      editorRef.current = editor;
+
+      // Register KCL navigation if file explorer and file manager are provided
+      if (fileExplorerRef && fileManager) {
+        navigationDisposableRef.current = registerKclNavigation(monaco, editor, {
+          fileExplorerRef,
+          fileManager,
+          decodeTextFile,
+        });
+      }
+    },
+    [fileExplorerRef, fileManager],
+  );
 
   useEffect(() => {
     return () => {
       completionRef.current?.deregister();
+      navigationDisposableRef.current?.dispose();
     };
   }, []);
 

@@ -23,10 +23,23 @@ const objectStoreWorker = {
       throw new Error(`Build not found: ${buildId}`);
     }
 
-    return storage.createBuild({
+    // Create the duplicated build first (without lastChatId)
+    const newBuild = await storage.createBuild({
       ...build,
       name: `${build.name} (Copy)`,
+      lastChatId: undefined,
     });
+
+    // Duplicate all chats for this build
+    const chatIdMapping = await storage.duplicateResourceChats(buildId, newBuild.id);
+
+    // Update the new build's lastChatId to point to the cloned chat
+    if (build.lastChatId && chatIdMapping[build.lastChatId]) {
+      await storage.updateBuild(newBuild.id, { lastChatId: chatIdMapping[build.lastChatId] });
+      newBuild.lastChatId = chatIdMapping[build.lastChatId];
+    }
+
+    return newBuild;
   },
 
   async updateBuild(
@@ -85,6 +98,10 @@ const objectStoreWorker = {
 
   async duplicateChat(chatId: string): Promise<Chat> {
     return storage.duplicateChat(chatId);
+  },
+
+  async duplicateResourceChats(sourceResourceId: string, targetResourceId: string): Promise<Record<string, string>> {
+    return storage.duplicateResourceChats(sourceResourceId, targetResourceId);
   },
 };
 

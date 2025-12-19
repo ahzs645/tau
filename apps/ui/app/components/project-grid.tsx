@@ -209,6 +209,7 @@ function ProjectCard({
                 </div>
               ) : null}
               <div
+                className="size-full"
                 onClick={(event) => {
                   event.stopPropagation();
                 }}
