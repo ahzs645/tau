@@ -147,12 +147,12 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
         <span className="font-medium">Suggested Repositories</span>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3">
         {suggestedRepositories.map((repo) => (
           <button
             key={`${repo.owner}/${repo.repo}`}
             type="button"
-            className="group flex flex-col gap-3 rounded-lg border bg-sidebar p-4 text-left transition-colors hover:border-primary/50 hover:bg-sidebar/80"
+            className="group flex flex-col gap-2 rounded-lg border bg-sidebar p-3 text-left transition-colors hover:border-primary/50 hover:bg-sidebar/80 sm:gap-3 sm:p-4"
             onClick={() => {
               onSelect({
                 owner: repo.owner,
@@ -167,26 +167,26 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
               <RepositoryAvatar owner={repo.owner} repo={repo.repo} />
 
               {/* Kernel badge */}
-              <div className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+              <div className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] sm:px-2 sm:text-xs">
                 <SvgIcon id={repo.kernelIcon} className="size-3" />
-                <span>{getKernelName(repo.kernel)}</span>
+                <span className="hidden sm:inline">{getKernelName(repo.kernel)}</span>
               </div>
             </div>
 
             {/* Repository name */}
             <div className="flex items-center gap-2">
-              <span className="truncate font-mono text-sm font-medium">
+              <span className="truncate font-mono text-xs font-medium sm:text-sm">
                 {repo.owner}/{repo.repo}
               </span>
               <ExternalLink className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
             </div>
 
             {/* Description */}
-            <p className="line-clamp-2 text-xs text-muted-foreground">{repo.description}</p>
+            <p className="line-clamp-2 text-[10px] text-muted-foreground sm:text-xs">{repo.description}</p>
 
             {/* Footer with stats and main file */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground sm:text-xs">
+              <div className="flex items-center gap-2 sm:gap-3">
                 <div className="flex items-center gap-1">
                   <Star className="size-3" />
                   <span>{formatCount(repo.stars)}</span>
@@ -196,7 +196,7 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
                   <span>{formatCount(repo.forks)}</span>
                 </div>
               </div>
-              <div className="truncate text-right font-mono text-[10px]">{repo.mainFile.split('/').pop()}</div>
+              <div className="hidden truncate text-right font-mono text-[10px] sm:block">{repo.mainFile.split('/').pop()}</div>
             </div>
           </button>
         ))}
