@@ -1,4 +1,5 @@
 import { AlertCircle, ArrowLeft, RefreshCcw } from 'lucide-react';
+import { useEffect } from 'react';
 import { isRouteErrorResponse, useNavigate, useRouteError } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { useAnalytics } from '#hooks/use-analytics.js';
@@ -8,12 +9,19 @@ export function ErrorPage(): React.JSX.Element {
   const error = useRouteError();
   const navigate = useNavigate();
   const analytics = useAnalytics();
+
+  useEffect(() => {
+    if (isRouteErrorResponse(error)) {
+      const routeError = new Error(`${error.status} ${error.statusText}`);
+      routeError.name = 'route_error';
+      analytics.captureException(routeError, { context: { component: 'ErrorPage' } });
+    } else if (error instanceof Error) {
+      analytics.captureException(error, { context: { component: 'ErrorPage' } });
+    }
+  }, [error, analytics]);
+
   const goBack = (): void => {
     void navigate(-1);
-  };
-
-  const captureError = (error: Error): void => {
-    analytics.captureException(error, { context: { component: 'ErrorPage' } });
   };
 
   const refreshPage = (): void => {
@@ -21,10 +29,6 @@ export function ErrorPage(): React.JSX.Element {
   };
 
   if (isRouteErrorResponse(error)) {
-    captureError({
-      name: 'route_error',
-      message: `${error.status} ${error.statusText}`,
-    });
     return (
       <div className="flex size-full flex-col items-center justify-center gap-6 p-8 md:ml-(--sidebar-width-current)">
         <div className="flex flex-col items-center gap-3 text-center">
@@ -54,7 +58,6 @@ export function ErrorPage(): React.JSX.Element {
   }
 
   if (error instanceof Error) {
-    captureError(error);
     return (
       <div className="flex min-h-full flex-col items-center justify-center py-8 pr-2 transition-all duration-200 ease-linear md:ml-(--sidebar-width-current)">
         <div className="flex w-full max-w-lg flex-col items-center gap-4 p-6 text-center">
