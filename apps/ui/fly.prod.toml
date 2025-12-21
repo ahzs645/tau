@@ -14,6 +14,7 @@ primary_region = 'syd'
   TAU_API_URL = 'https://api.tau.new'
   TAU_WEBSOCKET_URL = 'wss://api.tau.new'
   TAU_FRONTEND_URL = 'https://tau.new'
+  POSTHOG_CLIENT_KEY= 'phc_Yh1MsocAJKotBFtG7JfjjaZncOdCNr204C0Xs4993rZ'
 
 [http_service]
   internal_port = 3000

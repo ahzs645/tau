@@ -14,6 +14,7 @@ primary_region = 'syd'
   TAU_API_URL = 'https://api.taucad.dev'
   TAU_WEBSOCKET_URL = 'wss://api.taucad.dev'
   TAU_FRONTEND_URL = 'https://taucad.dev'
+  POSTHOG_CLIENT_KEY= 'phc_8TfD632paSVHiuFp6vY8LhDWOgoxA1nodyciBw2FeKq'
 
 [http_service]
   internal_port = 3000
