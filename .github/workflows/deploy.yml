@@ -50,8 +50,11 @@ jobs:
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             CONFIG_FILE="apps/${{ inputs.app }}/fly.staging.toml"
-          else
+          else if [ "${{ inputs.environment }}" = "production" ]; then
             CONFIG_FILE="apps/${{ inputs.app }}/fly.prod.toml"
+          else
+            echo "Invalid environment: ${{ inputs.environment }}"
+            exit 1
           fi
           
           echo "Deploying ${{ inputs.app }} to ${{ inputs.environment }} using $CONFIG_FILE"
