@@ -9,5 +9,6 @@ export const posthogConfig: { options: Partial<PostHogConfig>; apiKey: string } 
     ui_host: ENV.POSTHOG_UI_HOST,
     defaults: '2025-11-30',
   },
-  apiKey: ENV.POSTHOG_CLIENT_KEY,
+  // When no API key is set, use an empty string. PostHog will detect an invalid key and not send any data.
+  apiKey: ENV.POSTHOG_CLIENT_KEY ?? '',
 };
