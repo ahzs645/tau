@@ -47,8 +47,6 @@ const posthogProxy = async (request: Request): Promise<Response> => {
   headers.set('host', hostname);
   headers.delete('accept-encoding');
 
-  console.log('newUrl', newUrl.toString());
-
   const response = await fetch(newUrl, {
     method: request.method,
     headers,
