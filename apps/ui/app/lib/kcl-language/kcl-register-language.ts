@@ -1,5 +1,5 @@
 import { codeLanguages } from '@taucad/types/constants';
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import type * as LSP from 'vscode-languageserver-protocol';
 import type { Node } from '@taucad/kcl-wasm-lib/bindings/Node';
 import type { Program } from '@taucad/kcl-wasm-lib/bindings/Program';

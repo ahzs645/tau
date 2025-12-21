@@ -2,7 +2,7 @@
  * Position conversion utilities between Monaco (1-based) and LSP (0-based).
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import type * as LSP from 'vscode-languageserver-protocol';
 
 /**

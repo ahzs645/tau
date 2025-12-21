@@ -6,7 +6,7 @@
  * 2. Symbol Service (WASM AST-based, for user-defined symbols)
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import type { KclLspClient, LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { KclSymbolService, KclSymbol } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import { formatSymbolHover } from '#lib/kcl-language/lsp/kcl-symbol-service.js';

@@ -1,5 +1,5 @@
 /* eslint-disable max-params -- TODO: refactor */
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import {
   documentationDescriptor,
   requirementDescriptor,

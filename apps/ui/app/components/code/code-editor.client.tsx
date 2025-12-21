@@ -153,6 +153,7 @@ export function CodeEditor({
 
   return (
     <Editor
+      keepCurrentModel
       className={classNames}
       theme={theme === Theme.DARK ? 'github-dark' : 'github-light'}
       wrapperProps={{

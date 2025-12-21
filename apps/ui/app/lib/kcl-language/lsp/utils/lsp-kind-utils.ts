@@ -2,7 +2,7 @@
  * Conversion utilities for LSP kinds to Monaco kinds.
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import type * as LSP from 'vscode-languageserver-protocol';
 
 /**

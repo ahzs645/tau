@@ -5,7 +5,7 @@
  * This enables Cmd+Click to open KCL files in the application's editor tabs.
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import type { AnyActorRef } from 'xstate';
 import { codeLanguages } from '@taucad/types/constants';
 

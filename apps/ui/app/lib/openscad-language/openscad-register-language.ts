@@ -1,6 +1,6 @@
 // Portions of this file are Copyright 2021 Google LLC, and licensed under GPL2+. See COPYING.
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import { codeLanguages } from '@taucad/types/constants';
 import { createCompletionItemProvider } from '#lib/openscad-language/openscad-completions.js';
 import { createDefinitionProvider } from '#lib/openscad-language/openscad-definition.js';

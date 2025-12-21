@@ -33,7 +33,7 @@ export const configureMonaco = async (): Promise<void> => {
       },
     };
 
-    const monaco = await import('monaco-editor/esm/vs/editor/editor.api');
+    const monaco = await import('monaco-editor/esm/vs/editor/editor.api.js');
 
     loader.config({
       monaco,
@@ -41,13 +41,13 @@ export const configureMonaco = async (): Promise<void> => {
 
     // Core Editor features, like auto-completion.
     // @ts-expect-error -- no declaration file
-    await import('monaco-editor/esm/vs/editor/edcore.main');
+    await import('monaco-editor/esm/vs/editor/edcore.main.js');
 
     // Languages
-    await import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution');
-    await import('monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution');
-    await import('monaco-editor/esm/vs/language/json/monaco.contribution');
-    await import('monaco-editor/esm/vs/language/typescript/monaco.contribution');
+    await import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js');
+    await import('monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js');
+    await import('monaco-editor/esm/vs/language/json/monaco.contribution.js');
+    await import('monaco-editor/esm/vs/language/typescript/monaco.contribution.js');
 
     registerOpenScadLanguage(monaco);
     registerKclLanguage(monaco);

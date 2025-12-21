@@ -144,7 +144,7 @@
     "langchain": "^0.3.29",
     "lucide-react": "^0.552.0",
     "minimatch": "^10.1.1",
-    "monaco-editor": "^0.54.0",
+    "monaco-editor": "^0.55.1",
     "monacopilot": "^1.1.23",
     "motion": "^12.11.3",
     "nanoid": "^5.1.6",
