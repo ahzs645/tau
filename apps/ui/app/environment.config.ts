@@ -41,7 +41,7 @@ const environmentSchema = z.preprocess(
       .string()
       .default('us-assets.i.posthog.com')
       .describe('PostHog asset host for the PostHog client.'),
-    POSTHOG_CLIENT_KEY: z.string().default('').describe('PostHog client secret for the PostHog client.'),
+    POSTHOG_CLIENT_KEY: z.string().optional().describe('PostHog client key. Set to enable analytics.'),
     /* eslint-enable @typescript-eslint/naming-convention -- environment variables are not camelCase */
   }),
 );
