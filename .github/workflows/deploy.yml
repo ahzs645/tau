@@ -66,7 +66,7 @@ jobs:
               --dockerfile "apps/${{ inputs.app }}/Dockerfile" \
               --build-arg INJECT_SOURCEMAPS=true \
               --build-secret POSTHOG_CLI_TOKEN="${{ secrets.POSTHOG_CLI_TOKEN }}" \
-              --build-secret POSTHOG_CLI_ENV_ID="${{ secrets.POSTHOG_ENV_ID }}"
+              --build-secret POSTHOG_CLI_ENV_ID="${{ secrets.POSTHOG_CLI_ENV_ID }}"
           else
             flyctl deploy --remote-only \
               --config "$CONFIG_FILE" \
