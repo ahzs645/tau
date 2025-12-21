@@ -123,7 +123,7 @@ function RepositoryAvatar({ owner, repo }: RepositoryAvatarProperties): React.JS
 
   // Loading state: show placeholder and preload image in background
   return (
-    <div className="relative flex size-8 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+    <div className="relative flex size-8 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
       {owner[0]}/{repo[0]}
       {/* Hidden image to trigger load/error events */}
       <img
@@ -167,7 +167,7 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
               <RepositoryAvatar owner={repo.owner} repo={repo.repo} />
 
               {/* Kernel badge */}
-              <div className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] sm:px-2 sm:text-xs">
+              <div className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-xs sm:px-2 sm:text-xs">
                 <SvgIcon id={repo.kernelIcon} className="size-3" />
                 <span className="hidden sm:inline">{getKernelName(repo.kernel)}</span>
               </div>
@@ -182,10 +182,10 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
             </div>
 
             {/* Description */}
-            <p className="line-clamp-2 text-[10px] text-muted-foreground sm:text-xs">{repo.description}</p>
+            <p className="line-clamp-2 text-xs text-muted-foreground sm:text-xs">{repo.description}</p>
 
             {/* Footer with stats and main file */}
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground sm:text-xs">
+            <div className="flex items-center justify-between text-xs text-muted-foreground sm:text-xs">
               <div className="flex items-center gap-2 sm:gap-3">
                 <div className="flex items-center gap-1">
                   <Star className="size-3" />
@@ -196,7 +196,7 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
                   <span>{formatCount(repo.forks)}</span>
                 </div>
               </div>
-              <div className="hidden truncate text-right font-mono text-[10px] sm:block">
+              <div className="hidden truncate text-right font-mono text-xs sm:block">
                 {repo.mainFile.split('/').pop()}
               </div>
             </div>
