@@ -124,7 +124,14 @@ export function createDefinitionProvider(
 
       // Return local symbol definition (variable, function, parameter)
       if (symbol) {
-        log.debug('Symbol service found local definition:', symbol.name, 'kind:', symbol.kind, 'at line:', symbol.lineNumber);
+        log.debug(
+          'Symbol service found local definition:',
+          symbol.name,
+          'kind:',
+          symbol.kind,
+          'at line:',
+          symbol.lineNumber,
+        );
         log.debug('Returning definition at:', symbol.uri, 'line:', symbol.lineNumber, 'column:', symbol.column);
         return {
           uri: monaco.Uri.parse(symbol.uri),

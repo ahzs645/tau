@@ -206,7 +206,13 @@ async function runKclLsp(token: string, apiBaseUrl: string): Promise<void> {
     });
     const config = new LspServerConfig(intoServer, fromServer, fileSystemBridge);
     log.debug('LspServerConfig created successfully');
-    log.debug('Starting KCL LSP server (token:', token ? 'provided' : 'empty', ', baseUrl:', apiBaseUrl || 'empty', ')');
+    log.debug(
+      'Starting KCL LSP server (token:',
+      token ? 'provided' : 'empty',
+      ', baseUrl:',
+      apiBaseUrl || 'empty',
+      ')',
+    );
 
     // Signal that WASM is ready before starting the server
     isWasmReady = true;
