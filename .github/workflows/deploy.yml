@@ -50,15 +50,27 @@ jobs:
         run: |
           if [ "${{ inputs.environment }}" = "staging" ]; then
             CONFIG_FILE="apps/${{ inputs.app }}/fly.staging.toml"
-          else if [ "${{ inputs.environment }}" = "production" ]; then
+          elif [ "${{ inputs.environment }}" = "production" ]; then
             CONFIG_FILE="apps/${{ inputs.app }}/fly.prod.toml"
           else
             echo "Invalid environment: ${{ inputs.environment }}"
             exit 1
           fi
-          
+
           echo "Deploying ${{ inputs.app }} to ${{ inputs.environment }} using $CONFIG_FILE"
-          flyctl deploy --remote-only --config "$CONFIG_FILE" --dockerfile "apps/${{ inputs.app }}/Dockerfile"
+
+          # UI: inject source maps via build arg + secrets (secrets come from GH environment)
+          if [ "${{ inputs.app }}" = "ui" ]; then
+            flyctl deploy --remote-only \
+              --config "$CONFIG_FILE" \
+              --dockerfile "apps/${{ inputs.app }}/Dockerfile" \
+              --build-arg INJECT_SOURCEMAPS=true \
+              --build-secret POSTHOG_CLI_TOKEN="${{ secrets.POSTHOG_CLI_TOKEN }}" \
+              --build-secret POSTHOG_CLI_ENV_ID="${{ secrets.POSTHOG_ENV_ID }}"
+          else
+            flyctl deploy --remote-only \
+              --config "$CONFIG_FILE" \
+              --dockerfile "apps/${{ inputs.app }}/Dockerfile"
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
