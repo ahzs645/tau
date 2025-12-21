@@ -11,7 +11,6 @@ import { BuildNameEditor } from '#routes/builds_.$id/build-name-editor.js';
 import { ViewContextProvider } from '#routes/builds_.$id/chat-interface-view-context.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { BuildCommandPaletteItems } from '#routes/builds_.$id/build-command-items.js';
-import { ChatModeSelector } from '#routes/builds_.$id/chat-mode-selector.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { useChatTools } from '#hooks/use-chat-tools.js';
 
@@ -29,7 +28,12 @@ export const handle: Handle = {
   breadcrumb(match) {
     const { id } = match.params as Route.LoaderArgs['params'];
 
-    return [<BuildNameEditor key={`${id}-build-name-editor`} />, <ChatModeSelector key={`${id}-chat-mode-selector`} />];
+    return [
+      //
+      <BuildNameEditor key={`${id}-build-name-editor`} />,
+      // Disabled until publishing is implemented
+      // <ChatModeSelector key={`${id}-chat-mode-selector`} />
+    ];
   },
   commandPalette(match) {
     return <BuildCommandPaletteItems match={match} />;
