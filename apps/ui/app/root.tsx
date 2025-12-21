@@ -24,6 +24,7 @@ import { RootCommandPaletteItems } from '#root-command-items.js';
 import { BuildManagerProvider } from '#hooks/use-build-manager.js';
 import { ChatManagerProvider } from '#hooks/use-chat-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
+import { AnalyticsProvider } from '#hooks/use-analytics.js';
 
 export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
 
@@ -84,21 +85,23 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
   return (
     <AuthConfigProvider>
       <QueryClientProvider client={queryClient}>
-        <FileManagerProvider rootDirectory="/">
-          <BuildManagerProvider>
-            <ChatManagerProvider>
-              <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
-                <ColorProvider>
-                  <TooltipProvider>
-                    <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
-                      {children}
-                    </LayoutDocument>
-                  </TooltipProvider>
-                </ColorProvider>
-              </ThemeProvider>
-            </ChatManagerProvider>
-          </BuildManagerProvider>
-        </FileManagerProvider>
+        <AnalyticsProvider>
+          <FileManagerProvider rootDirectory="/">
+            <BuildManagerProvider>
+              <ChatManagerProvider>
+                <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
+                  <ColorProvider>
+                    <TooltipProvider>
+                      <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
+                        {children}
+                      </LayoutDocument>
+                    </TooltipProvider>
+                  </ColorProvider>
+                </ThemeProvider>
+              </ChatManagerProvider>
+            </BuildManagerProvider>
+          </FileManagerProvider>
+        </AnalyticsProvider>
       </QueryClientProvider>
     </AuthConfigProvider>
   );
