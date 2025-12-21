@@ -9,14 +9,14 @@ export function useAnalytics(): Analytics {
   return posthog;
 }
 
-export function AnalyticsProvider({ children }: { readonly children: React.ReactNode }): React.ReactNode {
+export function AnalyticsProvider({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
   const { options, apiKey } = posthogConfig;
 
   // When no API key is set, we don't use the analytics provider.
   // This is useful for development and self-hosted configurations.
   if (!apiKey) {
     console.debug('No `POSTHOG_CLIENT_KEY` key set, skipping analytics provider');
-    return children;
+    return <>children</>;
   }
 
   return (
