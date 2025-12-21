@@ -2,7 +2,7 @@
  * Monaco code action provider for KCL LSP.
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import type * as LSP from 'vscode-languageserver-protocol';
 import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';

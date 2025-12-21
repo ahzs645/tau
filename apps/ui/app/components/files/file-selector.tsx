@@ -3,6 +3,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useIsMobile } from '#hooks/use-mobile.js';
+import { useHorizontalScroll } from '#hooks/use-horizontal-scroll.js';
 import { Command, CommandInput, CommandItem, CommandList } from '#components/ui/command.js';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle, DrawerTrigger } from '#components/ui/drawer.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
@@ -31,6 +32,8 @@ type FileSelectorProps = {
   readonly searchPlaceholder?: string;
   readonly emptyMessage?: string;
   readonly virtualizationThreshold?: number;
+  /** Directory path to show when opened. If not provided, navigates to parent of selectedFile. */
+  readonly initialPath?: string;
 };
 
 type TreeNode = {
@@ -184,79 +187,59 @@ function BreadcrumbNav({
   }, [currentPath]);
 
   // Enable horizontal scrolling with mouse wheel
-  useEffect(() => {
-    const scrollContainer = scrollContainerRef.current;
-    if (!scrollContainer) {
-      return;
-    }
-
-    const handleWheel = (event: WheelEvent): void => {
-      // Only handle vertical scroll when there's horizontal overflow
-      if (event.deltaY !== 0 && scrollContainer.scrollWidth > scrollContainer.clientWidth) {
-        event.preventDefault();
-        scrollContainer.scrollLeft += event.deltaY;
-      }
-    };
-
-    scrollContainer.addEventListener('wheel', handleWheel, { passive: false });
-
-    return () => {
-      scrollContainer.removeEventListener('wheel', handleWheel);
-    };
-  }, []);
+  useHorizontalScroll(scrollContainerRef);
 
   return (
     <div className="flex items-center border-b text-sm">
-      {/* Fixed "Files" root button */}
-      <button
-        type="button"
-        className={cn(
-          'my-1.5 ml-2 shrink-0 rounded-xs px-1 py-0.5 hover:bg-muted',
-          currentPath === '' && 'font-medium text-foreground',
-          currentPath !== '' && 'text-muted-foreground',
-        )}
-        onClick={() => {
-          onNavigate('');
-        }}
+      <div
+        ref={scrollContainerRef}
+        className="mx-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        Files
-      </button>
-      {/* Scrollable path segments with snap behavior */}
-      {crumbs.length > 0 ? (
-        <div
-          ref={scrollContainerRef}
-          className="mr-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        {/* "Files" root button - inside scrollable area */}
+        <button
+          type="button"
+          className={cn(
+            'my-1.5 shrink-0 snap-start rounded-xs px-1 py-0.5 hover:bg-muted',
+            currentPath === '' && 'font-medium text-foreground',
+            currentPath !== '' && 'text-muted-foreground',
+          )}
+          onClick={() => {
+            onNavigate('');
+          }}
         >
-          {crumbs.map((crumb, index) => {
-            const isLast = index === crumbs.length - 1;
-            return (
-              <div key={crumb.path} className="my-1.5 flex shrink-0 snap-start items-center gap-0.5">
-                <ChevronRight className="size-3 text-muted-foreground" />
-                <button
-                  ref={isLast ? currentCrumbRef : undefined}
-                  type="button"
-                  className={cn(
-                    'max-w-32 shrink-0 truncate rounded-xs px-1 py-0.5 hover:bg-muted',
-                    isLast && 'font-medium text-foreground',
-                    !isLast && 'text-muted-foreground',
-                  )}
-                  onClick={() => {
-                    onNavigate(crumb.path);
-                  }}
-                >
-                  {crumb.name}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      ) : undefined}
+          Files
+        </button>
+        {/* Path segments */}
+        {crumbs.map((crumb, index) => {
+          const isLast = index === crumbs.length - 1;
+          return (
+            <div key={crumb.path} className="my-1.5 flex shrink-0 snap-start items-center gap-0.5">
+              <ChevronRight className="size-3 text-muted-foreground" />
+              <button
+                ref={isLast ? currentCrumbRef : undefined}
+                type="button"
+                className={cn(
+                  'max-w-32 shrink-0 truncate rounded-xs px-1 py-0.5 hover:bg-muted',
+                  isLast && 'font-medium text-foreground',
+                  !isLast && 'text-muted-foreground',
+                )}
+                onClick={() => {
+                  onNavigate(crumb.path);
+                }}
+              >
+                {crumb.name}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 /**
  * Render a single file/folder item
+ * Both files and folders use CommandItem to ensure unified hover state management
  */
 function FileSelectorItem({
   item,
@@ -269,13 +252,12 @@ function FileSelectorItem({
   readonly onDrillDown: (path: string) => void;
   readonly onSelect: (path: string) => void;
 }): React.JSX.Element {
-  // For folders, use a button that doesn't trigger CommandItem's close behavior
   if (item.isFolder) {
     return (
-      <button
-        type="button"
-        className="hover:text-accent-foreground flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent"
-        onClick={() => {
+      <CommandItem
+        value={item.path}
+        className="flex items-center justify-between gap-2"
+        onSelect={() => {
           onDrillDown(item.path);
         }}
       >
@@ -284,11 +266,10 @@ function FileSelectorItem({
           <span className="truncate">{item.name}</span>
         </div>
         <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-      </button>
+      </CommandItem>
     );
   }
 
-  // For files, use CommandItem which will close the popover on selection
   return (
     <CommandItem
       value={item.path}
@@ -411,6 +392,7 @@ export function FileSelector({
   emptyMessage = 'No files found.',
   virtualizationThreshold = 50,
   popoverProperties,
+  initialPath,
 }: FileSelectorProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState('');
@@ -423,13 +405,15 @@ export function FileSelector({
   // Get items at current path
   const currentItems = useMemo(() => getItemsAtPath(tree, currentPath), [tree, currentPath]);
 
-  // Open at the same level as the selected file
+  // Open at the same level as the selected file (or initialPath if provided)
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
       setOpen(isOpen);
       if (isOpen) {
-        // Navigate to the parent directory of the selected file
-        if (selectedFile) {
+        // Use initialPath if provided, otherwise navigate to parent of selectedFile
+        if (initialPath !== undefined) {
+          setCurrentPath(initialPath);
+        } else if (selectedFile) {
           const parts = selectedFile.split('/');
           // Remove the filename to get the directory path
           parts.pop();
@@ -441,7 +425,7 @@ export function FileSelector({
         setSearchQuery('');
       }
     },
-    [selectedFile],
+    [initialPath, selectedFile],
   );
 
   // Handle file selection

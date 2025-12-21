@@ -33,6 +33,15 @@ const environmentSchema = z.preprocess(
     TAU_FRONTEND_URL: z.url(),
     NODE_ENV: z.enum(['development', 'production', 'test']),
     GITHUB_API_TOKEN: z.string().optional().describe('GitHub API token for the GitHub API client.'),
+
+    // PostHog Analytics
+    POSTHOG_API_HOST: z.string().default('https://us.i.posthog.com').describe('PostHog host for the PostHog client.'),
+    POSTHOG_UI_HOST: z.string().default('https://us.posthog.com').describe('PostHog UI host for the PostHog client.'),
+    POSTHOG_ASSET_HOST: z
+      .string()
+      .default('us-assets.i.posthog.com')
+      .describe('PostHog asset host for the PostHog client.'),
+    POSTHOG_CLIENT_KEY: z.string().optional().describe('PostHog client key. Set to enable analytics.'),
     /* eslint-enable @typescript-eslint/naming-convention -- environment variables are not camelCase */
   }),
 );

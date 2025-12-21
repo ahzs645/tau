@@ -55,6 +55,16 @@
       "options": {
         "command": "fly launch --config ./apps/ui/fly.prod.toml"
       }
+    },
+    "sourcemaps": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "npx -y @posthog/cli sourcemap inject --directory {projectRoot}/build/client --project tau-ui",
+          "npx -y @posthog/cli sourcemap upload --directory {projectRoot}/build/client --delete-after"
+        ],
+        "parallel": false
+      }
     }
   }
 }

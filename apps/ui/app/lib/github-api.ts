@@ -1,6 +1,6 @@
 import { Octokit } from '@octokit/rest';
 import { metaConfig } from '#constants/meta.constants.js';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 
 /**
  * Branch node from GraphQL response

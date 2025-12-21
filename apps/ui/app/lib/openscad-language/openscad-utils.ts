@@ -1,7 +1,7 @@
 /* eslint-disable max-depth -- TODO: refactor */
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment -- TODO: fix these types
 // @ts-nocheck
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import { openscadFunctions, openscadSymbols } from '#lib/openscad-language/openscad-symbols.js';
 
 export type VariableInfo = {

@@ -3,7 +3,7 @@ import type { MessageRole, MyMetadata, MyUIMessage } from '@taucad/chat';
 import { idPrefix } from '@taucad/types/constants';
 import { DefaultChatTransport } from 'ai';
 import { generatePrefixedId } from '@taucad/utils/id';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 
 export const useChatConstants = {
   transport: new DefaultChatTransport({

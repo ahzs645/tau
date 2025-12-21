@@ -1,5 +1,5 @@
 import type { Route } from './+types/route.js';
-import { getEnvironment } from '#config.js';
+import { getEnvironment } from '#environment.config.js';
 import { metaConfig } from '#constants/meta.constants.js';
 
 /**

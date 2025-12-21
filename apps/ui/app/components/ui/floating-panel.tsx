@@ -11,6 +11,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { DrawerClose, DrawerHandle } from '#components/ui/drawer.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { CollapsibleCodeBlock } from '#components/markdown/collapsible-code-block.js';
+import { useAnalytics } from '#hooks/use-analytics.js';
+import type { Analytics } from '#hooks/use-analytics.js';
 
 type Side = 'left' | 'right';
 type TooltipSide = 'left' | 'right' | 'top' | 'bottom';
@@ -382,6 +384,7 @@ type FloatingPanelErrorBoundaryState = {
 class FloatingPanelErrorBoundary extends React.Component<
   {
     readonly children: ReactNode;
+    readonly analytics: Analytics;
     readonly fallback: (props: FloatingPanelErrorFallbackProps) => ReactNode;
   },
   FloatingPanelErrorBoundaryState
@@ -393,6 +396,7 @@ class FloatingPanelErrorBoundary extends React.Component<
   public override state: FloatingPanelErrorBoundaryState = { hasError: false, error: undefined };
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    this.props.analytics.captureException(error, { errorInfo, context: { component: 'FloatingPanel' } });
     console.error('FloatingPanel content error:', error, errorInfo);
   }
 
@@ -419,10 +423,12 @@ class FloatingPanelErrorBoundary extends React.Component<
 
 function FloatingPanelContent({ children, className, errorFallback }: FloatingPanelContentProps): React.JSX.Element {
   const fallback = errorFallback ?? ((props) => <FloatingPanelErrorContent {...props} />);
-
+  const analytics = useAnalytics();
   return (
     <div className={cn('flex size-full flex-col bg-sidebar/50', className)} data-slot="floating-panel-content">
-      <FloatingPanelErrorBoundary fallback={fallback}>{children}</FloatingPanelErrorBoundary>
+      <FloatingPanelErrorBoundary fallback={fallback} analytics={analytics}>
+        {children}
+      </FloatingPanelErrorBoundary>
     </div>
   );
 }
@@ -518,6 +524,10 @@ function FloatingPanelErrorContent({
         {displayDescription ? (
           <p className="max-w-xs text-sm text-muted-foreground">{displayDescription}</p>
         ) : undefined}
+
+        <p className="max-w-3xs text-sm text-pretty text-muted-foreground">
+          Our team has been notified of the error and will investigate it shortly.
+        </p>
 
         {/* Error Details with Stack Trace */}
         {errorStack ? (

@@ -8,43 +8,48 @@
 /** Master debug flag - set to true to enable logging across all KCL LSP components */
 export const isDebugEnabled = false;
 
+const consoleColors = {
+  info: '\u001B[32m',
+  error: '\u001B[31m',
+  warn: '\u001B[33m',
+  debug: '\u001B[34m',
+  reset: '\u001B[0m',
+};
+
 /**
- * Create a scoped logger for a specific component.
+ * Create a scoped logger for a specific KCL component.
  *
  * @param component The component name (e.g., 'Hover Provider', 'LSP Client')
- * @returns A logging function that prefixes messages with the component name
+ * @returns A logging object with various log level methods
  */
-export function createLogger(component: string): (...arguments_: unknown[]) => void {
-  return (...arguments_: unknown[]): void => {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
-    if (isDebugEnabled) {
-      console.log(`[KCL ${component}]`, ...arguments_);
-    }
-  };
-}
+export function createKclLogger(component: string): {
+  info: (...arguments_: unknown[]) => void;
+  error: (...arguments_: unknown[]) => void;
+  warn: (...arguments_: unknown[]) => void;
+  debug: (...arguments_: unknown[]) => void;
+} {
+  const prefix = `[KCL ${component}]`;
 
-/**
- * Create a scoped warning logger for a specific component.
- * Warnings are always logged regardless of debug flag.
- *
- * @param component The component name
- * @returns A warning function that prefixes messages with the component name
- */
-export function createWarningLogger(component: string): (...arguments_: unknown[]) => void {
-  return (...arguments_: unknown[]): void => {
-    console.warn(`[KCL ${component}]`, ...arguments_);
-  };
-}
-
-/**
- * Create a scoped error logger for a specific component.
- * Errors are always logged regardless of debug flag.
- *
- * @param component The component name
- * @returns An error function that prefixes messages with the component name
- */
-export function createErrorLogger(component: string): (...arguments_: unknown[]) => void {
-  return (...arguments_: unknown[]): void => {
-    console.error(`[KCL ${component}]`, ...arguments_);
+  return {
+    info(...arguments_: unknown[]): void {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      if (isDebugEnabled) {
+        console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset}`, ...arguments_);
+      }
+    },
+    error(...arguments_: unknown[]): void {
+      // Errors are always logged regardless of debug flag
+      console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset}`, ...arguments_);
+    },
+    warn(...arguments_: unknown[]): void {
+      // Warnings are always logged regardless of debug flag
+      console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset}`, ...arguments_);
+    },
+    debug(...arguments_: unknown[]): void {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      if (isDebugEnabled) {
+        console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset}`, ...arguments_);
+      }
+    },
   };
 }

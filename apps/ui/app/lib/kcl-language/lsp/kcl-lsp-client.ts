@@ -13,7 +13,7 @@ import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2
 import type { JSONRPCRequest } from 'json-rpc-2.0';
 import { IntoServer } from '#lib/kcl-language/lsp/codec/into-server.js';
 import { createFromServer } from '#lib/kcl-language/lsp/codec/from-server.js';
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { lspWorkerEventType, kclWorkerType } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
 import type { KclLspWorkerOptions, LspWorkerEvent, FileSystemRequest } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
 import { encodeMessage } from '#lib/kcl-language/lsp/codec/utils.js';
@@ -27,7 +27,7 @@ export type LspFileManager = {
   readdir?: (path: string) => Promise<string[]>;
 };
 
-const log = createLogger('LSP Client');
+const log = createKclLogger('LSP Client');
 
 /**
  * Client capabilities sent during initialization.
@@ -135,7 +135,7 @@ export class KclLspClient {
    * This can be called after initialization to enable import resolution.
    */
   public setFileManager(fileManager: LspFileManager): void {
-    log('Setting file manager');
+    log.debug('Setting file manager');
     this.options.fileManager = fileManager;
   }
 
@@ -147,14 +147,14 @@ export class KclLspClient {
   }
 
   public textDocumentDidOpen(parameters: LSP.DidOpenTextDocumentParams): void {
-    log(
+    log.debug(
       'textDocumentDidOpen called for:',
       parameters.textDocument.uri,
       'text length:',
       parameters.textDocument.text.length,
     );
     this.notify('textDocument/didOpen', parameters);
-    log('textDocumentDidOpen notification sent');
+    log.debug('textDocumentDidOpen notification sent');
   }
 
   public textDocumentDidChange(parameters: LSP.DidChangeTextDocumentParams): void {
@@ -176,11 +176,11 @@ export class KclLspClient {
   public async textDocumentCompletion(
     parameters: LSP.CompletionParams,
   ): Promise<LSP.CompletionItem[] | LSP.CompletionList | undefined> {
-    log('textDocumentCompletion called for uri:', parameters.textDocument.uri);
-    log('textDocumentCompletion position:', JSON.stringify(parameters.position));
-    log('textDocumentCompletion capabilities:', this.serverCapabilities.completionProvider);
+    log.debug('textDocumentCompletion called for uri:', parameters.textDocument.uri);
+    log.debug('textDocumentCompletion position:', JSON.stringify(parameters.position));
+    log.debug('textDocumentCompletion capabilities:', this.serverCapabilities.completionProvider);
     if (!this.serverCapabilities.completionProvider) {
-      log('No completion provider capability - returning undefined');
+      log.debug('No completion provider capability - returning undefined');
       return undefined;
     }
 
@@ -190,11 +190,14 @@ export class KclLspClient {
       parameters,
     );
 
-    log('textDocumentCompletion result type:', result === null ? 'null' : Array.isArray(result) ? 'array' : 'object');
+    log.debug(
+      'textDocumentCompletion result type:',
+      result === null ? 'null' : Array.isArray(result) ? 'array' : 'object',
+    );
     if (result && 'items' in result) {
-      log('textDocumentCompletion items count:', result.items.length);
+      log.debug('textDocumentCompletion items count:', result.items.length);
     } else if (Array.isArray(result)) {
-      log('textDocumentCompletion array length:', result.length);
+      log.debug('textDocumentCompletion array length:', result.length);
     }
 
     return result ?? undefined;
@@ -277,7 +280,7 @@ export class KclLspClient {
   }
 
   public async initialize(): Promise<void> {
-    log('Creating worker...');
+    log.debug('Creating worker...');
     this.worker = new Worker(new URL('kcl-lsp-worker.ts', import.meta.url), { type: 'module', name: 'kcl-lsp' });
     this.fromServer = createFromServer();
     this.intoServer = new IntoServer(kclWorkerType, this.worker);
@@ -287,30 +290,30 @@ export class KclLspClient {
 
       if (event.data?.eventType !== undefined) {
         const workerEvent = event.data as LspWorkerEvent;
-        log('Received file system request from worker:', workerEvent.eventType);
+        log.debug('Received file system request from worker:', workerEvent.eventType);
         void this.handleFileSystemRequest(workerEvent);
         return;
       }
 
-      log('Received LSP message from worker:', event.data);
+      log.debug('Received LSP message from worker:', event.data);
       this.fromServer?.add(event.data as Uint8Array);
     };
 
     this.worker.addEventListener('message', handleWorkerMessage);
     this.worker.addEventListener('error', (error) => {
-      console.error('[KCL LSP Client] Worker error:', error);
+      log.error('Worker error:', error);
     });
 
     const sendRequest = async (request: JSONRPCRequest): Promise<void> => {
-      log('Sending request:', request.method, 'id:', request.id);
+      log.debug('Sending request:', request.method, 'id:', request.id);
       const encoded = encodeMessage(request);
       this.intoServer?.enqueue(encoded);
 
       if (request.id !== null && request.id !== undefined) {
-        log('Waiting for response to id:', request.id);
+        log.debug('Waiting for response to id:', request.id);
 
         const response = await this.fromServer?.responses.get(request.id);
-        log('Got response for id:', request.id, response);
+        log.debug('Got response for id:', request.id, response);
         if (response) {
           // Cast to match json-rpc-2.0 expected type
           this.jsonRpcClient?.client.receive(response as Parameters<typeof this.jsonRpcClient.client.receive>[0]);
@@ -322,7 +325,7 @@ export class KclLspClient {
 
     this.jsonRpcClient.addMethod('client/registerCapability', (requestParameters: unknown) => {
       const { registrations } = requestParameters as { registrations: LSP.Registration[] };
-      log('Server registering capabilities:', registrations);
+      log.debug('Server registering capabilities:', registrations);
       for (const registration of registrations) {
         this.registerServerCapability(registration);
       }
@@ -330,7 +333,7 @@ export class KclLspClient {
 
     this.jsonRpcClient.addMethod('client/unregisterCapability', (requestParameters: unknown) => {
       const { unregisterations } = requestParameters as { unregisterations: LSP.Unregistration[] };
-      log('Server unregistering capabilities:', unregisterations);
+      log.debug('Server unregistering capabilities:', unregisterations);
       for (const unregistration of unregisterations) {
         this.unregisterServerCapability(unregistration);
       }
@@ -339,19 +342,19 @@ export class KclLspClient {
     this.jsonRpcClient.addMethod('window/logMessage', (requestParameters: unknown) => {
       const { type, message } = requestParameters as { type: LSP.MessageType; message: string };
       const prefix = ['', '[error]', '[warn]', '[info]', '[log]'][type] ?? '[log]';
-      console.log(`[KCL LSP Server] ${prefix} ${message}`);
+      log.debug(`[LSP Server] ${prefix} ${message}`);
     });
 
     const initOptions: KclLspWorkerOptions = { wasmUrl: '', token: '', apiBaseUrl: '' };
-    log('Posting Init event to worker');
+    log.debug('Posting Init event to worker');
     this.worker.postMessage({ worker: kclWorkerType, eventType: lspWorkerEventType.init, eventData: initOptions });
 
     void this.processNotifications();
     void this.processRequests();
 
-    log('Starting LSP initialization...');
+    log.debug('Starting LSP initialization...');
     await this.initializeLsp();
-    log('LSP initialization complete');
+    log.debug('LSP initialization complete');
   }
 
   public dispose(): void {
@@ -386,16 +389,16 @@ export class KclLspClient {
       workspaceFolders: null,
     };
 
-    log('Sending initialize request...');
+    log.debug('Sending initialize request...');
     const result = await this.request<LSP.InitializeResult>('initialize', initializeParameters);
-    log('Initialize response received:', result);
+    log.debug('Initialize response received:', result);
     this.serverCapabilities = result.capabilities;
-    log('Server capabilities:', this.serverCapabilities);
+    log.debug('Server capabilities:', this.serverCapabilities);
     this.notify('initialized', {});
     this.isReady = true;
     this.resolveReady();
     this.options.onInitialized?.();
-    log('Client fully initialized');
+    log.debug('Client fully initialized');
   }
 
   private async processNotifications(): Promise<void> {
@@ -419,11 +422,11 @@ export class KclLspClient {
   }
 
   private registerServerCapability(registration: LSP.Registration): void {
-    console.log('[KCL LSP Client] Registered capability:', registration.method);
+    log.debug('Registered capability:', registration.method);
   }
 
   private unregisterServerCapability(unregistration: LSP.Unregistration): void {
-    console.log('[KCL LSP Client] Unregistered capability:', unregistration.method);
+    log.debug('Unregistered capability:', unregistration.method);
   }
 
   private async handleFileSystemRequest(event: LspWorkerEvent): Promise<void> {
@@ -456,11 +459,11 @@ export class KclLspClient {
   }
 
   private async handleFileReadRequest(request: FileSystemRequest): Promise<void> {
-    log('Handling file read request:', request.path);
+    log.debug('Handling file read request:', request.path);
     const { fileManager } = this.options;
 
     if (!fileManager) {
-      log('No file manager available, returning empty');
+      log.debug('No file manager available, returning empty');
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileReadResponse,
@@ -471,7 +474,7 @@ export class KclLspClient {
 
     try {
       const data = await fileManager.readFile(request.path);
-      log('File read success:', request.path, 'bytes:', data.length);
+      log.debug('File read success:', request.path, 'bytes:', data.length);
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileReadResponse,
@@ -479,7 +482,7 @@ export class KclLspClient {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      log('File read error:', request.path, errorMessage);
+      log.debug('File read error:', request.path, errorMessage);
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileReadResponse,
@@ -489,7 +492,7 @@ export class KclLspClient {
   }
 
   private async handleFileExistsRequest(request: FileSystemRequest): Promise<void> {
-    log('Handling file exists request:', request.path);
+    log.debug('Handling file exists request:', request.path);
     const { fileManager } = this.options;
 
     if (!fileManager?.exists) {
@@ -522,7 +525,7 @@ export class KclLspClient {
 
     try {
       const exists = await fileManager.exists(request.path);
-      log('File exists result:', request.path, exists);
+      log.debug('File exists result:', request.path, exists);
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileExistsResponse,
@@ -530,7 +533,7 @@ export class KclLspClient {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      log('File exists error:', request.path, errorMessage);
+      log.debug('File exists error:', request.path, errorMessage);
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileExistsResponse,
@@ -540,11 +543,11 @@ export class KclLspClient {
   }
 
   private async handleFileListRequest(request: FileSystemRequest): Promise<void> {
-    log('Handling file list request:', request.path);
+    log.debug('Handling file list request:', request.path);
     const { fileManager } = this.options;
 
     if (!fileManager?.readdir) {
-      log('No readdir available, returning empty array');
+      log.debug('No readdir available, returning empty array');
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileListResponse,
@@ -555,7 +558,7 @@ export class KclLspClient {
 
     try {
       const files = await fileManager.readdir(request.path);
-      log('File list success:', request.path, files.length, 'files');
+      log.debug('File list success:', request.path, files.length, 'files');
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileListResponse,
@@ -563,7 +566,7 @@ export class KclLspClient {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      log('File list error:', request.path, errorMessage);
+      log.debug('File list error:', request.path, errorMessage);
       this.worker?.postMessage({
         worker: kclWorkerType,
         eventType: lspWorkerEventType.fileListResponse,

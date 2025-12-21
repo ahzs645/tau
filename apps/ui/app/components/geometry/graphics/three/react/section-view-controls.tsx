@@ -11,24 +11,187 @@ import { adjustHexColorBrightness } from '#utils/color.utils.js';
 
 export type PlaneId = 'xy' | 'xz' | 'yz';
 export type PlaneSelectorId = 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy';
-// Calculate rotation for plane selector based on plane orientation
-// - XY plane: normal = [0, 0, 1], no rotation needed (default orientation)
-// - XZ plane: normal = [0, 1, 0], rotate -90° around X axis
-// - YZ plane: normal = [1, 0, 0], rotate 90° around Y axis
-function getPlaneRotation(planeId: PlaneId): [number, number, number] {
+export type UpDirection = 'x' | 'y' | 'z';
+
+/**
+ * Get the plane position for a given plane ID and up direction.
+ * The position determines where the plane selector is placed in 3D space.
+ *
+ * In each coordinate system, we want the "horizontal" plane (Top/Bottom) to be
+ * positioned along the up axis, and the vertical planes to be positioned along
+ * the other two axes.
+ */
+function getPlanePositionForUpDirection(planeId: PlaneId, upDirection: UpDirection): [number, number, number] {
+  // Z-up (CAD/engineering default): XY is horizontal, XZ/YZ are vertical
+  if (upDirection === 'z') {
+    if (planeId === 'xy') {
+      return [0, 0, -1];
+    }
+
+    if (planeId === 'xz') {
+      return [0, 1, 0];
+    }
+
+    // Yz
+    return [-1, 0, 0];
+  }
+
+  // Y-up (standard Three.js): XZ is horizontal, XY/YZ are vertical
+  if (upDirection === 'y') {
+    if (planeId === 'xy') {
+      return [0, 0, -1];
+    }
+
+    if (planeId === 'xz') {
+      return [0, -1, 0];
+    }
+
+    // Yz
+    return [-1, 0, 0];
+  }
+
+  // X-up: YZ is horizontal, XY/XZ are vertical
   if (planeId === 'xy') {
-    // No rotation, faces +Z
-    return [0, 0, 0];
+    return [0, 0, -1];
   }
 
   if (planeId === 'xz') {
-    // Rotate to face +Y
-    return [-Math.PI / 2, 0, Math.PI];
+    return [0, -1, 0];
   }
 
-  // PlaneId === 'yz'
-  // Rotate to face +X
-  return [Math.PI / 2, Math.PI / 2, 0];
+  // YZ - positioned at bottom (-X direction, like Y-up has XZ at -Y)
+  return [-1, 0, 0];
+}
+
+/**
+ * Get the plane rotation for a given plane ID and up direction.
+ * The rotation orients the plane selector to face the correct direction.
+ */
+function getPlaneRotationForUpDirection(planeId: PlaneId, upDirection: UpDirection): [number, number, number] {
+  // Z-up (CAD/engineering default)
+  if (upDirection === 'z') {
+    if (planeId === 'xy') {
+      return [0, 0, 0];
+    }
+
+    if (planeId === 'xz') {
+      return [-Math.PI / 2, 0, Math.PI];
+    }
+
+    // Yz
+    return [Math.PI / 2, Math.PI / 2, 0];
+  }
+
+  // Y-up (standard Three.js)
+  if (upDirection === 'y') {
+    if (planeId === 'xy') {
+      // XY plane at [0,0,-1] faces +Z, needs to face the camera with upright text
+      return [0, 0, 0];
+    }
+
+    if (planeId === 'xz') {
+      // XZ plane at [0,-1,0] - horizontal floor plane
+      // Rotate 90° around X to make it horizontal, facing +Y (up)
+      // Add 180° around Z to flip text orientation without mirroring
+      return [Math.PI / 2, 0, Math.PI];
+    }
+
+    // YZ plane at [-1,0,0] - vertical side plane
+    // Rotate to face +X direction
+    return [0, Math.PI / 2, 0];
+  }
+
+  // X-up
+  if (planeId === 'xy') {
+    // XY plane at [0,0,-1] faces +Z
+    return [0, 0, -Math.PI / 2];
+  }
+
+  if (planeId === 'xz') {
+    // XZ plane at [0,-1,0] - vertical side plane
+    // Rotate -90° around X to face +Y, add 180° Z for upright text
+    return [-Math.PI / 2, Math.PI, -Math.PI / 2];
+  }
+
+  // YZ plane at [-1,0,0] - horizontal floor plane in X-up
+  // Rotate 90° around Y to make it horizontal, facing +X (up)
+  // Add 90° around Z for upright text when viewed from above
+  return [0, Math.PI / 2, Math.PI];
+}
+
+/**
+ * Get the labels for a plane selector based on the up direction.
+ * The semantic meaning of "Top/Bottom/Front/Back/Left/Right" changes depending
+ * on which axis is "up" and the position of the selector in 3D space.
+ *
+ * The label mapping must match the physical position of the selector:
+ * - The selector at the "up" position should show "Top"
+ * - The selector at the "down" position should show "Bottom"
+ * - etc.
+ */
+function getLabelsForUpDirection(
+  id: PlaneSelectorId,
+  naming: 'cartesian' | 'face',
+  upDirection: UpDirection,
+): [string, string] {
+  if (naming === 'cartesian') {
+    const label = id.toUpperCase();
+    return [label, label];
+  }
+
+  const base = getBaseFromSelector(id);
+  // IsInverse is true for 'yx', 'zx', 'zy' (the reversed versions)
+  const isInverse = id !== base;
+
+  if (upDirection === 'z') {
+    // Z-up: XY → Top/Bottom, XZ → Front/Back, YZ → Left/Right
+    // XY at [0,0,-1]: faces +Z (up), so 'xy' shows "Top"
+    // XZ at [0,1,0]: faces -Y, so 'xz' shows "Back"
+    // YZ at [-1,0,0]: faces +X, so 'yz' shows "Right"
+    if (base === 'xy') {
+      return isInverse ? ['Bottom', 'Top'] : ['Top', 'Bottom'];
+    }
+
+    if (base === 'xz') {
+      return isInverse ? ['Front', 'Back'] : ['Back', 'Front'];
+    }
+
+    // Yz
+    return isInverse ? ['Left', 'Right'] : ['Right', 'Left'];
+  }
+
+  if (upDirection === 'y') {
+    // Y-up: XZ → Top/Bottom, XY → Front/Back, YZ → Left/Right
+    // XZ at [0,-1,0]: The selector is below the model, the visible face (facing +Y) should show "Top"
+    // But the 'xz' ID with isInverse=true render prop uses base rotation, making it face +Y
+    // So 'zx' (which faces -Y, away from viewer looking down) should show "Top"
+    // and 'xz' (facing +Y toward viewer) should show "Bottom"
+    if (base === 'xz') {
+      return isInverse ? ['Top', 'Bottom'] : ['Bottom', 'Top'];
+    }
+
+    // XY at [0,0,-1]: Front/Back need to be on opposite faces
+    if (base === 'xy') {
+      return isInverse ? ['Back', 'Front'] : ['Front', 'Back'];
+    }
+
+    // Yz - Right/Left remains the same
+    return isInverse ? ['Left', 'Right'] : ['Right', 'Left'];
+  }
+
+  // X-up: YZ → Top/Bottom, XY → Front/Back, XZ → Left/Right
+  // YZ at [-1,0,0]: swap so 'yz' shows "Top", 'zy' shows "Bottom"
+  if (base === 'yz') {
+    return isInverse ? ['Bottom', 'Top'] : ['Top', 'Bottom'];
+  }
+
+  // XY at [0,0,-1]: 'xy' faces +Z → shows "Front", 'yx' faces -Z → shows "Back"
+  if (base === 'xy') {
+    return isInverse ? ['Back', 'Front'] : ['Front', 'Back'];
+  }
+
+  // XZ at [0,-1,0]: swap so 'xz' shows "Left", 'zx' shows "Right"
+  return isInverse ? ['Right', 'Left'] : ['Left', 'Right'];
 }
 
 function getBaseFromSelector(id: PlaneSelectorId): PlaneId {
@@ -41,29 +204,6 @@ function getBaseFromSelector(id: PlaneSelectorId): PlaneId {
   }
 
   return 'yz';
-}
-
-function getLabelsFor(id: PlaneSelectorId, naming: 'cartesian' | 'face'): [string, string] {
-  if (naming === 'cartesian') {
-    const label = id.toUpperCase();
-    return [label, label];
-  }
-
-  // Face naming
-  const base = getBaseFromSelector(id);
-  if (base === 'xy') {
-    const isInverse = id === 'yx';
-    return isInverse ? ['Bottom', 'Top'] : ['Top', 'Bottom'];
-  }
-
-  if (base === 'xz') {
-    const isInverse = id === 'zx';
-    return isInverse ? ['Front', 'Back'] : ['Back', 'Front'];
-  }
-
-  // Base === 'yz'
-  const isInverse = id === 'zy';
-  return isInverse ? ['Left', 'Right'] : ['Right', 'Left'];
 }
 
 type PlaneSelectorProperties = {
@@ -80,6 +220,7 @@ type PlaneSelectorProperties = {
   readonly textDepth: number;
   readonly labelDepth: number;
   readonly isInverse?: boolean;
+  readonly upDirection: UpDirection;
 };
 
 function PlaneSelector({
@@ -96,6 +237,7 @@ function PlaneSelector({
   textDepth,
   labelDepth,
   isInverse = false,
+  upDirection,
 }: PlaneSelectorProperties): React.JSX.Element {
   const { gl, camera, size: threeSize, viewport } = useThree();
   const [isHovered, setIsHovered] = React.useState(false);
@@ -169,7 +311,7 @@ function PlaneSelector({
     onHover(undefined);
   };
 
-  const [forwardPlaneName] = getLabelsFor(planeId, naming);
+  const [forwardPlaneName] = getLabelsForUpDirection(planeId, naming, upDirection);
 
   const frontFontGeometry = useMemo(
     // eslint-disable-next-line new-cap -- Three.js naming convention
@@ -184,23 +326,40 @@ function PlaneSelector({
   const darkenedColor = useMemo(() => adjustHexColorBrightness(color, -0.5), [color]);
   const slightlyDarkenedColor = useMemo(() => adjustHexColorBrightness(color, -0.3), [color]);
 
-  const baseRotation = getPlaneRotation(getBaseFromSelector(planeId));
-  // For inverse faces, rotate 180 degrees around the plane's normal axis to face the opposite direction
+  const baseRotation = getPlaneRotationForUpDirection(getBaseFromSelector(planeId), upDirection);
+  // For inverse faces, rotate 180 degrees to face the opposite direction
+  // The rotation axis depends on the up direction to maintain upright text
   const rotation = isInverse
     ? baseRotation
     : ((): [number, number, number] => {
         const base = getBaseFromSelector(planeId);
-        if (base === 'xy') {
-          // Rotate 180° around Z axis
-          return [baseRotation[0] + Math.PI, baseRotation[1], baseRotation[2]];
-        }
 
-        if (base === 'xz') {
-          // Rotate 180° around Y axis
+        // X-up needs different inverse rotations due to different base rotations
+        if (upDirection === 'x') {
+          if (base === 'xy') {
+            // Front→Back: flip around X to keep text upright
+            return [baseRotation[0] + Math.PI, baseRotation[1], baseRotation[2]];
+          }
+
+          if (base === 'xz') {
+            // Right→Left: flip around X
+            return [baseRotation[0] + Math.PI, baseRotation[1], baseRotation[2]];
+          }
+
+          // YZ (Top→Bottom): flip around Y
           return [baseRotation[0], baseRotation[1] + Math.PI, baseRotation[2]];
         }
 
-        // Base === 'yz', rotate 180° around X axis
+        // Z-up and Y-up use 180° Y rotation
+        if (base === 'xy') {
+          return [baseRotation[0], baseRotation[1] + Math.PI, baseRotation[2]];
+        }
+
+        if (base === 'xz') {
+          return [baseRotation[0], baseRotation[1] + Math.PI, baseRotation[2]];
+        }
+
+        // Base === 'yz'
         return [baseRotation[0], baseRotation[1] + Math.PI, baseRotation[2]];
       })();
   const displayedHover = isHovered || Boolean(isExternallyHovered);
@@ -246,6 +405,7 @@ type SectionViewControlsProperties = {
   readonly rotation: [number, number, number];
   readonly planeName: 'cartesian' | 'face';
   readonly hoveredSectionViewId: PlaneSelectorId | undefined;
+  readonly upDirection: UpDirection;
   readonly onSelectPlane: (planeId: PlaneSelectorId) => void;
   readonly onHover: (planeId: PlaneSelectorId | undefined) => void;
   readonly onSetRotation: (rotation: THREE.Euler) => void;
@@ -260,6 +420,7 @@ export function SectionViewControls({
   rotation,
   planeName,
   hoveredSectionViewId,
+  upDirection,
   onSelectPlane,
   onHover,
   onSetRotation,
@@ -350,28 +511,10 @@ export function SectionViewControls({
   if (!selectedPlane) {
     return (
       <group>
-        {planes.map(({ idPos, idNeg, normal, color }) => {
-          let position: [number, number, number] = normal.toArray();
-          switch (idPos) {
-            case 'xy': {
-              position = [0, 0, -1];
-
-              break;
-            }
-
-            case 'xz': {
-              position = [0, 1, 0];
-
-              break;
-            }
-
-            case 'yz': {
-              position = [-1, 0, 0];
-
-              break;
-            }
-            // No default
-          }
+        {planes.map(({ idPos, idNeg, color }) => {
+          // Use coordinate-aware position based on up direction
+          const baseId = getBaseFromSelector(idPos);
+          const position = getPlanePositionForUpDirection(baseId, upDirection);
 
           return (
             <group key={idPos}>
@@ -387,6 +530,7 @@ export function SectionViewControls({
                 isExternallyHovered={hoveredSectionViewId === idPos}
                 textDepth={textDepth}
                 labelDepth={labelDepth}
+                upDirection={upDirection}
                 onClick={onSelectPlane}
                 onHover={onHover}
               />
@@ -402,6 +546,7 @@ export function SectionViewControls({
                 isExternallyHovered={hoveredSectionViewId === idNeg}
                 textDepth={textDepth}
                 labelDepth={labelDepth}
+                upDirection={upDirection}
                 onClick={onSelectPlane}
                 onHover={onHover}
               />

@@ -105,6 +105,7 @@ export const Controls = React.memo(function ({
         pivot={pivot}
         planeName={planeName}
         hoveredSectionViewId={hoveredSectionViewId}
+        upDirection={upDirection}
         onSelectPlane={handleSelectPlane}
         onHover={handleHover}
         onSetRotation={handleSetRotation}

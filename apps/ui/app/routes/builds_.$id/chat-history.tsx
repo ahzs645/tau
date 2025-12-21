@@ -158,7 +158,7 @@ export const ChatHistory = memo(function (props: {
           <FloatingPanelErrorContent
             {...errorProps}
             title="Chat Unavailable"
-            description="Something went wrong while loading the chat. This might be due to a storage issue."
+            description="Something went wrong while loading the chat."
           />
         )}
       >

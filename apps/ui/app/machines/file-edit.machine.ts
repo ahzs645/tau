@@ -1,6 +1,6 @@
 import { setup, fromPromise, assign, assertEvent } from 'xstate';
 import type { DoneActorEvent } from 'xstate';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 
 // Types for the API request and response

@@ -17,7 +17,7 @@ import { draftMachine } from '#hooks/draft.machine.js';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
 import { useChats } from '#hooks/use-chats.js';
 import { inspect } from '#machines/inspector.js';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 import type { CreateOnToolCallFn } from '#hooks/use-chat-tools.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;

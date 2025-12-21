@@ -4,7 +4,8 @@ import { Theme, useTheme } from 'remix-themes';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { shikiToMonaco } from '@shikijs/monaco';
 import type { AnyActorRef } from 'xstate';
-import type { CompletionRegistration, Monaco, StandaloneCodeEditor } from 'monacopilot';
+import type { CompletionRegistration } from 'monacopilot';
+import type * as Monaco from 'monaco-editor';
 import { cn } from '#utils/ui.utils.js';
 import { highlighter } from '#lib/shiki.js';
 import { configureMonaco, registerCompletions } from '#lib/monaco.js';
@@ -35,11 +36,11 @@ export function CodeEditor({
   const [theme] = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
-  const editorRef = useRef<StandaloneCodeEditor | undefined>(undefined);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
   const navigationDisposableRef = useRef<{ dispose: () => void } | undefined>(undefined);
 
   const handleMount = useCallback(
-    (editor: StandaloneCodeEditor, monaco: Monaco) => {
+    (editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
       completionRef.current = registerCompletions(editor, monaco);
       editorRef.current = editor;
 
@@ -153,6 +154,7 @@ export function CodeEditor({
 
   return (
     <Editor
+      keepCurrentModel
       className={classNames}
       theme={theme === Theme.DARK ? 'github-dark' : 'github-light'}
       wrapperProps={{

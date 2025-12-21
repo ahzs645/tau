@@ -4,7 +4,7 @@ import { useMonaco } from '@monaco-editor/react';
 import { useSelector } from '@xstate/react';
 import { FileCode } from 'lucide-react';
 import { languageFromExtension } from '@taucad/types/constants';
-import { CodeEditor } from '#components/code/code-editor.js';
+import { CodeEditor } from '#components/code/code-editor.client.js';
 import { cn } from '#utils/ui.utils.js';
 import { HammerAnimation } from '#components/hammer-animation.js';
 import { registerMonaco } from '#lib/monaco.js';

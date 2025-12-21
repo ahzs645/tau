@@ -1,4 +1,4 @@
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 
 export async function loader(): Promise<Response> {
   return new Response(

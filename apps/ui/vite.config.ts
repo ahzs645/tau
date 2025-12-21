@@ -108,6 +108,7 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
     },
     build: {
+      sourcemap: true,
       assetsInlineLimit(file) {
         // Don't inline SVGs
         return !file.endsWith('.svg');

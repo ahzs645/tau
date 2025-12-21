@@ -24,7 +24,7 @@ import type { JscadWorkerInterface as JscadWorker } from '#components/geometry/k
 import JscadBuilderWorker from '#components/geometry/kernel/jscad/jscad.worker.js?worker';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import type { LogLevel, LogOrigin, OnWorkerLog } from '#types/console.types.js';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
 
 type KernelProvider = CadKernelProvider | 'tau' | 'jscad';

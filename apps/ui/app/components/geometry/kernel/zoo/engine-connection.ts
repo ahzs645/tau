@@ -484,9 +484,9 @@ export class EngineConnection {
           this.pendingCommands.delete(message.request_id);
           batchCommand.resolve(message);
         } else {
-          log.warn(`Batch request ${message.request_id} not found in pending commands`);
+          log.debug(`Batch request ${message.request_id} not found in pending commands`);
           const pendingCommands = [...this.pendingCommands.keys()];
-          log.warn(
+          log.debug(
             `Current pending commands: ${pendingCommands.length} pending commands: ${pendingCommands.join(', ')}`,
           );
         }

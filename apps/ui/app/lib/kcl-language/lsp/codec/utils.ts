@@ -5,6 +5,9 @@
 import type { JSONRPCRequest, JSONRPCResponse } from 'json-rpc-2.0';
 import { encodeBytes, decodeBytes } from '#lib/kcl-language/lsp/codec/bytes.js';
 import { addHeaders, parseMessages } from '#lib/kcl-language/lsp/codec/headers.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+
+const log = createKclLogger('Codec');
 
 /**
  * Encode a JSON-RPC message to bytes with LSP headers.
@@ -32,9 +35,9 @@ export function decodeMessage<T>(data: Uint8Array): T {
     // Return the first message (for backward compatibility with single-message decoding)
     return JSON.parse(firstMessage) as T;
   } catch (error) {
-    console.error('[Codec] Failed to decode message:', error);
-    console.error('[Codec] Raw data length:', data.length);
-    console.error('[Codec] First 200 chars:', decodeBytes(data).slice(0, 200));
+    log.error('Failed to decode message:', error);
+    log.error('Raw data length:', data.length);
+    log.error('First 200 chars:', decodeBytes(data).slice(0, 200));
     throw error;
   }
 }

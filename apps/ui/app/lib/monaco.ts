@@ -3,10 +3,10 @@ import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { registerCompletion } from 'monacopilot';
-import type { CompletionRegistration, Monaco, StandaloneCodeEditor, CompletionCopilot } from 'monacopilot';
-import type { Monaco as MonacoEditor } from '@monaco-editor/react';
+import type { CompletionRegistration, CompletionCopilot } from 'monacopilot';
+import type * as Monaco from 'monaco-editor';
 import { replicadTypesOriginal } from '@taucad/api-extractor';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 import { registerOpenScadLanguage } from '#lib/openscad-language/openscad-register-language.js';
 import { registerKclLanguage } from '#lib/kcl-language/kcl-register-language.js';
 
@@ -33,7 +33,7 @@ export const configureMonaco = async (): Promise<void> => {
       },
     };
 
-    const monaco = await import('monaco-editor/esm/vs/editor/editor.api');
+    const monaco = await import('monaco-editor');
 
     loader.config({
       monaco,
@@ -41,13 +41,13 @@ export const configureMonaco = async (): Promise<void> => {
 
     // Core Editor features, like auto-completion.
     // @ts-expect-error -- no declaration file
-    await import('monaco-editor/esm/vs/editor/edcore.main');
+    await import('monaco-editor/esm/vs/editor/edcore.main.js');
 
     // Languages
-    await import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution');
-    await import('monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution');
-    await import('monaco-editor/esm/vs/language/json/monaco.contribution');
-    await import('monaco-editor/esm/vs/language/typescript/monaco.contribution');
+    await import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js');
+    await import('monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js');
+    await import('monaco-editor/esm/vs/language/json/monaco.contribution.js');
+    await import('monaco-editor/esm/vs/language/typescript/monaco.contribution.js');
 
     registerOpenScadLanguage(monaco);
     registerKclLanguage(monaco);
@@ -61,7 +61,10 @@ export const configureMonaco = async (): Promise<void> => {
  * @param monaco - The Monaco instance.
  * @returns The completion registration.
  */
-export const registerCompletions = (editor: StandaloneCodeEditor, monaco: Monaco): CompletionRegistration => {
+export const registerCompletions = (
+  editor: Monaco.editor.IStandaloneCodeEditor,
+  monaco: typeof Monaco,
+): CompletionRegistration => {
   return registerCompletion(monaco, editor, {
     endpoint: `${ENV.TAU_API_URL}/v1/code-completion`,
     language: 'typescript',
@@ -82,19 +85,19 @@ export const registerCompletions = (editor: StandaloneCodeEditor, monaco: Monaco
   });
 };
 
-export const registerMonaco = async (monaco: MonacoEditor): Promise<void> => {
-  monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+export const registerMonaco = async (monaco: typeof Monaco): Promise<void> => {
+  monaco.typescript.typescriptDefaults.setCompilerOptions({
     experimentalDecorators: true,
     allowSyntheticDefaultImports: true,
-    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
-    target: monaco.languages.typescript.ScriptTarget.ESNext,
+    moduleResolution: monaco.typescript.ModuleResolutionKind.NodeJs,
+    target: monaco.typescript.ScriptTarget.ESNext,
     noLib: false,
     allowNonTsExtensions: true,
     noEmit: true,
     baseUrl: './',
   });
-  monaco.languages.typescript.typescriptDefaults.setEagerModelSync(true);
-  monaco.languages.typescript.typescriptDefaults.setExtraLibs([
+  monaco.typescript.typescriptDefaults.setEagerModelSync(true);
+  monaco.typescript.typescriptDefaults.setExtraLibs([
     {
       content: `declare module 'replicad' { ${replicadTypesOriginal} }`,
       filePath: 'file:///node_modules/replicad/index.d.ts',

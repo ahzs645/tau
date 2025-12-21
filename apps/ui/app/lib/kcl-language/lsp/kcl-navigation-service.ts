@@ -5,9 +5,12 @@
  * This enables Cmd+Click to open KCL files in the application's editor tabs.
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import type { AnyActorRef } from 'xstate';
 import { codeLanguages } from '@taucad/types/constants';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+
+const log = createKclLogger('Navigation');
 
 type FileManagerApi = {
   readFile: (path: string) => Promise<Uint8Array>;
@@ -76,7 +79,7 @@ export function registerKclNavigation(
   const editorService = getEditorService(editor);
 
   if (!editorService) {
-    console.warn('[KCL Navigation] Could not access editor service, navigation may not work');
+    log.warn('Could not access editor service, navigation may not work');
 
     return {
       dispose() {
@@ -90,7 +93,7 @@ export function registerKclNavigation(
   const originalOpenCodeEditor = editorService.openCodeEditor?.bind(editorService);
 
   if (!originalOpenCodeEditor) {
-    console.warn('[KCL Navigation] openCodeEditor not available, navigation may not work');
+    log.warn('openCodeEditor not available, navigation may not work');
 
     return {
       dispose() {
@@ -105,10 +108,10 @@ export function registerKclNavigation(
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Monaco internal API
     const resource = input?.resource;
 
-    console.log('[KCL Navigation] openCodeEditor called with resource:', resource);
+    log.debug('openCodeEditor called with resource:', resource);
 
     if (!resource) {
-      console.log('[KCL Navigation] No resource, using default behavior');
+      log.debug('No resource, using default behavior');
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- Monaco internal API
       return originalOpenCodeEditor(input, source, sideBySide);
     }
@@ -116,11 +119,11 @@ export function registerKclNavigation(
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Monaco internal API
     const { path: uriPath, scheme }: { path: string; scheme: string } = resource;
 
-    console.log('[KCL Navigation] Resource scheme:', scheme, 'path:', uriPath);
+    log.debug('Resource scheme:', scheme, 'path:', uriPath);
 
     // Check if this is a file navigation
     if (scheme !== 'file') {
-      console.log('[KCL Navigation] Non-file scheme, using default behavior');
+      log.debug('Non-file scheme, using default behavior');
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- Monaco internal API
       return originalOpenCodeEditor(input, source, sideBySide);
     }
@@ -128,7 +131,7 @@ export function registerKclNavigation(
     // Extract relative path (remove leading slash)
     const relativePath = uriPath.startsWith('/') ? uriPath.slice(1) : uriPath;
 
-    console.log('[KCL Navigation] Relative path:', relativePath);
+    log.debug('Relative path:', relativePath);
 
     // Check if this is a KCL file or if the model exists with KCL language
     const isKclFile = relativePath.endsWith('.kcl');
@@ -136,11 +139,11 @@ export function registerKclNavigation(
     const existingModel = monaco.editor.getModel(uri);
     const isKclModel = existingModel?.getLanguageId() === codeLanguages.kcl;
 
-    console.log('[KCL Navigation] isKclFile:', isKclFile, 'isKclModel:', isKclModel);
+    log.debug('isKclFile:', isKclFile, 'isKclModel:', isKclModel);
 
     if (!isKclFile && !isKclModel) {
       // Not a KCL file, use default behavior
-      console.log('[KCL Navigation] Not a KCL file, using default behavior');
+      log.debug('Not a KCL file, using default behavior');
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- Monaco internal API
       return originalOpenCodeEditor(input, source, sideBySide);
     }
@@ -151,18 +154,18 @@ export function registerKclNavigation(
     const lineNumber = (selection?.startLineNumber as number | undefined) ?? 1;
     const column = (selection?.startColumn as number | undefined) ?? 1;
 
-    console.log('[KCL Navigation] Target position:', lineNumber, column);
+    log.debug('Target position:', lineNumber, column);
 
     // Check if this is same-file navigation (e.g., jumping to a variable declaration)
     const currentModel = editor.getModel();
     const currentPath = currentModel?.uri.path;
     const targetPath = `/${relativePath}`;
 
-    console.log('[KCL Navigation] Current path:', currentPath, 'Target path:', targetPath);
+    log.debug('Current path:', currentPath, 'Target path:', targetPath);
 
     if (currentPath === targetPath) {
       // Same-file navigation: jump directly to the position
-      console.log('[KCL Navigation] Same-file navigation, jumping to position:', lineNumber, column);
+      log.debug('Same-file navigation, jumping to position:', lineNumber, column);
       editor.setPosition({ lineNumber, column });
       editor.revealPositionInCenter({ lineNumber, column });
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- Monaco internal API
@@ -172,18 +175,18 @@ export function registerKclNavigation(
     // Store pending navigation for position jumping
     pendingNavigation = { path: relativePath, lineNumber, column };
 
-    console.log('[KCL Navigation] Pending navigation set:', pendingNavigation);
+    log.debug('Pending navigation set:', pendingNavigation);
 
     // Ensure the Monaco model exists for the target file
     if (!existingModel) {
-      console.log('[KCL Navigation] No existing model, loading file:', relativePath);
+      log.debug('No existing model, loading file:', relativePath);
       try {
         const content = await fileManager.readFile(relativePath);
         const textContent = decodeTextFile(content);
         monaco.editor.createModel(textContent, codeLanguages.kcl, uri);
-        console.log('[KCL Navigation] Created Monaco model for:', relativePath);
+        log.debug('Created Monaco model for:', relativePath);
       } catch (error: unknown) {
-        console.error('[KCL Navigation] Failed to load file:', relativePath, error);
+        log.error('Failed to load file:', relativePath, error);
         pendingNavigation = undefined;
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- Monaco internal API
@@ -192,7 +195,7 @@ export function registerKclNavigation(
     }
 
     // Open the file through the file explorer
-    console.log('[KCL Navigation] Opening file through file explorer:', relativePath);
+    log.debug('Opening file through file explorer:', relativePath);
     fileExplorerRef.send({ type: 'openFile', path: relativePath });
 
     // Return the source editor to prevent Monaco from trying to navigate internally

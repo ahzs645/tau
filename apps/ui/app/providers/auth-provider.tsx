@@ -1,7 +1,7 @@
 import { AuthUIProvider } from '@daveyplate/better-auth-ui';
 import { Link } from 'react-router';
 import { authClient } from '#lib/auth-client.js';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 
 export function AuthConfigProvider({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
   // Const rrNavigate = useNavigate();

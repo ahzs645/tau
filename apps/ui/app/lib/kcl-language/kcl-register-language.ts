@@ -1,12 +1,12 @@
 import { codeLanguages } from '@taucad/types/constants';
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import type * as LSP from 'vscode-languageserver-protocol';
 import type { Node } from '@taucad/kcl-wasm-lib/bindings/Node';
 import type { Program } from '@taucad/kcl-wasm-lib/bindings/Program';
 import type { KclValue } from '@taucad/kcl-wasm-lib/bindings/KclValue';
 import { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
-import { createLogger, createWarningLogger, createErrorLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { createDiagnosticsHandler } from '#lib/kcl-language/lsp/providers/diagnostics-handler.js';
 import { createCompletionProvider } from '#lib/kcl-language/lsp/providers/completion-provider.js';
 import { createHoverProvider } from '#lib/kcl-language/lsp/providers/hover-provider.js';
@@ -20,9 +20,7 @@ import { createCodeActionProvider } from '#lib/kcl-language/lsp/providers/code-a
 import { getKclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import type { KclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 
-const log = createLogger('Register');
-const logWarn = createWarningLogger('Register');
-const logError = createErrorLogger('Register');
+const log = createKclLogger('Register');
 
 /** Global LSP client instance */
 let lspClient: KclLspClient | undefined;
@@ -62,23 +60,23 @@ export function getKclLspClient(): KclLspClient | undefined {
  * Also triggers re-processing of already opened documents to resolve their imports.
  */
 export function setKclLspFileManager(fileManager: LspFileManager): void {
-  log(' setKclLspFileManager called');
-  log(' - lspClient exists:', Boolean(lspClient));
-  log(' - lspClient ready:', lspClient?.ready);
-  log(' - fileManager.exists:', Boolean(fileManager.exists));
-  log(' - fileManager.readFile:', Boolean(fileManager.readFile));
-  log(' - openedDocuments count:', openedDocuments.size);
-  log(' - openedDocuments:', [...openedDocuments]);
+  log.debug(' setKclLspFileManager called');
+  log.debug(' - lspClient exists:', Boolean(lspClient));
+  log.debug(' - lspClient ready:', lspClient?.ready);
+  log.debug(' - fileManager.exists:', Boolean(fileManager.exists));
+  log.debug(' - fileManager.readFile:', Boolean(fileManager.readFile));
+  log.debug(' - openedDocuments count:', openedDocuments.size);
+  log.debug(' - openedDocuments:', [...openedDocuments]);
 
   if (lspClient) {
     lspClient.setFileManager(fileManager);
-    log(' File manager set on client, triggering import re-processing');
+    log.debug(' File manager set on client, triggering import re-processing');
 
     // Re-process all opened documents to parse and open their imports
     // This handles the case where documents were opened before the file manager was set
     void reprocessOpenedDocumentsForImports();
   } else {
-    logWarn('Cannot set file manager - client not initialized');
+    log.warn('Cannot set file manager - client not initialized');
   }
 }
 
@@ -88,23 +86,23 @@ export function setKclLspFileManager(fileManager: LspFileManager): void {
  */
 async function reprocessOpenedDocumentsForImports(): Promise<void> {
   if (!lspClient?.ready) {
-    log(' Client not ready, skipping import re-processing');
+    log.debug(' Client not ready, skipping import re-processing');
     return;
   }
 
   const fileManager = lspClient.getFileManager();
   if (!fileManager) {
-    log(' No file manager, skipping import re-processing');
+    log.debug(' No file manager, skipping import re-processing');
     return;
   }
 
   const monaco = monacoInstance;
   if (!monaco) {
-    log(' No Monaco instance, skipping import re-processing');
+    log.debug(' No Monaco instance, skipping import re-processing');
     return;
   }
 
-  console.log(`[KCL LSP] Re-processing ${openedDocuments.size} opened documents for imports`);
+  log.debug(`Re-processing ${openedDocuments.size} opened documents for imports`);
 
   // Collect all documents to process
   const documentsToProcess: Array<{ uri: string; text: string }> = [];
@@ -118,7 +116,7 @@ async function reprocessOpenedDocumentsForImports(): Promise<void> {
   // Process all documents in parallel to avoid await-in-loop
   await Promise.all(
     documentsToProcess.map(async ({ uri, text }) => {
-      console.log(`[KCL LSP] Re-processing imports for: ${uri}`);
+      log.debug(`Re-processing imports for: ${uri}`);
       await openImportedFiles(uri, text);
     }),
   );
@@ -135,23 +133,23 @@ const openedDocuments = new Set<string>();
  * Also scans for imports and opens those files recursively.
  */
 export function notifyDocumentOpen(uri: string, text: string): void {
-  console.log(`[KCL LSP] notifyDocumentOpen called for: ${uri}`);
-  console.log(`[KCL LSP] - lspClient?.ready: ${lspClient?.ready}`);
+  log.debug(`notifyDocumentOpen called for: ${uri}`);
+  log.debug(`- lspClient?.ready: ${lspClient?.ready}`);
 
   if (!lspClient?.ready) {
-    console.log(`[KCL LSP] LSP client not ready, skipping notifyDocumentOpen`);
+    log.debug(`LSP client not ready, skipping notifyDocumentOpen`);
     return;
   }
 
   // Skip if already opened
   if (openedDocuments.has(uri)) {
-    console.log(`[KCL LSP] Document already opened, sending didChange instead: ${uri}`);
+    log.debug(`Document already opened, sending didChange instead: ${uri}`);
     // Just send a change notification instead
     notifyDocumentChange(uri, text);
     return;
   }
 
-  console.log(`[KCL LSP] Sending textDocument/didOpen for: ${uri} (${text.length} chars)`);
+  log.debug(`Sending textDocument/didOpen for: ${uri} (${text.length} chars)`);
   openedDocuments.add(uri);
   documentVersions.set(uri, 1);
   lspClient.textDocumentDidOpen({
@@ -162,10 +160,10 @@ export function notifyDocumentOpen(uri: string, text: string): void {
       text,
     },
   });
-  console.log(`[KCL LSP] textDocument/didOpen sent for: ${uri}`);
+  log.debug(`textDocument/didOpen sent for: ${uri}`);
 
   // Parse imports and open those files
-  console.log(`[KCL LSP] Now calling openImportedFiles for: ${uri}`);
+  log.debug(`Now calling openImportedFiles for: ${uri}`);
   void openImportedFiles(uri, text);
 }
 
@@ -180,19 +178,19 @@ export function notifyDocumentOpen(uri: string, text: string): void {
  * files now available in its code_map.
  */
 async function openImportedFiles(currentUri: string, text: string): Promise<void> {
-  log(' openImportedFiles called for:', currentUri);
+  log.debug(' openImportedFiles called for:', currentUri);
 
   const fileManager = lspClient?.getFileManager();
 
   const existsFunction = fileManager?.exists;
   if (!existsFunction) {
-    log(' No file manager.exists available, skipping import resolution');
+    log.debug(' No file manager.exists available, skipping import resolution');
     return;
   }
 
   // Use symbol service to get imports (from WASM AST)
   if (!symbolService?.isInitialized) {
-    log(' Symbol service not initialized, skipping import resolution');
+    log.debug(' Symbol service not initialized, skipping import resolution');
     return;
   }
 
@@ -201,7 +199,7 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
   await symbolService.updateDocument(currentUri, text, version);
 
   const imports = symbolService.getImports(currentUri);
-  log(' Found', imports.length, 'imports in', currentUri);
+  log.debug(' Found', imports.length, 'imports in', currentUri);
 
   if (imports.length === 0) {
     return;
@@ -222,24 +220,24 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
 
       // Skip if already opened
       if (openedDocuments.has(importUri)) {
-        log(' Import already opened:', importUri);
+        log.debug(' Import already opened:', importUri);
         return;
       }
 
       try {
         // Convert URI to path for file manager
         const filePath = uriToPath(importUri);
-        log(' Reading import:', filePath);
+        log.debug(' Reading import:', filePath);
 
         // Check if file exists
         try {
           const fileExists = await existsFunction(filePath);
           if (!fileExists) {
-            log(' Import file not found:', filePath);
+            log.debug(' Import file not found:', filePath);
             return;
           }
         } catch (existsError) {
-          logError(`Error checking file exists for ${filePath}:`, existsError);
+          log.error(`Error checking file exists for ${filePath}:`, existsError);
           // Try to read anyway in case exists failed but read works
         }
 
@@ -247,13 +245,13 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
         const data = await fileManager.readFile(filePath);
         const importText = new TextDecoder().decode(data);
 
-        log(' Successfully read import file:', filePath, '(', importText.length, 'chars)');
+        log.debug(' Successfully read import file:', filePath, '(', importText.length, 'chars)');
 
         // Open the file (this will recursively open its imports too)
         notifyDocumentOpen(importUri, importText);
         importsOpened++;
       } catch (error) {
-        logError(`Failed to open import ${importPath}:`, error);
+        log.error(`Failed to open import ${importPath}:`, error);
       }
     }),
   );
@@ -263,7 +261,7 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
   // may have already parsed the parent file before the imported files were
   // added to its code_map, causing import resolution to fail.
   if (importsOpened > 0) {
-    log(' ', importsOpened, 'imports opened, triggering re-parse of parent file:', currentUri);
+    log.debug(' ', importsOpened, 'imports opened, triggering re-parse of parent file:', currentUri);
     notifyDocumentChange(currentUri, text);
   }
 }
@@ -354,7 +352,7 @@ export function notifyDocumentClose(uri: string): void {
 export function registerKclLanguage(monaco: typeof Monaco): void {
   // Prevent duplicate registration
   if (isRegistered) {
-    log(' Language already registered, skipping');
+    log.debug(' Language already registered, skipping');
 
     return;
   }
@@ -420,7 +418,7 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
   // Create and initialize LSP client
   lspClient = new KclLspClient({
     onInitialized() {
-      log(' Client initialized successfully');
+      log.debug(' Client initialized successfully');
     },
     onNotification(notification: LSP.NotificationMessage) {
       diagnosticsHandler(notification);
@@ -430,7 +428,7 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
   try {
     await lspClient.initialize();
   } catch (error) {
-    logError('Failed to initialize client:', error);
+    log.error('Failed to initialize client:', error);
     lspClient = undefined;
 
     return;
@@ -475,7 +473,7 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
   // Set up document synchronization
   setupDocumentSync(monaco, lspClient);
 
-  log(' All Monaco providers registered');
+  log.debug(' All Monaco providers registered');
 }
 
 /**
@@ -554,7 +552,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
         // Process stdlib from successful result if available and not already done
         const successSourceFiles = result.sourceFiles;
         if (!stdlibProcessed && successSourceFiles) {
-          log('Processing stdlib from successful mock execution...');
+          log.debug('Processing stdlib from successful mock execution...');
 
           await service.processStdlibSources(successSourceFiles);
           stdlibProcessed = true;
@@ -570,7 +568,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
           // Process stdlib from error result if available and not already done
           const errorSourceFiles = errorObject.sourceFiles;
           if (!stdlibProcessed && errorSourceFiles) {
-            log('Processing stdlib from error mock execution...');
+            log.debug('Processing stdlib from error mock execution...');
 
             await service.processStdlibSources(errorSourceFiles);
             stdlibProcessed = true;
@@ -590,12 +588,12 @@ async function initializeSymbolServiceWasm(): Promise<void> {
       }
     });
 
-    log(' Symbol service WASM initialized with mock execution');
+    log.debug(' Symbol service WASM initialized with mock execution');
 
     // Re-parse any documents that were opened before WASM was ready
     await symbolService.reparseAllDocuments();
   } catch (error) {
-    logWarn('Failed to initialize symbol service WASM:', error);
+    log.warn('Failed to initialize symbol service WASM:', error);
   }
 }
 
@@ -608,12 +606,12 @@ function setupDocumentSync(monaco: typeof Monaco, client: KclLspClient): void {
 
   // Handle existing models (might be created before LSP was ready)
   const allModels = monaco.editor.getModels();
-  log('setupDocumentSync: found', allModels.length, 'models total');
+  log.debug('setupDocumentSync: found', allModels.length, 'models total');
   for (const model of allModels) {
     const modelLanguage = model.getLanguageId();
-    log('setupDocumentSync: model', model.uri.toString(), 'language:', modelLanguage);
+    log.debug('setupDocumentSync: model', model.uri.toString(), 'language:', modelLanguage);
     if (modelLanguage === languageId) {
-      log('setupDocumentSync: syncing KCL model', model.uri.toString());
+      log.debug('setupDocumentSync: syncing KCL model', model.uri.toString());
       syncDocumentOpen(client, model);
     }
   }
@@ -653,16 +651,16 @@ function syncDocumentOpen(client: KclLspClient, model: Monaco.editor.ITextModel)
   const uri = model.uri.toString();
   const text = model.getValue();
 
-  log('syncDocumentOpen called for:', uri, '(text length:', text.length, ')');
-  log('syncDocumentOpen: openedDocuments:', [...openedDocuments]);
+  log.debug('syncDocumentOpen called for:', uri, '(text length:', text.length, ')');
+  log.debug('syncDocumentOpen: openedDocuments:', [...openedDocuments]);
 
   // Skip if already opened (prevents duplicates)
   if (openedDocuments.has(uri)) {
-    log('syncDocumentOpen: Document already opened, skipping:', uri);
+    log.debug('syncDocumentOpen: Document already opened, skipping:', uri);
     return;
   }
 
-  log('syncDocumentOpen: Document NOT in openedDocuments, sending didOpen');
+  log.debug('syncDocumentOpen: Document NOT in openedDocuments, sending didOpen');
   openedDocuments.add(uri);
   documentVersions.set(uri, 1);
   client.textDocumentDidOpen({
@@ -674,7 +672,7 @@ function syncDocumentOpen(client: KclLspClient, model: Monaco.editor.ITextModel)
     },
   });
 
-  log('syncDocumentOpen: Sent textDocument/didOpen for:', uri);
+  log.debug('syncDocumentOpen: Sent textDocument/didOpen for:', uri);
 
   // Update symbol service with document content
   if (symbolService) {
@@ -728,7 +726,7 @@ function syncDocumentClose(client: KclLspClient, uri: string): void {
     symbolService.removeDocument(uri);
   }
 
-  log(' Closed document:', uri);
+  log.debug(' Closed document:', uri);
 }
 
 /**

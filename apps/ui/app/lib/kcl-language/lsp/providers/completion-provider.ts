@@ -7,16 +7,16 @@
  * 3. Imported symbols (resolved from imported files)
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import { CompletionTriggerKind } from 'vscode-languageserver-protocol';
 import type * as LSP from 'vscode-languageserver-protocol';
 import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { KclSymbolService, KclSymbol, KclParameterInfo } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { monacoToLspPosition, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
 import { lspToMonacoCompletionKind, formatDocumentation } from '#lib/kcl-language/lsp/utils/lsp-kind-utils.js';
 
-const log = createLogger('Completion Provider');
+const log = createKclLogger('Completion Provider');
 
 /**
  * Create a Monaco completion provider that uses the LSP client.
@@ -37,7 +37,7 @@ export function createCompletionProvider(
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.CompletionList | undefined> {
       const uri = model.uri.toString();
-      log('provideCompletionItems called, uri:', uri, 'position:', position.lineNumber, position.column);
+      log.debug('provideCompletionItems called, uri:', uri, 'position:', position.lineNumber, position.column);
 
       const suggestions: Monaco.languages.CompletionItem[] = [];
       const seenLabels = new Set<string>();
@@ -51,17 +51,17 @@ export function createCompletionProvider(
       // 1. Get LSP completions (stdlib functions)
       // Wait for LSP to be ready before requesting completions
       if (!client.ready) {
-        log('LSP client not ready, waiting...');
+        log.debug('LSP client not ready, waiting...');
         await client.waitForReady();
-        log('LSP client now ready');
+        log.debug('LSP client now ready');
       }
 
       const lspPosition = monacoToLspPosition(position);
-      log('Requesting LSP completions at position:', JSON.stringify(lspPosition), 'uri:', uri);
+      log.debug('Requesting LSP completions at position:', JSON.stringify(lspPosition), 'uri:', uri);
 
       // Log the line content for debugging
       const lineContent = model.getLineContent(position.lineNumber);
-      log('Line content:', JSON.stringify(lineContent), 'word at pos:', wordInfo?.word);
+      log.debug('Line content:', JSON.stringify(lineContent), 'word at pos:', wordInfo?.word);
 
       try {
         const lspResult = await client.textDocumentCompletion({
@@ -75,11 +75,11 @@ export function createCompletionProvider(
             triggerCharacter: context.triggerCharacter,
           },
         });
-        log('LSP completion result:', lspResult ? 'received' : 'empty');
+        log.debug('LSP completion result:', lspResult ? 'received' : 'empty');
 
         if (lspResult) {
           const lspItems = 'items' in lspResult ? lspResult.items : lspResult;
-          log('LSP returned', lspItems.length, 'completions');
+          log.debug('LSP returned', lspItems.length, 'completions');
 
           for (const item of lspItems) {
             const labelText = getLabelText(item.label);
@@ -89,10 +89,10 @@ export function createCompletionProvider(
             }
           }
         } else {
-          log('No LSP completions returned');
+          log.debug('No LSP completions returned');
         }
       } catch (error) {
-        log('Error getting LSP completions:', error);
+        log.debug('Error getting LSP completions:', error);
       }
 
       // ════════════════════════════════════════════════════════════════════════
@@ -105,13 +105,13 @@ export function createCompletionProvider(
         // This provides stdlib completions when LSP returns null
         if (symbolService.hasStdlib) {
           const stdlibSymbols: KclSymbol[] = symbolService.getStdlibSymbols();
-          log('Symbol service returned', stdlibSymbols.length, 'stdlib symbols');
+          log.debug('Symbol service returned', stdlibSymbols.length, 'stdlib symbols');
           addSymbolsToSuggestions(stdlibSymbols, { isStdlib: true });
         }
 
         // 3. Get local symbols (variables, functions, parameters)
         const localSymbols = symbolService.getCompletableSymbols(uri);
-        log('Symbol service returned', localSymbols.length, 'local symbols');
+        log.debug('Symbol service returned', localSymbols.length, 'local symbols');
         addSymbolsToSuggestions(localSymbols, {});
 
         // 4. Get imported symbols (resolved to actual definitions)
@@ -119,10 +119,10 @@ export function createCompletionProvider(
         if (fileManager) {
           try {
             const importedSymbols = await symbolService.getImportedSymbolsForCompletion(uri, fileManager);
-            log('Symbol service returned', importedSymbols.length, 'imported symbols');
+            log.debug('Symbol service returned', importedSymbols.length, 'imported symbols');
             addSymbolsToSuggestions(importedSymbols, { isImported: true });
           } catch (error) {
-            log('Error getting imported symbols:', error);
+            log.debug('Error getting imported symbols:', error);
           }
         }
       }
@@ -139,7 +139,7 @@ export function createCompletionProvider(
         }
       }
 
-      log('Returning', suggestions.length, 'total completions');
+      log.debug('Returning', suggestions.length, 'total completions');
 
       return {
         suggestions,
@@ -161,7 +161,7 @@ export function createCompletionProvider(
             item.documentation = formatDocumentation(resolved.documentation);
           }
         } catch (error) {
-          log('Error resolving completion item:', error);
+          log.debug('Error resolving completion item:', error);
         }
       }
 

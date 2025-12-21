@@ -1,84 +1,105 @@
-import { ArrowLeft, AlertCircle, Code, RefreshCcw } from 'lucide-react';
+import { AlertCircle, ArrowLeft, RefreshCcw } from 'lucide-react';
+import { useEffect } from 'react';
 import { isRouteErrorResponse, useNavigate, useRouteError } from 'react-router';
-import { Button, buttonVariants } from '#components/ui/button.js';
-import { cn } from '#utils/ui.utils.js';
-import { CopyButton } from '#components/copy-button.js';
+import { Button } from '#components/ui/button.js';
+import { useAnalytics } from '#hooks/use-analytics.js';
+import { CollapsibleCodeBlock } from '#components/markdown/collapsible-code-block.js';
 
 export function ErrorPage(): React.JSX.Element {
   const error = useRouteError();
   const navigate = useNavigate();
+  const analytics = useAnalytics();
 
-  const goBack = () => {
+  useEffect(() => {
+    if (isRouteErrorResponse(error)) {
+      const routeError = new Error(`${error.status} ${error.statusText}`);
+      routeError.name = 'route_error';
+      analytics.captureException(routeError, { context: { component: 'ErrorPage' } });
+    } else if (error instanceof Error) {
+      analytics.captureException(error, { context: { component: 'ErrorPage' } });
+    }
+  }, [error, analytics]);
+
+  const goBack = (): void => {
     void navigate(-1);
   };
 
-  const refreshPage = () => {
+  const refreshPage = (): void => {
     globalThis.location.reload();
   };
 
   if (isRouteErrorResponse(error)) {
     return (
-      <div className="flex size-full flex-col items-center justify-center gap-4 p-8 md:ml-[var(--sidebar-width-current)]">
-        <h1 className="text-xl">
-          {error.status} {error.statusText}
-        </h1>
-        <p>{error.data}</p>
-        <p>
-          Please try again later,{' '}
-          <button
-            type="button"
-            className={cn(buttonVariants({ variant: 'link' }), 'h-auto cursor-pointer p-0 text-base underline')}
-            onClick={goBack}
-          >
-            head back
-          </button>
-          {', '}
-          or navigate to a different page.
-        </p>
-        <Button variant="outline" size="sm" className="mt-2 flex items-center gap-2" onClick={refreshPage}>
-          <RefreshCcw className="size-4" />
-          Reload
-        </Button>
+      <div className="flex size-full flex-col items-center justify-center gap-6 p-8 md:ml-(--sidebar-width-current)">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="flex size-12 items-center justify-center rounded-full bg-destructive/10">
+            <AlertCircle className="size-6 text-destructive" />
+          </div>
+          <h1 className="text-lg font-semibold text-foreground">
+            {error.status} {error.statusText}
+          </h1>
+          {error.data ? <p className="max-w-sm text-sm text-muted-foreground">{error.data}</p> : undefined}
+          <p className="max-w-xs text-sm text-pretty text-muted-foreground">
+            Our team has been notified and will investigate shortly.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button variant="default" size="sm" className="gap-2" onClick={goBack}>
+            <ArrowLeft className="size-4" />
+            Go Back
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={refreshPage}>
+            <RefreshCcw className="size-4" />
+            Reload Page
+          </Button>
+        </div>
       </div>
     );
   }
 
   if (error instanceof Error) {
     return (
-      <div className="flex min-h-full flex-col items-center justify-center py-8 pr-2 transition-all duration-200 ease-linear md:ml-[var(--sidebar-width-current)]">
-        <div className="shadow-lg w-full animate-in rounded-lg border border-destructive/20 bg-destructive/5 p-8 duration-300 fade-in dark:border-destructive/30 dark:bg-destructive/10">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="flex size-7 items-center justify-center rounded-full bg-destructive/20">
-              <AlertCircle className="size-5 text-destructive" />
-            </div>
-            <h1 className="text-2xl font-semibold text-destructive">Error</h1>
+      <div className="flex min-h-full flex-col items-center justify-center py-8 pr-2 transition-all duration-200 ease-linear md:ml-(--sidebar-width-current)">
+        <div className="flex w-full max-w-lg flex-col items-center gap-4 p-6 text-center">
+          {/* Error Icon */}
+          <div className="flex size-12 items-center justify-center rounded-full bg-destructive/10">
+            <AlertCircle className="size-6 text-destructive" />
           </div>
 
-          <div className="mb-6 rounded-md border border-destructive/10 bg-background/50 p-4 dark:bg-muted/30">
-            <p className="text-lg font-medium">{error.message}</p>
-          </div>
+          {/* Error Title */}
+          <h1 className="text-lg font-semibold text-foreground">Something went wrong</h1>
 
-          <div className="w-full overflow-hidden rounded-md border border-border bg-muted/30 dark:border-neutral/20">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3 dark:border-neutral/20">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Code className="size-4" />
-                <p className="text-sm font-medium">Stack Trace</p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={goBack}>
-                  <ArrowLeft />
-                  Go back
-                </Button>
-                <Button variant="outline" size="sm" onClick={refreshPage}>
-                  <RefreshCcw className="size-4" />
-                  Reload
-                </Button>
-                <CopyButton size="sm" variant="outline" getText={() => error.stack ?? ''} tooltip="Copy stack trace" />
-              </div>
+          {/* Reassurance Message */}
+          <p className="max-w-xs text-sm text-pretty text-muted-foreground">
+            Our team has been notified of the error and will investigate it shortly.
+          </p>
+
+          {/* Error Details with Collapsible Stack Trace */}
+          {error.stack ? (
+            <CollapsibleCodeBlock
+              language="bash"
+              title={error.message}
+              text={error.stack}
+              collapsedLineCount={3}
+              className="text-left text-muted-foreground"
+              containerClassName="w-full"
+            />
+          ) : (
+            <div className="w-full rounded-md border border-border bg-muted/30 p-3 text-left">
+              <p className="text-xs font-medium text-muted-foreground">{error.message}</p>
             </div>
-            <pre className="max-h-[50vh] overflow-auto border-l-4 border-l-destructive/20 p-4 text-left font-mono text-xs break-words whitespace-pre-wrap text-foreground">
-              {error.stack}
-            </pre>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button variant="default" size="sm" className="gap-2" onClick={goBack}>
+              <ArrowLeft className="size-4" />
+              Go Back
+            </Button>
+            <Button variant="outline" size="sm" className="gap-2" onClick={refreshPage}>
+              <RefreshCcw className="size-4" />
+              Reload Page
+            </Button>
           </div>
         </div>
       </div>

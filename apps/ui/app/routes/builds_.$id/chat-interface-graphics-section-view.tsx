@@ -17,6 +17,60 @@ function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
+type PlaneButtonConfig = {
+  id: 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy';
+  dir: 1 | -1;
+};
+
+/**
+ * Get the plane button configuration for the given up direction.
+ * The buttons are ordered semantically: Top, Front, Right, Bottom, Back, Left
+ * The IDs map to the correct planes for each coordinate system.
+ */
+function getPlaneButtonsForUpDirection(upDirection: 'x' | 'y' | 'z'): PlaneButtonConfig[] {
+  // Button order: Top, Front, Right, Bottom, Back, Left (2 rows x 3 cols)
+  if (upDirection === 'z') {
+    // Z-up: XY → Top/Bottom, XZ → Front/Back, YZ → Left/Right
+    return [
+      { id: 'xy', dir: 1 }, // Top
+      { id: 'zx', dir: -1 }, // Front
+      { id: 'yz', dir: 1 }, // Right
+      { id: 'yx', dir: -1 }, // Bottom
+      { id: 'xz', dir: 1 }, // Back
+      { id: 'zy', dir: -1 }, // Left
+    ];
+  }
+
+  if (upDirection === 'y') {
+    // Y-up: XZ → Top/Bottom, XY → Front/Back, YZ → Left/Right
+    // Labels match 3D selectors:
+    // 'zx' shows "Top", 'xz' shows "Bottom"
+    // 'xy' shows "Front", 'yx' shows "Back"
+    return [
+      { id: 'zx', dir: -1 }, // Top
+      { id: 'xy', dir: 1 }, // Front
+      { id: 'yz', dir: 1 }, // Right
+      { id: 'xz', dir: 1 }, // Bottom
+      { id: 'yx', dir: -1 }, // Back
+      { id: 'zy', dir: -1 }, // Left
+    ];
+  }
+
+  // X-up: YZ → Top/Bottom, XY → Front/Back, XZ → Left/Right
+  // Labels match 3D selectors:
+  // 'yz' shows "Top", 'zy' shows "Bottom"
+  // 'xy' shows "Front", 'yx' shows "Back"
+  // 'xz' shows "Left", 'zx' shows "Right"
+  return [
+    { id: 'yz', dir: 1 }, // Top
+    { id: 'xy', dir: 1 }, // Front
+    { id: 'zx', dir: -1 }, // Right
+    { id: 'zy', dir: -1 }, // Bottom
+    { id: 'yx', dir: -1 }, // Back
+    { id: 'xz', dir: 1 }, // Left
+  ];
+}
+
 export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
   const { graphicsRef: graphicsActor } = useBuild();
   const {
@@ -30,6 +84,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     geometryRadius,
     sceneRadius,
     units,
+    upDirection,
   } = useSelector(graphicsActor, (s) => ({
     selectedSectionViewId: s.context.selectedSectionViewId,
     sectionViewTranslation: s.context.sectionViewTranslation,
@@ -41,6 +96,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     geometryRadius: s.context.geometryRadius,
     sceneRadius: s.context.sceneRadius,
     units: s.context.units,
+    upDirection: s.context.upDirection,
   }));
 
   const maxDistance = useMemo(() => {
@@ -73,28 +129,28 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
   }, [selectedSectionViewId]);
 
   function getUiLabelFor(base: 'xy' | 'xz' | 'yz', dir: 1 | -1): string {
+    type PlaneLabels = Record<'xy' | 'xz' | 'yz', [string, string]>;
+
     if (planeName === 'cartesian') {
-      if (base === 'xy') {
-        return dir === 1 ? 'XY' : 'YX';
-      }
-
-      if (base === 'xz') {
-        return dir === 1 ? 'XZ' : 'ZX';
-      }
-
-      return dir === 1 ? 'YZ' : 'ZY';
-    }
-    // Face naming
-
-    if (base === 'xy') {
-      return dir === 1 ? 'Top' : 'Bottom';
+      const cartesianLabels: PlaneLabels = {
+        xy: ['XY', 'YX'],
+        xz: ['XZ', 'ZX'],
+        yz: ['YZ', 'ZY'],
+      };
+      const labels = cartesianLabels[base];
+      return dir === 1 ? labels[0] : labels[1];
     }
 
-    if (base === 'xz') {
-      return dir === 1 ? 'Back' : 'Front';
-    }
+    // Face naming - must match getLabelsForUpDirection in section-view-controls.tsx
+    // Map: upDirection -> base -> [label for dir=1, label for dir=-1]
+    const faceLabels: Record<'x' | 'y' | 'z', PlaneLabels> = {
+      z: { xy: ['Top', 'Bottom'], xz: ['Back', 'Front'], yz: ['Right', 'Left'] },
+      y: { xz: ['Bottom', 'Top'], xy: ['Front', 'Back'], yz: ['Right', 'Left'] },
+      x: { yz: ['Top', 'Bottom'], xy: ['Front', 'Back'], xz: ['Left', 'Right'] },
+    };
 
-    return dir === 1 ? 'Right' : 'Left';
+    const labels = faceLabels[upDirection][base];
+    return dir === 1 ? labels[0] : labels[1];
   }
 
   function getSelectedHeader(): string {
@@ -261,14 +317,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
         <div className="grid gap-2">
           <div className="px-1 text-xs text-muted-foreground">Select a plane</div>
           <div className="grid grid-cols-3 gap-2">
-            {[
-              { id: 'xy' as const, dir: 1 as const },
-              { id: 'zx' as const, dir: -1 as const },
-              { id: 'yz' as const, dir: 1 as const },
-              { id: 'yx' as const, dir: -1 as const },
-              { id: 'xz' as const, dir: 1 as const },
-              { id: 'zy' as const, dir: -1 as const },
-            ].map((item) => (
+            {getPlaneButtonsForUpDirection(upDirection).map((item) => (
               <Button
                 key={`${item.id}`}
                 variant="outline"

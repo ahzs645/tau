@@ -6,15 +6,15 @@
  * 2. Symbol Service (WASM AST-based, for user-defined symbols)
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import type { KclLspClient, LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { KclSymbolService, KclSymbol } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import { formatSymbolHover } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { monacoToLspPosition, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
 import { formatDocumentation } from '#lib/kcl-language/lsp/utils/lsp-kind-utils.js';
 
-const log = createLogger('Hover Provider');
+const log = createKclLogger('Hover Provider');
 
 /**
  * Resolve an import symbol to its actual definition in the imported file.
@@ -26,26 +26,26 @@ async function resolveImportSymbolHover(
   importSymbol: KclSymbol,
   fileManager: LspFileManager | undefined,
 ): Promise<string[] | undefined> {
-  log('resolveImportSymbolHover called:', {
+  log.debug('resolveImportSymbolHover called:', {
     symbolName: importSymbol.name,
     importPath: importSymbol.importPath,
     hasFileManager: Boolean(fileManager),
   });
 
   if (!fileManager) {
-    log('resolveImportSymbolHover: no fileManager, returning undefined');
+    log.debug('resolveImportSymbolHover: no fileManager, returning undefined');
     return undefined;
   }
 
   const importedSymbol = await symbolService.resolveImportedSymbol(uri, importSymbol.name, fileManager);
-  log('resolveImportSymbolHover: resolveImportedSymbol returned:', importedSymbol?.name, importedSymbol?.kind);
+  log.debug('resolveImportSymbolHover: resolveImportedSymbol returned:', importedSymbol?.name, importedSymbol?.kind);
 
   if (!importedSymbol) {
-    log('resolveImportSymbolHover: no imported symbol found, returning undefined');
+    log.debug('resolveImportSymbolHover: no imported symbol found, returning undefined');
     return undefined;
   }
 
-  log('Resolved import to actual definition:', importedSymbol.name, 'kind:', importedSymbol.kind);
+  log.debug('Resolved import to actual definition:', importedSymbol.name, 'kind:', importedSymbol.kind);
   const hoverLines = formatSymbolHover(importedSymbol);
 
   // Add "from" reference to show it's imported
@@ -73,12 +73,12 @@ export function createHoverProvider(
     ): Promise<Monaco.languages.Hover | undefined> {
       const uri = model.uri.toString();
       const lspPosition = monacoToLspPosition(position);
-      log('Hover requested at', uri, 'line:', lspPosition.line, 'character:', lspPosition.character);
+      log.debug('Hover requested at', uri, 'line:', lspPosition.line, 'character:', lspPosition.character);
 
       // Get the word at the hover position
       const wordInfo = model.getWordAtPosition(position);
       if (wordInfo) {
-        log('Word at position:', wordInfo.word);
+        log.debug('Word at position:', wordInfo.word);
       }
 
       // 1. Try LSP first (stdlib functions, future-proof)
@@ -87,7 +87,7 @@ export function createHoverProvider(
         position: lspPosition,
       });
 
-      log('LSP hover result:', lspResult);
+      log.debug('LSP hover result:', lspResult);
 
       if (lspResult) {
         const contents = convertHoverContents(lspResult.contents);
@@ -103,7 +103,7 @@ export function createHoverProvider(
       // ════════════════════════════════════════════════════════════════════════
 
       if (!wordInfo || !symbolService?.isInitialized) {
-        log('No word at position or symbol service not initialized:', {
+        log.debug('No word at position or symbol service not initialized:', {
           hasWordInfo: Boolean(wordInfo),
           isInitialized: symbolService?.isInitialized,
         });
@@ -119,18 +119,18 @@ export function createHoverProvider(
 
       // Debug: log available symbols
       const allSymbols = symbolService.getSymbols(uri);
-      log('Symbol service has', allSymbols.length, 'symbols for', uri);
+      log.debug('Symbol service has', allSymbols.length, 'symbols for', uri);
       if (allSymbols.length > 0) {
-        log('Available symbols:', allSymbols.map((s) => `${s.name}(${s.kind})`).join(', '));
+        log.debug('Available symbols:', allSymbols.map((s) => `${s.name}(${s.kind})`).join(', '));
       }
 
       const symbol = symbolService.getDefinitionForUsage(uri, position.lineNumber, position.column, wordInfo.word);
       if (!symbol) {
-        log('No symbol found for word:', wordInfo.word);
+        log.debug('No symbol found for word:', wordInfo.word);
         return undefined;
       }
 
-      log('Symbol service found local symbol:', symbol.name, 'kind:', symbol.kind);
+      log.debug('Symbol service found local symbol:', symbol.name, 'kind:', symbol.kind);
 
       // For imports, resolve to the actual definition in the imported file
       if (symbol.kind === 'import') {

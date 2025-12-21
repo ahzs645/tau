@@ -14,9 +14,9 @@ import type { FunctionExpression } from '@taucad/kcl-wasm-lib/bindings/FunctionE
 import type { Parameter } from '@taucad/kcl-wasm-lib/bindings/Parameter';
 import type { ImportStatement } from '@taucad/kcl-wasm-lib/bindings/ImportStatement';
 import type { LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 
-const log = createLogger('Symbol Service');
+const log = createKclLogger('Symbol Service');
 
 /**
  * Types of symbols that can be extracted from KCL code
@@ -159,12 +159,12 @@ export class KclSymbolService {
       return;
     }
 
-    log('Processing stdlib source files...');
+    log.debug('Processing stdlib source files...');
     const stdlibEntries = Object.values(sourceFiles).filter(
       (source): source is ModuleSource => source.path.type === 'Std',
     );
 
-    log('Found', stdlibEntries.length, 'stdlib modules');
+    log.debug('Found', stdlibEntries.length, 'stdlib modules');
 
     const allSymbols: KclSymbol[] = [];
 
@@ -192,10 +192,10 @@ export class KclSymbolService {
             }
           }
 
-          log('Parsed stdlib module:', moduleName, 'symbols:', symbols.length);
+          log.debug('Parsed stdlib module:', moduleName, 'symbols:', symbols.length);
           return moduleSymbols;
         } catch (error) {
-          log('Failed to parse stdlib module:', moduleName, error);
+          log.debug('Failed to parse stdlib module:', moduleName, error);
           return [];
         }
       }),
@@ -207,7 +207,7 @@ export class KclSymbolService {
 
     this.stdlibSymbols = allSymbols;
     this.stdlibProcessed = true;
-    log('Stdlib processing complete. Total symbols:', allSymbols.length);
+    log.debug('Stdlib processing complete. Total symbols:', allSymbols.length);
   }
 
   /**
@@ -224,12 +224,12 @@ export class KclSymbolService {
    */
   public async reparseAllDocuments(): Promise<void> {
     if (!this.parseFunction) {
-      log('Cannot reparse: parseFunction not set');
+      log.debug('Cannot reparse: parseFunction not set');
       return;
     }
 
     const uris = [...this.cache.keys()];
-    log('Reparsing', uris.length, 'cached documents');
+    log.debug('Reparsing', uris.length, 'cached documents');
 
     // Collect documents that need reparsing
     const documentsToReparse: Array<{ uri: string; content: string; version: number }> = [];
@@ -243,7 +243,7 @@ export class KclSymbolService {
     // Reparse all documents in parallel
     await Promise.all(
       documentsToReparse.map(async (doc) => {
-        log('Reparsing document:', doc.uri);
+        log.debug('Reparsing document:', doc.uri);
         await this.updateDocument(doc.uri, doc.content, doc.version + 1);
       }),
     );
@@ -258,7 +258,7 @@ export class KclSymbolService {
       return; // Already up to date
     }
 
-    log('Updating document:', uri, 'version:', version);
+    log.debug('Updating document:', uri, 'version:', version);
 
     const lineOffsets = computeLineOffsets(content);
     let program: Node<Program> | undefined;
@@ -271,14 +271,14 @@ export class KclSymbolService {
         const parseResult = await this.parseFunction(content);
         program = parseResult.program;
         symbols = extractSymbolsFromProgram(program, uri, content, lineOffsets);
-        log('Extracted', symbols.length, 'symbols from AST');
+        log.debug('Extracted', symbols.length, 'symbols from AST');
 
         // Try mock execution for variable values
         if (this.mockExecuteFunction) {
           try {
             const execResult = await this.mockExecuteFunction(program, uriToPath(uri));
             variables = execResult.variables;
-            log('Mock execution returned', Object.keys(variables).length, 'variables');
+            log.debug('Mock execution returned', Object.keys(variables).length, 'variables');
           } catch (error) {
             // Mock execution can throw but still contain partial results (variables computed before error)
             // Check if the thrown error contains variables we can use
@@ -286,10 +286,10 @@ export class KclSymbolService {
               const errorWithVars = error as { variables?: Partial<Record<string, KclValue>> };
               if (errorWithVars.variables && typeof errorWithVars.variables === 'object') {
                 variables = errorWithVars.variables;
-                log('Mock execution failed but extracted', Object.keys(variables).length, 'partial variables');
+                log.debug('Mock execution failed but extracted', Object.keys(variables).length, 'partial variables');
               }
             } else {
-              log('Mock execution failed (non-fatal):', error);
+              log.debug('Mock execution failed (non-fatal):', error);
             }
           }
 
@@ -299,13 +299,13 @@ export class KclSymbolService {
               const value = variables[symbol.name];
               if (value) {
                 symbol.value = value;
-                log('Set value for symbol:', symbol.name, 'type:', typeof value);
+                log.debug('Set value for symbol:', symbol.name, 'type:', typeof value);
               }
             }
           }
         }
       } catch (error) {
-        log('Parse failed:', error);
+        log.debug('Parse failed:', error);
       }
     }
 
@@ -448,13 +448,13 @@ export class KclSymbolService {
     fileManager: LspFileManager,
   ): Promise<KclSymbol | undefined> {
     const imports = this.getImports(uri);
-    log('resolveImportedSymbol: checking', imports.length, 'imports for:', symbolName);
+    log.debug('resolveImportedSymbol: checking', imports.length, 'imports for:', symbolName);
 
     const importInfo = imports.find((importSymbol) => importSymbol.name === symbolName);
-    log('resolveImportedSymbol: importInfo:', importInfo?.name, 'path:', importInfo?.importPath);
+    log.debug('resolveImportedSymbol: importInfo:', importInfo?.name, 'path:', importInfo?.importPath);
 
     if (!importInfo?.importPath) {
-      log('resolveImportedSymbol: no importPath for symbol:', symbolName);
+      log.debug('resolveImportedSymbol: no importPath for symbol:', symbolName);
       return undefined;
     }
 
@@ -462,7 +462,7 @@ export class KclSymbolService {
     const importUri = resolveImportPath(uri, importInfo.importPath);
     const importFilePath = uriToPath(importUri);
 
-    log('Resolving imported symbol:', symbolName, 'from:', importFilePath);
+    log.debug('Resolving imported symbol:', symbolName, 'from:', importFilePath);
 
     try {
       // Read the imported file
@@ -475,14 +475,14 @@ export class KclSymbolService {
       // Find the symbol in the imported file
       const symbol = this.findSymbolByName(importUri, symbolName);
       if (symbol) {
-        log('Found imported symbol definition:', symbol.name, 'at line:', symbol.lineNumber);
+        log.debug('Found imported symbol definition:', symbol.name, 'at line:', symbol.lineNumber);
         return symbol;
       }
 
-      log('Symbol not found in imported file:', symbolName);
+      log.debug('Symbol not found in imported file:', symbolName);
       return undefined;
     } catch (error) {
-      log('Error resolving imported symbol:', error);
+      log.debug('Error resolving imported symbol:', error);
       return undefined;
     }
   }
@@ -511,7 +511,7 @@ export class KclSymbolService {
    */
   public async getImportedSymbolsForCompletion(uri: string, fileManager: LspFileManager): Promise<KclSymbol[]> {
     const imports = this.getImports(uri);
-    log('getImportedSymbolsForCompletion: resolving', imports.length, 'imports');
+    log.debug('getImportedSymbolsForCompletion: resolving', imports.length, 'imports');
 
     // Filter to imports with valid paths
     const validImports = imports.filter((importSymbol) => Boolean(importSymbol.importPath));
@@ -541,7 +541,7 @@ export class KclSymbolService {
 
           return undefined;
         } catch (error) {
-          log('Error resolving import for completion:', importSymbol.name, error);
+          log.debug('Error resolving import for completion:', importSymbol.name, error);
 
           return undefined;
         }
@@ -551,7 +551,7 @@ export class KclSymbolService {
     // Filter out undefined results
     const resolvedSymbols = resolveResults.filter((symbol): symbol is KclSymbol => symbol !== undefined);
 
-    log('getImportedSymbolsForCompletion: resolved', resolvedSymbols.length, 'symbols');
+    log.debug('getImportedSymbolsForCompletion: resolved', resolvedSymbols.length, 'symbols');
 
     return resolvedSymbols;
   }
@@ -929,12 +929,12 @@ function extractImportSymbol(
     }
   }
 
-  log('extractImportSymbol: path type:', pathValue.type, 'extracted path:', importPath);
+  log.debug('extractImportSymbol: path type:', pathValue.type, 'extracted path:', importPath);
 
   // Extract selector (imported names)
   const { selector } = importStmt;
 
-  log('extractImportSymbol: selector type:', selector.type);
+  log.debug('extractImportSymbol: selector type:', selector.type);
 
   switch (selector.type) {
     case 'None': {
@@ -944,7 +944,7 @@ function extractImportSymbol(
       if (alias && 'name' in alias) {
         const { name } = alias;
         const position = offsetToPosition(lineOffsets, alias.start);
-        log('extractImportSymbol: None selector, alias:', name, 'importPath:', importPath);
+        log.debug('extractImportSymbol: None selector, alias:', name, 'importPath:', importPath);
 
         symbols.push({
           name,
@@ -974,7 +974,7 @@ function extractImportSymbol(
           const nameNode = importItem.name;
           const { name } = nameNode;
           const position = offsetToPosition(lineOffsets, nameNode.start);
-          log('extractImportSymbol: List item:', name, 'importPath:', importPath);
+          log.debug('extractImportSymbol: List item:', name, 'importPath:', importPath);
 
           symbols.push({
             name,
@@ -999,7 +999,7 @@ function extractImportSymbol(
     default: {
       // Glob or other import types: `import * from "..."`
       // No specific symbol name to extract
-      log('extractImportSymbol: Glob/other selector (wildcard import), skipping');
+      log.debug('extractImportSymbol: Glob/other selector (wildcard import), skipping');
       break;
     }
   }

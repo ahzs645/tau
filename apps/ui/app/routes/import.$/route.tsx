@@ -334,7 +334,7 @@ export default function ImportRoute(): React.JSX.Element {
       const isCheckingOrFetching = state.matches('checkingRepo') || state.matches('fetchingRepoInfo');
 
       return (
-        <div className="flex h-full items-center justify-center px-4 pt-8 pb-16">
+        <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
           <div className="w-full max-w-2xl space-y-6">
             <div className="flex flex-col items-center gap-4">
               <div className="flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
@@ -559,7 +559,7 @@ export default function ImportRoute(): React.JSX.Element {
       const fileNames = [...files.keys()];
 
       return (
-        <div className="flex h-full items-center justify-center px-4 pt-8 pb-16">
+        <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
           <div className="w-full max-w-5xl space-y-6">
             <div className="flex flex-col items-center gap-4">
               <div className="flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
@@ -628,7 +628,7 @@ export default function ImportRoute(): React.JSX.Element {
 
     case state.matches('error'): {
       return (
-        <div className="flex h-full items-center justify-center px-4">
+        <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
           <div className="w-full max-w-md space-y-4">
             <div className="flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
               <AlertCircle className="size-5 shrink-0" />
@@ -660,7 +660,7 @@ export default function ImportRoute(): React.JSX.Element {
 
     default: {
       return (
-        <div className="flex h-full items-center justify-center px-4 pt-8 pb-16">
+        <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
           <div className="w-full max-w-2xl space-y-6">
             <div className="flex flex-col items-center gap-4">
               <div className="flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">

@@ -1,5 +1,5 @@
 import type { Route } from './+types/route.js';
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 
 /**
  * Generic proxy route for importing external resources.

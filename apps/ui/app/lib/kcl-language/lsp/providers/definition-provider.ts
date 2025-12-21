@@ -6,14 +6,14 @@
  * 2. Symbol Service (WASM AST-based, for local and imported symbols)
  */
 
-import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as Monaco from 'monaco-editor';
 import type * as LSP from 'vscode-languageserver-protocol';
 import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { KclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { monacoToLspPosition, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
 
-const log = createLogger('Definition Provider');
+const log = createKclLogger('Definition Provider');
 
 /**
  * Create a Monaco definition provider that uses the LSP client.
@@ -32,7 +32,7 @@ export function createDefinitionProvider(
     ): Promise<Monaco.languages.Definition | undefined> {
       const uri = model.uri.toString();
       const wordInfo = model.getWordAtPosition(position);
-      log('Definition requested at', uri, 'word:', wordInfo?.word);
+      log.debug('Definition requested at', uri, 'word:', wordInfo?.word);
 
       // 1. Try LSP first (future-proof - currently returns null)
       const lspResult = await client.textDocumentDefinition({
@@ -41,7 +41,7 @@ export function createDefinitionProvider(
       });
 
       if (lspResult) {
-        log('LSP definition found');
+        log.debug('LSP definition found');
         return convertDefinition(monaco, lspResult);
       }
 
@@ -57,9 +57,9 @@ export function createDefinitionProvider(
         const quotedPathMatch = /^["'](.+\.kcl)["']$/.exec(word);
         if (quotedPathMatch?.[1]) {
           const importPath = quotedPathMatch[1];
-          log('Word is a quoted import path:', importPath);
+          log.debug('Word is a quoted import path:', importPath);
           const targetUri = resolveImportPathToUri(uri, importPath);
-          log('Resolved import path to URI:', targetUri);
+          log.debug('Resolved import path to URI:', targetUri);
           return {
             uri: monaco.Uri.parse(targetUri),
             range: new monaco.Range(1, 1, 1, 1), // Beginning of file
@@ -71,9 +71,9 @@ export function createDefinitionProvider(
       // This handles cases where the wordPattern didn't match the full quoted string
       const importPathResult = getImportPathAtPosition(model, position);
       if (importPathResult) {
-        log('Detected import path string:', importPathResult.path);
+        log.debug('Detected import path string:', importPathResult.path);
         const targetUri = resolveImportPathToUri(uri, importPathResult.path);
-        log('Resolved import path to URI:', targetUri);
+        log.debug('Resolved import path to URI:', targetUri);
         return {
           uri: monaco.Uri.parse(targetUri),
           range: new monaco.Range(1, 1, 1, 1), // Beginning of file
@@ -81,33 +81,33 @@ export function createDefinitionProvider(
       }
 
       if (!wordInfo) {
-        log('No word at position, no definition available');
+        log.debug('No word at position, no definition available');
         return undefined;
       }
 
       if (!symbolService?.isInitialized) {
-        log('Symbol service not initialized');
+        log.debug('Symbol service not initialized');
         return undefined;
       }
 
       // Try local symbol lookup
-      log('Looking up symbol by name:', wordInfo.word, 'in', uri);
+      log.debug('Looking up symbol by name:', wordInfo.word, 'in', uri);
       const symbol = symbolService.findSymbolByName(uri, wordInfo.word);
-      log('Symbol lookup result:', symbol?.name, 'kind:', symbol?.kind, 'line:', symbol?.lineNumber);
+      log.debug('Symbol lookup result:', symbol?.name, 'kind:', symbol?.kind, 'line:', symbol?.lineNumber);
 
       // For imports, resolve to the actual definition in the imported file
       if (symbol?.kind === 'import') {
-        log('Symbol is an import, resolving to actual definition in imported file');
+        log.debug('Symbol is an import, resolving to actual definition in imported file');
         const fileManager = client.getFileManager();
-        log('fileManager available:', Boolean(fileManager));
+        log.debug('fileManager available:', Boolean(fileManager));
         if (fileManager) {
           const importedSymbol = await symbolService.resolveImportedSymbol(uri, wordInfo.word, fileManager);
-          log('resolveImportedSymbol result:', importedSymbol?.name, 'uri:', importedSymbol?.uri);
+          log.debug('resolveImportedSymbol result:', importedSymbol?.name, 'uri:', importedSymbol?.uri);
           if (importedSymbol) {
             const targetUri = monaco.Uri.parse(importedSymbol.uri);
-            log('Resolved import to definition:', importedSymbol.name, 'in', importedSymbol.uri);
-            log('Target URI:', targetUri.toString(), 'scheme:', targetUri.scheme, 'path:', targetUri.path);
-            log('Target position:', importedSymbol.lineNumber, importedSymbol.column);
+            log.debug('Resolved import to definition:', importedSymbol.name, 'in', importedSymbol.uri);
+            log.debug('Target URI:', targetUri.toString(), 'scheme:', targetUri.scheme, 'path:', targetUri.path);
+            log.debug('Target position:', importedSymbol.lineNumber, importedSymbol.column);
             return {
               uri: targetUri,
               range: new monaco.Range(
@@ -124,8 +124,15 @@ export function createDefinitionProvider(
 
       // Return local symbol definition (variable, function, parameter)
       if (symbol) {
-        log('Symbol service found local definition:', symbol.name, 'kind:', symbol.kind, 'at line:', symbol.lineNumber);
-        log('Returning definition at:', symbol.uri, 'line:', symbol.lineNumber, 'column:', symbol.column);
+        log.debug(
+          'Symbol service found local definition:',
+          symbol.name,
+          'kind:',
+          symbol.kind,
+          'at line:',
+          symbol.lineNumber,
+        );
+        log.debug('Returning definition at:', symbol.uri, 'line:', symbol.lineNumber, 'column:', symbol.column);
         return {
           uri: monaco.Uri.parse(symbol.uri),
           range: new monaco.Range(
@@ -137,7 +144,7 @@ export function createDefinitionProvider(
         };
       }
 
-      log('No definition found');
+      log.debug('No definition found');
       return undefined;
     },
   };

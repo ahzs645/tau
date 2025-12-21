@@ -9,9 +9,9 @@ import { Queue } from '#lib/kcl-language/lsp/codec/queue.js';
 import { PromiseMap } from '#lib/kcl-language/lsp/codec/promise-map.js';
 import { decodeBytes } from '#lib/kcl-language/lsp/codec/bytes.js';
 import { parseMessages } from '#lib/kcl-language/lsp/codec/headers.js';
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 
-const log = createLogger('StreamDemuxer');
+const log = createKclLogger('StreamDemuxer');
 
 /**
  * Type guard functions for JSON-RPC message types.
@@ -41,10 +41,10 @@ export class StreamDemuxer implements WritableStream<Uint8Array> {
   private readonly stream: WritableStream<Uint8Array>;
 
   public constructor() {
-    log('Creating StreamDemuxer');
+    log.debug('Creating StreamDemuxer');
     // Store reference to add method for use in stream
     const addMessage = (chunk: Uint8Array): void => {
-      log('WritableStream.write called with chunk length:', chunk.length);
+      log.debug('WritableStream.write called with chunk length:', chunk.length);
       this.add(chunk);
     };
 
@@ -61,23 +61,23 @@ export class StreamDemuxer implements WritableStream<Uint8Array> {
    * Handles multiple LSP messages concatenated in a single write.
    */
   public add(bytes: Uint8Array): void {
-    log('add() called with bytes length:', bytes.length);
+    log.debug('add() called with bytes length:', bytes.length);
 
     // Decode bytes to string and parse all LSP messages
     const data = decodeBytes(bytes);
     const jsonMessages = parseMessages(data);
 
-    log('Parsed', jsonMessages.length, 'messages from buffer');
+    log.debug('Parsed', jsonMessages.length, 'messages from buffer');
 
     for (const jsonString of jsonMessages) {
       try {
         const message = JSON.parse(jsonString) as Message;
-        log('Decoded message:', message);
+        log.debug('Decoded message:', message);
         this.routeMessage(message);
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error('[StreamDemuxer] Failed to parse JSON:', errorMessage);
-        console.error('[StreamDemuxer] JSON string (first 200):', jsonString.slice(0, 200));
+        log.error('Failed to parse JSON:', errorMessage);
+        log.error('JSON string (first 200):', jsonString.slice(0, 200));
       }
     }
   }
@@ -104,22 +104,22 @@ export class StreamDemuxer implements WritableStream<Uint8Array> {
    */
   private routeMessage(message: Message): void {
     if (isResponse(message)) {
-      log('Message is a Response, id:', message.id);
+      log.debug('Message is a Response, id:', message.id);
       const responseId = message.id as string | number | undefined;
 
       if (typeof responseId === 'string' || typeof responseId === 'number') {
-        log('Setting response for id:', responseId);
+        log.debug('Setting response for id:', responseId);
         this.responses.set(responseId, message);
       }
     }
 
     if (isNotification(message)) {
-      log('Message is a Notification, method:', message.method);
+      log.debug('Message is a Notification, method:', message.method);
       this.notifications.enqueue(message);
     }
 
     if (isRequest(message)) {
-      log('Message is a Request, method:', message.method, 'id:', message.id);
+      log.debug('Message is a Request, method:', message.method, 'id:', message.id);
       this.requests.enqueue(message);
     }
   }

@@ -1,7 +1,8 @@
-import { Fragment, useCallback, useEffect, useRef } from 'react';
+import { Fragment, useCallback, useRef } from 'react';
 import { X, Download, Eye, EyeOff } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { useBuild } from '#hooks/use-build.js';
+import { useHorizontalScroll } from '#hooks/use-horizontal-scroll.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { FloatingPanelContentHeader, FloatingPanelContentHeaderActions } from '#components/ui/floating-panel.js';
@@ -83,26 +84,8 @@ export function ChatEditorTabs(): React.JSX.Element {
     [fileExplorerRef],
   );
 
-  useEffect(() => {
-    const scrollContainer = scrollContainerRef.current;
-    if (!scrollContainer) {
-      return;
-    }
-
-    const handleWheel = (event: WheelEvent) => {
-      // Only handle vertical scroll when there's horizontal overflow
-      if (event.deltaY !== 0 && scrollContainer.scrollWidth > scrollContainer.clientWidth) {
-        event.preventDefault();
-        scrollContainer.scrollLeft += event.deltaY;
-      }
-    };
-
-    scrollContainer.addEventListener('wheel', handleWheel, { passive: false });
-
-    return () => {
-      scrollContainer.removeEventListener('wheel', handleWheel);
-    };
-  }, []);
+  // Enable horizontal scrolling with mouse wheel
+  useHorizontalScroll(scrollContainerRef);
 
   return (
     <FloatingPanelContentHeader className="pl-0">

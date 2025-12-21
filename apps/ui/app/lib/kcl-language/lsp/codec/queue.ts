@@ -2,9 +2,9 @@
  * Async queue implementation for LSP message handling.
  */
 
-import { createLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 
-const log = createLogger('Queue');
+const log = createKclLogger('Queue');
 
 export class Queue<T> {
   private readonly promises: Array<Promise<T>> = [];
@@ -12,7 +12,7 @@ export class Queue<T> {
   private closed = false;
 
   public enqueue(item: T): void {
-    log('enqueue() called, closed:', this.closed, 'resolvers:', this.resolvers.length);
+    log.debug('enqueue() called, closed:', this.closed, 'resolvers:', this.resolvers.length);
     if (!this.closed) {
       if (this.resolvers.length === 0) {
         this.addPromise();
@@ -20,14 +20,14 @@ export class Queue<T> {
 
       const resolve = this.resolvers.shift();
       if (resolve) {
-        log('Resolving with item');
+        log.debug('Resolving with item');
         resolve(item);
       }
     }
   }
 
   public async dequeue(): Promise<T> {
-    log('dequeue() called, promises:', this.promises.length);
+    log.debug('dequeue() called, promises:', this.promises.length);
     if (this.promises.length === 0) {
       this.addPromise();
     }
@@ -37,9 +37,9 @@ export class Queue<T> {
       throw new Error('Queue is unexpectedly empty');
     }
 
-    log('dequeue() awaiting item...');
+    log.debug('dequeue() awaiting item...');
     const result = await item;
-    log('dequeue() got item');
+    log.debug('dequeue() got item');
     return result;
   }
 
@@ -56,25 +56,25 @@ export class Queue<T> {
   }
 
   public async next(): Promise<IteratorResult<T, never>> {
-    log('next() called');
+    log.debug('next() called');
     const value = await this.dequeue();
-    log('next() returning value');
+    log.debug('next() returning value');
     return { done: false, value };
   }
 
   public async return_(): Promise<IteratorResult<T, never>> {
-    log('return_() called');
+    log.debug('return_() called');
     this.close();
     return { done: true as const, value: undefined as never };
   }
 
   public async throw_(error: Error): Promise<IteratorResult<T, never>> {
-    log('throw_() called');
+    log.debug('throw_() called');
     throw error;
   }
 
   public [Symbol.asyncIterator](): AsyncGenerator<T, never, void> {
-    log('[Symbol.asyncIterator] called');
+    log.debug('[Symbol.asyncIterator] called');
     return {
       next: async () => this.next(),
       return: async () => ({ done: true as const, value: undefined as never }),
@@ -87,12 +87,12 @@ export class Queue<T> {
   }
 
   public close(): void {
-    log('close() called');
+    log.debug('close() called');
     this.closed = true;
   }
 
   private addPromise(): void {
-    log('addPromise() called');
+    log.debug('addPromise() called');
     this.promises.push(
       new Promise((resolve) => {
         this.resolvers.push(resolve);

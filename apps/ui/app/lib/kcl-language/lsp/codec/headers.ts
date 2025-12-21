@@ -6,6 +6,10 @@
  * This matters for multi-byte UTF-8 characters (emojis, non-ASCII, etc.)
  */
 
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+
+const log = createKclLogger('Headers');
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -46,7 +50,7 @@ export function parseMessages(data: string): string[] {
         remaining = remaining.slice(messageEnd);
       } else {
         // Incomplete message - shouldn't happen in single writes but handle gracefully
-        console.warn('[Headers] Incomplete LSP message, expected', contentLength, 'bytes');
+        log.warn('Incomplete LSP message, expected', contentLength, 'bytes');
         break;
       }
     } else {

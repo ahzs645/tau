@@ -1,5 +1,5 @@
 // Make sure to include this route in `routes.ts` & pre-rendering!
-import { ENV } from '#config.js';
+import { ENV } from '#environment.config.js';
 import { metaConfig } from '#constants/meta.constants.js';
 import { getLlmRefText } from '#lib/fumadocs/get-llms-text.js';
 
