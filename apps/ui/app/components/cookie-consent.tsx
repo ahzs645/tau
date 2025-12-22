@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CookieIcon } from 'lucide-react';
 import { Link } from 'react-router';
-import { useAnalytics } from '#hooks/use-analytics.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import { useAnalytics, useCookieConsent } from '#hooks/use-analytics.js';
 import { Button } from '#components/ui/button.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
@@ -17,17 +15,6 @@ import {
   DialogTitle,
 } from '#components/ui/dialog.js';
 
-type ConsentStatus = 'pending' | 'granted' | 'denied';
-
-/**
- * Hook to manage cookie consent state.
- * Returns the current consent status and a setter function.
- */
-export function useCookieConsent(): [ConsentStatus, (status: ConsentStatus) => void] {
-  const [consentStatus, setConsentStatus] = useCookie<ConsentStatus>(cookieName.cookieConsent, 'pending');
-  return [consentStatus, setConsentStatus];
-}
-
 /**
  * Cookie preferences dialog component.
  * Can be used standalone to allow users to manage their cookie preferences.
@@ -40,23 +27,25 @@ export function CookiePreferencesDialog({
   readonly onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const analytics = useAnalytics();
-  const [consentStatus, setConsentStatus] = useCookieConsent();
+  const [, setConsentStatus] = useCookieConsent();
   // Default to false for GDPR compliance - optional cookies must not be pre-selected
-  const [analyticsEnabled, setAnalyticsEnabled] = useState(consentStatus === 'granted');
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(analytics.get_explicit_consent_status() === 'granted');
 
-  // Sync PostHog consent state with our cookie when consent changes
+  // Reset local state to match actual consent status when dialog opens
+  // Uses PostHog's get_explicit_consent_status() as the source of truth
+  // This ensures Cancel truly discards changes by syncing on each open
   useEffect(() => {
-    if (consentStatus === 'granted') {
-      analytics.opt_in_capturing();
-    } else if (consentStatus === 'denied') {
-      analytics.opt_out_capturing();
+    if (isOpen) {
+      setAnalyticsEnabled(analytics.get_explicit_consent_status() === 'granted');
     }
-  }, [analytics, consentStatus]);
+  }, [isOpen, analytics]);
 
   const handleSaveSettings = (): void => {
     if (analyticsEnabled) {
+      analytics.opt_in_capturing();
       setConsentStatus('granted');
     } else {
+      analytics.opt_out_capturing();
       setConsentStatus('denied');
     }
 
@@ -74,7 +63,7 @@ export function CookiePreferencesDialog({
           <DialogTitle>Cookie preferences</DialogTitle>
           <DialogDescription>
             We use cookies to analyze site usage and improve your experience.{' '}
-            <Link to="/docs/privacy" className="underline hover:text-foreground">
+            <Link to="/privacy" className="underline hover:text-foreground">
               Learn more
             </Link>
           </DialogDescription>
