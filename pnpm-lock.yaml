@@ -44,11 +44,11 @@ importers:
         specifier: ^4.2.0
         version: 4.2.0
       '@headless-tree/core':
-        specifier: ^1.5.1
-        version: 1.5.1
+        specifier: ^1.6.1
+        version: 1.6.1
       '@headless-tree/react':
-        specifier: ^1.5.1
-        version: 1.5.1(@headless-tree/core@1.5.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+        specifier: ^1.6.1
+        version: 1.6.1(@headless-tree/core@1.6.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       '@hookform/resolvers':
         specifier: ^5.1.1
         version: 5.1.1(react-hook-form@7.60.0(react@19.2.0))
@@ -2861,11 +2861,11 @@ packages:
       react: '>= 16.3.0'
       react-dom: '>= 16.3.0'
 
-  '@headless-tree/core@1.5.1':
-    resolution: {integrity: sha512-uPoFcjPYdnXwuEDJd2oCMY8a4nnsMKyx6P0G1+is6dIGFpUsoV0qjtJN6ykJtOgTHVhBRR11zRmletER6Qgj/Q==}
+  '@headless-tree/core@1.6.1':
+    resolution: {integrity: sha512-67de8m/50/4l7qgDvJBFjG6wMMWGkEFWBtbk0kwKGVGZPW3kiPM+2uQmEFGaHugegVbNI/vNjLUJAqG6oegj5g==}
 
-  '@headless-tree/react@1.5.1':
-    resolution: {integrity: sha512-8r34ug5g25peTDgyGoCZf5Ohy4O0FMhdhUNyiaXzGn/1nwUDpmmwsrqh64DVNPereSA9uhY0s39uRibfvdmTqw==}
+  '@headless-tree/react@1.6.1':
+    resolution: {integrity: sha512-uY4FS7xvkCjeqrtrMRRju+91N/95NRiX8iSq4L0vX2mGVlJvi6ZbH4o/yZXEnSkC14Qk78JYDw1wcrtj8w9L7w==}
     peerDependencies:
       '@headless-tree/core': '*'
       react: '*'
@@ -18600,11 +18600,11 @@ snapshots:
       react: 19.2.0
       react-dom: 19.2.0(react@19.2.0)
 
-  '@headless-tree/core@1.5.1': {}
+  '@headless-tree/core@1.6.1': {}
 
-  '@headless-tree/react@1.5.1(@headless-tree/core@1.5.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
+  '@headless-tree/react@1.6.1(@headless-tree/core@1.6.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
     dependencies:
-      '@headless-tree/core': 1.5.1
+      '@headless-tree/core': 1.6.1
       react: 19.2.0
       react-dom: 19.2.0(react@19.2.0)
 
