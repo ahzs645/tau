@@ -23,6 +23,7 @@ import { Tau } from '#components/icons/tau.js';
 import { Compose } from '#components/ui/utils/compose.js';
 import { Commands } from '#components/layout/command-palette.js';
 import { PageFooter } from '#components/layout/page-footer.js';
+import { CookieConsent } from '#components/cookie-consent.js';
 
 export const headerHeight = 'calc(var(--spacing) * 12)';
 
@@ -157,6 +158,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
             )}
           </section>
         </SidebarInset>
+        <CookieConsent />
       </SidebarProvider>
     </Compose>
   );
