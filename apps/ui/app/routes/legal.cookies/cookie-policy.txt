@@ -1,0 +1,87 @@
+# Cookie Policy
+
+**Last updated: December 22, 2024**
+
+## What is a Cookie
+
+Cookies are small text files which may include an anonymous unique identifier. They are sent to your browser from a website and stored on your device. Similar technologies like local storage are also used to store information locally in your browser.
+
+## How Tau Uses Cookies
+
+Tau uses cookies and similar technologies like local storage to maintain your preferences and hold certain information to improve your experience.
+
+We distinguish between two different types of cookies:
+
+- **Essential**: Cookies that are strictly necessary for basic website or app functionality. These cannot be disabled as the service would not function properly without them.
+- **Analytics**: Cookies used to collect information about how you use the website. This data helps us improve the site and your experience. These are optional and require your consent.
+
+## The Cookies We Set
+
+### Essential Cookies
+
+We use essential cookies to remember your preferences and settings. These include:
+
+| Category | Purpose |
+|----------|---------|
+| **Theme** | Remember your preferred color theme and accent color. |
+| **Layout** | Store panel sizes, sidebar states, and UI preferences so your workspace looks the same each time you visit. |
+| **CAD Settings** | Remember your preferred CAD kernel, measurement units, and file preview settings. |
+| **Chat Preferences** | Store your selected AI model, web search preferences, and interface settings. |
+| **View Settings** | Remember your camera field of view, view configuration, and section view settings. |
+| **Console Settings** | Store your preferred log level and display configuration. |
+| **Converter Settings** | Remember your preferred output formats and download preferences. |
+| **Cookie Consent** | Remember your cookie consent choice so we don't ask you again. |
+
+These cookies are stored locally in your browser and are not transmitted to any external services.
+
+### Analytics Cookies (Optional)
+
+With your consent, we use PostHog to understand how users interact with our service. PostHog is an open-source product analytics platform that helps us improve Tau.
+
+**What PostHog collects:**
+
+- Page views and navigation patterns
+- Device and browser information
+- Interaction patterns (clicks, scrolls)
+- Feature usage statistics
+
+**What PostHog does NOT do:**
+
+- Does not use third-party cookies
+- Does not track you across different websites
+- Does not share data with advertising networks
+- Does not sell your data to third parties
+
+You can opt out of analytics cookies at any time through our cookie preferences banner or by visiting your browser settings.
+
+For more information, see the [PostHog Privacy Policy](https://posthog.com/privacy).
+
+## Managing Your Cookie Preferences
+
+When you first visit Tau, you will see a cookie consent banner where you can:
+
+- **Accept**: Enable both essential and analytics cookies
+- **Decline**: Enable only essential cookies (analytics will be disabled)
+- **Manage**: Open detailed preferences to customize your choices
+
+You can change your cookie preferences at any time by clicking the cookie icon in the footer or through your browser settings.
+
+## How to Control Cookies in Your Browser
+
+Most web browsers allow you to control cookies through their settings. You can:
+
+- View what cookies are stored
+- Delete cookies individually or all at once
+- Block cookies from specific sites
+- Block all cookies (note: this may affect site functionality)
+
+Please refer to your browser's help documentation for instructions on managing cookies.
+
+## Changes to This Cookie Policy
+
+We may update our Cookie Policy from time to time. We will notify you of any changes by posting the new Cookie Policy on this page and updating the "Last updated" date.
+
+## Contact Us
+
+If you have any questions about this Cookie Policy, please contact us at [privacy@taucad.com](mailto:privacy@taucad.com).
+

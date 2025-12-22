@@ -7,6 +7,7 @@ import { CookiePreferencesDialog } from '#components/cookie-consent.js';
 const navigationLinks = [
   { label: 'Home', href: '/' },
   { label: 'Docs', href: '/docs' },
+  { label: 'Legal', href: '/legal' },
 ];
 
 export function PageFooter(): React.JSX.Element {
