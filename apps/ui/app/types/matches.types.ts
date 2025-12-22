@@ -30,10 +30,19 @@ export type Handle = {
    */
   enablePageWrapper?: boolean;
   /**
-   * Enable floating sidebar. You will become responsible for setting content boundaries using:
-   * - var(--sidebar-width) (for the sidebar width)
-   * - var(--sidebar-width-current) (for the current sidebar width)
-   * - var(--header-height) (for the header height)
+   * Enable floating sidebar mode where the sidebar overlays content.
+   *
+   * Use this for routes with full-screen viewers (CAD, canvas) that should
+   * extend edge-to-edge under the sidebar.
+   *
+   * For elements that should respect the sidebar, use utilities from
+   * `#components/layout/sidebar-offset.js`:
+   *
+   * **Component:**
+   * - `<SidebarOffset via="padding">` - padding offset
+   * - `<SidebarOffset via="margin">` - margin offset
+   * - `<SidebarOffset via="left">` - left positioning for fixed/absolute
+   * - Add `asChild` prop to avoid extra DOM nodes
    */
   enableFloatingSidebar?: boolean;
   /**

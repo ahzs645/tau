@@ -8,6 +8,7 @@ import { useLocation, NavLink } from 'react-router';
 import { useTreeContext } from 'fumadocs-ui/contexts/tree';
 import { useSearchContext } from 'fumadocs-ui/contexts/search';
 import { cn } from '#utils/ui.utils.js';
+import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
@@ -364,55 +365,57 @@ export function DocsSidebarWithTrigger(): React.JSX.Element {
   const { isDocsSidebarOpen, setIsDocsSidebarOpen } = useDocsSidebarProvider();
 
   return (
-    <div
-      className={cn(
-        // Left
-        'left-2',
-        'md:left-(--sidebar-width-current)',
-        // Top
-        'top-(--header-height)',
-
-        // Width - collapse when closed, expand when open (no animation)
-        'transition-[top,left] duration-200 ease-linear',
-        'fixed',
-      )}
-    >
-      <DocsSidebar
+    <SidebarOffset asChild via="left">
+      <div
         className={cn(
           // Left
           'left-2',
-          'md:left-(--sidebar-width-current)',
-          'data-[state=closed]:bg-muted',
           // Top
           'top-(--header-height)',
-          'pb-[calc(var(--header-height)+var(--spacing)*2)]',
 
-          // Width - collapse when closed, expand when open (no animation)
-          'w-0',
-          'data-[state=open]:w-full',
-
-          // Transition (excluding width to prevent animation)
+          // Transition
           'transition-[top,left] duration-200 ease-linear',
-
-          // Max width
-          'max-w-[calc(100dvw-var(--spacing)*4)]',
-          'md:max-w-(--docs-sidebar-width)',
           'fixed',
         )}
-      />
-      <div
-        className="absolute top-0"
-        style={{
-          left: isDocsSidebarOpen ? 'calc(var(--docs-sidebar-width) + var(--spacing)*2)' : 0,
-        }}
       >
-        <DocsSidebarTrigger
-          isOpen={isDocsSidebarOpen}
-          onToggle={() => {
-            setIsDocsSidebarOpen((previous) => !previous);
+        <SidebarOffset asChild via="left">
+          <DocsSidebar
+            className={cn(
+              // Left
+              'left-2',
+              'data-[state=closed]:bg-muted',
+              // Top
+              'top-(--header-height)',
+              'pb-[calc(var(--header-height)+var(--spacing)*2)]',
+
+              // Width - collapse when closed, expand when open (no animation)
+              'w-0',
+              'data-[state=open]:w-full',
+
+              // Transition (excluding width to prevent animation)
+              'transition-[top,left] duration-200 ease-linear',
+
+              // Max width
+              'max-w-[calc(100dvw-var(--spacing)*4)]',
+              'md:max-w-(--docs-sidebar-width)',
+              'fixed',
+            )}
+          />
+        </SidebarOffset>
+        <div
+          className="absolute top-0"
+          style={{
+            left: isDocsSidebarOpen ? 'calc(var(--docs-sidebar-width) + var(--spacing)*2)' : 0,
           }}
-        />
+        >
+          <DocsSidebarTrigger
+            isOpen={isDocsSidebarOpen}
+            onToggle={() => {
+              setIsDocsSidebarOpen((previous) => !previous);
+            }}
+          />
+        </div>
       </div>
-    </div>
+    </SidebarOffset>
   );
 }

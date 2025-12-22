@@ -23,6 +23,7 @@ import { Tau } from '#components/icons/tau.js';
 import { Compose } from '#components/ui/utils/compose.js';
 import { Commands } from '#components/layout/command-palette.js';
 import { PageFooter } from '#components/layout/page-footer.js';
+import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 import { CookieConsent } from '#components/cookie-consent.js';
 
 export const headerHeight = 'calc(var(--spacing) * 12)';
@@ -65,7 +66,13 @@ function SectionContent({
         className={cn('flex min-h-full flex-col overflow-hidden', shouldApplyPositioning && sidebarPositioningClasses)}
       >
         <div className="flex flex-1 flex-col">{content}</div>
-        <PageFooter enableFloatingSidebar={enableFloatingSidebar} />
+        {enableFloatingSidebar ? (
+          <SidebarOffset asChild via="margin">
+            <PageFooter />
+          </SidebarOffset>
+        ) : (
+          <PageFooter />
+        )}
       </div>
     );
   }
