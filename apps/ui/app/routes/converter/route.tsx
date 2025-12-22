@@ -393,7 +393,7 @@ function ConverterContent(): React.JSX.Element {
                     </CardHeader>
                     <CardContent>
                       <Button asChild variant="outline" size="sm" className="w-full">
-                        <Link to="#">View API Documentation</Link>
+                        <Link to="/docs">View API Documentation</Link>
                       </Button>
                     </CardContent>
                   </Card>
