@@ -131,8 +131,8 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
   return (
     <FloatingPanel isOpen={isDocsSidebarOpen} side="right" className={className} onOpenChange={setIsDocsSidebarOpen}>
       <FloatingPanelContent className={cn('overflow-hidden rounded-md border', isDocsSidebarOpen && 'z-100')}>
-        <FloatingPanelContentHeader className="pl-0">
-          <FloatingPanelContentTitle className="flex w-full items-center justify-between pl-0.25">
+        <FloatingPanelContentHeader className="px-0">
+          <FloatingPanelContentTitle className="z-10 flex w-full items-center justify-between pl-0.25">
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => `${isOpen ? 'Close' : 'Open'} Documentation Sidebar`}
