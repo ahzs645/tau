@@ -32,7 +32,8 @@ function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode 
 
     // User logged in or app loaded with authenticated user
     // Identify the user with their unique ID and person properties
-    if (currentUserId && currentUserId !== previousUserId) {
+    // Only call identify() once per session to prevent unnecessary events
+    if (currentUserId && currentUserId !== previousUserId && !analytics._isIdentified()) {
       analytics.identify(currentUserId, {
         email: user.email,
         name: user.name,
