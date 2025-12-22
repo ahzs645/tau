@@ -59,7 +59,11 @@ const posthogProxy = async (request: Request): Promise<Response> => {
   responseHeaders.delete('content-encoding');
   responseHeaders.delete('content-length');
 
-  const data = await response.arrayBuffer();
+  // Null body statuses (204, 205, 304) cannot have a response body per HTTP spec
+  const nullBodyStatuses = [204, 205, 304];
+  const isNullBodyStatus = nullBodyStatuses.includes(response.status);
+
+  const data = isNullBodyStatus ? null : await response.arrayBuffer();
 
   return new Response(data, {
     status: response.status,
