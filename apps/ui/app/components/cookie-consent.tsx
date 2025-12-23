@@ -63,7 +63,7 @@ export function CookiePreferencesDialog({
           <DialogTitle>Cookie preferences</DialogTitle>
           <DialogDescription>
             We use cookies to analyze site usage and improve your experience.{' '}
-            <Link to="/privacy" className="underline hover:text-foreground">
+            <Link to="/legal/cookies" className="underline hover:text-foreground">
               Learn more
             </Link>
           </DialogDescription>
