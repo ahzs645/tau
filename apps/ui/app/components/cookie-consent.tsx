@@ -16,6 +16,20 @@ import {
 } from '#components/ui/dialog.js';
 
 /**
+ * Detects if Global Privacy Control (GPC) is enabled in the browser.
+ * GPC is a browser signal that indicates the user's preference to opt out of tracking.
+ * @see https://globalprivacycontrol.org
+ */
+function isGlobalPrivacyControlEnabled(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
+  // Navigator.globalPrivacyControl is the standard GPC signal
+  return (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true;
+}
+
+/**
  * Cookie preferences dialog component.
  * Can be used standalone to allow users to manage their cookie preferences.
  */
@@ -130,6 +144,15 @@ export function CookieConsent(): React.JSX.Element | undefined {
   const [consentStatus, setConsentStatus] = useCookieConsent();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+
+  // Honor Global Privacy Control (GPC) signal
+  // If GPC is enabled and consent is pending, automatically opt out of analytics
+  useEffect(() => {
+    if (consentStatus === 'pending' && isGlobalPrivacyControlEnabled()) {
+      analytics.opt_out_capturing();
+      setConsentStatus('denied');
+    }
+  }, [analytics, consentStatus, setConsentStatus]);
 
   // Delay showing the banner by 2 seconds
   useEffect(() => {
