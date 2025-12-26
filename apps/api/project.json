@@ -50,13 +50,6 @@
         "command": "fly launch --config ./apps/api/fly.prod.toml"
       }
     },
-    "db-generate-migrations": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "drizzle-kit generate",
-        "cwd": "{projectRoot}"
-      }
-    },
     "db-generate": {
       "executor": "nx:run-commands",
       "options": {
