@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "allows_ai_training" boolean DEFAULT true NOT NULL;
