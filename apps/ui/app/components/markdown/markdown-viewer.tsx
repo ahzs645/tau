@@ -1,4 +1,5 @@
 import { Streamdown } from 'streamdown';
+import type { ControlsConfig, StreamdownProps } from 'streamdown';
 import type { ComponentProps } from 'react';
 import { memo, useMemo } from 'react';
 import { InlineCode } from '#components/code/code-block.js';
@@ -13,7 +14,7 @@ type MarkdownViewerProps = {
    * When true, uses streaming-optimized parsing.
    */
   readonly isStreaming?: boolean;
-};
+} & StreamdownProps;
 
 // Custom code component that uses our shiki highlighter with custom language support
 function CodeComponent({
@@ -40,22 +41,43 @@ function CodeComponent({
 }
 
 // Custom link component that opens in new tab
-function LinkComponent({ children, ...rest }: ComponentProps<'a'>): React.JSX.Element {
+function LinkComponent({ children, className, ...rest }: ComponentProps<'a'>): React.JSX.Element {
   return (
-    <a {...rest} target="_blank" rel="noopener noreferrer">
+    <a
+      {...rest}
+      className={cn(className, 'underline underline-offset-3 transition-all duration-200 hover:underline-offset-4')}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
       {children}
     </a>
   );
 }
 
-export const MarkdownViewer = memo(function ({ children, isStreaming = true }: MarkdownViewerProps): React.JSX.Element {
+export const defaultMarkdownComponents = {
+  code: CodeComponent,
+  a: LinkComponent,
+} as const satisfies MarkdownViewerProps['components'];
+
+export const defaultMarkdownControls = {
+  // Disable built-in copy button (we have our own in CollapsibleCodeBlock)
+  code: false,
+  table: false,
+} as const satisfies ControlsConfig;
+
+export const MarkdownViewer = memo(function ({
+  children,
+  isStreaming = true,
+  controls = defaultMarkdownControls,
+  components,
+}: MarkdownViewerProps): React.JSX.Element {
   // Memoize components object to prevent unnecessary re-renders
-  const components = useMemo(
+  const memoizedComponents = useMemo(
     () => ({
-      code: CodeComponent,
-      a: LinkComponent,
+      ...defaultMarkdownComponents,
+      ...components,
     }),
-    [],
+    [components],
   );
 
   return (
@@ -68,8 +90,8 @@ export const MarkdownViewer = memo(function ({ children, isStreaming = true }: M
     >
       <Streamdown
         mode={isStreaming ? 'streaming' : 'static'}
-        components={components}
-        controls={{ code: false }} // Disable built-in copy button (we have our own in CollapsibleCodeBlock)
+        components={memoizedComponents}
+        controls={controls}
         shikiTheme={['github-light', 'github-dark']}
       >
         {children}
