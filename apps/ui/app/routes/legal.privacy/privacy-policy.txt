@@ -180,7 +180,9 @@ We use the following third-party service providers to operate our Service. Each 
 
 ### 9.1 Infrastructure and Hosting
 
-- **Fly.io**: Our Service is hosted on Fly.io infrastructure in the United States. Fly.io processes data necessary to deliver our Service, including IP addresses and request data. For more information, visit [Fly.io's Privacy Policy](https://fly.io/legal/privacy-policy/).
+- **Fly.io**: Our API is hosted on Fly.io infrastructure in the United States. Fly.io processes data necessary to deliver our Service, including IP addresses and request data. For more information, visit [Fly.io's Privacy Policy](https://fly.io/legal/privacy-policy/).
+
+- **Netlify**: Our frontend application is hosted on Netlify. Netlify processes request data including IP addresses and request headers. For more information, visit [Netlify's Privacy Policy](https://www.netlify.com/privacy/).
 
 ### 9.2 AI and Machine Learning Services
 
@@ -191,6 +193,14 @@ Our Service includes AI-assisted CAD features. When you use these features, your
 - **Anthropic**: Provides Claude AI models for AI-assisted features. For more information, visit [Anthropic's Privacy Policy](https://www.anthropic.com/privacy).
 
 - **Google (Vertex AI)**: Provides AI model services through Google Cloud. For more information, visit [Google Cloud's Privacy Policy](https://cloud.google.com/terms/cloud-privacy-notice).
+
+- **SambaNova**: When you select a SambaNova model, your prompts are processed by SambaNova. For more information, visit [SambaNova's Privacy Policy](https://sambanova.ai/privacy-policy).
+
+- **Cerebras**: When you select a Cerebras model, your prompts are processed by Cerebras. For more information, visit [Cerebras's Privacy Policy](https://cerebras.ai/privacy-policy).
+
+- **Tavily**: When you enable web search in AI features, your search queries are processed by Tavily. For more information, visit [Tavily's Privacy Policy](https://tavily.com/privacy).
+
+- **Zoo.dev (KittyCAD)**: When using KCL kernel features, your CAD code and geometry data is processed by Zoo.dev's API. For more information, visit [Zoo.dev's Privacy Policy](https://zoo.dev/privacy).
 
 **Important**: Your data is not retained by these third-party AI providers for their own training purposes.
 
@@ -235,6 +245,8 @@ We only receive information you authorize these providers to share with us.
 ### 9.6 Data Processing Agreements
 
 We maintain appropriate Data Processing Agreements (DPAs) with all third-party service providers who process personal data on our behalf, as required by GDPR Article 28 and equivalent provisions in other privacy laws.
+
+A complete list of our sub-processors is available at [/legal/subprocessors](/legal/subprocessors).
 
 ## 10. Security of Your Personal Data
 

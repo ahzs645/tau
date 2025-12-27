@@ -4,6 +4,11 @@ import { Card, CardDescription, CardTitle } from '#components/ui/card.js';
 
 const legalPages = [
   {
+    title: 'Terms of Service',
+    description: 'All the info you need to know about using our product and services.',
+    href: '/legal/terms',
+  },
+  {
     title: 'Privacy Policy',
     description: 'Learn how we handle, store, and protect your personal information.',
     href: '/legal/privacy',
@@ -14,9 +19,9 @@ const legalPages = [
     href: '/legal/cookies',
   },
   {
-    title: 'Terms of Service',
-    description: 'All the info you need to know about using our product and services.',
-    href: '/legal/terms',
+    title: 'Sub-processors',
+    description: 'View our list of third-party service providers that process your data.',
+    href: '/legal/subprocessors',
   },
 ];
 

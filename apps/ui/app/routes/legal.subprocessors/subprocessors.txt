@@ -1,0 +1,65 @@
+# Sub-processors - TauCAD Limited
+
+*Effective date: December 27, 2025*
+
+This page lists all third-party service providers (sub-processors) that process personal data on behalf of TauCAD Limited in connection with our Service. This list is maintained in accordance with our [Privacy Policy](/legal/privacy) and applicable data protection laws.
+
+We maintain Data Processing Agreements (DPAs) with all sub-processors listed below, as required by GDPR Article 28 and equivalent provisions in other privacy laws.
+
+## Infrastructure and Hosting
+
+| Sub-processor | Purpose | Data Processed | Location |
+|---------------|---------|----------------|----------|
+| **Fly.io** | API application hosting | All service data, IP addresses, server logs | USA |
+| **Netlify** | Frontend hosting and CDN | Static assets, IP addresses, request headers | USA |
+
+## AI and Machine Learning Services
+
+When you use AI-assisted CAD features, your prompts and relevant context may be processed by the following providers. Your data is not retained by these providers for their own training purposes.
+
+| Sub-processor | Purpose | Data Processed | Location |
+|---------------|---------|----------------|----------|
+| **OpenAI** | AI language models (GPT) | Prompts, CAD context, conversation history | USA |
+| **Anthropic** | AI language models (Claude) | Prompts, CAD context, conversation history | USA |
+| **Google (Vertex AI)** | AI model services (Gemini) | Prompts, CAD context, conversation history | USA |
+| **SambaNova** | AI model services (optional) | Prompts, CAD context when model is selected | USA |
+| **Cerebras** | AI model services (optional) | Prompts, CAD context when model is selected | USA |
+| **Tavily** | Web search for AI features | Search queries when web search is enabled | USA |
+
+## CAD Processing
+
+| Sub-processor | Purpose | Data Processed | Location |
+|---------------|---------|----------------|----------|
+| **Zoo.dev (KittyCAD)** | KCL CAD kernel processing | CAD code, model geometry, rendering data | USA |
+
+## Analytics and Observability
+
+| Sub-processor | Purpose | Data Processed | Location |
+|---------------|---------|----------------|----------|
+| **PostHog** | Product analytics (with consent) | Usage data, device info, interaction patterns | USA |
+| **LangSmith** | AI feature observability | AI interaction logs, prompt/response metadata | USA |
+
+## Payment Processing
+
+| Sub-processor | Purpose | Data Processed | Location |
+|---------------|---------|----------------|----------|
+| **Stripe** | Payment processing | Payment method details, billing information | USA |
+
+## Authentication Services
+
+When you choose to sign in using third-party authentication, we receive certain information from these providers.
+
+| Sub-processor | Purpose | Data Processed | Location |
+|---------------|---------|----------------|----------|
+| **GitHub** | OAuth authentication | Email, username, profile picture (if authorized) | USA |
+| **Google** | OAuth authentication | Email, name, profile picture (if authorized) | USA |
+
+## Changes to This List
+
+We will update this list when we add or remove sub-processors. For material changes, we will notify you in accordance with our [Privacy Policy](/legal/privacy).
+
+## Contact Us
+
+If you have questions about our sub-processors or data processing practices, please contact us at [privacy@tau.new](mailto:privacy@tau.new).
+
+
