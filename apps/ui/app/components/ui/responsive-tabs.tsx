@@ -15,6 +15,7 @@ type ResponsiveTabsProps = {
   readonly activeTab: string;
   readonly children: React.ReactNode;
   readonly className?: string;
+  readonly enableContentAnimation?: boolean;
 };
 
 /**
@@ -25,7 +26,13 @@ type ResponsiveTabsProps = {
  * Uses pure CSS via Tailwind responsive utilities (no JS media queries)
  * Automatically scrolls active tab into view on mobile
  */
-export function ResponsiveTabs({ tabs, activeTab, children, className }: ResponsiveTabsProps): React.JSX.Element {
+export function ResponsiveTabs({
+  tabs,
+  activeTab,
+  children,
+  className,
+  enableContentAnimation = true,
+}: ResponsiveTabsProps): React.JSX.Element {
   const tabsListRef = useRef<HTMLDivElement>(null);
 
   // Scroll active tab into view when activeTab changes
@@ -79,11 +86,13 @@ export function ResponsiveTabs({ tabs, activeTab, children, className }: Respons
 
         <div className="flex flex-1 flex-col gap-6">
           <h2 className="hidden text-2xl font-bold md:block">{activeTab}</h2>
-          <TabsContents className={cn('h-full! w-full')}>{children}</TabsContents>
+          <TabsContents className={cn('h-full! w-full')} enableAnimation={enableContentAnimation}>
+            {children}
+          </TabsContents>
         </div>
       </>
     );
-  }, [tabs, activeTab, children]);
+  }, [tabs, activeTab, children, enableContentAnimation]);
 
   return (
     <>

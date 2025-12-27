@@ -1,11 +1,20 @@
 import { AccountView, useAuthenticate } from '@daveyplate/better-auth-ui';
 import { Link, useLocation } from 'react-router';
-import { CreditCard, Key, Lock, Palette, User } from 'lucide-react';
+import { CreditCard, Key, Lock, Settings2, User } from 'lucide-react';
 import { TabsContent } from '#components/ui/tabs.js';
 import type { Handle } from '#types/matches.types.js';
 import { Button } from '#components/ui/button.js';
 import { ResponsiveTabs } from '#components/ui/responsive-tabs.js';
 import type { ResponsiveTabItem } from '#components/ui/responsive-tabs.js';
+import { GeneralSettings } from '#routes/settings_.$/general-settings.js';
+
+const generalTabs: readonly ResponsiveTabItem[] = [
+  {
+    label: 'General',
+    href: '/settings/general',
+    icon: Settings2,
+  },
+] as const;
 
 const authTabs: readonly ResponsiveTabItem[] = [
   {
@@ -37,23 +46,18 @@ const authTabs: readonly ResponsiveTabItem[] = [
   // },
 ] as const;
 
-const nonAuthTabs: readonly ResponsiveTabItem[] = [
+const otherTabs: readonly ResponsiveTabItem[] = [
   {
     label: 'Billing',
     href: '/settings/billing',
     icon: CreditCard,
   },
-  {
-    label: 'Appearance',
-    href: '/settings/appearance',
-    icon: Palette,
-  },
 ] as const;
 
-const allTabs: readonly ResponsiveTabItem[] = [...authTabs, ...nonAuthTabs];
+const allTabs: readonly ResponsiveTabItem[] = [...generalTabs, ...authTabs, ...otherTabs];
 
-const defaultTab = authTabs[0]!.label;
-const defaultLabel = authTabs[0]!.label;
+const defaultTab = generalTabs[0]!.label;
+const defaultLabel = generalTabs[0]!.label;
 
 export const handle: Handle = {
   breadcrumb() {
@@ -85,9 +89,9 @@ export default function SettingsPage(): React.JSX.Element {
 
   return (
     <div className="mx-auto size-full max-w-4xl flex-1 px-2 md:px-4">
-      <ResponsiveTabs tabs={allTabs} activeTab={activeTab}>
+      <ResponsiveTabs tabs={allTabs} activeTab={activeTab} enableContentAnimation={false}>
         {authTabs.map((tab) => (
-          <TabsContent key={tab.label} value={tab.label} className="[&>*]:md:gap-0">
+          <TabsContent key={tab.label} enableAnimation={false} value={tab.label} className="*:md:gap-0">
             <AccountView
               hideNav
               pathname={location.pathname}
@@ -95,11 +99,11 @@ export default function SettingsPage(): React.JSX.Element {
             />
           </TabsContent>
         ))}
-        <TabsContent value="Billing">
-          <div>Billing - TODO</div>
+        <TabsContent enableAnimation={false} value="General">
+          <GeneralSettings />
         </TabsContent>
-        <TabsContent value="Appearance">
-          <div>Appearance - TODO</div>
+        <TabsContent enableAnimation={false} value="Billing">
+          <div>Billing - TODO</div>
         </TabsContent>
       </ResponsiveTabs>
     </div>

@@ -199,6 +199,7 @@ type TabsContentsProps = HTMLMotionProps<'div'> & {
   readonly children: React.ReactNode;
   readonly className?: string;
   readonly transition?: Transition;
+  readonly enableAnimation?: boolean;
 };
 
 const defaultTabsContentsTransition = {
@@ -211,6 +212,7 @@ function TabsContents({
   children,
   className,
   transition = defaultTabsContentsTransition,
+  enableAnimation = true,
   ...props
 }: TabsContentsProps): React.JSX.Element {
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -218,7 +220,7 @@ function TabsContents({
   const [height, setHeight] = React.useState(0);
 
   React.useEffect(() => {
-    if (!containerRef.current) {
+    if (!enableAnimation || !containerRef.current) {
       return;
     }
 
@@ -238,14 +240,22 @@ function TabsContents({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [children]);
+  }, [children, enableAnimation]);
 
   React.useLayoutEffect(() => {
-    if (containerRef.current) {
+    if (enableAnimation && containerRef.current) {
       const initialHeight = containerRef.current.getBoundingClientRect().height;
       setHeight(initialHeight);
     }
-  }, [children]);
+  }, [children, enableAnimation]);
+
+  if (!enableAnimation) {
+    return (
+      <div data-slot="tabs-contents" className={className}>
+        {children}
+      </div>
+    );
+  }
 
   return (
     <motion.div

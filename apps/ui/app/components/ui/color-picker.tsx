@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import type { ComponentProps, RefObject } from 'react';
+import type { ReactNode } from 'react';
 import type { HslColor } from 'react-colorful';
-import { RotateCcw } from 'lucide-react';
+import { Pipette, RotateCcw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Slider } from '#components/ui/slider.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
@@ -17,25 +17,26 @@ type ColorPickerProperties = {
   readonly onChange: (value: ColorPickerValue) => void;
   readonly onBlur?: () => void;
   readonly onReset?: () => void;
-  readonly ref?: RefObject<typeof Slider>;
-} & Omit<ComponentProps<typeof Button>, 'value' | 'onChange' | 'onBlur' | 'ref'>;
+  readonly children?: ReactNode;
+  readonly isDisabled?: boolean;
+  readonly className?: string;
+  readonly hasTooltip?: boolean;
+};
 
 function ColorPicker({
-  disabled,
   value,
   onChange,
   onBlur,
-  name,
-  className,
   onReset,
-  ref,
-  ...properties
-}: Omit<React.ComponentProps<typeof Button>, 'value' | 'onChange' | 'onBlur'> &
-  ColorPickerProperties): React.JSX.Element {
+  children,
+  isDisabled,
+  className,
+  hasTooltip = true,
+}: ColorPickerProperties): React.JSX.Element {
   const [open, setOpen] = useState(false);
 
-  const handleChange = (value: HslColor) => {
-    onChange(value);
+  const handleChange = (newValue: HslColor) => {
+    onChange(newValue);
   };
 
   const { formattedKeyCombination } = useKeydown(
@@ -47,38 +48,37 @@ function ColorPicker({
       setOpen((previous) => !previous);
     },
   );
+
+  // Default trigger button if no children provided
+  const triggerContent = children ?? (
+    <Button variant="outline" size="icon" className={cn('block', className)}>
+      <Pipette className="size-4" />
+    </Button>
+  );
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <PopoverTrigger asChild disabled={disabled} onBlur={onBlur}>
-          <TooltipTrigger asChild>
-            <Button
-              {...properties}
-              className={cn('block', className)}
-              name={name}
-              size="icon"
-              data-color-h={value.h}
-              data-color-s={value.s}
-              data-color-l={value.l}
-              variant="outline"
-              onClick={() => {
-                setOpen(true);
-              }}
-            />
-          </TooltipTrigger>
+      {hasTooltip ? (
+        <Tooltip>
+          <PopoverTrigger asChild disabled={isDisabled} onBlur={onBlur}>
+            <TooltipTrigger asChild>{triggerContent}</TooltipTrigger>
+          </PopoverTrigger>
+          <TooltipContent side="top">
+            Choose color{' '}
+            <KeyShortcut variant="tooltip" className="ml-1">
+              {formattedKeyCombination}
+            </KeyShortcut>
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <PopoverTrigger asChild disabled={isDisabled} onBlur={onBlur}>
+          {triggerContent}
         </PopoverTrigger>
-        <TooltipContent side="top">
-          Choose color{' '}
-          <KeyShortcut variant="tooltip" className="ml-1">
-            {formattedKeyCombination}
-          </KeyShortcut>
-        </TooltipContent>
-      </Tooltip>
+      )}
       <PopoverContent side="top" className="flex w-48 flex-col gap-2 p-2">
         <span className="w-full items-center text-sm text-muted-foreground">Select hue ({value.h}°)</span>
         <div className="flex w-full flex-row gap-2">
           <Slider
-            ref={ref}
             min={0}
             max={360}
             value={[value.h]}
