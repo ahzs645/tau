@@ -17,7 +17,7 @@ export const handle: Handle = {
 export const loader: LoaderFunction = async ({ request }) => {
   const url = new URL(request.url);
   if (url.pathname === '/settings') {
-    return redirect('/settings/account');
+    return redirect('/settings/general');
   }
 
   return null;
@@ -29,7 +29,7 @@ export default function SettingsPage(): React.JSX.Element {
 
   useEffect(() => {
     if (location.pathname === '/settings') {
-      void navigate('/settings/account');
+      void navigate('/settings/general');
     }
   }, [navigate, location.pathname]);
 

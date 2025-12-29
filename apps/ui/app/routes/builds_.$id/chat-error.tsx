@@ -51,11 +51,11 @@ export const ChatError = memo(function ({
 
   // Handle UNAUTHORIZED errors with dedicated component
   if (parsed?.code === 'UNAUTHORIZED') {
-    return <ChatErrorUnauthorized className={className} />;
+    return <ChatErrorUnauthorized className={cn('mx-2', className)} />;
   }
 
   return (
-    <div className={cn('size-full', className)}>
+    <div className={cn('mx-2 size-full', className)}>
       <Collapsible
         open={isOpen}
         className={cn(
@@ -64,18 +64,18 @@ export const ChatError = memo(function ({
         onOpenChange={onOpenChange}
       >
         <CollapsibleTrigger asChild>
-          <div className="flex w-full cursor-pointer items-center justify-between gap-1 p-2">
+          <div className="flex w-full cursor-pointer items-center justify-between gap-2 p-2">
             <ChevronRight className="size-4 transition-transform duration-300 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
             <div className="flex w-full items-center justify-between">
               <p>Unable to send the message.</p>
               <Button
                 variant="outline"
-                size="xs"
+                size="sm"
                 onClick={async () => {
                   regenerate();
                 }}
               >
-                <RefreshCcw className="size-3" />
+                <RefreshCcw className="size-3.5" />
                 Retry
               </Button>
             </div>

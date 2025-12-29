@@ -1,6 +1,6 @@
 import { AuthUIContext, SignedIn, SignedOut, UserAvatar, UserButton } from '@daveyplate/better-auth-ui';
 import type { UserButtonProps } from '@daveyplate/better-auth-ui';
-import { CreditCard, LogIn, Sparkles } from 'lucide-react';
+import { CreditCard, LogIn, Settings, Sparkles } from 'lucide-react';
 import { useContext } from 'react';
 import { NavLink } from 'react-router';
 import { Button } from '#components/ui/button.js';
@@ -20,6 +20,12 @@ const additionalUserButtonLinks: UserButtonProps['additionalLinks'] = [
     href: '/settings/billing',
     label: 'Billing',
     icon: <CreditCard />,
+    signedIn: true,
+  },
+  {
+    href: '/settings/general',
+    label: 'Settings',
+    icon: <Settings />,
     signedIn: true,
   },
 ];
@@ -51,6 +57,7 @@ export function NavUser(): React.JSX.Element {
       <SignedIn>
         <Tooltip>
           <UserButton
+            disableDefaultLinks
             trigger={
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="select-none">

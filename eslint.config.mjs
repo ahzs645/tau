@@ -262,6 +262,8 @@ const config = [
             'ZodSerializerDto',
             'Sse',
             'WebSocketGateway',
+            'User',
+            'UseAuth',
           ],
         },
       ],

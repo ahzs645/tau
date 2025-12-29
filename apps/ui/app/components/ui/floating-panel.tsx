@@ -10,7 +10,7 @@ import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { DrawerClose, DrawerHandle } from '#components/ui/drawer.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
-import { CollapsibleCodeBlock } from '#components/markdown/collapsible-code-block.js';
+import { CollapsibleCodeBlock } from '#components/ui/collapsible-code-block.js';
 import { useAnalytics } from '#hooks/use-analytics.js';
 import type { Analytics } from '#hooks/use-analytics.js';
 

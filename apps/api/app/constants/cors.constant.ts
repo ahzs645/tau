@@ -14,7 +14,7 @@ const corsAllowedHeaders = Object.values(httpHeader);
 /**
  * CORS allowed methods.
  */
-const corsAllowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'];
+const corsAllowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 
 /**
  * CORS configuration.

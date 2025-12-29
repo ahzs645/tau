@@ -1,0 +1,85 @@
+# Cookie Policy
+
+*Effective date: December 29, 2025*
+
+This Cookie Policy explains how TauCAD Limited ("we," "us," or "our") uses cookies and similar technologies when you use our Service. This policy should be read together with our [Privacy Policy](/legal/privacy).
+
+This Cookie Policy complies with the EU ePrivacy Directive (2002/58/EC as amended by 2009/136/EC), the UK Privacy and Electronic Communications Regulations (PECR), and other applicable cookie laws.
+
+## What Are Cookies
+
+Cookies are small text files stored on your device. Similar technologies like localStorage are also used to store information locally in your browser.
+
+## Cookies We Use
+
+We distinguish between two types of cookies:
+
+- **Essential**: Strictly necessary for basic functionality. Cannot be disabled.
+- **Analytics** (Optional): With your consent, used to understand how you use the Service.
+
+### Essential Cookies
+
+| Category | Purpose | Retention |
+|----------|---------|-----------|
+| **Theme** | Remember your preferred color theme and accent color | Persistent |
+| **Layout** | Store panel sizes, sidebar states, and UI preferences | Persistent |
+| **CAD Settings** | Remember CAD kernel, measurement units, and file preview settings | Persistent |
+| **Chat Preferences** | Store AI model selection, web search preferences, and interface settings | Persistent |
+| **View Settings** | Remember camera field of view, view configuration, and section view settings | Persistent |
+| **Console Settings** | Store log level and display configuration | Persistent |
+| **Converter Settings** | Remember output formats and download preferences | Persistent |
+| **Cookie Consent** | Remember your cookie consent choice | 1 year |
+
+These cookies are stored locally in your browser and are not transmitted to external services. "Persistent" cookies remain until you clear your browser data or reset preferences.
+
+### Analytics Cookies (Optional)
+
+With your consent, we use PostHog to understand how users interact with our service.
+
+**Retention:** 12 months from collection.
+**Data Location:** United States.
+
+**What PostHog collects:** Page views, navigation patterns, device and browser information, interaction patterns, feature usage statistics.
+
+**What PostHog does NOT do:** Use third-party cookies, track you across websites, share data with advertising networks, sell your data.
+
+For more information, see the [PostHog Privacy Policy](https://posthog.com/privacy).
+
+## Global Privacy Control (GPC)
+
+We honor the Global Privacy Control (GPC) signal. If your browser sends a GPC signal:
+
+- Analytics cookies (PostHog) will not be loaded
+- Your preference is respected immediately without displaying a consent prompt for analytics
+- Essential cookies will still function as necessary for the Service
+
+For more information about GPC, visit [globalprivacycontrol.org](https://globalprivacycontrol.org).
+
+## Managing Your Cookie Preferences
+
+When you first visit Tau, you will see a cookie consent banner where you can:
+
+- **Accept**: Enable both essential and analytics cookies
+- **Decline**: Enable only essential cookies (analytics disabled)
+- **Manage**: Customize your choices
+
+You can change your preferences at any time:
+
+1. Click the Cookies button in the footer to reopen preferences
+2. Visit [Cookie Settings](/legal/cookies#preferences)
+3. Use your browser's cookie controls
+4. Clear site data for tau.new to reset all preferences
+
+When you withdraw consent for analytics, we stop collecting new data immediately.
+
+## Browser Cookie Controls
+
+Most web browsers allow you to view, delete, or block cookies through their settings. Refer to your browser's help documentation for instructions.
+
+## Changes to This Policy
+
+We may update this Cookie Policy from time to time. We will notify you of changes by posting the new policy on this page.
+
+## Contact Us
+
+If you have questions about this Cookie Policy, contact us at [privacy@tau.new](mailto:privacy@tau.new).

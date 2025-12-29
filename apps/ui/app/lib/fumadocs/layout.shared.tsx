@@ -28,7 +28,7 @@ export function baseOptions(): Omit<DocsLayoutProps, 'tree'> {
         // Mobile ToC Navigation Styles
         '[&_#nd-tocnav]:border',
         '[&_#nd-tocnav]:rounded-md',
-        '[&_#nd-tocnav]:bg-muted',
+        '[&_#nd-tocnav]:bg-sidebar',
         '[&_#nd-tocnav]:mx-2',
         // We want to keep the full page width on mobile, but only shrink the tocnav width via margins.
         '[&_#nd-tocnav]:ml-[calc(var(--docs-sidebar-toggle-width-current)+var(--spacing)*4)]',
@@ -42,7 +42,7 @@ export function baseOptions(): Omit<DocsLayoutProps, 'tree'> {
         'xl:[--fd-banner-height:calc(var(--header-height)-(var(--spacing)*2))]',
         '[&_#nd-toc]:border',
         '[&_#nd-toc]:rounded-md',
-        '[&_#nd-toc]:bg-muted',
+        '[&_#nd-toc]:bg-sidebar',
         '[&_#nd-toc]:mx-2',
         '[&_#nd-toc]:p-2',
         '[&_#nd-toc]:pb-0!',

@@ -97,6 +97,9 @@ function isHiddenFile(path: string, patterns: string[]): boolean {
 }
 
 export const ChatEditorFileTree = memo(function (): React.JSX.Element {
+  // It's necessary to opt out of React Compiler auto-memoization for this component due to:
+  // https://headless-tree.lukasbach.com/guides/react-compiler/
+  'use no memo'; // Opt out of React Compiler memoization
   const { buildRef, fileExplorerRef, gitRef, cadRef } = useBuild();
   const buildId = useSelector(buildRef, (state) => state.context.buildId);
   const { fileManagerRef } = useFileManager();

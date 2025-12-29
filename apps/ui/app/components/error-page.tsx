@@ -3,7 +3,8 @@ import { useEffect } from 'react';
 import { isRouteErrorResponse, useNavigate, useRouteError } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { useAnalytics } from '#hooks/use-analytics.js';
-import { CollapsibleCodeBlock } from '#components/markdown/collapsible-code-block.js';
+import { CollapsibleCodeBlock } from '#components/ui/collapsible-code-block.js';
+import { PageNotFound } from '#components/page-not-found.js';
 
 export function ErrorPage(): React.JSX.Element {
   const error = useRouteError();
@@ -11,6 +12,11 @@ export function ErrorPage(): React.JSX.Element {
   const analytics = useAnalytics();
 
   useEffect(() => {
+    // Don't report 404 errors to analytics - they're expected user behavior
+    if (isRouteErrorResponse(error) && error.status === 404) {
+      return;
+    }
+
     if (isRouteErrorResponse(error)) {
       const routeError = new Error(`${error.status} ${error.statusText}`);
       routeError.name = 'route_error';
@@ -28,9 +34,14 @@ export function ErrorPage(): React.JSX.Element {
     globalThis.location.reload();
   };
 
+  // Handle 404 errors with the dedicated PageNotFound component
+  if (isRouteErrorResponse(error) && error.status === 404) {
+    return <PageNotFound />;
+  }
+
   if (isRouteErrorResponse(error)) {
     return (
-      <div className="flex size-full flex-col items-center justify-center gap-6 p-8 md:ml-(--sidebar-width-current)">
+      <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-6 px-4 py-8">
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="flex size-12 items-center justify-center rounded-full bg-destructive/10">
             <AlertCircle className="size-6 text-destructive" />
@@ -59,7 +70,7 @@ export function ErrorPage(): React.JSX.Element {
 
   if (error instanceof Error) {
     return (
-      <div className="flex min-h-full flex-col items-center justify-center py-8 pr-2 transition-all duration-200 ease-linear md:ml-(--sidebar-width-current)">
+      <div className="flex min-h-full flex-1 flex-col items-center justify-center px-4 py-8">
         <div className="flex w-full max-w-lg flex-col items-center gap-4 p-6 text-center">
           {/* Error Icon */}
           <div className="flex size-12 items-center justify-center rounded-full bg-destructive/10">

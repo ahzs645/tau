@@ -1,12 +1,77 @@
 import { PostHogProvider, usePostHog } from 'posthog-js/react';
 import type { PostHog } from 'posthog-js/react';
+import { useAuthenticate } from '@daveyplate/better-auth-ui';
+import { useEffect, useRef } from 'react';
 import { posthogConfig } from '#lib/posthog.js';
+import { useCookie } from '#hooks/use-cookie.js';
+import { cookieName } from '#constants/cookie.constants.js';
 
 export type Analytics = PostHog;
+
+export type ConsentStatus = 'pending' | 'granted' | 'denied';
 
 export function useAnalytics(): Analytics {
   const posthog = usePostHog();
   return posthog;
+}
+
+/**
+ * Hook to manage cookie consent state.
+ * Returns the current consent status and a setter function.
+ */
+export function useCookieConsent(): [ConsentStatus, (status: ConsentStatus) => void] {
+  const [consentStatus, setConsentStatus] = useCookie<ConsentStatus>(cookieName.cookieConsent, 'pending');
+  return [consentStatus, setConsentStatus];
+}
+
+/**
+ * Internal component that handles user identification with PostHog.
+ *
+ * Following PostHog best practices:
+ * - Identifies logged-in users with their unique user ID and person properties
+ * - Resets analytics when users log out to unlink future events
+ * - Called once per session, with identification on app load and after login
+ * - Only identifies users who have explicitly granted consent
+ *
+ * @see https://posthog.com/docs/data/identify
+ */
+function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode }): React.ReactNode {
+  const analytics = useAnalytics();
+  const { user } = useAuthenticate({ enabled: false });
+  const [consentStatus] = useCookieConsent();
+  const previousUserIdRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    const currentUserId = user?.id;
+    const previousUserId = previousUserIdRef.current;
+
+    // Only identify users who have explicitly granted consent
+    // PostHog does not automatically prevent identify() calls, so we must check consent
+    const hasConsent = consentStatus === 'granted';
+
+    // User logged in or app loaded with authenticated user
+    // Identify the user with their unique ID and person properties
+    // Only call identify() once per session to prevent unnecessary events
+    if (currentUserId && currentUserId !== previousUserId && hasConsent && !analytics._isIdentified()) {
+      analytics.identify(currentUserId, {
+        email: user.email,
+        name: user.name,
+        // PostHog uses 'avatar' for person profile images
+        avatar: user.image,
+      });
+      // Only update ref after successful identification to handle deferred consent
+      previousUserIdRef.current = currentUserId;
+    }
+
+    // User logged out - reset to unlink future events from this user
+    // This is important for shared devices to avoid merging different users
+    if (!currentUserId && previousUserId) {
+      analytics.reset();
+      previousUserIdRef.current = undefined;
+    }
+  }, [analytics, consentStatus, user?.id, user?.email, user?.name, user?.image]);
+
+  return children;
 }
 
 export function AnalyticsProvider({ children }: { readonly children: React.ReactNode }): React.ReactNode {
@@ -21,7 +86,7 @@ export function AnalyticsProvider({ children }: { readonly children: React.React
 
   return (
     <PostHogProvider options={options} apiKey={apiKey}>
-      {children}
+      <AnalyticsIdentifier>{children}</AnalyticsIdentifier>
     </PostHogProvider>
   );
 }

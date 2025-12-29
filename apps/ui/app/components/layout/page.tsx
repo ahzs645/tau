@@ -23,8 +23,69 @@ import { Tau } from '#components/icons/tau.js';
 import { Compose } from '#components/ui/utils/compose.js';
 import { Commands } from '#components/layout/command-palette.js';
 import { PageFooter } from '#components/layout/page-footer.js';
+import { SidebarOffset } from '#components/layout/sidebar-offset.js';
+import { CookieConsent } from '#components/cookie-consent.js';
 
 export const headerHeight = 'calc(var(--spacing) * 12)';
+
+/**
+ * Positioning classes for content that needs to account for the sidebar.
+ * Applied to the section when `enableFloatingSidebar` is false,
+ * or to the content wrapper when rendering errors on floating sidebar routes.
+ */
+const sidebarPositioningClasses =
+  'mt-(--header-height) h-[calc(100dvh-var(--header-height)-1px)] transition-[margin] duration-200 ease-linear md:ml-[calc(var(--sidebar-width-current)-var(--spacing)*2)]';
+
+type SectionContentProps = {
+  readonly error: ReactNode | undefined;
+  readonly enablePageFooter: boolean;
+  readonly enableFloatingSidebar: boolean;
+  readonly shouldApplyPositioning: boolean;
+};
+
+/**
+ * Renders the main content area of the page.
+ * Handles the different rendering paths for:
+ * - Normal content (Outlet)
+ * - Error content
+ * - With or without page footer
+ * - With or without sidebar positioning
+ */
+function SectionContent({
+  error,
+  enablePageFooter,
+  enableFloatingSidebar,
+  shouldApplyPositioning,
+}: SectionContentProps): React.JSX.Element {
+  const content = error ?? <Outlet />;
+
+  // With footer: wrap in flex container with optional positioning
+  if (enablePageFooter) {
+    return (
+      <div
+        className={cn('flex min-h-full flex-col overflow-hidden', shouldApplyPositioning && sidebarPositioningClasses)}
+      >
+        <div className="flex flex-1 flex-col">{content}</div>
+        {enableFloatingSidebar ? (
+          <SidebarOffset asChild via="margin">
+            <PageFooter />
+          </SidebarOffset>
+        ) : (
+          <PageFooter />
+        )}
+      </div>
+    );
+  }
+
+  // Error on floating sidebar route (no footer): wrap with positioning
+  if (shouldApplyPositioning) {
+    return <div className={cn('flex flex-col', sidebarPositioningClasses)}>{content}</div>;
+  }
+
+  // Default: render content directly
+  // eslint-disable-next-line react/jsx-no-useless-fragment -- needed for consistent return type
+  return <>{content}</>;
+}
 
 export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Element {
   const {
@@ -32,7 +93,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
     hasBreadcrumbItems,
     actionItems,
     hasActionItems,
-    noPageWrapper,
+    enablePageWrapper,
     enableFloatingSidebar,
     enableOverflowY,
     providers,
@@ -42,7 +103,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
     hasBreadcrumbItems: handles.breadcrumb.length > 0,
     actionItems: handles.actions,
     hasActionItems: handles.actions.length > 0,
-    noPageWrapper: handles.noPageWrapper.some((match) => match.handle.noPageWrapper === true),
+    enablePageWrapper: !handles.enablePageWrapper.some((match) => match.handle.enablePageWrapper === false),
     enableFloatingSidebar: handles.enableFloatingSidebar.some((match) => match.handle.enableFloatingSidebar === true),
     enableOverflowY: handles.enableOverflowY.some((match) => match.handle.enableOverflowY === true),
     providers: handles.providers,
@@ -61,7 +122,14 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
 
   const isOnline = useNetworkConnectivity();
 
-  if (noPageWrapper) {
+  // Compute positioning logic once
+  // Section handles positioning for standard routes (non-floating sidebar)
+  const shouldSectionApplyPositioning = !enableFloatingSidebar;
+  // Content wrapper needs positioning when: floating sidebar route + error
+  // (because error content doesn't handle its own positioning like fumadocs does)
+  const shouldContentApplyPositioning = enableFloatingSidebar && error !== undefined;
+
+  if (!enablePageWrapper) {
     return (
       <Compose components={Providers}>
         <Outlet />
@@ -74,8 +142,8 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
       <SidebarProvider>
         <AppSidebar />
         <SidebarInset style={{ '--header-height': headerHeight }}>
-          <header className="pointer-events-none absolute top-0 z-20 flex h-[var(--header-height)] w-full shrink-0 items-center justify-between gap-2">
-            <div className="pointer-events-auto ml-2 flex h-8 items-center gap-0.25 rounded-md border bg-sidebar p-0.25 pl-2.75 transition-[margin] duration-200 ease-linear md:ml-[var(--sidebar-width-current)] md:gap-1">
+          <header className="pointer-events-none absolute top-0 z-20 flex h-(--header-height) w-full shrink-0 items-center justify-between gap-2">
+            <div className="pointer-events-auto ml-2 flex h-8 items-center gap-0.25 rounded-md border bg-sidebar p-0.25 pl-2.75 transition-[margin] duration-200 ease-linear md:ml-(--sidebar-width-current) md:gap-1">
               <SidebarTrigger className="group/sidebar-trigger -ml-2.5 rounded-sm">
                 <Tau className="size-6 text-primary group-hover/sidebar-trigger:hidden group-data-[open=true]/sidebar-trigger:hidden max-md:hidden" />
                 <PanelLeftIcon className="size-4 group-hover/sidebar-trigger:block group-data-[open=true]/sidebar-trigger:block md:hidden" />
@@ -141,22 +209,18 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
             className={cn(
               'h-dvh',
               enableOverflowY && 'overflow-y-auto',
-              !enableFloatingSidebar &&
-                'mt-[var(--header-height)] h-[calc(100dvh-var(--header-height)-1px)] transition-[margin] duration-200 ease-linear md:ml-[calc(var(--sidebar-width-current)-var(--spacing)*2)]',
+              shouldSectionApplyPositioning && sidebarPositioningClasses,
             )}
           >
-            {enablePageFooter ? (
-              <div className="flex min-h-full flex-col overflow-hidden">
-                <div className="flex-1">{error === undefined ? <Outlet /> : error}</div>
-                <PageFooter />
-              </div>
-            ) : error === undefined ? (
-              <Outlet />
-            ) : (
-              error
-            )}
+            <SectionContent
+              error={error}
+              enablePageFooter={enablePageFooter}
+              enableFloatingSidebar={enableFloatingSidebar}
+              shouldApplyPositioning={shouldContentApplyPositioning}
+            />
           </section>
         </SidebarInset>
+        <CookieConsent />
       </SidebarProvider>
     </Compose>
   );

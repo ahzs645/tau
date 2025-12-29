@@ -8,6 +8,8 @@ export const posthogConfig: { options: Partial<PostHogConfig>; apiKey: string } 
     // eslint-disable-next-line @typescript-eslint/naming-convention -- posthog-js Options
     ui_host: ENV.POSTHOG_UI_HOST,
     defaults: '2025-11-30',
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- posthog-js Options
+    cookieless_mode: 'on_reject',
   },
   // When no API key is set, set an empty string. `use-analytics.tsx` will detect this and not use the analytics provider.
   // This is useful for development and self-hosted configurations.

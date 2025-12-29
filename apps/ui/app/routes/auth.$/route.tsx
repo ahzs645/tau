@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import type { Handle } from '#types/matches.types.js';
 
 export const handle: Handle = {
-  noPageWrapper: true,
+  enablePageWrapper: false,
 };
 
 export default function AuthPage(): React.JSX.Element {

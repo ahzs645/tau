@@ -19,7 +19,7 @@ export function useTypedMatches<Selected>(
       breadcrumb: [],
       actions: [],
       commandPalette: [],
-      noPageWrapper: [],
+      enablePageWrapper: [],
       enableFloatingSidebar: [],
       enableOverflowY: [],
       providers: [],
@@ -38,7 +38,7 @@ export function useTypedMatches<Selected>(
 
     // Populate the result with matches for each handle property
     for (const key of handleKeys) {
-      result[key] = matches.filter((match): match is TypedUiMatchWithHandle => Boolean(match.handle?.[key]));
+      result[key] = matches.filter((match): match is TypedUiMatchWithHandle => match.handle?.[key] !== undefined);
     }
 
     return result;

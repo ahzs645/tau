@@ -1,34 +1,12 @@
 import { Laptop, Moon, Sun } from 'lucide-react';
-import { Theme, useTheme } from 'remix-themes';
 import { SidebarMenuButton } from '#components/ui/sidebar.js';
-import { useCookie } from '#hooks/use-cookie.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { cookieName } from '#constants/cookie.constants.js';
-
-// Null is used to represent the system theme
-// eslint-disable-next-line @typescript-eslint/no-restricted-types -- null is used to represent the system theme, as it's serializable in JSON
-type ThemeWithSystem = Theme | null;
+import { useThemeToggle } from '#hooks/use-theme-toggle.js';
 
 export function ThemeToggle(): React.JSX.Element {
-  const [, setTheme] = useTheme();
-
-  const [theme, setThemeCookie] = useCookie<ThemeWithSystem>(cookieName.colorTheme, null);
-
-  const cycleTheme = () => {
-    let newTheme;
-    if (theme === Theme.LIGHT) {
-      newTheme = Theme.DARK;
-    } else if (theme === Theme.DARK) {
-      newTheme = null;
-    } else {
-      newTheme = Theme.LIGHT;
-    }
-
-    setTheme(newTheme);
-    setThemeCookie(newTheme);
-  };
+  const { theme, cycleTheme } = useThemeToggle();
 
   const { formattedKeyCombination } = useKeydown(
     {

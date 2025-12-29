@@ -125,7 +125,7 @@ export function CodeEditor({
         automaticLayout: true,
         // Word-based suggestions are redundant for typed languages
         wordBasedSuggestions: 'off',
-      }) as const,
+      }) as const satisfies Monaco.editor.IStandaloneEditorConstructionOptions,
     [isMobile],
   );
 

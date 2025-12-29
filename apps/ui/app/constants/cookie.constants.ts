@@ -91,6 +91,10 @@ export const cookieName = {
   /* Docs */
   // Whether the docs sidebar is open.
   docsOpSidebar: 'docs-op-sidebar',
+
+  /* Privacy */
+  // The user's cookie consent choice.
+  cookieConsent: 'cookie-consent',
 } as const;
 
 /**
