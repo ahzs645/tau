@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { extractLanguageFromClassName, MarkdownCode } from '#components/markdown/markdown-code.js';
 
 // Mock the CollapsibleCodeBlock component
-vi.mock('#components/markdown/collapsible-code-block.js', () => ({
+vi.mock('#components/ui/collapsible-code-block.js', () => ({
   CollapsibleCodeBlock: ({
     language,
     title,
