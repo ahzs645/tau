@@ -402,6 +402,8 @@ class OpenScadWorker extends KernelWorker {
 
       this.debug(`Successfully mounted ${this.fontCache.size} fonts`, { operation: 'mountFonts' });
     } catch (error) {
+      // Reset fontCache so next call will retry fetching
+      this.fontCache = undefined;
       // Log warning but don't fail - text rendering just won't work
       this.warn('Failed to mount fonts - text() may not render correctly', {
         operation: 'mountFonts',
