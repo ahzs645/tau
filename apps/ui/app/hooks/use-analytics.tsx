@@ -10,8 +10,32 @@ export type Analytics = PostHog;
 
 export type ConsentStatus = 'pending' | 'granted' | 'denied';
 
+/**
+ * Noop analytics object that implements the PostHog interface.
+ * Used when PostHog is not configured (e.g., no API key in development or self-hosted).
+ */
+/* eslint-disable @typescript-eslint/naming-convention -- posthog-js uses snake_case method names */
+const noopAnalytics = {
+  opt_in_capturing: () => undefined,
+  opt_out_capturing: () => undefined,
+  get_explicit_consent_status: () => undefined,
+  identify: () => undefined,
+  reset: () => undefined,
+  _isIdentified: () => false,
+  captureException: () => undefined,
+} as unknown as Analytics;
+/* eslint-enable @typescript-eslint/naming-convention -- re-enable after noop object */
+
 export function useAnalytics(): Analytics {
   const posthog = usePostHog();
+
+  // When PostHog is not configured (no API key), usePostHog returns an object
+  // that doesn't have all the required methods. Check for a key method to determine
+  // if PostHog is properly initialized.
+  if (typeof posthog.get_explicit_consent_status !== 'function') {
+    return noopAnalytics;
+  }
+
   return posthog;
 }
 
@@ -79,7 +103,7 @@ export function AnalyticsProvider({ children }: { readonly children: React.React
 
   // When no API key is set, we don't use the analytics provider.
   // This is useful for development and self-hosted configurations.
-  // The usePostHog hook safely handles the missing context.
+  // The useAnalytics hook returns a noop implementation when PostHog is not available.
   if (!apiKey) {
     return children;
   }
