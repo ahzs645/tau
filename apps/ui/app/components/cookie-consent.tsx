@@ -198,7 +198,7 @@ export function CookieConsent(): React.JSX.Element | undefined {
   return (
     <>
       {/* Cookie consent banner */}
-      <div className="fixed right-2 bottom-2 z-50 max-w-sm animate-in duration-300 fade-in slide-in-from-bottom-4">
+      <div className="fixed right-2 bottom-2 z-50 max-w-sm animate-in duration-300 fade-in slide-in-from-bottom-4 max-sm:left-2">
         <div className="flex flex-col gap-2 rounded-lg border bg-card p-4 shadow-md">
           <div className="flex items-start justify-between">
             <h3 className="font-semibold">Cookies</h3>
@@ -207,8 +207,8 @@ export function CookieConsent(): React.JSX.Element | undefined {
           <p className="text-sm text-muted-foreground">
             We use cookies to analyze site usage and improve your experience.
           </p>
-          <div className="-ml-3 flex items-center justify-between">
-            <Button variant="link" size="sm" className="-mb-2" onClick={handleManage}>
+          <div className="flex items-center justify-between">
+            <Button variant="link" size="sm" className="-mb-2 -ml-3" onClick={handleManage}>
               Manage
             </Button>
             <div className="flex items-center gap-2">
