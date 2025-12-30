@@ -1,137 +1,140 @@
-// select the type and complete the matching tab below (***)
-Type = "T"; // [T:Text, W:Wi-Fi,P:Phone Call,V:vCard]
+// Configure the matching tab below
+Type = "T"; // [T:Text,W:Wi-Fi,P:Phone,V:vCard]
 
 
-/* [*** Text Type ***] */
+/* [Text] */
 
-// string to encode (text, url, mail, ect.)
-Text = "hello world"; // 128
+// Any text, URL, email, or message
+Text = "https://tau.tools"; // 128
 
 
-/* [*** Wi-Fi Type ***] */
+/* [Wi-Fi] */
 
-// Wi-Fi network name
-SSID = "my ssid"; // 32
+// Your wireless network name
+SSID = "MyNetwork"; // 32
 
-// Wi-Fi Authentication Type
-Auth = "WPA"; // [nopass: open network - no password, WEP:WEP password protection - obsolete,WPA:WPA password protection]
+// How the network is protected
+Auth = "WPA"; // [nopass:None,WEP:WEP,WPA:WPA/WPA2]
 
-// Wi-Fi Password
-Password = "my password";
+// Leave empty for open networks
+Password = ""; // 64
 
-// whether network is hidden
+// Enable if network doesn't broadcast
 Is_Hidden = false;
 
 
-/* [*** Phone Call Type ****] */
+/* [Phone] */
 
-// phone number
-Number = "+48111111111"; // 32
+// Include country code (e.g. +1)
+Number = "+1234567890"; // 32
 
 
-/* [*** vCard Type ***] */
+/* [vCard] */
 
-// firstname
-Firstname = "John"; // 32
+// Contact's given name
+Firstname = "Jane"; // 32
 
-// surname - lastname
-Surname = "Smith"; // 32
+// Contact's family name
+Surname = "Doe"; // 32
 
-// street address
-Address = "My Street, 123"; // 64
+// Street number and name
+Address = "123 Main St"; // 64
 
-// city name
-City = "Los Angeles"; // 64
+// City or town
+City = "San Francisco"; // 64
 
-// region (e.g. state or province)
-Region = "California"; // 64
+// State, province, or territory
+Region = "CA"; // 64
 
-// postal code
-Postalcode = "90001"; // 32
+// ZIP or postal code
+Postalcode = "94102"; // 32
 
-// full country name
-Country = "United States"; // 64
+// Full country name or code
+Country = "USA"; // 64
 
-// email address
-Email = "info@example.org"; // 64
+// Contact email for the vCard
+Email = "hello@example.com"; // 64
 
-// website or other URL
-Site_URL = "https://www.example.org"; // 64
+// Personal or company website
+Site_URL = "https://example.com"; // 64
 
-// phone number
-Phone_Number = "+48111111111"; // 32
+// Contact phone with country code
+Phone_Number = "+1234567890"; // 32
 
 
 /* [Dimensions] */
 
-// overall size of the object (mm)
-Overall_Size = 50;// [10:0.1:200]
+// Width and height of the entire model
+Overall_Size = 50; // [10:0.1:200]
 
-// size of the border (mm)
-Border_Size = 1;// [0:0.1:20]
-    
-// thickness of the background (mm)
-Background_Thickness = 1;// [1:0.1:20]
+// Margin around the QR pattern
+Border_Size = 1; // [0:0.1:20]
 
-// thickness of the QR Code (mm)
-QR_Code_Thickness = 0.6;// [0.6:0.1:20]
+// Thickness of the base plate
+Background_Thickness = 1; // [1:0.1:20]
+
+// How much the QR pattern is raised
+QR_Code_Thickness = 0.6; // [0.6:0.1:20]
 
 
-/* [QR Code Options] */
+/* [Style] */
 
-// use round blocks
+// Modern look with circular dots
 Round_Blocks = false;
 
 
-/* [Hole Keyring Options] */
+/* [Keyring] */
 
-// diameter of the hole (mm, 0 to remove)
+// Add a loop hole for hanging (0 = none)
 Hole_Size = 0; // [0:1:10]
 
 
-/* [Label Options] */
+/* [Label] */
 
-// size of the label (mm, 0 to remove)
-Label_Size = 0; //[0:1:10]
+// Add text above or below (0 = none)
+Label_Size = 0; // [0:1:10]
 
-// position of the label (if enabled)
-Label_Position = "T";// [T:Top,B:Bottom,TB:Top & Bottom]
+// Where to place the label text
+Label_Position = "T"; // [T:Top,B:Bottom,TB:Both]
 
-// primary string (when top or bottom)
+// Main text shown on label
 Label_Primary_String = "SCAN ME"; // 32
 
-// secondary string (when both)
-Label_Secondary_String = "NOW"; // 32
+// Additional text when using both positions
+Label_Secondary_String = ""; // 32
 
-// thickness of the label (mm)
-Label_Thickness = 0.6;// [0.6:0.1:20]
+// How much the text is raised
+Label_Thickness = 0.6; // [0.6:0.1:20]
 
-// font name
-Font = "Roboto:style=Regular"; // font
+// Typeface for label text
+Font = "Roboto:style=Bold"; // font
 
-/* [Magnet Options] */
 
-// magnet type
-Magnet_Type = "N"; // [N:None, C_04_02:D4x2 mm Round Magnet, C_05_01:D5x1 mm Round Magnet, C_05_02:D5x2 mm Round Magnet, C_05_03:D5x3 mm Round Magnet, C_06_02:D6x2 mm Round Magnet, C_06_03:D6x3 mm Round Magnet, C_06_02:D6x4 mm Round Magnet, C_08_02:D8x2 mm Round Magnet, C_08_03:D8x3 mm Round Magnet, C_10_03:D10x3 mm Round Magnet, C_12_03:D12x3 mm Round Magnet, C_15_03:D15x3 mm Round Magnet, C_20_03:D20x3 mm Round Magnet, R_10_05_01:10x5x1 mm Rectangular Magnet, R_10_05_02:10x5x2 mm Rectangular Magnet, R_20_10_02:20x10x2 mm Rectangular Magnet, R_20_10_03:20x10x3 mm Rectangular Magnet, R_25_15_05:25x15x5 mm Rectangular Magnet]
+/* [Magnet] */
 
-// magnet hole clearance (mm)
+// Embed a magnet recess in the back
+Magnet_Type = "N"; // [N:None,C_05_02:5x2mm Round,C_06_03:6x3mm Round,C_08_03:8x3mm Round,C_10_03:10x3mm Round,R_10_05_02:10x5x2mm Rect,R_20_10_03:20x10x3mm Rect]
+
+// Extra space for easier magnet fit
 Magnet_Clearance = 0.20; // [0:0.05:0.4]
+
 
 /* [Colors] */
 
-// background color
-Color_Background = "#000000"; // color
+// Base plate and border color
+Color_Background = "#1a1a1a"; // color
 
-// QR Code color
+// Color of the raised QR pattern
 Color_QR_Code = "#FFFFFF"; // color
 
-// label color
-Color_Labels = "#333333"; // color
+// Color of any label text
+Color_Labels = "#888888"; // color
 
-/* [Parts Download] */
 
-// parts to download in STL (to be merged in Bambu Studio)
-Parts = "A"; //[A:All, B:Background,Q:QR Code,L:Label - if present]
+/* [Export] */
+
+// Choose which parts to download
+Parts = "A"; // [A:All,B:Background,Q:QR Code,L:Label]
 
 /* [Hidden] */
 

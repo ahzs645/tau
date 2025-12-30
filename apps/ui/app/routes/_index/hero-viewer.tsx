@@ -61,7 +61,7 @@ function ViewerStatus({ className, ...properties }: React.HTMLAttributes<HTMLDiv
     <div
       {...properties}
       className={cn(
-        'absolute top-4 left-4 z-10 flex items-center gap-2 rounded-md border bg-background/70 px-2 py-1 backdrop-blur-sm',
+        'absolute right-2 bottom-2 z-10 flex items-center gap-2 rounded-md border bg-background/70 px-2 py-1 backdrop-blur-sm',
         className,
       )}
     >
