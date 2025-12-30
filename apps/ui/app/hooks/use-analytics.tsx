@@ -74,16 +74,21 @@ function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode 
     const hasConsent = consentStatus === 'granted';
 
     // User logged in or app loaded with authenticated user
-    // Identify the user with their unique ID and person properties
-    // Only call identify() once per session to prevent unnecessary events
-    if (currentUserId && currentUserId !== previousUserId && hasConsent && !analytics._isIdentified()) {
-      analytics.identify(currentUserId, {
-        email: user.email,
-        name: user.name,
-        // PostHog uses 'avatar' for person profile images
-        avatar: user.image,
-      });
-      // Only update ref after successful identification to handle deferred consent
+    if (currentUserId && currentUserId !== previousUserId) {
+      // Identify the user with their unique ID and person properties
+      // Only call identify() once per session to prevent unnecessary events
+      // Skip if already identified (e.g., PostHog restored from session storage)
+      if (hasConsent && !analytics._isIdentified()) {
+        analytics.identify(currentUserId, {
+          email: user.email,
+          name: user.name,
+          // PostHog uses 'avatar' for person profile images
+          avatar: user.image,
+        });
+      }
+
+      // Always sync the ref with current user to ensure logout detection works
+      // even when identify() was skipped (e.g., already identified from session)
       previousUserIdRef.current = currentUserId;
     }
 
