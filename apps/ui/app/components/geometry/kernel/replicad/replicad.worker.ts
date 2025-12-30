@@ -119,10 +119,17 @@ try {
       this.replicadHasOc = true;
     }
 
-    // Load default font for textBlueprints() and sketchText() if not already loaded
-    if (!replicad.getFont()) {
+    // Load default font for textBlueprints() and sketchText()
+    // Font loading is non-critical - text functions will warn if font is unavailable
+    // replicad.loadFont() is idempotent and skips if font already loaded
+    try {
       this.debug('Loading default font for text rendering');
       await replicad.loadFont(geistRegularUrl, 'default');
+    } catch (error) {
+      this.warn('Failed to load default font for text rendering - text functions may not work', {
+        data: error,
+        operation: 'initialize',
+      });
     }
   }
 
