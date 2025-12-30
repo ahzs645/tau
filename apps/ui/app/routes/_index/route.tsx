@@ -96,40 +96,42 @@ export default function ChatStart(): React.JSX.Element {
   return (
     <>
       {/* Chat Input Section */}
-      <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 pb-12 md:space-y-8 md:px-6 md:pt-32">
-        <div className="mb-12 text-center">
-          <h1 className="mx-auto max-w-[16ch] text-3xl font-semibold tracking-tight text-balance md:max-w-[20ch] md:text-5xl">
-            What can I help you build?
-          </h1>
-        </div>
+      <div className="container mx-auto px-4 py-6 pb-12 md:px-6 md:pt-32">
+        <div className="mx-auto max-w-3xl space-y-6 md:space-y-8">
+          <div className="mb-12 text-center">
+            <h1 className="mx-auto max-w-[16ch] text-3xl font-semibold tracking-tight text-balance md:max-w-[20ch] md:text-5xl">
+              What can I help you build?
+            </h1>
+          </div>
 
-        <ChatProvider value={{}}>
-          <div className="space-y-4">
-            <div className="flex justify-center">
-              <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />
+          <ChatProvider value={{}}>
+            <div className="space-y-4">
+              <div className="flex justify-center">
+                <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />
+              </div>
+              <ChatTextarea
+                enableContextActions={false}
+                enableKernelSelector={false}
+                className="pt-1"
+                onSubmit={onSubmit}
+              />
             </div>
-            <ChatTextarea
-              enableContextActions={false}
-              enableKernelSelector={false}
-              className="pt-1"
-              onSubmit={onSubmit}
-            />
-          </div>
-          <div className="mx-auto my-6 flex w-20 items-center justify-center">
-            <Separator />
-            <div className="mx-4 text-sm font-light text-muted-foreground">or</div>
-            <Separator />
-          </div>
-          <div className="flex justify-center">
-            <NavLink to="/builds/new" tabIndex={-1}>
-              {({ isPending }) => (
-                <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
-                  {isPending ? <LoadingSpinner /> : 'Build from code'}
-                </InteractiveHoverButton>
-              )}
-            </NavLink>
-          </div>
-        </ChatProvider>
+            <div className="mx-auto my-6 flex w-20 items-center justify-center">
+              <Separator />
+              <div className="mx-4 text-sm font-light text-muted-foreground">or</div>
+              <Separator />
+            </div>
+            <div className="flex justify-center">
+              <NavLink to="/builds/new" tabIndex={-1}>
+                {({ isPending }) => (
+                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
+                    {isPending ? <LoadingSpinner /> : 'Build from code'}
+                  </InteractiveHoverButton>
+                )}
+              </NavLink>
+            </div>
+          </ChatProvider>
+        </div>
       </div>
 
       {/* Community Builds */}
