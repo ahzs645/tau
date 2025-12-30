@@ -51,11 +51,15 @@ export const ChatError = memo(function ({
 
   // Handle UNAUTHORIZED errors with dedicated component
   if (parsed?.code === 'UNAUTHORIZED') {
-    return <ChatErrorUnauthorized className={cn('mx-2', className)} />;
+    return (
+      <div className={cn('size-full', className)}>
+        <ChatErrorUnauthorized />
+      </div>
+    );
   }
 
   return (
-    <div className={cn('mx-2 size-full', className)}>
+    <div className={cn('size-full', className)}>
       <Collapsible
         open={isOpen}
         className={cn(
