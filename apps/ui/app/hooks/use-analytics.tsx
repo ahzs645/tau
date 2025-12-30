@@ -75,10 +75,12 @@ function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode 
 
     // User logged in or app loaded with authenticated user
     if (currentUserId && currentUserId !== previousUserId) {
+      const isAlreadyIdentified = analytics._isIdentified();
+
       // Identify the user with their unique ID and person properties
       // Only call identify() once per session to prevent unnecessary events
       // Skip if already identified (e.g., PostHog restored from session storage)
-      if (hasConsent && !analytics._isIdentified()) {
+      if (hasConsent && !isAlreadyIdentified) {
         analytics.identify(currentUserId, {
           email: user.email,
           name: user.name,
@@ -87,9 +89,11 @@ function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode 
         });
       }
 
-      // Always sync the ref with current user to ensure logout detection works
-      // even when identify() was skipped (e.g., already identified from session)
-      previousUserIdRef.current = currentUserId;
+      // Only update ref after successful identification to handle deferred consent
+      // Also update if already identified from session (for logout detection)
+      if (hasConsent || isAlreadyIdentified) {
+        previousUserIdRef.current = currentUserId;
+      }
     }
 
     // User logged out - reset to unlink future events from this user
