@@ -2,103 +2,7 @@ import type { Model } from '#api/models/model.schema.js';
 import type { CloudProviderId } from '#api/models/model.service.js';
 
 export const modelList: Record<CloudProviderId, Record<string, Model>> = {
-  vertexai: {
-    'gemini-3-pro': {
-      id: 'google-gemini-3-pro',
-      name: 'Gemini 3 Pro',
-      slug: 'gemini-3-pro',
-      provider: {
-        id: 'vertexai',
-        name: 'Google',
-      },
-      model: 'gemini-3-pro-preview',
-      details: {
-        family: 'gemini',
-        families: ['Gemini'],
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-        cost: {
-          inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
-          outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
-          cachedReadTokens: 0,
-          cachedWriteTokens: 0,
-        },
-      },
-      configuration: {
-        streaming: true,
-        temperature: 0,
-        // Note: This is the non-thinking config. For extended thinking, create a
-        // separate model entry with thinkingLevel: 'high' (requires temperature: 1).
-      },
-    },
-  },
-
   anthropic: {
-    'claude-sonnet-4.5': {
-      id: 'anthropic-claude-sonnet-4.5',
-      name: 'Sonnet 4.5',
-      slug: 'claude-sonnet-4.5',
-      provider: {
-        id: 'anthropic',
-        name: 'Anthropic',
-      },
-      model: 'claude-sonnet-4-5-20250929',
-      details: {
-        family: 'claude',
-        families: ['Claude'],
-        contextWindow: 200_000,
-        // Sonnet 4.5 supports standard output up to 8192 tokens
-        maxTokens: 8192,
-        cost: {
-          inputTokens: 3,
-          outputTokens: 15,
-          cachedReadTokens: 0.3,
-          cachedWriteTokens: 3.75,
-        },
-      },
-      configuration: {
-        streaming: true,
-        temperature: 0,
-      },
-    },
-    'claude-sonnet-4.5-thinking': {
-      id: 'anthropic-claude-sonnet-4.5-thinking',
-      name: 'Sonnet 4.5 (Extended Thinking)',
-      slug: 'claude-sonnet-4.5-thinking',
-      provider: {
-        id: 'anthropic',
-        name: 'Anthropic',
-      },
-      model: 'claude-sonnet-4-5-20250929',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'claude',
-        families: ['Claude'],
-        contextWindow: 200_000,
-        // Extended thinking mode supports up to 64000 tokens
-        maxTokens: 64_000,
-        cost: {
-          inputTokens: 3,
-          outputTokens: 15,
-          cachedReadTokens: 0.3,
-          cachedWriteTokens: 3.75,
-        },
-      },
-      configuration: {
-        streaming: true,
-        maxTokens: 20_000,
-        // @ts-expect-error: FIXME - some models use camelCase
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-        max_tokens: 20_000,
-        thinking: {
-          type: 'enabled',
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-          budget_tokens: 10_000,
-        },
-      },
-    },
     'claude-4.5-opus': {
       id: 'anthropic-claude-opus-4.5',
       name: 'Opus 4.5',
@@ -133,6 +37,44 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
           type: 'enabled',
           // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
           budget_tokens: 5000,
+        },
+      },
+    },
+    'claude-sonnet-4.5': {
+      id: 'anthropic-claude-sonnet-4.5',
+      name: 'Sonnet 4.5',
+      slug: 'claude-sonnet-4.5',
+      provider: {
+        id: 'anthropic',
+        name: 'Anthropic',
+      },
+      model: 'claude-sonnet-4-5-20250929',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'claude',
+        families: ['Claude'],
+        contextWindow: 200_000,
+        // Extended thinking mode supports up to 64000 tokens
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 3,
+          outputTokens: 15,
+          cachedReadTokens: 0.3,
+          cachedWriteTokens: 3.75,
+        },
+      },
+      configuration: {
+        streaming: true,
+        maxTokens: 20_000,
+        // @ts-expect-error: FIXME - some models use camelCase
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
+        max_tokens: 20_000,
+        thinking: {
+          type: 'enabled',
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
+          budget_tokens: 10_000,
         },
       },
     },
@@ -191,6 +133,37 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
       configuration: {
         streaming: true,
+      },
+    },
+  },
+
+  vertexai: {
+    'gemini-3-pro': {
+      id: 'google-gemini-3-pro',
+      name: 'Gemini 3 Pro',
+      slug: 'gemini-3-pro',
+      provider: {
+        id: 'vertexai',
+        name: 'Google',
+      },
+      model: 'gemini-3-pro-preview',
+      details: {
+        family: 'gemini',
+        families: ['Gemini'],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        cost: {
+          inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
+          outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
+          cachedReadTokens: 0,
+          cachedWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+        temperature: 0,
+        // Note: This is the non-thinking config. For extended thinking, create a
+        // separate model entry with thinkingLevel: 'high' (requires temperature: 1).
       },
     },
   },
