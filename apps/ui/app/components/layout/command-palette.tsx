@@ -107,7 +107,7 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
               const commandItemContent = (
                 <CommandItem
                   key={item.id}
-                  value={item.label}
+                  value={item.id}
                   disabled={item.disabled}
                   className="h-8"
                   onSelect={() => {
