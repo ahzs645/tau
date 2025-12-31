@@ -46,7 +46,7 @@ const fontFiles = [
   { url: geistBoldUrl, filename: 'Geist-Bold.ttf' },
 ] as const;
 
-class OpenScadWorker extends KernelWorker {
+export class OpenScadWorker extends KernelWorker {
   protected static override readonly supportedExportFormats: ExportFormat[] = [
     'stl',
     'stl-binary',
@@ -70,41 +70,65 @@ class OpenScadWorker extends KernelWorker {
   }
 
   protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
-    const code = await this.readFile(filename, 'utf8');
     try {
-      const instance = await this.createInstance();
-      await this.mountFilesystem(instance, this.basePath);
-      await this.mountFonts(instance);
+      // Get all .scad files in the project to extract parameters from each
+      // OpenSCAD's customizer only sees parameters declared in the main file,
+      // not from included files. We need to extract from each file separately.
+      const allScadFiles = await this.getAllScadFiles();
 
-      const inputFile = filename;
-      const parameterFile = `${filename}.params.json`;
+      this.debug(`Extracting parameters from ${allScadFiles.length} files`, {
+        operation: 'extractParameters',
+        data: { files: allScadFiles, mainFile: filename },
+      });
 
-      instance.FS.writeFile(inputFile, code);
+      // Collect parameters from all files
+      const allParameters: OpenScadParameterExport['parameters'] = [];
 
-      const result = instance.callMain([inputFile, '-o', parameterFile, '--export-format=param']);
+      for (const scadFile of allScadFiles) {
+        // Create a fresh OpenSCAD instance for each file
+        // This is necessary because OpenSCAD WASM doesn't properly support multiple callMain invocations
+        // eslint-disable-next-line no-await-in-loop -- Sequential processing required: each file needs its own instance
+        const extractedParameters = await this.extractParametersFromFile(scadFile);
 
-      if (result !== 0) {
-        // @ts-expect-error - TODO: add typings for formatException, ensure this API is available.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- formatException is not typed
-        const error = instance.formatException?.(result);
-        return createKernelError({
-          message: `Failed to build geometry: ${error}`,
-          // OpenSCAD doesn't provide line info, so we include location with filename only
-          location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
-        });
+        // Defensive check: ensure extracted params exists and has a valid parameters array
+        const parameters = extractedParameters?.parameters;
+        if (!parameters || !Array.isArray(parameters)) {
+          continue;
+        }
+
+        // Add file context to group name for parameters from non-main files
+        const isMainFile = scadFile === filename;
+        for (const parameter of parameters) {
+          // Skip internal OpenSCAD parameters
+          if (parameter.name.startsWith('$')) {
+            continue;
+          }
+
+          // For included files, preserve their group or use filename as group
+          const needsFileGroup =
+            !isMainFile && (!parameter.group || parameter.group === 'Global' || parameter.group === 'Parameters');
+
+          if (needsFileGroup) {
+            const fileGroup = this.getGroupNameFromPath(scadFile);
+            allParameters.push({ ...parameter, group: fileGroup });
+          } else {
+            allParameters.push(parameter);
+          }
+        }
       }
 
       let jsonSchema: JSONSchema7 = { type: 'object' };
       let defaultParameters: Record<string, unknown> = {};
 
-      try {
-        const parameterData = instance.FS.readFile(parameterFile, { encoding: 'utf8' });
-        const parsedExport = JSON.parse(parameterData) as OpenScadParameterExport;
+      if (allParameters.length > 0) {
+        const mergedExport: OpenScadParameterExport = {
+          parameters: allParameters,
+          title: filename,
+        };
 
-        jsonSchema = processOpenScadParameters(parsedExport);
+        jsonSchema = processOpenScadParameters(mergedExport);
         defaultParameters = jsonDefault(jsonSchema) as Record<string, unknown>;
-      } catch (error) {
-        this.warn('No parameters found or error parsing parameter file', { data: error });
+      } else {
         jsonSchema = { type: 'object', properties: {}, additionalProperties: false };
         defaultParameters = {};
       }
@@ -233,6 +257,81 @@ class OpenScadWorker extends KernelWorker {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return createKernelError({ message: errorMessage });
     }
+  }
+
+  /**
+   * Extract parameters from a single .scad file using OpenSCAD's --export-format=param.
+   * Creates a fresh OpenSCAD instance for this file to avoid state issues.
+   *
+   * @param filePath - The path to the .scad file.
+   * @returns The extracted parameters or undefined if extraction fails.
+   */
+  private async extractParametersFromFile(filePath: string): Promise<OpenScadParameterExport | undefined> {
+    const parameterFile = `${filePath}.params.json`;
+
+    try {
+      // Create a fresh instance for each file - OpenSCAD WASM doesn't support multiple callMain calls
+      const instance = await this.createInstance();
+      await this.mountFilesystem(instance, this.basePath);
+
+      const result = instance.callMain([filePath, '-o', parameterFile, '--export-format=param']);
+
+      if (result !== 0) {
+        this.debug(`No parameters extracted from ${filePath} (exit code: ${result})`, {
+          operation: 'extractParametersFromFile',
+        });
+        return undefined;
+      }
+
+      const parameterData = instance.FS.readFile(parameterFile, { encoding: 'utf8' });
+      const parsed = JSON.parse(parameterData) as OpenScadParameterExport;
+
+      this.debug(`Extracted ${parsed.parameters.length} parameters from ${filePath}`, {
+        operation: 'extractParametersFromFile',
+      });
+
+      return parsed;
+    } catch (error) {
+      this.debug(`Failed to extract parameters from ${filePath}`, {
+        operation: 'extractParametersFromFile',
+        data: error,
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Get all .scad files in the current project directory.
+   *
+   * @returns Array of relative file paths to .scad files.
+   */
+  private async getAllScadFiles(): Promise<string[]> {
+    const files = await this.fileManager.getDirectoryContents(this.basePath);
+    const scadFiles: string[] = [];
+
+    for (const [relativePath] of Object.entries(files)) {
+      if (relativePath.endsWith('.scad')) {
+        scadFiles.push(relativePath);
+      }
+    }
+
+    return scadFiles;
+  }
+
+  /**
+   * Generate a group name from a file path.
+   * Converts "lib/parameters.scad" to "Parameters" (capitalized, without path prefix and extension).
+   *
+   * @param filePath - The file path.
+   * @returns A human-readable group name.
+   */
+  private getGroupNameFromPath(filePath: string): string {
+    // Remove directory prefix and extension
+    const fileName = filePath.split('/').pop() ?? filePath;
+    const nameWithoutExt = fileName.replace(/\.scad$/, '');
+
+    // Capitalize first letter
+    return nameWithoutExt.charAt(0).toUpperCase() + nameWithoutExt.slice(1);
   }
 
   private parseLogLevel(message: string): LogLevel {
