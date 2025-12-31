@@ -329,9 +329,11 @@ export default function ImportRoute(): React.JSX.Element {
     case state.matches('enteringDetails') ||
       state.matches('checkingRepo') ||
       state.matches('fetchingRepoInfo') ||
-      state.matches('loadingMoreBranches'): {
+      state.matches('loadingMoreBranches') ||
+      state.matches('fetchingFiles'): {
       const isValidRepo = repoOwner.length > 0 && repoName.length > 0;
       const isCheckingOrFetching = state.matches('checkingRepo') || state.matches('fetchingRepoInfo');
+      const isFetchingFiles = state.matches('fetchingFiles');
 
       return (
         <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
@@ -418,38 +420,16 @@ export default function ImportRoute(): React.JSX.Element {
                     </div>
                   ) : undefined}
 
-                  {/* Fetch Errors - Show warnings for non-critical failures */}
-                  {repoMetadata && !isCheckingOrFetching && fetchErrors.branches ? (
-                    <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
-                      <AlertCircle className="size-5 shrink-0" />
-                      <div className="flex flex-col gap-1">
-                        <div className="font-semibold">Partial Information</div>
-                        <div className="text-sm">
-                          <div>Could not fetch branches list</div>
-                          <div className="mt-1">You can still proceed with the import.</div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : undefined}
-
-                  {/* File Tree Errors - Show when file listing fails (e.g., truncation for large repos) */}
-                  {repoMetadata && !isCheckingOrFetching && fetchErrors.files ? (
-                    <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
-                      <AlertCircle className="size-5 shrink-0" />
-                      <div className="flex flex-col gap-1">
-                        <div className="font-semibold">Could Not List Files</div>
-                        <div className="text-sm">
-                          <div>{fetchErrors.files.message}</div>
-                          <div className="mt-1">You can still proceed with the import.</div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : undefined}
-
-                  {/* Branch & Main File Selectors */}
-                  {branches.length > 0 || repoFiles.length > 0 ? (
+                  {/* Branch & Main File Selectors - Show grid when we have data or errors */}
+                  {repoMetadata &&
+                  !isCheckingOrFetching &&
+                  (branches.length > 0 ||
+                    repoFiles.length > 0 ||
+                    isLoadingFiles ||
+                    fetchErrors.branches !== undefined ||
+                    fetchErrors.files !== undefined) ? (
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      {/* Branch Selector */}
+                      {/* Branch Selector or Error */}
                       {branches.length > 0 ? (
                         <div className="space-y-2 rounded-lg border bg-sidebar p-6">
                           <label className="text-sm font-medium">Branch</label>
@@ -469,9 +449,19 @@ export default function ImportRoute(): React.JSX.Element {
                             }
                           />
                         </div>
+                      ) : fetchErrors.branches ? (
+                        <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
+                          <AlertCircle className="size-5 shrink-0" />
+                          <div className="flex flex-col gap-1">
+                            <div className="text-sm font-medium">Could not fetch branches</div>
+                            <div className="text-xs opacity-80">
+                              Import will use the <span className="font-semibold">{selectedBranch}</span> branch.
+                            </div>
+                          </div>
+                        </div>
                       ) : undefined}
 
-                      {/* Main File Selector */}
+                      {/* Main File Selector or Error */}
                       {repoFiles.length > 0 || isLoadingFiles ? (
                         <div className="space-y-2 rounded-lg border bg-sidebar p-6">
                           <label className="text-sm font-medium">Main File</label>
@@ -487,6 +477,14 @@ export default function ImportRoute(): React.JSX.Element {
                             }}
                           />
                         </div>
+                      ) : fetchErrors.files ? (
+                        <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
+                          <AlertCircle className="size-5 shrink-0" />
+                          <div className="flex flex-col gap-1">
+                            <div className="text-sm font-medium">Could not list files</div>
+                            <div className="text-xs opacity-80">You can still proceed with the import.</div>
+                          </div>
+                        </div>
                       ) : undefined}
                     </div>
                   ) : undefined}
@@ -496,7 +494,7 @@ export default function ImportRoute(): React.JSX.Element {
                     <Button
                       className="flex-1"
                       size="lg"
-                      disabled={isCheckingOrFetching || !repoMetadata}
+                      disabled={isCheckingOrFetching || isFetchingFiles || !repoMetadata}
                       onClick={() => {
                         importActorRef.send({ type: 'startImport' });
                       }}

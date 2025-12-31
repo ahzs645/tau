@@ -60,6 +60,13 @@ function toMetadataFetchError(error: unknown): Error {
     return new Error('Repository not found. Please check the URL and try again.');
   }
 
+  if (errorMessage.includes('401') || errorMessage.toLowerCase().includes('unauthorized')) {
+    return new Error(
+      'GitHub API authentication failed. Your access token may be invalid or expired. ' +
+        'Public repository information could not be fetched.',
+    );
+  }
+
   if (errorMessage.includes('403') || errorMessage.includes('rate limit')) {
     return new Error(
       'GitHub API rate limit exceeded. Please add a GITHUB_API_TOKEN to your environment or wait before trying again.',
