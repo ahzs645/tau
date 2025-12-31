@@ -119,6 +119,16 @@ export const cadMachine = setup({
         assertEvent(event, 'setFile');
         return event.file;
       },
+      // Clear stale errors atomically when file changes.
+      // Old errors become invalid when content changes, and new errors
+      // will be set by kernel processing or Monaco validation.
+      codeErrors: () => [],
+      kernelErrors({ context, event }) {
+        assertEvent(event, 'setFile');
+        const newErrorsMap = new Map(context.kernelErrors);
+        newErrorsMap.delete(event.file.filename);
+        return newErrorsMap;
+      },
     }),
     setParameters: assign({
       parameters({ event }) {

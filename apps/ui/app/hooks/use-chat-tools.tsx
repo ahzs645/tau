@@ -67,13 +67,9 @@ export function useChatTools(): UseChatToolsReturn {
 
           await fileManager.writeFile(resolvedPath, encodeTextFile(result.editedContent), { source: 'external' });
 
-          // Clear stale code errors immediately after file write.
-          // Monaco validation runs asynchronously and may not complete before CAD processing finishes,
-          // which would cause us to return outdated errors to the LLM.
-          // Clearing ensures we don't waste LLM tokens on non-existent issues.
-          cadActor.send({ type: 'setCodeErrors', errors: [] });
-
-          // Wait for CAD processing to complete
+          // Wait for CAD processing to complete.
+          // Note: Stale code and kernel errors are cleared atomically by the CAD machine
+          // when it receives the setFile event triggered by the file write.
           const cadSnapshot = await waitFor(cadActor, (state) => state.value === 'ready' || state.value === 'error');
 
           // Get the kernel errors for the edited file from the per-file errors map
