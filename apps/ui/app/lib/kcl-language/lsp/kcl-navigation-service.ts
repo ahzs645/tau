@@ -21,6 +21,8 @@ type NavigationServiceOptions = {
   fileExplorerRef: AnyActorRef;
   /** File manager for reading file contents */
   fileManager: FileManagerApi;
+  /** Build ID for namespacing Monaco URIs */
+  buildId: string;
   /** Decode file content from Uint8Array to string */
   decodeTextFile: (data: Uint8Array) => string;
 };
@@ -35,12 +37,37 @@ type PendingNavigation = {
  * Registers a navigation interceptor on the Monaco editor to handle
  * Cmd+Click navigation for KCL files.
  */
+/**
+ * Build prefix for Monaco URIs, matching the file manager's root directory structure.
+ */
+const buildsPrefix = '/builds';
+
+/**
+ * Create a Monaco URI with build namespace to ensure file isolation between builds.
+ */
+function createBuildNamespacedUri(monaco: typeof Monaco, buildId: string, relativePath: string): Monaco.Uri {
+  return monaco.Uri.file(`${buildsPrefix}/${buildId}/${relativePath}`);
+}
+
+/**
+ * Extract the relative path from a build-namespaced URI path.
+ * Returns undefined if the path doesn't match the expected build namespace.
+ */
+function extractRelativePathFromUri(uriPath: string, buildId: string): string | undefined {
+  const prefix = `${buildsPrefix}/${buildId}/`;
+  if (uriPath.startsWith(prefix)) {
+    return uriPath.slice(prefix.length);
+  }
+
+  return undefined;
+}
+
 export function registerKclNavigation(
   monaco: typeof Monaco,
   editor: Monaco.editor.IStandaloneCodeEditor,
   options: NavigationServiceOptions,
 ): Monaco.IDisposable {
-  const { fileExplorerRef, fileManager, decodeTextFile } = options;
+  const { fileExplorerRef, fileManager, buildId, decodeTextFile } = options;
 
   // Store pending navigation info for position jumping after file opens
   let pendingNavigation: PendingNavigation | undefined;
@@ -55,7 +82,7 @@ export function registerKclNavigation(
 
       // Small delay to ensure the editor has mounted and model is ready
       setTimeout(() => {
-        const targetUri = monaco.Uri.file(`/${capturedNavigation.path}`);
+        const targetUri = createBuildNamespacedUri(monaco, buildId, capturedNavigation.path);
         const targetModel = monaco.editor.getModel(targetUri);
 
         if (targetModel) {
@@ -128,14 +155,22 @@ export function registerKclNavigation(
       return originalOpenCodeEditor(input, source, sideBySide);
     }
 
-    // Extract relative path (remove leading slash)
-    const relativePath = uriPath.startsWith('/') ? uriPath.slice(1) : uriPath;
+    // Extract relative path from build-namespaced URI
+    // The URI path should be like /builds/bld_xxx/main.kcl
+    const relativePath = extractRelativePathFromUri(uriPath, buildId);
+
+    if (!relativePath) {
+      // Path doesn't match this build's namespace, use default behavior
+      log.debug('Path does not match build namespace, using default behavior:', uriPath);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- Monaco internal API
+      return originalOpenCodeEditor(input, source, sideBySide);
+    }
 
     log.debug('Relative path:', relativePath);
 
     // Check if this is a KCL file or if the model exists with KCL language
     const isKclFile = relativePath.endsWith('.kcl');
-    const uri = monaco.Uri.file(`/${relativePath}`);
+    const uri = createBuildNamespacedUri(monaco, buildId, relativePath);
     const existingModel = monaco.editor.getModel(uri);
     const isKclModel = existingModel?.getLanguageId() === codeLanguages.kcl;
 
@@ -159,7 +194,7 @@ export function registerKclNavigation(
     // Check if this is same-file navigation (e.g., jumping to a variable declaration)
     const currentModel = editor.getModel();
     const currentPath = currentModel?.uri.path;
-    const targetPath = `/${relativePath}`;
+    const targetPath = uri.path;
 
     log.debug('Current path:', currentPath, 'Target path:', targetPath);
 

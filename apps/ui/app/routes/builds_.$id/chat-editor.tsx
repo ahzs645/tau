@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 import { useMonaco } from '@monaco-editor/react';
 import { useSelector } from '@xstate/react';
 import { FileCode } from 'lucide-react';
+import type * as Monaco from 'monaco-editor';
 import { languageFromExtension } from '@taucad/types/constants';
 import { CodeEditor } from '#components/code/code-editor.client.js';
 import { cn } from '#utils/ui.utils.js';
@@ -19,9 +20,29 @@ import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '
 import { ChatEditorBinaryWarning } from '#routes/builds_.$id/chat-editor-binary-warning.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 
+/**
+ * Build prefix for Monaco URIs, matching the file manager's root directory structure.
+ */
+const buildsPrefix = '/builds';
+
+/**
+ * Create a Monaco URI with build namespace to ensure file isolation between builds.
+ * This prevents stale file content from appearing when switching builds.
+ */
+function createBuildNamespacedUri(monaco: typeof Monaco, buildId: string, relativePath: string): Monaco.Uri {
+  return monaco.Uri.file(`${buildsPrefix}/${buildId}/${relativePath}`);
+}
+
+/**
+ * Create a path string with build namespace for the Monaco Editor path prop.
+ */
+function createBuildNamespacedPath(buildId: string, relativePath: string): string {
+  return `${buildsPrefix}/${buildId}/${relativePath}`;
+}
+
 export const ChatEditor = memo(function ({ className }: { readonly className?: string }): React.JSX.Element {
   const monaco = useMonaco();
-  const { fileExplorerRef: fileExplorerActor, cadRef: cadActor, buildRef } = useBuild();
+  const { buildId, fileExplorerRef: fileExplorerActor, cadRef: cadActor, buildRef } = useBuild();
   const fileManager = useFileManager();
   const { fileManagerRef } = useFileManager();
   const [forceOpenBinary, setForceOpenBinary] = useState(false);
@@ -142,7 +163,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       return;
     }
 
-    const uri = monaco.Uri.file(`/${activeFile.path}`);
+    const uri = createBuildNamespacedUri(monaco, buildId, activeFile.path);
     const model = monaco.editor.getModel(uri);
 
     if (!model) {
@@ -162,7 +183,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       }));
 
     monaco.editor.setModelMarkers(model, 'kernel', markers);
-  }, [monaco, kernelErrors, activeFile]);
+  }, [monaco, kernelErrors, activeFile, buildId]);
 
   // Subscribe to file writes and update Monaco model for non-editor sources
   useEffect(() => {
@@ -178,7 +199,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
 
       const { path, data, source } = emittedEvent;
       const newContent = decodeTextFile(data);
-      const uri = monaco.Uri.file(`/${path}`);
+      const uri = createBuildNamespacedUri(monaco, buildId, path);
 
       // Find existing Monaco model for this file
       const existingModel = monaco.editor.getModel(uri);
@@ -200,7 +221,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
     return () => {
       subscription.unsubscribe();
     };
-  }, [monaco, fileManagerRef]);
+  }, [monaco, fileManagerRef, buildId]);
 
   return (
     <div className={cn('flex h-full flex-col bg-background', className)}>
@@ -217,7 +238,8 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
             defaultValue={editorContent}
             fileExplorerRef={fileExplorerActor}
             fileManager={fileManager}
-            path={activeFile.path}
+            buildId={buildId}
+            path={createBuildNamespacedPath(buildId, activeFile.path)}
             onChange={handleCodeChange}
             onValidate={handleValidate}
           />

@@ -23,6 +23,8 @@ type CodeEditorProperties = EditorProps & {
   readonly fileExplorerRef?: AnyActorRef;
   /** Optional file manager for KCL navigation */
   readonly fileManager?: FileManagerApi;
+  /** Build ID for namespacing Monaco URIs - required for KCL navigation */
+  readonly buildId?: string;
 };
 
 await configureMonaco();
@@ -31,6 +33,7 @@ export function CodeEditor({
   className,
   fileExplorerRef,
   fileManager,
+  buildId,
   ...rest
 }: CodeEditorProperties): React.JSX.Element {
   const [theme] = useTheme();
@@ -45,15 +48,16 @@ export function CodeEditor({
       editorRef.current = editor;
 
       // Register KCL navigation if file explorer and file manager are provided
-      if (fileExplorerRef && fileManager) {
+      if (fileExplorerRef && fileManager && buildId) {
         navigationDisposableRef.current = registerKclNavigation(monaco, editor, {
           fileExplorerRef,
           fileManager,
+          buildId,
           decodeTextFile,
         });
       }
     },
-    [fileExplorerRef, fileManager],
+    [fileExplorerRef, fileManager, buildId],
   );
 
   useEffect(() => {
