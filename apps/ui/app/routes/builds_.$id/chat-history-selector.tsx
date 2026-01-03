@@ -152,9 +152,13 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
       const chatName = chat.name;
       const isActive = chat.id === selectedChat?.id;
 
+      // Extract draft text if present
+      const draftTextPart = chat.draft?.parts.find((part) => part.type === 'text');
+      const draftText = draftTextPart?.type === 'text' ? draftTextPart.text : undefined;
+
       return (
         <div className="group flex w-full items-start justify-between">
-          <div className="flex flex-col">
+          <div className="flex min-w-0 flex-col">
             <div
               className={cn(
                 'font-medium',
@@ -164,6 +168,11 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
             >
               {chatName}
             </div>
+            {draftText ? (
+              <div className="truncate text-xs text-muted-foreground italic">
+                <span className="font-medium">Draft</span>: {draftText}
+              </div>
+            ) : null}
             <div className="text-xs text-muted-foreground">
               {chat.messages.length} {chat.messages.length === 1 ? 'message' : 'messages'} ·{' '}
               {formatRelativeTime(chat.updatedAt)}
