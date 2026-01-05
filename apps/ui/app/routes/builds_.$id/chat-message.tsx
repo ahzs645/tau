@@ -263,7 +263,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               </DropdownMenu>
               <TooltipContent side="bottom">Switch model</TooltipContent>
             </Tooltip>
-            <div className="mx-1 flex flex-row items-center justify-end gap-1">
+            <div className="flex flex-row items-center justify-end gap-1">
               {displayMessage.metadata ? <ChatMessageMetadata metadata={displayMessage.metadata} /> : null}
             </div>
           </div>
