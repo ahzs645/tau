@@ -13,6 +13,8 @@ import { fromPromise } from 'xstate';
 import { createContext, useContext, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { MyUIMessage } from '@taucad/chat';
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { idPrefix } from '@taucad/types/constants';
 import { draftMachine } from '#hooks/draft.machine.js';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
 import { useChats } from '#hooks/use-chats.js';
@@ -162,6 +164,7 @@ export function ChatProvider({
       api: `${ENV.TAU_API_URL}/v1/chat`,
       credentials: 'include',
     }),
+    generateId: () => generatePrefixedId(idPrefix.message),
     // Automatically submit tool outputs when assistant message is complete with tool calls
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onToolCall: wrappedOnToolCall,
