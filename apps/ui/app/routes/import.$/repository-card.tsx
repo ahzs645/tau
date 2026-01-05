@@ -1,4 +1,4 @@
-import { Star, GitFork, Eye, Scale, Lock, Globe, Clock } from 'lucide-react';
+import { Star, GitFork, Eye, Scale, Lock, Globe, Clock, ArrowUpRight } from 'lucide-react';
 import { Badge } from '#components/ui/badge.js';
 import { Skeleton } from '#components/ui/skeleton.js';
 import { cn } from '#utils/ui.utils.js';
@@ -90,9 +90,15 @@ export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.
           </div>
         )}
         <div className="flex-1 space-y-1">
-          <h3 className="font-mono text-lg font-semibold">
+          <a
+            href={`https://github.com/${owner}/${repo}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group/link inline-flex items-center gap-1 font-mono text-lg font-semibold underline decoration-muted-foreground/50 underline-offset-2 transition-colors hover:decoration-foreground"
+          >
             {owner}/{repo}
-          </h3>
+            <ArrowUpRight className="size-4 -translate-x-1 opacity-0 transition-all group-hover/link:translate-x-0 group-hover/link:opacity-100" />
+          </a>
           {metadata?.description ? (
             <p className="line-clamp-2 text-sm text-muted-foreground">{metadata.description}</p>
           ) : undefined}

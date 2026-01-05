@@ -368,9 +368,9 @@ export default function ImportRoute(): React.JSX.Element {
                   />
                   {repoUrl.length > 0 ? (
                     <Button
-                      variant="ghost"
+                      variant="secondary"
                       size="icon"
-                      className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 p-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                      className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground"
                       type="button"
                       aria-label="Clear URL"
                       onClick={() => {
