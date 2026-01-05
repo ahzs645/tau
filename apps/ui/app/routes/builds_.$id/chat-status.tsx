@@ -12,7 +12,7 @@ type ChatStatusProperties = {
 
 export const ChatStatus = memo(function ({ className }: ChatStatusProperties) {
   const status = useChatSelector((state) => state.status);
-  const isVisible = status === 'streaming';
+  const isVisible = ['submitted', 'streaming'].includes(status);
 
   return (
     <div className={cn(className)}>
