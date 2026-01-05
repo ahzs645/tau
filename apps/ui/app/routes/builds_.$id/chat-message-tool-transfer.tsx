@@ -98,6 +98,8 @@ export function ChatMessageToolTransfer({ part }: { readonly part: ToolUIPart })
   const isStreaming = chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(part.state);
   const isComplete = part.state === 'output-available';
 
+  // This component has unique agent-specific styling, so we keep it custom
+  // but follow the inline badge pattern
   return (
     <div
       className={cn(

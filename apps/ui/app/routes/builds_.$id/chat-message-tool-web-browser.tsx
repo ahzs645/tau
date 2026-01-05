@@ -1,11 +1,10 @@
 import type { UIToolInvocation } from 'ai';
-import { LoaderCircle } from 'lucide-react';
+import { Globe } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { Badge } from '#components/ui/badge.js';
 import { createFaviconUrl, extractDomainFromUrl } from '#utils/url.utils.js';
-import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
+import { ChatToolInline } from '#components/chat/chat-tool-inline.js';
 
 export function ChatMessageToolWebBrowser({
   part,
@@ -22,20 +21,16 @@ export function ChatMessageToolWebBrowser({
 
       if (part.state === 'input-available') {
         return (
-          <Badge variant="outline">
-            <AnimatedShinyText className="flex max-w-full flex-row items-center gap-2">
-              <LoaderCircle className="size-3 animate-spin text-inherit" />
-              <span className="truncate">Visiting {domain}...</span>
-            </AnimatedShinyText>
-          </Badge>
+          <ChatToolInline status="loading" icon={Globe}>
+            Visiting {domain}...
+          </ChatToolInline>
         );
       }
 
       return (
-        <Badge variant="outline" className="flex max-w-full flex-row items-center gap-2 text-neutral">
-          <img src={faviconUrl} alt={domain} className="size-3 rounded-full" />
-          <span className="truncate">Visited {domain}</span>
-        </Badge>
+        <ChatToolInline status="success" image={{ src: faviconUrl, alt: domain }}>
+          Visited {domain}
+        </ChatToolInline>
       );
     }
 
@@ -44,7 +39,11 @@ export function ChatMessageToolWebBrowser({
     }
 
     case 'output-error': {
-      return <div>Web browser failed</div>;
+      return (
+        <ChatToolInline status="error" icon={Globe}>
+          Web browser failed
+        </ChatToolInline>
+      );
     }
   }
 }

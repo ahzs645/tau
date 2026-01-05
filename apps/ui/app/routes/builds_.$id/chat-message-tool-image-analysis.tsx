@@ -1,52 +1,28 @@
-import type { ToolUIPart, UIToolInvocation } from 'ai';
-import { useState } from 'react';
-import { Eye, LoaderCircle, ChevronDown, Camera } from 'lucide-react';
+import type { UIToolInvocation } from 'ai';
+import { Eye, Camera, ListChecks } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { Button } from '#components/ui/button.js';
-import { cn } from '#utils/ui.utils.js';
-import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { CopyButton } from '#components/copy-button.js';
-
-function StatusIcon({
-  chatStatus,
-  toolStatus,
-}: {
-  readonly chatStatus: 'error' | 'submitted' | 'streaming' | 'ready';
-  readonly toolStatus: ToolUIPart['state'];
-}): React.JSX.Element {
-  if (chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(toolStatus)) {
-    return <LoaderCircle className="size-3 animate-spin" />;
-  }
-
-  return <Eye className="size-3" />;
-}
-
-function ToolTitle({
-  chatStatus,
-  toolStatus,
-}: {
-  readonly chatStatus: 'error' | 'submitted' | 'streaming' | 'ready';
-  readonly toolStatus: ToolUIPart['state'];
-}): React.JSX.Element {
-  if (chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(toolStatus)) {
-    return <AnimatedShinyText>Analyzing model...</AnimatedShinyText>;
-  }
-
-  return <span>Visual Analysis</span>;
-}
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardActions,
+  ChatToolCardContent,
+  ChatToolCardSection,
+} from '#components/chat/chat-tool-card.js';
+import { cookieName } from '#constants/cookie.constants.js';
 
 export function ChatMessageToolImageAnalysis({
   part,
 }: {
   readonly part: UIToolInvocation<MyTools[typeof toolName.imageAnalysis]>;
 }): React.JSX.Element {
-  const [isExpanded, setIsExpanded] = useState(true);
-  const [isRequirementsExpanded, setIsRequirementsExpanded] = useState(false);
-  const status = useChatSelector((state) => state.status);
+  const chatStatus = useChatSelector((state) => state.status);
+  const isLoading = chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(part.state);
 
   switch (part.state) {
     case 'input-streaming':
@@ -55,161 +31,103 @@ export function ChatMessageToolImageAnalysis({
       const { requirements = [] } = input;
 
       return (
-        <div className="@container/analysis flex w-full flex-col gap-2 overflow-hidden rounded-md border bg-neutral/10 p-3">
-          <div className="flex flex-row items-center gap-1 text-xs text-muted-foreground">
-            <StatusIcon chatStatus={status} toolStatus={part.state} />
-            <ToolTitle chatStatus={status} toolStatus={part.state} />
-          </div>
-          {requirements.length > 0 && (
-            <div className="text-xs text-muted-foreground">
-              <div className="font-medium">
+        <ChatToolCard variant="card" status="loading" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Eye} />
+            <ChatToolCardTitle>Analyzing model...</ChatToolCardTitle>
+          </ChatToolCardHeader>
+          {requirements.length > 0 ? (
+            <ChatToolCardContent>
+              <div className="p-2 text-xs text-muted-foreground">
                 Checking {requirements.length} requirement{requirements.length > 1 ? 's' : ''}...
               </div>
-            </div>
-          )}
-        </div>
+            </ChatToolCardContent>
+          ) : undefined}
+        </ChatToolCard>
       );
     }
 
     case 'output-available': {
-      const { input } = part;
+      const { input, output: result } = part;
       const { requirements = [] } = input;
 
-      const result = part.output;
-
       return (
-        <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-          <div className="@container/analysis overflow-hidden rounded-md border bg-neutral/10">
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="group/trigger sticky top-0 flex h-7 w-full flex-row items-center justify-between pr-1 pl-2 text-foreground/50 hover:bg-neutral/10"
+        <ChatToolCard isDefaultOpen variant="card" status={isLoading ? 'loading' : 'ready'}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Eye} />
+            <ChatToolCardTitle>Visual Analysis</ChatToolCardTitle>
+            <ChatToolCardActions>
+              <CopyButton
+                size="xs"
+                className="[&_[data-slot=label]]:hidden @xs/chat-tool-card:[&_[data-slot=label]]:flex"
+                getText={() => result.analysis}
+              />
+            </ChatToolCardActions>
+          </ChatToolCardHeader>
+          <ChatToolCardContent>
+            {/* Screenshot Section - Now collapsible */}
+            {result.screenshot ? (
+              <ChatToolCardSection
+                isDefaultOpen
+                isCookieDefaultOpen
+                title="Model Screenshot"
+                icon={Camera}
+                cookieName={cookieName.chatToolImageScreenshot}
               >
-                <div className="flex flex-row items-center gap-1 text-xs text-muted-foreground">
-                  <span className="relative flex size-3 items-center justify-center">
-                    <ChevronDown
-                      className={cn(
-                        'absolute size-3 shrink-0 opacity-0 transition-all duration-200 group-hover/trigger:opacity-100',
-                        isExpanded ? '' : '-rotate-90',
-                      )}
-                    />
-                    <Eye className="absolute size-3 shrink-0 opacity-100 transition-opacity duration-200 group-hover/trigger:opacity-0" />
-                  </span>
-                  <ToolTitle chatStatus={status} toolStatus={part.state} />
-                </div>
-                <div className="flex flex-row gap-1">
-                  <CopyButton
-                    size="xs"
-                    className="[&_[data-slot=label]]:hidden @xs/analysis:[&_[data-slot=label]]:flex"
-                    getText={() => result.analysis}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                    }}
-                  />
-                </div>
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              {/* Screenshot Section */}
-              {result.screenshot ? (
-                <div className="border-t p-2 pt-1">
-                  <div className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                    <Camera className="size-3" />
-                    <span>Model Screenshot</span>
-                  </div>
-                  <HoverCard>
-                    <HoverCardTrigger asChild>
-                      <div className="cursor-pointer rounded-md border bg-neutral/5 hover:bg-neutral/10">
-                        <img
-                          src={result.screenshot}
-                          alt="Model screenshot"
-                          className="size-full rounded-sm object-cover object-top"
-                        />
-                      </div>
-                    </HoverCardTrigger>
-                    <HoverCardContent asChild side="top" align="start" className="w-96">
-                      <img src={result.screenshot} alt="Model screenshot (full size)" className="max-w-full" />
-                    </HoverCardContent>
-                  </HoverCard>
-                </div>
-              ) : null}
-              {/* Requirements Section */}
-              {requirements.length > 0 && (
-                <Collapsible
-                  open={isRequirementsExpanded}
-                  className="border-t"
-                  onOpenChange={setIsRequirementsExpanded}
-                >
-                  <CollapsibleTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="group flex h-auto w-full justify-start gap-2 rounded-none p-2 hover:bg-transparent"
-                    >
-                      <span className="relative flex items-center">
-                        <ChevronDown
-                          className={cn(
-                            'size-3 shrink-0 transition-transform duration-200',
-                            isRequirementsExpanded ? 'rotate-180' : '',
-                          )}
-                        />
-                      </span>
-                      <span className="text-left text-xs font-normal">
-                        {requirements.length} Requirement{requirements.length > 1 ? 's' : ''}
-                      </span>
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="border-t">
-                    <div className="space-y-1 px-2 py-2 text-xs">
-                      {requirements.map((requirement, index) => {
-                        const key = `${index}-${requirement}`;
-
-                        return (
-                          <div key={key} className="flex items-start text-xs">
-                            <div className="mr-2 shrink-0 font-mono text-muted-foreground">{index + 1}.</div>
-                            <div className="flex-1">{requirement}</div>
-                          </div>
-                        );
-                      })}
+                <HoverCard>
+                  <HoverCardTrigger asChild>
+                    <div className="cursor-pointer rounded-md border bg-neutral/5 hover:bg-neutral/10">
+                      <img
+                        src={result.screenshot}
+                        alt="Model screenshot"
+                        className="size-full rounded-sm object-cover object-top"
+                      />
                     </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              )}
-              {/* Analysis Section */}
-              {/* <div className="border-t">
-          <div className="mb-1 flex items-center gap-1 px-2 py-1 pt-2 text-xs text-muted-foreground">
-            <Eye className="size-3" />
-            <span>Analysis</span>
-          </div>
-          <div className={cn('relative', isImageExpanded ? '' : 'max-h-96 overflow-y-auto')}>
-            <div className="prose prose-sm max-w-none px-3 pb-3 text-xs dark:prose-invert">
-              <ReactMarkdown>{result.analysis}</ReactMarkdown>
-            </div>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  className="sticky bottom-0 h-6 w-full rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40"
-                  onClick={() => {
-                    setIsImageExpanded((previous) => !previous);
-                  }}
-                >
-                  <ChevronDown className={cn('transition-transform', isImageExpanded ? 'rotate-x-180' : '')} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{isImageExpanded ? 'Collapse' : 'Expand'} analysis</TooltipContent>
-            </Tooltip>
-          </div>
-        </div> */}
-            </CollapsibleContent>
-          </div>
-        </Collapsible>
+                  </HoverCardTrigger>
+                  <HoverCardContent asChild side="top" align="start" className="w-96">
+                    <img src={result.screenshot} alt="Model screenshot (full size)" className="max-w-full" />
+                  </HoverCardContent>
+                </HoverCard>
+              </ChatToolCardSection>
+            ) : undefined}
+
+            {/* Requirements Section */}
+            {requirements.length > 0 ? (
+              <ChatToolCardSection
+                title={`${requirements.length} Requirement${requirements.length > 1 ? 's' : ''}`}
+                icon={ListChecks}
+                isDefaultOpen={false}
+                cookieName={cookieName.chatToolImageRequirements}
+                isCookieDefaultOpen={false}
+              >
+                <div className="space-y-1">
+                  {requirements.map((requirement, index) => {
+                    const key = `${index}-${requirement}`;
+
+                    return (
+                      <div key={key} className="flex items-start text-xs">
+                        <div className="mr-2 shrink-0 font-mono text-muted-foreground">{index + 1}.</div>
+                        <div className="flex-1">{requirement}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ChatToolCardSection>
+            ) : undefined}
+          </ChatToolCardContent>
+        </ChatToolCard>
       );
     }
 
     case 'output-error': {
-      return <div>Image analysis failed</div>;
+      return (
+        <ChatToolCard variant="card" status="error" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon isError icon={Eye} />
+            <ChatToolCardTitle>Image analysis failed</ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
+      );
     }
   }
 }

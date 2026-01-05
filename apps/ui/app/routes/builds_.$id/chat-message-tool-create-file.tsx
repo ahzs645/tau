@@ -1,14 +1,34 @@
 import type { UIToolInvocation } from 'ai';
+import { useCallback } from 'react';
 import { X } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
 import { CollapsibleFileOperation, CodePreview } from '#components/chat/chat-tool-file-operation.js';
+import { useBuild } from '#hooks/use-build.js';
 
 export function ChatMessageToolCreateFile({
   part,
 }: {
   readonly part: UIToolInvocation<MyTools[typeof toolName.createFile]>;
 }): React.JSX.Element {
+  const build = useBuild({ enableNoContext: true });
+
+  const handleFileClick = useCallback(
+    (path: string) => {
+      if (!build) {
+        return;
+      }
+
+      build.fileExplorerRef.send({
+        type: 'openFile',
+        path,
+        lineNumber: 1,
+        column: 1,
+      });
+    },
+    [build],
+  );
+
   switch (part.state) {
     case 'input-streaming':
     case 'input-available': {
@@ -27,7 +47,15 @@ export function ChatMessageToolCreateFile({
       const { success } = output;
 
       return (
-        <CollapsibleFileOperation targetFile={targetFile} toolStatus={part.state} mode="create" isSuccess={success}>
+        <CollapsibleFileOperation
+          targetFile={targetFile}
+          toolStatus={part.state}
+          mode="create"
+          isSuccess={success}
+          onFileClick={() => {
+            handleFileClick(targetFile);
+          }}
+        >
           {success && content ? <CodePreview content={content} /> : null}
         </CollapsibleFileOperation>
       );

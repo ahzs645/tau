@@ -1,17 +1,41 @@
 import type { UIToolInvocation } from 'ai';
-import { ChevronRight } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
+import { Brain } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { Button } from '#components/ui/button.js';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
+import { defaultMarkdownControls, MarkdownViewer } from '#components/markdown/markdown-viewer.js';
+import { useChatSelector } from '#hooks/use-chat.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardContent,
+} from '#components/chat/chat-tool-card.js';
+
+/**
+ * Format duration display.
+ */
+function formatDuration(seconds: number): string {
+  if (seconds < 1) {
+    return '<1 second';
+  }
+
+  if (seconds === 1) {
+    return '1 second';
+  }
+
+  return `${seconds} seconds`;
+}
 
 export function ChatMessageToolReasoning({
   part,
 }: {
   readonly part: UIToolInvocation<MyTools[typeof toolName.reasoning]>;
 }): React.JSX.Element {
+  const isStreaming = useChatSelector((state) => state.status === 'streaming');
   const [isOpen, setIsOpen] = useState(false);
+
   // Capture start time when component mounts (tool call begins)
   const startTimeRef = useRef<number>(Date.now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -40,53 +64,43 @@ export function ChatMessageToolReasoning({
       ? Math.round(part.output.durationMs / 1000)
       : elapsedSeconds;
 
-  // Format duration display
-  const formatDuration = (seconds: number): string => {
-    if (seconds < 1) {
-      return '<1 second';
-    }
-
-    if (seconds === 1) {
-      return '1 second';
-    }
-
-    return `${seconds} seconds`;
-  };
-
   if (part.state === 'output-error') {
-    return <div className="text-sm text-muted-foreground italic">Reasoning failed: {part.errorText}</div>;
+    return (
+      <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
+        <ChatToolCardHeader>
+          <ChatToolCardIcon isError icon={Brain} />
+          <ChatToolCardTitle>Reasoning failed: {part.errorText}</ChatToolCardTitle>
+        </ChatToolCardHeader>
+      </ChatToolCard>
+    );
   }
-
-  // Get the label text based on state
-  const getLabel = (): string => {
-    if (isThinking) {
-      return 'Thinking...';
-    }
-
-    return `Thought for ${formatDuration(finalDurationSeconds)}`;
-  };
 
   // Determine if content should be visible
   const hasContent = thinking.trim() !== '';
   const shouldBeOpen = isThinking ? hasContent : isOpen;
 
   return (
-    <Collapsible className="group/collapsible" open={shouldBeOpen} onOpenChange={setIsOpen}>
-      <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="-ml-2 font-medium text-foreground/60 hover:bg-transparent hover:text-foreground/80 dark:hover:bg-transparent"
-        >
-          <ChevronRight className="transition-transform duration-300 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
-          {getLabel()}
-        </Button>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-        <div className="border-l border-foreground/20 pl-5 text-sm whitespace-pre-wrap text-foreground/60 italic">
-          {thinking.trim()}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+    <ChatToolCard
+      variant="minimal"
+      status={isThinking ? 'loading' : 'ready'}
+      isOpen={shouldBeOpen}
+      onOpenChange={setIsOpen}
+    >
+      <ChatToolCardHeader>
+        <ChatToolCardIcon icon={Brain} />
+        <ChatToolCardTitle>
+          {isThinking ? 'Thinking...' : `Thought for ${formatDuration(finalDurationSeconds)}`}
+        </ChatToolCardTitle>
+      </ChatToolCardHeader>
+      {hasContent ? (
+        <ChatToolCardContent className="border-l-0">
+          <div className="border-l border-foreground/20 pl-4 text-sm text-foreground/60 italic">
+            <MarkdownViewer isStreaming={isStreaming} controls={{ ...defaultMarkdownControls, table: true }}>
+              {thinking.trim()}
+            </MarkdownViewer>
+          </div>
+        </ChatToolCardContent>
+      ) : undefined}
+    </ChatToolCard>
   );
 }

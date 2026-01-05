@@ -77,8 +77,7 @@ function renderTree(node: TreeNode, indent = ''): string {
 
   for (const [, child] of sortedChildren) {
     if (child.type === 'dir') {
-      lines.push(`${indent}- ${child.name}/`);
-      lines.push(renderTree(child, indent + '  '));
+      lines.push(`${indent}- ${child.name}/`, renderTree(child, indent + '  '));
     } else {
       // Include file size for context
       const sizeInfo = child.size > 0 ? ` (${formatSize(child.size)})` : '';

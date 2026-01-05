@@ -11,6 +11,14 @@ import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 
 /**
+ * Extract the filename from a path.
+ */
+function getFilename(path: string): string {
+  const parts = path.split('/');
+  return parts.at(-1) ?? path;
+}
+
+/**
  * Type guard to check if an error is a CodeError (has startLineNumber directly)
  */
 function isCodeError(error: CodeError | KernelError): error is CodeError {
@@ -381,6 +389,7 @@ type CollapsibleFileOperationTriggerProps = {
   readonly mode: 'edit' | 'create';
   readonly isOpen: boolean;
   readonly isSuccess?: boolean;
+  readonly onFileClick?: () => void;
 };
 
 export function CollapsibleFileOperationTrigger({
@@ -389,12 +398,75 @@ export function CollapsibleFileOperationTrigger({
   mode,
   isOpen,
   isSuccess = true,
+  onFileClick,
 }: CollapsibleFileOperationTriggerProps): React.JSX.Element {
   const isStreaming = ['input-streaming', 'input-available'].includes(toolStatus);
   const isError = toolStatus === 'output-available' && !isSuccess;
+  const filename = getFilename(targetFile);
+  const hasPath = targetFile !== filename;
 
+  // Handle click on filename to open file (stops propagation to prevent collapsible toggle)
+  const handleFilenameClick = (event: React.MouseEvent): void => {
+    if (onFileClick && !isStreaming) {
+      event.stopPropagation();
+      onFileClick();
+    }
+  };
+
+  // Render the filename content
+  const filenameContent = isStreaming ? (
+    <AnimatedShinyText>{filename || 'file'}</AnimatedShinyText>
+  ) : isError ? (
+    <span>
+      Failed to {mode === 'create' ? 'create' : 'edit'} {filename}
+    </span>
+  ) : (
+    <span>{filename}</span>
+  );
+
+  // Filename element - clickable only if onFileClick is provided
+  const filenameElement =
+    onFileClick && !isStreaming ? (
+      hasPath ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="min-w-0 cursor-pointer truncate underline-offset-2 hover:text-foreground hover:underline"
+              onClick={handleFilenameClick}
+            >
+              {filenameContent}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="start">
+            {targetFile}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <button
+          type="button"
+          className="min-w-0 cursor-pointer truncate underline-offset-2 hover:text-foreground hover:underline"
+          onClick={handleFilenameClick}
+        >
+          {filenameContent}
+        </button>
+      )
+    ) : hasPath && !isStreaming ? (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="min-w-0 truncate">{filenameContent}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top" align="start">
+          {targetFile}
+        </TooltipContent>
+      </Tooltip>
+    ) : (
+      <span className="min-w-0 truncate">{filenameContent}</span>
+    );
+
+  // Entire header is the collapsible trigger
   return (
-    <CollapsibleTrigger className="group flex h-7 w-full cursor-pointer flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/5">
+    <CollapsibleTrigger className="group flex h-7 min-w-0 flex-1 cursor-pointer flex-row items-center gap-1 pl-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/5">
       {/* Status icon - visible by default, hidden on hover */}
       <span className="relative flex size-3 items-center justify-center">
         {isStreaming ? (
@@ -421,18 +493,7 @@ export function CollapsibleFileOperationTrigger({
           </>
         )}
       </span>
-      {/* Filename */}
-      <span className="truncate">
-        {isStreaming ? (
-          <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
-        ) : isError ? (
-          <span>
-            Failed to {mode === 'create' ? 'create' : 'edit'} {targetFile}
-          </span>
-        ) : (
-          <span>{targetFile}</span>
-        )}
-      </span>
+      {filenameElement}
     </CollapsibleTrigger>
   );
 }
@@ -447,6 +508,10 @@ type CollapsibleFileOperationProps = {
   readonly actions?: React.ReactNode;
   readonly footer?: React.ReactNode;
   readonly isDefaultOpen?: boolean;
+  /**
+   * Callback when the filename is clicked. Use this to open the file in the editor.
+   */
+  readonly onFileClick?: () => void;
 };
 
 export function CollapsibleFileOperation({
@@ -459,9 +524,12 @@ export function CollapsibleFileOperation({
   actions,
   footer,
   isDefaultOpen = false,
+  onFileClick,
 }: CollapsibleFileOperationProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(isDefaultOpen);
   const isStreaming = ['input-streaming', 'input-available'].includes(toolStatus);
+  const filename = getFilename(targetFile);
+  const hasPath = targetFile !== filename;
 
   // For streaming, show last 4 lines without collapsible
   if (isStreaming && content) {
@@ -473,7 +541,20 @@ export function CollapsibleFileOperation({
       <div className="@container/code overflow-hidden rounded-md border bg-neutral/10">
         <div className="flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground">
           <LoaderCircle className="size-3 animate-spin" />
-          <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+          {hasPath ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="min-w-0 truncate">
+                  <AnimatedShinyText>{filename || 'file'}</AnimatedShinyText>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" align="start">
+                {targetFile}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+          )}
         </div>
         {hasContent ? (
           <div className="max-h-24 overflow-hidden border-t">
@@ -486,7 +567,7 @@ export function CollapsibleFileOperation({
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className="@container/code overflow-hidden rounded-md border bg-neutral/10">
+      <div className="group/file-op @container/code overflow-hidden rounded-md border bg-neutral/10">
         <div className="flex items-center">
           <CollapsibleFileOperationTrigger
             targetFile={targetFile}
@@ -494,8 +575,19 @@ export function CollapsibleFileOperation({
             mode={mode}
             isOpen={isOpen}
             isSuccess={isSuccess}
+            onFileClick={onFileClick}
           />
-          {actions ? <div className="flex shrink-0 items-center gap-1 pr-1">{actions}</div> : null}
+          {actions ? (
+            <div
+              className="ml-auto flex shrink-0 items-center gap-1 pr-1 opacity-0 group-hover/file-op:opacity-100"
+              onClick={(event) => {
+                // Prevent triggering the collapsible when clicking actions
+                event.stopPropagation();
+              }}
+            >
+              {actions}
+            </div>
+          ) : undefined}
         </div>
         <CollapsibleContent>
           {children}

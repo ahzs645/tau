@@ -1,10 +1,9 @@
 import type { UIToolInvocation } from 'ai';
-import { Trash2, LoaderCircle, Check, X } from 'lucide-react';
+import { Trash2, Check, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { Badge } from '#components/ui/badge.js';
-import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
+import { ChatToolInline } from '#components/chat/chat-tool-inline.js';
 
 export function ChatMessageToolDeleteFile({
   part,
@@ -18,12 +17,9 @@ export function ChatMessageToolDeleteFile({
       const targetFile = input?.targetFile ?? 'file';
 
       return (
-        <Badge variant="outline">
-          <AnimatedShinyText className="flex max-w-full flex-row items-center gap-2">
-            <LoaderCircle className="size-3 animate-spin text-inherit" />
-            <span className="truncate">Deleting {targetFile}...</span>
-          </AnimatedShinyText>
-        </Badge>
+        <ChatToolInline status="loading" icon={Trash2}>
+          Deleting {targetFile}...
+        </ChatToolInline>
       );
     }
 
@@ -33,28 +29,17 @@ export function ChatMessageToolDeleteFile({
       const { success } = output;
 
       return (
-        <Badge variant={success ? 'outline' : 'destructive'} className="flex items-center gap-2">
-          {success ? (
-            <>
-              <Check className="size-3 text-success" />
-              <Trash2 className="size-3" />
-              <span className="truncate">Deleted {targetFile}</span>
-            </>
-          ) : (
-            <>
-              <X className="size-3" />
-              <span className="truncate">Failed to delete {targetFile}</span>
-            </>
-          )}
-        </Badge>
+        <ChatToolInline status={success ? 'success' : 'error'} icon={success ? Check : X}>
+          {success ? `Deleted ${targetFile}` : `Failed to delete ${targetFile}`}
+        </ChatToolInline>
       );
     }
 
     case 'output-error': {
       return (
-        <Badge variant="destructive">
-          <span>Failed to delete file</span>
-        </Badge>
+        <ChatToolInline status="error" icon={X}>
+          Failed to delete file
+        </ChatToolInline>
       );
     }
   }

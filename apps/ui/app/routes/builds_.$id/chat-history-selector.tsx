@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { useChat } from '@ai-sdk/react';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import { useSelector } from '@xstate/react';
+import { ChatHistorySettings } from '#routes/builds_.$id/chat-history-settings.js';
 import { Button } from '#components/ui/button.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useChats } from '#hooks/use-chats.js';
@@ -255,6 +256,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
             </KeyShortcut>
           </TooltipContent>
         </Tooltip>
+        <ChatHistorySettings />
       </FloatingPanelContentHeaderActions>
 
       {/* Rename Dialog */}

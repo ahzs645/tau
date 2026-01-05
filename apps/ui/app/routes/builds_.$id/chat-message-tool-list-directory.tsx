@@ -1,10 +1,17 @@
 import type { UIToolInvocation } from 'ai';
-import { Folder, FolderOpen, File, LoaderCircle } from 'lucide-react';
+import { FolderOpen, Folder, File } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { Badge } from '#components/ui/badge.js';
-import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardContent,
+  ChatToolCardList,
+  ChatToolCardListItem,
+} from '#components/chat/chat-tool-card.js';
 
 export function ChatMessageToolListDirectory({
   part,
@@ -15,15 +22,14 @@ export function ChatMessageToolListDirectory({
     case 'input-streaming':
     case 'input-available': {
       const { input } = part;
-      const path = input?.path || '/';
+      const path = input?.path ?? '/';
 
       return (
-        <Badge variant="outline">
-          <AnimatedShinyText className="flex max-w-full flex-row items-center gap-2">
-            <LoaderCircle className="size-3 animate-spin text-inherit" />
-            <span className="truncate">Listing {path}...</span>
-          </AnimatedShinyText>
-        </Badge>
+        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardTitle>Listing {path}...</ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 
@@ -41,39 +47,44 @@ export function ChatMessageToolListDirectory({
       });
 
       return (
-        <div className="overflow-hidden rounded-md border bg-neutral/10">
-          <div className="flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground">
-            <FolderOpen className="size-3" />
-            <span className="truncate">{path || '/'}</span>
-            <span className="ml-auto text-xs opacity-60">({entries.length} items)</span>
-          </div>
-          <div className="max-h-40 overflow-y-auto border-t">
-            {sortedEntries.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted-foreground">(empty directory)</div>
-            ) : (
-              <div className="space-y-0.5 p-2">
-                {sortedEntries.map((entry) => (
-                  <div key={entry.name} className="flex items-center gap-2 px-1 text-xs">
-                    {entry.type === 'dir' ? (
-                      <Folder className="size-3 text-warning" />
-                    ) : (
-                      <File className="size-3 text-muted-foreground" />
-                    )}
-                    <span className="truncate">{entry.name}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        <ChatToolCard variant="minimal" status="ready" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={FolderOpen} />
+            <ChatToolCardTitle>
+              {path || '/'} ({entries.length} items)
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+          <ChatToolCardContent>
+            <ChatToolCardList maxHeight="max-h-40">
+              {sortedEntries.length === 0 ? (
+                <ChatToolCardListItem className="text-muted-foreground/70 italic">
+                  (empty directory)
+                </ChatToolCardListItem>
+              ) : (
+                sortedEntries.map((entry) => (
+                  <ChatToolCardListItem
+                    key={entry.name}
+                    icon={entry.type === 'dir' ? Folder : File}
+                    className={entry.type === 'dir' ? '[&_svg]:text-warning' : ''}
+                  >
+                    {entry.name}
+                  </ChatToolCardListItem>
+                ))
+              )}
+            </ChatToolCardList>
+          </ChatToolCardContent>
+        </ChatToolCard>
       );
     }
 
     case 'output-error': {
       return (
-        <Badge variant="destructive">
-          <span>Failed to list directory</span>
-        </Badge>
+        <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon isError icon={FolderOpen} />
+            <ChatToolCardTitle>Failed to list directory</ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
   }

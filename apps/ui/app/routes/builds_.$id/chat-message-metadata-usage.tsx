@@ -1,3 +1,4 @@
+import { DollarSign } from 'lucide-react';
 import type { MyMetadata } from '@taucad/chat';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
@@ -7,6 +8,8 @@ import { TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Ta
 import { useModels } from '#hooks/use-models.js';
 import { formatCurrency } from '#utils/currency.utils.js';
 import { formatNumber } from '#utils/number.utils.js';
+import { useCookie } from '#hooks/use-cookie.js';
+import { cookieName } from '#constants/cookie.constants.js';
 
 // Single metadata usage component
 export function ChatMessageMetadataUsage({
@@ -15,6 +18,7 @@ export function ChatMessageMetadataUsage({
   readonly metadata: MyMetadata;
 }): React.JSX.Element | undefined {
   const { data: models } = useModels();
+  const [showModelCost] = useCookie(cookieName.chatModelCost, true);
 
   if (!metadata.usageCost) {
     return undefined;
@@ -32,9 +36,10 @@ export function ChatMessageMetadataUsage({
       <HoverCardTrigger asChild className="flex flex-row items-center" tabIndex={0}>
         <Badge
           variant="outline"
-          className="h-7 cursor-help border-none font-medium text-inherit outline-none hover:bg-neutral/20"
+          className="h-7 cursor-help gap-0 border-none font-medium text-inherit outline-none hover:bg-neutral/20"
         >
-          {formatCurrency(totalCost, { significantFigures: 2 })}
+          <DollarSign className="size-3.5! stroke-2" />
+          {showModelCost ? <span>{formatCurrency(totalCost, { significantFigures: 2 })}</span> : undefined}
         </Badge>
       </HoverCardTrigger>
       <HoverCardContent className="w-auto p-2 pt-1">
@@ -46,7 +51,7 @@ export function ChatMessageMetadataUsage({
                 <SvgIcon id={model.provider.id} className="size-4 translate-y-[0.25em] text-muted-foreground" />
                 <span className="font-mono">{model.name}</span>
               </div>
-            ) : null}
+            ) : undefined}
           </div>
           <Table className="overflow-clip rounded-md">
             <TableHeader>
@@ -101,7 +106,7 @@ export function ChatMessageMetadataUsage({
                   <TableCell>{formatNumber(usage.cachedWriteTokens)}</TableCell>
                   <TableCell>{formatCurrency(0, { significantFigures: 2 })}</TableCell>
                 </TableRow>
-              ) : null}
+              ) : undefined}
             </TableBody>
             <TableFooter className="overflow-clip rounded-b-md">
               <TableRow>

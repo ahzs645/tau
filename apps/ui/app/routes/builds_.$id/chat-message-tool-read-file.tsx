@@ -4,6 +4,7 @@ import type { ReactNode, MouseEvent } from 'react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
 import { useBuild } from '#hooks/use-build.js';
+import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
 
 function formatLineRange(offset?: number, limit?: number): string {
   if (offset === undefined && limit === undefined) {
@@ -53,19 +54,15 @@ export function ChatMessageToolReadFile({
     case 'input-streaming':
     case 'input-available': {
       return (
-        <span className="animate-shiny-text text-sm text-muted-foreground">
-          Reading{' '}
-          <button
-            type="button"
-            className="cursor-pointer text-muted-foreground/80 underline-offset-2 hover:text-primary hover:underline"
-            onClick={(event) => {
-              handleClick(event, targetFile, startLine);
-            }}
-          >
-            {targetFile}
-            {lineRange}
-          </button>
-        </span>
+        <ChatToolInlineLink
+          status="loading"
+          onClick={(event) => {
+            handleClick(event, targetFile, startLine);
+          }}
+        >
+          Reading {targetFile}
+          {lineRange}...
+        </ChatToolInlineLink>
       );
     }
 
@@ -76,19 +73,15 @@ export function ChatMessageToolReadFile({
       const startLine = input.offset ?? 1;
 
       return (
-        <span className="text-sm text-muted-foreground">
-          Read{' '}
-          <button
-            type="button"
-            className="cursor-pointer text-muted-foreground/80 underline-offset-2 hover:text-primary hover:underline"
-            onClick={(event) => {
-              handleClick(event, targetFile, startLine);
-            }}
-          >
-            {targetFile}
-            {lineRange}
-          </button>
-        </span>
+        <ChatToolInlineLink
+          status="ready"
+          onClick={(event) => {
+            handleClick(event, targetFile, startLine);
+          }}
+        >
+          <span className="font-medium">Read</span> {targetFile}
+          {lineRange}
+        </ChatToolInlineLink>
       );
     }
 

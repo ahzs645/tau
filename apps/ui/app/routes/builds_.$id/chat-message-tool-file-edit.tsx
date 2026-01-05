@@ -22,6 +22,7 @@ export function ChatMessageToolFileEdit({
 }: {
   readonly part: UIToolInvocation<MyTools[typeof toolName.fileEdit]>;
 }): React.JSX.Element {
+  const build = useBuild({ enableNoContext: true });
   const { getMainFilename } = useBuild();
 
   // Create file edit machine
@@ -29,6 +30,22 @@ export function ChatMessageToolFileEdit({
   const fileEditState = useSelector(fileEditRef, (state) => state.value);
   const fileEditError = useSelector(fileEditRef, (state) => state.context.error);
   const fileManager = useFileManager();
+
+  const handleFileClick = useCallback(
+    (path: string) => {
+      if (!build) {
+        return;
+      }
+
+      build.fileExplorerRef.send({
+        type: 'openFile',
+        path,
+        lineNumber: 1,
+        column: 1,
+      });
+    },
+    [build],
+  );
 
   const handleApplyEdit = useCallback(
     async (targetFile: string, editInstructions: string) => {
@@ -102,6 +119,9 @@ export function ChatMessageToolFileEdit({
           targetFile={targetFile}
           toolStatus={part.state}
           mode="edit"
+          onFileClick={() => {
+            handleFileClick(targetFile);
+          }}
           actions={
             <>
               <CopyButton

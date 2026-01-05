@@ -61,6 +61,20 @@ export const cookieName = {
   chatWebSearch: 'chat-web-search',
   // The last selected model.
   chatModel: 'chat-model',
+  // Whether to show the model cost in the chat-history.
+  chatModelCost: 'chat-model-cost',
+
+  /* Chat Tool Sections - collapse state (true = open, false = collapsed) */
+  // Whether kernel errors section is open.
+  chatToolKernelErrors: 'chat-tool-kernel-errors',
+  // Whether code/linter errors section is open.
+  chatToolCodeErrors: 'chat-tool-code-errors',
+  // Whether code preview section is open.
+  chatToolCodePreview: 'chat-tool-code-preview',
+  // Whether image analysis screenshot section is open.
+  chatToolImageScreenshot: 'chat-tool-image-screenshot',
+  // Whether image analysis requirements section is open.
+  chatToolImageRequirements: 'chat-tool-image-requirements',
 
   /* Builds */
   // The last selected build view mode.

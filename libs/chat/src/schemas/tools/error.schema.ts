@@ -39,6 +39,6 @@ export const kernelErrorSchema: z.ZodType<KernelError> = z
         }),
       )
       .optional(),
-    type: z.enum(['compilation', 'runtime', 'kernel', 'unknown']).optional(),
+    type: z.enum(['compilation', 'runtime', 'kernel', 'connection', 'unknown']).optional(),
   })
   .meta({ id: 'KernelError' });
