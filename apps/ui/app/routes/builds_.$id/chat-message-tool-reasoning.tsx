@@ -94,8 +94,12 @@ export function ChatMessageToolReasoning({
       </ChatToolCardHeader>
       {hasContent ? (
         <ChatToolCardContent className="border-l-0">
-          <div className="border-l border-foreground/20 pl-4 text-sm text-foreground/60 italic">
-            <MarkdownViewer isStreaming={isStreaming} controls={{ ...defaultMarkdownControls, table: true }}>
+          <div className="border-l border-foreground/20 pl-4 text-sm italic">
+            <MarkdownViewer
+              className="text-muted-foreground"
+              isStreaming={isStreaming}
+              controls={{ ...defaultMarkdownControls, table: true }}
+            >
               {thinking.trim()}
             </MarkdownViewer>
           </div>
