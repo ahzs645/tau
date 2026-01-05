@@ -263,7 +263,7 @@ export function useChatTools(): UseChatToolsReturn {
         await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
 
         // Send delete event to file manager machine
-        fileManagerRef.send({ type: 'deleteFile', path: resolvedPath });
+        fileManagerRef.send({ type: 'deleteFile', path: resolvedPath, source: 'external' });
 
         // Return immediately without waiting for completion
         // LLM should use get_kernel_result to verify changes
