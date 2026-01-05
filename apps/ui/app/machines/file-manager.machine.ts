@@ -39,6 +39,7 @@ type FileManagerContext = {
   lastRenamedOldPath: string | undefined;
   lastRenamedNewPath: string | undefined;
   lastDeletedPath: string | undefined;
+  lastDeleteSource: FileWriteSource | undefined;
   rootDirectory: string;
   shouldInitializeOnStart: boolean;
 };
@@ -276,7 +277,7 @@ type FileManagerEventInternal =
   | { type: 'writeFiles'; files: Record<string, { content: Uint8Array }> }
   | { type: 'readFile'; path: string }
   | { type: 'renameFile'; oldPath: string; newPath: string }
-  | { type: 'deleteFile'; path: string };
+  | { type: 'deleteFile'; path: string; source?: FileWriteSource };
 
 type FileManagerEventExternal = OutputFrom<(typeof fileManagerActors)[FileManagerActorNames]>;
 type FileManagerEventExternalDone = DoneActorEvent<FileManagerEventExternal, FileManagerActorNames>;
@@ -292,7 +293,7 @@ type FileManagerEmitted =
   | { type: 'fileWritten'; path: string; data: Uint8Array; source: FileWriteSource }
   | { type: 'fileRead'; path: string; data: Uint8Array }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
-  | { type: 'fileDeleted'; path: string };
+  | { type: 'fileDeleted'; path: string; source: FileWriteSource };
 
 /**
  * File Manager Machine
@@ -497,6 +498,10 @@ export const fileManagerMachine = setup({
         assertEvent(event, 'deleteFile');
         return event.path;
       },
+      lastDeleteSource({ event }) {
+        assertEvent(event, 'deleteFile');
+        return event.source ?? 'file-tree';
+      },
     }),
 
     removeDeletedFileFromTree: assign({
@@ -663,6 +668,7 @@ export const fileManagerMachine = setup({
     emitFileDeleted: emit(({ context }) => ({
       type: 'fileDeleted' as const,
       path: context.lastDeletedPath ?? '',
+      source: context.lastDeleteSource ?? 'file-tree',
     })),
   },
   guards: {
@@ -742,6 +748,7 @@ export const fileManagerMachine = setup({
     lastRenamedOldPath: undefined,
     lastRenamedNewPath: undefined,
     lastDeletedPath: undefined,
+    lastDeleteSource: undefined,
     rootDirectory: input.rootDirectory,
     shouldInitializeOnStart: input.shouldInitializeOnStart ?? true,
   }),
