@@ -19,6 +19,7 @@ import { EmptyItems } from '#components/ui/empty-items.js';
 import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { ChatEditorBinaryWarning } from '#routes/builds_.$id/chat-editor-binary-warning.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
+import { useViewContext } from '#routes/builds_.$id/chat-interface-view-context.js';
 
 /**
  * Build prefix for Monaco URIs, matching the file manager's root directory structure.
@@ -46,6 +47,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
   const fileManager = useFileManager();
   const { fileManagerRef } = useFileManager();
   const [forceOpenBinary, setForceOpenBinary] = useState(false);
+  const { setIsEditorOpen } = useViewContext();
 
   // Get active file path from file explorer
   const activeFilePath = useSelector(fileExplorerActor, (state) => {
@@ -223,7 +225,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
     };
   }, [monaco, fileManagerRef, buildId]);
 
-  // Subscribe to fileOpened events to jump to specific line numbers
+  // Subscribe to fileOpened events to open the editor panel and jump to specific line numbers
   useEffect(() => {
     if (!monaco) {
       return;
@@ -232,32 +234,42 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
     const subscription = fileExplorerActor.on(
       'fileOpened',
       (event: { path: string; lineNumber?: number; column?: number }) => {
+        // Always open the editor panel when a file is opened
+        setIsEditorOpen(true);
+
         // Only jump if a line number is specified
         if (!event.lineNumber) {
           return;
         }
 
-        const uri = createBuildNamespacedUri(monaco, buildId, event.path);
-        const model = monaco.editor.getModel(uri);
+        // Defer Monaco navigation until after the layout has fully settled
+        // Double rAF ensures we wait for both React render and browser layout/paint cycles
+        // This prevents layout shifts when the editor panel is opening
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const uri = createBuildNamespacedUri(monaco, buildId, event.path);
+            const model = monaco.editor.getModel(uri);
 
-        if (model) {
-          const editors = monaco.editor.getEditors();
-          const targetEditor = editors.find((editorInstance) => editorInstance.getModel() === model);
+            if (model) {
+              const editors = monaco.editor.getEditors();
+              const targetEditor = editors.find((editorInstance) => editorInstance.getModel() === model);
 
-          if (targetEditor) {
-            const position = new monaco.Position(event.lineNumber, event.column ?? 1);
-            targetEditor.setPosition(position);
-            targetEditor.revealPositionInCenter(position);
-            targetEditor.focus();
-          }
-        }
+              if (targetEditor) {
+                const position = new monaco.Position(event.lineNumber!, event.column ?? 1);
+                targetEditor.setPosition(position);
+                targetEditor.revealPositionInCenter(position);
+                targetEditor.focus();
+              }
+            }
+          });
+        });
       },
     );
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [monaco, fileExplorerActor, buildId]);
+  }, [monaco, fileExplorerActor, buildId, setIsEditorOpen]);
 
   return (
     <div className={cn('flex h-full flex-col bg-background', className)}>
