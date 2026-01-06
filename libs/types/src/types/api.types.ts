@@ -18,12 +18,12 @@ export type NormalizedChatError = {
   httpStatus?: number;
   /** User-friendly error title */
   title: string;
-  /** User-friendly error message/description */
+  /** User-friendly error message/description (may contain markdown) */
   message: string;
   /** Request ID for support/debugging */
   requestId?: string;
-  /** URL to troubleshooting documentation */
-  troubleshootingUrl?: string;
+  /** URL to help documentation or troubleshooting guide */
+  helpUrl?: string;
   /** Raw error message for debugging */
   raw?: string;
 };
