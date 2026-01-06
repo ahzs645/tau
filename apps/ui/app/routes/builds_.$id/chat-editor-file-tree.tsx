@@ -509,7 +509,7 @@ export const ChatEditorFileTree = memo(function ({
   const handleCreateFile = useCallback(
     (template: KernelConfiguration | undefined) => {
       const content = template?.emptyCode ?? '';
-      const extension = template?.mainFile.split('.').pop() ?? 'txt';
+      const extension = template ? getFileExtension(template.mainFile) : 'txt';
 
       // Determine parent path based on focused item
       let parentPath = '';

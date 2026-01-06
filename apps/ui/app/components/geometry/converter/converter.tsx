@@ -10,7 +10,7 @@ import { Label } from '#components/ui/label.js';
 import { downloadBlob } from '#utils/file.utils.js';
 import { FormatSelector } from '#components/geometry/converter/format-selector.js';
 import { ConverterFileTree } from '#components/geometry/converter/converter-file-tree.js';
-import { formatDisplayName, getFileExtension } from '#components/geometry/converter/converter-utils.js';
+import { formatDisplayName, getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';
 import { zipMachine } from '#machines/zip.machine.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -124,7 +124,7 @@ export function Converter({
               throw new Error('No file returned from export');
             }
 
-            const extension = getFileExtension(format);
+            const extension = getExtensionForFormat(format);
             const filename = uploadedFile
               ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
               : `model.${extension}`;
@@ -182,7 +182,7 @@ export function Converter({
             const exportedFiles: ExportedFile[] = [];
             for (const { format, files } of results) {
               for (const file of files) {
-                const extension = getFileExtension(format);
+                const extension = getExtensionForFormat(format);
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;
@@ -265,7 +265,7 @@ export function Converter({
             const exportedFiles: ExportedFile[] = [];
             for (const { format, files } of results) {
               for (const file of files) {
-                const extension = getFileExtension(format);
+                const extension = getExtensionForFormat(format);
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;

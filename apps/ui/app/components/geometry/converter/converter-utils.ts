@@ -1,11 +1,12 @@
 import type { InputFormat, OutputFormat } from '@taucad/converter';
 import { formatConfigurations, isInputFormatSupported } from '@taucad/converter';
+import { getFileExtension } from '#utils/filesystem.utils.js';
 
 /**
  * Extract file format from filename extension
  */
 export function getFormatFromFilename(filename: string): InputFormat {
-  const extension = filename.split('.').pop()?.toLowerCase();
+  const extension = getFileExtension(filename);
 
   if (!extension) {
     throw new Error('File has no extension');
@@ -43,6 +44,6 @@ export function formatFileSize(bytes: number): string {
 /**
  * Get file extension for output format
  */
-export function getFileExtension(format: OutputFormat): string {
+export function getExtensionForFormat(format: OutputFormat): string {
   return format;
 }
