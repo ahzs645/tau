@@ -12,6 +12,69 @@ import { CopyButton } from '#components/copy-button.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 
+type CollapsibleContainerProps = {
+  readonly children: React.ReactNode;
+  /**
+   * Total number of lines in the content - used to determine if toggle should be shown.
+   */
+  readonly lineCount: number;
+  /**
+   * Number of lines before showing the collapse toggle.
+   * @default 4
+   */
+  readonly collapsedLineCount?: number;
+  /**
+   * Max height when collapsed (Tailwind class).
+   * @default 'max-h-32'
+   */
+  readonly collapsedMaxHeight?: string;
+  readonly className?: string;
+};
+
+/**
+ * A generic collapsible container that wraps any content with expand/collapse functionality.
+ * Shows a toggle button when content exceeds the collapsed line count.
+ */
+export function CollapsibleContainer({
+  children,
+  lineCount,
+  collapsedLineCount = 4,
+  collapsedMaxHeight = 'max-h-32',
+  className,
+}: CollapsibleContainerProps): React.JSX.Element {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const shouldShowToggle = lineCount > collapsedLineCount;
+
+  return (
+    <div className={cn('relative flex flex-col leading-0', className)}>
+      {/* Scrollable content area */}
+      <div
+        className={cn(
+          'w-full overflow-x-auto',
+          shouldShowToggle && !isExpanded ? `${collapsedMaxHeight} overflow-y-hidden` : '',
+        )}
+      >
+        {children}
+      </div>
+      {/* Toggle button - outside scrollable area so it stays fixed */}
+      {shouldShowToggle ? (
+        <Button
+          size="xs"
+          className={cn(
+            'h-4 w-full shrink-0 rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40',
+            isExpanded ? '' : 'absolute right-0 bottom-0 left-0',
+          )}
+          onClick={() => {
+            setIsExpanded((previous) => !previous);
+          }}
+        >
+          <ChevronDown className={cn('transition-transform', isExpanded ? 'rotate-x-180' : '')} />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 type CollapsibleCodeBlockProps = {
   readonly language: string;
   readonly title?: string;
@@ -36,13 +99,7 @@ export const CollapsibleCodeBlock = memo(function ({
   className = '',
   containerClassName = '',
 }: CollapsibleCodeBlockProps): React.JSX.Element {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const lines = useMemo(() => text.split('\n'), [text]);
-  const collapsedText = useMemo(() => lines.slice(0, collapsedLineCount).join('\n'), [lines, collapsedLineCount]);
-  const shouldShowToggle = lines.length > collapsedLineCount;
-
-  // Determine which text to display based on expanded state
-  const displayText = isExpanded ? text : collapsedText;
+  const lineCount = useMemo(() => text.split('\n').length, [text]);
 
   return (
     <CodeBlock className={containerClassName} variant="standard">
@@ -56,24 +113,13 @@ export const CollapsibleCodeBlock = memo(function ({
           />
         </CodeBlockAction>
       </CodeBlockHeader>
-      <div className={cn('relative leading-0', shouldShowToggle && !isExpanded ? 'max-h-32 overflow-y-auto' : '')}>
+      <CollapsibleContainer lineCount={lineCount} collapsedLineCount={collapsedLineCount}>
         <CodeBlockContent className="px-3">
           <Pre language={language} className={cn('text-xs', className)}>
-            {displayText}
+            {text}
           </Pre>
         </CodeBlockContent>
-        {shouldShowToggle ? (
-          <Button
-            size="xs"
-            className="sticky bottom-0 mb-0 h-4 w-full rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40"
-            onClick={() => {
-              setIsExpanded((previous) => !previous);
-            }}
-          >
-            <ChevronDown className={cn('transition-transform', isExpanded ? 'rotate-x-180' : '')} />
-          </Button>
-        ) : null}
-      </div>
+      </CollapsibleContainer>
     </CodeBlock>
   );
 });
