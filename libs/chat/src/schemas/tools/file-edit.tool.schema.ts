@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { diffStatsSchema } from '#schemas/tools/diff.schema.js';
 
 export const fileEditInputSchema = z.object({
   targetFile: z.string().describe('The target file to modify.'),
@@ -7,6 +8,7 @@ export const fileEditInputSchema = z.object({
 
 export const fileEditOutputSchema = z.object({
   success: z.boolean().describe('Whether the file edit was successfully applied'),
+  diffStats: diffStatsSchema.describe('Statistics and content diff for the changes made'),
 });
 
 export type FileEditInput = z.infer<typeof fileEditInputSchema>;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { diffStatsSchema } from '#schemas/tools/diff.schema.js';
 
 export const createFileInputSchema = z.object({
   targetFile: z.string().describe('The path of the file to create, relative to the project root.'),
@@ -8,6 +9,7 @@ export const createFileInputSchema = z.object({
 export const createFileOutputSchema = z.object({
   success: z.boolean().describe('Whether the file was created successfully.'),
   message: z.string().optional().describe('Additional information about the operation.'),
+  diffStats: diffStatsSchema.describe('Statistics and content diff for the changes made'),
 });
 
 export type CreateFileInput = z.infer<typeof createFileInputSchema>;
