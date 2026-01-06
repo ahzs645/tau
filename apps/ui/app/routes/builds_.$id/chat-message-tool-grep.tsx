@@ -12,6 +12,7 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 export function ChatMessageToolGrep({
   part,
@@ -27,7 +28,10 @@ export function ChatMessageToolGrep({
       return (
         <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
           <ChatToolCardHeader>
-            <ChatToolCardTitle>Searching for &quot;{pattern}&quot;...</ChatToolCardTitle>
+            <ChatToolCardTitle>
+              <ChatToolAction>Searching for</ChatToolAction>{' '}
+              <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
+            </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
       );
@@ -53,8 +57,13 @@ export function ChatMessageToolGrep({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Search} />
             <ChatToolCardTitle>
-              <span className="font-mono">/{pattern}/</span> ({totalMatches} match{totalMatches === 1 ? '' : 'es'}
-              {truncated ? ', truncated' : ''})
+              <ChatToolAction>
+                <span className="font-mono">/{pattern}/</span>
+              </ChatToolAction>{' '}
+              <ChatToolDescription>
+                ({totalMatches} match{totalMatches === 1 ? '' : 'es'}
+                {truncated ? ', truncated' : ''})
+              </ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>

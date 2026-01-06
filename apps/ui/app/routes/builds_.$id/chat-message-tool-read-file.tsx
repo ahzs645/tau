@@ -1,10 +1,10 @@
 import type { UIToolInvocation } from 'ai';
-import { useCallback } from 'react';
-import type { ReactNode, MouseEvent } from 'react';
+import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { useBuild } from '#hooks/use-build.js';
+import { FileLink } from '#components/files/file-link.js';
 import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 function formatLineRange(offset?: number, limit?: number): string {
   if (offset === undefined && limit === undefined) {
@@ -26,42 +26,20 @@ export function ChatMessageToolReadFile({
 }: {
   readonly part: UIToolInvocation<MyTools[typeof toolName.readFile]>;
 }): ReactNode {
-  const build = useBuild({ enableNoContext: true });
-
-  const handleClick = useCallback(
-    (event: MouseEvent, path: string, lineNumber?: number) => {
-      event.preventDefault();
-      if (!build) {
-        return;
-      }
-
-      build.fileExplorerRef.send({
-        type: 'openFile',
-        path,
-        lineNumber,
-        column: 1,
-      });
-    },
-    [build],
-  );
-
   const { input } = part;
   const targetFile = input?.targetFile ?? 'file';
   const lineRange = formatLineRange(input?.offset, input?.limit);
-  const startLine = input?.offset ?? 1;
 
   switch (part.state) {
     case 'input-streaming':
     case 'input-available': {
       return (
-        <ChatToolInlineLink
-          status="loading"
-          onClick={(event) => {
-            handleClick(event, targetFile, startLine);
-          }}
-        >
-          Reading {targetFile}
-          {lineRange}...
+        <ChatToolInlineLink status="loading">
+          <ChatToolAction>Reading</ChatToolAction>{' '}
+          <ChatToolDescription>
+            {targetFile}
+            {lineRange}...
+          </ChatToolDescription>
         </ChatToolInlineLink>
       );
     }
@@ -73,14 +51,12 @@ export function ChatMessageToolReadFile({
       const startLine = input.offset ?? 1;
 
       return (
-        <ChatToolInlineLink
-          status="ready"
-          onClick={(event) => {
-            handleClick(event, targetFile, startLine);
-          }}
-        >
-          <span className="font-medium">Read</span> {targetFile}
-          {lineRange}
+        <ChatToolInlineLink status="ready">
+          <ChatToolAction>Read</ChatToolAction>{' '}
+          <FileLink path={targetFile} lineNumber={startLine} className="text-foreground/50">
+            {targetFile}
+            {lineRange}
+          </FileLink>
         </ChatToolInlineLink>
       );
     }

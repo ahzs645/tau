@@ -14,6 +14,7 @@ import {
   ChatToolCardContent,
   ChatToolCardSection,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
 export function ChatMessageToolImageAnalysis({
@@ -34,7 +35,10 @@ export function ChatMessageToolImageAnalysis({
         <ChatToolCard variant="card" status="loading" isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Eye} />
-            <ChatToolCardTitle>Analyzing model...</ChatToolCardTitle>
+            <ChatToolCardTitle>
+              <ChatToolAction>Analyzing</ChatToolAction>{' '}
+              <ChatToolDescription>model...</ChatToolDescription>
+            </ChatToolCardTitle>
           </ChatToolCardHeader>
           {requirements.length > 0 ? (
             <ChatToolCardContent>

@@ -12,6 +12,7 @@ import {
   ChatToolCardTitle,
   ChatToolCardContent,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 /**
  * Format duration display.
@@ -89,7 +90,14 @@ export function ChatMessageToolReasoning({
       <ChatToolCardHeader>
         <ChatToolCardIcon icon={Brain} />
         <ChatToolCardTitle>
-          {isThinking ? 'Thinking...' : `Thought for ${formatDuration(finalDurationSeconds)}`}
+          {isThinking ? (
+            'Thinking...'
+          ) : (
+            <>
+              <ChatToolAction>Thought</ChatToolAction>{' '}
+              <ChatToolDescription>for {formatDuration(finalDurationSeconds)}</ChatToolDescription>
+            </>
+          )}
         </ChatToolCardTitle>
       </ChatToolCardHeader>
       {hasContent ? (

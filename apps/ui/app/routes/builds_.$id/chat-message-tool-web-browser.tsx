@@ -5,6 +5,7 @@ import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
 import { createFaviconUrl, extractDomainFromUrl } from '#utils/url.utils.js';
 import { ChatToolInline } from '#components/chat/chat-tool-inline.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 export function ChatMessageToolWebBrowser({
   part,
@@ -29,7 +30,7 @@ export function ChatMessageToolWebBrowser({
 
       return (
         <ChatToolInline status="success" image={{ src: faviconUrl, alt: domain }}>
-          Visited {domain}
+          <ChatToolAction>Visited</ChatToolAction> <ChatToolDescription>{domain}</ChatToolDescription>
         </ChatToolInline>
       );
     }

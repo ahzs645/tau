@@ -12,6 +12,7 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 export function ChatMessageToolListDirectory({
   part,
@@ -27,7 +28,9 @@ export function ChatMessageToolListDirectory({
       return (
         <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
           <ChatToolCardHeader>
-            <ChatToolCardTitle>Listing {path}...</ChatToolCardTitle>
+            <ChatToolCardTitle>
+              <ChatToolAction>Listing</ChatToolAction> <ChatToolDescription>{path}...</ChatToolDescription>
+            </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
       );
@@ -36,6 +39,7 @@ export function ChatMessageToolListDirectory({
     case 'output-available': {
       const { output } = part;
       const { entries, path } = output;
+      console.log(part);
 
       // Sort entries: directories first, then files
       const sortedEntries = [...entries].sort((a, b) => {
@@ -51,7 +55,10 @@ export function ChatMessageToolListDirectory({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FolderOpen} />
             <ChatToolCardTitle>
-              {path || '/'} ({entries.length} items)
+              <ChatToolAction>Listed</ChatToolAction>{' '}
+              <ChatToolDescription>
+                {path || '/'} ({entries.length} items)
+              </ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>

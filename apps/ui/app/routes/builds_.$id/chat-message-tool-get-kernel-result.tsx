@@ -11,6 +11,8 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { FileLink } from '#components/files/file-link.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
 export function ChatMessageToolGetKernelResult({
@@ -25,7 +27,9 @@ export function ChatMessageToolGetKernelResult({
         <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={CheckCircle} />
-            <ChatToolCardTitle>Checking kernel status...</ChatToolCardTitle>
+            <ChatToolCardTitle>
+              <ChatToolAction>Checking</ChatToolAction> <ChatToolDescription>kernel status...</ChatToolDescription>
+            </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
       );
@@ -58,7 +62,7 @@ export function ChatMessageToolGetKernelResult({
           isDefaultOpen={false}
           cookieName={cookieName.chatToolKernelErrors}
         >
-          <ChatToolCardHeader className="text-destructive">
+          <ChatToolCardHeader className="text-destructive hover:text-destructive">
             <ChatToolCardIcon isError icon={XCircle} />
             <ChatToolCardTitle>{message ?? `Found ${kernelErrors?.length ?? 0} error(s)`}</ChatToolCardTitle>
           </ChatToolCardHeader>
@@ -73,9 +77,14 @@ export function ChatMessageToolGetKernelResult({
                     <ChatToolCardListItem key={key} icon={AlertTriangle} className="text-muted-foreground">
                       <span className="flex flex-1 items-start gap-1">
                         {location ? (
-                          <span className="shrink-0 font-mono text-muted-foreground/70">
+                          <FileLink
+                            path={location.fileName}
+                            lineNumber={location.startLineNumber}
+                            column={location.startColumn}
+                            className="shrink-0 font-mono text-xs text-muted-foreground/70 hover:text-foreground"
+                          >
                             {location.fileName}:{location.startLineNumber}:{location.startColumn}
-                          </span>
+                          </FileLink>
                         ) : undefined}
                         <span className="font-mono">{error.message}</span>
                       </span>
@@ -92,7 +101,7 @@ export function ChatMessageToolGetKernelResult({
     case 'output-error': {
       return (
         <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
-          <ChatToolCardHeader className="text-destructive">
+          <ChatToolCardHeader className="text-destructive hover:text-destructive">
             <ChatToolCardIcon isError icon={XCircle} />
             <ChatToolCardTitle>Failed to check kernel status: {part.errorText}</ChatToolCardTitle>
           </ChatToolCardHeader>

@@ -1,15 +1,20 @@
 import type { UIToolInvocation } from 'ai';
-import { Trash2, Check, X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Trash2, XCircle } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
-import { ChatToolInline } from '#components/chat/chat-tool-inline.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+} from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 export function ChatMessageToolDeleteFile({
   part,
 }: {
   readonly part: UIToolInvocation<MyTools[typeof toolName.deleteFile]>;
-}): ReactNode {
+}): React.JSX.Element {
   switch (part.state) {
     case 'input-streaming':
     case 'input-available': {
@@ -17,9 +22,15 @@ export function ChatMessageToolDeleteFile({
       const targetFile = input?.targetFile ?? 'file';
 
       return (
-        <ChatToolInline status="loading" icon={Trash2}>
-          Deleting {targetFile}...
-        </ChatToolInline>
+        <ChatToolCard variant="minimal" status="loading" isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Trash2} />
+            <ChatToolCardTitle>
+              <ChatToolAction>Deleting</ChatToolAction>{' '}
+              <ChatToolDescription>{targetFile}...</ChatToolDescription>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 
@@ -28,18 +39,41 @@ export function ChatMessageToolDeleteFile({
       const { targetFile } = input;
       const { success } = output;
 
+      if (success) {
+        return (
+          <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
+            <ChatToolCardHeader>
+              <ChatToolCardIcon icon={Trash2} />
+              <ChatToolCardTitle>
+                <ChatToolAction>Deleted</ChatToolAction>{' '}
+                <ChatToolDescription>{targetFile}</ChatToolDescription>
+              </ChatToolCardTitle>
+            </ChatToolCardHeader>
+          </ChatToolCard>
+        );
+      }
+
       return (
-        <ChatToolInline status={success ? 'success' : 'error'} icon={success ? Check : X}>
-          {success ? `Deleted ${targetFile}` : `Failed to delete ${targetFile}`}
-        </ChatToolInline>
+        <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
+          <ChatToolCardHeader className="text-destructive">
+            <ChatToolCardIcon isError icon={XCircle} />
+            <ChatToolCardTitle>
+              <ChatToolAction>Failed to delete</ChatToolAction>{' '}
+              <ChatToolDescription>{targetFile}</ChatToolDescription>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 
     case 'output-error': {
       return (
-        <ChatToolInline status="error" icon={X}>
-          Failed to delete file
-        </ChatToolInline>
+        <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
+          <ChatToolCardHeader className="text-destructive">
+            <ChatToolCardIcon isError icon={XCircle} />
+            <ChatToolCardTitle>Failed to delete file</ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
   }

@@ -12,6 +12,7 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 export function ChatMessageToolGlobSearch({
   part,
@@ -27,7 +28,10 @@ export function ChatMessageToolGlobSearch({
       return (
         <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
           <ChatToolCardHeader>
-            <ChatToolCardTitle>Finding files matching &quot;{pattern}&quot;...</ChatToolCardTitle>
+            <ChatToolCardTitle>
+              <ChatToolAction>Finding files matching</ChatToolAction>{' '}
+              <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
+            </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
       );
@@ -43,7 +47,12 @@ export function ChatMessageToolGlobSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Files} />
             <ChatToolCardTitle>
-              <span className="font-mono">{pattern}</span> ({totalFiles} file{totalFiles === 1 ? '' : 's'})
+              <ChatToolAction>
+                <span className="font-mono">{pattern}</span>
+              </ChatToolAction>{' '}
+              <ChatToolDescription>
+                ({totalFiles} file{totalFiles === 1 ? '' : 's'})
+              </ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
