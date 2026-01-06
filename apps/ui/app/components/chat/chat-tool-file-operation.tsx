@@ -1,16 +1,24 @@
 import type { ToolUIPart } from 'ai';
+import type { DiffStats } from '@taucad/chat';
+import type { CodeLanguage } from '@taucad/types';
 import { useState, useEffect, useRef } from 'react';
-import { File, FilePlus, LoaderCircle, X, ChevronDown, ChevronRight, Check, RotateCcw, Play } from 'lucide-react';
+import { File, FilePlus, LoaderCircle, X, ChevronRight, Check, RotateCcw, Play } from 'lucide-react';
+import { languageFromExtension } from '@taucad/types/constants';
 import { CodeViewer } from '#components/code/code-viewer.js';
+import { DiffViewer, getDiffLineCount } from '#components/code/diff-viewer.js';
 import { CopyButton } from '#components/copy-button.js';
 import { FileLink } from '#components/files/file-link.js';
+import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
+import { getFileExtension } from '#utils/filesystem.utils.js';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
+import { CollapsibleContainer } from '#components/ui/collapsible-code-block.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
+import { ChangeIndicator } from '#components/chat/change-indicator.js';
 
 /**
  * Extract the filename from a path.
@@ -18,6 +26,19 @@ import { cookieName } from '#constants/cookie.constants.js';
 function getFilename(path: string): string {
   const parts = path.split('/');
   return parts.at(-1) ?? path;
+}
+
+/**
+ * Get the code language for syntax highlighting based on a filename's extension.
+ * Falls back to 'typescript' if the extension is not recognized.
+ */
+function getLanguageFromFilename(filename: string): CodeLanguage {
+  const extension = getFileExtension(filename);
+  if (extension in languageFromExtension) {
+    return languageFromExtension[extension as keyof typeof languageFromExtension];
+  }
+
+  return 'typescript';
 }
 
 type StatusIconProps = {
@@ -99,148 +120,49 @@ export function ApplyButton({ state, error, onApply, isDisabled }: ApplyButtonPr
 
 type CodePreviewProps = {
   readonly content: string;
-  readonly language?: 'typescript' | 'kcl' | 'openscad' | 'javascript' | 'jsx' | 'tsx' | 'bash' | 'json';
-  readonly isExpanded?: boolean;
-  readonly onToggleExpand?: () => void;
+  readonly language?: CodeLanguage;
   readonly maxCollapsedLines?: number;
 };
 
 export function CodePreview({
   content,
-  language = 'openscad',
-  isExpanded: controlledIsExpanded,
-  onToggleExpand,
+  language = 'typescript',
   maxCollapsedLines = 4,
 }: CodePreviewProps): React.JSX.Element {
-  const [internalIsExpanded, setInternalIsExpanded] = useState(false);
-  const isExpanded = controlledIsExpanded ?? internalIsExpanded;
-  const handleToggle =
-    onToggleExpand ??
-    ((): void => {
-      setInternalIsExpanded((previous) => !previous);
-    });
-
-  const lines = content.split('\n');
-  const displayContent = isExpanded ? content : lines.slice(0, maxCollapsedLines).join('\n');
-  const hasMoreLines = lines.length > maxCollapsedLines;
+  const lineCount = content.split('\n').length;
 
   return (
-    <div className={cn('relative border-t', isExpanded ? '' : 'max-h-32 overflow-y-auto')}>
-      <div className="leading-0">
-        <CodeViewer language={language} text={displayContent} className="overflow-x-auto px-2.5 py-1.5 text-xs" />
-        {hasMoreLines ? (
-          <Button
-            size="xs"
-            className="sticky bottom-0 h-4 w-full rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40"
-            onClick={handleToggle}
-          >
-            <ChevronDown className={cn('transition-transform', isExpanded ? 'rotate-x-180' : '')} />
-          </Button>
-        ) : null}
-      </div>
-    </div>
+    <CollapsibleContainer lineCount={lineCount} collapsedLineCount={maxCollapsedLines} className="border-t">
+      <CodeViewer language={language} text={content} className="overflow-x-auto px-2.5 py-1.5 text-xs" />
+    </CollapsibleContainer>
   );
 }
 
-type DiffLine = {
-  type: 'added' | 'removed' | 'unchanged';
-  content: string;
-  lineNumber?: number;
-};
-
-/**
- * Simple diff algorithm that compares lines
- */
-export function computeDiff(originalContent: string, newContent: string): DiffLine[] {
-  const originalLines = originalContent.split('\n');
-  const newLines = newContent.split('\n');
-  const result: DiffLine[] = [];
-
-  // Simple line-by-line diff (not optimal but works for display)
-  let originalIndex = 0;
-  let newIndex = 0;
-
-  while (originalIndex < originalLines.length || newIndex < newLines.length) {
-    const originalLine = originalLines[originalIndex];
-    const newLine = newLines[newIndex];
-
-    if (originalLine === newLine) {
-      result.push({ type: 'unchanged', content: originalLine ?? '', lineNumber: newIndex + 1 });
-      originalIndex++;
-      newIndex++;
-    } else if (originalLine !== undefined && !newLines.includes(originalLine)) {
-      result.push({ type: 'removed', content: originalLine });
-      originalIndex++;
-    } else if (newLine !== undefined && !originalLines.includes(newLine)) {
-      result.push({ type: 'added', content: newLine, lineNumber: newIndex + 1 });
-      newIndex++;
-    } else {
-      // Lines exist in both but at different positions - treat as change
-      if (originalLine !== undefined) {
-        result.push({ type: 'removed', content: originalLine });
-        originalIndex++;
-      }
-
-      if (newLine !== undefined) {
-        result.push({ type: 'added', content: newLine, lineNumber: newIndex + 1 });
-        newIndex++;
-      }
-    }
-  }
-
-  return result;
-}
-
-type DiffViewProps = {
+type DiffPreviewProps = {
   readonly originalContent: string;
-  readonly newContent: string;
-  readonly isExpanded: boolean;
-  readonly onToggleExpand: () => void;
+  readonly modifiedContent: string;
+  readonly language?: CodeLanguage;
   readonly maxCollapsedLines?: number;
 };
 
-export function DiffView({
+export function DiffPreview({
   originalContent,
-  newContent,
-  isExpanded,
-  onToggleExpand,
-  maxCollapsedLines = 8,
-}: DiffViewProps): React.JSX.Element {
-  const diffLines = computeDiff(originalContent, newContent);
-  const displayLines = isExpanded ? diffLines : diffLines.slice(0, maxCollapsedLines);
-  const hasMoreLines = diffLines.length > maxCollapsedLines;
+  modifiedContent,
+  language = 'typescript',
+  maxCollapsedLines = 4,
+}: DiffPreviewProps): React.JSX.Element {
+  // Get actual visible line count (with context collapsing applied)
+  const lineCount = getDiffLineCount(originalContent, modifiedContent);
 
   return (
-    <div className={cn('relative border-t', isExpanded ? '' : 'max-h-48 overflow-y-auto')}>
-      <div className="font-mono text-xs leading-relaxed">
-        {displayLines.map((line, index) => (
-          <div
-            // eslint-disable-next-line react/no-array-index-key -- Index is stable for diff display
-            key={index}
-            className={cn(
-              'flex px-3 py-0.5',
-              line.type === 'added' && 'bg-success/20 text-success',
-              line.type === 'removed' && 'bg-destructive/20 text-destructive line-through',
-              line.type === 'unchanged' && 'text-muted-foreground',
-            )}
-          >
-            <span className="mr-2 w-4 shrink-0 text-right opacity-50 select-none">
-              {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-            </span>
-            <span className="whitespace-pre">{line.content}</span>
-          </div>
-        ))}
-      </div>
-      {hasMoreLines ? (
-        <Button
-          size="xs"
-          className="sticky bottom-0 h-4 w-full rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40"
-          onClick={onToggleExpand}
-        >
-          <ChevronDown className={cn('transition-transform', isExpanded ? 'rotate-x-180' : '')} />
-        </Button>
-      ) : null}
-    </div>
+    <CollapsibleContainer
+      lineCount={lineCount}
+      collapsedLineCount={maxCollapsedLines}
+      collapsedMaxHeight="max-h-32"
+      className="border-t"
+    >
+      <DiffViewer originalContent={originalContent} modifiedContent={modifiedContent} language={language} />
+    </CollapsibleContainer>
   );
 }
 
@@ -295,8 +217,13 @@ type CollapsibleFileOperationTriggerProps = {
    * When true, wraps the filename with FileLink for file opening functionality.
    */
   readonly enableFileLink?: boolean;
+  /**
+   * Diff statistics for displaying change indicator.
+   */
+  readonly diffStats?: DiffStats;
 };
 
+// eslint-disable-next-line complexity -- UI component with many conditional rendering paths
 export function CollapsibleFileOperationTrigger({
   targetFile,
   toolStatus,
@@ -304,6 +231,7 @@ export function CollapsibleFileOperationTrigger({
   isOpen,
   isSuccess = true,
   enableFileLink = false,
+  diffStats,
 }: CollapsibleFileOperationTriggerProps): React.JSX.Element {
   const isStreaming = ['input-streaming', 'input-available'].includes(toolStatus);
   const isError = toolStatus === 'output-available' && !isSuccess;
@@ -353,6 +281,10 @@ export function CollapsibleFileOperationTrigger({
       <span className="min-w-0 truncate">{filenameContent}</span>
     );
 
+  // Show change indicator when diffStats is available and there are changes
+  const showChangeIndicator =
+    diffStats !== undefined && (diffStats.linesAdded > 0 || diffStats.linesRemoved > 0) && !isStreaming && !isError;
+
   // Entire header is the collapsible trigger
   return (
     <CollapsibleTrigger className="group flex h-7 min-w-0 flex-1 cursor-pointer flex-row items-center gap-1 pl-2 text-xs text-muted-foreground transition-colors">
@@ -365,10 +297,8 @@ export function CollapsibleFileOperationTrigger({
             <span className={cn('transition-opacity duration-150', 'group-hover:opacity-0')}>
               {isError ? (
                 <X className="size-3 text-destructive" />
-              ) : mode === 'create' ? (
-                <FilePlus className="size-3" />
               ) : (
-                <File className="size-3" />
+                <FileExtensionIcon filename={filename} className="size-3" />
               )}
             </span>
             {/* Caret - hidden by default, visible on hover */}
@@ -383,6 +313,9 @@ export function CollapsibleFileOperationTrigger({
         )}
       </span>
       {filenameElement}
+      {showChangeIndicator ? (
+        <ChangeIndicator linesAdded={diffStats.linesAdded} linesRemoved={diffStats.linesRemoved} />
+      ) : undefined}
     </CollapsibleTrigger>
   );
 }
@@ -401,6 +334,10 @@ type CollapsibleFileOperationProps = {
    * When true, wraps the filename with FileLink for file opening functionality.
    */
   readonly enableFileLink?: boolean;
+  /**
+   * Diff statistics for displaying change indicator.
+   */
+  readonly diffStats?: DiffStats;
 };
 
 export function CollapsibleFileOperation({
@@ -414,6 +351,7 @@ export function CollapsibleFileOperation({
   footer,
   isDefaultOpen = false,
   enableFileLink = false,
+  diffStats,
 }: CollapsibleFileOperationProps): React.JSX.Element {
   const isStreaming = ['input-streaming', 'input-available'].includes(toolStatus);
   const [showCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
@@ -466,12 +404,40 @@ export function CollapsibleFileOperation({
         </div>
         {shouldShowContent ? (
           <div className="h-24 overflow-hidden border-t">
-            <CodeViewer language="openscad" text={lastFourLines} className="overflow-x-auto p-3 text-xs" />
+            <CodeViewer
+              language={getLanguageFromFilename(filename)}
+              text={lastFourLines}
+              className="overflow-x-auto p-3 text-xs"
+            />
           </div>
         ) : null}
       </div>
     );
   }
+
+  // Derive language from filename for syntax highlighting
+  const language = getLanguageFromFilename(filename);
+
+  // Render content: always show DiffPreview when diffStats is available
+  const renderContent = (): React.ReactNode => {
+    // Show diff view when diff data is available (primary view)
+    if (diffStats) {
+      return (
+        <DiffPreview
+          originalContent={diffStats.originalContent}
+          modifiedContent={diffStats.modifiedContent}
+          language={language}
+        />
+      );
+    }
+
+    // Fallback to code preview during streaming or when no diff data
+    if (content) {
+      return <CodePreview content={content} language={language} />;
+    }
+
+    return null;
+  };
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -484,6 +450,7 @@ export function CollapsibleFileOperation({
             isOpen={isOpen}
             isSuccess={isSuccess}
             enableFileLink={enableFileLink}
+            diffStats={diffStats}
           />
           {actions ? (
             <div
@@ -498,7 +465,7 @@ export function CollapsibleFileOperation({
           ) : undefined}
         </div>
         <CollapsibleContent>
-          {content ? <CodePreview content={content} /> : null}
+          {renderContent()}
           {children}
           {footer}
         </CollapsibleContent>

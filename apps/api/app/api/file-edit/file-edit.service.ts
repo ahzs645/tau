@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MorphClient } from '@morphllm/morphsdk';
 import type { Environment } from '#config/environment.config.js';
+import { parseDiffStats } from '#utils/diff.utils.js';
 
 export type FileEditRequest = {
   targetFile: string;
@@ -16,6 +17,7 @@ export type FileEditResult = {
   error?: string;
   editedContent?: string;
   udiff?: string;
+  diffStats?: { linesAdded: number; linesRemoved: number };
 };
 
 @Injectable()
@@ -56,6 +58,7 @@ export class FileEditService {
         message: 'File edit applied successfully',
         editedContent: result.mergedCode,
         udiff: result.udiff,
+        diffStats: result.udiff ? parseDiffStats(result.udiff) : undefined,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';

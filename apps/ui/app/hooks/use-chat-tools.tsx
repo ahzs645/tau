@@ -104,12 +104,14 @@ export function useChatTools(): UseChatToolsReturn {
           currentCode = new Uint8Array();
         }
 
+        const originalContent = decodeTextFile(currentCode);
+
         fileEditRef.start();
         fileEditRef.send({
           type: 'applyEdit',
           request: {
             targetFile: resolvedPath,
-            originalContent: decodeTextFile(currentCode),
+            originalContent,
             codeEdit: toolCallInput.codeEdit,
           },
         });
@@ -128,9 +130,17 @@ export function useChatTools(): UseChatToolsReturn {
 
         await fileManager.writeFile(resolvedPath, encodeTextFile(result.editedContent), { source: 'external' });
 
-        // Return immediately without waiting for kernel - use get_kernel_result tool to check status
+        // Return with diffStats for UI display
+        const linesAdded = result.diffStats?.linesAdded;
+        const linesRemoved = result.diffStats?.linesRemoved;
         return {
           success: true,
+          diffStats: {
+            linesAdded: typeof linesAdded === 'number' ? linesAdded : 0,
+            linesRemoved: typeof linesRemoved === 'number' ? linesRemoved : 0,
+            originalContent,
+            modifiedContent: result.editedContent,
+          },
         };
       };
 
@@ -248,9 +258,20 @@ export function useChatTools(): UseChatToolsReturn {
           source: 'external',
         });
 
-        // Return immediately without waiting for completion
-        // LLM should use get_kernel_result to verify compilation success
-        return { success: true, message: `File created: ${resolvedPath}` };
+        // Calculate line count for new file (all lines are additions)
+        const lineCount = input.content.split('\n').length;
+
+        // Return with diffStats for UI display
+        return {
+          success: true,
+          message: `File created: ${resolvedPath}`,
+          diffStats: {
+            linesAdded: lineCount,
+            linesRemoved: 0,
+            originalContent: '',
+            modifiedContent: input.content,
+          },
+        };
       };
 
       // Handler for delete file tool

@@ -15,6 +15,10 @@ export type FileEditResult = {
   message: string;
   error?: string;
   editedContent: string;
+  diffStats?: {
+    linesAdded: number;
+    linesRemoved: number;
+  };
 };
 
 // Context

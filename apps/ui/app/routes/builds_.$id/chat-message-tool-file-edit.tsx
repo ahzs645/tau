@@ -87,8 +87,12 @@ export function ChatMessageToolFileEdit({
     }
 
     case 'output-available': {
-      const { input } = part;
+      const { input, output } = part;
       const { targetFile = '', codeEdit = '' } = input;
+      const { diffStats } = output;
+
+      // Use the actual edited content for display if available, otherwise fallback to codeEdit
+      const displayContent = diffStats.modifiedContent;
 
       return (
         <CollapsibleFileOperation
@@ -96,13 +100,14 @@ export function ChatMessageToolFileEdit({
           targetFile={targetFile}
           toolStatus={part.state}
           mode="edit"
-          content={codeEdit}
+          content={displayContent}
+          diffStats={diffStats}
           actions={
             <>
               <CopyButton
                 size="xs"
                 className="**:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex"
-                getText={() => codeEdit}
+                getText={() => displayContent}
               />
               <ApplyButton
                 state={getApplyState()}

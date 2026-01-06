@@ -24,7 +24,7 @@ export function ChatMessageToolCreateFile({
     case 'output-available': {
       const { input, output } = part;
       const { targetFile, content } = input;
-      const { success } = output;
+      const { success, diffStats } = output;
 
       return (
         <CollapsibleFileOperation
@@ -34,6 +34,7 @@ export function ChatMessageToolCreateFile({
           mode="create"
           content={success ? content : undefined}
           isSuccess={success}
+          diffStats={diffStats}
         />
       );
     }
