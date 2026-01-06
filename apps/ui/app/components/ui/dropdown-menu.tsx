@@ -1,8 +1,12 @@
 import * as React from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
 import { Switch } from '#components/ui/switch.js';
+import { Slider } from '#components/ui/slider.js';
+import { ToggleGroup, ToggleGroupItem } from '#components/ui/toggle-group.js';
+import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { Button } from '#components/ui/button.js';
 
 function DropdownMenu({ ...properties }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>): React.JSX.Element {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...properties} />;
@@ -142,8 +146,7 @@ function DropdownMenuSwitchItem({
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-switch-item"
       className={cn(
-        'focus:text-accent-foreground relative flex h-8 cursor-pointer items-center justify-between gap-2 rounded-sm px-2 text-sm outline-hidden select-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
-        "[&_svg]:pointer-events-none [&_svg]:text-muted-foreground [&_svg:not([class*='size-'])]:size-4",
+        'focus:text-accent-foreground relative flex h-8 cursor-pointer items-center justify-between gap-2 rounded-sm px-2 text-sm outline-hidden select-none focus:bg-accent data-disabled:pointer-events-none data-disabled:opacity-50',
         className,
       )}
       onSelect={(event) => {
@@ -152,13 +155,153 @@ function DropdownMenuSwitchItem({
       }}
       {...properties}
     >
-      {children}
+      <span
+        className={cn(
+          'flex items-center gap-2',
+          "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:text-muted-foreground [&_svg:not([class*='size-'])]:size-4",
+        )}
+      >
+        {children}
+      </span>
       <Switch
         className="data-[state=unchecked]:bg-muted-foreground!"
         checked={isChecked}
         onCheckedChange={onIsCheckedChange}
       />
     </DropdownMenuPrimitive.Item>
+  );
+}
+
+type DropdownMenuSliderItemProperties = {
+  readonly className?: string;
+  readonly children: React.ReactNode;
+  readonly value: number;
+  readonly onValueChange?: (value: number) => void;
+  readonly min?: number;
+  readonly max?: number;
+  readonly step?: number;
+  readonly infoTooltip?: React.ReactNode;
+  readonly formatValue?: (value: number) => string;
+};
+
+function DropdownMenuSliderItem({
+  className,
+  children,
+  value,
+  onValueChange,
+  min = 0,
+  max = 100,
+  step = 1,
+  infoTooltip,
+  formatValue,
+}: DropdownMenuSliderItemProperties): React.JSX.Element {
+  const handleValueChange = React.useCallback(
+    (values: number[]) => {
+      const newValue = values[0];
+      if (newValue !== undefined) {
+        onValueChange?.(newValue);
+      }
+    },
+    [onValueChange],
+  );
+
+  const displayValue = formatValue ? formatValue(value) : `${value}`;
+
+  return (
+    <div
+      data-slot="dropdown-menu-slider-item"
+      className={cn('px-2 py-2', className)}
+      // Prevent dropdown from closing when interacting with slider
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span
+          className={cn(
+            'flex items-center gap-2 text-sm',
+            "[&_svg]:pointer-events-none [&_svg]:text-muted-foreground [&_svg:not([class*='size-'])]:size-4",
+          )}
+        >
+          {children}
+          {infoTooltip}
+        </span>
+        <span className="text-xs text-muted-foreground">{displayValue}</span>
+      </div>
+      <Slider value={[value]} min={min} max={max} step={step} className="w-full" onValueChange={handleValueChange} />
+    </div>
+  );
+}
+
+type ToggleOption<T extends string> = {
+  value: T;
+  label: React.ReactNode;
+  ariaLabel?: string;
+};
+
+type DropdownMenuToggleGroupItemProperties<T extends string> = {
+  readonly className?: string;
+  readonly children: React.ReactNode;
+  readonly infoTooltip?: React.ReactNode;
+  readonly value: T;
+  readonly options: Array<ToggleOption<T>>;
+  readonly onValueChange?: (value: T) => void;
+};
+
+function DropdownMenuToggleGroupItem<T extends string>({
+  className,
+  children,
+  infoTooltip,
+  value,
+  options,
+  onValueChange,
+}: DropdownMenuToggleGroupItemProperties<T>): React.JSX.Element {
+  const handleValueChange = React.useCallback(
+    (newValue: string) => {
+      if (newValue) {
+        onValueChange?.(newValue as T);
+      }
+    },
+    [onValueChange],
+  );
+
+  return (
+    <div
+      data-slot="dropdown-menu-toggle-group-item"
+      className={cn('flex items-center justify-between px-2 py-1.5', className)}
+      // Prevent dropdown from closing when interacting with toggle group
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <span
+        className={cn(
+          'flex items-center gap-2 text-sm',
+          "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        )}
+      >
+        {children}
+        {infoTooltip}
+      </span>
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        value={value}
+        className="font-semibold"
+        onValueChange={handleValueChange}
+      >
+        {options.map((option) => (
+          <ToggleGroupItem
+            key={option.value}
+            value={option.value}
+            aria-label={option.ariaLabel ?? option.value}
+            className="h-7 flex-1"
+          >
+            {option.label}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   );
 }
 
@@ -219,7 +362,7 @@ function DropdownMenuSubTrigger({
       data-slot="dropdown-menu-sub-trigger"
       data-inset={isInset}
       className={cn(
-        'focus:text-accent-foreground data-[state=open]:text-accent-foreground flex h-8 cursor-pointer items-center rounded-sm px-2 text-sm outline-hidden select-none focus:bg-accent data-[inset]:pl-8 data-[state=open]:bg-accent',
+        'focus:text-accent-foreground data-[state=open]:text-accent-foreground flex h-8 cursor-pointer items-center rounded-sm px-2 text-sm outline-hidden select-none focus:bg-accent data-inset:pl-8 data-[state=open]:bg-accent [&_svg]:text-muted-foreground',
         className,
       )}
       {...properties}
@@ -246,6 +389,97 @@ function DropdownMenuSubContent({
   );
 }
 
+type DropdownMenuSelectItemProperties<T> = {
+  readonly className?: string;
+  readonly children: React.ReactNode;
+  readonly infoTooltip?: React.ReactNode;
+  readonly value: T;
+  readonly options: T[];
+  readonly getOptionValue: (option: T) => string;
+  readonly getOptionLabel: (option: T) => string;
+  readonly onValueChange?: (value: string) => void;
+  readonly title?: string;
+  readonly description?: string;
+};
+
+function DropdownMenuSelectItem<T>({
+  className,
+  children,
+  infoTooltip,
+  value,
+  options,
+  getOptionValue,
+  getOptionLabel,
+  onValueChange,
+  title = 'Select option',
+  description = 'Choose from available options',
+}: DropdownMenuSelectItemProperties<T>): React.JSX.Element {
+  const groupedItems = React.useMemo(
+    () => [
+      {
+        name: '',
+        items: options,
+      },
+    ],
+    [options],
+  );
+
+  const renderLabel = React.useCallback(
+    (item: T, selectedItem: T | undefined) => {
+      const isSelected = selectedItem && getOptionValue(item) === getOptionValue(selectedItem);
+      return (
+        <span className="flex w-full items-center justify-between">
+          <span>{getOptionLabel(item)}</span>
+          {isSelected ? <CheckIcon className="size-4" /> : null}
+        </span>
+      );
+    },
+    [getOptionLabel, getOptionValue],
+  );
+
+  return (
+    <div
+      data-slot="dropdown-menu-select-item"
+      className={cn('flex items-center justify-between px-2 py-1.5', className)}
+      // Prevent parent dropdown from closing when interacting with select
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <span
+        className={cn(
+          'flex items-center gap-2 text-sm',
+          "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:text-muted-foreground [&_svg:not([class*='size-'])]:size-4",
+        )}
+      >
+        {children}
+        {infoTooltip}
+      </span>
+      <ComboBoxResponsive
+        isNested
+        groupedItems={groupedItems}
+        defaultValue={value}
+        getValue={getOptionValue}
+        renderLabel={renderLabel}
+        title={title}
+        description={description}
+        isSearchEnabled={false}
+        popoverProperties={{
+          align: 'end',
+          side: 'bottom',
+          sideOffset: 4,
+        }}
+        onSelect={onValueChange}
+      >
+        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" role="combobox">
+          {getOptionLabel(value)}
+          <ChevronDownIcon className="size-3 opacity-50" />
+        </Button>
+      </ComboBoxResponsive>
+    </div>
+  );
+}
+
 export {
   DropdownMenu,
   DropdownMenuPortal,
@@ -258,6 +492,9 @@ export {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSwitchItem,
+  DropdownMenuSliderItem,
+  DropdownMenuSelectItem,
+  DropdownMenuToggleGroupItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,

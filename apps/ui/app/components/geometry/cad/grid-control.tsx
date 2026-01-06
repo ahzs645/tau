@@ -160,16 +160,9 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Grid</DropdownMenuLabel>
-        <DropdownMenuSwitchItem
-          className="flex w-full justify-between"
-          isChecked={isGridSizeLocked}
-          onIsCheckedChange={handleLockToggle}
-        >
-          <span data-locked={isGridSizeLocked} className="group flex items-center gap-2">
-            <Lock className="hidden size-4 group-data-[locked=true]:block" />
-            <LockOpen className="block size-4 group-data-[locked=true]:hidden" />
-            Lock Grid Size ({localizedSmallGridSize} {unit})
-          </span>
+        <DropdownMenuSwitchItem isChecked={isGridSizeLocked} onIsCheckedChange={handleLockToggle}>
+          {isGridSizeLocked ? <Lock /> : <LockOpen />}
+          Lock Grid Size ({localizedSmallGridSize} {unit})
         </DropdownMenuSwitchItem>
         <span className="inline-flex items-center gap-1 p-2 text-xs font-medium text-muted-foreground/80">
           <Info className="size-3 stroke-2" /> Adjust grid size by changing zoom level

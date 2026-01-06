@@ -1,18 +1,6 @@
 import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import type { ClassValue } from 'clsx';
-import {
-  Axis3D,
-  Box,
-  Grid3X3,
-  Rotate3D,
-  Settings,
-  PenLine,
-  Sparkles,
-  ArrowUp,
-  Timer,
-  Check,
-  ChevronsUpDown,
-} from 'lucide-react';
+import { Axis3D, Box, Grid3X3, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
@@ -23,15 +11,18 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSwitchItem,
+  DropdownMenuSelectItem,
+  DropdownMenuToggleGroupItem,
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
-import { ToggleGroup, ToggleGroupItem } from '#components/ui/toggle-group.js';
 import { cn } from '#utils/ui.utils.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
-import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+
+// Up direction options
+type UpDirection = 'x' | 'y' | 'z';
 
 type ViewSettings = {
   surface: boolean;
@@ -40,7 +31,7 @@ type ViewSettings = {
   grid: boolean;
   axes: boolean;
   matcap: boolean;
-  upDirection: 'x' | 'y' | 'z';
+  upDirection: UpDirection;
 };
 
 // Default settings
@@ -74,15 +65,18 @@ type TimeoutOption = {
 // Predefined timeout options
 const timeoutOptions: TimeoutOption[] = [
   { value: 0, label: 'Disabled' },
-  { value: 10, label: '15s' },
+  { value: 15, label: '15s' },
   { value: 30, label: '30s' },
   { value: 60, label: '1 min' },
   { value: 300, label: '5 min' },
   { value: 600, label: '10 min' },
 ];
 
-// Default timeout option (30s)
-const defaultTimeoutOption: TimeoutOption = { value: 30, label: '30s' };
+const upDirectionOptions: Array<{ value: UpDirection; label: React.ReactNode; ariaLabel: string }> = [
+  { value: 'x', label: <span style={{ color: axesColors.x }}>X</span>, ariaLabel: 'X-up' },
+  { value: 'y', label: <span style={{ color: axesColors.y }}>Y</span>, ariaLabel: 'Y-up' },
+  { value: 'z', label: <span style={{ color: axesColors.z }}>Z</span>, ariaLabel: 'Z-up' },
+];
 
 /**
  * Component that provides camera and visibility settings for the 3D viewer
@@ -173,10 +167,8 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
   );
 
   const handleUpDirectionChange = useCallback(
-    (value: string) => {
-      if (value === 'x' || value === 'y' || value === 'z') {
-        setViewSettings((previous) => ({ ...previous, upDirection: value }));
-      }
+    (value: UpDirection) => {
+      setViewSettings((previous) => ({ ...previous, upDirection: value }));
     },
     [setViewSettings],
   );
@@ -193,12 +185,12 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
 
   // Get current timeout option for display (default to 30s if not found)
   const currentTimeoutOption = useMemo(
-    () => timeoutOptions.find((option) => option.value === renderTimeout) ?? defaultTimeoutOption,
+    () => timeoutOptions.find((option) => option.value === renderTimeout) ?? timeoutOptions[2]!,
     [renderTimeout],
   );
 
-  // Group timeout options for combobox
-  const groupedTimeoutOptions = useMemo(() => [{ name: 'Timeout', items: timeoutOptions }], []);
+  const getTimeoutValue = useCallback((option: TimeoutOption): string => String(option.value), []);
+  const getTimeoutLabel = useCallback((option: TimeoutOption): string => option.label, []);
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
@@ -223,141 +215,81 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
         {!is2dGeometry && (
           <>
             <DropdownMenuLabel>Model</DropdownMenuLabel>
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={viewSettings.surface}
-              onIsCheckedChange={handleMeshToggle}
-            >
-              <span className="flex items-center gap-2">
-                <Box />
-                Surfaces
-              </span>
+            <DropdownMenuSwitchItem isChecked={viewSettings.surface} onIsCheckedChange={handleMeshToggle}>
+              <Box />
+              Surfaces
+            </DropdownMenuSwitchItem>
+            <DropdownMenuSwitchItem isChecked={viewSettings.lines} onIsCheckedChange={handleLinesToggle}>
+              <PenLine />
+              Lines
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={viewSettings.lines}
-              onIsCheckedChange={handleLinesToggle}
-            >
-              <span className="flex items-center gap-2">
-                <PenLine />
-                Lines
-              </span>
-            </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              className="flex h-10 w-full justify-between"
+              className="h-10"
               isChecked={viewSettings.matcap}
               onIsCheckedChange={handleMatcapToggle}
             >
-              <span className="flex items-center gap-2">
-                <Sparkles />
-                <div className="flex flex-col">
-                  <span className="flex items-center gap-1">
-                    Matcap{' '}
-                    <InfoTooltip>
-                      A material that gives models a consistent appearance independent of scene lighting.
-                      <br /> Rendering performance is improved with this enabled.
-                    </InfoTooltip>
-                  </span>
-                  <span className="text-xs font-medium text-muted-foreground/80">
-                    Lighting effects are {viewSettings.matcap ? 'inactive' : 'active'}
-                  </span>
-                </div>
-              </span>
+              <Sparkles />
+              <div className="flex flex-col">
+                <span className="flex items-center gap-1">
+                  Matcap{' '}
+                  <InfoTooltip>
+                    A material that gives models a consistent appearance independent of scene lighting.
+                    <br /> Rendering performance is improved with this enabled.
+                  </InfoTooltip>
+                </span>
+                <span className="text-xs font-medium text-muted-foreground/80">
+                  Lighting effects are {viewSettings.matcap ? 'inactive' : 'active'}
+                </span>
+              </div>
             </DropdownMenuSwitchItem>
             <DropdownMenuSeparator />
           </>
         )}
         <DropdownMenuLabel>Viewport</DropdownMenuLabel>
         <DropdownMenuSwitchItem
-          className={cn('flex w-full justify-between', is2dGeometry && 'hidden')}
+          className={cn(is2dGeometry && 'hidden')}
           isChecked={viewSettings.gizmo}
           onIsCheckedChange={handleGizmoToggle}
         >
-          <span className="flex items-center gap-2">
-            <Rotate3D />
-            Gizmo
-          </span>
+          <Rotate3D />
+          Gizmo
         </DropdownMenuSwitchItem>
-        <DropdownMenuSwitchItem
-          className="flex w-full justify-between"
-          isChecked={viewSettings.grid}
-          onIsCheckedChange={handleGridToggle}
-        >
-          <span className="flex items-center gap-2">
-            <Grid3X3 />
-            Grid
-          </span>
+        <DropdownMenuSwitchItem isChecked={viewSettings.grid} onIsCheckedChange={handleGridToggle}>
+          <Grid3X3 />
+          Grid
         </DropdownMenuSwitchItem>
-        <DropdownMenuSwitchItem
-          className="flex w-full justify-between"
-          isChecked={viewSettings.axes}
-          onIsCheckedChange={handleAxesHelperToggle}
-        >
-          <span className="flex items-center gap-2">
-            <Axis3D />
-            Axes
-          </span>
+        <DropdownMenuSwitchItem isChecked={viewSettings.axes} onIsCheckedChange={handleAxesHelperToggle}>
+          <Axis3D />
+          Axes
         </DropdownMenuSwitchItem>
         {!is2dGeometry && (
-          <div className="flex items-center justify-between px-2 py-0.5">
-            <span className="flex items-center gap-2 text-sm">
-              <ArrowUp className="size-4" />
-              Up Direction
-            </span>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              value={viewSettings.upDirection}
-              className="font-semibold"
-              onValueChange={handleUpDirectionChange}
-            >
-              <ToggleGroupItem value="x" aria-label="X-up" className="h-7 flex-1">
-                <span style={{ color: axesColors.x }}>X</span>
-              </ToggleGroupItem>
-              <ToggleGroupItem value="y" aria-label="Y-up" className="h-7 flex-1">
-                <span style={{ color: axesColors.y }}>Y</span>
-              </ToggleGroupItem>
-              <ToggleGroupItem value="z" aria-label="Z-up" className="h-7 flex-1">
-                <span style={{ color: axesColors.z }}>Z</span>
-              </ToggleGroupItem>
-            </ToggleGroup>
-          </div>
+          <DropdownMenuToggleGroupItem
+            value={viewSettings.upDirection}
+            options={upDirectionOptions}
+            onValueChange={handleUpDirectionChange}
+          >
+            <ArrowUp />
+            Up Direction
+          </DropdownMenuToggleGroupItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel>Performance</DropdownMenuLabel>
-        <div className="flex items-center justify-between px-2 py-1.5">
-          <span className="flex items-center gap-2 text-sm">
-            <Timer className="size-4" />
-            <span className="flex items-center gap-1">
-              Render Timeout
-              <InfoTooltip>
-                Maximum time to wait for CAD rendering before timing out.
-                <br /> Set to &quot;Disabled&quot; to turn off timeout.
-              </InfoTooltip>
-            </span>
-          </span>
-          <ComboBoxResponsive
-            groupedItems={groupedTimeoutOptions}
-            defaultValue={currentTimeoutOption}
-            title="Render Timeout"
-            description="Select a render timeout duration"
-            isSearchEnabled={false}
-            popoverProperties={{ align: 'end' }}
-            getValue={(option) => String(option.value)}
-            renderLabel={(option, selectedOption) => (
-              <span className="flex w-full items-center justify-between">
-                {option.label}
-                {option.value === selectedOption?.value && <Check className="size-4" />}
-              </span>
-            )}
-            onSelect={handleRenderTimeoutChange}
-          >
-            <Button variant="outline" size="sm" className="h-7 w-20 justify-between">
-              <span>{currentTimeoutOption.label}</span>
-              <ChevronsUpDown className="size-3 opacity-50" />
-            </Button>
-          </ComboBoxResponsive>
-        </div>
+        <DropdownMenuLabel>Rendering</DropdownMenuLabel>
+        <DropdownMenuSelectItem
+          value={currentTimeoutOption}
+          options={timeoutOptions}
+          getOptionValue={getTimeoutValue}
+          getOptionLabel={getTimeoutLabel}
+          infoTooltip={
+            <InfoTooltip>
+              Maximum time to wait for CAD rendering before timing out.
+              <br /> Set to &quot;Disabled&quot; to turn off timeout.
+            </InfoTooltip>
+          }
+          onValueChange={handleRenderTimeoutChange}
+        >
+          <Timer />
+          Timeout
+        </DropdownMenuSelectItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
