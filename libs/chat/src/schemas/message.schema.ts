@@ -8,7 +8,7 @@ import { messageMetadataSchema } from '#schemas/metadata.schema.js';
 import { providerMetadataSchema } from '#schemas/message-provider.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
 import { dataPartSchema } from '#schemas/message-data.schema.js';
-import { fileEditInputSchema, fileEditOutputSchema } from '#schemas/tools/file-edit.tool.schema.js';
+import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
 import { imageAnalysisInputSchema, imageAnalysisOutputSchema } from '#schemas/tools/image-analysis.tool.schema.js';
 import { webBrowserInputSchema, webBrowserOutputSchema } from '#schemas/tools/web-browser.tool.schema.js';
 import { webSearchInputSchema, webSearchOutputSchema } from '#schemas/tools/web-search.tool.schema.js';
@@ -152,12 +152,12 @@ const createTransferToolSchemas = <Name extends ToolName>(toolName: Name) => {
 const toolPartSchemas = [
   ...createToolSchemas(toolName.webSearch, webSearchInputSchema, webSearchOutputSchema),
   ...createToolSchemas(toolName.webBrowser, webBrowserInputSchema, webBrowserOutputSchema),
-  ...createToolSchemas(toolName.fileEdit, fileEditInputSchema, fileEditOutputSchema),
   ...createToolSchemas(toolName.imageAnalysis, imageAnalysisInputSchema, imageAnalysisOutputSchema),
   // Filesystem tools
   ...createToolSchemas(toolName.readFile, readFileInputSchema, readFileOutputSchema),
   ...createToolSchemas(toolName.listDirectory, listDirectoryInputSchema, listDirectoryOutputSchema),
   ...createToolSchemas(toolName.createFile, createFileInputSchema, createFileOutputSchema),
+  ...createToolSchemas(toolName.editFile, editFileInputSchema, editFileOutputSchema),
   ...createToolSchemas(toolName.deleteFile, deleteFileInputSchema, deleteFileOutputSchema),
   ...createToolSchemas(toolName.grep, grepInputSchema, grepOutputSchema),
   ...createToolSchemas(toolName.globSearch, globSearchInputSchema, globSearchOutputSchema),

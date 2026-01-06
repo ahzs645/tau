@@ -37,11 +37,6 @@ const toolMetadata: Partial<Record<ToolName, ToolMetadata>> = {
     description: 'Browse and analyze web pages',
     icon: Eye,
   },
-  [toolName.fileEdit]: {
-    label: 'File Edit',
-    description: 'Edit and create files',
-    icon: Code,
-  },
   [toolName.imageAnalysis]: {
     label: 'Image Analysis',
     description: 'Analyze images',
@@ -168,7 +163,7 @@ export const ChatToolSelector = memo(function ({
 
           case 'custom': {
             // When selecting custom mode directly, default to common tools
-            onValueChange?.([toolName.webSearch, toolName.fileEdit]);
+            onValueChange?.([toolName.webSearch]);
             break;
           }
         }

@@ -630,11 +630,11 @@ When designing models, always think parametrically. Users should be able to adju
 Before diving into code, take a moment to plan your approach systematically. ${config.implementationApproach}
 
 **Code Output Guidelines:**
-- **Primary Method**: Use the \`${toolName.fileEdit}\` tool to create and deliver your complete model code. This is the standard and preferred approach for all CAD model implementations.
+- **Primary Method**: Use the \`${toolName.editFile}\` tool to create and deliver your complete model code. This is the standard and preferred approach for all CAD model implementations.
 - **Direct Code Output**: Only display code directly in your response when you need to explain complex modeling strategies, demonstrate specific techniques, or break down particularly challenging geometric operations for planning purposes. 
-- **Keep It Focused**: When you do show code directly, keep it brief and focused on the specific concept being explained, then use \`${toolName.fileEdit}\` for the complete implementation.
+- **Keep It Focused**: When you do show code directly, keep it brief and focused on the specific concept being explained, then use \`${toolName.editFile}\` for the complete implementation.
 
-When you're ready to implement, use the \`${toolName.fileEdit}\` tool to create the complete model. Your main ${config.mainFunctionDescription}, making the model truly adjustable and reusable.
+When you're ready to implement, use the \`${toolName.editFile}\` tool to create the complete model. Your main ${config.mainFunctionDescription}, making the model truly adjustable and reusable.
 
 **File Naming**: Always use the correct file extension for this kernel: \`${config.fileExtension}\`
 
@@ -650,7 +650,7 @@ You have access to a complete set of filesystem tools to manage project files:
 - **\`${toolName.grep}\`**: Search for text patterns using regex across files. Useful for finding function definitions or usage.
 
 ### Modifying Files
-- **\`${toolName.fileEdit}\`**: Edit existing files with precise changes. This is the primary tool for modifying code.
+- **\`${toolName.editFile}\`**: Edit existing files with precise changes. This is the primary tool for modifying code.
 - **\`${toolName.createFile}\`**: Create new files with specified content. Use for adding new modules, libraries, or assets.
 - **\`${toolName.deleteFile}\`**: Delete files that are no longer needed.
 
@@ -661,7 +661,7 @@ When working on projects with existing files:
 1. Check the \`<project_layout>\` section in the message to understand what files already exist
 2. Use \`${toolName.readFile}\` to examine file contents before editing
 3. Prefer editing existing files over creating new ones unless modularity benefits are clear
-4. Specify the correct \`targetFile\` path when using \`${toolName.fileEdit}\` or \`${toolName.createFile}\`
+4. Specify the correct \`targetFile\` path when using \`${toolName.editFile}\` or \`${toolName.createFile}\`
 5. All paths are relative to the project root
 
 ## Reasoning Tool
@@ -678,7 +678,7 @@ Your thinking will be displayed to the user in a collapsible section, allowing t
 ## Kernel Result Tool
 The \`${toolName.getKernelResult}\` tool is **essential** for verifying that your code changes compile successfully.
 
-**IMPORTANT**: File operations (\`${toolName.fileEdit}\`, \`${toolName.createFile}\`, \`${toolName.deleteFile}\`) return immediately without waiting for compilation. You MUST call \`${toolName.getKernelResult}\` to check for errors.
+**IMPORTANT**: File operations (\`${toolName.editFile}\`, \`${toolName.createFile}\`, \`${toolName.deleteFile}\`) return immediately without waiting for compilation. You MUST call \`${toolName.getKernelResult}\` to check for errors.
 
 **Best Practice Workflow:**
 1. Make ALL file changes first (create all files, edit the main file to import them)

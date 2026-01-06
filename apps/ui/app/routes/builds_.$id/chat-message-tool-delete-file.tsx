@@ -26,8 +26,7 @@ export function ChatMessageToolDeleteFile({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Trash2} />
             <ChatToolCardTitle>
-              <ChatToolAction>Deleting</ChatToolAction>{' '}
-              <ChatToolDescription>{targetFile}...</ChatToolDescription>
+              <ChatToolAction>Deleting</ChatToolAction> <ChatToolDescription>{targetFile}...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -45,8 +44,7 @@ export function ChatMessageToolDeleteFile({
             <ChatToolCardHeader>
               <ChatToolCardIcon icon={Trash2} />
               <ChatToolCardTitle>
-                <ChatToolAction>Deleted</ChatToolAction>{' '}
-                <ChatToolDescription>{targetFile}</ChatToolDescription>
+                <ChatToolAction>Deleted</ChatToolAction> <ChatToolDescription>{targetFile}</ChatToolDescription>
               </ChatToolCardTitle>
             </ChatToolCardHeader>
           </ChatToolCard>
@@ -58,8 +56,7 @@ export function ChatMessageToolDeleteFile({
           <ChatToolCardHeader className="text-destructive">
             <ChatToolCardIcon isError icon={XCircle} />
             <ChatToolCardTitle>
-              <ChatToolAction>Failed to delete</ChatToolAction>{' '}
-              <ChatToolDescription>{targetFile}</ChatToolDescription>
+              <ChatToolAction>Failed to delete</ChatToolAction> <ChatToolDescription>{targetFile}</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>

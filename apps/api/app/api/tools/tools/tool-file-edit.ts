@@ -1,14 +1,14 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';
-import { fileEditInputSchema } from '@taucad/chat';
-import type { FileEditOutput } from '@taucad/chat';
+import { editFileInputSchema } from '@taucad/chat';
+import type { EditFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 
-const fileEditJsonSchema = z.toJSONSchema(fileEditInputSchema);
+const editFileJsonSchema = z.toJSONSchema(editFileInputSchema);
 
-export const fileEditToolDefinition = {
-  name: toolName.fileEdit,
+export const editFileToolDefinition = {
+  name: toolName.editFile,
   description: `Use this tool to propose an edit to an existing file.
 
 This will be read by a less intelligent model, which will quickly apply the edit. You should make it clear what the edit is, while also minimizing the unchanged code you write.
@@ -29,10 +29,10 @@ You should bias towards repeating as few lines of the original file as possible 
 Each edit should contain sufficient context of unchanged lines around the code you're editing to resolve ambiguity.
 If you plan on deleting a section, you must provide surrounding context to indicate the deletion.
 DO NOT omit spans of pre-existing code without using the // ... existing code ... comment to indicate its absence.`,
-  schema: fileEditJsonSchema,
+  schema: editFileJsonSchema,
 } as const;
 
-export const fileEditTool = tool((args) => {
-  const result = interrupt<unknown, FileEditOutput>(args);
+export const editFileTool = tool((args) => {
+  const result = interrupt<unknown, EditFileOutput>(args);
   return result;
-}, fileEditToolDefinition);
+}, editFileToolDefinition);

@@ -1,6 +1,6 @@
 import type { InferUITools, Tool as AiTool } from 'ai';
 import type { toolName, toolMode } from '#constants/tool.constants.js';
-import type { FileEditInput, FileEditOutput } from '#schemas/tools/file-edit.tool.schema.js';
+import type { EditFileInput, EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
 import type { ImageAnalysisInput, ImageAnalysisOutput } from '#schemas/tools/image-analysis.tool.schema.js';
 import type { WebBrowserInput, WebBrowserOutput } from '#schemas/tools/web-browser.tool.schema.js';
 import type { WebSearchInput, WebSearchOutput } from '#schemas/tools/web-search.tool.schema.js';
@@ -42,7 +42,7 @@ export type ToolMode = (typeof toolMode)[keyof typeof toolMode];
 export type ToolSelection = ToolMode | ToolName[];
 
 export type MyTools = InferUITools<{
-  [toolName.fileEdit]: AiTool<FileEditInput, FileEditOutput>;
+  [toolName.editFile]: AiTool<EditFileInput, EditFileOutput>;
   [toolName.imageAnalysis]: AiTool<ImageAnalysisInput, ImageAnalysisOutput>;
   [toolName.webBrowser]: AiTool<WebBrowserInput, WebBrowserOutput>;
   [toolName.webSearch]: AiTool<WebSearchInput, WebSearchOutput>;

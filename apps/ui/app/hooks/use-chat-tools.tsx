@@ -5,8 +5,8 @@ import type { useChat } from '@ai-sdk/react';
 import type { ChatOnToolCallCallback } from 'ai';
 import { createActor, waitFor } from 'xstate';
 import type {
-  FileEditInput,
-  FileEditOutput,
+  EditFileInput,
+  EditFileOutput,
   ImageAnalysisOutput,
   ReadFileInput,
   ReadFileOutput,
@@ -89,8 +89,8 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for file edit tool
-      const handleFileEdit = async (toolCall: { toolCallId: string; input: unknown }): Promise<FileEditOutput> => {
-        const toolCallInput = toolCall.input as FileEditInput;
+      const handleFileEdit = async (toolCall: { toolCallId: string; input: unknown }): Promise<EditFileOutput> => {
+        const toolCallInput = toolCall.input as EditFileInput;
 
         // Use the targetFile from input, falling back to main file for backwards compatibility
         const mainFilePath = await getMainFilename();
@@ -466,7 +466,7 @@ export function useChatTools(): UseChatToolsReturn {
         let output: ToolOutputUnion;
 
         switch (currentToolName) {
-          case toolName.fileEdit: {
+          case toolName.editFile: {
             output = await handleFileEdit(toolCall);
             break;
           }

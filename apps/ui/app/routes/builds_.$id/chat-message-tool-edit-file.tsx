@@ -14,7 +14,7 @@ import { useFileManager } from '#hooks/use-file-manager.js';
 export function ChatMessageToolFileEdit({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.fileEdit]>;
+  readonly part: UIToolInvocation<MyTools[typeof toolName.editFile]>;
 }): React.JSX.Element {
   const { getMainFilename } = useBuild();
 

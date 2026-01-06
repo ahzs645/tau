@@ -1,9 +1,9 @@
 export const toolName = {
   webSearch: 'web_search',
   webBrowser: 'web_browser',
-  fileEdit: 'edit_file',
   imageAnalysis: 'analyze_image',
   readFile: 'read_file',
+  editFile: 'edit_file',
   listDirectory: 'list_directory',
   createFile: 'create_file',
   deleteFile: 'delete_file',
@@ -24,9 +24,9 @@ export const toolNames = Object.values(toolName) as [(typeof toolName)[keyof typ
  * Server-only tools (transfers, web search) are NOT included here.
  */
 export const clientToolNames = [
-  toolName.fileEdit,
   toolName.imageAnalysis,
   toolName.readFile,
+  toolName.editFile,
   toolName.listDirectory,
   toolName.createFile,
   toolName.deleteFile,

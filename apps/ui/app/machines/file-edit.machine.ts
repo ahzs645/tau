@@ -133,7 +133,7 @@ export const fileEditMachine = setup({
     },
   },
 }).createMachine({
-  id: 'fileEdit',
+  id: 'editFile',
   context: {
     request: undefined,
     result: undefined,
