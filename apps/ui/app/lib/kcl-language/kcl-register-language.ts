@@ -496,16 +496,30 @@ async function initializeSymbolServiceWasm(): Promise<void> {
     // Initialize WASM
     await wasmModule.default(wasmPathModule.default);
 
-    // Set up parse function
+    // Set up parse function with error resilience
+    // The WASM parser returns [program, errors] even when there are parse errors,
+    // but may throw on catastrophic failures (e.g., invalid UTF-8)
     type ParseResultError = { severity: string };
     type ParseResult = [Node<Program>, ParseResultError[]];
 
     symbolService.setParseFunction(async (code: string) => {
-      const result = wasmModule.parse_wasm(code) as ParseResult;
-      const allErrors = result[1];
-      const errors = allErrors.filter((error) => error.severity !== 'Warning');
-      const warnings = allErrors.filter((warning) => warning.severity === 'Warning');
-      return { program: result[0], errors, warnings };
+      try {
+        const result = wasmModule.parse_wasm(code) as ParseResult;
+        const allErrors = result[1];
+        const errors = allErrors.filter((error) => error.severity !== 'Warning');
+        const warnings = allErrors.filter((warning) => warning.severity === 'Warning');
+
+        // WASM parser returns partial AST even with errors - this is intentional
+        // We can extract symbols from the successfully parsed portions
+        log.debug('Parse completed with', errors.length, 'errors and', warnings.length, 'warnings');
+
+        return { program: result[0], errors, warnings };
+      } catch (error) {
+        // Catastrophic parse failure - WASM threw an exception
+        // Create empty program structure so symbol service can preserve previous symbols
+        log.debug('Parse threw exception (catastrophic failure):', error);
+        throw error;
+      }
     });
 
     // Set up mock execution function for variable values

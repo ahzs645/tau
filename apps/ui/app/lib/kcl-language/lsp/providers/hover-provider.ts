@@ -9,8 +9,9 @@
 import type * as Monaco from 'monaco-editor';
 import type { KclLspClient, LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { KclSymbolService, KclSymbol } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
-import { formatSymbolHover } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
+import { formatSymbolHover, formatModuleHover } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { getImportPathAtPosition } from '#lib/kcl-language/lsp/utils/import-path-utils.js';
 import { monacoToLspPosition, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
 import { formatDocumentation } from '#lib/kcl-language/lsp/utils/lsp-kind-utils.js';
 
@@ -18,7 +19,11 @@ const log = createKclLogger('Hover Provider');
 
 /**
  * Resolve an import symbol to its actual definition in the imported file.
- * Returns the resolved symbol with its hover lines, or undefined if resolution fails.
+ * Returns the resolved symbol with TypeScript-like alias hover format:
+ *   (alias) function name(params): ReturnType
+ *   import name
+ *   <documentation>
+ *   from "path"
  */
 async function resolveImportSymbolHover(
   symbolService: KclSymbolService,
@@ -46,12 +51,12 @@ async function resolveImportSymbolHover(
   }
 
   log.debug('Resolved import to actual definition:', importedSymbol.name, 'kind:', importedSymbol.kind);
-  const hoverLines = formatSymbolHover(importedSymbol);
 
-  // Add "from" reference to show it's imported
-  if (importSymbol.importPath) {
-    hoverLines.push(`*from* \`"${importSymbol.importPath}"\``);
-  }
+  // Use TypeScript-like alias format for resolved imports
+  const hoverLines = formatSymbolHover(importedSymbol, {
+    isAlias: true,
+    importPath: importSymbol.importPath,
+  });
 
   return hoverLines;
 }
@@ -82,18 +87,43 @@ export function createHoverProvider(
       }
 
       // 1. Try LSP first (stdlib functions, future-proof)
-      const lspResult = await client.textDocumentHover({
-        textDocument: { uri },
-        position: lspPosition,
-      });
+      // Error Resilience: LSP errors should not prevent symbol service fallback
+      try {
+        const lspResult = await client.textDocumentHover({
+          textDocument: { uri },
+          position: lspPosition,
+        });
 
-      log.debug('LSP hover result:', lspResult);
+        log.debug('LSP hover result:', lspResult);
 
-      if (lspResult) {
-        const contents = convertHoverContents(lspResult.contents);
+        if (lspResult) {
+          const contents = convertHoverContents(lspResult.contents);
+          return {
+            contents,
+            range: lspResult.range ? lspToMonacoRange(monaco, lspResult.range) : undefined,
+          };
+        }
+      } catch (error) {
+        log.debug('LSP hover error (falling back to symbol service):', error);
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // MODULE PATH HOVER: Show "module 'path'" when hovering over import path
+      // ════════════════════════════════════════════════════════════════════════
+
+      const importPathResult = getImportPathAtPosition(model, position);
+      if (importPathResult) {
+        log.debug('Detected import path for hover:', importPathResult.path);
+        const moduleHoverLines = formatModuleHover(importPathResult.path);
+        const pathRange = new monaco.Range(
+          position.lineNumber,
+          importPathResult.range.start + 1, // +1 for 1-based columns
+          position.lineNumber,
+          importPathResult.range.end + 2, // +2 for closing quote and 1-based
+        );
         return {
-          contents,
-          range: lspResult.range ? lspToMonacoRange(monaco, lspResult.range) : undefined,
+          contents: moduleHoverLines.map((line) => ({ value: line })),
+          range: pathRange,
         };
       }
 
@@ -110,45 +140,56 @@ export function createHoverProvider(
         return undefined;
       }
 
-      const wordRange = new monaco.Range(
-        position.lineNumber,
-        wordInfo.startColumn,
-        position.lineNumber,
-        wordInfo.endColumn,
-      );
+      // Error Resilience: Symbol service provides hover even when LSP fails
+      // Symbols may be from last successful parse if current parse failed
+      try {
+        const wordRange = new monaco.Range(
+          position.lineNumber,
+          wordInfo.startColumn,
+          position.lineNumber,
+          wordInfo.endColumn,
+        );
 
-      // Debug: log available symbols
-      const allSymbols = symbolService.getSymbols(uri);
-      log.debug('Symbol service has', allSymbols.length, 'symbols for', uri);
-      if (allSymbols.length > 0) {
-        log.debug('Available symbols:', allSymbols.map((s) => `${s.name}(${s.kind})`).join(', '));
-      }
+        // Debug: log available symbols
+        const allSymbols = symbolService.getSymbols(uri);
+        log.debug('Symbol service has', allSymbols.length, 'symbols for', uri);
+        if (allSymbols.length > 0) {
+          log.debug('Available symbols:', allSymbols.map((s) => `${s.name}(${s.kind})`).join(', '));
+        }
 
-      const symbol = symbolService.getDefinitionForUsage(uri, position.lineNumber, position.column, wordInfo.word);
-      if (!symbol) {
-        log.debug('No symbol found for word:', wordInfo.word);
+        const symbol = symbolService.getDefinitionForUsage(uri, position.lineNumber, position.column, wordInfo.word);
+        if (!symbol) {
+          log.debug('No symbol found for word:', wordInfo.word);
+          return undefined;
+        }
+
+        log.debug('Symbol service found local symbol:', symbol.name, 'kind:', symbol.kind);
+
+        // For imports, resolve to the actual definition in the imported file
+        if (symbol.kind === 'import') {
+          try {
+            const resolvedHover = await resolveImportSymbolHover(symbolService, uri, symbol, client.getFileManager());
+            if (resolvedHover) {
+              return {
+                contents: resolvedHover.map((line) => ({ value: line })),
+                range: wordRange,
+              };
+            }
+          } catch (error) {
+            log.debug('Error resolving import hover (non-fatal):', error);
+          }
+          // Fallback: if we can't resolve, show the import symbol below
+        }
+
+        const hoverLines = formatSymbolHover(symbol);
+        return {
+          contents: hoverLines.map((line) => ({ value: line })),
+          range: wordRange,
+        };
+      } catch (error) {
+        log.debug('Symbol service hover error (non-fatal):', error);
         return undefined;
       }
-
-      log.debug('Symbol service found local symbol:', symbol.name, 'kind:', symbol.kind);
-
-      // For imports, resolve to the actual definition in the imported file
-      if (symbol.kind === 'import') {
-        const resolvedHover = await resolveImportSymbolHover(symbolService, uri, symbol, client.getFileManager());
-        if (resolvedHover) {
-          return {
-            contents: resolvedHover.map((line) => ({ value: line })),
-            range: wordRange,
-          };
-        }
-        // Fallback: if we can't resolve, show the import symbol below
-      }
-
-      const hoverLines = formatSymbolHover(symbol);
-      return {
-        contents: hoverLines.map((line) => ({ value: line })),
-        range: wordRange,
-      };
     },
   };
 }

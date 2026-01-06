@@ -100,30 +100,38 @@ export function createCompletionProvider(
       // Remove this block when KCL LSP provides user-defined symbol completions
       // ════════════════════════════════════════════════════════════════════════
 
+      // Error Resilience: Symbol service provides fallback completions even when LSP fails
+      // All symbol service calls are wrapped to ensure partial failures don't break completions
       if (symbolService?.isInitialized) {
-        // 2. Get stdlib symbols (built-in functions from parsed stdlib sources)
-        // This provides stdlib completions when LSP returns null
-        if (symbolService.hasStdlib) {
-          const stdlibSymbols: KclSymbol[] = symbolService.getStdlibSymbols();
-          log.debug('Symbol service returned', stdlibSymbols.length, 'stdlib symbols');
-          addSymbolsToSuggestions(stdlibSymbols, { isStdlib: true });
-        }
-
-        // 3. Get local symbols (variables, functions, parameters)
-        const localSymbols = symbolService.getCompletableSymbols(uri);
-        log.debug('Symbol service returned', localSymbols.length, 'local symbols');
-        addSymbolsToSuggestions(localSymbols, {});
-
-        // 4. Get imported symbols (resolved to actual definitions)
-        const fileManager = client.getFileManager();
-        if (fileManager) {
-          try {
-            const importedSymbols = await symbolService.getImportedSymbolsForCompletion(uri, fileManager);
-            log.debug('Symbol service returned', importedSymbols.length, 'imported symbols');
-            addSymbolsToSuggestions(importedSymbols, { isImported: true });
-          } catch (error) {
-            log.debug('Error getting imported symbols:', error);
+        try {
+          // 2. Get stdlib symbols (built-in functions from parsed stdlib sources)
+          // This provides stdlib completions when LSP returns null
+          if (symbolService.hasStdlib) {
+            const stdlibSymbols: KclSymbol[] = symbolService.getStdlibSymbols();
+            log.debug('Symbol service returned', stdlibSymbols.length, 'stdlib symbols');
+            addSymbolsToSuggestions(stdlibSymbols, { isStdlib: true });
           }
+
+          // 3. Get local symbols (variables, functions, parameters)
+          // These may be from the last successful parse if current parse failed
+          const localSymbols = symbolService.getCompletableSymbols(uri);
+          log.debug('Symbol service returned', localSymbols.length, 'local symbols');
+          addSymbolsToSuggestions(localSymbols, {});
+
+          // 4. Get imported symbols (resolved to actual definitions)
+          const fileManager = client.getFileManager();
+          if (fileManager) {
+            try {
+              const importedSymbols = await symbolService.getImportedSymbolsForCompletion(uri, fileManager);
+              log.debug('Symbol service returned', importedSymbols.length, 'imported symbols');
+              addSymbolsToSuggestions(importedSymbols, { isImported: true });
+            } catch (error) {
+              log.debug('Error getting imported symbols (non-fatal):', error);
+            }
+          }
+        } catch (error) {
+          // Symbol service error should not prevent returning whatever completions we have
+          log.debug('Error getting symbol service completions (non-fatal):', error);
         }
       }
 

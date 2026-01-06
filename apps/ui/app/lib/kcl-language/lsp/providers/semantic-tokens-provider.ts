@@ -4,7 +4,10 @@
 
 import type * as Monaco from 'monaco-editor';
 import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { semanticTokenTypes, semanticTokenModifiers } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
+
+const log = createKclLogger('Semantic Tokens Provider');
 
 /**
  * Get the semantic tokens legend for KCL.
@@ -34,18 +37,24 @@ export function createSemanticTokensProvider(
       _lastResultId: string | null,
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.SemanticTokens | undefined> {
-      const result = await client.textDocumentSemanticTokensFull({
-        textDocument: { uri: model.uri.toString() },
-      });
+      // Error Resilience: LSP errors should not break the editor
+      try {
+        const result = await client.textDocumentSemanticTokensFull({
+          textDocument: { uri: model.uri.toString() },
+        });
 
-      if (!result) {
+        if (!result) {
+          return undefined;
+        }
+
+        return {
+          resultId: result.resultId ?? undefined,
+          data: new Uint32Array(result.data),
+        };
+      } catch (error) {
+        log.debug('Semantic tokens error (non-fatal):', error);
         return undefined;
       }
-
-      return {
-        resultId: result.resultId ?? undefined,
-        data: new Uint32Array(result.data),
-      };
     },
 
     releaseDocumentSemanticTokens(_resultId: string | undefined): void {

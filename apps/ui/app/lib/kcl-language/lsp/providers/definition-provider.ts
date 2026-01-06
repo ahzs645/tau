@@ -4,16 +4,120 @@
  * Priority order:
  * 1. LSP server (future-proof for when KCL LSP adds definition support)
  * 2. Symbol Service (WASM AST-based, for local and imported symbols)
+ *
+ * On-demand model loading:
+ * When returning a definition for an import path, this provider ensures
+ * the target Monaco model exists. This is required for Monaco to show
+ * the Cmd+hover underline (Monaco verifies the target exists before
+ * displaying the link preview).
  */
 
+import { codeLanguages } from '@taucad/types/constants';
 import type * as Monaco from 'monaco-editor';
 import type * as LSP from 'vscode-languageserver-protocol';
-import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
+import type { KclLspClient, LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { KclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
+import { getImportPathAtPosition, isKclFileImport } from '#lib/kcl-language/lsp/utils/import-path-utils.js';
 import { monacoToLspPosition, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
 
 const log = createKclLogger('Definition Provider');
+
+/** Context for symbol definition lookup */
+type SymbolLookupContext = {
+  monaco: typeof Monaco;
+  symbolService: KclSymbolService;
+  client: KclLspClient;
+  uri: string;
+  word: string;
+};
+
+/**
+ * Find symbol definition using the symbol service.
+ * Extracted to reduce complexity of provideDefinition.
+ */
+async function findSymbolDefinition(ctx: SymbolLookupContext): Promise<Monaco.languages.Definition | undefined> {
+  const { monaco, symbolService, uri, word } = ctx;
+
+  try {
+    log.debug('Looking up symbol by name:', word, 'in', uri);
+    const symbol = symbolService.findSymbolByName(uri, word);
+    log.debug('Symbol lookup result:', symbol?.name, 'kind:', symbol?.kind, 'line:', symbol?.lineNumber);
+
+    if (!symbol) {
+      return undefined;
+    }
+
+    // For imports, resolve to the actual definition in the imported file
+    if (symbol.kind === 'import') {
+      const importDef = await resolveImportDefinition(ctx);
+      if (importDef) {
+        return importDef;
+      }
+      // If we can't resolve, fall through to return the import location
+    }
+
+    // Return local symbol definition (variable, function, parameter)
+    log.debug(
+      'Symbol service found local definition:',
+      symbol.name,
+      'kind:',
+      symbol.kind,
+      'at line:',
+      symbol.lineNumber,
+    );
+    log.debug('Returning definition at:', symbol.uri, 'line:', symbol.lineNumber, 'column:', symbol.column);
+    return {
+      uri: monaco.Uri.parse(symbol.uri),
+      range: new monaco.Range(symbol.lineNumber, symbol.column, symbol.lineNumber, symbol.column + symbol.name.length),
+    };
+  } catch (error) {
+    log.debug('Symbol service definition error (non-fatal):', error);
+    return undefined;
+  }
+}
+
+/**
+ * Resolve an import symbol to its definition in the imported file.
+ */
+async function resolveImportDefinition(ctx: SymbolLookupContext): Promise<Monaco.languages.Definition | undefined> {
+  const { monaco, symbolService, client, uri, word } = ctx;
+
+  log.debug('Symbol is an import, resolving to actual definition in imported file');
+  const fileManager = client.getFileManager();
+  log.debug('fileManager available:', Boolean(fileManager));
+
+  if (!fileManager) {
+    return undefined;
+  }
+
+  try {
+    const importedSymbol = await symbolService.resolveImportedSymbol(uri, word, fileManager);
+    log.debug('resolveImportedSymbol result:', importedSymbol?.name, 'uri:', importedSymbol?.uri);
+
+    if (!importedSymbol) {
+      return undefined;
+    }
+
+    const targetUri = monaco.Uri.parse(importedSymbol.uri);
+    log.debug('Resolved import to definition:', importedSymbol.name, 'in', importedSymbol.uri);
+    log.debug('Target URI:', targetUri.toString(), 'scheme:', targetUri.scheme, 'path:', targetUri.path);
+    log.debug('Target position:', importedSymbol.lineNumber, importedSymbol.column);
+
+    return {
+      uri: targetUri,
+      range: new monaco.Range(
+        importedSymbol.lineNumber,
+        importedSymbol.column,
+        importedSymbol.lineNumber,
+        importedSymbol.column + importedSymbol.name.length,
+      ),
+    };
+  } catch (error) {
+    log.debug('Error resolving imported symbol (non-fatal):', error);
+    return undefined;
+  }
+}
 
 /**
  * Create a Monaco definition provider that uses the LSP client.
@@ -35,14 +139,21 @@ export function createDefinitionProvider(
       log.debug('Definition requested at', uri, 'word:', wordInfo?.word);
 
       // 1. Try LSP first (future-proof - currently returns null)
-      const lspResult = await client.textDocumentDefinition({
-        textDocument: { uri },
-        position: monacoToLspPosition(position),
-      });
+      // Error Resilience: LSP errors should not prevent symbol service fallback
+      try {
+        const lspResult = await client.textDocumentDefinition({
+          textDocument: { uri },
+          position: monacoToLspPosition(position),
+        });
 
-      if (lspResult) {
-        log.debug('LSP definition found');
-        return convertDefinition(monaco, lspResult);
+        // Check for non-empty result (empty array is truthy but means no definitions)
+        const hasResult = lspResult && (!Array.isArray(lspResult) || lspResult.length > 0);
+        if (hasResult) {
+          log.debug('LSP definition found');
+          return convertDefinition(monaco, lspResult);
+        }
+      } catch (error) {
+        log.debug('LSP definition error (falling back to symbol service):', error);
       }
 
       // ════════════════════════════════════════════════════════════════════════
@@ -52,6 +163,8 @@ export function createDefinitionProvider(
 
       // Check if the word is a quoted import path (e.g., "car-wheel.kcl")
       // The wordPattern includes quoted .kcl strings, so wordInfo.word may contain quotes
+      const fileManager = client.getFileManager();
+
       if (wordInfo) {
         const { word } = wordInfo;
         const quotedPathMatch = /^["'](.+\.kcl)["']$/.exec(word);
@@ -60,6 +173,10 @@ export function createDefinitionProvider(
           log.debug('Word is a quoted import path:', importPath);
           const targetUri = resolveImportPathToUri(uri, importPath);
           log.debug('Resolved import path to URI:', targetUri);
+
+          // Ensure target model exists for Monaco to show Cmd+hover underline
+          await ensureModelExists(monaco, targetUri, fileManager);
+
           return {
             uri: monaco.Uri.parse(targetUri),
             range: new monaco.Range(1, 1, 1, 1), // Beginning of file
@@ -70,10 +187,14 @@ export function createDefinitionProvider(
       // Fallback: Check if cursor is inside an import path string (e.g., "car-wheel.kcl")
       // This handles cases where the wordPattern didn't match the full quoted string
       const importPathResult = getImportPathAtPosition(model, position);
-      if (importPathResult) {
+      if (importPathResult && isKclFileImport(importPathResult.path)) {
         log.debug('Detected import path string:', importPathResult.path);
         const targetUri = resolveImportPathToUri(uri, importPathResult.path);
         log.debug('Resolved import path to URI:', targetUri);
+
+        // Ensure target model exists for Monaco to show Cmd+hover underline
+        await ensureModelExists(monaco, targetUri, fileManager);
+
         return {
           uri: monaco.Uri.parse(targetUri),
           range: new monaco.Range(1, 1, 1, 1), // Beginning of file
@@ -90,58 +211,17 @@ export function createDefinitionProvider(
         return undefined;
       }
 
-      // Try local symbol lookup
-      log.debug('Looking up symbol by name:', wordInfo.word, 'in', uri);
-      const symbol = symbolService.findSymbolByName(uri, wordInfo.word);
-      log.debug('Symbol lookup result:', symbol?.name, 'kind:', symbol?.kind, 'line:', symbol?.lineNumber);
-
-      // For imports, resolve to the actual definition in the imported file
-      if (symbol?.kind === 'import') {
-        log.debug('Symbol is an import, resolving to actual definition in imported file');
-        const fileManager = client.getFileManager();
-        log.debug('fileManager available:', Boolean(fileManager));
-        if (fileManager) {
-          const importedSymbol = await symbolService.resolveImportedSymbol(uri, wordInfo.word, fileManager);
-          log.debug('resolveImportedSymbol result:', importedSymbol?.name, 'uri:', importedSymbol?.uri);
-          if (importedSymbol) {
-            const targetUri = monaco.Uri.parse(importedSymbol.uri);
-            log.debug('Resolved import to definition:', importedSymbol.name, 'in', importedSymbol.uri);
-            log.debug('Target URI:', targetUri.toString(), 'scheme:', targetUri.scheme, 'path:', targetUri.path);
-            log.debug('Target position:', importedSymbol.lineNumber, importedSymbol.column);
-            return {
-              uri: targetUri,
-              range: new monaco.Range(
-                importedSymbol.lineNumber,
-                importedSymbol.column,
-                importedSymbol.lineNumber,
-                importedSymbol.column + importedSymbol.name.length,
-              ),
-            };
-          }
-        }
-        // If we can't resolve, fall through to return the import location
-      }
-
-      // Return local symbol definition (variable, function, parameter)
-      if (symbol) {
-        log.debug(
-          'Symbol service found local definition:',
-          symbol.name,
-          'kind:',
-          symbol.kind,
-          'at line:',
-          symbol.lineNumber,
-        );
-        log.debug('Returning definition at:', symbol.uri, 'line:', symbol.lineNumber, 'column:', symbol.column);
-        return {
-          uri: monaco.Uri.parse(symbol.uri),
-          range: new monaco.Range(
-            symbol.lineNumber,
-            symbol.column,
-            symbol.lineNumber,
-            symbol.column + symbol.name.length,
-          ),
-        };
+      // Error Resilience: Symbol service provides definitions even when LSP fails
+      // Symbols may be from last successful parse if current parse failed
+      const symbolResult = await findSymbolDefinition({
+        monaco,
+        symbolService,
+        client,
+        uri,
+        word: wordInfo.word,
+      });
+      if (symbolResult) {
+        return symbolResult;
       }
 
       log.debug('No definition found');
@@ -184,72 +264,6 @@ function convertDefinition(
 }
 
 /**
- * Check if the cursor is inside an import path string and return the path.
- * Handles patterns like:
- * - import "car-wheel.kcl" as carWheel
- * - import * from "parameters.kcl"
- * - import { foo } from "module.kcl"
- */
-function getImportPathAtPosition(
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-): { path: string; range: { start: number; end: number } } | undefined {
-  const lineContent = model.getLineContent(position.lineNumber);
-  const { column } = position;
-
-  // Find if cursor is inside a quoted string
-  // Look for opening quote before cursor
-  let stringStart = -1;
-  let quoteChar = '';
-  for (let index = column - 2; index >= 0; index--) {
-    const char = lineContent[index];
-    // Check if it's a quote that's an opening quote (not preceded by backslash)
-    if ((char === '"' || char === "'") && (index === 0 || lineContent[index - 1] !== '\\')) {
-      stringStart = index;
-      quoteChar = char;
-      break;
-    }
-  }
-
-  if (stringStart === -1) {
-    return undefined;
-  }
-
-  // Find closing quote after cursor
-  let stringEnd = -1;
-  for (let index = column - 1; index < lineContent.length; index++) {
-    const char = lineContent[index];
-    if (char === quoteChar && lineContent[index - 1] !== '\\') {
-      stringEnd = index;
-      break;
-    }
-  }
-
-  if (stringEnd === -1) {
-    return undefined;
-  }
-
-  // Extract the string content (without quotes)
-  const path = lineContent.slice(stringStart + 1, stringEnd);
-
-  // Check if this looks like a KCL file import
-  if (!path.endsWith('.kcl')) {
-    return undefined;
-  }
-
-  // Check if this line is an import statement
-  const trimmedLine = lineContent.trim();
-  if (!trimmedLine.startsWith('import ')) {
-    return undefined;
-  }
-
-  return {
-    path,
-    range: { start: stringStart, end: stringEnd },
-  };
-}
-
-/**
  * Resolve an import path relative to the current file's URI.
  */
 function resolveImportPathToUri(currentFileUri: string, importPath: string): string {
@@ -260,4 +274,62 @@ function resolveImportPathToUri(currentFileUri: string, importPath: string): str
 
   // Join with the import path
   return `${directory}${importPath}`;
+}
+
+/**
+ * Extract the file path from a Monaco URI for file reading.
+ * Handles build-namespaced URIs like "file:///builds/bld_xxx/main.kcl"
+ */
+function extractFilePathFromUri(uri: string): string {
+  // Remove file:// prefix
+  let path = uri.replace(/^file:\/\//, '');
+
+  // Remove build namespace prefix if present
+  // URI path: /builds/bld_xxx/main.kcl -> main.kcl
+  const buildMatch = /^\/builds\/[^/]+\/(.+)$/.exec(path);
+  if (buildMatch?.[1]) {
+    path = buildMatch[1];
+  }
+
+  return path;
+}
+
+/**
+ * Ensure a Monaco model exists for the given URI.
+ * If the model doesn't exist, creates it by loading the file content.
+ * This is required for Monaco to show Cmd+hover link underlines.
+ */
+async function ensureModelExists(
+  monaco: typeof Monaco,
+  targetUri: string,
+  fileManager: LspFileManager | undefined,
+): Promise<void> {
+  const monacoUri = monaco.Uri.parse(targetUri);
+  const existingModel = monaco.editor.getModel(monacoUri);
+
+  if (existingModel) {
+    log.debug('Model already exists for:', targetUri);
+    return;
+  }
+
+  if (!fileManager) {
+    log.debug('No file manager available, cannot create model for:', targetUri);
+    return;
+  }
+
+  try {
+    const filePath = extractFilePathFromUri(targetUri);
+    log.debug('Creating model on-demand for:', targetUri, '(path:', filePath, ')');
+
+    const content = await fileManager.readFile(filePath);
+    const textContent = new TextDecoder().decode(content);
+
+    // Create the model with KCL language
+    monaco.editor.createModel(textContent, codeLanguages.kcl, monacoUri);
+    log.debug('Model created successfully for:', targetUri);
+  } catch (error) {
+    log.debug('Failed to create model for:', targetUri, error);
+    // Non-fatal: Monaco will show the definition without the model
+    // and the navigation service will create it when the user clicks
+  }
 }

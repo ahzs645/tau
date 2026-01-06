@@ -4,7 +4,10 @@
 
 import type * as Monaco from 'monaco-editor';
 import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { monacoToLspPosition, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
+
+const log = createKclLogger('Rename Provider');
 
 /**
  * Create a Monaco rename provider that uses the LSP client.
@@ -17,17 +20,23 @@ export function createRenameProvider(monaco: typeof Monaco, client: KclLspClient
       newName: string,
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.WorkspaceEdit | undefined> {
-      const result = await client.textDocumentRename({
-        textDocument: { uri: model.uri.toString() },
-        position: monacoToLspPosition(position),
-        newName,
-      });
+      // Error Resilience: LSP errors should not break the editor
+      try {
+        const result = await client.textDocumentRename({
+          textDocument: { uri: model.uri.toString() },
+          position: monacoToLspPosition(position),
+          newName,
+        });
 
-      if (!result) {
+        if (!result) {
+          return undefined;
+        }
+
+        return convertWorkspaceEdit(monaco, result);
+      } catch (error) {
+        log.debug('Rename error (non-fatal):', error);
         return undefined;
       }
-
-      return convertWorkspaceEdit(monaco, result);
     },
 
     async resolveRenameLocation(
@@ -35,43 +44,49 @@ export function createRenameProvider(monaco: typeof Monaco, client: KclLspClient
       position: Monaco.Position,
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.RenameLocation | undefined> {
-      const result = await client.textDocumentPrepareRename({
-        textDocument: { uri: model.uri.toString() },
-        position: monacoToLspPosition(position),
-      });
+      // Error Resilience: LSP errors should not break the editor
+      try {
+        const result = await client.textDocumentPrepareRename({
+          textDocument: { uri: model.uri.toString() },
+          position: monacoToLspPosition(position),
+        });
 
-      if (!result) {
+        if (!result) {
+          return undefined;
+        }
+
+        // Handle different return types
+        if ('range' in result) {
+          // PrepareRenameResult with range
+          const prepareResult = result as {
+            range: { start: { line: number; character: number }; end: { line: number; character: number } };
+            placeholder: string;
+          };
+
+          return {
+            range: lspToMonacoRange(monaco, prepareResult.range),
+            text: prepareResult.placeholder,
+          };
+        }
+
+        if ('start' in result && 'end' in result) {
+          // Plain Range
+          const range = result as {
+            start: { line: number; character: number };
+            end: { line: number; character: number };
+          };
+
+          return {
+            range: lspToMonacoRange(monaco, range),
+            text: model.getValueInRange(lspToMonacoRange(monaco, range)),
+          };
+        }
+
+        return undefined;
+      } catch (error) {
+        log.debug('Prepare rename error (non-fatal):', error);
         return undefined;
       }
-
-      // Handle different return types
-      if ('range' in result) {
-        // PrepareRenameResult with range
-        const prepareResult = result as {
-          range: { start: { line: number; character: number }; end: { line: number; character: number } };
-          placeholder: string;
-        };
-
-        return {
-          range: lspToMonacoRange(monaco, prepareResult.range),
-          text: prepareResult.placeholder,
-        };
-      }
-
-      if ('start' in result && 'end' in result) {
-        // Plain Range
-        const range = result as {
-          start: { line: number; character: number };
-          end: { line: number; character: number };
-        };
-
-        return {
-          range: lspToMonacoRange(monaco, range),
-          text: model.getValueInRange(lspToMonacoRange(monaco, range)),
-        };
-      }
-
-      return undefined;
     },
   };
 }

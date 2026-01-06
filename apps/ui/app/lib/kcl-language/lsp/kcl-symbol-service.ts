@@ -250,7 +250,12 @@ export class KclSymbolService {
   }
 
   /**
-   * Update document cache with new content
+   * Update document cache with new content.
+   *
+   * Error Resilience Strategy:
+   * - If parsing fails completely, preserve the last good symbols for intellisense
+   * - If parsing succeeds but has errors, extract symbols from the partial AST
+   * - Mock execution errors are non-fatal; we still use successfully extracted symbols
    */
   public async updateDocument(uri: string, content: string, version: number): Promise<void> {
     const existing = this.cache.get(uri);
@@ -261,60 +266,42 @@ export class KclSymbolService {
     log.debug('Updating document:', uri, 'version:', version);
 
     const lineOffsets = computeLineOffsets(content);
-    let program: Node<Program> | undefined;
-    let symbols: KclSymbol[] = [];
-    let variables: Partial<Record<string, KclValue>> = {};
 
-    // Parse using WASM if available
-    if (this.parseFunction) {
-      try {
-        const parseResult = await this.parseFunction(content);
-        program = parseResult.program;
-        symbols = extractSymbolsFromProgram(program, uri, content, lineOffsets);
-        log.debug('Extracted', symbols.length, 'symbols from AST');
+    // Try to parse and extract symbols
+    const parseResult = await this.parseAndExtractSymbols(uri, content, lineOffsets);
 
-        // Try mock execution for variable values
-        if (this.mockExecuteFunction) {
-          try {
-            const execResult = await this.mockExecuteFunction(program, uriToPath(uri));
-            variables = execResult.variables;
-            log.debug('Mock execution returned', Object.keys(variables).length, 'variables');
-          } catch (error) {
-            // Mock execution can throw but still contain partial results (variables computed before error)
-            // Check if the thrown error contains variables we can use
-            if (error && typeof error === 'object' && 'variables' in error) {
-              const errorWithVars = error as { variables?: Partial<Record<string, KclValue>> };
-              if (errorWithVars.variables && typeof errorWithVars.variables === 'object') {
-                variables = errorWithVars.variables;
-                log.debug('Mock execution failed but extracted', Object.keys(variables).length, 'partial variables');
-              }
-            } else {
-              log.debug('Mock execution failed (non-fatal):', error);
-            }
-          }
+    // Error Resilience: If parsing failed completely and we have previous symbols, preserve them
+    // This keeps intellisense working with stale-but-valid data while user fixes errors
+    if (!parseResult.succeeded && existing && existing.symbols.length > 0) {
+      log.debug(
+        'Parse failed, preserving',
+        existing.symbols.length,
+        'previous symbols for intellisense (version:',
+        existing.version,
+        ')',
+      );
 
-          // Merge variable values into symbols
-          for (const symbol of symbols) {
-            if (symbol.kind === 'variable' || symbol.kind === 'function') {
-              const value = variables[symbol.name];
-              if (value) {
-                symbol.value = value;
-                log.debug('Set value for symbol:', symbol.name, 'type:', typeof value);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        log.debug('Parse failed:', error);
-      }
+      // Update content and version but keep previous symbols
+      // This allows diagnostics to update while intellisense remains functional
+      this.cache.set(uri, {
+        version,
+        content,
+        program: existing.program, // Keep previous AST
+        symbols: existing.symbols, // Keep previous symbols for intellisense
+        variables: existing.variables, // Keep previous variable values
+        lineOffsets,
+      });
+
+      return;
     }
 
+    // Normal case: update cache with new (possibly partial) symbols
     this.cache.set(uri, {
       version,
       content,
-      program,
-      symbols,
-      variables,
+      program: parseResult.program,
+      symbols: parseResult.symbols,
+      variables: parseResult.variables,
       lineOffsets,
     });
   }
@@ -554,6 +541,116 @@ export class KclSymbolService {
     log.debug('getImportedSymbolsForCompletion: resolved', resolvedSymbols.length, 'symbols');
 
     return resolvedSymbols;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Private Helper Methods (for error resilience)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Parse content and extract symbols with error resilience.
+   * Extracted to reduce complexity of updateDocument.
+   */
+  private async parseAndExtractSymbols(
+    uri: string,
+    content: string,
+    lineOffsets: number[],
+  ): Promise<{
+    succeeded: boolean;
+    program: Node<Program> | undefined;
+    symbols: KclSymbol[];
+    variables: Partial<Record<string, KclValue>>;
+  }> {
+    let program: Node<Program> | undefined;
+    let symbols: KclSymbol[] = [];
+    let variables: Partial<Record<string, KclValue>> = {};
+    let succeeded = false;
+
+    if (!this.parseFunction) {
+      return { succeeded, program, symbols, variables };
+    }
+
+    try {
+      const parseResult = await this.parseFunction(content);
+      program = parseResult.program;
+
+      // Extract symbols even if there are parse errors (partial AST)
+      // The WASM parser returns a partial program even when there are errors
+      symbols = extractSymbolsFromProgram(program, uri, content, lineOffsets);
+      succeeded = true;
+      log.debug('Extracted', symbols.length, 'symbols from AST (errors:', parseResult.errors.length, ')');
+
+      // Try mock execution for variable values
+      if (this.mockExecuteFunction) {
+        variables = await this.executeMockAndMergeValues(program, uri, symbols);
+      }
+    } catch (error) {
+      log.debug('Parse failed:', error);
+      // Parse threw an exception - this is a complete failure, not just errors in the code
+    }
+
+    return { succeeded, program, symbols, variables };
+  }
+
+  /**
+   * Execute mock and merge variable values into symbols.
+   * Extracted to reduce nesting depth.
+   */
+  private async executeMockAndMergeValues(
+    program: Node<Program>,
+    uri: string,
+    symbols: KclSymbol[],
+  ): Promise<Partial<Record<string, KclValue>>> {
+    let variables: Partial<Record<string, KclValue>> = {};
+
+    if (!this.mockExecuteFunction) {
+      return variables;
+    }
+
+    try {
+      const execResult = await this.mockExecuteFunction(program, uriToPath(uri));
+      variables = execResult.variables;
+      log.debug('Mock execution returned', Object.keys(variables).length, 'variables');
+    } catch (error) {
+      // Mock execution can throw but still contain partial results
+      variables = this.extractVariablesFromError(error);
+    }
+
+    // Merge variable values into symbols
+    this.mergeVariableValuesIntoSymbols(symbols, variables);
+
+    return variables;
+  }
+
+  /**
+   * Extract variables from a mock execution error (partial results).
+   */
+  private extractVariablesFromError(error: unknown): Partial<Record<string, KclValue>> {
+    if (error && typeof error === 'object' && 'variables' in error) {
+      const errorWithVars = error as { variables?: Partial<Record<string, KclValue>> };
+      if (errorWithVars.variables && typeof errorWithVars.variables === 'object') {
+        log.debug('Mock execution failed but extracted', Object.keys(errorWithVars.variables).length, 'partial vars');
+        return errorWithVars.variables;
+      }
+    }
+
+    log.debug('Mock execution failed (non-fatal):', error);
+    return {};
+  }
+
+  /**
+   * Merge variable values into symbols.
+   */
+  private mergeVariableValuesIntoSymbols(symbols: KclSymbol[], variables: Partial<Record<string, KclValue>>): void {
+    for (const symbol of symbols) {
+      if (symbol.kind === 'variable' || symbol.kind === 'function') {
+        const value = variables[symbol.name];
+        if (value) {
+          symbol.value = value;
+          log.debug('Set value for symbol:', symbol.name, 'type:', typeof value);
+        }
+      }
+    }
   }
 }
 
@@ -1136,72 +1233,124 @@ function formatTypeForDisplay(type: string): string {
 }
 
 /**
- * Format a symbol for hover display (OpenSCAD-style)
+ * Options for formatting symbol hover
  */
-export function formatSymbolHover(symbol: KclSymbol): string[] {
+export type FormatSymbolHoverOptions = {
+  /** Show as an alias (like TypeScript's import hover) */
+  isAlias?: boolean;
+  /** The original import path (for alias display) */
+  importPath?: string;
+};
+
+/**
+ * Format a variable symbol for hover display.
+ */
+function formatVariableHover(symbol: KclSymbol, isAlias: boolean, importPath: string | undefined): string[] {
   const lines: string[] = [];
+  const type = symbol.value ? getKclValueType(symbol.value) : 'unknown';
+  const prefix = isAlias ? '(alias)' : '(var)';
+  lines.push(`\`\`\`kcl\n${prefix} ${symbol.name}: ${type}\n\`\`\``);
+
+  if (isAlias) {
+    lines.push(`\`\`\`kcl\nimport ${symbol.name}\n\`\`\``);
+  }
+
+  if (symbol.value) {
+    lines.push(`*@default* — \`${formatKclValue(symbol.value)}\``);
+  }
+
+  if (isAlias && importPath) {
+    lines.push(`*from* \`"${importPath}"\``);
+  }
+
+  return lines;
+}
+
+/**
+ * Format a function symbol for hover display.
+ */
+function formatFunctionHover(symbol: KclSymbol, isAlias: boolean, importPath: string | undefined): string[] {
+  const lines: string[] = [];
+  const parameters = symbol.parameters ?? [];
+  const parameterStrings = parameters.map((p) => {
+    let string_ = p.isLabeled ? '' : '@';
+    string_ += p.name;
+
+    if (p.type) {
+      string_ += `: ${formatTypeForDisplay(p.type)}`;
+    }
+
+    if (p.hasDefault) {
+      string_ += ' = ...';
+    }
+
+    return string_;
+  });
+
+  const prefix = isAlias ? '(alias) function' : '(fn)';
+  let signature = `${prefix} ${symbol.name}(${parameterStrings.join(', ')})`;
+  if (symbol.returnType) {
+    signature += `: ${symbol.returnType}`;
+  }
+
+  lines.push(`\`\`\`kcl\n${signature}\n\`\`\``);
+
+  if (isAlias) {
+    lines.push(`\`\`\`kcl\nimport ${symbol.name}\n\`\`\``);
+  }
+
+  if (isAlias && importPath) {
+    lines.push(`*from* \`"${importPath}"\``);
+  }
+
+  return lines;
+}
+
+/**
+ * Format a symbol for hover display.
+ * Supports both standard format and TypeScript-like alias format for imports.
+ */
+export function formatSymbolHover(symbol: KclSymbol, options: FormatSymbolHoverOptions = {}): string[] {
+  const { isAlias = false, importPath } = options;
 
   switch (symbol.kind) {
     case 'variable': {
-      const type = symbol.value ? getKclValueType(symbol.value) : 'unknown';
-      lines.push(`\`\`\`kcl\n(var) ${symbol.name}: ${type}\n\`\`\``);
-
-      if (symbol.value) {
-        lines.push(`*@default* — \`${formatKclValue(symbol.value)}\``);
-      }
-
-      break;
+      return formatVariableHover(symbol, isAlias, importPath);
     }
 
     case 'function': {
-      const parameters = symbol.parameters ?? [];
-      const parameterStrings = parameters.map((p) => {
-        let string_ = p.isLabeled ? '' : '@';
-        string_ += p.name;
-        if (p.type) {
-          string_ += `: ${formatTypeForDisplay(p.type)}`;
-        }
-
-        if (p.hasDefault) {
-          string_ += ' = ...';
-        }
-
-        return string_;
-      });
-
-      let signature = `(fn) ${symbol.name}(${parameterStrings.join(', ')})`;
-      if (symbol.returnType) {
-        signature += `: ${symbol.returnType}`;
-      }
-
-      lines.push(`\`\`\`kcl\n${signature}\n\`\`\``);
-
-      break;
+      return formatFunctionHover(symbol, isAlias, importPath);
     }
 
     case 'parameter': {
-      const parameterString = `(param) ${symbol.name}`;
-
-      lines.push(`\`\`\`kcl\n${parameterString}\n\`\`\``);
+      const lines: string[] = [];
+      lines.push(`\`\`\`kcl\n(param) ${symbol.name}\n\`\`\``);
       if (symbol.containingFunction) {
         lines.push(`*Parameter of function \`${symbol.containingFunction}\`*`);
       }
 
-      break;
+      return lines;
     }
 
     case 'import': {
+      const lines: string[] = [];
       lines.push(`\`\`\`kcl\n(import) ${symbol.name}\n\`\`\``);
       if (symbol.importPath) {
         lines.push(`*from* \`"${symbol.importPath}"\``);
       }
 
-      break;
+      return lines;
     }
     // No default
   }
+}
 
-  return lines;
+/**
+ * Format a module path for hover display (like TypeScript's module hover).
+ * Shows: module "path"
+ */
+export function formatModuleHover(modulePath: string): string[] {
+  return [`\`\`\`kcl\nmodule "${modulePath}"\n\`\`\``];
 }
 
 // Singleton instance
