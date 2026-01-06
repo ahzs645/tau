@@ -5,8 +5,13 @@ import type { KernelProvider, KernelError, KernelStackFrame } from '@taucad/type
 import { languageFromKernel } from '@taucad/types/constants';
 import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { Button } from '#components/ui/button.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { FileLink } from '#components/files/file-link.js';
+import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
+import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useChatActions } from '#hooks/use-chat.js';
+import { useChats } from '#hooks/use-chats.js';
+import { useKeydown } from '#hooks/use-keydown.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useCookie } from '#hooks/use-cookie.js';
@@ -17,6 +22,8 @@ import { useModels } from '#hooks/use-models.js';
 import { defaultChatModel } from '#constants/chat.constants.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
+
+const shiftKeyCombination = { key: 'Shift' } as const;
 
 type FormatErrorPromptOptions = {
   error: KernelError;
@@ -172,19 +179,38 @@ function ErrorStackTrace({
   readonly startLineNumber?: number;
   readonly startColumn?: number;
   readonly stackFrames?: KernelStackFrame[];
-  readonly onFixWithAi?: () => void;
+  readonly onFixWithAi?: (createNewChat: boolean) => void;
 }): React.JSX.Element {
   const isLocationClickable = Boolean(fileName && startLineNumber);
   const locationText = formatLocation(fileName, startLineNumber, startColumn);
+
+  // Track shift key state for "new chat" functionality
+  const { isKeyPressed: isShiftHeld, formattedKeyCombination: shiftKey } = useKeydown(
+    shiftKeyCombination,
+    () => {
+      // No-op callback - we only care about isKeyPressed state
+    },
+    { preventDefault: false, stopPropagation: false },
+  );
 
   return (
     <div className="flex flex-col gap-2 rounded-md border border-destructive/20 bg-destructive/5 p-3 text-xs">
       {/* Error message with Fix button */}
       <div className="flex flex-row items-start justify-between gap-2">
-        <div className="font-medium text-destructive">
-          {message}
+        <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium text-destructive">
+          <MarkdownViewer
+            className={cn(
+              'inline w-auto! text-xs text-inherit',
+              // Inline-code styles
+              '[&_code]:text-destructive',
+              '[&_code]:border-destructive/30',
+              '[&_code]:bg-background/80',
+            )}
+          >
+            {message}
+          </MarkdownViewer>
           {locationText ? (
-            <span className="ml-1.5 font-mono font-normal text-muted-foreground">
+            <span className="font-mono font-normal text-muted-foreground">
               (
               {isLocationClickable ? (
                 <FileLink
@@ -203,15 +229,26 @@ function ErrorStackTrace({
           ) : null}
         </div>
         {onFixWithAi ? (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 shrink-0 gap-1.5 border-destructive/30 bg-background/80 text-[0.6875rem] hover:border-destructive/50 hover:bg-background"
-            onClick={onFixWithAi}
-          >
-            <Sparkles className="size-3" />
-            Fix with AI
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant="outline"
+                className="size-6 shrink-0 border-destructive/30 bg-background/80 hover:border-destructive/50 hover:bg-background"
+                onClick={() => {
+                  onFixWithAi(isShiftHeld);
+                }}
+              >
+                <Sparkles className="size-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="flex flex-col gap-1">
+              <span>{isShiftHeld ? 'Fix in new chat' : 'Fix with AI'}</span>
+              <span className="flex items-center gap-1 text-xs opacity-70">
+                <KeyShortcut variant="tooltip">{shiftKey}</KeyShortcut> for new chat
+              </span>
+            </TooltipContent>
+          </Tooltip>
         ) : null}
       </div>
 
@@ -219,7 +256,7 @@ function ErrorStackTrace({
       {stackFrames && stackFrames.length > 0 ? (
         <div className="space-y-1">
           <div className="font-medium text-muted-foreground">Stack trace:</div>
-          <div className="space-y-0.5 rounded border bg-background/50 p-2">
+          <div className="space-y-0.5 rounded border border-destructive/20 bg-background/80 p-2">
             {stackFrames.map((frame, index) => (
               <StackFrame
                 key={`${frame.functionName}-${frame.fileName}-${frame.lineNumber}-${frame.columnNumber}`}
@@ -235,8 +272,9 @@ function ErrorStackTrace({
 }
 
 export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { getMainFilename, cadRef, fileExplorerRef } = useBuild();
+  const { getMainFilename, cadRef, fileExplorerRef, buildId, setLastChatId } = useBuild();
   const fileManager = useFileManager();
+  const { createChat } = useChats(buildId);
   // Get the active file path from file explorer
   const activeFilePath = useSelector(fileExplorerRef, (state) => state.context.activeFilePath);
 
@@ -255,7 +293,7 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
   const { kernel } = useKernel();
 
   const handleFixWithAi = useCallback(
-    async (errorIndex: number) => {
+    async (errorIndex: number, createNewChat: boolean) => {
       if (!errors || errors.length === 0) {
         return;
       }
@@ -281,7 +319,7 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
       // Open the chat panel
       setIsChatOpen(true);
 
-      // Append the error fixing message to the current chat
+      // Create the error fixing message
       const message = createMessage({
         content: errorPrompt,
         role: messageRole.user,
@@ -292,9 +330,32 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
         },
       });
 
-      sendMessage(message);
+      // Create a new chat if shift was held
+      if (createNewChat) {
+        // Create the chat with the message already included.
+        // When ChatProvider loads this chat, it will see the pending user message
+        // and automatically trigger the AI response via regenerate().
+        const newChat = await createChat({
+          name: 'New chat',
+          messages: [message],
+        });
+        setLastChatId(newChat.id);
+      } else {
+        // Send to current chat
+        sendMessage(message);
+      }
     },
-    [errors, getMainFilename, fileManager, kernel, setIsChatOpen, selectedModel?.id, sendMessage],
+    [
+      errors,
+      getMainFilename,
+      fileManager,
+      kernel,
+      setIsChatOpen,
+      createChat,
+      setLastChatId,
+      selectedModel?.id,
+      sendMessage,
+    ],
   );
 
   if (!errors || errors.length === 0) {
@@ -315,7 +376,7 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
             startLineNumber={error.location?.startLineNumber}
             startColumn={error.location?.startColumn}
             stackFrames={error.stackFrames}
-            onFixWithAi={async () => handleFixWithAi(errorIndex)}
+            onFixWithAi={async (createNewChat) => handleFixWithAi(errorIndex, createNewChat)}
           />
         );
       })}

@@ -1,50 +1,80 @@
 import { memo, useMemo } from 'react';
 import type React from 'react';
 import { ChevronRight, RefreshCcw } from 'lucide-react';
+import { errorCategory } from '@taucad/types';
+import type { ErrorCategory, NormalizedChatError } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { CodeViewer } from '#components/code/code-viewer.js';
+import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatErrorUnauthorized } from '#routes/builds_.$id/chat-error-unauthorized.js';
 import { ChatErrorServiceUnavailable } from '#routes/builds_.$id/chat-error-service-unavailable.js';
-
-type ParsedError = {
-  code?: string;
-  error?: string;
-  statusCode?: number;
-  path?: string;
-  requestId?: string;
-};
+import { ChatErrorCredits } from '#routes/builds_.$id/chat-error-credits.js';
+import { ChatErrorRateLimit } from '#routes/builds_.$id/chat-error-rate-limit.js';
+import { ChatErrorTool } from '#routes/builds_.$id/chat-error-tool.js';
 
 /**
- * Checks if the error indicates a network/connectivity issue.
- * This includes browser fetch failures and connection refused errors.
+ * Parsed error ready for UI display (uses NormalizedChatError from API).
+ */
+type ParsedError = NormalizedChatError;
+
+/**
+ * Checks if error is a client-side network error (never reaches the API).
  */
 function isNetworkError(message: string): boolean {
-  const networkErrorPatterns = [
-    'Failed to fetch', // Browser fetch API network error
-    'NetworkError', // Generic network error
-    'net::ERR_CONNECTION_REFUSED', // Chrome connection refused
-    'net::ERR_NETWORK_CHANGED', // Chrome network changed
-    'net::ERR_INTERNET_DISCONNECTED', // Chrome no internet
-    'net::ERR_NAME_NOT_RESOLVED', // Chrome DNS failure
-    'Load failed', // Safari network error
-    'Network request failed', // React Native / some polyfills
-    'ECONNREFUSED', // Node.js connection refused
-    'ETIMEDOUT', // Connection timeout
-    'ENOTFOUND', // DNS lookup failed
-  ];
-
-  return networkErrorPatterns.some((pattern) => message.includes(pattern));
+  return (
+    message.includes('Failed to fetch') ||
+    message.includes('NetworkError') ||
+    message.includes('net::ERR_') ||
+    message.includes('Load failed')
+  );
 }
 
-function parseErrorMessage(message: string): { parsed: ParsedError | undefined; formatted: string } {
+/**
+ * Parses the JSON error from the API.
+ */
+function tryParseApiError(message: string): ParsedError | undefined {
+  if (!message.startsWith('{')) {
+    return undefined;
+  }
+
   try {
-    const parsed = JSON.parse(message) as ParsedError;
-    return { parsed, formatted: JSON.stringify(parsed, null, 2) };
+    const parsed = JSON.parse(message) as Record<string, unknown>;
+
+    if (
+      typeof parsed['category'] === 'string' &&
+      typeof parsed['title'] === 'string' &&
+      typeof parsed['message'] === 'string'
+    ) {
+      return {
+        category: parsed['category'] as ErrorCategory,
+        title: parsed['title'],
+        message: parsed['message'],
+        code: typeof parsed['code'] === 'string' ? parsed['code'] : undefined,
+        httpStatus: typeof parsed['httpStatus'] === 'number' ? parsed['httpStatus'] : undefined,
+        troubleshootingUrl: typeof parsed['troubleshootingUrl'] === 'string' ? parsed['troubleshootingUrl'] : undefined,
+        raw: typeof parsed['raw'] === 'string' ? parsed['raw'] : undefined,
+        requestId: typeof parsed['requestId'] === 'string' ? parsed['requestId'] : undefined,
+      };
+    }
   } catch {
-    return { parsed: undefined, formatted: message };
+    // Not valid JSON
+  }
+
+  return undefined;
+}
+
+/**
+ * Attempts to format a string as pretty-printed JSON.
+ */
+function tryFormatJson(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return text;
   }
 }
 
@@ -60,68 +90,135 @@ export const ChatError = memo(function ({
   const error = useChatSelector((state) => state.error);
   const { regenerate } = useChatActions();
 
-  const { parsed, formatted } = useMemo(() => {
+  const parsedError = useMemo((): ParsedError | undefined => {
     if (!error) {
-      return { parsed: undefined, formatted: '' };
+      return undefined;
     }
 
-    return parseErrorMessage(error.message);
+    // Handle client-side network errors (these never reach the API)
+    if (isNetworkError(error.message)) {
+      return {
+        category: errorCategory.network,
+        title: 'Connection Error',
+        message: 'Unable to connect to the server. Please check your internet connection.',
+        raw: error.message,
+      };
+    }
+
+    // Parse structured error from API
+    const parsed = tryParseApiError(error.message);
+    if (parsed) {
+      return parsed;
+    }
+
+    // Fallback for unexpected formats
+    return {
+      category: errorCategory.generic,
+      title: 'Error',
+      message: error.message,
+      raw: error.message,
+    };
   }, [error]);
 
-  if (!error) {
+  if (!error || !parsedError) {
     return null;
   }
 
-  // Handle UNAUTHORIZED errors with dedicated component
-  if (parsed?.code === 'UNAUTHORIZED') {
+  // Render the generic/server error view with collapsible details
+  const renderGenericError = (): React.ReactNode => {
+    const formattedError = parsedError.raw ? tryFormatJson(parsedError.raw) : parsedError.message;
+
     return (
       <div className={cn('size-full', className)}>
-        <ChatErrorUnauthorized />
-      </div>
-    );
-  }
-
-  // Handle network/connectivity errors with dedicated component
-  if (isNetworkError(error.message)) {
-    return (
-      <div className={cn('size-full', className)}>
-        <ChatErrorServiceUnavailable />
-      </div>
-    );
-  }
-
-  return (
-    <div className={cn('size-full', className)}>
-      <Collapsible
-        open={isOpen}
-        className={cn(
-          'group/collapsible flex flex-col justify-center rounded-md border border-destructive/20 bg-destructive/10 text-sm',
-        )}
-        onOpenChange={onOpenChange}
-      >
-        <CollapsibleTrigger asChild>
-          <div className="flex w-full cursor-pointer items-center justify-between gap-2 px-2 py-1.5">
-            <ChevronRight className="size-4 transition-transform duration-300 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
-            <div className="flex w-full items-center justify-between">
-              <p>Unable to send the message.</p>
-              <Button
-                variant="outline"
-                className="h-7 hover:border-neutral/50"
-                size="sm"
-                onClick={async () => {
-                  regenerate();
-                }}
-              >
-                <RefreshCcw className="size-3.5" />
-                Retry
-              </Button>
+        <Collapsible
+          open={isOpen}
+          className={cn(
+            'group/collapsible flex flex-col justify-center rounded-md border border-destructive/20 bg-destructive/10 text-sm',
+          )}
+          onOpenChange={onOpenChange}
+        >
+          <CollapsibleTrigger asChild>
+            <div className="flex w-full cursor-pointer items-center justify-between gap-2 px-2 py-1.5">
+              <ChevronRight className="size-4 transition-transform duration-300 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
+              <div className="flex w-full items-center justify-between">
+                <p>{parsedError.title || 'Unable to send the message.'}</p>
+                <Button
+                  variant="outline"
+                  className="h-7 hover:border-neutral/50"
+                  size="sm"
+                  onClick={() => {
+                    regenerate();
+                  }}
+                >
+                  <RefreshCcw className="size-3.5" />
+                  Retry
+                </Button>
+              </div>
             </div>
-          </div>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="overflow-x-scroll px-2 pb-2">
-          <CodeViewer text={formatted} language="json" className="text-xs whitespace-pre-wrap" />
-        </CollapsibleContent>
-      </Collapsible>
-    </div>
-  );
+          </CollapsibleTrigger>
+          <CollapsibleContent className="overflow-x-scroll px-2 pb-2">
+            <CodeViewer text={formattedError} language="json" className="text-xs whitespace-pre-wrap" />
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
+    );
+  };
+
+  // Route to specialized error components based on category
+  // All cases from ErrorCategory are handled explicitly for exhaustive matching
+  const { category } = parsedError;
+  switch (category) {
+    case errorCategory.auth: {
+      return (
+        <div className={cn('size-full', className)}>
+          <ChatErrorUnauthorized />
+        </div>
+      );
+    }
+
+    case errorCategory.network: {
+      return (
+        <div className={cn('size-full', className)}>
+          <ChatErrorServiceUnavailable />
+        </div>
+      );
+    }
+
+    case errorCategory.credits: {
+      return (
+        <div className={cn('size-full', className)}>
+          <ChatErrorCredits />
+        </div>
+      );
+    }
+
+    case errorCategory.rateLimit: {
+      return (
+        <div className={cn('size-full', className)}>
+          <ChatErrorRateLimit />
+        </div>
+      );
+    }
+
+    case errorCategory.overloaded: {
+      return (
+        <div className={cn('size-full', className)}>
+          <ChatErrorServiceUnavailable />
+        </div>
+      );
+    }
+
+    case errorCategory.toolError: {
+      return (
+        <div className={cn('size-full', className)}>
+          <ChatErrorTool description={parsedError.message} troubleshootingUrl={parsedError.troubleshootingUrl} />
+        </div>
+      );
+    }
+
+    case errorCategory.server:
+    case errorCategory.generic: {
+      return renderGenericError();
+    }
+  }
 });
