@@ -3,7 +3,7 @@ import { diffStatsSchema } from '#schemas/tools/diff.schema.js';
 
 export const editFileInputSchema = z.object({
   targetFile: z.string().describe('The target file to modify.'),
-  codeEdit: z.string().describe('Specify ONLY the precise lines of code that you wish to edit...'),
+  codeEdit: z.string().describe('Specify ONLY the precise lines of code that you wish to edit'),
 });
 
 export const editFileOutputSchema = z.object({
