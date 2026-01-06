@@ -89,12 +89,15 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for file edit tool
-      const handleFileEdit = async (toolCall: { toolCallId: string; input: unknown }): Promise<EditFileOutput> => {
-        const toolCallInput = toolCall.input as EditFileInput;
+      const handleEditFile = async (toolCall: {
+        toolCallId: string;
+        input: EditFileInput;
+      }): Promise<EditFileOutput> => {
+        const { input } = toolCall;
 
         // Use the targetFile from input, falling back to main file for backwards compatibility
         const mainFilePath = await getMainFilename();
-        const resolvedPath = toolCallInput.targetFile ? resolvePath(toolCallInput.targetFile) : mainFilePath;
+        const resolvedPath = input.targetFile ? resolvePath(input.targetFile) : mainFilePath;
 
         let currentCode: Uint8Array;
         try {
@@ -112,7 +115,7 @@ export function useChatTools(): UseChatToolsReturn {
           request: {
             targetFile: resolvedPath,
             originalContent,
-            codeEdit: toolCallInput.codeEdit,
+            codeEdit: input.codeEdit,
           },
         });
 
@@ -134,7 +137,7 @@ export function useChatTools(): UseChatToolsReturn {
         const linesAdded = result.diffStats?.linesAdded;
         const linesRemoved = result.diffStats?.linesRemoved;
         return {
-          success: true,
+          success: result.success,
           diffStats: {
             linesAdded: typeof linesAdded === 'number' ? linesAdded : 0,
             linesRemoved: typeof linesRemoved === 'number' ? linesRemoved : 0,
@@ -187,8 +190,11 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for read file tool
-      const handleReadFile = async (toolCall: { toolCallId: string; input: unknown }): Promise<ReadFileOutput> => {
-        const input = toolCall.input as ReadFileInput;
+      const handleReadFile = async (toolCall: {
+        toolCallId: string;
+        input: ReadFileInput;
+      }): Promise<ReadFileOutput> => {
+        const { input } = toolCall;
         const resolvedPath = resolvePath(input.targetFile);
 
         try {
@@ -219,8 +225,11 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for list directory tool
-      const handleListDirectory = (toolCall: { toolCallId: string; input: unknown }): ListDirectoryOutput => {
-        const input = toolCall.input as ListDirectoryInput;
+      const handleListDirectory = (toolCall: {
+        toolCallId: string;
+        input: ListDirectoryInput;
+      }): ListDirectoryOutput => {
+        const { input } = toolCall;
         const resolvedPath = input.path === '' ? '' : resolvePath(input.path);
 
         const entries: ListDirectoryOutput['entries'] = [];
@@ -242,8 +251,11 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for create file tool
-      const handleCreateFile = async (toolCall: { toolCallId: string; input: unknown }): Promise<CreateFileOutput> => {
-        const input = toolCall.input as CreateFileInput;
+      const handleCreateFile = async (toolCall: {
+        toolCallId: string;
+        input: CreateFileInput;
+      }): Promise<CreateFileOutput> => {
+        const { input } = toolCall;
         const resolvedPath = resolvePath(input.targetFile);
 
         // Wait for file manager to be in a state that can accept writeFile events
@@ -275,8 +287,11 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for delete file tool
-      const handleDeleteFile = async (toolCall: { toolCallId: string; input: unknown }): Promise<DeleteFileOutput> => {
-        const input = toolCall.input as DeleteFileInput;
+      const handleDeleteFile = async (toolCall: {
+        toolCallId: string;
+        input: DeleteFileInput;
+      }): Promise<DeleteFileOutput> => {
+        const { input } = toolCall;
         const resolvedPath = resolvePath(input.targetFile);
 
         // Wait for file manager to be in a state that can accept deleteFile events
@@ -291,8 +306,8 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for grep tool
-      const handleGrep = async (toolCall: { toolCallId: string; input: unknown }): Promise<GrepOutput> => {
-        const input = toolCall.input as GrepInput;
+      const handleGrep = async (toolCall: { toolCallId: string; input: GrepInput }): Promise<GrepOutput> => {
+        const { input } = toolCall;
         const matches: GrepOutput['matches'] = [];
         const maxMatches = 100;
 
@@ -370,8 +385,8 @@ export function useChatTools(): UseChatToolsReturn {
       };
 
       // Handler for glob search tool
-      const handleGlobSearch = (toolCall: { toolCallId: string; input: unknown }): GlobSearchOutput => {
-        const input = toolCall.input as GlobSearchInput;
+      const handleGlobSearch = (toolCall: { toolCallId: string; input: GlobSearchInput }): GlobSearchOutput => {
+        const { input } = toolCall;
         const files: string[] = [];
 
         try {
@@ -402,9 +417,9 @@ export function useChatTools(): UseChatToolsReturn {
       // Handler for get kernel result tool
       const handleGetKernelResult = async (toolCall: {
         toolCallId: string;
-        input: unknown;
+        input: GetKernelResultInput;
       }): Promise<GetKernelResultOutput> => {
-        const input = toolCall.input as GetKernelResultInput;
+        const { input } = toolCall;
 
         try {
           // Use target file if provided, otherwise fall back to main file
@@ -462,12 +477,17 @@ export function useChatTools(): UseChatToolsReturn {
           return;
         }
 
+        // Skip dynamic tools (input type is unknown)
+        if ('dynamic' in toolCall && toolCall.dynamic) {
+          return;
+        }
+
         // Execute handler and get the result
         let output: ToolOutputUnion;
 
         switch (currentToolName) {
           case toolName.editFile: {
-            output = await handleFileEdit(toolCall);
+            output = await handleEditFile(toolCall);
             break;
           }
 
