@@ -101,7 +101,7 @@ export function ApplyButton({ state, error, onApply, isDisabled }: ApplyButtonPr
           ) : state === 'error' ? (
             <RotateCcw className="size-3" />
           ) : (
-            <Play />
+            <Play className="size-3" />
           )}
         </Button>
       </TooltipTrigger>
