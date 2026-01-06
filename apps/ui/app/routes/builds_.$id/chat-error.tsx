@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react';
 import type React from 'react';
 import { ChevronRight, RefreshCcw } from 'lucide-react';
-import { errorCategory } from '@taucad/types';
+import { errorCategory, errorCategories } from '@taucad/types';
 import type { ErrorCategory, NormalizedChatError } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
@@ -48,8 +48,14 @@ function tryParseApiError(message: string): ParsedError | undefined {
       typeof parsed['title'] === 'string' &&
       typeof parsed['message'] === 'string'
     ) {
+      // Validate category against known values, fallback to generic if unknown
+      const parsedCategory = parsed['category'];
+      const category: ErrorCategory = errorCategories.includes(parsedCategory as ErrorCategory)
+        ? (parsedCategory as ErrorCategory)
+        : errorCategory.generic;
+
       return {
-        category: parsed['category'] as ErrorCategory,
+        category,
         title: parsed['title'],
         message: parsed['message'],
         code: typeof parsed['code'] === 'string' ? parsed['code'] : undefined,
