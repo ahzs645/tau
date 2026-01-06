@@ -22,6 +22,7 @@ import { useModels } from '#hooks/use-models.js';
 import { defaultChatModel } from '#constants/chat.constants.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
+import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
 const shiftKeyCombination = { key: 'Shift' } as const;
 
@@ -291,6 +292,7 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
   const { selectedModel } = useModels();
   const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const { kernel } = useKernel();
+  const snapshot = useChatSnapshot();
 
   const handleFixWithAi = useCallback(
     async (errorIndex: number, createNewChat: boolean) => {
@@ -327,6 +329,7 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
           model: selectedModel?.id ?? defaultChatModel,
           status: messageStatus.pending,
           kernel,
+          snapshot,
         },
       });
 
@@ -355,6 +358,7 @@ export function ChatStackTrace({ className, ...props }: React.HTMLAttributes<HTM
       setLastChatId,
       selectedModel?.id,
       sendMessage,
+      snapshot,
     ],
   );
 

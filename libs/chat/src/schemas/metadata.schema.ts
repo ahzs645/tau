@@ -3,6 +3,31 @@ import { kernelProviders, manufacturingMethods, engineeringDisciplines } from '@
 import { toolNames, toolModes } from '#constants/tool.constants.js';
 import { messageStatuses } from '#constants/message.constants.js';
 
+/**
+ * Schema for the editor context snapshot.
+ * Provides the LLM with awareness of what the user is currently working on.
+ */
+export const snapshotSchema = z.object({
+  /** Token-efficient tree representation of the project filesystem */
+  filesystem: z.string().optional(),
+  /** The file currently being rendered by the CAD engine */
+  activeFile: z
+    .object({
+      path: z.string(),
+      name: z.string(),
+    })
+    .optional(),
+  /** The files currently open in editor tabs */
+  openFiles: z
+    .array(
+      z.object({
+        path: z.string(),
+        name: z.string(),
+      }),
+    )
+    .optional(),
+});
+
 export const messageMetadataSchema = z.object({
   usageCost: z
     .object({
@@ -10,6 +35,10 @@ export const messageMetadataSchema = z.object({
       outputTokens: z.number(),
       cachedReadTokens: z.number(),
       cachedWriteTokens: z.number().optional(),
+      inputTokensCost: z.number().optional(),
+      outputTokensCost: z.number().optional(),
+      cachedReadTokensCost: z.number().optional(),
+      cachedWriteTokensCost: z.number().optional(),
       usageCost: z.number().optional(),
     })
     .optional(),
@@ -27,15 +56,8 @@ export const messageMetadataSchema = z.object({
   status: z.enum(messageStatuses).optional(),
   model: z.string().optional(),
   /**
-   * A token-efficient tree representation of the project filesystem.
-   * Format: hierarchical text structure with file names and optional metadata.
-   * Example:
-   * ```
-   * /project/
-   *   - main.scad (245 lines)
-   *   - lib/
-   *     - utils.scad (89 lines)
-   * ```
+   * Snapshot of the user's editor context at message submission time.
+   * Provides the LLM with awareness of what the user is currently working on.
    */
-  filesystemSnapshot: z.string().optional(),
+  snapshot: snapshotSchema.optional(),
 });

@@ -26,7 +26,7 @@ import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatHistoryEmpty } from '#routes/builds_.$id/chat-history-empty.js';
 import { useKernel } from '#hooks/use-kernel.js';
-import { useFilesystemSnapshot } from '#hooks/use-file-manager.js';
+import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
 const toggleChatHistoryKeyCombination = {
   key: 'c',
@@ -75,7 +75,7 @@ export const ChatHistory = memo(function (props: {
   const messageIds = useChatSelector((state) => state.messageOrder);
   const { sendMessage } = useChatActions();
   const { kernel } = useKernel();
-  const filesystemSnapshot = useFilesystemSnapshot();
+  const snapshot = useChatSnapshot();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const chatTextareaRef = useRef<ChatTextareaHandle>(null);
   const toggleChatHistory = useCallback(() => {
@@ -111,13 +111,13 @@ export const ChatHistory = memo(function (props: {
           kernel,
           model,
           status: messageStatus.pending,
-          filesystemSnapshot,
+          snapshot,
         },
         imageUrls,
       });
       sendMessage(userMessage);
     },
-    [sendMessage, kernel, filesystemSnapshot],
+    [sendMessage, kernel, snapshot],
   );
 
   // Memoize the item renderer for Virtuoso with stable references

@@ -66,6 +66,14 @@ export const cookieName = {
   // Whether to show the model cost in the chat-history.
   chatModelCost: 'chat-model-cost',
 
+  /* Chat Context - what editor context to include in messages */
+  // Whether to include filesystem snapshot in chat context.
+  chatCtxFs: 'chat-ctx-fs',
+  // Whether to include active file in chat context.
+  chatCtxActive: 'chat-ctx-active',
+  // Whether to include open files in chat context.
+  chatCtxOpen: 'chat-ctx-open',
+
   /* Chat Tool Sections - collapse state (true = open, false = collapsed) */
   // Whether kernel errors section is open.
   chatToolKernelErrors: 'chat-tool-kernel-errors',

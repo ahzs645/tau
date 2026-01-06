@@ -1,5 +1,18 @@
 import React, { useCallback, useState } from 'react';
-import { Settings, DollarSign, File, Image, Code, AlertTriangle, AlertCircle, Camera, ListChecks } from 'lucide-react';
+import {
+  Settings,
+  DollarSign,
+  File,
+  Image,
+  Code,
+  AlertTriangle,
+  AlertCircle,
+  Camera,
+  ListChecks,
+  FolderTree,
+  FileCode,
+  Layers,
+} from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
 import {
@@ -26,6 +39,9 @@ export function ChatHistorySettings(): React.ReactNode {
   const [showCodePreview, setShowCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
   const [showImageScreenshot, setShowImageScreenshot] = useCookie(cookieName.chatToolImageScreenshot, true);
   const [showImageRequirements, setShowImageRequirements] = useCookie(cookieName.chatToolImageRequirements, false);
+  const [includeFilesystem, setIncludeFilesystem] = useCookie(cookieName.chatCtxFs, true);
+  const [includeActiveFile, setIncludeActiveFile] = useCookie(cookieName.chatCtxActive, true);
+  const [includeOpenFiles, setIncludeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
   const [isOpen, setIsOpen] = useState(false);
 
   const handleShowModelCostToggle = useCallback(
@@ -70,6 +86,27 @@ export function ChatHistorySettings(): React.ReactNode {
     [setShowImageRequirements],
   );
 
+  const handleIncludeFilesystemToggle = useCallback(
+    (checked: boolean) => {
+      setIncludeFilesystem(checked);
+    },
+    [setIncludeFilesystem],
+  );
+
+  const handleIncludeActiveFileToggle = useCallback(
+    (checked: boolean) => {
+      setIncludeActiveFile(checked);
+    },
+    [setIncludeActiveFile],
+  );
+
+  const handleIncludeOpenFilesToggle = useCallback(
+    (checked: boolean) => {
+      setIncludeOpenFiles(checked);
+    },
+    [setIncludeOpenFiles],
+  );
+
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
       <Tooltip>
@@ -101,6 +138,52 @@ export function ChatHistorySettings(): React.ReactNode {
             Show Model Cost
           </span>
         </DropdownMenuSwitchItem>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuLabel>Context Settings</DropdownMenuLabel>
+
+        {/* Context Settings Sub-menu */}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <span className="flex items-center gap-2">
+              <Layers className="size-4" />
+              Editor Context
+            </span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-52">
+            <DropdownMenuSwitchItem
+              className="flex w-full justify-between"
+              isChecked={includeFilesystem}
+              onIsCheckedChange={handleIncludeFilesystemToggle}
+            >
+              <span className="flex items-center gap-2">
+                <FolderTree className="size-4" />
+                Filesystem
+              </span>
+            </DropdownMenuSwitchItem>
+            <DropdownMenuSwitchItem
+              className="flex w-full justify-between"
+              isChecked={includeActiveFile}
+              onIsCheckedChange={handleIncludeActiveFileToggle}
+            >
+              <span className="flex items-center gap-2">
+                <FileCode className="size-4" />
+                Active File
+              </span>
+            </DropdownMenuSwitchItem>
+            <DropdownMenuSwitchItem
+              className="flex w-full justify-between"
+              isChecked={includeOpenFiles}
+              onIsCheckedChange={handleIncludeOpenFilesToggle}
+            >
+              <span className="flex items-center gap-2">
+                <File className="size-4" />
+                Open Tabs
+              </span>
+            </DropdownMenuSwitchItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
 
         <DropdownMenuSeparator />
 
