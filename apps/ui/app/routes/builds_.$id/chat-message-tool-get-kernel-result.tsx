@@ -75,7 +75,7 @@ export function ChatMessageToolGetKernelResult({
 
                   return (
                     <ChatToolCardListItem key={key} icon={AlertTriangle} className="text-muted-foreground">
-                      <span className="flex flex-1 items-start gap-1">
+                      <span className="flex flex-1 flex-col items-start gap-0.5 @xs:flex-row @xs:gap-1">
                         {location ? (
                           <FileLink
                             path={location.fileName}
@@ -86,7 +86,7 @@ export function ChatMessageToolGetKernelResult({
                             {location.fileName}:{location.startLineNumber}:{location.startColumn}
                           </FileLink>
                         ) : undefined}
-                        <span className="font-mono">{error.message}</span>
+                        <span className="font-mono text-xs">{error.message}</span>
                       </span>
                     </ChatToolCardListItem>
                   );
