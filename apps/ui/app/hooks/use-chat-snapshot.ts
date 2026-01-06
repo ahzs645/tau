@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ChatSnapshot } from '@taucad/chat';
 import { useBuild } from '#hooks/use-build.js';
-import { useFilesystemSnapshot } from '#hooks/use-file-manager.js';
+import { useFileTree } from '#hooks/use-file-manager.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
@@ -11,7 +11,7 @@ import { cookieName } from '#constants/cookie.constants.js';
  * This provides the LLM with awareness of what the user is currently working on.
  *
  * The snapshot includes:
- * - filesystem: Token-efficient tree representation of the project
+ * - fileTree: Array of file entries representing the project filesystem
  * - activeFile: The file currently being rendered by the CAD engine
  * - openFiles: The files currently open in editor tabs
  *
@@ -24,8 +24,8 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
   const buildContext = useBuild({ enableNoContext: true });
   const fileExplorerRef = buildContext?.fileExplorerRef;
 
-  // Get filesystem snapshot
-  const filesystemSnapshot = useFilesystemSnapshot();
+  // Get file tree data
+  const fileTree = useFileTree();
 
   // Get editor state from file explorer
   const editorState = useSelector(
@@ -56,9 +56,9 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
   return useMemo((): ChatSnapshot | undefined => {
     const snapshot: ChatSnapshot = {};
 
-    // Add filesystem if enabled and available
-    if (includeFilesystem && filesystemSnapshot) {
-      snapshot.filesystem = filesystemSnapshot;
+    // Add file tree if enabled and available
+    if (includeFilesystem && fileTree) {
+      snapshot.fileTree = fileTree;
     }
 
     // Add active file if enabled and available
@@ -85,7 +85,7 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
     return snapshot;
   }, [
     includeFilesystem,
-    filesystemSnapshot,
+    fileTree,
     includeActiveFile,
     editorState.activeFilePath,
     includeOpenFiles,

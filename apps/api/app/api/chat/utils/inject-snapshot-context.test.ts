@@ -20,13 +20,15 @@ function createAssistantMessage(text: string, id = 'msg-2'): UIMessage {
 }
 
 describe('injectSnapshotContext', () => {
-  const filesystemSnapshot = `src/
-  index.ts
-  utils/
-    helper.ts`;
+  const fileTree: ChatSnapshot['fileTree'] = [
+    { path: 'src', name: 'src', type: 'dir', size: 0 },
+    { path: 'src/index.ts', name: 'index.ts', type: 'file', size: 1024 },
+    { path: 'src/utils', name: 'utils', type: 'dir', size: 0 },
+    { path: 'src/utils/helper.ts', name: 'helper.ts', type: 'file', size: 512 },
+  ];
 
   const fullSnapshot: ChatSnapshot = {
-    filesystem: filesystemSnapshot,
+    fileTree,
     activeFile: { path: 'src/index.ts', name: 'index.ts' },
     openFiles: [
       { path: 'src/index.ts', name: 'index.ts' },
@@ -57,16 +59,19 @@ describe('injectSnapshotContext', () => {
       expect(text).toContain('src/index.ts, src/utils/helper.ts');
       expect(text).toContain('</open_files>');
 
-      // Should have project layout
+      // Should have project layout with generated tree
       expect(text).toContain('<project_layout>');
-      expect(text).toContain(filesystemSnapshot);
+      expect(text).toContain('/project/');
+      expect(text).toContain('src/');
+      expect(text).toContain('index.ts');
+      expect(text).toContain('helper.ts');
       expect(text).toContain('</project_layout>');
 
       // Should preserve original message
       expect(text).toContain('Help me with my code');
     });
 
-    it('should format context in correct order: activeFile, openFiles, filesystem', () => {
+    it('should format context in correct order: activeFile, openFiles, fileTree', () => {
       const messages = [createUserMessage('Test')];
 
       const result = injectSnapshotContext(messages, fullSnapshot);
@@ -82,8 +87,8 @@ describe('injectSnapshotContext', () => {
   });
 
   describe('with partial snapshot', () => {
-    it('should inject only filesystem when only filesystem is provided', () => {
-      const snapshot: ChatSnapshot = { filesystem: filesystemSnapshot };
+    it('should inject only fileTree when only fileTree is provided', () => {
+      const snapshot: ChatSnapshot = { fileTree };
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
@@ -129,7 +134,7 @@ describe('injectSnapshotContext', () => {
 
     it('should skip openFiles section when openFiles array is empty', () => {
       const snapshot: ChatSnapshot = {
-        filesystem: filesystemSnapshot,
+        fileTree,
         openFiles: [],
       };
       const messages = [createUserMessage('Hello')];
@@ -139,6 +144,20 @@ describe('injectSnapshotContext', () => {
 
       expect(text).toContain('<project_layout>');
       expect(text).not.toContain('<open_files>');
+    });
+
+    it('should skip fileTree section when fileTree array is empty', () => {
+      const snapshot: ChatSnapshot = {
+        fileTree: [],
+        activeFile: { path: 'main.scad', name: 'main.scad' },
+      };
+      const messages = [createUserMessage('Hello')];
+
+      const result = injectSnapshotContext(messages, snapshot);
+      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+
+      expect(text).toContain('<active_file>');
+      expect(text).not.toContain('<project_layout>');
     });
   });
 
@@ -288,6 +307,66 @@ describe('injectSnapshotContext', () => {
       const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
 
       expect(text).toMatch(/<\/editor_context>\n\nMy question$/);
+    });
+
+    it('should generate tree structure from fileTree entries', () => {
+      const snapshot: ChatSnapshot = {
+        fileTree: [
+          { path: 'lib', name: 'lib', type: 'dir', size: 0 },
+          { path: 'lib/shapes.scad', name: 'shapes.scad', type: 'file', size: 2048 },
+          { path: 'lib/utils.scad', name: 'utils.scad', type: 'file', size: 1024 },
+          { path: 'main.scad', name: 'main.scad', type: 'file', size: 5120 },
+        ],
+      };
+      const messages = [createUserMessage('Hello')];
+
+      const result = injectSnapshotContext(messages, snapshot);
+      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+
+      // Should have project root
+      expect(text).toContain('/project/');
+      // Should have directory with trailing slash
+      expect(text).toContain('lib/');
+      // Should have files with sizes
+      expect(text).toContain('shapes.scad (2KB)');
+      expect(text).toContain('utils.scad (1KB)');
+      expect(text).toContain('main.scad (5KB)');
+    });
+
+    it('should sort directories before files in tree output', () => {
+      const snapshot: ChatSnapshot = {
+        fileTree: [
+          { path: 'main.scad', name: 'main.scad', type: 'file', size: 100 },
+          { path: 'lib', name: 'lib', type: 'dir', size: 0 },
+          { path: 'lib/utils.scad', name: 'utils.scad', type: 'file', size: 100 },
+        ],
+      };
+      const messages = [createUserMessage('Hello')];
+
+      const result = injectSnapshotContext(messages, snapshot);
+      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+
+      const libIndex = text.indexOf('lib/');
+      const mainIndex = text.indexOf('main.scad');
+
+      // Directory should come before file
+      expect(libIndex).toBeLessThan(mainIndex);
+    });
+
+    it('should show empty message for empty fileTree', () => {
+      const snapshot: ChatSnapshot = {
+        fileTree: [],
+        activeFile: { path: 'test.scad', name: 'test.scad' },
+      };
+      const messages = [createUserMessage('Hello')];
+
+      const result = injectSnapshotContext(messages, snapshot);
+      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+
+      // Should not have project_layout for empty tree
+      expect(text).not.toContain('<project_layout>');
+      // Should still have active file
+      expect(text).toContain('<active_file>');
     });
   });
 });

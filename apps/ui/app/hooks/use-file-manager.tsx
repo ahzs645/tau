@@ -3,10 +3,10 @@ import { createContext, useContext, useMemo, useCallback, useEffect } from 'reac
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom, SnapshotFrom } from 'xstate';
+import type { FileTreeEntry } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource } from '#machines/file-manager.machine.js';
 import { joinPath } from '#utils/path.utils.js';
-import { generateFilesystemSnapshotFromMap } from '#utils/filesystem-snapshot.utils.js';
 
 type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
 
@@ -27,14 +27,6 @@ function createErrorAwareWaitPredicate(
     return predicate(state);
   };
 }
-
-export type FileEntry = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-  isLoaded: boolean;
-};
 
 type WriteFileOptions = {
   source: FileWriteSource;
@@ -251,13 +243,12 @@ export function useFileManager(): FileManagerContextType {
 }
 
 /**
- * Hook to get the current filesystem snapshot as a token-efficient string.
+ * Hook to get the current file tree as an array of file entries.
  * This is used to provide context to the LLM about the project structure.
  *
- * @param rootLabel - Optional label for the root directory (defaults to "/project/")
- * @returns The filesystem snapshot string, or undefined if the file manager is not ready
+ * @returns Array of file entries, or undefined if the file manager is not ready
  */
-export function useFilesystemSnapshot(rootLabel = '/project/'): string | undefined {
+export function useFileTree(): FileTreeEntry[] | undefined {
   const { fileManagerRef } = useFileManager();
 
   return useSelector(fileManagerRef, (state) => {
@@ -270,6 +261,12 @@ export function useFilesystemSnapshot(rootLabel = '/project/'): string | undefin
       return undefined;
     }
 
-    return generateFilesystemSnapshotFromMap(fileTree, rootLabel);
+    // Convert Map to array and exclude isLoaded (client-side state)
+    return [...fileTree.values()].map(({ path, name, type, size }) => ({
+      path,
+      name,
+      type,
+      size,
+    }));
   });
 }

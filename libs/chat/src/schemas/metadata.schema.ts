@@ -1,15 +1,27 @@
 import z from 'zod';
+import type { FileTreeEntry } from '@taucad/types';
 import { kernelProviders, manufacturingMethods, engineeringDisciplines } from '@taucad/types/constants';
 import { toolNames, toolModes } from '#constants/tool.constants.js';
 import { messageStatuses } from '#constants/message.constants.js';
+
+/**
+ * Schema for a file entry in the project filesystem.
+ * Constrained to match the FileTreeEntry type from @taucad/types.
+ */
+const fileTreeEntrySchema: z.ZodType<FileTreeEntry> = z.object({
+  path: z.string(),
+  name: z.string(),
+  type: z.enum(['file', 'dir']),
+  size: z.number(),
+});
 
 /**
  * Schema for the editor context snapshot.
  * Provides the LLM with awareness of what the user is currently working on.
  */
 export const snapshotSchema = z.object({
-  /** Token-efficient tree representation of the project filesystem */
-  filesystem: z.string().optional(),
+  /** Array of file entries representing the project filesystem */
+  fileTree: z.array(fileTreeEntrySchema).optional(),
   /** The file currently being rendered by the CAD engine */
   activeFile: z
     .object({

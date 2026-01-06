@@ -2,18 +2,11 @@ import { assign, assertEvent, setup, fromPromise, enqueueActions, emit } from 'x
 import type { OutputFrom, DoneActorEvent } from 'xstate';
 import { wrap } from 'comlink';
 import type { Remote } from 'comlink';
+import type { FileEntry } from '@taucad/types';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import type { FileWorker } from '#machines/file-manager.worker.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import { joinPath, normalizePath } from '#utils/path.utils.js';
-
-type FileEntry = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-  isLoaded: boolean;
-};
 
 /**
  * The source of the file write.
