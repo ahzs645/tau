@@ -5,6 +5,7 @@ import { kernelConfigurations } from '@taucad/types/constants';
 import { Format3D } from '#components/icons/format-3d.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import type { SvgIcons } from '#components/icons/generated/svg-icons.js';
+import { getFileExtension } from '#utils/filesystem.utils.js';
 
 type IconConfig =
   | {
@@ -95,7 +96,7 @@ const supportedFormatsSet = new Set<string>([
 // Map kernel mainFile extensions to kernel configs
 const kernelExtensionMap = new Map<string, string>();
 for (const kernel of kernelConfigurations) {
-  const extension = kernel.mainFile.split('.').pop()?.toLowerCase();
+  const extension = getFileExtension(kernel.mainFile);
   if (extension) {
     kernelExtensionMap.set(extension, kernel.id);
   }
@@ -147,7 +148,7 @@ export function FileExtensionIcon({
   readonly filename: string;
   readonly className?: string;
 }): React.JSX.Element {
-  const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+  const extension = getFileExtension(filename);
   const config = getIconConfig(extension);
 
   if (!config) {
