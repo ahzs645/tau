@@ -226,12 +226,17 @@ export function DiffViewer({
             '[&_pre_code]:flex [&_pre_code]:flex-col',
             // Line styles - w-full fills the parent container
             '[&_.line]:relative [&_.line]:block [&_.line]:w-full [&_.line]:px-3!',
+
+            // Diff styles
+            '[&_.diff]:border-l-2 [&_.diff]:border-transparent',
             // Diff add styles
             '[&_.diff.add]:bg-success/20',
-            "[&_.diff.add]:before:absolute [&_.diff.add]:before:left-1.5 [&_.diff.add]:before:text-success [&_.diff.add]:before:content-['']!",
+            '[&_.diff.add]:border-l-success',
+            "[&_.diff.add]:before:content-['']!",
             // Diff remove styles
             '[&_.diff.remove]:bg-destructive/20 [&_.diff.remove]:opacity-70',
-            "[&_.diff.remove]:before:absolute [&_.diff.remove]:before:left-1.5 [&_.diff.remove]:before:text-destructive [&_.diff.remove]:before:content-['']!",
+            '[&_.diff.remove]:border-l-destructive',
+            "[&_.diff.remove]:before:content-['']!",
           )}
         />
       );

@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import type { ClassValue } from 'clsx';
-import { Axis3D, Box, Grid3X3, Rotate3D, Settings, PenLine, Sparkles, ArrowUp } from 'lucide-react';
+import { Axis3D, Box, Grid3X3, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
@@ -19,6 +19,7 @@ import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
+import { Input } from '#components/ui/input.js';
 
 type ViewSettings = {
   surface: boolean;
@@ -41,23 +42,32 @@ const defaultSettings: ViewSettings = {
   upDirection: 'z',
 };
 
-type CameraSettingsProps = {
+type ViewerSettingsProps = {
   /**
    * Optional className for styling
    */
   readonly className?: ClassValue;
 };
 
+// Default render timeout in seconds (30 seconds)
+const defaultRenderTimeout = 30;
+
 /**
  * Component that provides camera and visibility settings for the 3D viewer
  */
-export function SettingsControl({ className }: CameraSettingsProps): React.ReactNode {
-  const { graphicsRef: graphicsActor } = useBuild();
+export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactNode {
+  const { graphicsRef: graphicsActor, cadRef } = useBuild();
   const [viewSettings, setViewSettings] = useCookie<ViewSettings>(cookieName.viewSettings, defaultSettings);
+  const [renderTimeout, setRenderTimeout] = useCookie(cookieName.cadRenderTimeout, defaultRenderTimeout);
   const [isOpen, setIsOpen] = useState(false);
   const is2dGeometry = useSelector(graphicsActor, (state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
+
+  // Synchronize render timeout to CAD machine
+  useEffect(() => {
+    cadRef.send({ type: 'setRenderTimeout', timeout: renderTimeout * 1000 }); // Convert seconds to ms
+  }, [renderTimeout, cadRef]);
 
   // Synchronize each setting to the Graphics context when settings change
   useEffect(() => {
@@ -137,6 +147,17 @@ export function SettingsControl({ className }: CameraSettingsProps): React.React
       }
     },
     [setViewSettings],
+  );
+
+  const handleRenderTimeoutChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const value = Number.parseInt(event.target.value, 10);
+      // Clamp between 0 (disabled) and 300 seconds (5 minutes)
+      if (!Number.isNaN(value)) {
+        setRenderTimeout(Math.max(0, Math.min(300, value)));
+      }
+    },
+    [setRenderTimeout],
   );
 
   return (
@@ -262,6 +283,33 @@ export function SettingsControl({ className }: CameraSettingsProps): React.React
             </ToggleGroup>
           </div>
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Performance</DropdownMenuLabel>
+        <div className="flex items-center justify-between px-2 py-1.5">
+          <span className="flex items-center gap-2 text-sm">
+            <Timer className="size-4" />
+            <span className="flex flex-col">
+              <span className="flex items-center gap-1">
+                Render Timeout
+                <InfoTooltip>
+                  Maximum time to wait for CAD rendering before timing out.
+                  <br /> Set to 0 to disable timeout.
+                </InfoTooltip>
+              </span>
+              <span className="text-xs font-medium text-muted-foreground/80">
+                {renderTimeout === 0 ? 'Disabled' : `${renderTimeout}s`}
+              </span>
+            </span>
+          </span>
+          <Input
+            type="number"
+            min={0}
+            max={300}
+            value={renderTimeout}
+            className="h-7 w-16 text-center"
+            onChange={handleRenderTimeoutChange}
+          />
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
