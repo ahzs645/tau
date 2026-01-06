@@ -274,10 +274,11 @@ export const cadMachine = setup({
     isKernelNotInitialized: ({ context }) => !context.isKernelInitialized,
     isKernelInitializing: ({ context }) => context.isKernelInitializing,
     hasModel: ({ context }) => context.file !== undefined,
-    // Detects file switches vs content changes - file switches should render immediately
-    isDifferentFile({ context, event }) {
+    // Detects when the same file is being set again (e.g., clicking on already open file)
+    // Used to ignore redundant setFile events and prevent unnecessary re-renders
+    isSameFile({ context, event }) {
       assertEvent(event, 'setFile');
-      return context.file?.filename !== event.file.filename;
+      return context.file?.filename === event.file.filename;
     },
   },
   delays: {
@@ -395,14 +396,12 @@ export const cadMachine = setup({
         },
         setFile: [
           {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
+            // Same file already active - ignore to prevent unnecessary re-renders
+            guard: 'isSameFile',
           },
           {
-            // Same file content change - debounce
-            target: 'bufferingFile',
+            // File switch - render immediately without debounce
+            target: 'rendering',
             actions: 'setFile',
           },
         ],
@@ -449,16 +448,13 @@ export const cadMachine = setup({
         },
         setFile: [
           {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
+            // Same file already active - ignore to prevent unnecessary re-renders
+            guard: 'isSameFile',
           },
           {
-            // Same file content change - reset debounce timer
-            target: 'bufferingFile',
+            // File switch - render immediately without debounce
+            target: 'rendering',
             actions: 'setFile',
-            reenter: true,
           },
         ],
         setParameters: {
@@ -484,14 +480,12 @@ export const cadMachine = setup({
         },
         setFile: [
           {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
+            // Same file already active - ignore to prevent unnecessary re-renders
+            guard: 'isSameFile',
           },
           {
-            // Same file content change - go to file buffering
-            target: 'bufferingFile',
+            // File switch - render immediately without debounce
+            target: 'rendering',
             actions: 'setFile',
           },
         ],
@@ -525,16 +519,14 @@ export const cadMachine = setup({
         },
         setFile: [
           {
+            // Same file already active - ignore to prevent unnecessary re-renders
+            guard: 'isSameFile',
+          },
+          {
             // File switch - reenter rendering immediately
-            guard: 'isDifferentFile',
             target: 'rendering',
             actions: 'setFile',
             reenter: true,
-          },
-          {
-            // Same file content change - debounce
-            target: 'bufferingFile',
-            actions: 'setFile',
           },
         ],
         setParameters: {
@@ -563,14 +555,12 @@ export const cadMachine = setup({
         },
         setFile: [
           {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
+            // Same file already active - ignore to prevent unnecessary re-renders
+            guard: 'isSameFile',
           },
           {
-            // Same file content change - debounce
-            target: 'bufferingFile',
+            // File switch - render immediately without debounce
+            target: 'rendering',
             actions: 'setFile',
           },
         ],
