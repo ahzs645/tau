@@ -71,7 +71,7 @@ export function ChatMessageMetadataUsage({
                   </InfoTooltip>
                 </TableCell>
                 <TableCell>{formatNumber(usage.inputTokens)}</TableCell>
-                <TableCell>{formatCurrency(0, { significantFigures: 2 })}</TableCell>
+                <TableCell>{formatCurrency(usage.inputTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className="flex flex-row items-center gap-1">
@@ -79,7 +79,7 @@ export function ChatMessageMetadataUsage({
                   <InfoTooltip>The number of tokens in the output response.</InfoTooltip>
                 </TableCell>
                 <TableCell>{formatNumber(usage.outputTokens)}</TableCell>
-                <TableCell>{formatCurrency(0, { significantFigures: 2 })}</TableCell>
+                <TableCell>{formatCurrency(usage.outputTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
               </TableRow>
               {usage.cachedReadTokens > 0 && (
                 <TableRow>
@@ -91,7 +91,7 @@ export function ChatMessageMetadataUsage({
                     </InfoTooltip>
                   </TableCell>
                   <TableCell>{formatNumber(usage.cachedReadTokens)}</TableCell>
-                  <TableCell>{formatCurrency(0, { significantFigures: 2 })}</TableCell>
+                  <TableCell>{formatCurrency(usage.cachedReadTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
                 </TableRow>
               )}
               {usage.cachedWriteTokens !== undefined && usage.cachedWriteTokens > 0 ? (
@@ -104,7 +104,7 @@ export function ChatMessageMetadataUsage({
                     </InfoTooltip>
                   </TableCell>
                   <TableCell>{formatNumber(usage.cachedWriteTokens)}</TableCell>
-                  <TableCell>{formatCurrency(0, { significantFigures: 2 })}</TableCell>
+                  <TableCell>{formatCurrency(usage.cachedWriteTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
                 </TableRow>
               ) : undefined}
             </TableBody>
