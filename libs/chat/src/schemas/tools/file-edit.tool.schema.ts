@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { codeErrorSchema, kernelErrorSchema } from '#schemas/tools/error.schema.js';
 
 export const fileEditInputSchema = z.object({
   targetFile: z.string().describe('The target file to modify.'),
@@ -7,8 +6,7 @@ export const fileEditInputSchema = z.object({
 });
 
 export const fileEditOutputSchema = z.object({
-  codeErrors: z.array(codeErrorSchema),
-  kernelErrors: z.array(kernelErrorSchema).optional(),
+  success: z.boolean().describe('Whether the file edit was successfully applied'),
 });
 
 export type FileEditInput = z.infer<typeof fileEditInputSchema>;

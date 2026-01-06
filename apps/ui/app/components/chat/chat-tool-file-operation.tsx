@@ -1,7 +1,6 @@
 import type { ToolUIPart } from 'ai';
 import { useState } from 'react';
 import { File, FilePlus, LoaderCircle, X, ChevronDown, ChevronRight, Check, RotateCcw, Play } from 'lucide-react';
-import type { CodeError, KernelError } from '@taucad/types';
 import { CodeViewer } from '#components/code/code-viewer.js';
 import { CopyButton } from '#components/copy-button.js';
 import { FileLink } from '#components/files/file-link.js';
@@ -17,106 +16,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components
 function getFilename(path: string): string {
   const parts = path.split('/');
   return parts.at(-1) ?? path;
-}
-
-/**
- * Type guard to check if an error is a CodeError (has startLineNumber directly)
- */
-function isCodeError(error: CodeError | KernelError): error is CodeError {
-  return 'startLineNumber' in error && typeof error.startLineNumber === 'number';
-}
-
-/**
- * Get line number from an error, handling both CodeError and KernelError types
- */
-function getErrorLineNumber(error: CodeError | KernelError): number | undefined {
-  if (isCodeError(error)) {
-    return error.startLineNumber;
-  }
-
-  return error.location?.startLineNumber;
-}
-
-/**
- * Get column number from an error, handling both CodeError and KernelError types
- */
-function getErrorColumn(error: CodeError | KernelError): number | undefined {
-  if (isCodeError(error)) {
-    return error.startColumn;
-  }
-
-  return error.location?.startColumn;
-}
-
-type ErrorSectionProps = {
-  readonly type: string;
-  readonly errors: Array<CodeError | KernelError>;
-  readonly icon: React.ComponentType<{ className?: string }>;
-  readonly isInitiallyOpen?: boolean;
-  readonly className?: string;
-};
-
-export function ErrorSection({
-  type,
-  errors,
-  icon: Icon,
-  isInitiallyOpen = false,
-  className,
-}: ErrorSectionProps): React.JSX.Element | undefined {
-  const [isOpen, setIsOpen] = useState(isInitiallyOpen);
-
-  if (errors.length === 0) {
-    return undefined;
-  }
-
-  return (
-    <Collapsible open={isOpen} className={className} onOpenChange={setIsOpen}>
-      <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="group flex h-auto w-full justify-start gap-2 rounded-none p-2 text-warning hover:bg-transparent"
-        >
-          <span className="relative flex items-center">
-            <ChevronDown
-              className={cn(
-                'absolute left-0 size-3 shrink-0 opacity-0 transition-[opacity,transform] duration-200 group-hover:opacity-100',
-                isOpen ? 'rotate-180' : '',
-              )}
-            />
-            <Icon
-              className={cn('size-3 shrink-0 transition-opacity duration-200', 'group-hover:opacity-0', 'opacity-100')}
-            />
-          </span>
-          <span className="text-left text-xs font-normal">
-            {Number(errors.length)} {type} error{errors.length > 1 ? 's' : ''}
-          </span>
-        </Button>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="border-t">
-        <div className="space-y-2 px-2 py-2 text-xs">
-          {errors.map((error) => {
-            const lineNumber = getErrorLineNumber(error);
-            const column = getErrorColumn(error);
-            const key = `${lineNumber ?? 'unknown'}-${error.message}`;
-
-            return (
-              <div key={key} className="flex items-start text-xs">
-                {lineNumber !== undefined && column !== undefined ? (
-                  <div className="flex flex-row items-center gap-1 text-muted-foreground">
-                    <div className="shrink-0 font-mono">
-                      {lineNumber}:{column}
-                    </div>
-                  </div>
-                ) : null}
-                <div className="ml-2 flex-1 font-mono">{error.message}</div>
-              </div>
-            );
-          })}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
 }
 
 type StatusIconProps = {

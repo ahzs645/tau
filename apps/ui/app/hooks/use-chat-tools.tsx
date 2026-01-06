@@ -130,8 +130,7 @@ export function useChatTools(): UseChatToolsReturn {
 
         // Return immediately without waiting for kernel - use get_kernel_result tool to check status
         return {
-          codeErrors: [],
-          kernelErrors: undefined,
+          success: true,
         };
       };
 
