@@ -92,4 +92,3 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
     editorState.openFiles,
   ]);
 }
-
