@@ -13,6 +13,7 @@ import {
 } from '#components/chat/chat-tool-card.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { FileLink } from '#components/files/file-link.js';
+import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
 export function ChatMessageToolGetKernelResult({
@@ -86,7 +87,9 @@ export function ChatMessageToolGetKernelResult({
                             {location.fileName}:{location.startLineNumber}:{location.startColumn}
                           </FileLink>
                         ) : undefined}
-                        <span className="font-mono text-xs">{error.message}</span>
+                        <MarkdownViewer className="inline w-auto font-mono text-xs text-inherit">
+                          {error.message}
+                        </MarkdownViewer>
                       </span>
                     </ChatToolCardListItem>
                   );
