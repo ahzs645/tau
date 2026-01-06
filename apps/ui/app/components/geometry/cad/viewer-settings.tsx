@@ -1,6 +1,18 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import type { ClassValue } from 'clsx';
-import { Axis3D, Box, Grid3X3, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
+import {
+  Axis3D,
+  Box,
+  Grid3X3,
+  Rotate3D,
+  Settings,
+  PenLine,
+  Sparkles,
+  ArrowUp,
+  Timer,
+  Check,
+  ChevronsUpDown,
+} from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
@@ -19,7 +31,7 @@ import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
-import { Input } from '#components/ui/input.js';
+import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 
 type ViewSettings = {
   surface: boolean;
@@ -51,6 +63,26 @@ type ViewerSettingsProps = {
 
 // Default render timeout in seconds (30 seconds)
 const defaultRenderTimeout = 30;
+
+// Timeout option type
+type TimeoutOption = {
+  // Value in seconds
+  value: number;
+  label: string;
+};
+
+// Predefined timeout options
+const timeoutOptions: TimeoutOption[] = [
+  { value: 0, label: 'Disabled' },
+  { value: 10, label: '15s' },
+  { value: 30, label: '30s' },
+  { value: 60, label: '1 min' },
+  { value: 300, label: '5 min' },
+  { value: 600, label: '10 min' },
+];
+
+// Default timeout option (30s)
+const defaultTimeoutOption: TimeoutOption = { value: 30, label: '30s' };
 
 /**
  * Component that provides camera and visibility settings for the 3D viewer
@@ -150,15 +182,23 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
   );
 
   const handleRenderTimeoutChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const value = Number.parseInt(event.target.value, 10);
-      // Clamp between 0 (disabled) and 300 seconds (5 minutes)
-      if (!Number.isNaN(value)) {
-        setRenderTimeout(Math.max(0, Math.min(300, value)));
+    (value: string) => {
+      const seconds = Number.parseInt(value, 10);
+      if (!Number.isNaN(seconds)) {
+        setRenderTimeout(seconds);
       }
     },
     [setRenderTimeout],
   );
+
+  // Get current timeout option for display (default to 30s if not found)
+  const currentTimeoutOption = useMemo(
+    () => timeoutOptions.find((option) => option.value === renderTimeout) ?? defaultTimeoutOption,
+    [renderTimeout],
+  );
+
+  // Group timeout options for combobox
+  const groupedTimeoutOptions = useMemo(() => [{ name: 'Timeout', items: timeoutOptions }], []);
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
@@ -288,27 +328,35 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
         <div className="flex items-center justify-between px-2 py-1.5">
           <span className="flex items-center gap-2 text-sm">
             <Timer className="size-4" />
-            <span className="flex flex-col">
-              <span className="flex items-center gap-1">
-                Render Timeout
-                <InfoTooltip>
-                  Maximum time to wait for CAD rendering before timing out.
-                  <br /> Set to 0 to disable timeout.
-                </InfoTooltip>
-              </span>
-              <span className="text-xs font-medium text-muted-foreground/80">
-                {renderTimeout === 0 ? 'Disabled' : `${renderTimeout}s`}
-              </span>
+            <span className="flex items-center gap-1">
+              Render Timeout
+              <InfoTooltip>
+                Maximum time to wait for CAD rendering before timing out.
+                <br /> Set to &quot;Disabled&quot; to turn off timeout.
+              </InfoTooltip>
             </span>
           </span>
-          <Input
-            type="number"
-            min={0}
-            max={300}
-            value={renderTimeout}
-            className="h-7 w-16 text-center"
-            onChange={handleRenderTimeoutChange}
-          />
+          <ComboBoxResponsive
+            groupedItems={groupedTimeoutOptions}
+            defaultValue={currentTimeoutOption}
+            title="Render Timeout"
+            description="Select a render timeout duration"
+            isSearchEnabled={false}
+            popoverProperties={{ align: 'end' }}
+            getValue={(option) => String(option.value)}
+            renderLabel={(option, selectedOption) => (
+              <span className="flex w-full items-center justify-between">
+                {option.label}
+                {option.value === selectedOption?.value && <Check className="size-4" />}
+              </span>
+            )}
+            onSelect={handleRenderTimeoutChange}
+          >
+            <Button variant="outline" size="sm" className="h-7 w-20 justify-between">
+              <span>{currentTimeoutOption.label}</span>
+              <ChevronsUpDown className="size-3 opacity-50" />
+            </Button>
+          </ComboBoxResponsive>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

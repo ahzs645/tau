@@ -4,7 +4,7 @@ import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
 import { cn } from '#utils/ui.utils.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
-import { SettingsControl } from '#components/geometry/cad/settings-control.js';
+import { ViewerSettings } from '#components/geometry/cad/viewer-settings.js';
 
 export function ChatViewerControls({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   return (
@@ -14,7 +14,7 @@ export function ChatViewerControls({ className, ...props }: React.HTMLAttributes
       <SectionViewControl />
       <MeasureControl />
       <ResetCameraControl />
-      <SettingsControl />
+      <ViewerSettings />
     </div>
   );
 }

@@ -43,7 +43,7 @@ import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { SectionViewControl } from '#components/geometry/cad/section-view-control.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
 import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
-import { SettingsControl } from '#components/geometry/cad/settings-control.js';
+import { ViewerSettings } from '#components/geometry/cad/viewer-settings.js';
 import { ChatInterfaceGraphics } from '#routes/builds_.$id/chat-interface-graphics.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -230,7 +230,7 @@ function ConverterContent(): React.JSX.Element {
                   <SectionViewControl />
                   <MeasureControl />
                   <ResetCameraControl />
-                  <SettingsControl />
+                  <ViewerSettings />
                 </div>
               </div>
             </SidebarOffset>
