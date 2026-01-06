@@ -515,9 +515,8 @@ async function initializeSymbolServiceWasm(): Promise<void> {
 
         return { program: result[0], errors, warnings };
       } catch (error) {
-        // Catastrophic parse failure - WASM threw an exception
-        // Create empty program structure so symbol service can preserve previous symbols
-        log.debug('Parse threw exception (catastrophic failure):', error);
+        // Log and re-throw to surface the failure
+        log.error('Parse threw exception (catastrophic failure):', error);
         throw error;
       }
     });
