@@ -74,6 +74,10 @@ export const cookieName = {
   // Whether to include open files in chat context.
   chatCtxOpen: 'chat-ctx-open',
 
+  /* Chat Tool Settings */
+  // Screenshot quality for chat (0.1 to 1.0).
+  chatScreenshotQuality: 'chat-screenshot-quality',
+
   /* Chat Tool Sections - collapse state (true = open, false = collapsed) */
   // Whether kernel errors section is open.
   chatToolKernelErrors: 'chat-tool-kernel-errors',

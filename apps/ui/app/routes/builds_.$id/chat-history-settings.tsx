@@ -12,14 +12,17 @@ import {
   FolderTree,
   FileCode,
   Layers,
+  ImageDown,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
+import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuSwitchItem,
+  DropdownMenuSliderItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
   DropdownMenuSub,
@@ -27,6 +30,7 @@ import {
   DropdownMenuSubContent,
 } from '#components/ui/dropdown-menu.js';
 import { useCookie } from '#hooks/use-cookie.js';
+import { useImageQuality } from '#hooks/use-image-quality.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
 /**
@@ -42,6 +46,7 @@ export function ChatHistorySettings(): React.ReactNode {
   const [includeFilesystem, setIncludeFilesystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile, setIncludeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles, setIncludeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
+  const { quality: screenshotQuality, setQuality: setScreenshotQuality } = useImageQuality();
   const [isOpen, setIsOpen] = useState(false);
 
   const handleShowModelCostToggle = useCallback(
@@ -107,6 +112,17 @@ export function ChatHistorySettings(): React.ReactNode {
     [setIncludeOpenFiles],
   );
 
+  const handleScreenshotQualityChange = useCallback(
+    (value: number) => {
+      setScreenshotQuality(value);
+    },
+    [setScreenshotQuality],
+  );
+
+  const formatQualityValue = useCallback((value: number): string => {
+    return `${Math.round(value * 100)}%`;
+  }, []);
+
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
       <Tooltip>
@@ -128,15 +144,9 @@ export function ChatHistorySettings(): React.ReactNode {
         }}
       >
         <DropdownMenuLabel>Metadata Display</DropdownMenuLabel>
-        <DropdownMenuSwitchItem
-          className="flex w-full justify-between"
-          isChecked={showModelCost}
-          onIsCheckedChange={handleShowModelCostToggle}
-        >
-          <span className="flex items-center gap-2">
-            <DollarSign className="size-4 stroke-2" />
-            Show Model Cost
-          </span>
+        <DropdownMenuSwitchItem isChecked={showModelCost} onIsCheckedChange={handleShowModelCostToggle}>
+          <DollarSign className="size-4 stroke-2" />
+          Show Model Cost
         </DropdownMenuSwitchItem>
 
         <DropdownMenuSeparator />
@@ -152,35 +162,17 @@ export function ChatHistorySettings(): React.ReactNode {
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={includeFilesystem}
-              onIsCheckedChange={handleIncludeFilesystemToggle}
-            >
-              <span className="flex items-center gap-2">
-                <FolderTree className="size-4" />
-                Filesystem
-              </span>
+            <DropdownMenuSwitchItem isChecked={includeFilesystem} onIsCheckedChange={handleIncludeFilesystemToggle}>
+              <FolderTree className="size-4" />
+              Filesystem
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={includeActiveFile}
-              onIsCheckedChange={handleIncludeActiveFileToggle}
-            >
-              <span className="flex items-center gap-2">
-                <FileCode className="size-4" />
-                Active File
-              </span>
+            <DropdownMenuSwitchItem isChecked={includeActiveFile} onIsCheckedChange={handleIncludeActiveFileToggle}>
+              <FileCode className="size-4" />
+              Active File
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={includeOpenFiles}
-              onIsCheckedChange={handleIncludeOpenFilesToggle}
-            >
-              <span className="flex items-center gap-2">
-                <File className="size-4" />
-                Open Tabs
-              </span>
+            <DropdownMenuSwitchItem isChecked={includeOpenFiles} onIsCheckedChange={handleIncludeOpenFilesToggle}>
+              <File className="size-4" />
+              Open Tabs
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -198,35 +190,17 @@ export function ChatHistorySettings(): React.ReactNode {
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={showCodePreview}
-              onIsCheckedChange={handleShowCodePreviewToggle}
-            >
-              <span className="flex items-center gap-2">
-                <Code className="size-4" />
-                Code Preview
-              </span>
+            <DropdownMenuSwitchItem isChecked={showCodePreview} onIsCheckedChange={handleShowCodePreviewToggle}>
+              <Code className="size-4" />
+              Code Preview
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={showKernelErrors}
-              onIsCheckedChange={handleShowKernelErrorsToggle}
-            >
-              <span className="flex items-center gap-2">
-                <AlertTriangle className="size-4" />
-                Kernel Errors
-              </span>
+            <DropdownMenuSwitchItem isChecked={showKernelErrors} onIsCheckedChange={handleShowKernelErrorsToggle}>
+              <AlertTriangle className="size-4" />
+              Kernel Errors
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={showCodeErrors}
-              onIsCheckedChange={handleShowCodeErrorsToggle}
-            >
-              <span className="flex items-center gap-2">
-                <AlertCircle className="size-4" />
-                Linter Errors
-              </span>
+            <DropdownMenuSwitchItem isChecked={showCodeErrors} onIsCheckedChange={handleShowCodeErrorsToggle}>
+              <AlertCircle className="size-4" />
+              Linter Errors
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -240,26 +214,37 @@ export function ChatHistorySettings(): React.ReactNode {
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
-            <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
-              isChecked={showImageScreenshot}
-              onIsCheckedChange={handleShowImageScreenshotToggle}
-            >
-              <span className="flex items-center gap-2">
-                <Camera className="size-4" />
-                Screenshot
-              </span>
+            <DropdownMenuSwitchItem isChecked={showImageScreenshot} onIsCheckedChange={handleShowImageScreenshotToggle}>
+              <Camera className="size-4" />
+              Screenshot
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem
-              className="flex w-full justify-between"
               isChecked={showImageRequirements}
               onIsCheckedChange={handleShowImageRequirementsToggle}
             >
-              <span className="flex items-center gap-2">
-                <ListChecks className="size-4" />
-                Requirements
-              </span>
+              <ListChecks className="size-4" />
+              Requirements
             </DropdownMenuSwitchItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuSliderItem
+              value={screenshotQuality}
+              min={0.1}
+              max={1}
+              step={0.1}
+              formatValue={formatQualityValue}
+              infoTooltip={
+                <InfoTooltip>
+                  <ul className="list-disc space-y-1 pl-4">
+                    <li>Lower quality: less precise, faster upload and lower LLM cost</li>
+                    <li>Higher quality: more precise, slower upload and higher LLM cost</li>
+                  </ul>
+                </InfoTooltip>
+              }
+              onValueChange={handleScreenshotQualityChange}
+            >
+              <ImageDown />
+              Quality
+            </DropdownMenuSliderItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       </DropdownMenuContent>

@@ -8,6 +8,7 @@ import { toast } from '#components/ui/sonner.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { orthographicViews, screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
 import { cn } from '#utils/ui.utils.js';
+import { useImageQuality } from '#hooks/use-image-quality.js';
 
 type ChatContextActionsProperties = {
   readonly addImage: (image: string) => void;
@@ -56,6 +57,7 @@ export function ChatContextActions({
 
   const codeErrors = useSelector(cadActor, (state) => state.context.codeErrors);
   const isScreenshotReady = useSelector(graphicsActor, (state) => state.context.isScreenshotReady);
+  const { quality: screenshotQuality } = useImageQuality();
 
   // Create screenshot request machine instance
   const screenshotActorRef = useActorRef(screenshotRequestMachine, {
@@ -73,7 +75,7 @@ export function ChatContextActions({
       options: {
         output: {
           format: 'image/webp', // Use WebP for consistency and performance
-          quality: 0.3, // Slightly higher quality for single screenshots
+          quality: screenshotQuality, // User-configurable quality via chat settings
         },
         aspectRatio: 16 / 9, // Standard widescreen ratio for model shots
         maxResolution: 1200, // Good balance of quality and performance for single shots
@@ -93,7 +95,7 @@ export function ChatContextActions({
         toast.error(`Screenshot failed: ${error}`);
       },
     });
-  }, [addImage, asPopoverMenu, onClose, screenshotActorRef]);
+  }, [addImage, asPopoverMenu, onClose, screenshotActorRef, screenshotQuality]);
 
   const handleAddAllViewsScreenshots = useCallback(() => {
     if (asPopoverMenu) {
@@ -105,8 +107,8 @@ export function ChatContextActions({
       type: 'requestCompositeScreenshot',
       options: {
         output: {
-          format: 'image/webp', // Use PNG for transparent backgrounds
-          quality: 0.3,
+          format: 'image/webp', // Use WebP for consistency and performance
+          quality: screenshotQuality, // User-configurable quality via chat settings
           isPreview: true,
         },
         cameraAngles: orthographicViews.slice(0, 6),
@@ -138,7 +140,7 @@ export function ChatContextActions({
         toast.error(`All views screenshot failed: ${error}`);
       },
     });
-  }, [addImage, asPopoverMenu, onClose, screenshotActorRef]);
+  }, [addImage, asPopoverMenu, onClose, screenshotActorRef, screenshotQuality]);
 
   const handleAddCodeErrors = useCallback(() => {
     const errors = codeErrors.map((error) => `- (${error.startLineNumber}:${error.startColumn}): ${error.message}`);

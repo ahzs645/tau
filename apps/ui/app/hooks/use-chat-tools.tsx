@@ -33,6 +33,7 @@ import { screenshotRequestMachine } from '#machines/screenshot-request.machine.j
 import { decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
+import { useImageQuality } from '#hooks/use-image-quality.js';
 
 /**
  * Union of all possible tool outputs, derived from clientToolNames.
@@ -74,6 +75,9 @@ export function useChatTools(): UseChatToolsReturn {
 
   // Get file tree for grep and glob operations
   const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
+
+  // Get screenshot quality from user settings
+  const { quality: screenshotQuality } = useImageQuality();
 
   const createOnToolCall: CreateOnToolCallFn = useCallback(
     (dependencies) => {
@@ -157,7 +161,7 @@ export function useChatTools(): UseChatToolsReturn {
           screenshotActor.send({
             type: 'requestScreenshot',
             options: {
-              output: { format: 'image/webp', quality: 0.3 },
+              output: { format: 'image/webp', quality: screenshotQuality },
               aspectRatio: 16 / 9,
               maxResolution: 1200,
               zoomLevel: 1.4,
@@ -551,7 +555,17 @@ export function useChatTools(): UseChatToolsReturn {
         });
       };
     },
-    [buildId, cadActor, fileEditRef, fileManager, fileManagerRef, fileTree, getMainFilename, graphicsActor],
+    [
+      buildId,
+      cadActor,
+      fileEditRef,
+      fileManager,
+      fileManagerRef,
+      fileTree,
+      getMainFilename,
+      graphicsActor,
+      screenshotQuality,
+    ],
   );
 
   return {
