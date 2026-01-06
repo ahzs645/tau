@@ -32,12 +32,11 @@ export function ChatMessageToolImageAnalysis({
       const { requirements = [] } = input;
 
       return (
-        <ChatToolCard variant="card" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Eye} />
             <ChatToolCardTitle>
-              <ChatToolAction>Analyzing</ChatToolAction>{' '}
-              <ChatToolDescription>model...</ChatToolDescription>
+              <ChatToolAction>Analyzing</ChatToolAction> <ChatToolDescription>model...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           {requirements.length > 0 ? (
