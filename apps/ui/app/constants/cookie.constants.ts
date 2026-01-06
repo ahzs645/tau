@@ -55,6 +55,8 @@ export const cookieName = {
   cadUnit: 'cad-unit',
   // Whether to enable file preview (send file content to CAD when switching files).
   cadFilePreview: 'cad-file-preview',
+  // Render timeout in seconds (0 = disabled).
+  cadRenderTimeout: 'cad-render-timeout',
 
   /* Chat */
   // Whether to enable web search in the chat.
