@@ -14,6 +14,7 @@ import { buildNameGenerationSystemPrompt } from '#api/chat/prompts/chat-prompt-n
 import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/commit-message-prompt.js';
 import type { LangGraphAdapterCallbacks } from '#api/chat/utils/langgraph-adapter.js';
 import { getCadSystemPrompt } from '#api/chat/prompts/chat-prompt-cad.js';
+import { normalizeError } from '#api/chat/utils/error-normalizer.js';
 import type { Environment } from '#config/environment.config.js';
 
 @Injectable()
@@ -129,14 +130,20 @@ Always prefer \`${toolName.webSearch}\` first, and only use \`${toolName.webBrow
       onError(error) {
         if (error instanceof Error && error.message === 'Aborted') {
           logger.warn('Request aborted');
-          return 'The request was aborted';
+          return JSON.stringify({
+            category: 'generic',
+            title: 'Aborted',
+            message: 'The request was aborted',
+          });
         }
 
         logger.error('Error in chat stream follows:');
         logger.error(error);
-        const errorMessage = error instanceof Error ? error.message : 'An error occurred while processing the request';
 
-        return errorMessage;
+        // Use the error normalizer to create a structured error response
+        const normalized = normalizeError(error);
+
+        return normalized;
       },
     };
   }
