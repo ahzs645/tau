@@ -1,0 +1,495 @@
+/**
+ * Error normalizer for LangGraph, LangChain, and LLM provider errors.
+ * Converts various error formats into a structured JSON format for the UI.
+ */
+
+import { errorCategory } from '@taucad/types';
+import type { ErrorCategory, NormalizedChatError } from '@taucad/types';
+
+/**
+ * LangChain error codes that may be present on wrapped errors.
+ */
+type LangChainErrorCode =
+  | 'INVALID_PROMPT_INPUT'
+  | 'INVALID_TOOL_RESULTS'
+  | 'MESSAGE_COERCION_FAILURE'
+  | 'MODEL_AUTHENTICATION'
+  | 'MODEL_NOT_FOUND'
+  | 'MODEL_RATE_LIMIT'
+  | 'OUTPUT_PARSING_FAILURE'
+  | 'GRAPH_RECURSION_LIMIT'
+  | 'INVALID_CONCURRENT_GRAPH_UPDATE'
+  | 'INVALID_GRAPH_NODE_RETURN_VALUE'
+  | 'MULTIPLE_SUBGRAPHS'
+  | 'UNREACHABLE_NODE';
+
+/**
+ * Maps LangChain error codes to user-friendly categories.
+ */
+/* eslint-disable @typescript-eslint/naming-convention -- LangChain error codes use SCREAMING_SNAKE_CASE */
+const langChainCodeToCategory: Record<LangChainErrorCode, ErrorCategory> = {
+  INVALID_PROMPT_INPUT: errorCategory.toolError,
+  INVALID_TOOL_RESULTS: errorCategory.toolError,
+  MESSAGE_COERCION_FAILURE: errorCategory.toolError,
+  MODEL_AUTHENTICATION: errorCategory.auth,
+  MODEL_NOT_FOUND: errorCategory.server,
+  MODEL_RATE_LIMIT: errorCategory.rateLimit,
+  OUTPUT_PARSING_FAILURE: errorCategory.toolError,
+  GRAPH_RECURSION_LIMIT: errorCategory.server,
+  INVALID_CONCURRENT_GRAPH_UPDATE: errorCategory.toolError,
+  INVALID_GRAPH_NODE_RETURN_VALUE: errorCategory.toolError,
+  MULTIPLE_SUBGRAPHS: errorCategory.server,
+  UNREACHABLE_NODE: errorCategory.server,
+};
+/* eslint-enable @typescript-eslint/naming-convention -- re-enable after SCREAMING_SNAKE_CASE section */
+
+/**
+ * Maps HTTP status codes to error categories.
+ */
+function httpStatusToCategory(status: number): ErrorCategory {
+  switch (status) {
+    case 400: {
+      return errorCategory.toolError;
+    }
+
+    case 401: {
+      return errorCategory.auth;
+    }
+
+    case 403: {
+      return errorCategory.credits;
+    }
+
+    case 404: {
+      return errorCategory.server;
+    }
+
+    case 429: {
+      return errorCategory.rateLimit;
+    }
+
+    case 503:
+    case 529: {
+      return errorCategory.overloaded;
+    }
+
+    default: {
+      if (status >= 500) {
+        return errorCategory.server;
+      }
+
+      return errorCategory.generic;
+    }
+  }
+}
+
+/**
+ * Default titles for each error category.
+ */
+const categoryTitles: Record<ErrorCategory, string> = {
+  [errorCategory.credits]: 'Credit Limit Reached',
+  [errorCategory.rateLimit]: 'Rate Limit Exceeded',
+  [errorCategory.overloaded]: 'Service Temporarily Unavailable',
+  [errorCategory.toolError]: 'Processing Error',
+  [errorCategory.auth]: 'Authentication Error',
+  [errorCategory.network]: 'Connection Error',
+  [errorCategory.server]: 'Server Error',
+  [errorCategory.generic]: 'Error',
+};
+
+/**
+ * Patterns to wrap in inline code blocks for better readability.
+ */
+const codePatterns = [
+  // Tool-related identifiers
+  /\b(tool_use|tool_result|tool_call|tool_calls|tool_call_id)\b/g,
+  // API error types (snake_case identifiers)
+  /\b(invalid_request_error|authentication_error|permission_error|rate_limit_error|overloaded_error|api_error)\b/g,
+  // Function/method names with parentheses
+  /\b([a-zA-Z_]\w*)\(\)/g,
+  // UUIDs and call IDs (common in error messages)
+  /\b(call_[\w-]+)\b/g,
+  /\b(toolu_[\w-]+)\b/g,
+  // HTTP methods
+  /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b/g,
+  // Status codes in context
+  /\b(status\s+)(\d{3})\b/gi,
+];
+
+/**
+ * Applies a single pattern to wrap matches in backticks.
+ */
+function applyCodePattern(text: string, pattern: RegExp, isStatusPattern: boolean): string {
+  return text.replace(pattern, (match, ...groups) => {
+    // Handle special case for "status 400" pattern
+    if (isStatusPattern) {
+      const prefix = groups[0] as string;
+      const code = groups[1] as string;
+      return `${prefix}\`${code}\``;
+    }
+
+    // Skip if already wrapped in backticks (check the offset position)
+    const offset = groups.at(-2) as number;
+    if (offset > 0 && text[offset - 1] === '`') {
+      return match;
+    }
+
+    return `\`${match}\``;
+  });
+}
+
+/**
+ * Formats an error message with markdown for better readability.
+ * Wraps code-like patterns in inline code blocks.
+ */
+function formatMessageWithMarkdown(message: string): string {
+  let formatted = message;
+
+  // Apply code patterns
+  for (const pattern of codePatterns) {
+    const isStatusPattern = pattern.source.includes('status');
+    formatted = applyCodePattern(formatted, pattern, isStatusPattern);
+  }
+
+  // Clean up any double backticks that might occur
+  formatted = formatted.replaceAll(/``+/g, '`');
+
+  return formatted;
+}
+
+/**
+ * Checks if error has a status property (Anthropic/OpenAI SDK errors).
+ */
+function hasStatus(error: unknown): error is { status: number } {
+  return typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number';
+}
+
+/**
+ * Checks if error has a requestID property (Anthropic SDK errors).
+ */
+function hasRequestId(
+  error: unknown,
+): error is { requestID: string } | { request_id: string } | { error: { request_id: string } } {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  if ('requestID' in error && typeof error.requestID === 'string') {
+    return true;
+  }
+
+  if ('request_id' in error && typeof error.request_id === 'string') {
+    return true;
+  }
+
+  if (
+    'error' in error &&
+    typeof error.error === 'object' &&
+    error.error !== null &&
+    'request_id' in error.error &&
+    typeof error.error.request_id === 'string'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extracts requestId from error.
+ */
+function extractRequestId(error: unknown): string | undefined {
+  if (!hasRequestId(error)) {
+    return undefined;
+  }
+
+  // The hasRequestId type guard ensures one of these properties exists
+  const errorObject = error as Record<string, unknown>;
+
+  if ('requestID' in error && typeof errorObject['requestID'] === 'string') {
+    return errorObject['requestID'];
+  }
+
+  if ('request_id' in error && typeof errorObject['request_id'] === 'string') {
+    return errorObject['request_id'];
+  }
+
+  const nestedError = errorObject['error'] as Record<string, unknown> | undefined;
+  if (nestedError && typeof nestedError['request_id'] === 'string') {
+    return nestedError['request_id'];
+  }
+
+  return undefined;
+}
+
+/**
+ * Extracts the nested Anthropic error message from LangChain-wrapped errors.
+ * LangChain wraps Anthropic errors with structure: error.error = { type, error: { type, message }, request_id }
+ */
+function extractNestedAnthropicMessage(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+
+  const errorRecord = error as Record<string, unknown>;
+
+  // Check for error.error.error.message (LangChain wrapped Anthropic structure)
+  if ('error' in errorRecord && typeof errorRecord['error'] === 'object' && errorRecord['error'] !== null) {
+    const outerError = errorRecord['error'] as Record<string, unknown>;
+
+    if ('error' in outerError && typeof outerError['error'] === 'object' && outerError['error'] !== null) {
+      const innerError = outerError['error'] as Record<string, unknown>;
+
+      if (typeof innerError['message'] === 'string') {
+        return innerError['message'];
+      }
+    }
+
+    // Also check error.error.message directly
+    if (typeof outerError['message'] === 'string') {
+      return outerError['message'];
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extracts help/troubleshooting URL from error message.
+ * LangChain appends "Troubleshooting URL: https://..." to error messages.
+ */
+function extractHelpUrl(message: string): string | undefined {
+  const match = /troubleshooting url:\s*(https?:\/\/\S+)/i.exec(message);
+  return match?.[1]?.replace(/[.,;:!?)\]}>]+$/, ''); // Strip trailing punctuation
+}
+
+/**
+ * Checks if error has a LangChain error code.
+ */
+function hasLcErrorCode(error: unknown): error is { lc_error_code: string } {
+  return typeof error === 'object' && error !== null && 'lc_error_code' in error;
+}
+
+/**
+ * Attempts to parse JSON from error message, handling various formats.
+ */
+function parseJsonFromMessage(message: string): {
+  parsed: Record<string, unknown> | undefined;
+  statusPrefix?: number;
+} {
+  // Handle "400 {...}" format
+  const statusPrefixMatch = /^(\d{3})\s+({.+})$/s.exec(message);
+  if (statusPrefixMatch?.[1] && statusPrefixMatch[2]) {
+    try {
+      const parsed = JSON.parse(statusPrefixMatch[2]) as Record<string, unknown>;
+      return { parsed, statusPrefix: Number.parseInt(statusPrefixMatch[1], 10) };
+    } catch {
+      // Fall through
+    }
+  }
+
+  // Try direct JSON parsing
+  if (message.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(message) as Record<string, unknown>;
+      return { parsed };
+    } catch {
+      // Fall through
+    }
+  }
+
+  return { parsed: undefined };
+}
+
+/**
+ * Detects specific error patterns in message text.
+ */
+function detectPatternCategory(message: string): ErrorCategory | undefined {
+  const lowerMessage = message.toLowerCase();
+
+  // Tool use without tool result pattern
+  if (lowerMessage.includes('tool_use') && lowerMessage.includes('tool_result')) {
+    return errorCategory.toolError;
+  }
+
+  // Credit/billing patterns
+  if (
+    lowerMessage.includes('credit') ||
+    lowerMessage.includes('billing') ||
+    lowerMessage.includes('payment') ||
+    lowerMessage.includes('subscription') ||
+    lowerMessage.includes('quota exceeded')
+  ) {
+    return errorCategory.credits;
+  }
+
+  // Overloaded patterns
+  if (lowerMessage.includes('overloaded') || lowerMessage.includes('capacity') || lowerMessage.includes('too busy')) {
+    return errorCategory.overloaded;
+  }
+
+  // Rate limit patterns
+  if (lowerMessage.includes('rate limit') || lowerMessage.includes('too many requests')) {
+    return errorCategory.rateLimit;
+  }
+
+  // Authentication patterns
+  if (
+    lowerMessage.includes('unauthorized') ||
+    lowerMessage.includes('authentication') ||
+    lowerMessage.includes('api key')
+  ) {
+    return errorCategory.auth;
+  }
+
+  return undefined;
+}
+
+/**
+ * Normalizes an error into a structured format for the UI.
+ *
+ * Detection priority:
+ * 1. LangChain/LangGraph error codes (lc_error_code property)
+ * 2. HTTP status codes (SDK error classes)
+ * 3. JSON parsing from error message
+ * 4. Pattern matching on message text
+ * 5. Generic fallback
+ */
+export function normalizeError(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  let category: ErrorCategory = errorCategory.generic;
+  let code: string | undefined;
+  let httpStatus: number | undefined;
+  let message = rawMessage;
+  let requestId: string | undefined;
+
+  // Extract help URL from raw message (LangChain appends troubleshooting URLs)
+  const helpUrl = extractHelpUrl(rawMessage);
+
+  // 1. Check for LangChain error codes
+  if (hasLcErrorCode(error)) {
+    const lcCode = error.lc_error_code as LangChainErrorCode;
+    if (lcCode in langChainCodeToCategory) {
+      category = langChainCodeToCategory[lcCode];
+      code = lcCode;
+    }
+  }
+
+  // 2. Check for HTTP status (SDK errors)
+  if (hasStatus(error)) {
+    httpStatus = error.status;
+    // Only override category if we don't have a more specific LangChain code
+    if (category === errorCategory.generic) {
+      category = httpStatusToCategory(error.status);
+    }
+  }
+
+  // Extract request ID
+  requestId = extractRequestId(error);
+
+  // 2.5. Try to extract message from nested Anthropic error structure on the error object
+  // LangChain wraps Anthropic errors with: error.error = { type, error: { type, message }, request_id }
+  const nestedMessage = extractNestedAnthropicMessage(error);
+  if (nestedMessage) {
+    message = nestedMessage;
+  }
+
+  // 3. Try to parse JSON from message (for additional metadata like HTTP status)
+  const { parsed, statusPrefix } = parseJsonFromMessage(rawMessage);
+  if (parsed) {
+    // Extract more specific info from parsed JSON
+    if (statusPrefix && !httpStatus) {
+      httpStatus = statusPrefix;
+      if (category === errorCategory.generic) {
+        category = httpStatusToCategory(statusPrefix);
+      }
+    }
+
+    // Handle Anthropic error format: {"type":"error","error":{...}}
+    // Only extract message if we didn't already get it from nested error structure
+    if (parsed['type'] === 'error' && typeof parsed['error'] === 'object' && parsed['error'] !== null) {
+      const errorBody = parsed['error'] as Record<string, unknown>;
+      if (!nestedMessage && typeof errorBody['message'] === 'string') {
+        message = errorBody['message'];
+      }
+
+      if (typeof errorBody['type'] === 'string') {
+        code ??= errorBody['type'];
+
+        // Map Anthropic error types to categories
+        if (category === errorCategory.generic) {
+          switch (errorBody['type']) {
+            case 'invalid_request_error': {
+              category = errorCategory.toolError;
+              break;
+            }
+
+            case 'authentication_error': {
+              category = errorCategory.auth;
+              break;
+            }
+
+            case 'permission_error': {
+              category = errorCategory.credits;
+              break;
+            }
+
+            case 'rate_limit_error': {
+              category = errorCategory.rateLimit;
+              break;
+            }
+
+            case 'overloaded_error': {
+              category = errorCategory.overloaded;
+              break;
+            }
+
+            case 'api_error': {
+              category = errorCategory.server;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Extract request_id from parsed JSON
+    if (typeof parsed['request_id'] === 'string' && !requestId) {
+      requestId = parsed['request_id'];
+    }
+  }
+
+  // 4. Pattern matching on message text
+  if (category === errorCategory.generic) {
+    const patternCategory = detectPatternCategory(message);
+    if (patternCategory) {
+      category = patternCategory;
+    }
+  }
+
+  // Build the normalized error with markdown-formatted message
+  const normalizedError: NormalizedChatError = {
+    category,
+    title: categoryTitles[category],
+    message: formatMessageWithMarkdown(message),
+    raw: rawMessage,
+  };
+
+  if (code) {
+    normalizedError.code = code;
+  }
+
+  if (httpStatus) {
+    normalizedError.httpStatus = httpStatus;
+  }
+
+  if (requestId) {
+    normalizedError.requestId = requestId;
+  }
+
+  if (helpUrl) {
+    normalizedError.helpUrl = helpUrl;
+  }
+
+  return JSON.stringify(normalizedError);
+}

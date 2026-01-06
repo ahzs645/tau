@@ -54,9 +54,9 @@ function tryParseApiError(message: string): ParsedError | undefined {
         message: parsed['message'],
         code: typeof parsed['code'] === 'string' ? parsed['code'] : undefined,
         httpStatus: typeof parsed['httpStatus'] === 'number' ? parsed['httpStatus'] : undefined,
-        troubleshootingUrl: typeof parsed['troubleshootingUrl'] === 'string' ? parsed['troubleshootingUrl'] : undefined,
         raw: typeof parsed['raw'] === 'string' ? parsed['raw'] : undefined,
         requestId: typeof parsed['requestId'] === 'string' ? parsed['requestId'] : undefined,
+        helpUrl: typeof parsed['helpUrl'] === 'string' ? parsed['helpUrl'] : undefined,
       };
     }
   } catch {
@@ -148,6 +148,7 @@ export const ChatError = memo(function ({
                     '[&_code]:text-destructive',
                     '[&_code]:border-destructive/30',
                     '[&_code]:bg-background/80',
+                    'line-clamp-none',
                   )}
                 >
                   {parsedError.message || parsedError.title || 'Unable to send the message.'}
@@ -221,7 +222,7 @@ export const ChatError = memo(function ({
     case errorCategory.toolError: {
       return (
         <div className={cn('size-full', className)}>
-          <ChatErrorTool description={parsedError.message} troubleshootingUrl={parsedError.troubleshootingUrl} />
+          <ChatErrorTool description={parsedError.message} helpUrl={parsedError.helpUrl} />
         </div>
       );
     }
