@@ -46,7 +46,7 @@ export function CollapsibleContainer({
   const shouldShowToggle = lineCount > collapsedLineCount;
 
   return (
-    <div className={cn('relative flex flex-col leading-0', className)}>
+    <div className={cn('flex flex-col leading-0', className)}>
       {/* Scrollable content area */}
       <div
         className={cn(
@@ -56,14 +56,11 @@ export function CollapsibleContainer({
       >
         {children}
       </div>
-      {/* Toggle button - outside scrollable area so it stays fixed */}
+      {/* Toggle button - always in normal flow so it has its own space */}
       {shouldShowToggle ? (
         <Button
           size="xs"
-          className={cn(
-            'h-4 w-full shrink-0 rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40',
-            isExpanded ? '' : 'absolute right-0 bottom-0 left-0',
-          )}
+          className="h-4 w-full shrink-0 rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40"
           onClick={() => {
             setIsExpanded((previous) => !previous);
           }}
