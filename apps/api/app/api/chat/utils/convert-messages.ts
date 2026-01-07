@@ -1,4 +1,4 @@
-import type { BaseMessageLike } from '@langchain/core/messages';
+import type { BaseMessageLike, MessageContentComplex } from '@langchain/core/messages';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { Logger } from '@nestjs/common';
 import type { ModelMessage, ToolUIPart, UIDataTypes, UIMessage, UIMessagePart, UITools } from 'ai';
