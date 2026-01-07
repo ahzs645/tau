@@ -79,6 +79,8 @@ export const cookieName = {
   chatToolCodePreview: 'chat-tool-code-preview',
   // Whether images section in visual analysis is open.
   chatToolAnalysisImages: 'chat-tool-analysis-images',
+  // The quality of the screenshots in the chat.
+  chatScreenshotQuality: 'chat-screenshot-quality',
 
   /* Builds */
   // The last selected build view mode.

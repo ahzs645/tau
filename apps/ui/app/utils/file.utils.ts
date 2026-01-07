@@ -1,3 +1,21 @@
+/**
+ * Creates a Blob from a Uint8Array.
+ *
+ * This utility handles the TypeScript type incompatibility between
+ * Uint8Array<ArrayBufferLike> and BlobPart that occurs with stricter
+ * type checkers (like tsgo). The runtime behavior is correct - browsers
+ * accept Uint8Array in Blob constructors.
+ *
+ * @param data - The Uint8Array data to convert to a Blob
+ * @param options - Optional BlobPropertyBag for specifying MIME type etc.
+ * @returns A new Blob containing the data
+ */
+export function createBlob(data: Uint8Array, options?: BlobPropertyBag): Blob {
+  // Type assertion needed because Uint8Array<ArrayBufferLike> includes
+  // SharedArrayBuffer which lacks some ArrayBuffer properties in TS definitions
+  return new Blob([data as BlobPart], options);
+}
+
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   try {

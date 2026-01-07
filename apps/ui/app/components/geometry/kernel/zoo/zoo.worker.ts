@@ -18,6 +18,7 @@ import { KclUtils } from '#components/geometry/kernel/zoo/kcl-utils.js';
 import { isKclError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { convertKclErrorToKernelError, mapErrorToKclError } from '#components/geometry/kernel/zoo/error-mappers.js';
 import { getErrorPosition } from '#components/geometry/kernel/zoo/source-range-utils.js';
+import { createBlob } from '#utils/file.utils.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
 
@@ -214,7 +215,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
               return createKernelError({ message: 'No STL file in export result' });
             }
 
-            const blob = new Blob([stlFile.contents], {
+            const blob = createBlob(stlFile.contents, {
               type: fileType === 'stl-binary' ? 'application/octet-stream' : 'text/plain',
             });
             return createKernelSuccess([
@@ -245,7 +246,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
               return createKernelError({ message: 'No STEP file in export result' });
             }
 
-            const blob = new Blob([stepFile.contents], {
+            const blob = createBlob(stepFile.contents, {
               type: 'application/step',
             });
             return createKernelSuccess([
@@ -278,7 +279,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
               return createKernelError({ message: 'No GLB file in export result' });
             }
 
-            const blob = new Blob([glbFile.contents], {
+            const blob = createBlob(glbFile.contents, {
               type: 'model/gltf-binary',
             });
             return createKernelSuccess([
@@ -296,7 +297,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
 
         case 'gltf': {
           try {
-            const blob = new Blob([gltfData], {
+            const blob = createBlob(gltfData, {
               type: 'model/gltf-json',
             });
             return createKernelSuccess([

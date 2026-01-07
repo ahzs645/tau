@@ -1,8 +1,9 @@
-import { tool } from '@langchain/core/tools';
+import { tool, DynamicStructuredTool } from '@langchain/core/tools';
+import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';
 import { getKernelResultInputSchema } from '@taucad/chat';
-import type { GetKernelResultOutput } from '@taucad/chat';
+import type { GetKernelResultInput, GetKernelResultOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 
 const getKernelResultJsonSchema = z.toJSONSchema(getKernelResultInputSchema);
@@ -22,7 +23,12 @@ Best Practice: Always call this tool after making file changes to ensure the mod
   schema: getKernelResultJsonSchema,
 } as const;
 
-export const getKernelResultTool = tool((args) => {
+export const getKernelResultTool: DynamicStructuredTool<
+  JSONSchema,
+  GetKernelResultOutput,
+  GetKernelResultInput,
+  GetKernelResultOutput
+> = tool((args) => {
   const result = interrupt<unknown, GetKernelResultOutput>(args);
   return result;
 }, getKernelResultToolDefinition);

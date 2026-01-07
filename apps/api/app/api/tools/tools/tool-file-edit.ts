@@ -1,9 +1,10 @@
-import { tool } from '@langchain/core/tools';
+import { tool, DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';
 import { editFileInputSchema } from '@taucad/chat';
-import type { EditFileOutput } from '@taucad/chat';
+import type { EditFileInput, EditFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { JSONSchema } from '@langchain/core/utils/json_schema';
 
 const editFileJsonSchema = z.toJSONSchema(editFileInputSchema);
 
@@ -32,7 +33,12 @@ DO NOT omit spans of pre-existing code without using the // ... existing code ..
   schema: editFileJsonSchema,
 } as const;
 
-export const editFileTool = tool((args) => {
+export const editFileTool: DynamicStructuredTool<
+  JSONSchema,
+  EditFileOutput,
+  EditFileInput,
+  EditFileOutput
+> = tool((args) => {
   const result = interrupt<unknown, EditFileOutput>(args);
   return result;
 }, editFileToolDefinition);

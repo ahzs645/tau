@@ -1,8 +1,9 @@
-import { tool } from '@langchain/core/tools';
+import { tool, DynamicStructuredTool } from '@langchain/core/tools';
+import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';
 import { createFileInputSchema } from '@taucad/chat';
-import type { CreateFileOutput } from '@taucad/chat';
+import type { CreateFileInput, CreateFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 
 const createFileJsonSchema = z.toJSONSchema(createFileInputSchema);
@@ -22,7 +23,12 @@ Note: This tool will overwrite an existing file if one exists at the specified p
   schema: createFileJsonSchema,
 } as const;
 
-export const createFileTool = tool((args) => {
+export const createFileTool: DynamicStructuredTool<
+  JSONSchema,
+  CreateFileOutput,
+  CreateFileInput,
+  CreateFileOutput
+> = tool((args) => {
   const result = interrupt<unknown, CreateFileOutput>(args);
   return result;
 }, createFileToolDefinition);

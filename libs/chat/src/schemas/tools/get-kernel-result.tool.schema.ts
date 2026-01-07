@@ -1,3 +1,4 @@
+import type { KernelError } from '@taucad/types';
 import { z } from 'zod';
 import { kernelErrorSchema } from '#schemas/tools/error.schema.js';
 
@@ -12,4 +13,10 @@ export const getKernelResultOutputSchema = z.object({
 });
 
 export type GetKernelResultInput = z.infer<typeof getKernelResultInputSchema>;
-export type GetKernelResultOutput = z.infer<typeof getKernelResultOutputSchema>;
+
+// Explicitly defined to avoid TS2742 with tsgo compiler
+export type GetKernelResultOutput = {
+  status: 'ready' | 'error' | 'pending';
+  kernelErrors?: KernelError[];
+  message?: string;
+};

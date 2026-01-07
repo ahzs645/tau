@@ -7,9 +7,8 @@
     "moduleResolution": "NodeNext",
     "lib": ["DOM", "DOM.Iterable", "ES2024"],
     "target": "ESNext",
-    "baseUrl": ".",
     "paths": {
-      "#*": ["src/*"]
+      "#*": ["./src/*"]
     }
   },
   "include": [

@@ -18,6 +18,7 @@ import {
 import { convertOffToGltf } from '#components/geometry/kernel/utils/off-to-gltf.js';
 import { convertOffToStl } from '#components/geometry/kernel/utils/off-to-stl.js';
 import { convertOffTo3mf } from '#components/geometry/kernel/utils/off-to-3mf.js';
+import { createBlob } from '#utils/file.utils.js';
 import { logLevels } from '#types/console.types.js';
 import type { LogLevel } from '#types/console.types.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
@@ -236,12 +237,12 @@ export class OpenScadWorker extends KernelWorker {
       switch (fileType) {
         case 'glb': {
           const gltfBlob = await convertOffToGltf(offData, 'glb');
-          return createKernelSuccess([{ blob: new Blob([gltfBlob]), name: 'model.glb' }]);
+          return createKernelSuccess([{ blob: createBlob(gltfBlob), name: 'model.glb' }]);
         }
 
         case 'gltf': {
           const gltfBlob = await convertOffToGltf(offData, 'gltf');
-          return createKernelSuccess([{ blob: new Blob([gltfBlob]), name: 'model.gltf' }]);
+          return createKernelSuccess([{ blob: createBlob(gltfBlob), name: 'model.gltf' }]);
         }
 
         case 'stl': {

@@ -7,7 +7,7 @@ import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
-import { downloadBlob } from '#utils/file.utils.js';
+import { createBlob, downloadBlob } from '#utils/file.utils.js';
 import { FormatSelector } from '#components/geometry/converter/format-selector.js';
 import { ConverterFileTree } from '#components/geometry/converter/converter-file-tree.js';
 import { formatDisplayName, getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';
@@ -129,7 +129,7 @@ export function Converter({
               ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
               : `model.${extension}`;
 
-            const blob = new Blob([file.data]);
+            const blob = createBlob(file.data);
 
             if (shouldChooseLocation) {
               await saveFileWithPicker(blob, filename);
@@ -269,7 +269,7 @@ export function Converter({
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;
-                const blob = new Blob([file.data]);
+                const blob = createBlob(file.data);
 
                 if (shouldChooseLocation) {
                   // eslint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional

@@ -20,10 +20,10 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "target": "ES2024",
-    "baseUrl": ".",
     "paths": {
-      "#*": ["app/*"],
-      "fumadocs-mdx:collections/*": [".source/*"]
+      "package.json": ["./package.json"],
+      "#*": ["./app/*"],
+      "fumadocs-mdx:collections/*": ["./.source/*"]
     }
   },
   "exclude": [

@@ -14,7 +14,6 @@ import {
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { FileLink } from '#components/files/file-link.js';
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
-import { cookieName } from '#constants/cookie.constants.js';
 
 export function ChatMessageToolGetKernelResult({
   part,
@@ -56,13 +55,7 @@ export function ChatMessageToolGetKernelResult({
 
       // Error state - use minimal card with error list
       return (
-        <ChatToolCard
-          isCookieDefaultOpen
-          variant="minimal"
-          status="error"
-          isDefaultOpen={false}
-          cookieName={cookieName.chatToolKernelErrors}
-        >
+        <ChatToolCard isCookieDefaultOpen variant="minimal" status="error" isDefaultOpen={false}>
           <ChatToolCardHeader className="text-destructive hover:text-destructive">
             <ChatToolCardIcon isError icon={XCircle} />
             <ChatToolCardTitle>{message ?? `Found ${kernelErrors?.length ?? 0} error(s)`}</ChatToolCardTitle>
