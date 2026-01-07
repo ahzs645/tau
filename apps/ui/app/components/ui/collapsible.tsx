@@ -15,10 +15,7 @@ function CollapsibleContent({
   className,
   forceMount,
   ...properties
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent> & {
-  // eslint-disable-next-line react/boolean-prop-naming -- Radix UI prop naming convention.
-  readonly forceMount?: boolean;
-}): React.JSX.Element {
+}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>): React.JSX.Element {
   return (
     <CollapsiblePrimitive.CollapsibleContent
       className={cn(
