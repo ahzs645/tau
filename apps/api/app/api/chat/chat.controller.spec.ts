@@ -8,7 +8,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Command } from '@langchain/langgraph';
 import type { StateSnapshot } from '@langchain/langgraph';
 import { HumanMessage } from '@langchain/core/messages';
-import type { streamText } from 'ai';
+import type { StreamTextResult as StreamTextResultType, ToolSet } from 'ai';
 import type { MyUIMessage } from '@taucad/chat';
 import { ChatController } from '#api/chat/chat.controller.js';
 import { ChatService } from '#api/chat/chat.service.js';
@@ -45,7 +45,7 @@ vi.mock('#api/chat/utils/langgraph-adapter.js', () => ({
  * Type for the streamText return value used in name/commit generators.
  * We use the actual return type from the AI SDK to ensure type safety.
  */
-type StreamTextResult = ReturnType<typeof streamText>;
+type StreamTextResult = StreamTextResultType<ToolSet, unknown>;
 
 // Helper to create mock MyUIMessage
 function createMockUserMessage(model: string): MyUIMessage {
