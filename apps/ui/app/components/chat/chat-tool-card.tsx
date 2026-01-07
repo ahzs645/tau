@@ -303,19 +303,23 @@ function ChatToolCardActions({ children, className }: ChatToolCardActionsProps):
 type ChatToolCardContentProps = {
   readonly children: React.ReactNode;
   readonly className?: string;
+  /** When true, keeps content mounted (uses CSS to hide instead of unmounting) */
+  readonly forceMount?: true | undefined;
 };
 
-function ChatToolCardContent({ children, className }: ChatToolCardContentProps): React.JSX.Element {
+function ChatToolCardContent({ children, className, forceMount }: ChatToolCardContentProps): React.JSX.Element {
   const { variant } = useChatToolCard();
 
   return (
     <CollapsibleContent
       className={cn(
-        'data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down',
+        // Skip animations when forceMount is true (content is always in DOM)
+        !forceMount && 'data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down',
         variant === 'card' && 'border-t',
         variant === 'minimal' && 'pl-1.5',
         className,
       )}
+      forceMount={forceMount}
     >
       {children}
     </CollapsibleContent>

@@ -3,16 +3,13 @@ import {
   Settings,
   DollarSign,
   File,
-  Image,
   Code,
-  AlertTriangle,
-  AlertCircle,
-  Camera,
-  ListChecks,
   FolderTree,
   FileCode,
   Layers,
-  ImageDown,
+  SlidersHorizontal,
+  ScanEye,
+  Image,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
@@ -38,11 +35,8 @@ import { cookieName } from '#constants/cookie.constants.js';
  */
 export function ChatHistorySettings(): React.ReactNode {
   const [showModelCost, setShowModelCost] = useCookie(cookieName.chatModelCost, true);
-  const [showKernelErrors, setShowKernelErrors] = useCookie(cookieName.chatToolKernelErrors, true);
-  const [showCodeErrors, setShowCodeErrors] = useCookie(cookieName.chatToolCodeErrors, true);
   const [showCodePreview, setShowCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
-  const [showImageScreenshot, setShowImageScreenshot] = useCookie(cookieName.chatToolImageScreenshot, true);
-  const [showImageRequirements, setShowImageRequirements] = useCookie(cookieName.chatToolImageRequirements, false);
+  const [showAnalysisImages, setShowAnalysisImages] = useCookie(cookieName.chatToolAnalysisImages, true);
   const [includeFilesystem, setIncludeFilesystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile, setIncludeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles, setIncludeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
@@ -56,20 +50,6 @@ export function ChatHistorySettings(): React.ReactNode {
     [setShowModelCost],
   );
 
-  const handleShowKernelErrorsToggle = useCallback(
-    (checked: boolean) => {
-      setShowKernelErrors(checked);
-    },
-    [setShowKernelErrors],
-  );
-
-  const handleShowCodeErrorsToggle = useCallback(
-    (checked: boolean) => {
-      setShowCodeErrors(checked);
-    },
-    [setShowCodeErrors],
-  );
-
   const handleShowCodePreviewToggle = useCallback(
     (checked: boolean) => {
       setShowCodePreview(checked);
@@ -77,18 +57,11 @@ export function ChatHistorySettings(): React.ReactNode {
     [setShowCodePreview],
   );
 
-  const handleShowImageScreenshotToggle = useCallback(
+  const handleShowAnalysisImagesToggle = useCallback(
     (checked: boolean) => {
-      setShowImageScreenshot(checked);
+      setShowAnalysisImages(checked);
     },
-    [setShowImageScreenshot],
-  );
-
-  const handleShowImageRequirementsToggle = useCallback(
-    (checked: boolean) => {
-      setShowImageRequirements(checked);
-    },
-    [setShowImageRequirements],
+    [setShowAnalysisImages],
   );
 
   const handleIncludeFilesystemToggle = useCallback(
@@ -192,40 +165,25 @@ export function ChatHistorySettings(): React.ReactNode {
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuSwitchItem isChecked={showCodePreview} onIsCheckedChange={handleShowCodePreviewToggle}>
               <Code className="size-4" />
-              Code Preview
-            </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem isChecked={showKernelErrors} onIsCheckedChange={handleShowKernelErrorsToggle}>
-              <AlertTriangle className="size-4" />
-              Kernel Errors
-            </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem isChecked={showCodeErrors} onIsCheckedChange={handleShowCodeErrorsToggle}>
-              <AlertCircle className="size-4" />
-              Linter Errors
+              Preview
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
-        {/* Image Analysis Sub-menu */}
+        {/* Analysis Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <span className="flex items-center gap-2">
-              <Image className="size-4" />
-              Image Analysis
+              <ScanEye className="size-4" />
+              Analysis
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
-            <DropdownMenuSwitchItem isChecked={showImageScreenshot} onIsCheckedChange={handleShowImageScreenshotToggle}>
-              <Camera className="size-4" />
-              Screenshot
+            <DropdownMenuLabel>Image Analysis</DropdownMenuLabel>
+            <DropdownMenuSwitchItem isChecked={showAnalysisImages} onIsCheckedChange={handleShowAnalysisImagesToggle}>
+              <Image className="size-4" />
+              Preview
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              isChecked={showImageRequirements}
-              onIsCheckedChange={handleShowImageRequirementsToggle}
-            >
-              <ListChecks className="size-4" />
-              Requirements
-            </DropdownMenuSwitchItem>
-            <DropdownMenuSeparator />
             <DropdownMenuSliderItem
               value={screenshotQuality}
               min={0.1}
@@ -242,7 +200,7 @@ export function ChatHistorySettings(): React.ReactNode {
               }
               onValueChange={handleScreenshotQualityChange}
             >
-              <ImageDown />
+              <SlidersHorizontal />
               Quality
             </DropdownMenuSliderItem>
           </DropdownMenuSubContent>

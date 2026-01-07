@@ -74,21 +74,11 @@ export const cookieName = {
   // Whether to include open files in chat context.
   chatCtxOpen: 'chat-ctx-open',
 
-  /* Chat Tool Settings */
-  // Screenshot quality for chat (0.1 to 1.0).
-  chatScreenshotQuality: 'chat-screenshot-quality',
-
   /* Chat Tool Sections - collapse state (true = open, false = collapsed) */
-  // Whether kernel errors section is open.
-  chatToolKernelErrors: 'chat-tool-kernel-errors',
-  // Whether code/linter errors section is open.
-  chatToolCodeErrors: 'chat-tool-code-errors',
-  // Whether code preview section is open.
+  // Whether code preview section is open in file operations.
   chatToolCodePreview: 'chat-tool-code-preview',
-  // Whether image analysis screenshot section is open.
-  chatToolImageScreenshot: 'chat-tool-image-screenshot',
-  // Whether image analysis requirements section is open.
-  chatToolImageRequirements: 'chat-tool-image-requirements',
+  // Whether images section in visual analysis is open.
+  chatToolAnalysisImages: 'chat-tool-analysis-images',
 
   /* Builds */
   // The last selected build view mode.

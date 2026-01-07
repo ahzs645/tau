@@ -1,20 +1,59 @@
 import type { UIToolInvocation } from 'ai';
-import { Eye, Camera, ListChecks } from 'lucide-react';
-import type { MyTools } from '@taucad/chat';
+import { Eye, Check, X, Lightbulb } from 'lucide-react';
+import type { MyTools, RequirementResult } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
 import { useChatSelector } from '#hooks/use-chat.js';
-import { ImagePreview, ImagePreviewTrigger, ImagePreviewImage } from '#components/ui/image-preview.js';
+import { useCookie } from '#hooks/use-cookie.js';
+import { cookieName } from '#constants/cookie.constants.js';
+import { ImagePreviewGroup } from '#components/ui/image-preview-group.js';
+import type { ImagePreviewItem } from '#components/ui/image-preview-group.js';
 import {
   ChatToolCard,
   ChatToolCardHeader,
   ChatToolCardIcon,
   ChatToolCardTitle,
-  ChatToolCardActions,
   ChatToolCardContent,
-  ChatToolCardSection,
 } from '#components/chat/chat-tool-card.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import { RequirementIndicator } from '#components/chat/requirement-indicator.js';
+import { cn } from '#utils/ui.utils.js';
+
+/**
+ * Renders a single requirement result with status icon, reason, and suggestion if failed
+ */
+function RequirementResultItem({
+  result,
+  index,
+}: {
+  readonly result: RequirementResult;
+  readonly index: number;
+}): React.JSX.Element {
+  const isPassed = result.status === 'passed';
+
+  return (
+    <div className="flex items-start gap-2 text-xs">
+      <div className="mt-0.5 shrink-0">
+        {isPassed ? <Check className="size-3.5 text-success" /> : <X className="size-3.5 text-destructive" />}
+      </div>
+      <div className="flex-1">
+        <div className={cn(isPassed ? 'text-foreground' : 'text-foreground')}>
+          {index + 1}. {result.requirement}
+        </div>
+        {result.status === 'failed' ? (
+          <div className="mt-1 space-y-1.5">
+            <div className="text-muted-foreground">{result.reason}</div>
+            {result.suggestion ? (
+              <div className="text-warning-foreground flex items-start gap-1.5 rounded-md bg-warning/10 p-2">
+                <Lightbulb className="mt-0.5 size-3 shrink-0 text-warning" />
+                <span className="text-[11px] leading-relaxed">{result.suggestion}</span>
+              </div>
+            ) : undefined}
+          </div>
+        ) : undefined}
+      </div>
+    </div>
+  );
+}
 
 export function ChatMessageToolImageAnalysis({
   part,
@@ -23,6 +62,7 @@ export function ChatMessageToolImageAnalysis({
 }): React.JSX.Element {
   const chatStatus = useChatSelector((state) => state.status);
   const isLoading = chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(part.state);
+  const [showAnalysisImages] = useCookie(cookieName.chatToolAnalysisImages, true);
 
   switch (part.state) {
     case 'input-streaming':
@@ -52,62 +92,59 @@ export function ChatMessageToolImageAnalysis({
     case 'output-available': {
       const { input, output: result } = part;
       const { requirements = [] } = input;
+      const { observations = [], aggregatedResults = [] } = result;
+
+      // Calculate pass/fail counts from aggregated results
+      const passedCount = aggregatedResults.filter((r) => r.status === 'passed').length;
+      const failedCount = aggregatedResults.filter((r) => r.status === 'failed').length;
+
+      // Map observations to generic image preview items
+      const imageItems: ImagePreviewItem[] = observations.map((observation) => ({
+        id: observation.id,
+        src: observation.src,
+        label: observation.side,
+      }));
 
       return (
-        <ChatToolCard isDefaultOpen variant="card" status={isLoading ? 'loading' : 'ready'}>
+        <ChatToolCard isDefaultOpen={showAnalysisImages} variant="card" status={isLoading ? 'loading' : 'ready'}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Eye} />
             <ChatToolCardTitle>Visual Analysis</ChatToolCardTitle>
-            <ChatToolCardActions>
-              <CopyButton
-                size="xs"
-                className="[&_[data-slot=label]]:hidden @xs/chat-tool-card:[&_[data-slot=label]]:flex"
-                getText={() => result.analysis}
-              />
-            </ChatToolCardActions>
+            {aggregatedResults.length > 0 ? (
+              <RequirementIndicator failedCount={failedCount} passedCount={passedCount} />
+            ) : undefined}
           </ChatToolCardHeader>
-          <ChatToolCardContent>
-            {/* Screenshot Section - Now collapsible */}
-            {result.screenshot ? (
-              <ChatToolCardSection
-                isDefaultOpen
-                isCookieDefaultOpen
-                title="Model Screenshot"
-                icon={Camera}
-                cookieName={cookieName.chatToolImageScreenshot}
-              >
-                <ImagePreview src={result.screenshot} alt="Model screenshot">
-                  <ImagePreviewTrigger>
-                    <div className="cursor-pointer rounded-md border bg-neutral/5 hover:bg-neutral/10">
-                      <ImagePreviewImage className="size-full rounded-sm object-cover object-top" />
-                    </div>
-                  </ImagePreviewTrigger>
-                </ImagePreview>
-              </ChatToolCardSection>
+          <ChatToolCardContent forceMount>
+            {/* Observations Carousel */}
+            {imageItems.length > 0 ? (
+              <div className="mb-3 border-b p-2">
+                <ImagePreviewGroup alt="Model screenshot" className="w-full" items={imageItems} />
+              </div>
             ) : undefined}
 
-            {/* Requirements Section */}
-            {requirements.length > 0 ? (
-              <ChatToolCardSection
-                title={`${requirements.length} Requirement${requirements.length > 1 ? 's' : ''}`}
-                icon={ListChecks}
-                isDefaultOpen={false}
-                cookieName={cookieName.chatToolImageRequirements}
-                isCookieDefaultOpen={false}
-              >
-                <div className="space-y-1">
-                  {requirements.map((requirement, index) => {
-                    const key = `${index}-${requirement}`;
+            {/* Requirements List */}
+            {aggregatedResults.length > 0 ? (
+              <div className="space-y-2 px-2 pb-2">
+                {aggregatedResults.map((resultItem, index) => {
+                  const key = `${index}-${resultItem.requirement}`;
 
-                    return (
-                      <div key={key} className="flex items-start text-xs">
-                        <div className="mr-2 shrink-0 font-mono text-muted-foreground">{index + 1}.</div>
-                        <div className="flex-1">{requirement}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </ChatToolCardSection>
+                  return <RequirementResultItem key={key} result={resultItem} index={index} />;
+                })}
+              </div>
+            ) : requirements.length > 0 ? (
+              // Fallback: Show original requirements if no results (shouldn't normally happen)
+              <div className="space-y-1">
+                {requirements.map((requirement, index) => {
+                  const key = `${index}-${requirement}`;
+
+                  return (
+                    <div key={key} className="flex items-start text-xs">
+                      <div className="mr-2 shrink-0 font-mono text-muted-foreground">{index + 1}.</div>
+                      <div className="flex-1">{requirement}</div>
+                    </div>
+                  );
+                })}
+              </div>
             ) : undefined}
           </ChatToolCardContent>
         </ChatToolCard>

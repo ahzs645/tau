@@ -360,8 +360,8 @@ export function CollapsibleFileOperation({
   // Track the previous streaming state to detect transitions
   const wasStreamingRef = useRef(isStreaming);
 
-  // Default to open when content is available (after streaming completes)
-  const [isOpen, setIsOpen] = useState(isDefaultOpen || (!isStreaming && Boolean(content)));
+  // Default to open when content is available (after streaming completes) and showCodePreview is enabled
+  const [isOpen, setIsOpen] = useState(isDefaultOpen || (!isStreaming && Boolean(content) && showCodePreview));
 
   // When transitioning from streaming to non-streaming, open if showCodePreview is enabled
   useEffect(() => {
