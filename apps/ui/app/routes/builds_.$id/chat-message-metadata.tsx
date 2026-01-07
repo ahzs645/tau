@@ -3,8 +3,8 @@ import { ChatMessageMetadataUsage } from '#routes/builds_.$id/chat-message-metad
 
 // Controller component for rendering message metadata
 export function ChatMessageMetadata({ metadata }: { readonly metadata: MyMetadata }): React.JSX.Element | undefined {
-  // Only render if we have usage cost data
-  if (!metadata.usageCost) {
+  // Only render if we have usage data
+  if (!metadata.turns || metadata.turns.length === 0) {
     return undefined;
   }
 

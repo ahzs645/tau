@@ -40,20 +40,25 @@ export const snapshotSchema = z.object({
     .optional(),
 });
 
+/**
+ * Schema for per-turn usage data in multi-turn agent calls.
+ */
+export const turnUsageSchema = z.object({
+  turnIndex: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cachedReadTokens: z.number(),
+  cachedWriteTokens: z.number().optional(),
+  inputTokensCost: z.number().optional(),
+  outputTokensCost: z.number().optional(),
+  cachedReadTokensCost: z.number().optional(),
+  cachedWriteTokensCost: z.number().optional(),
+  usageCost: z.number().optional(),
+});
+
 export const messageMetadataSchema = z.object({
-  usageCost: z
-    .object({
-      inputTokens: z.number(),
-      outputTokens: z.number(),
-      cachedReadTokens: z.number(),
-      cachedWriteTokens: z.number().optional(),
-      inputTokensCost: z.number().optional(),
-      outputTokensCost: z.number().optional(),
-      cachedReadTokensCost: z.number().optional(),
-      cachedWriteTokensCost: z.number().optional(),
-      usageCost: z.number().optional(),
-    })
-    .optional(),
+  /** Per-turn usage data for multi-turn agent calls */
+  turns: z.array(turnUsageSchema).optional(),
   toolChoice: z
     .union([
       // Allow single tool selection or array of tools

@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { DollarSign } from 'lucide-react';
 import type { MyMetadata } from '@taucad/chat';
 import { SvgIcon } from '#components/icons/svg-icon.js';
@@ -11,6 +12,8 @@ import { formatNumber } from '#utils/number.utils.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
+type TurnUsage = NonNullable<MyMetadata['turns']>[number];
+
 // Single metadata usage component
 export function ChatMessageMetadataUsage({
   metadata,
@@ -20,16 +23,50 @@ export function ChatMessageMetadataUsage({
   const { data: models } = useModels();
   const [showModelCost] = useCookie(cookieName.chatModelCost, true);
 
-  if (!metadata.usageCost) {
+  // Calculate totals from turns array
+  const { totals, turns, hasMultipleTurns } = useMemo(() => {
+    const turnsData = metadata.turns ?? [];
+    const hasMultiple = turnsData.length > 1;
+
+    if (turnsData.length === 0) {
+      return { totals: undefined, turns: [] as TurnUsage[], hasMultipleTurns: false };
+    }
+
+    // Calculate totals from turns using a loop
+    const calculated = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+      inputTokensCost: 0,
+      outputTokensCost: 0,
+      cachedReadTokensCost: 0,
+      cachedWriteTokensCost: 0,
+      usageCost: 0,
+    };
+
+    for (const turn of turnsData) {
+      calculated.inputTokens += turn.inputTokens;
+      calculated.outputTokens += turn.outputTokens;
+      calculated.cachedReadTokens += turn.cachedReadTokens;
+      calculated.cachedWriteTokens += turn.cachedWriteTokens ?? 0;
+      calculated.inputTokensCost += turn.inputTokensCost ?? 0;
+      calculated.outputTokensCost += turn.outputTokensCost ?? 0;
+      calculated.cachedReadTokensCost += turn.cachedReadTokensCost ?? 0;
+      calculated.cachedWriteTokensCost += turn.cachedWriteTokensCost ?? 0;
+      calculated.usageCost += turn.usageCost ?? 0;
+    }
+
+    return { totals: calculated, turns: turnsData, hasMultipleTurns: hasMultiple };
+  }, [metadata.turns]);
+
+  if (!totals) {
     return undefined;
   }
 
-  const usage = metadata.usageCost;
   const model = models?.find((m) => m.id === metadata.model);
-
-  // Calculate total cost from usage data
-  const totalTokens = usage.inputTokens + usage.outputTokens + usage.cachedReadTokens + (usage.cachedWriteTokens ?? 0);
-  const totalCost = usage.usageCost ?? 0;
+  const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedReadTokens + totals.cachedWriteTokens;
+  const totalCost = totals.usageCost;
 
   return (
     <HoverCard openDelay={100} closeDelay={100}>
@@ -57,62 +94,107 @@ export function ChatMessageMetadataUsage({
             <TableHeader>
               <TableRow>
                 <TableHead>Metric</TableHead>
-                <TableHead>Tokens</TableHead>
-                <TableHead>Cost</TableHead>
+                <TableHead className="text-right">Tokens</TableHead>
+                <TableHead className="text-right">Cost</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              <TableRow>
-                <TableCell className="flex flex-row items-center gap-1">
-                  <span>Input</span>
-                  <InfoTooltip>
-                    The number of tokens in the input prompt. This includes the user prompt, system message, and any
-                    previous messages.
-                  </InfoTooltip>
-                </TableCell>
-                <TableCell>{formatNumber(usage.inputTokens)}</TableCell>
-                <TableCell>{formatCurrency(usage.inputTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell className="flex flex-row items-center gap-1">
-                  <span>Output</span>
-                  <InfoTooltip>The number of tokens in the output response.</InfoTooltip>
-                </TableCell>
-                <TableCell>{formatNumber(usage.outputTokens)}</TableCell>
-                <TableCell>{formatCurrency(usage.outputTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
-              </TableRow>
-              {usage.cachedReadTokens > 0 && (
-                <TableRow>
-                  <TableCell className="flex flex-row items-center gap-1">
-                    <span>Cached Read</span>
-                    <InfoTooltip>
-                      The number of tokens read from the prompt cache. This improves performance by avoiding
-                      re-processing the same prompt.
-                    </InfoTooltip>
-                  </TableCell>
-                  <TableCell>{formatNumber(usage.cachedReadTokens)}</TableCell>
-                  <TableCell>{formatCurrency(usage.cachedReadTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
-                </TableRow>
+              {hasMultipleTurns ? (
+                // Display per-turn breakdown for multi-turn messages
+                <>
+                  {turns.map((turn: TurnUsage) => {
+                    const turnTokens =
+                      turn.inputTokens + turn.outputTokens + turn.cachedReadTokens + (turn.cachedWriteTokens ?? 0);
+                    const turnCost = turn.usageCost ?? 0;
+                    return (
+                      <TableRow key={turn.turnIndex}>
+                        <TableCell className="flex flex-row items-center gap-1">
+                          <span>Turn {turn.turnIndex + 1}</span>
+                          <InfoTooltip>
+                            <div className="space-y-1 text-xs">
+                              <div>Input: {formatNumber(turn.inputTokens)} tokens</div>
+                              <div>Output: {formatNumber(turn.outputTokens)} tokens</div>
+                              {turn.cachedReadTokens > 0 && (
+                                <div>Cached Read: {formatNumber(turn.cachedReadTokens)} tokens</div>
+                              )}
+                              {(turn.cachedWriteTokens ?? 0) > 0 && (
+                                <div>Cached Write: {formatNumber(turn.cachedWriteTokens ?? 0)} tokens</div>
+                              )}
+                            </div>
+                          </InfoTooltip>
+                        </TableCell>
+                        <TableCell className="text-right">{formatNumber(turnTokens)}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(turnCost, { significantFigures: 2 })}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </>
+              ) : (
+                // Display detailed breakdown for single-turn messages
+                <>
+                  <TableRow>
+                    <TableCell className="flex flex-row items-center gap-1">
+                      <span>Input</span>
+                      <InfoTooltip>
+                        The number of tokens in the input prompt. This includes the user prompt, system message, and any
+                        previous messages.
+                      </InfoTooltip>
+                    </TableCell>
+                    <TableCell className="text-right">{formatNumber(totals.inputTokens)}</TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(totals.inputTokensCost, { significantFigures: 2 })}
+                    </TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell className="flex flex-row items-center gap-1">
+                      <span>Output</span>
+                      <InfoTooltip>The number of tokens in the output response.</InfoTooltip>
+                    </TableCell>
+                    <TableCell className="text-right">{formatNumber(totals.outputTokens)}</TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(totals.outputTokensCost, { significantFigures: 2 })}
+                    </TableCell>
+                  </TableRow>
+                  {totals.cachedReadTokens > 0 && (
+                    <TableRow>
+                      <TableCell className="flex flex-row items-center gap-1">
+                        <span>Cached Read</span>
+                        <InfoTooltip>
+                          The number of tokens read from the prompt cache. This improves performance by avoiding
+                          re-processing the same prompt.
+                        </InfoTooltip>
+                      </TableCell>
+                      <TableCell className="text-right">{formatNumber(totals.cachedReadTokens)}</TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(totals.cachedReadTokensCost, { significantFigures: 2 })}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {totals.cachedWriteTokens > 0 ? (
+                    <TableRow>
+                      <TableCell className="flex flex-row items-center gap-1">
+                        <span>Cached Write</span>
+                        <InfoTooltip>
+                          The number of tokens written to the prompt cache. This improves performance by avoiding
+                          re-processing the same prompt.
+                        </InfoTooltip>
+                      </TableCell>
+                      <TableCell className="text-right">{formatNumber(totals.cachedWriteTokens)}</TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(totals.cachedWriteTokensCost, { significantFigures: 2 })}
+                      </TableCell>
+                    </TableRow>
+                  ) : undefined}
+                </>
               )}
-              {usage.cachedWriteTokens !== undefined && usage.cachedWriteTokens > 0 ? (
-                <TableRow>
-                  <TableCell className="flex flex-row items-center gap-1">
-                    <span>Cached Write</span>
-                    <InfoTooltip>
-                      The number of tokens written to the prompt cache. This improves performance by avoiding
-                      re-processing the same prompt.
-                    </InfoTooltip>
-                  </TableCell>
-                  <TableCell>{formatNumber(usage.cachedWriteTokens)}</TableCell>
-                  <TableCell>{formatCurrency(usage.cachedWriteTokensCost ?? 0, { significantFigures: 2 })}</TableCell>
-                </TableRow>
-              ) : undefined}
             </TableBody>
             <TableFooter className="overflow-clip rounded-b-md">
               <TableRow>
                 <TableCell>Total</TableCell>
-                <TableCell>{formatNumber(totalTokens)}</TableCell>
-                <TableCell>{formatCurrency(totalCost, { significantFigures: 2 })}</TableCell>
+                <TableCell className="text-right">{formatNumber(totalTokens)}</TableCell>
+                <TableCell className="text-right">{formatCurrency(totalCost, { significantFigures: 2 })}</TableCell>
               </TableRow>
             </TableFooter>
           </Table>
