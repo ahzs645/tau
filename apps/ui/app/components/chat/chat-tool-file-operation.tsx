@@ -250,13 +250,14 @@ export function CollapsibleFileOperationTrigger({
   );
 
   // Filename element - clickable when enableFileLink is true
+  // Uses asChild to avoid nesting buttons inside CollapsibleTrigger
   const filenameElement =
     enableFileLink && !isStreaming ? (
       hasPath ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <FileLink path={targetFile} className="min-w-0 truncate hover:text-foreground">
-              {filenameContent}
+            <FileLink asChild path={targetFile} className="min-w-0 truncate hover:text-foreground">
+              <span>{filenameContent}</span>
             </FileLink>
           </TooltipTrigger>
           <TooltipContent side="top" align="start">
@@ -264,8 +265,8 @@ export function CollapsibleFileOperationTrigger({
           </TooltipContent>
         </Tooltip>
       ) : (
-        <FileLink path={targetFile} className="min-w-0 truncate hover:text-foreground">
-          {filenameContent}
+        <FileLink asChild path={targetFile} className="min-w-0 truncate hover:text-foreground">
+          <span>{filenameContent}</span>
         </FileLink>
       )
     ) : hasPath && !isStreaming ? (
