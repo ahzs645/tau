@@ -6,6 +6,72 @@ import type { ModelMessage, ToolUIPart, UIDataTypes, UIMessage, UIMessagePart, U
 const isToolPart = (part: UIMessagePart<UIDataTypes, UITools>): part is ToolUIPart => part.type.startsWith('tool-');
 
 /**
+ * Anthropic cache control configuration.
+ * Used to mark content blocks for prompt caching to reduce costs and latency.
+ *
+ * @see https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+ */
+type AnthropicCacheControl = {
+  /**
+   * Type of cache control. Currently only 'ephemeral' is supported.
+   * - 'ephemeral': Cache with a 5-minute TTL (extended on each use)
+   */
+  type: 'ephemeral';
+};
+
+/**
+ * Text content block with optional Anthropic cache control.
+ */
+type CacheableTextBlock = MessageContentComplex & {
+  type: 'text';
+  text: string;
+  cache_control?: AnthropicCacheControl;
+};
+
+/**
+ * Creates a cacheable text content block for Anthropic models.
+ * Marks the content block with ephemeral cache control to enable prompt caching.
+ *
+ * @param text - The text content to cache
+ * @returns A text content block with cache_control set to ephemeral
+ */
+export function createCacheableTextBlock(text: string): CacheableTextBlock {
+  return {
+    type: 'text',
+    text,
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Anthropic API uses snake_case
+    cache_control: { type: 'ephemeral' },
+  };
+}
+
+/**
+ * Creates a SystemMessage with cache control enabled for Anthropic models.
+ * The system prompt content will be marked for caching, which can significantly
+ * reduce costs (up to 90%) and latency (up to 85%) for repeated prompts.
+ *
+ * Note: Caching requires a minimum of 1,024 tokens (2,048 for some models).
+ * Cached content has a 5-minute TTL that is extended on each use.
+ *
+ * @param content - The system prompt text content
+ * @returns A SystemMessage with cacheable content blocks
+ *
+ * @example
+ * ```typescript
+ * const systemMessage = createCacheableSystemMessage(systemPrompt);
+ * const agent = createReactAgent({
+ *   llm: model,
+ *   tools,
+ *   prompt: systemMessage,
+ * });
+ * ```
+ */
+export function createCacheableSystemMessage(content: string): SystemMessage {
+  return new SystemMessage({
+    content: [createCacheableTextBlock(content)],
+  });
+}
+
+/**
  * Preprocesses UI messages to handle partial tool calls by converting them to completed state
  * with mock results. This prevents MessageConversionError when partial tool calls are present.
  *
@@ -190,11 +256,9 @@ export const convertAiSdkMessagesToLangchainMessages: (
       }
 
       case 'system': {
-        return [
-          new SystemMessage({
-            content: coreMessage.content,
-          }),
-        ];
+        // Convert system message content to cacheable format for Anthropic.
+        // This enables prompt caching when the system message is static/repeated.
+        return [createCacheableSystemMessage(coreMessage.content)];
       }
 
       default: {
