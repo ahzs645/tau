@@ -1,8 +1,9 @@
 import { memo } from 'react';
 import { X } from 'lucide-react';
-import { HoverCard, HoverCardContent, HoverCardPortal, HoverCardTrigger } from '#components/ui/hover-card.js';
+import { ImagePreview, ImagePreviewTrigger, ImagePreviewImage } from '#components/ui/image-preview.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
+import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
 
 type ChatTextareaImagesProperties = {
   readonly images: string[];
@@ -11,7 +12,7 @@ type ChatTextareaImagesProperties = {
 
 /**
  * Shared image preview overlay component for the chat textarea.
- * Displays uploaded images with hover preview and remove functionality.
+ * Displays uploaded images with click-to-preview and remove functionality.
  */
 export const ChatTextareaDesktopImages = memo(function ({
   images,
@@ -29,19 +30,14 @@ export const ChatTextareaDesktopImages = memo(function ({
           key={`image-${index}-${image}`}
           className="group/image-item relative text-muted-foreground hover:text-foreground"
         >
-          <HoverCard openDelay={100} closeDelay={100}>
-            <HoverCardTrigger asChild>
-              <div className="flex h-6 cursor-zoom-in items-center justify-center overflow-hidden rounded-xs border bg-background object-cover">
-                <img src={image} alt="Uploaded" className="size-6 border-r object-cover" />
+          <ImagePreview src={image} alt="Uploaded" dialogProps={{ [focusTrapAttribute]: '' }}>
+            <ImagePreviewTrigger>
+              <div className="flex h-6 cursor-pointer items-center justify-center overflow-hidden rounded-xs border bg-background hover:bg-accent/50">
+                <ImagePreviewImage className="size-6 border-r object-cover" />
                 <span className="px-1 text-xs">Image</span>
               </div>
-            </HoverCardTrigger>
-            <HoverCardPortal>
-              <HoverCardContent side="top" align="start" className="size-auto max-w-screen overflow-hidden p-0">
-                <img src={image} alt="Uploaded" className="h-48 object-cover md:h-96" />
-              </HoverCardContent>
-            </HoverCardPortal>
-          </HoverCard>
+            </ImagePreviewTrigger>
+          </ImagePreview>
           <Button
             size="icon"
             className={cn(

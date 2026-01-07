@@ -2,47 +2,26 @@ import { useState } from 'react';
 import type { FileUIPart } from 'ai';
 import { File } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
-import { Dialog, DialogContent, DialogTrigger } from '#components/ui/dialog.js';
+import { ImagePreview, ImagePreviewTrigger, ImagePreviewImage } from '#components/ui/image-preview.js';
 
 export function ChatMessageFile({ part }: { readonly part: FileUIPart }): React.ReactNode {
   const [imageError, setImageError] = useState(false);
   const isImage = part.mediaType.startsWith('image/');
-  const [open, setOpen] = useState(false);
 
   // Render images with preview and dialog enlargement on click
   if (isImage && !imageError) {
-    // Use inline component, or if hoisting is preferred, move it outside.
     return (
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger asChild>
-          <img
-            src={part.url}
-            alt={part.filename ?? 'Uploaded image'}
-            className="size-12 cursor-pointer rounded-lg border bg-background object-contain"
-            loading="lazy"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setOpen(true);
-            }}
-            onError={() => {
-              setImageError(true);
-            }}
-          />
-        </DialogTrigger>
-        {open ? (
-          <DialogContent className="flex aspect-auto max-h-[80vh]! max-w-[80vw]! items-center justify-center overflow-hidden rounded-lg border bg-transparent p-0 shadow-none">
-            <img
-              src={part.url}
-              alt={part.filename ?? 'Uploaded image'}
-              className="size-full rounded-lg bg-background object-cover"
-              onError={() => {
-                setImageError(true);
-              }}
-            />
-          </DialogContent>
-        ) : null}
-      </Dialog>
+      <ImagePreview
+        src={part.url}
+        alt={part.filename ?? 'Uploaded image'}
+        onError={() => {
+          setImageError(true);
+        }}
+      >
+        <ImagePreviewTrigger>
+          <ImagePreviewImage className="size-12 rounded-lg border bg-background object-contain" />
+        </ImagePreviewTrigger>
+      </ImagePreview>
     );
   }
 
