@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useSelector } from '@xstate/react';
 import { ChatHistory } from '#routes/builds_.$id/chat-history.js';
 import { ChatFileTree } from '#routes/builds_.$id/chat-file-tree.js';
 import { ChatParameters } from '#routes/builds_.$id/chat-parameters.js';
@@ -9,16 +10,21 @@ import { ChatViewerControls } from '#routes/builds_.$id/chat-viewer-controls.js'
 import { ChatStackTrace } from '#routes/builds_.$id/chat-stack-trace.js';
 import { ChatDetails } from '#routes/builds_.$id/chat-details.js';
 import { ChatConverter } from '#routes/builds_.$id/chat-converter.js';
+import { BuildNotFound } from '#routes/builds_.$id/build-not-found.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatInterfaceNav } from '#routes/builds_.$id/chat-interface-nav.js';
 import { Tabs, TabsContent } from '#components/ui/tabs.js';
 import { ChatInterfaceStatus } from '#routes/builds_.$id/chat-interface-status.js';
 import { useChatInterfaceState } from '#routes/builds_.$id/use-chat-interface-state.js';
 import { Drawer, DrawerContent, DrawerTitle, DrawerDescription } from '#components/ui/drawer.js';
+import { useBuild } from '#hooks/use-build.js';
 
 export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
   const { activeTab, handleTabChange, drawerOpen, handleDrawerChange, snapPoints, activeSnapPoint, handleSnapChange } =
     useChatInterfaceState();
+
+  const { buildRef } = useBuild();
+  const isBuildError = useSelector(buildRef, (state) => state.matches('error'));
 
   const isModelTab = activeTab === 'model';
 
@@ -32,6 +38,9 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
         }}
       >
         <ChatViewer />
+
+        {/* Build Not Found Overlay */}
+        {isBuildError ? <BuildNotFound /> : null}
 
         {/* Gizmo Container - Static container for the gizmo to ensure it shares the same containing block as the anchor */}
         <div

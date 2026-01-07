@@ -16,6 +16,7 @@ export function BuildNameEditor(): React.JSX.Element {
   const { buildRef, updateName } = useBuild();
   const buildName = useSelector(buildRef, (state) => state.context.build?.name) ?? '';
   const isLoading = useSelector(buildRef, (state) => state.context.isLoading);
+  const isBuildError = useSelector(buildRef, (state) => state.matches('error'));
   const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId);
   const { getChat } = useChatManager();
 
@@ -75,15 +76,29 @@ export function BuildNameEditor(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only run after loading completes
   }, [buildName, isLoading, activeChatFirstMessage]);
 
+  // Render display content based on state
+  const renderDisplayContent = (value: string): React.ReactNode => {
+    if (isBuildError) {
+      return 'Build Not Found';
+    }
+
+    if (value === '') {
+      return <LoadingSpinner />;
+    }
+
+    return value;
+  };
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <InlineTextEditor
           value={displayName}
+          isDisabled={isBuildError}
           className="h-7 [&_[data-slot=button]]:w-auto [&_[data-slot=button]]:max-w-48"
           renderDisplay={(value) => (
             <span data-animate={isNameAnimating} className="truncate data-[animate=true]:animate-typewriter-20">
-              {value === '' ? <LoadingSpinner /> : value}
+              {renderDisplayContent(value)}
             </span>
           )}
           onSave={(value) => {
@@ -92,7 +107,7 @@ export function BuildNameEditor(): React.JSX.Element {
           }}
         />
       </TooltipTrigger>
-      <TooltipContent>Edit name</TooltipContent>
+      <TooltipContent>{isBuildError ? 'Build not found' : 'Edit name'}</TooltipContent>
     </Tooltip>
   );
 }
