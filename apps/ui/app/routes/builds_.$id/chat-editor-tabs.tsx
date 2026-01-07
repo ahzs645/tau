@@ -12,7 +12,7 @@ import { useFileManager } from '#hooks/use-file-manager.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { CopyButton } from '#components/copy-button.js';
 import { toast } from '#components/ui/sonner.js';
-import { createBlob, downloadBlob } from '#utils/file.utils.js';
+import { asBuffer, downloadBlob } from '#utils/file.utils.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
 
 export function ChatEditorTabs(): React.JSX.Element {
@@ -41,7 +41,7 @@ export function ChatEditorTabs(): React.JSX.Element {
 
         const activeFileData = await fileManager.readFile(activeFile.path);
 
-        const blob = createBlob(activeFileData, { type: 'text/plain' });
+        const blob = new Blob([asBuffer(activeFileData.buffer)], { type: 'text/plain' });
         downloadBlob(blob, activeFile.name);
       },
       {

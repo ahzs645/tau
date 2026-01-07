@@ -15,7 +15,7 @@ import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js
 import { buildEsModule, runInCjsContext, registerKernelModules } from '#components/geometry/kernel/replicad/vm.js';
 import { jscadToGltf } from '#components/geometry/kernel/jscad/jscad-to-gltf.js';
 import { jsonSchemaFromJson } from '#utils/schema.utils.js';
-import { createBlob } from '#utils/file.utils.js';
+import { asBuffer } from '#utils/file.utils.js';
 import type { JscadParameterDefinition } from '#components/geometry/kernel/jscad/jscad.schema.js';
 import {
   convertParameterDefinitionsToDefaults,
@@ -402,7 +402,7 @@ class JscadWorker extends KernelWorker {
 
         return createKernelSuccess([
           {
-            blob: createBlob(blob),
+            blob: new Blob([asBuffer(blob.buffer)]),
             name: fileType === 'glb' ? 'model.glb' : 'model.gltf',
           },
         ]);

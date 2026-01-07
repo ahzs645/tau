@@ -18,7 +18,7 @@ import { KclUtils } from '#components/geometry/kernel/zoo/kcl-utils.js';
 import { isKclError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { convertKclErrorToKernelError, mapErrorToKclError } from '#components/geometry/kernel/zoo/error-mappers.js';
 import { getErrorPosition } from '#components/geometry/kernel/zoo/source-range-utils.js';
-import { createBlob } from '#utils/file.utils.js';
+import { asBuffer } from '#utils/file.utils.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
 
@@ -215,7 +215,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
               return createKernelError({ message: 'No STL file in export result' });
             }
 
-            const blob = createBlob(stlFile.contents, {
+            const blob = new Blob([asBuffer(stlFile.contents.buffer)], {
               type: fileType === 'stl-binary' ? 'application/octet-stream' : 'text/plain',
             });
             return createKernelSuccess([
@@ -246,7 +246,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
               return createKernelError({ message: 'No STEP file in export result' });
             }
 
-            const blob = createBlob(stepFile.contents, {
+            const blob = new Blob([asBuffer(stepFile.contents.buffer)], {
               type: 'application/step',
             });
             return createKernelSuccess([
@@ -279,7 +279,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
               return createKernelError({ message: 'No GLB file in export result' });
             }
 
-            const blob = createBlob(glbFile.contents, {
+            const blob = new Blob([asBuffer(glbFile.contents.buffer)], {
               type: 'model/gltf-binary',
             });
             return createKernelSuccess([
@@ -297,7 +297,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
 
         case 'gltf': {
           try {
-            const blob = createBlob(gltfData, {
+            const blob = new Blob([asBuffer(gltfData.buffer)], {
               type: 'model/gltf-json',
             });
             return createKernelSuccess([

@@ -24,7 +24,7 @@ import { runInCjsContext, buildEsModule, registerKernelModules } from '#componen
 import { renderOutput } from '#components/geometry/kernel/replicad/utils/render-output.js';
 import { convertReplicadGeometriesToGltf } from '#components/geometry/kernel/replicad/utils/replicad-to-gltf.js';
 import { jsonSchemaFromJson } from '#utils/schema.utils.js';
-import { createBlob } from '#utils/file.utils.js';
+import { asBuffer } from '#utils/file.utils.js';
 import type { InputShape, MainResultShapes } from '#components/geometry/kernel/replicad/utils/render-output.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import type { GeometryReplicad } from '#components/geometry/kernel/replicad/replicad.types.js';
@@ -327,7 +327,7 @@ try {
         const gltfBlob = await convertReplicadGeometriesToGltf(temporaryShapes, fileType);
         return createKernelSuccess([
           {
-            blob: createBlob(gltfBlob),
+            blob: new Blob([asBuffer(gltfBlob.buffer)]),
             name: fileType === 'glb' ? 'model.glb' : 'model.gltf',
           },
         ]);

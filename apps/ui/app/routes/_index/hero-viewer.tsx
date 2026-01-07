@@ -18,7 +18,7 @@ import { HammerAnimation } from '#components/hammer-animation.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { toast } from '#components/ui/sonner.js';
-import { createBlob, downloadBlob } from '#utils/file.utils.js';
+import { asBuffer, downloadBlob } from '#utils/file.utils.js';
 import qrcodeScad from '#routes/_index/qrcode.scad?raw';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 
@@ -166,7 +166,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
           throw new Error('No file returned from export');
         }
 
-        const blob = createBlob(file.data);
+        const blob = new Blob([asBuffer(file.data.buffer)]);
         downloadBlob(blob, filename);
         return blob;
       })(),

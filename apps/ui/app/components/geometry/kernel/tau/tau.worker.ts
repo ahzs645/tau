@@ -10,7 +10,7 @@ import { importToGlb, exportFromGlb, supportedExportFormats, supportedImportForm
 import type { InputFormat, OutputFormat } from '@taucad/converter';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
-import { createBlob } from '#utils/file.utils.js';
+import { asBuffer } from '#utils/file.utils.js';
 
 class TauWorker extends KernelWorker {
   protected static override readonly supportedExportFormats: ExportFormat[] = supportedExportFormats as ExportFormat[];
@@ -93,7 +93,7 @@ class TauWorker extends KernelWorker {
       const files = await exportFromGlb(glbData, fileType as OutputFormat);
 
       const results = files.map((file) => ({
-        blob: createBlob(file.data),
+        blob: new Blob([asBuffer(file.data.buffer)]),
         name: file.name,
       }));
 
