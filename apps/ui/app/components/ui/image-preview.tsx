@@ -6,6 +6,7 @@ import { Dialog, DialogContent } from '#components/ui/dialog.js';
 type ImagePreviewContextValue = {
   src: string;
   alt: string;
+  label?: string;
   onError?: () => void;
   openDialog: () => void;
 };
@@ -27,6 +28,8 @@ type ImagePreviewProps = {
   readonly src: string;
   /** Alt text for accessibility */
   readonly alt: string;
+  /** Optional label to display as overlay on the dialog content */
+  readonly label?: string;
   /** Callback when image fails to load */
   readonly onError?: () => void;
   /** Children (should include ImagePreviewTrigger and ImagePreviewImage) */
@@ -35,7 +38,7 @@ type ImagePreviewProps = {
   readonly dialogProps?: React.HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string>;
 };
 
-function ImagePreview({ src, alt, onError, children, dialogProps }: ImagePreviewProps): React.JSX.Element {
+function ImagePreview({ src, alt, label, onError, children, dialogProps }: ImagePreviewProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
 
   const openDialog = React.useCallback(() => {
@@ -46,10 +49,11 @@ function ImagePreview({ src, alt, onError, children, dialogProps }: ImagePreview
     () => ({
       src,
       alt,
+      label,
       onError,
       openDialog,
     }),
-    [src, alt, onError, openDialog],
+    [src, alt, label, onError, openDialog],
   );
 
   return (
@@ -72,15 +76,23 @@ function ImagePreview({ src, alt, onError, children, dialogProps }: ImagePreview
             )}
             <DialogContent
               {...dialogProps}
-              className="z-101! flex h-[80vh]! max-h-none! w-auto! max-w-none! items-center justify-center overflow-visible border-0 bg-transparent p-0 shadow-none"
+              className="shadow-lg z-101! flex h-[80vh]! max-h-none! w-auto! max-w-none! items-center justify-center overflow-visible rounded-lg border bg-background p-4"
             >
-              <img
-                src={src}
-                alt={alt}
-                className="h-full w-auto rounded-lg object-contain"
-                loading="lazy"
-                onError={onError}
-              />
+              <div className="relative h-full">
+                <img
+                  alt={alt}
+                  className="h-full w-auto rounded-lg object-contain"
+                  loading="lazy"
+                  src={src}
+                  onError={onError}
+                />
+                {/* Label overlay on top-left */}
+                {label ? (
+                  <div className="absolute top-1 left-1 rounded bg-black/60 px-2 py-1 text-xs font-medium tracking-wide text-white uppercase">
+                    {label}
+                  </div>
+                ) : undefined}
+              </div>
             </DialogContent>
           </>
         ) : undefined}
