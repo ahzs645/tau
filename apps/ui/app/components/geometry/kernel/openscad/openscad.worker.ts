@@ -22,7 +22,13 @@ import { asBuffer } from '#utils/file.utils.js';
 import { logLevels } from '#types/console.types.js';
 import type { LogLevel } from '#types/console.types.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
-import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
+import {
+  createKernelError,
+  createKernelErrors,
+  createKernelSuccess,
+} from '#components/geometry/kernel/utils/kernel-helpers.js';
+import type { AddErrorFn } from '#components/geometry/kernel/openscad/parse-output.js';
+import { parseStderrLine } from '#components/geometry/kernel/openscad/parse-output.js';
 // Font files for OpenSCAD text() rendering (Vite ?url imports)
 import geistRegularUrl from '#components/geometry/kernel/openscad/fonts/Geist-Regular.ttf?url';
 import geistBoldUrl from '#components/geometry/kernel/openscad/fonts/Geist-Bold.ttf?url';
@@ -163,6 +169,12 @@ export class OpenScadWorker extends KernelWorker {
     parameters?: Record<string, unknown>,
     geometryId = 'defaultGeometry',
   ): Promise<ComputeGeometryResult> {
+    // Collect errors from stderr parsing in real-time
+    const collectedErrors: import('@taucad/types').KernelError[] = [];
+    const addError = (error: import('@taucad/types').KernelError): void => {
+      collectedErrors.push(error);
+    };
+
     try {
       const code = await this.readFile(filename, 'utf8');
       const trimmedCode = code.trim();
@@ -170,7 +182,7 @@ export class OpenScadWorker extends KernelWorker {
         return createKernelSuccess([]);
       }
 
-      const instance = await this.createInstance();
+      const instance = await this.createInstance(addError);
       await this.mountFilesystem(instance, this.basePath);
       await this.mountFonts(instance);
 
@@ -191,11 +203,14 @@ export class OpenScadWorker extends KernelWorker {
       const result = instance.callMain(args);
 
       if (result !== 0) {
-        // @ts-expect-error - TODO: add typings for formatException, ensure this API is available.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- formatException is not typed
-        const error = instance.formatException?.(result);
+        // Return parsed errors if we collected any from stderr
+        if (collectedErrors.length > 0) {
+          return createKernelErrors(collectedErrors);
+        }
+
+        // Fallback error when OpenSCAD fails without a parseable error message
         return createKernelError({
-          message: `Failed to build geometry: ${error}`,
+          message: 'OpenSCAD build failed',
           location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
         });
       }
@@ -213,6 +228,12 @@ export class OpenScadWorker extends KernelWorker {
       return createKernelSuccess([geometry]);
     } catch (error) {
       this.error('Error while building geometries from code', { data: error });
+
+      // Return parsed errors if we collected any before the exception
+      if (collectedErrors.length > 0) {
+        return createKernelErrors(collectedErrors);
+      }
+
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return createKernelError({
         message: errorMessage,
@@ -373,7 +394,13 @@ export class OpenScadWorker extends KernelWorker {
     });
   }
 
-  private async createInstance(): Promise<OpenSCAD> {
+  /**
+   * Create an OpenSCAD WASM instance.
+   *
+   * @param addError - Optional callback to receive parsed errors from stderr in real-time.
+   * @returns The OpenSCAD instance.
+   */
+  private async createInstance(addError?: AddErrorFn): Promise<OpenSCAD> {
     const instance = await createOpenSCAD({
       noInitialRun: true,
       print: (message) => {
@@ -381,6 +408,9 @@ export class OpenScadWorker extends KernelWorker {
       },
       printErr: (message) => {
         this.printErr(message);
+        if (addError) {
+          parseStderrLine(message, addError);
+        }
       },
     });
 

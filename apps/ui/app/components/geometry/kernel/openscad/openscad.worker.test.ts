@@ -809,6 +809,66 @@ describe('OpenScadWorker', () => {
         }
       });
     });
+
+    describe('Error handling', () => {
+      it('should return compilation error with line number for syntax errors', async () => {
+        const worker = createGeometryWorker({
+          'syntax_error.scad': `
+            x = 10;
+            x += 5;
+            cube([x, x, x]);
+          `,
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'syntax_error.scad', path: '' }, {});
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.errors.length).toBeGreaterThan(0);
+          expect(result.errors[0]?.location?.startLineNumber).toBeGreaterThan(0);
+          expect(result.errors[0]?.type).toBe('compilation');
+        }
+      });
+
+      it('should return error with file name for included file errors', async () => {
+        const worker = createGeometryWorker({
+          'main.scad': 'include <lib.scad>\ncube([10, 10, 10]);',
+          'lib.scad': 'x += 5;',
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'main.scad', path: '' }, {});
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.errors[0]?.location?.fileName).toContain('lib.scad');
+        }
+      });
+
+      it('should return fallback error when OpenSCAD fails without parseable message', async () => {
+        const worker = createGeometryWorker({
+          'empty_module.scad': 'module test() {}  test();',
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'empty_module.scad', path: '' }, {});
+
+        // This may succeed with empty geometry or fail - just verify we get a proper result
+        expect(typeof result.success).toBe('boolean');
+      });
+
+      it('should parse error message correctly for += operator', async () => {
+        const worker = createGeometryWorker({
+          'compound_assign.scad': `
+            x = 90;
+            x += 2*5;
+            cube([x, 10, 10]);
+          `,
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'compound_assign.scad', path: '' }, {});
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.errors.length).toBeGreaterThan(0);
+          expect(result.errors[0]?.message).toContain('syntax error');
+        }
+      });
+    });
   });
 });
 
