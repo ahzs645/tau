@@ -60,7 +60,7 @@ export function CollapsibleContainer({
       {shouldShowToggle ? (
         <Button
           size="xs"
-          className="h-4 w-full shrink-0 rounded-none bg-neutral/10 text-center text-foreground/50 hover:bg-neutral/40"
+          className="h-4 w-full shrink-0 rounded-none bg-transparent text-center text-foreground/50 hover:bg-neutral/10"
           onClick={() => {
             setIsExpanded((previous) => !previous);
           }}
