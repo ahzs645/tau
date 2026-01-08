@@ -39,6 +39,7 @@ export const kernelIssueSchema: z.ZodType<KernelIssue> = z
         }),
       )
       .optional(),
+    severity: z.enum(['error', 'warning', 'info']),
     type: z.enum(['compilation', 'runtime', 'kernel', 'connection', 'unknown']).optional(),
   })
   .meta({ id: 'KernelIssue' });
