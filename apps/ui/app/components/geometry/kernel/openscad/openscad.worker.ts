@@ -9,6 +9,7 @@ import type {
   ExtractParametersResult,
   ExportFormat,
   GeometryGltf,
+  KernelError,
 } from '@taucad/types';
 import type { OpenScadParameterExport } from '#components/geometry/kernel/openscad/parse-parameters.js';
 import {
@@ -27,7 +28,7 @@ import {
   createKernelErrors,
   createKernelSuccess,
 } from '#components/geometry/kernel/utils/kernel-helpers.js';
-import type { AddErrorFn } from '#components/geometry/kernel/openscad/parse-output.js';
+import type { AddErrorFn, GetFileContentsFn } from '#components/geometry/kernel/openscad/parse-output.js';
 import { parseStderrLine } from '#components/geometry/kernel/openscad/parse-output.js';
 // Font files for OpenSCAD text() rendering (Vite ?url imports)
 import geistRegularUrl from '#components/geometry/kernel/openscad/fonts/Geist-Regular.ttf?url';
@@ -169,9 +170,17 @@ export class OpenScadWorker extends KernelWorker {
     parameters?: Record<string, unknown>,
     geometryId = 'defaultGeometry',
   ): Promise<ComputeGeometryResult> {
+    // Cache for file contents - populated during mountFilesystem, used for error highlighting
+    const fileContentsCache = new Map<string, string>();
+
+    // Lazy file contents getter - returns cached content for error highlighting
+    const getFileContents: GetFileContentsFn = (fileName: string) => {
+      return fileContentsCache.get(fileName);
+    };
+
     // Collect errors from stderr parsing in real-time
-    const collectedErrors: import('@taucad/types').KernelError[] = [];
-    const addError = (error: import('@taucad/types').KernelError): void => {
+    const collectedErrors: KernelError[] = [];
+    const addError = (error: KernelError): void => {
       collectedErrors.push(error);
     };
 
@@ -182,8 +191,8 @@ export class OpenScadWorker extends KernelWorker {
         return createKernelSuccess([]);
       }
 
-      const instance = await this.createInstance(addError);
-      await this.mountFilesystem(instance, this.basePath);
+      const instance = await this.createInstance(addError, getFileContents);
+      await this.mountFilesystem(instance, this.basePath, fileContentsCache);
       await this.mountFonts(instance);
 
       const inputFile = filename;
@@ -398,9 +407,10 @@ export class OpenScadWorker extends KernelWorker {
    * Create an OpenSCAD WASM instance.
    *
    * @param addError - Optional callback to receive parsed errors from stderr in real-time.
+   * @param getFileContents - Optional function to lazily fetch file contents for error highlighting.
    * @returns The OpenSCAD instance.
    */
-  private async createInstance(addError?: AddErrorFn): Promise<OpenSCAD> {
+  private async createInstance(addError?: AddErrorFn, getFileContents?: GetFileContentsFn): Promise<OpenSCAD> {
     const instance = await createOpenSCAD({
       noInitialRun: true,
       print: (message) => {
@@ -409,7 +419,7 @@ export class OpenScadWorker extends KernelWorker {
       printErr: (message) => {
         this.printErr(message);
         if (addError) {
-          parseStderrLine(message, addError);
+          parseStderrLine(message, addError, getFileContents);
         }
       },
     });
@@ -432,11 +442,17 @@ export class OpenScadWorker extends KernelWorker {
   /**
    * Mount the current directory filesystem into Emscripten's FS.
    * Pre-populates all files from basePath so OpenSCAD can access them.
+   * Optionally populates a cache with .scad file contents for error highlighting.
    *
    * @param instance - The OpenSCAD instance with FS API.
    * @param basePath - The base path to mount files from.
+   * @param fileContentsCache - Optional cache to populate with .scad file contents.
    */
-  private async mountFilesystem(instance: OpenSCAD, basePath: string): Promise<void> {
+  private async mountFilesystem(
+    instance: OpenSCAD,
+    basePath: string,
+    fileContentsCache?: Map<string, string>,
+  ): Promise<void> {
     try {
       this.debug('Mounting filesystem from basePath', { operation: 'mountFilesystem', data: { basePath } });
 
@@ -478,6 +494,12 @@ export class OpenScadWorker extends KernelWorker {
         // Write the file
         instance.FS.writeFile(relativePath, content);
         this.trace(`Mounted file: ${relativePath}`, { operation: 'mountFilesystem' });
+
+        // Cache .scad file contents for error highlighting
+        if (fileContentsCache && relativePath.endsWith('.scad')) {
+          const textContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
+          fileContentsCache.set(relativePath, textContent);
+        }
       }
 
       this.debug(`Successfully mounted ${fileCount} files`, { operation: 'mountFilesystem' });

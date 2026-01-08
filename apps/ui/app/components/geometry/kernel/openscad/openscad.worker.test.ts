@@ -868,6 +868,30 @@ describe('OpenScadWorker', () => {
           expect(result.errors[0]?.message).toContain('syntax error');
         }
       });
+
+      it('should return correct error location with start and end columns for indented code', async () => {
+        // The error line "    x += 90 + tray_clearance;" has 4 leading spaces
+        const errorLine = '    x += 90 + tray_clearance;';
+        const worker = createGeometryWorker({
+          'indented_error.scad': `module test() {
+${errorLine}
+}`,
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'indented_error.scad', path: '' }, {});
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.errors.length).toBeGreaterThan(0);
+          const error = result.errors[0];
+          expect(error?.message).toContain('syntax error');
+          expect(error?.location?.fileName).toBe('indented_error.scad');
+          expect(error?.location?.startLineNumber).toBe(2);
+          // 1-based column: first non-whitespace 'x' is at column 5 (after 4 spaces)
+          expect(error?.location?.startColumn).toBe(5);
+          // End column should be line length + 1 (1-based exclusive)
+          expect(error?.location?.endColumn).toBe(errorLine.length + 1);
+        }
+      });
     });
   });
 });
