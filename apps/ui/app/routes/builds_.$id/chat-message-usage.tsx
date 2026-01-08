@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { DollarSign } from 'lucide-react';
-import type { MyMetadata } from '@taucad/chat';
+import type { UsageData } from '@taucad/chat';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { Badge } from '#components/ui/badge.js';
@@ -12,28 +12,40 @@ import { formatNumber } from '#utils/number.utils.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
-type TurnUsage = NonNullable<MyMetadata['turns']>[number];
+type UsageTotals = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedReadTokens: number;
+  cachedWriteTokens: number;
+  inputTokensCost: number;
+  outputTokensCost: number;
+  cachedReadTokensCost: number;
+  cachedWriteTokensCost: number;
+  totalCost: number;
+};
 
-// Single metadata usage component
-export function ChatMessageMetadataUsage({
-  metadata,
+/**
+ * Component for displaying usage data from data parts.
+ * Aggregates multiple usage parts across agent turns and displays totals.
+ */
+export function ChatMessageUsage({
+  usageParts,
 }: {
-  readonly metadata: MyMetadata;
+  readonly usageParts: UsageData[];
 }): React.JSX.Element | undefined {
   const { data: models } = useModels();
   const [showModelCost] = useCookie(cookieName.chatModelCost, true);
 
-  // Calculate totals from turns array
-  const { totals, turns, hasMultipleTurns } = useMemo(() => {
-    const turnsData = metadata.turns ?? [];
-    const hasMultiple = turnsData.length > 1;
-
-    if (turnsData.length === 0) {
-      return { totals: undefined, turns: [] as TurnUsage[], hasMultipleTurns: false };
+  // Calculate totals from usage parts
+  const { totals, hasMultipleTurns, model } = useMemo(() => {
+    if (usageParts.length === 0) {
+      return { totals: undefined, hasMultipleTurns: false, model: undefined };
     }
 
-    // Calculate totals from turns using a loop
-    const calculated = {
+    const hasMultiple = usageParts.length > 1;
+
+    // Calculate totals from all usage parts
+    const calculated: UsageTotals = {
       inputTokens: 0,
       outputTokens: 0,
       cachedReadTokens: 0,
@@ -42,31 +54,34 @@ export function ChatMessageMetadataUsage({
       outputTokensCost: 0,
       cachedReadTokensCost: 0,
       cachedWriteTokensCost: 0,
-      usageCost: 0,
+      totalCost: 0,
     };
 
-    for (const turn of turnsData) {
-      calculated.inputTokens += turn.inputTokens;
-      calculated.outputTokens += turn.outputTokens;
-      calculated.cachedReadTokens += turn.cachedReadTokens;
-      calculated.cachedWriteTokens += turn.cachedWriteTokens ?? 0;
-      calculated.inputTokensCost += turn.inputTokensCost ?? 0;
-      calculated.outputTokensCost += turn.outputTokensCost ?? 0;
-      calculated.cachedReadTokensCost += turn.cachedReadTokensCost ?? 0;
-      calculated.cachedWriteTokensCost += turn.cachedWriteTokensCost ?? 0;
-      calculated.usageCost += turn.usageCost ?? 0;
+    for (const usage of usageParts) {
+      calculated.inputTokens += usage.inputTokens;
+      calculated.outputTokens += usage.outputTokens;
+      calculated.cachedReadTokens += usage.cachedReadTokens;
+      calculated.cachedWriteTokens += usage.cachedWriteTokens;
+      calculated.inputTokensCost += usage.inputTokensCost;
+      calculated.outputTokensCost += usage.outputTokensCost;
+      calculated.cachedReadTokensCost += usage.cachedReadTokensCost;
+      calculated.cachedWriteTokensCost += usage.cachedWriteTokensCost;
+      calculated.totalCost += usage.totalCost;
     }
 
-    return { totals: calculated, turns: turnsData, hasMultipleTurns: hasMultiple };
-  }, [metadata.turns]);
+    // Use the model from the last usage part (most recent)
+    const lastUsage = usageParts.at(-1);
+    const modelId = lastUsage?.model;
+    const foundModel = modelId ? models?.find((m) => m.id === modelId) : undefined;
+
+    return { totals: calculated, hasMultipleTurns: hasMultiple, model: foundModel };
+  }, [usageParts, models]);
 
   if (!totals) {
     return undefined;
   }
 
-  const model = models?.find((m) => m.id === metadata.model);
   const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedReadTokens + totals.cachedWriteTokens;
-  const totalCost = totals.usageCost;
 
   return (
     <HoverCard openDelay={100} closeDelay={100}>
@@ -76,7 +91,7 @@ export function ChatMessageMetadataUsage({
           className="h-7 cursor-help gap-0 border-none font-medium text-inherit outline-none hover:bg-neutral/20"
         >
           <DollarSign className="size-3.5! stroke-2" />
-          {showModelCost ? <span>{formatCurrency(totalCost, { significantFigures: 2 })}</span> : undefined}
+          {showModelCost ? <span>{formatCurrency(totals.totalCost, { significantFigures: 2 })}</span> : undefined}
         </Badge>
       </HoverCardTrigger>
       <HoverCardContent className="w-auto p-2 pt-1">
@@ -102,30 +117,29 @@ export function ChatMessageMetadataUsage({
               {hasMultipleTurns ? (
                 // Display per-turn breakdown for multi-turn messages
                 <>
-                  {turns.map((turn: TurnUsage) => {
+                  {usageParts.map((usage, index) => {
                     const turnTokens =
-                      turn.inputTokens + turn.outputTokens + turn.cachedReadTokens + (turn.cachedWriteTokens ?? 0);
-                    const turnCost = turn.usageCost ?? 0;
+                      usage.inputTokens + usage.outputTokens + usage.cachedReadTokens + usage.cachedWriteTokens;
                     return (
-                      <TableRow key={turn.turnIndex}>
+                      <TableRow key={index}>
                         <TableCell className="flex flex-row items-center gap-1">
-                          <span>Turn {turn.turnIndex + 1}</span>
+                          <span>Turn {index + 1}</span>
                           <InfoTooltip>
                             <div className="space-y-1 text-xs">
-                              <div>Input: {formatNumber(turn.inputTokens)} tokens</div>
-                              <div>Output: {formatNumber(turn.outputTokens)} tokens</div>
-                              {turn.cachedReadTokens > 0 && (
-                                <div>Cached Read: {formatNumber(turn.cachedReadTokens)} tokens</div>
+                              <div>Input: {formatNumber(usage.inputTokens)} tokens</div>
+                              <div>Output: {formatNumber(usage.outputTokens)} tokens</div>
+                              {usage.cachedReadTokens > 0 && (
+                                <div>Cached Read: {formatNumber(usage.cachedReadTokens)} tokens</div>
                               )}
-                              {(turn.cachedWriteTokens ?? 0) > 0 && (
-                                <div>Cached Write: {formatNumber(turn.cachedWriteTokens ?? 0)} tokens</div>
+                              {usage.cachedWriteTokens > 0 && (
+                                <div>Cached Write: {formatNumber(usage.cachedWriteTokens)} tokens</div>
                               )}
                             </div>
                           </InfoTooltip>
                         </TableCell>
                         <TableCell className="text-right">{formatNumber(turnTokens)}</TableCell>
                         <TableCell className="text-right">
-                          {formatCurrency(turnCost, { significantFigures: 2 })}
+                          {formatCurrency(usage.totalCost, { significantFigures: 2 })}
                         </TableCell>
                       </TableRow>
                     );
@@ -194,7 +208,7 @@ export function ChatMessageMetadataUsage({
               <TableRow>
                 <TableCell>Total</TableCell>
                 <TableCell className="text-right">{formatNumber(totalTokens)}</TableCell>
-                <TableCell className="text-right">{formatCurrency(totalCost, { significantFigures: 2 })}</TableCell>
+                <TableCell className="text-right">{formatCurrency(totals.totalCost, { significantFigures: 2 })}</TableCell>
               </TableRow>
             </TableFooter>
           </Table>
@@ -203,3 +217,4 @@ export function ChatMessageMetadataUsage({
     </HoverCard>
   );
 }
+

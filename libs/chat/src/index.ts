@@ -18,6 +18,7 @@ export * from '#schemas/tools/transfer-to-research-expert.tool.schema.js';
 export * from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
 export * from '#schemas/metadata.schema.js';
 export * from '#schemas/message.schema.js';
+export * from '#schemas/message-data.schema.js';
 
 export type * from '#types/message.types.js';
 export type * from '#types/tool.types.js';

@@ -1,10 +1,10 @@
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { messageRole } from '@taucad/chat/constants';
-import type { MyUIMessage } from '@taucad/chat';
+import type { MyUIMessage, UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { ChatMessageReasoning } from '#routes/builds_.$id/chat-message-reasoning.js';
-import { ChatMessageMetadata } from '#routes/builds_.$id/chat-message-metadata.js';
+import { ChatMessageUsage } from '#routes/builds_.$id/chat-message-usage.js';
 import { ChatMessageText } from '#routes/builds_.$id/chat-message-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
 import { CopyButton } from '#components/copy-button.js';
@@ -59,6 +59,21 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
   const fileParts = useChatSelector(
     (state) => state.messagesById.get(messageId)?.parts.filter((part) => part.type === 'file') ?? [],
   );
+  const usageParts = useChatSelector((state) => {
+    const msg = state.messageEdits[messageId] ?? state.messagesById.get(messageId);
+    if (!msg) {
+      return [];
+    }
+
+    const usageDataParts: UsageData[] = [];
+    for (const part of msg.parts) {
+      if (part.type === 'data-usage') {
+        usageDataParts.push(part.data);
+      }
+    }
+
+    return usageDataParts;
+  });
   const { editMessage, retryMessage, startEditingMessage, exitEditMode } = useChatActions();
   const [isEditing, setIsEditing] = useState(false);
 
@@ -242,10 +257,9 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   return <ChatMessageToolReasoning key={part.toolCallId} part={part} />;
                 }
 
-                case 'data-test': {
-                  // A data part is required to be present to exhaustively match all parts.
-                  // This should replace with an actual data part when it becomes available.
-                  return <div>Data test</div>;
+                case 'data-usage': {
+                  // Usage data parts are rendered separately in the footer
+                  return null;
                 }
 
                 default: {
@@ -309,7 +323,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               <TooltipContent side="bottom">Switch model</TooltipContent>
             </Tooltip>
             <div className="flex flex-row items-center justify-end gap-1">
-              {displayMessage.metadata ? <ChatMessageMetadata metadata={displayMessage.metadata} /> : null}
+              {usageParts.length > 0 ? <ChatMessageUsage usageParts={usageParts} /> : null}
             </div>
           </div>
         </When>

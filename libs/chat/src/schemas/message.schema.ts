@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { messageMetadataSchema } from '#schemas/metadata.schema.js';
 import { providerMetadataSchema } from '#schemas/message-provider.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
-import { dataPartSchema } from '#schemas/message-data.schema.js';
+import { usageDataSchema } from '#schemas/message-data.schema.js';
 import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
 import { imageAnalysisInputSchema, imageAnalysisOutputSchema } from '#schemas/tools/image-analysis.tool.schema.js';
 import { webBrowserInputSchema, webBrowserOutputSchema } from '#schemas/tools/web-browser.tool.schema.js';
@@ -217,9 +217,9 @@ export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
               type: z.literal('step-start'),
             }),
             z.object({
-              type: z.enum(Object.values(dataPartSchema)),
+              type: z.literal('data-usage'),
               id: z.string().optional(),
-              data: z.unknown(),
+              data: usageDataSchema,
             }),
             z.object({
               type: z.literal('dynamic-tool'),

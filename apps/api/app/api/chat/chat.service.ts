@@ -114,45 +114,26 @@ Always prefer \`${toolName.webSearch}\` first, and only use \`${toolName.webBrow
 
   public getCallbacks(): LangGraphAdapterCallbacks {
     const { logger, modelService } = this;
-    // Accumulate per-turn usage data for multi-turn agent calls
-    type TurnUsage = {
-      turnIndex: number;
-      inputTokens: number;
-      outputTokens: number;
-      cachedReadTokens: number;
-      cachedWriteTokens: number;
-      inputTokensCost: number;
-      outputTokensCost: number;
-      cachedReadTokensCost: number;
-      cachedWriteTokensCost: number;
-      usageCost: number;
-    };
-    const turns: TurnUsage[] = [];
 
     return {
       onChatModelEnd({ dataStream, modelId: id, usageTokens }) {
-        // Emit per-turn usage metadata, accumulating all turns
+        // Emit usage as a data part for each model turn
         const normalizedUsageTokens = modelService.normalizeUsageTokens(id, usageTokens);
-        const turnUsageCost = modelService.getModelCost(id, normalizedUsageTokens);
-
-        turns.push({
-          turnIndex: turns.length,
-          inputTokens: normalizedUsageTokens.inputTokens,
-          outputTokens: normalizedUsageTokens.outputTokens,
-          cachedReadTokens: normalizedUsageTokens.cachedReadTokens,
-          cachedWriteTokens: normalizedUsageTokens.cachedWriteTokens,
-          inputTokensCost: turnUsageCost.inputTokensCost,
-          outputTokensCost: turnUsageCost.outputTokensCost,
-          cachedReadTokensCost: turnUsageCost.cachedReadTokensCost,
-          cachedWriteTokensCost: turnUsageCost.cachedWriteTokensCost,
-          usageCost: turnUsageCost.totalCost,
-        });
+        const usageCost = modelService.getModelCost(id, normalizedUsageTokens);
 
         dataStream.write({
-          type: 'message-metadata',
-          messageMetadata: {
-            turns: [...turns],
+          type: 'data-usage',
+          data: {
             model: id,
+            inputTokens: normalizedUsageTokens.inputTokens,
+            outputTokens: normalizedUsageTokens.outputTokens,
+            cachedReadTokens: normalizedUsageTokens.cachedReadTokens,
+            cachedWriteTokens: normalizedUsageTokens.cachedWriteTokens,
+            inputTokensCost: usageCost.inputTokensCost,
+            outputTokensCost: usageCost.outputTokensCost,
+            cachedReadTokensCost: usageCost.cachedReadTokensCost,
+            cachedWriteTokensCost: usageCost.cachedWriteTokensCost,
+            totalCost: usageCost.totalCost,
           },
         });
       },
