@@ -264,7 +264,7 @@ class JscadWorker extends KernelWorker {
         jsonSchema,
       });
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to extract parameters', filename);
+      return createJscadKernelError(error, 'Failed to extract parameters', this.activeFilePath);
     }
   }
 
@@ -329,7 +329,7 @@ class JscadWorker extends KernelWorker {
           data: error,
           operation: 'computeGeometry',
         });
-        return createJscadKernelError(error, 'Failed to execute JSCAD code', filename);
+        return createJscadKernelError(error, 'Failed to execute JSCAD code', this.activeFilePath);
       }
 
       // Store shapes in memory for export with LRU cleanup
@@ -366,7 +366,7 @@ class JscadWorker extends KernelWorker {
 
       return createKernelSuccess(geometries);
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to compute JSCAD geometry', filename);
+      return createJscadKernelError(error, 'Failed to compute JSCAD geometry', this.activeFilePath);
     }
   }
 

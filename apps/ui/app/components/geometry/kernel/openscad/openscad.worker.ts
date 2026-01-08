@@ -153,7 +153,7 @@ export class OpenScadWorker extends KernelWorker {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return createKernelError({
         message: errorMessage,
-        location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
+        location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
       });
     }
   }
@@ -196,7 +196,7 @@ export class OpenScadWorker extends KernelWorker {
         const error = instance.formatException?.(result);
         return createKernelError({
           message: `Failed to build geometry: ${error}`,
-          location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
+          location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
         });
       }
 
@@ -216,7 +216,7 @@ export class OpenScadWorker extends KernelWorker {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return createKernelError({
         message: errorMessage,
-        location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
+        location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
       });
     }
   }

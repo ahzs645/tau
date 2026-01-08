@@ -67,7 +67,7 @@ class TauWorker extends KernelWorker {
       const errorMessage = error instanceof Error ? error.message : 'Failed to convert file';
       return createKernelError({
         message: errorMessage,
-        location: { fileName: filename, startLineNumber: 0, startColumn: 0 },
+        location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
         type: 'runtime',
       });
     }

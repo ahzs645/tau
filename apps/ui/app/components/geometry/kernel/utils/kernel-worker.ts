@@ -51,6 +51,13 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected basePath = '';
 
   /**
+   * The full relative path of the active file being processed.
+   * Used for error locations to ensure FileLink can navigate correctly.
+   * Set via setBasePath() from the original file.filename.
+   */
+  protected activeFilePath = '';
+
+  /**
    * FileReader interface that provides logged filesystem operations relative to basePath.
    * Initialized during initialize() and can be used by kernels that need filesystem access.
    */
@@ -349,6 +356,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param file - The geometry file being processed
    */
   protected setBasePath(file: GeometryFile): void {
+    // Store the full relative path for use in error locations
+    this.activeFilePath = file.filename;
+
     // Extract directory from filename (e.g., 'public/kcl-samples/axial-fan/main.kcl' -> 'public/kcl-samples/axial-fan')
     const lastSlashIndex = file.filename.lastIndexOf('/');
     const directory = lastSlashIndex === -1 ? '' : file.filename.slice(0, lastSlashIndex);

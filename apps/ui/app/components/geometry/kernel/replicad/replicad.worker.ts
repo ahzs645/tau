@@ -197,7 +197,7 @@ try {
         jsonSchema,
       });
     } catch (error) {
-      const kernelError = await this.formatKernelError(error, filename);
+      const kernelError = await this.formatKernelError(error, this.activeFilePath);
       return createKernelError(kernelError);
     }
   }
@@ -230,7 +230,7 @@ try {
           data: error,
           operation: 'computeGeometry',
         });
-        const kernelError = await this.formatKernelError(error, filename);
+        const kernelError = await this.formatKernelError(error, this.activeFilePath);
         return createKernelError(kernelError);
       }
 
@@ -278,7 +278,7 @@ try {
       };
     } catch (error) {
       this.error('Error in computeGeometry', { data: error, operation: 'computeGeometry' });
-      const kernelError = await this.formatKernelError(error, filename);
+      const kernelError = await this.formatKernelError(error, this.activeFilePath);
       return createKernelError(kernelError);
     }
   }

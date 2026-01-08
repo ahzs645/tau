@@ -64,7 +64,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
       if (criticalErrors.length > 0) {
         this.warn('KCL parsing errors during parameter extraction', { data: criticalErrors });
         // Return ALL errors, not just the first one
-        const errors = this.mapCompilationErrorsToKernelErrors(criticalErrors, code, filename);
+        const errors = this.mapCompilationErrorsToKernelErrors(criticalErrors, code, this.activeFilePath);
         return createKernelErrors(errors);
       }
 
@@ -79,7 +79,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
       if (criticalExecutionErrors.length > 0) {
         this.warn('KCL execution errors during parameter extraction', { data: criticalExecutionErrors });
         // Return ALL execution errors
-        const errors = this.mapCompilationErrorsToKernelErrors(criticalExecutionErrors, code, filename);
+        const errors = this.mapCompilationErrorsToKernelErrors(criticalExecutionErrors, code, this.activeFilePath);
         return createKernelErrors(errors);
       }
 
@@ -95,7 +95,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         jsonSchema,
       });
     } catch (error) {
-      const kclErrorResult = this.handleError(error, code, filename);
+      const kclErrorResult = this.handleError(error, code, this.activeFilePath);
       this.logKernelErrors(kclErrorResult.errors, 'extractParameters');
       return kclErrorResult;
     }
@@ -121,7 +121,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         if (criticalParseErrors.length > 0) {
           this.warn('KCL parsing errors', { data: criticalParseErrors });
           // Return ALL parse errors
-          const errors = this.mapCompilationErrorsToKernelErrors(criticalParseErrors, trimmedCode, filename);
+          const errors = this.mapCompilationErrorsToKernelErrors(criticalParseErrors, trimmedCode, this.activeFilePath);
           return createKernelErrors(errors);
         }
 
@@ -137,7 +137,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         if (criticalExecutionErrors.length > 0) {
           this.warn('KCL execution errors', { data: criticalExecutionErrors });
           // Return ALL execution errors
-          const errors = this.mapCompilationErrorsToKernelErrors(criticalExecutionErrors, trimmedCode, filename);
+          const errors = this.mapCompilationErrorsToKernelErrors(criticalExecutionErrors, trimmedCode, this.activeFilePath);
           return createKernelErrors(errors);
         }
 
@@ -171,12 +171,12 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         };
         return createKernelSuccess([geometry]);
       } catch (error) {
-        const kclErrorResult = this.handleError(error, code, filename);
+        const kclErrorResult = this.handleError(error, code, this.activeFilePath);
         this.logKernelErrors(kclErrorResult.errors, 'computeGeometry');
         return kclErrorResult;
       }
     } catch (error) {
-      const kclErrorResult = this.handleError(error, code, filename);
+      const kclErrorResult = this.handleError(error, code, this.activeFilePath);
       this.logKernelErrors(kclErrorResult.errors, 'computeGeometry');
       return kclErrorResult;
     }
