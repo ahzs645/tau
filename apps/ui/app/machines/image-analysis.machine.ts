@@ -254,8 +254,6 @@ export function buildImageAnalysisOutput(context: ImageAnalysisContext): ImageAn
     aggregatedResults: context.aggregatedResults,
     evaluationCriteria: context.evaluationCriteria ?? {
       totalObservations: 0,
-      thresholdPercentage: 66,
-      thresholdCount: 0,
     },
   };
 }

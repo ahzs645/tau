@@ -244,8 +244,6 @@ export function useChatTools(): UseChatToolsReturn {
             aggregatedResults: [],
             evaluationCriteria: {
               totalObservations: observations.length,
-              thresholdPercentage: 66,
-              thresholdCount: Math.ceil(observations.length * 0.66),
             },
           };
         }

@@ -47,45 +47,65 @@ export class AnalysisService {
     );
     this.logger.log('All observations analyzed successfully');
 
-    // Aggregate results per requirement using 67% threshold
-    const thresholdPercentage = 67;
-    const thresholdCount = Math.ceil(observations.length * (thresholdPercentage / 100));
+    // Aggregate results per requirement using failure-based logic:
+    // - FAILED if ANY view returns 'failed', OR if ALL views return 'indeterminate'
+    // - PASSED if at least one view returns 'passed' and no views return 'failed'
+    const aggregatedResults: RequirementResult[] = await Promise.all(
+      requirements.map(async (requirement, requirementIndex) => {
+        // Collect ALL failed results for this requirement
+        type ViewFailure = { side: string; reason: string; suggestion: string };
+        const viewFailures: ViewFailure[] = [];
 
-    const aggregatedResults: RequirementResult[] = requirements.map((requirement, requirementIndex) => {
-      // Count how many observations marked this requirement as passed
-      const passCount = observationResults.filter((observationResult) => {
-        const result = observationResult.results[requirementIndex];
-        return result?.status === 'passed';
-      }).length;
+        for (const observationResult of observationResults) {
+          const result = observationResult.results[requirementIndex];
+          if (result?.status === 'failed') {
+            viewFailures.push({
+              side: observationResult.side,
+              reason: result.reason,
+              suggestion: result.suggestion,
+            });
+          }
+        }
 
-      if (passCount >= thresholdCount) {
-        return {
-          status: 'passed' as const,
-          requirement,
-        };
-      }
+        if (viewFailures.length > 0) {
+          // If only one failure, use it directly (no summarization needed)
+          const firstFailure = viewFailures[0];
+          if (viewFailures.length === 1 && firstFailure) {
+            return {
+              status: 'failed' as const,
+              requirement,
+              reason: firstFailure.reason,
+              suggestion: firstFailure.suggestion,
+            };
+          }
 
-      // Find a failed result to use for reason/suggestion
-      const failedResult = observationResults.find((observationResult) => {
-        const result = observationResult.results[requirementIndex];
-        return result?.status === 'failed';
-      })?.results[requirementIndex];
+          // Multiple failures: use LLM to summarize into coherent reason + suggestion
+          const { reason, suggestion } = await this.summarizeFailures(requirement, viewFailures);
+          return { status: 'failed' as const, requirement, reason, suggestion };
+        }
 
-      return {
-        status: 'failed' as const,
-        requirement,
-        reason:
-          failedResult?.status === 'failed'
-            ? `${passCount}/${observations.length} views passed. ${failedResult.reason}`
-            : `${passCount}/${observations.length} views passed (below ${thresholdPercentage}% threshold)`,
-        suggestion: failedResult?.status === 'failed' ? failedResult.suggestion : 'Review the failed views for details',
-      };
-    });
+        // Check if ALL views are indeterminate (no view could verify)
+        const allIndeterminate = observationResults.every((observationResult) => {
+          const result = observationResult.results[requirementIndex];
+          return result?.status === 'indeterminate';
+        });
+
+        if (allIndeterminate) {
+          return {
+            status: 'failed' as const,
+            requirement,
+            reason: 'No view could verify this requirement',
+            suggestion: 'Ensure the feature is visible from at least one orthographic view',
+          };
+        }
+
+        // At least one view passed and none failed
+        return { status: 'passed' as const, requirement };
+      }),
+    );
 
     const evaluationCriteria: EvaluationCriteria = {
       totalObservations: observations.length,
-      thresholdPercentage,
-      thresholdCount,
     };
 
     return {
@@ -161,6 +181,60 @@ export class AnalysisService {
   private formatRequirementsPrompt(requirements: string[]): string {
     const requirementsList = requirements.map((requirement, index) => `${index + 1}. ${requirement}`).join('\n');
     return `Please analyze this CAD model screenshot and verify the following requirements:\n\n${requirementsList}`;
+  }
+
+  /**
+   * Summarize multiple view failures into a single coherent reason and suggestion.
+   * Uses a fast text model to synthesize all failures intelligently.
+   */
+  private async summarizeFailures(
+    requirement: string,
+    viewFailures: Array<{ side: string; reason: string; suggestion: string }>,
+  ): Promise<{ reason: string; suggestion: string }> {
+    this.logger.debug(`Summarizing ${viewFailures.length} failures for requirement: ${requirement}`);
+
+    const failureDetails = viewFailures
+      .map((failure) => `${failure.side.toUpperCase()}: ${failure.reason} → Suggestion: ${failure.suggestion}`)
+      .join('\n');
+
+    const responseSchema = z.object({
+      reason: z.string(),
+      suggestion: z.string(),
+    });
+
+    try {
+      const { experimental_output: experimentalOutput } = await generateText({
+        model: openai('gpt-4o-mini'),
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- AI SDK uses snake_case for experimental API
+        experimental_output: Output.object({
+          schema: responseSchema,
+        }),
+        system: `You are a helpful assistant that summarizes CAD model verification failures. Given multiple view-specific failures for a single requirement, synthesize them into ONE clear reason and ONE actionable suggestion. Be concise but preserve all important details.`,
+        messages: [
+          {
+            role: 'user',
+            content: `Summarize these CAD model verification failures for requirement "${requirement}" into ONE clear reason and ONE actionable suggestion:
+
+${failureDetails}`,
+          },
+        ],
+      });
+
+      return {
+        reason: experimentalOutput.reason,
+        suggestion: experimentalOutput.suggestion,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to summarize failures: ${errorMessage}`);
+
+      // Fallback: use the first failure's details (viewFailures is guaranteed non-empty)
+      const firstFailure = viewFailures[0] ?? { reason: 'Unknown failure', suggestion: 'Review the model' };
+      return {
+        reason: `Failed in ${viewFailures.length} views. ${firstFailure.reason}`,
+        suggestion: firstFailure.suggestion,
+      };
+    }
   }
 }
 

@@ -21,13 +21,18 @@ You are analyzing the **${viewSideUpper} view** of a 3D CAD model. This is one o
 
 You are currently viewing: **${viewSideUpper}**
 
-## Spatial Reasoning Approach
+## Decision Framework
 
-Analyze the model from this single perspective:
-1. **Identify visible features**: Note what geometry, surfaces, edges, and details are visible from this ${viewSideUpper} view
-2. **Consider what's hidden**: Some features may not be visible from this angle - mark requirements as "cannot verify" if the relevant geometry is not visible
-3. **Describe positions precisely**: Use quadrant references, approximate measurements, and relative positions within this view
-4. **Be honest about limitations**: If a requirement cannot be verified from this single view, explain why
+For each requirement, ask yourself ONE question: **"Can I see enough in this image to make a determination?"**
+
+- **PASSED**: "I can clearly see the feature AND it meets the requirement"
+- **FAILED**: "I can clearly see the feature AND it does NOT meet the requirement" (or there is visible evidence contradicting the requirement)
+- **INDETERMINATE**: "I cannot see enough information in this image to determine if the requirement is met"
+
+**Key principles:**
+- Only judge what is clearly visible - never guess about what you cannot see
+- \`indeterminate\` means "insufficient visual information to decide" - it is not an error or failure
+- Never suggest "ensure the model is visible" or similar - that is not actionable. If you cannot see it, mark \`indeterminate\`
 
 ## Output Format
 
@@ -45,6 +50,15 @@ For FAILED requirements:
   "requirement": "<the requirement text>",
   "reason": "<precise description of what is wrong in this ${viewSideUpper} view>",
   "suggestion": "<specific, actionable fix the developer can implement>"
+}
+\`\`\`
+
+For INDETERMINATE requirements (when you cannot see enough to decide):
+\`\`\`json
+{
+  "status": "indeterminate",
+  "requirement": "<the requirement text>",
+  "reason": "<brief explanation of what visual information is missing>"
 }
 \`\`\`
 
@@ -79,6 +93,11 @@ Your suggestions must be **specific and actionable** so a developer can implemen
     "requirement": "The table top should be round",
     "reason": "This ${viewSideUpper} view clearly shows the table top is rectangular (approximately 100x60 units) instead of circular",
     "suggestion": "Replace the rectangular extrusion with a cylinder or revolve operation. Create a circle with radius ~50 units centered at the table's origin, then extrude upward by the current thickness (~5 units)"
+  },
+  {
+    "status": "indeterminate",
+    "requirement": "The wheel should have 5 spokes",
+    "reason": "Spoke detail not visible in this view - only a solid gray shape is shown"
   }
 ]
 \`\`\`
@@ -89,7 +108,7 @@ Your suggestions must be **specific and actionable** so a developer can implemen
 - Each requirement must appear in your output exactly as provided
 - Be precise and specific in failure reasons based on what you can see in this ${viewSideUpper} view
 - Every FAILED requirement MUST include a detailed, actionable suggestion
-- If a requirement cannot be verified from this ${viewSideUpper} view (e.g., feature is on the opposite side), mark it as failed with reason: "Cannot verify from ${viewSideUpper} view - relevant geometry not visible"
+- If you cannot see enough visual information to determine pass/fail, use \`indeterminate\` - never guess
 - Evaluate requirements in the order they are provided
 `;
 }

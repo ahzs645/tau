@@ -30,9 +30,16 @@ export const requirementFailedSchema = z.object({
   suggestion: z.string(),
 });
 
+export const requirementIndeterminateSchema = z.object({
+  status: z.literal('indeterminate'),
+  requirement: z.string(),
+  reason: z.string(),
+});
+
 export const requirementResultSchema = z.discriminatedUnion('status', [
   requirementPassedSchema,
   requirementFailedSchema,
+  requirementIndeterminateSchema,
 ]);
 
 // Observation result - results for a single observation/view
@@ -46,8 +53,6 @@ export type ObservationResult = z.infer<typeof observationResultSchema>;
 // Evaluation criteria - transparency for UI display
 export const evaluationCriteriaSchema = z.object({
   totalObservations: z.number(),
-  thresholdPercentage: z.number(),
-  thresholdCount: z.number(),
 });
 export type EvaluationCriteria = z.infer<typeof evaluationCriteriaSchema>;
 
@@ -63,5 +68,6 @@ export const imageAnalysisOutputSchema = z.object({
 export type ImageAnalysisInput = z.infer<typeof imageAnalysisInputSchema>;
 export type RequirementPassed = z.infer<typeof requirementPassedSchema>;
 export type RequirementFailed = z.infer<typeof requirementFailedSchema>;
+export type RequirementIndeterminate = z.infer<typeof requirementIndeterminateSchema>;
 export type RequirementResult = z.infer<typeof requirementResultSchema>;
 export type ImageAnalysisOutput = z.infer<typeof imageAnalysisOutputSchema>;

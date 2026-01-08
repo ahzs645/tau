@@ -11,13 +11,18 @@ export const imageAnalysisToolDefinition = {
   name: toolName.imageAnalysis,
   description: `Visually validate a CAD model against specific requirements.
 
-Captures 6 individual orthographic view observations (FRONT, BACK, RIGHT, LEFT, TOP, BOTTOM), analyzes each in parallel against the provided requirements, and aggregates results using a 67% consensus threshold.
+Captures 6 individual orthographic view observations (FRONT, BACK, RIGHT, LEFT, TOP, BOTTOM), analyzes each in parallel against the provided requirements, and aggregates results.
+
+Aggregation logic:
+- FAILED: If ANY view definitively fails the requirement, OR if ALL views return indeterminate
+- PASSED: If at least one view passes and no views fail
+- Each view can return: passed, failed, or indeterminate (when visual information is insufficient)
 
 Returns:
 - observations: Array of captured images with id, side, and src
 - observationResults: Per-observation analysis results matched by ID
-- aggregatedResults: Combined results (requirement passes if 4+/6 views agree)
-- evaluationCriteria: Threshold details for transparency`,
+- aggregatedResults: Combined results across all views
+- evaluationCriteria: Analysis metadata`,
   schema: imageAnalysisJsonSchema,
 } as const;
 

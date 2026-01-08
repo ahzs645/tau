@@ -1,5 +1,5 @@
 import type { UIToolInvocation } from 'ai';
-import { Eye, Check, X, Lightbulb } from 'lucide-react';
+import { Eye, Check, X, Lightbulb, HelpCircle } from 'lucide-react';
 import type { MyTools, RequirementResult } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
 import { useChatSelector } from '#hooks/use-chat.js';
@@ -15,7 +15,23 @@ import {
 } from '#components/chat/chat-tool-card.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { RequirementIndicator } from '#components/chat/requirement-indicator.js';
-import { cn } from '#utils/ui.utils.js';
+
+/**
+ * Returns the appropriate status icon for a requirement result
+ */
+function RequirementStatusIcon({ status }: { readonly status: RequirementResult['status'] }): React.JSX.Element {
+  switch (status) {
+    case 'passed': {
+      return <Check className="size-3.5 text-success" />;
+    }
+    case 'failed': {
+      return <X className="size-3.5 text-destructive" />;
+    }
+    case 'indeterminate': {
+      return <HelpCircle className="size-3.5 text-muted-foreground" />;
+    }
+  }
+}
 
 /**
  * Renders a single requirement result with status icon, reason, and suggestion if failed
@@ -27,15 +43,13 @@ function RequirementResultItem({
   readonly result: RequirementResult;
   readonly index: number;
 }): React.JSX.Element {
-  const isPassed = result.status === 'passed';
-
   return (
     <div className="flex items-start gap-2 text-xs">
       <div className="mt-0.5 shrink-0">
-        {isPassed ? <Check className="size-3.5 text-success" /> : <X className="size-3.5 text-destructive" />}
+        <RequirementStatusIcon status={result.status} />
       </div>
       <div className="flex-1">
-        <div className={cn(isPassed ? 'text-foreground' : 'text-foreground')}>
+        <div className="text-foreground">
           {index + 1}. {result.requirement}
         </div>
         {result.status === 'failed' ? (
@@ -48,6 +62,9 @@ function RequirementResultItem({
               </div>
             ) : undefined}
           </div>
+        ) : undefined}
+        {result.status === 'indeterminate' ? (
+          <div className="mt-1 text-muted-foreground">{result.reason}</div>
         ) : undefined}
       </div>
     </div>
