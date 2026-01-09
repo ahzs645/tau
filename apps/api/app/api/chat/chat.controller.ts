@@ -5,7 +5,6 @@ import { Command } from '@langchain/langgraph';
 import type { StateSnapshot } from '@langchain/langgraph';
 import type { IterableReadableStream } from '@langchain/core/utils/stream';
 import type { StreamEvent } from '@langchain/core/tracers/log_stream';
-import type { BaseMessage } from '@langchain/core/messages';
 import type { ToolSelection } from '@taucad/chat';
 import { tryExtractAllToolResults } from '#api/chat/utils/extract-tool-result.js';
 import { ToolService, toolChoiceFromToolName } from '#api/tools/tool.service.js';
@@ -17,7 +16,6 @@ import {
 } from '#api/chat/utils/convert-messages.js';
 import { AuthGuard } from '#auth/auth.guard.js';
 import { CreateChatDto } from '#api/chat/chat.dto.js';
-import { isConversationAlreadyComplete } from '#api/chat/utils/conversation-completion.js';
 import { sendSimpleModelStream } from '#api/chat/utils/simple-model-stream.js';
 import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.js';
 
@@ -158,35 +156,6 @@ export class ChatController {
         });
       }
     } else {
-      // Normal execution - start new conversation or continue existing one
-      // First, check if this is a duplicate/stale request for an already-complete conversation
-      const checkpointMessages = (currentState?.values as { messages?: BaseMessage[] } | undefined)?.messages ?? [];
-
-      if (isConversationAlreadyComplete(checkpointMessages, langchainMessages)) {
-        // The checkpoint already has a complete conversation matching the incoming messages.
-        // This is likely a duplicate request caused by:
-        // - sendAutomaticallyWhen triggering multiple times
-        // - Race condition between resume completing and another request arriving
-        // Skip processing to avoid message ID conflicts that cause Anthropic errors.
-        this.logger.debug(
-          `Skipping duplicate request for thread: ${body.id} - conversation already complete in checkpoint`,
-        );
-
-        // Return an empty SSE stream to gracefully complete the request
-        void response.header('content-type', 'text/event-stream');
-        void response.header('x-vercel-ai-ui-message-stream', 'v1');
-        void response.header('x-accel-buffering', 'no');
-
-        // Create an empty readable stream that immediately closes
-        const emptyStream = new ReadableStream({
-          start(controller) {
-            controller.close();
-          },
-        });
-
-        return response.send(emptyStream);
-      }
-
       this.logger.debug(`Starting normal execution for thread: ${body.id}`);
       eventStream = graph.streamEvents(
         {
