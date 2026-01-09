@@ -54,6 +54,7 @@ const config = [
       '**/assets',
       '**/.source/**/*', // Fumadocs source files.
       '**/.netlify',
+      '**/*.prompt.example.*', // Kernel prompt examples (OpenSCAD, KCL, etc.)
     ],
   },
   // First, apply XO's base configuration
