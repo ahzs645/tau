@@ -143,7 +143,7 @@ export type LangGraphAdapterOptions = {
    * Optional parsers for tool results by tool name. This can be helpful
    * when the tool results are not in the expected format.
    */
-  parseToolResults?: Partial<Record<string, (content: string) => unknown[]>>;
+  parseToolResults?: Partial<Record<string, (content: string) => unknown>>;
 };
 
 /**
@@ -807,7 +807,7 @@ export class LangGraphAdapter {
     streamEvent: ToolEndEvent;
     dataStream: TypedUiMessageStreamWriter;
     callbacks: LangGraphAdapterCallbacks;
-    parseToolResults?: Partial<Record<string, (content: string) => unknown[]>>;
+    parseToolResults?: Partial<Record<string, (content: string) => unknown>>;
     toolCallState: {
       toolCallsById: Map<string, { toolCallId: string; toolName: string }>;
       toolCallQueue: Array<{ toolCallId: string; toolName: string }>;

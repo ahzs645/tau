@@ -33,7 +33,6 @@ export const clientToolNames = [
   toolName.grep,
   toolName.globSearch,
   toolName.getKernelResult,
-  toolName.reasoning,
 ] as const;
 
 export type ClientToolName = (typeof clientToolNames)[number];

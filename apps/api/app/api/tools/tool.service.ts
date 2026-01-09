@@ -17,7 +17,7 @@ import { deleteFileTool } from '#api/tools/tools/tool-delete-file.js';
 import { grepTool } from '#api/tools/tools/tool-grep.js';
 import { globSearchTool } from '#api/tools/tools/tool-glob-search.js';
 import { getKernelResultTool } from '#api/tools/tools/tool-get-kernel-result.js';
-import { reasoningTool } from '#api/tools/tools/tool-reasoning.js';
+import { reasoningTool, parseReasoningOutput } from '#api/tools/tools/tool-reasoning.js';
 
 export const toolChoiceFromToolName = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- Tavily search tool name
@@ -97,9 +97,10 @@ export class ToolService {
     return { tools: toolCategoryToTool, resolvedToolChoice };
   }
 
-  public getToolParsers(): Partial<Record<ToolName, (content: string) => unknown[]>> {
+  public getToolParsers(): Partial<Record<ToolName, (content: string) => unknown>> {
     return {
       [toolName.webSearch]: parseWebSearchResults,
+      [toolName.reasoning]: parseReasoningOutput,
     };
   }
 

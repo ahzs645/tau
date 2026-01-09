@@ -1,6 +1,5 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { reasoningInputSchema } from '@taucad/chat';
 import type { ReasoningOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
@@ -16,7 +15,11 @@ Thinking is displayed to user in collapsible section.`,
   schema: reasoningJsonSchema,
 } as const;
 
-export const reasoningTool = tool((args) => {
-  const result = interrupt<unknown, ReasoningOutput>(args);
-  return result;
+export const reasoningTool = tool(() => {
+  // Reasoning tool is purely for display - the LLM's thinking is captured in the input
+  return { acknowledged: true };
 }, reasoningToolDefinition);
+
+export const parseReasoningOutput = (content: string): ReasoningOutput => {
+  return JSON.parse(content) as ReasoningOutput;
+};

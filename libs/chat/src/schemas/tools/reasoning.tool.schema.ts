@@ -6,7 +6,6 @@ export const reasoningInputSchema = z.object({
 
 export const reasoningOutputSchema = z.object({
   acknowledged: z.boolean().describe('Whether the reasoning was acknowledged.'),
-  durationMs: z.number().optional().describe('Time spent thinking in milliseconds.'),
 });
 
 export type ReasoningInput = z.infer<typeof reasoningInputSchema>;

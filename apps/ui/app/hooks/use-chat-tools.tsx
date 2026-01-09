@@ -23,7 +23,6 @@ import type {
   GlobSearchOutput,
   GetKernelResultInput,
   GetKernelResultOutput,
-  ReasoningOutput,
   MyUIMessage,
   MyTools,
   Observation,
@@ -510,17 +509,6 @@ export function useChatTools(): UseChatToolsReturn {
         }
       };
 
-      // Handler for reasoning tool
-      const handleReasoning = (): ReasoningOutput => {
-        // Reasoning tool is primarily for display - the LLM's thinking is captured in the input
-        // We simply acknowledge it and return the duration
-        const startTime = Date.now();
-        return {
-          acknowledged: true,
-          durationMs: Date.now() - startTime,
-        };
-      };
-
       // Main tool call handler - executes handlers and calls addToolOutput for each
       // AI SDK collects all outputs and sends them together via sendAutomaticallyWhen
       return async ({ toolCall }): Promise<void> => {
@@ -589,11 +577,6 @@ export function useChatTools(): UseChatToolsReturn {
 
           case toolName.getKernelResult: {
             output = await handleGetKernelResult(toolCall);
-            break;
-          }
-
-          case toolName.reasoning: {
-            output = handleReasoning();
             break;
           }
 
