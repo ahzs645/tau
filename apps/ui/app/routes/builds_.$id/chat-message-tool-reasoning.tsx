@@ -1,5 +1,5 @@
 import type { UIToolInvocation } from 'ai';
-import { useRef, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Brain } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import type { toolName } from '@taucad/chat/constants';
@@ -12,22 +12,6 @@ import {
   ChatToolCardTitle,
   ChatToolCardContent,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
-
-/**
- * Format duration display.
- */
-function formatDuration(seconds: number): string {
-  if (seconds < 1) {
-    return '<1 second';
-  }
-
-  if (seconds === 1) {
-    return '1 second';
-  }
-
-  return `${seconds} seconds`;
-}
 
 export function ChatMessageToolReasoning({
   part,
@@ -37,33 +21,8 @@ export function ChatMessageToolReasoning({
   const isStreaming = useChatSelector((state) => state.status === 'streaming');
   const [isOpen, setIsOpen] = useState(false);
 
-  // Capture start time when component mounts (tool call begins)
-  const startTimeRef = useRef<number>(Date.now());
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  // Update elapsed time while in streaming/input states
-  useEffect(() => {
-    if (part.state === 'input-streaming' || part.state === 'input-available') {
-      const interval = setInterval(() => {
-        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
-      }, 1000);
-
-      return () => {
-        clearInterval(interval);
-      };
-    }
-
-    return undefined;
-  }, [part.state]);
-
   const isThinking = part.state === 'input-streaming' || part.state === 'input-available';
   const thinking = part.input?.thinking ?? '';
-
-  // Calculate final duration when output is available
-  const finalDurationSeconds =
-    part.state === 'output-available' && part.output.durationMs
-      ? Math.round(part.output.durationMs / 1000)
-      : elapsedSeconds;
 
   if (part.state === 'output-error') {
     return (
@@ -90,14 +49,7 @@ export function ChatMessageToolReasoning({
       <ChatToolCardHeader>
         <ChatToolCardIcon icon={Brain} />
         <ChatToolCardTitle>
-          {isThinking ? (
-            'Thinking...'
-          ) : (
-            <>
-              <ChatToolAction>Thought</ChatToolAction>{' '}
-              <ChatToolDescription>for {formatDuration(finalDurationSeconds)}</ChatToolDescription>
-            </>
-          )}
+          {isThinking ? 'Thinking...' : 'Thought process'}
         </ChatToolCardTitle>
       </ChatToolCardHeader>
       {hasContent ? (
