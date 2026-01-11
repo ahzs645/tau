@@ -8,7 +8,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/ho
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Table } from '#components/ui/table.js';
 import { useModels } from '#hooks/use-models.js';
 import { formatCurrency } from '#utils/currency.utils.js';
-import { formatNumber } from '#utils/number.utils.js';
+import { formatNumberAbbreviation } from '#utils/number.utils.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
@@ -28,11 +28,7 @@ type UsageTotals = {
  * Component for displaying usage data from data parts.
  * Aggregates multiple usage parts across agent turns and displays totals.
  */
-export function ChatMessageUsage({
-  usageParts,
-}: {
-  readonly usageParts: UsageData[];
-}): React.JSX.Element | undefined {
+export function ChatMessageUsage({ usageParts }: { readonly usageParts: UsageData[] }): React.JSX.Element | undefined {
   const { data: models } = useModels();
   const [showModelCost] = useCookie(cookieName.chatModelCost, true);
 
@@ -121,24 +117,24 @@ export function ChatMessageUsage({
                     const turnTokens =
                       usage.inputTokens + usage.outputTokens + usage.cachedReadTokens + usage.cachedWriteTokens;
                     return (
-                      <TableRow key={index}>
+                      <TableRow key={usage.id}>
                         <TableCell className="flex flex-row items-center gap-1">
                           <span>Turn {index + 1}</span>
                           <InfoTooltip>
                             <div className="space-y-1 text-xs">
-                              <div>Input: {formatNumber(usage.inputTokens)} tokens</div>
-                              <div>Output: {formatNumber(usage.outputTokens)} tokens</div>
+                              <div>Input: {formatNumberAbbreviation(usage.inputTokens)} tokens</div>
+                              <div>Output: {formatNumberAbbreviation(usage.outputTokens)} tokens</div>
                               {usage.cachedReadTokens > 0 && (
-                                <div>Cached Read: {formatNumber(usage.cachedReadTokens)} tokens</div>
+                                <div>Cached Read: {formatNumberAbbreviation(usage.cachedReadTokens)} tokens</div>
                               )}
                               {usage.cachedWriteTokens > 0 && (
-                                <div>Cached Write: {formatNumber(usage.cachedWriteTokens)} tokens</div>
+                                <div>Cached Write: {formatNumberAbbreviation(usage.cachedWriteTokens)} tokens</div>
                               )}
                             </div>
                           </InfoTooltip>
                         </TableCell>
-                        <TableCell className="text-right">{formatNumber(turnTokens)}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right font-mono">{formatNumberAbbreviation(turnTokens)}</TableCell>
+                        <TableCell className="text-right font-mono">
                           {formatCurrency(usage.totalCost, { significantFigures: 2 })}
                         </TableCell>
                       </TableRow>
@@ -156,8 +152,10 @@ export function ChatMessageUsage({
                         previous messages.
                       </InfoTooltip>
                     </TableCell>
-                    <TableCell className="text-right">{formatNumber(totals.inputTokens)}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right font-mono">
+                      {formatNumberAbbreviation(totals.inputTokens)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
                       {formatCurrency(totals.inputTokensCost, { significantFigures: 2 })}
                     </TableCell>
                   </TableRow>
@@ -166,8 +164,10 @@ export function ChatMessageUsage({
                       <span>Output</span>
                       <InfoTooltip>The number of tokens in the output response.</InfoTooltip>
                     </TableCell>
-                    <TableCell className="text-right">{formatNumber(totals.outputTokens)}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right font-mono">
+                      {formatNumberAbbreviation(totals.outputTokens)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
                       {formatCurrency(totals.outputTokensCost, { significantFigures: 2 })}
                     </TableCell>
                   </TableRow>
@@ -180,8 +180,10 @@ export function ChatMessageUsage({
                           re-processing the same prompt.
                         </InfoTooltip>
                       </TableCell>
-                      <TableCell className="text-right">{formatNumber(totals.cachedReadTokens)}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right font-mono">
+                        {formatNumberAbbreviation(totals.cachedReadTokens)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
                         {formatCurrency(totals.cachedReadTokensCost, { significantFigures: 2 })}
                       </TableCell>
                     </TableRow>
@@ -195,8 +197,10 @@ export function ChatMessageUsage({
                           re-processing the same prompt.
                         </InfoTooltip>
                       </TableCell>
-                      <TableCell className="text-right">{formatNumber(totals.cachedWriteTokens)}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right font-mono">
+                        {formatNumberAbbreviation(totals.cachedWriteTokens)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
                         {formatCurrency(totals.cachedWriteTokensCost, { significantFigures: 2 })}
                       </TableCell>
                     </TableRow>
@@ -207,8 +211,10 @@ export function ChatMessageUsage({
             <TableFooter className="overflow-clip rounded-b-md">
               <TableRow>
                 <TableCell>Total</TableCell>
-                <TableCell className="text-right">{formatNumber(totalTokens)}</TableCell>
-                <TableCell className="text-right">{formatCurrency(totals.totalCost, { significantFigures: 2 })}</TableCell>
+                <TableCell className="text-right font-mono">{formatNumberAbbreviation(totalTokens)}</TableCell>
+                <TableCell className="text-right font-mono">
+                  {formatCurrency(totals.totalCost, { significantFigures: 2 })}
+                </TableCell>
               </TableRow>
             </TableFooter>
           </Table>
@@ -217,4 +223,3 @@ export function ChatMessageUsage({
     </HoverCard>
   );
 }
-

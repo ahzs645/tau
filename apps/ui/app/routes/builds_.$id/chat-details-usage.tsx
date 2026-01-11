@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter, Table } from '#components/ui/table.js';
 import { formatCurrency } from '#utils/currency.utils.js';
-import { formatNumber } from '#utils/number.utils.js';
+import { formatNumberAbbreviation } from '#utils/number.utils.js';
 import { useChats } from '#hooks/use-chats.js';
 import { useBuild } from '#hooks/use-build.js';
 
@@ -68,15 +68,15 @@ export function ChatDetailsUsage(): React.JSX.Element | undefined {
   const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedReadTokens + totals.cachedWriteTokens;
 
   return (
-    <div className="border-t pt-3">
+    <div className="@container border-t pt-3">
       <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-        <span>Usage</span>
+        <span>Chat Usage</span>
       </div>
 
-      <Table className="overflow-clip rounded-md -mx-2">
+      <Table className="-mx-2 overflow-clip rounded-md">
         <TableHeader>
           <TableRow>
-            <TableHead>Metric</TableHead>
+            <TableHead className="">Metric</TableHead>
             <TableHead className="text-right">Tokens</TableHead>
             <TableHead className="text-right">Cost</TableHead>
           </TableRow>
@@ -84,34 +84,41 @@ export function ChatDetailsUsage(): React.JSX.Element | undefined {
         <TableBody>
           <TableRow>
             <TableCell className="flex flex-row items-center gap-1">
-              <span>Input</span>
+              <span className="@[16rem]:hidden">IN</span>
+              <span className="hidden @[16rem]:inline">Input</span>
               <InfoTooltip>
-                The number of tokens in input prompts across all chats. This includes user prompts, system messages,
-                and conversation history.
+                The number of tokens in input prompts across all chats. This includes user prompts, system messages, and
+                conversation history.
               </InfoTooltip>
             </TableCell>
-            <TableCell className="text-right">{formatNumber(totals.inputTokens)}</TableCell>
-            <TableCell className="text-right">{formatCurrency(totals.inputTokensCost, { significantFigures: 2 })}</TableCell>
+            <TableCell className="text-right font-mono">{formatNumberAbbreviation(totals.inputTokens)}</TableCell>
+            <TableCell className="text-right font-mono">
+              {formatCurrency(totals.inputTokensCost, { significantFigures: 2 })}
+            </TableCell>
           </TableRow>
           <TableRow>
             <TableCell className="flex flex-row items-center gap-1">
-              <span>Output</span>
+              <span className="@[16rem]:hidden">OUT</span>
+              <span className="hidden @[16rem]:inline">Output</span>
               <InfoTooltip>The number of tokens in output responses across all chats.</InfoTooltip>
             </TableCell>
-            <TableCell className="text-right">{formatNumber(totals.outputTokens)}</TableCell>
-            <TableCell className="text-right">{formatCurrency(totals.outputTokensCost, { significantFigures: 2 })}</TableCell>
+            <TableCell className="text-right font-mono">{formatNumberAbbreviation(totals.outputTokens)}</TableCell>
+            <TableCell className="text-right font-mono">
+              {formatCurrency(totals.outputTokensCost, { significantFigures: 2 })}
+            </TableCell>
           </TableRow>
           {totals.cachedReadTokens > 0 && (
             <TableRow>
               <TableCell className="flex flex-row items-center gap-1">
-                <span>Cached Read</span>
+                <span className="@[16rem]:hidden">CR</span>
+                <span className="hidden @[16rem]:inline">Cached Read</span>
                 <InfoTooltip>
                   The number of tokens read from the prompt cache. This improves performance by avoiding re-processing
                   the same prompt.
                 </InfoTooltip>
               </TableCell>
-              <TableCell className="text-right">{formatNumber(totals.cachedReadTokens)}</TableCell>
-              <TableCell className="text-right">
+              <TableCell className="text-right font-mono">{formatNumberAbbreviation(totals.cachedReadTokens)}</TableCell>
+              <TableCell className="text-right font-mono">
                 {formatCurrency(totals.cachedReadTokensCost, { significantFigures: 2 })}
               </TableCell>
             </TableRow>
@@ -119,14 +126,15 @@ export function ChatDetailsUsage(): React.JSX.Element | undefined {
           {totals.cachedWriteTokens > 0 ? (
             <TableRow>
               <TableCell className="flex flex-row items-center gap-1">
-                <span>Cached Write</span>
+                <span className="@[16rem]:hidden">CW</span>
+                <span className="hidden @[16rem]:inline">Cached Write</span>
                 <InfoTooltip>
                   The number of tokens written to the prompt cache. This improves performance by avoiding re-processing
                   the same prompt.
                 </InfoTooltip>
               </TableCell>
-              <TableCell className="text-right">{formatNumber(totals.cachedWriteTokens)}</TableCell>
-              <TableCell className="text-right">
+              <TableCell className="text-right font-mono">{formatNumberAbbreviation(totals.cachedWriteTokens)}</TableCell>
+              <TableCell className="text-right font-mono">
                 {formatCurrency(totals.cachedWriteTokensCost, { significantFigures: 2 })}
               </TableCell>
             </TableRow>
@@ -135,12 +143,13 @@ export function ChatDetailsUsage(): React.JSX.Element | undefined {
         <TableFooter className="overflow-clip rounded-b-md">
           <TableRow>
             <TableCell>Total</TableCell>
-            <TableCell className="text-right">{formatNumber(totalTokens)}</TableCell>
-            <TableCell className="text-right">{formatCurrency(totals.totalCost, { significantFigures: 2 })}</TableCell>
+            <TableCell className="text-right font-mono">{formatNumberAbbreviation(totalTokens)}</TableCell>
+            <TableCell className="text-right font-mono">
+              {formatCurrency(totals.totalCost, { significantFigures: 2 })}
+            </TableCell>
           </TableRow>
         </TableFooter>
       </Table>
     </div>
   );
 }
-
