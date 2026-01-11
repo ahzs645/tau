@@ -91,10 +91,7 @@ export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.
           </div>
         )}
         <div className="flex-1 space-y-1">
-          <ExternalLink
-            href={`https://github.com/${owner}/${repo}`}
-            className="font-mono text-lg font-semibold"
-          >
+          <ExternalLink href={`https://github.com/${owner}/${repo}`} className="font-mono text-lg font-semibold">
             {owner}/{repo}
           </ExternalLink>
           {metadata?.description ? (

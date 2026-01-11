@@ -596,6 +596,7 @@ export const ChatEditorFileTree = memo(function ({
         fileExplorerRef.send({ type: 'closeFile', path });
       }
     }
+
     setDeleteDialogOpen(false);
     setItemsToDelete([]);
   }, [fileExplorerRef, fileManagerRef, fileTree, itemsToDelete]);
@@ -678,7 +679,7 @@ export const ChatEditorFileTree = memo(function ({
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Are you sure you want to delete '{deleteItemName}'?</DialogTitle>
+            <DialogTitle>Are you sure you want to delete &apos;{deleteItemName}&apos;?</DialogTitle>
             <DialogDescription>This action cannot be undone.</DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">

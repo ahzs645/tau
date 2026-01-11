@@ -40,7 +40,10 @@ function getMarkerSeverity(monaco: typeof Monaco, severity: IssueSeverity | unde
       return monaco.MarkerSeverity.Info;
     }
 
-    case 'error':
+    case 'error': {
+      return monaco.MarkerSeverity.Error;
+    }
+
     default: {
       return monaco.MarkerSeverity.Error;
     }

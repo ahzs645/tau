@@ -24,9 +24,11 @@ function getSeverityIcon(severity: IssueSeverity): typeof AlertTriangle {
     case 'error': {
       return XCircle;
     }
+
     case 'warning': {
       return AlertTriangle;
     }
+
     case 'info': {
       return Info;
     }
@@ -41,9 +43,11 @@ function getSeverityIconClass(severity: IssueSeverity): string {
     case 'error': {
       return 'text-destructive';
     }
+
     case 'warning': {
       return 'text-warning';
     }
+
     case 'info': {
       return 'text-muted-foreground';
     }
@@ -124,7 +128,9 @@ export function ChatMessageToolGetKernelResult({
 
       // Has issues - determine severity for styling
       const { summary, hasErrors } = hasIssues ? getIssueSummary(kernelIssues) : { summary: '', hasErrors: false };
-      const headerColorClass = hasErrors ? 'text-destructive hover:text-destructive' : 'text-warning hover:text-warning';
+      const headerColorClass = hasErrors
+        ? 'text-destructive hover:text-destructive'
+        : 'text-warning hover:text-warning';
       const headerIcon = hasErrors ? XCircle : AlertTriangle;
       const borderClass = hasErrors ? 'border-destructive/30' : 'border-warning/30';
       const cardStatus = hasErrors ? 'error' : 'warning';

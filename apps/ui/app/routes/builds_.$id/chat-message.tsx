@@ -60,13 +60,13 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
     (state) => state.messagesById.get(messageId)?.parts.filter((part) => part.type === 'file') ?? [],
   );
   const usageParts = useChatSelector((state) => {
-    const msg = state.messageEdits[messageId] ?? state.messagesById.get(messageId);
-    if (!msg) {
+    const message_ = state.messageEdits[messageId] ?? state.messagesById.get(messageId);
+    if (!message_) {
       return [];
     }
 
     const usageDataParts: UsageData[] = [];
-    for (const part of msg.parts) {
+    for (const part of message_.parts) {
       if (part.type === 'data-usage') {
         usageDataParts.push(part.data);
       }

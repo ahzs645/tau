@@ -24,9 +24,11 @@ function RequirementStatusIcon({ status }: { readonly status: RequirementResult[
     case 'passed': {
       return <Check className="size-3.5 text-success" />;
     }
+
     case 'failed': {
       return <X className="size-3.5 text-destructive" />;
     }
+
     case 'indeterminate': {
       return <HelpCircle className="size-3.5 text-muted-foreground" />;
     }

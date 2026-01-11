@@ -9,14 +9,14 @@
  * @param data - The Uint8Array or ArrayBuffer to convert
  * @returns The same data with a compatible type for Blob constructor
  */
-export function asBuffer(data: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer>;
+export function asBuffer(data: Uint8Array): Uint8Array<ArrayBuffer>;
 export function asBuffer(data: ArrayBufferLike): ArrayBuffer;
-export function asBuffer(data: Uint8Array<ArrayBufferLike> | ArrayBufferLike): Uint8Array<ArrayBuffer> | ArrayBuffer {
+export function asBuffer(data: Uint8Array | ArrayBufferLike): Uint8Array<ArrayBuffer> | ArrayBuffer {
   if (data instanceof Uint8Array) {
     return data as Uint8Array<ArrayBuffer>;
-  } else {
-    return data as ArrayBuffer;
   }
+
+  return data as ArrayBuffer;
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

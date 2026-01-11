@@ -117,7 +117,9 @@ export function ChatDetailsUsage(): React.JSX.Element | undefined {
                   the same prompt.
                 </InfoTooltip>
               </TableCell>
-              <TableCell className="text-right font-mono">{formatNumberAbbreviation(totals.cachedReadTokens)}</TableCell>
+              <TableCell className="text-right font-mono">
+                {formatNumberAbbreviation(totals.cachedReadTokens)}
+              </TableCell>
               <TableCell className="text-right font-mono">
                 {formatCurrency(totals.cachedReadTokensCost, { significantFigures: 2 })}
               </TableCell>
@@ -133,7 +135,9 @@ export function ChatDetailsUsage(): React.JSX.Element | undefined {
                   the same prompt.
                 </InfoTooltip>
               </TableCell>
-              <TableCell className="text-right font-mono">{formatNumberAbbreviation(totals.cachedWriteTokens)}</TableCell>
+              <TableCell className="text-right font-mono">
+                {formatNumberAbbreviation(totals.cachedWriteTokens)}
+              </TableCell>
               <TableCell className="text-right font-mono">
                 {formatCurrency(totals.cachedWriteTokensCost, { significantFigures: 2 })}
               </TableCell>

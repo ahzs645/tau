@@ -119,11 +119,7 @@ function createErrorLocation(
  * @param addError - Callback to invoke when an error is parsed.
  * @param getFileContents - Optional function to lazily fetch file content for calculating column positions.
  */
-export function parseStderrLine(
-  message: string,
-  addError: AddErrorFn,
-  getFileContents?: GetFileContentsFn,
-): void {
+export function parseStderrLine(message: string, addError: AddErrorFn, getFileContents?: GetFileContentsFn): void {
   // Pattern 1: ERROR: Parser error in file "foo.scad", line 10: syntax error
   let match = /^ERROR: Parser error in file "([^"]+)", line (\d+): (.*)$/.exec(message);
   if (match) {
@@ -168,4 +164,3 @@ export function parseStderrLine(
     });
   }
 }
-

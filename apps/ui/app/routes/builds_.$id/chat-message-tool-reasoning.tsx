@@ -48,9 +48,7 @@ export function ChatMessageToolReasoning({
     >
       <ChatToolCardHeader>
         <ChatToolCardIcon icon={Brain} />
-        <ChatToolCardTitle>
-          {isThinking ? 'Thinking...' : 'Thought process'}
-        </ChatToolCardTitle>
+        <ChatToolCardTitle>{isThinking ? 'Thinking...' : 'Thought process'}</ChatToolCardTitle>
       </ChatToolCardHeader>
       {hasContent ? (
         <ChatToolCardContent className="border-l-0">

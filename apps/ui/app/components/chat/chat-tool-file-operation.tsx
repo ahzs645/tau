@@ -251,7 +251,7 @@ export function CollapsibleFileOperationTrigger({
 
   // Calculate line number for first change when diff data is available
   const firstChangedLine =
-    diffStats !== undefined ? getFirstChangedLine(diffStats.originalContent, diffStats.modifiedContent) : undefined;
+    diffStats === undefined ? undefined : getFirstChangedLine(diffStats.originalContent, diffStats.modifiedContent);
 
   // Filename element - clickable when enableFileLink is true
   // Uses asChild to avoid nesting buttons inside CollapsibleTrigger

@@ -90,6 +90,7 @@ describe('parseStderrLine', () => {
   describe('Column positions from file contents (1-based)', () => {
     it('should use line content to set start and end columns', () => {
       const errorLine = 'x += 90 + 2*tray_clearance;';
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
@@ -114,6 +115,7 @@ describe('parseStderrLine', () => {
     it('should find first non-whitespace character for start column with indented code', () => {
       // Simulate indented error line like "    x += 90 + tray_clearance;"
       const errorLine = '    x += 90 + tray_clearance;';
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
@@ -137,6 +139,7 @@ describe('parseStderrLine', () => {
 
     it('should handle tabs as leading whitespace', () => {
       const errorLine = '\t\tx += 1;';
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
@@ -153,6 +156,7 @@ describe('parseStderrLine', () => {
     });
 
     it('should fallback to 1000 when file is not in contents map', () => {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'other.scad': 'content' });
 
       const errors: KernelIssue[] = [];
@@ -170,6 +174,7 @@ describe('parseStderrLine', () => {
     });
 
     it('should fallback to 1000 when line number is out of range', () => {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'main.scad': 'line 1\nline 2' });
 
       const errors: KernelIssue[] = [];
@@ -214,6 +219,7 @@ describe('parseStderrLine', () => {
 
     it('should use actual line content for warnings when file contents provided', () => {
       const errorLine = 'undefined_var = x;';
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'model.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
@@ -232,6 +238,7 @@ describe('parseStderrLine', () => {
 
     it('should find start column for indented warning lines', () => {
       const errorLine = '  undefined_var = x;';
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
       const getFileContents = createGetFileContents({ 'model.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
@@ -333,4 +340,3 @@ describe('parseStderrLine', () => {
     });
   });
 });
-

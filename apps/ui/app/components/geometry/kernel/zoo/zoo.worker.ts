@@ -133,7 +133,11 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         if (criticalExecutionErrors.length > 0) {
           this.warn('KCL execution errors', { data: criticalExecutionErrors });
           // Return ALL execution errors
-          const errors = this.mapCompilationErrorsToKernelIssues(criticalExecutionErrors, trimmedCode, this.activeFilePath);
+          const errors = this.mapCompilationErrorsToKernelIssues(
+            criticalExecutionErrors,
+            trimmedCode,
+            this.activeFilePath,
+          );
           return createKernelError(errors);
         }
 

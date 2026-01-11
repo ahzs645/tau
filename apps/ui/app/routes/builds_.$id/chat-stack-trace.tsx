@@ -510,7 +510,6 @@ export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProp
     <CollapsibleTrigger
       className={cn(
         'group/collapsible flex h-8 w-full items-center justify-between border-border bg-sidebar px-2 py-1.5 transition-colors hover:bg-accent',
-        
       )}
     >
       <span className="flex items-center gap-1.5 text-xs font-medium">
@@ -534,7 +533,7 @@ export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProp
   );
 
   const content = (
-    <CollapsibleContent className={cn('border-border', side === 'bottom' && 'border-b',side === 'top' && 'border-b',)}>
+    <CollapsibleContent className={cn('border-border', side === 'bottom' && 'border-b', side === 'top' && 'border-b')}>
       <div className="flex flex-col">
         {errors.map((error, errorIndex) => {
           // Create a unique key from error properties
@@ -559,7 +558,7 @@ export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProp
   );
 
   return (
-    <div {...props} className={cn('overflow-hidden rounded-md border bg-sidebar/50 border-border', className)}>
+    <div {...props} className={cn('overflow-hidden rounded-md border border-border bg-sidebar/50', className)}>
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         {side === 'top' ? (
           <>

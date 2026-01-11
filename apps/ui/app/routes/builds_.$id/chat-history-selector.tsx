@@ -236,7 +236,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
       <div className={cn('wrap ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
         <span className="truncate">{activeChat?.name}</span>
         {showModelCost && totalCost > 0 ? (
-          <span className="flex shrink-0 items-center gap-0 mt-0.5 text-xs text-muted-foreground">
+          <span className="mt-0.5 flex shrink-0 items-center gap-0 text-xs text-muted-foreground">
             <DollarSign className="size-3" />
             {formatCurrency(totalCost, { significantFigures: 2 })}
           </span>

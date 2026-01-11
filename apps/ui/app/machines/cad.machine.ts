@@ -156,7 +156,7 @@ export const cadMachine = setup({
 
           const newIssues = new Map(context.kernelIssues);
           // Set warnings if there are any, otherwise clear the entry for this file
-          if (event.issues && event.issues.length > 0) {
+          if (event.issues.length > 0) {
             newIssues.set(currentFileName, event.issues);
           } else {
             newIssues.delete(currentFileName);
