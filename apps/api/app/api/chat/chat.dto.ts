@@ -15,5 +15,4 @@ export const createChatSchema: z.ZodType<CreateChat> = z
   })
   .meta({ id: 'CreateChat' });
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- nestjs-zod pattern requires class extension
 export class CreateChatDto extends createZodDto(createChatSchema) {}

@@ -1,4 +1,5 @@
-import { tool, DynamicStructuredTool } from '@langchain/core/tools';
+import type { DynamicStructuredTool } from '@langchain/core/tools';
+import { tool } from '@langchain/core/tools';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';
@@ -23,12 +24,8 @@ Note: This tool will overwrite an existing file if one exists at the specified p
   schema: createFileJsonSchema,
 } as const;
 
-export const createFileTool: DynamicStructuredTool<
-  JSONSchema,
-  CreateFileOutput,
-  CreateFileInput,
-  CreateFileOutput
-> = tool((args) => {
-  const result = interrupt<unknown, CreateFileOutput>(args);
-  return result;
-}, createFileToolDefinition);
+export const createFileTool: DynamicStructuredTool<JSONSchema, CreateFileOutput, CreateFileInput, CreateFileOutput> =
+  tool((args) => {
+    const result = interrupt<unknown, CreateFileOutput>(args);
+    return result;
+  }, createFileToolDefinition);

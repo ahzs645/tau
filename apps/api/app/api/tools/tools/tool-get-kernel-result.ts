@@ -1,4 +1,5 @@
-import { tool, DynamicStructuredTool } from '@langchain/core/tools';
+import type { DynamicStructuredTool } from '@langchain/core/tools';
+import { tool } from '@langchain/core/tools';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';

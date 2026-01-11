@@ -10,4 +10,3 @@ export const analyzeObservationsSchema = z
   .meta({ id: 'AnalyzeObservations' });
 
 export class AnalyzeObservationsDto extends createZodDto(analyzeObservationsSchema) {}
-

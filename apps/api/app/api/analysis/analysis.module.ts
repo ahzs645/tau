@@ -8,4 +8,3 @@ import { AnalysisService } from '#api/analysis/analysis.service.js';
   exports: [AnalysisService],
 })
 export class AnalysisModule {}
-

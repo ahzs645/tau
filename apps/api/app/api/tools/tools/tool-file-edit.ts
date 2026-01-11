@@ -1,4 +1,5 @@
-import { tool, DynamicStructuredTool } from '@langchain/core/tools';
+import type { DynamicStructuredTool } from '@langchain/core/tools';
+import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { interrupt } from '@langchain/langgraph';
 import { editFileInputSchema } from '@taucad/chat';
@@ -33,12 +34,10 @@ DO NOT omit spans of pre-existing code without using the // ... existing code ..
   schema: editFileJsonSchema,
 } as const;
 
-export const editFileTool: DynamicStructuredTool<
-  JSONSchema,
-  EditFileOutput,
-  EditFileInput,
-  EditFileOutput
-> = tool((args) => {
-  const result = interrupt<unknown, EditFileOutput>(args);
-  return result;
-}, editFileToolDefinition);
+export const editFileTool: DynamicStructuredTool<JSONSchema, EditFileOutput, EditFileInput, EditFileOutput> = tool(
+  (args) => {
+    const result = interrupt<unknown, EditFileOutput>(args);
+    return result;
+  },
+  editFileToolDefinition,
+);
