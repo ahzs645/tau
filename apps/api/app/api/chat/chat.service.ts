@@ -6,8 +6,10 @@ import type { ModelMessage } from 'ai';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigService } from '@nestjs/config';
 import type { KernelProvider } from '@taucad/types';
+import { idPrefix } from '@taucad/types/constants';
 import type { ToolSelection } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { generatePrefixedId } from '@taucad/utils/id';
 import { ModelService } from '#api/models/model.service.js';
 import { ToolService } from '#api/tools/tool.service.js';
 import { buildNameGenerationSystemPrompt } from '#api/chat/prompts/cad-name.prompt.js';
@@ -124,6 +126,7 @@ Always prefer \`${toolName.webSearch}\` first, and only use \`${toolName.webBrow
         dataStream.write({
           type: 'data-usage',
           data: {
+            id: generatePrefixedId(idPrefix.data),
             model: id,
             inputTokens: normalizedUsageTokens.inputTokens,
             outputTokens: normalizedUsageTokens.outputTokens,

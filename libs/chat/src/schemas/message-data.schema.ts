@@ -4,6 +4,7 @@ import z from 'zod';
  * Schema for per-turn usage data.
  */
 export const usageDataSchema = z.object({
+  id: z.string(),
   model: z.string(),
   inputTokens: z.number(),
   outputTokens: z.number(),
