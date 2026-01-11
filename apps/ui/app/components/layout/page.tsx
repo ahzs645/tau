@@ -197,6 +197,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
                   <TooltipContent>You are offline. Reconnect to access online features.</TooltipContent>
                 </Tooltip>
               )}
+              <Badge className="h-8 border-purple bg-purple/10 font-normal text-purple">ALPHA</Badge>
               <Commands />
               {hasActionItems
                 ? actionItems.map((match) => <Fragment key={match.id}>{match.handle.actions?.(match)}</Fragment>)
