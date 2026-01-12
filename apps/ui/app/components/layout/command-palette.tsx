@@ -1,7 +1,7 @@
 import { Menu } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, createContext, useContext } from 'react';
 import { Fragment } from 'react/jsx-runtime';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import {
   CommandDialog,
@@ -75,6 +75,8 @@ type CommandPaletteProperties = {
 };
 
 function CommandPalette({ isOpen, onOpenChange, items }: CommandPaletteProperties): React.JSX.Element {
+  const navigate = useNavigate();
+
   const groupedItems = useMemo(() => {
     const groups: Record<string, CommandPaletteItem[]> = {};
 
@@ -103,41 +105,28 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
         <CommandEmpty>No results found.</CommandEmpty>
         {Object.entries(groupedItems).map(([groupName, groupItems]) => (
           <CommandGroup key={groupName} heading={groupName}>
-            {groupItems.map((item) => {
-              const commandItemContent = (
-                <CommandItem
-                  key={item.id}
-                  value={item.id}
-                  disabled={item.disabled}
-                  className="h-8"
-                  onSelect={() => {
-                    if (item.link) {
-                      // Close dialog and let Link component handle navigation
-                      onOpenChange(false);
-                    } else {
-                      runCommand(item);
-                      onOpenChange(false);
-                    }
-                  }}
-                >
-                  <div className="flex items-center gap-2">
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </div>
-                  {item.shortcut ? <KeyShortcut className="ml-auto">{item.shortcut}</KeyShortcut> : null}
-                </CommandItem>
-              );
-
-              if (item.link) {
-                return (
-                  <Link key={item.id} tabIndex={-1} to={item.link}>
-                    {commandItemContent}
-                  </Link>
-                );
-              }
-
-              return commandItemContent;
-            })}
+            {groupItems.map((item) => (
+              <CommandItem
+                key={item.id}
+                value={item.id}
+                disabled={item.disabled}
+                className="h-8"
+                onSelect={() => {
+                  onOpenChange(false);
+                  if (item.link) {
+                    void navigate(item.link);
+                  } else {
+                    runCommand(item);
+                  }
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  {item.icon}
+                  <span>{item.label}</span>
+                </div>
+                {item.shortcut ? <KeyShortcut className="ml-auto">{item.shortcut}</KeyShortcut> : null}
+              </CommandItem>
+            ))}
           </CommandGroup>
         ))}
       </CommandList>
