@@ -2,7 +2,7 @@ import type { UIToolInvocation } from 'ai';
 import { FolderOpen, Folder, File } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -92,6 +92,12 @@ export function ChatMessageToolListDirectory({
           </ChatToolCardHeader>
         </ChatToolCard>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.listDirectory} state: ${part.state}`);
     }
   }
 }

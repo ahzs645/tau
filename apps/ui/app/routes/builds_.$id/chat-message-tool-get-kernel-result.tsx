@@ -1,7 +1,7 @@
 import type { UIToolInvocation } from 'ai';
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import type { IssueSeverity, KernelIssue } from '@taucad/types';
 import {
   ChatToolCard,
@@ -186,6 +186,12 @@ export function ChatMessageToolGetKernelResult({
           </ChatToolCardHeader>
         </ChatToolCard>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.getKernelResult} state: ${part.state}`);
     }
   }
 }

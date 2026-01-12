@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import { CollapsibleFileOperation, ApplyButton } from '#components/chat/chat-tool-file-operation.js';
 import { CopyButton } from '#components/copy-button.js';
 import { useBuild } from '#hooks/use-build.js';
@@ -124,6 +124,12 @@ export function ChatMessageToolFileEdit({
 
     case 'output-error': {
       return <div>File edit failed</div>;
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.editFile} state: ${part.state}`);
     }
   }
 }

@@ -2,7 +2,7 @@ import type { UIToolInvocation } from 'ai';
 import { Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -113,6 +113,12 @@ export function ChatMessageToolGrep({
           </ChatToolCardHeader>
         </ChatToolCard>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.grep} state: ${part.state}`);
     }
   }
 }

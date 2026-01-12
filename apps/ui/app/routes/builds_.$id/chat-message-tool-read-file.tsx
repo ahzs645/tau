@@ -1,7 +1,7 @@
 import type { UIToolInvocation } from 'ai';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import { FileLink } from '#components/files/file-link.js';
 import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
@@ -63,6 +63,12 @@ export function ChatMessageToolReadFile({
 
     case 'output-error': {
       return <span className="text-sm text-destructive">Failed to read file</span>;
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.readFile} state: ${part.state}`);
     }
   }
 }

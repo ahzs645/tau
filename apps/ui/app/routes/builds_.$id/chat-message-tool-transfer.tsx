@@ -98,6 +98,10 @@ export function ChatMessageToolTransfer({ part }: { readonly part: ToolUIPart })
   const isStreaming = chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(part.state);
   const isComplete = part.state === 'output-available';
 
+  if (part.state === 'approval-requested' || part.state === 'approval-responded' || part.state === 'output-denied') {
+    throw new Error(`Unexpected ${toolName} state: ${part.state}`);
+  }
+
   // This component has unique agent-specific styling, so we keep it custom
   // but follow the inline badge pattern
   return (

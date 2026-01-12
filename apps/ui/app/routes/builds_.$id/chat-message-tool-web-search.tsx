@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronRight, Globe, HelpCircle } from 'lucide-react';
 import type { UIToolInvocation } from 'ai';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -189,6 +189,12 @@ export function ChatMessageToolWebSearch({
           </ChatToolCardContent>
         </ChatToolCard>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.webSearch} state: ${part.state}`);
     }
   }
 }

@@ -2,7 +2,7 @@ import type { UIToolInvocation } from 'ai';
 import { Globe } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import { createFaviconUrl, extractDomainFromUrl } from '#utils/url.utils.js';
 import { ChatToolInline } from '#components/chat/chat-tool-inline.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
@@ -45,6 +45,12 @@ export function ChatMessageToolWebBrowser({
           Web browser failed
         </ChatToolInline>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.webBrowser} state: ${part.state}`);
     }
   }
 }

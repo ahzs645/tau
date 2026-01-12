@@ -1,7 +1,7 @@
 import type { UIToolInvocation } from 'ai';
 import { LoaderCircle, X } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
@@ -110,6 +110,12 @@ export function ChatMessageToolDeleteFile({
           </div>
         </div>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.deleteFile} state: ${part.state}`);
     }
   }
 }

@@ -2,7 +2,7 @@ import type { UIToolInvocation } from 'ai';
 import { useState } from 'react';
 import { Brain } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import { defaultMarkdownControls, MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import {
@@ -33,6 +33,10 @@ export function ChatMessageToolReasoning({
         </ChatToolCardHeader>
       </ChatToolCard>
     );
+  }
+
+  if (part.state === 'approval-requested' || part.state === 'approval-responded' || part.state === 'output-denied') {
+    throw new Error(`Unexpected ${toolName.reasoning} state: ${part.state}`);
   }
 
   // Determine if content should be visible

@@ -1,7 +1,7 @@
 import type { UIToolInvocation } from 'ai';
 import { Eye, Check, X, Lightbulb, HelpCircle } from 'lucide-react';
 import type { MyTools, RequirementResult } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
+import { toolName } from '@taucad/chat/constants';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { ImagePreviewGroup } from '#components/ui/image-preview-group.js';
@@ -182,6 +182,12 @@ export function ChatMessageToolImageAnalysis({
           </ChatToolCardHeader>
         </ChatToolCard>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.imageAnalysis} state: ${part.state}`);
     }
   }
 }
