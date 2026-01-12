@@ -13,7 +13,7 @@ export function ChatMessageToolCreateFile({
     case 'input-streaming':
     case 'input-available': {
       const { input } = part;
-      const targetFile = input?.targetFile ?? 'file';
+      const targetFile = input?.targetFile ?? '';
       const content = input?.content ?? '';
 
       return (
