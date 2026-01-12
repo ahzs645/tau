@@ -1,7 +1,13 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
-import { observationSchema } from '@taucad/chat';
+import {
+  observationSchema,
+  observationResultSchema,
+  requirementResultSchema,
+  evaluationCriteriaSchema,
+} from '@taucad/chat';
 
+// Request DTO
 export const analyzeObservationsSchema = z
   .object({
     observations: z.array(observationSchema),
@@ -10,3 +16,14 @@ export const analyzeObservationsSchema = z
   .meta({ id: 'AnalyzeObservations' });
 
 export class AnalyzeObservationsDto extends createZodDto(analyzeObservationsSchema) {}
+
+// Response DTO
+export const analyzeObservationsResponseSchema = z
+  .object({
+    observationResults: z.array(observationResultSchema),
+    aggregatedResults: z.array(requirementResultSchema),
+    evaluationCriteria: evaluationCriteriaSchema,
+  })
+  .meta({ id: 'AnalyzeObservationsResponse' });
+
+export class AnalyzeObservationsResponseDto extends createZodDto(analyzeObservationsResponseSchema) {}

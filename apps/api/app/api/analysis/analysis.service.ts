@@ -3,17 +3,8 @@ import { openai } from '@ai-sdk/openai';
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
 import type { Observation, ObservationResult, RequirementResult, EvaluationCriteria } from '@taucad/chat';
-import { requirementResultSchema } from '@taucad/chat';
 import { createImageAnalysisSystemPrompt } from '#api/analysis/prompts/image-analysis-prompt.js';
-
-/**
- * Response from analyzing multiple observations
- */
-export type AnalyzeObservationsResponse = {
-  observationResults: ObservationResult[];
-  aggregatedResults: RequirementResult[];
-  evaluationCriteria: EvaluationCriteria;
-};
+import { AnalyzeObservationsResponseDto } from '#api/analysis/analysis.dto.js';
 
 /**
  * Service for analyzing CAD model observations (screenshots from different views)
@@ -32,7 +23,7 @@ export class AnalysisService {
   public async analyzeObservations(
     observations: Observation[],
     requirements: string[],
-  ): Promise<AnalyzeObservationsResponse> {
+  ): Promise<AnalyzeObservationsResponseDto> {
     this.logger.log(`Analyzing ${observations.length} observations against ${requirements.length} requirements`);
     this.logger.debug(
       'Observation IDs:',
@@ -127,8 +118,21 @@ export class AnalysisService {
     try {
       // Use generateText with Output.object for structured output generation
       // This replaces the deprecated generateObject function and uses OpenAI's strict mode
+      //
+      // Note: We use a flattened schema instead of discriminatedUnion because OpenAI's
+      // structured outputs don't support 'oneOf' (which is what Zod's discriminatedUnion compiles to).
+      // The LLM will populate reason/suggestion based on the status value.
+      // OpenAI structured outputs require ALL properties to be required (no optional fields).
+      // We use .nullable() so fields are required but can be null when not applicable.
+      const llmRequirementResultSchema = z.object({
+        status: z.enum(['passed', 'failed', 'indeterminate']),
+        requirement: z.string(),
+        reason: z.string().nullable().describe('Required when status is "failed" or "indeterminate", null otherwise'),
+        suggestion: z.string().nullable().describe('Required when status is "failed", null otherwise'),
+      });
+
       const responseSchema = z.object({
-        results: z.array(requirementResultSchema),
+        results: z.array(llmRequirementResultSchema),
       });
 
       const { output } = await generateText({
@@ -149,10 +153,41 @@ export class AnalysisService {
         ],
       });
 
+      // Transform the flat LLM output to the proper discriminated union type
+      const results: RequirementResult[] = output.results.map((result) => {
+        switch (result.status) {
+          case 'passed': {
+            return { status: 'passed' as const, requirement: result.requirement };
+          }
+
+          case 'failed': {
+            return {
+              status: 'failed' as const,
+              requirement: result.requirement,
+              reason: result.reason ?? 'No reason provided',
+              suggestion: result.suggestion ?? 'Review the model',
+            };
+          }
+
+          case 'indeterminate': {
+            return {
+              status: 'indeterminate' as const,
+              requirement: result.requirement,
+              reason: result.reason ?? 'Unable to determine from this view',
+            };
+          }
+
+          default: {
+            const _exhaustiveCheck: never = result.status;
+            throw new Error(`Invalid status: ${String(_exhaustiveCheck)}`);
+          }
+        }
+      });
+
       return {
         id: observation.id,
         side: observation.side,
-        results: output.results,
+        results,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
