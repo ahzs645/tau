@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { openai } from '@ai-sdk/openai';
-import { createAgent, humanInTheLoopMiddleware } from 'langchain';
+import { createAgent } from 'langchain';
 import type { ReactAgent } from 'langchain';
 import { streamText } from 'ai';
 import type { ModelMessage } from 'ai';
@@ -8,7 +8,6 @@ import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigService } from '@nestjs/config';
 import type { KernelProvider } from '@taucad/types';
 import type { ToolSelection } from '@taucad/chat';
-import { toolName } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';
 import { usageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
 import { ToolService } from '#api/tools/tool.service.js';
@@ -74,41 +73,21 @@ export class ChatService {
       tools.web_browser,
     ].filter((tool) => tool !== undefined);
 
-    // Build the unified system prompt
-    const cadSystemPrompt = await getCadSystemPrompt(selectedKernel);
-    const unifiedSystemPrompt = `${cadSystemPrompt}
-
-<research_capabilities>
-## Web Research Tools
-You also have access to web research tools for gathering information:
-
-- **\`${toolName.webSearch}\`**: Search the web for current information, documentation, tutorials, or any external knowledge needed to complete your task. Use this when you need to look up technical details, find examples, or research best practices.
-
-- **\`${toolName.webBrowser}\`**: Browse specific web pages to extract detailed information. Use this only when the web search results are insufficient and you need to dive deeper into a specific URL.
-
-**When to use research tools:**
-- When you need current information about libraries, APIs, or techniques
-- When the user asks about topics outside your training data
-- When you need to look up specifications, dimensions, or reference materials for CAD models
-- When researching best practices for specific manufacturing techniques
-
-Always prefer \`${toolName.webSearch}\` first, and only use \`${toolName.webBrowser}\` if the search results don't provide enough detail.
-</research_capabilities>`;
+    // Build the system prompt with cache control for Anthropic prompt caching
+    const systemPromptText = await getCadSystemPrompt(selectedKernel);
+    const systemPrompt = createCachedSystemMessage(systemPromptText);
 
     // Create a unified agent with createAgent from LangChain v1
-    // Uses systemPrompt (string) instead of prompt (SystemMessage)
+    // Uses SystemMessage with cache control for Anthropic prompt caching
     // Uses model instead of llm, and does NOT use pre-bound models with tools
     const agent = createAgent({
       model,
       tools: allTools,
-      systemPrompt: unifiedSystemPrompt,
+      systemPrompt,
       checkpointer,
       middleware: [
         // Track token usage and costs after each model call
         usageTrackingMiddleware,
-        // Handle tool interrupts - our tools use interrupt() from @langchain/langgraph
-        // The middleware manages the human-in-the-loop flow automatically
-        humanInTheLoopMiddleware({}),
       ],
     });
 
