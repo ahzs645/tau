@@ -80,24 +80,24 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
     },
   },
   openai: {
-    'gpt-5.1': {
-      id: 'openai-gpt-5.1',
-      name: 'GPT-5.1',
-      slug: 'gpt-5.1',
+    'gpt-5.2': {
+      id: 'openai-gpt-5.2',
+      name: 'GPT-5.2',
+      slug: 'gpt-5.2',
       provider: {
         id: 'openai',
         name: 'OpenAI',
       },
-      model: 'gpt-5.1',
+      model: 'gpt-5.2',
       details: {
         family: 'gpt',
-        families: ['GPT-5.1'],
-        contextWindow: 1_000_000,
-        maxTokens: 100_000,
+        families: ['GPT-5.2'],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
         cost: {
-          inputTokens: 2,
-          outputTokens: 8,
-          cachedReadTokens: 0.5,
+          inputTokens: 1.75,
+          outputTokens: 14,
+          cachedReadTokens: 0.175,
           cachedWriteTokens: 0,
         },
       },
@@ -107,6 +107,36 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         // @ts-expect-error: OpenAI reasoning params not in typed schema
         reasoningText: {
           effort: 'medium',
+        },
+      },
+    },
+    'gpt-5.1-codex-max': {
+      id: 'openai-gpt-5.1-codex-max',
+      name: 'GPT-5.1 Codex Max',
+      slug: 'gpt-5.1-codex-max',
+      provider: {
+        id: 'openai',
+        name: 'OpenAI',
+      },
+      model: 'gpt-5.1-codex-max',
+      details: {
+        family: 'gpt',
+        families: ['GPT-5.1'],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+        cost: {
+          inputTokens: 1.25,
+          outputTokens: 10,
+          cachedReadTokens: 0.125,
+          cachedWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+        temperature: 1,
+        // @ts-expect-error: OpenAI reasoning params not in typed schema
+        reasoningText: {
+          effort: 'high',
         },
       },
     },
