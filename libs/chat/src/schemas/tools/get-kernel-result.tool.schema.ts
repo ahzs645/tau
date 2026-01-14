@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { kernelIssueSchema } from '#schemas/tools/issue.schema.js';
 
 export const getKernelResultInputSchema = z.object({
-  targetFile: z.string().optional().describe('Optional file to check. If omitted, checks the current/main file.'),
+  targetFile: z.string().describe('The file to check kernel results for, relative to the project root.'),
 });
 
 export const getKernelResultOutputSchema = z.object({

@@ -11,7 +11,10 @@ const getKernelResultJsonSchema = z.toJSONSchema(getKernelResultInputSchema);
 
 export const getKernelResultToolDefinition = {
   name: toolName.getKernelResult,
-  description: `Check the status of the CAD kernel and retrieve any compilation errors.
+  description: `Check the status of the CAD kernel and retrieve any compilation errors for a specific file.
+
+Parameters:
+- targetFile: The file to check kernel results for (relative to project root)
 
 Use this tool AFTER using \`edit_file\` or \`create_file\` to verify that your code changes compiled successfully.
 
