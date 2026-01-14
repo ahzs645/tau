@@ -1,9 +1,10 @@
+import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { imageAnalysisInputSchema } from '@taucad/chat';
-import type { ImageAnalysisOutput } from '@taucad/chat';
+import type { ImageAnalysisOutput, CaptureObservationsOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
 const imageAnalysisJsonSchema = z.toJSONSchema(imageAnalysisInputSchema);
 
@@ -26,9 +27,32 @@ Returns:
   schema: imageAnalysisJsonSchema,
 } as const;
 
-export const imageAnalysisTool = tool(async (args) => {
-  const data = interrupt<unknown, ImageAnalysisOutput>(args);
+export const imageAnalysisTool = tool(async (input, runtime: ToolRuntime) => {
+  const args = input as { requirements: string[] };
+  const { chatToolsService, analysisService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+  const { toolCallId } = runtime;
+  const { requirements } = args;
 
-  // Return the full output from the client (observations, observationResults, aggregatedResults, evaluationCriteria)
-  return data;
+  // Step 1: Capture observations from the frontend via WebSocket
+  const captureResult = (await chatToolsService.sendToolCallRequest(
+    chatId,
+    toolCallId,
+    toolName.captureObservations,
+    {},
+  )) as CaptureObservationsOutput;
+
+  const { observations } = captureResult;
+
+  // Step 2: Analyze the observations using AnalysisService
+  const analysisResult = await analysisService.analyzeObservations(observations, requirements);
+
+  // Step 3: Return the combined result
+  const result: ImageAnalysisOutput = {
+    observations,
+    observationResults: analysisResult.observationResults,
+    aggregatedResults: analysisResult.aggregatedResults,
+    evaluationCriteria: analysisResult.evaluationCriteria,
+  };
+
+  return result;
 }, imageAnalysisToolDefinition);

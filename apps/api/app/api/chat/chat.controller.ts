@@ -2,14 +2,20 @@ import { Body, Controller, Logger, Post, Req, Res, UseGuards } from '@nestjs/com
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { StreamMode } from '@langchain/langgraph';
 import type { ToolSelection } from '@taucad/chat';
 import { ChatService } from '#api/chat/chat.service.js';
+import { ChatToolsService } from '#api/chat/chat-tools.service.js';
 import { ModelService } from '#api/models/model.service.js';
+import { FileEditService } from '#api/file-edit/file-edit.service.js';
+import { AnalysisService } from '#api/analysis/analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
 import { CreateChatDto } from '#api/chat/chat.dto.js';
 import { sendSimpleModelStream } from '#api/chat/utils/simple-model-stream.js';
 import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.js';
 import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform.js';
+import { createErrorTransform } from '#api/chat/utils/error-transform.js';
+import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
 
 @UseGuards(AuthGuard)
 @Controller({ path: 'chat', version: '1' })
@@ -18,7 +24,10 @@ export class ChatController {
 
   public constructor(
     private readonly chatService: ChatService,
+    private readonly chatToolsService: ChatToolsService,
     private readonly modelService: ModelService,
+    private readonly fileEditService: FileEditService,
+    private readonly analysisService: AnalysisService,
   ) {}
 
   @Post()
@@ -99,28 +108,29 @@ export class ChatController {
       }
     });
 
-    this.logger.debug(`Starting agent execution for thread: ${body.id}`);
-
-    // Stream the agent response using the underlying graph
-    // With createAgent and humanInTheLoopMiddleware, resume is handled automatically
-    // when tool results are present in the messages
-    const stream = await agent.graph.stream(
-      { messages: langchainMessages },
-      {
-        configurable: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
-          thread_id: body.id,
-        },
-        signal: abortController.signal,
-        // Include 'custom' to receive usage data from usageTrackingMiddleware
-        streamMode: ['values', 'messages', 'custom'],
-        // Pass context for usage tracking middleware
-        context: {
-          modelId,
-          modelService: this.modelService,
-        },
+    // Stream configuration with services for tool execution
+    const streamConfig = {
+      configurable: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
+        thread_id: body.id,
+        // Pass services for tools to use
+        chatToolsService: this.chatToolsService,
+        fileEditService: this.fileEditService,
+        analysisService: this.analysisService,
       },
-    );
+      signal: abortController.signal,
+      // Include 'custom' to receive usage data from usageTrackingMiddleware
+      streamMode: ['values', 'messages', 'custom'] as StreamMode[],
+      // Pass context for usage tracking middleware
+      context: {
+        modelId,
+        modelService: this.modelService,
+      },
+      recursionLimit: 200,
+    };
+
+    this.logger.debug(`Starting execution for thread: ${body.id}`);
+    const stream = await agent.graph.stream({ messages: langchainMessages }, streamConfig);
 
     // Set SSE headers
     void response.header('content-type', 'text/event-stream');
@@ -128,9 +138,15 @@ export class ChatController {
     void response.header('x-accel-buffering', 'no');
 
     // Convert the LangGraph stream to UI message stream
-    // The toUIMessageStream adapter marks all tools as dynamic, so we pipe through
-    // a transform that strips the dynamic flag for known static tools
-    const uiMessageStream = toUIMessageStream(stream).pipeThrough(createStaticToolTransform());
+    // The toUIMessageStream adapter marks all tools as dynamic and stringifies tool outputs,
+    // so we pipe through transforms to:
+    // 1) mark known tools as static
+    // 2) parse tool output JSON strings into objects
+    // 3) normalize error chunks
+    const uiMessageStream = toUIMessageStream(stream)
+      .pipeThrough(createStaticToolTransform())
+      .pipeThrough(createToolOutputTransform())
+      .pipeThrough(createErrorTransform());
 
     const uiMessageStreamResponse = createUIMessageStreamResponse({
       stream: uiMessageStream,

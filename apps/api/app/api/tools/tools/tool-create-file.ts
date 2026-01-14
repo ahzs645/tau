@@ -1,11 +1,11 @@
-import type { DynamicStructuredTool } from '@langchain/core/tools';
+import type { DynamicStructuredTool, ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { createFileInputSchema } from '@taucad/chat';
 import type { CreateFileInput, CreateFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
 const createFileJsonSchema = z.toJSONSchema(createFileInputSchema);
 
@@ -25,7 +25,10 @@ Note: This tool will overwrite an existing file if one exists at the specified p
 } as const;
 
 export const createFileTool: DynamicStructuredTool<JSONSchema, CreateFileOutput, CreateFileInput, CreateFileOutput> =
-  tool((args) => {
-    const result = interrupt<unknown, CreateFileOutput>(args);
-    return result;
+  tool(async (args, runtime: ToolRuntime) => {
+    const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+    const { toolCallId } = runtime;
+
+    const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.createFile, args);
+    return result as CreateFileOutput;
   }, createFileToolDefinition);

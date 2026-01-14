@@ -1,9 +1,10 @@
+import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { readFileInputSchema } from '@taucad/chat';
 import type { ReadFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
 const readFileJsonSchema = z.toJSONSchema(readFileInputSchema);
 
@@ -22,7 +23,32 @@ Use this tool when you need to:
   schema: readFileJsonSchema,
 } as const;
 
-export const readFileTool = tool((args) => {
-  const result = interrupt<unknown, ReadFileOutput>(args);
-  return result;
+/**
+ * Add line numbers to raw content for LLM display.
+ * Format: "     1|content" where the number is right-padded to 6 chars.
+ */
+function addLineNumbers(content: string, startLine: number): string {
+  const lines = content.split('\n');
+  return lines.map((line, idx) => `${String(startLine + idx).padStart(6)}|${line}`).join('\n');
+}
+
+export const readFileTool = tool(async (args, runtime: ToolRuntime) => {
+  const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+  const { toolCallId } = runtime;
+
+  const result = (await chatToolsService.sendToolCallRequest(
+    chatId,
+    toolCallId,
+    toolName.readFile,
+    args,
+  )) as ReadFileOutput;
+
+  // Add line numbers to the raw content for LLM display
+  const startLine = result.startLine ?? 1;
+  const contentWithLineNumbers = addLineNumbers(result.content, startLine);
+
+  return {
+    content: contentWithLineNumbers,
+    totalLines: result.totalLines,
+  };
 }, readFileToolDefinition);

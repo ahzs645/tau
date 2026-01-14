@@ -1,9 +1,10 @@
+import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { deleteFileInputSchema } from '@taucad/chat';
 import type { DeleteFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
 const deleteFileJsonSchema = z.toJSONSchema(deleteFileInputSchema);
 
@@ -23,7 +24,10 @@ The operation will fail gracefully if:
   schema: deleteFileJsonSchema,
 } as const;
 
-export const deleteFileTool = tool((args) => {
-  const result = interrupt<unknown, DeleteFileOutput>(args);
-  return result;
+export const deleteFileTool = tool(async (args, runtime: ToolRuntime) => {
+  const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+  const { toolCallId } = runtime;
+
+  const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.deleteFile, args);
+  return result as DeleteFileOutput;
 }, deleteFileToolDefinition);

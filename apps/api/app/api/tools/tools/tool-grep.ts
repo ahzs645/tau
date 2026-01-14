@@ -1,9 +1,10 @@
+import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { grepInputSchema } from '@taucad/chat';
 import type { GrepOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
 const grepJsonSchema = z.toJSONSchema(grepInputSchema);
 
@@ -26,7 +27,10 @@ Use this tool when you need to:
   schema: grepJsonSchema,
 } as const;
 
-export const grepTool = tool((args) => {
-  const result = interrupt<unknown, GrepOutput>(args);
-  return result;
+export const grepTool = tool(async (args, runtime: ToolRuntime) => {
+  const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+  const { toolCallId } = runtime;
+
+  const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.grep, args);
+  return result as GrepOutput;
 }, grepToolDefinition);

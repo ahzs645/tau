@@ -1,11 +1,11 @@
-import type { DynamicStructuredTool } from '@langchain/core/tools';
+import type { DynamicStructuredTool, ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import { z } from 'zod';
-import { interrupt } from '@langchain/langgraph';
 import { getKernelResultInputSchema } from '@taucad/chat';
 import type { GetKernelResultInput, GetKernelResultOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
 const getKernelResultJsonSchema = z.toJSONSchema(getKernelResultInputSchema);
 
@@ -28,7 +28,10 @@ export const getKernelResultTool: DynamicStructuredTool<
   GetKernelResultOutput,
   GetKernelResultInput,
   GetKernelResultOutput
-> = tool((args) => {
-  const result = interrupt<unknown, GetKernelResultOutput>(args);
-  return result;
+> = tool(async (args, runtime: ToolRuntime) => {
+  const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+  const { toolCallId } = runtime;
+
+  const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.getKernelResult, args);
+  return result as GetKernelResultOutput;
 }, getKernelResultToolDefinition);
