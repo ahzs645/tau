@@ -2,7 +2,6 @@ import { Body, Controller, Logger, Post, Req, Res, UseGuards } from '@nestjs/com
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { StreamMode } from '@langchain/langgraph';
 import type { ToolSelection } from '@taucad/chat';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatToolsService } from '#api/chat/chat-tools.service.js';
@@ -108,29 +107,29 @@ export class ChatController {
       }
     });
 
-    // Stream configuration with services for tool execution
-    const streamConfig = {
-      configurable: {
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
-        thread_id: body.id,
-        // Pass services for tools to use
-        chatToolsService: this.chatToolsService,
-        fileEditService: this.fileEditService,
-        analysisService: this.analysisService,
-      },
-      signal: abortController.signal,
-      // Include 'custom' to receive usage data from usageTrackingMiddleware
-      streamMode: ['values', 'messages', 'custom'] as StreamMode[],
-      // Pass context for usage tracking middleware
-      context: {
-        modelId,
-        modelService: this.modelService,
-      },
-      recursionLimit: 200,
-    };
-
     this.logger.debug(`Starting execution for thread: ${body.id}`);
-    const stream = await agent.graph.stream({ messages: langchainMessages }, streamConfig);
+    const stream = await agent.graph.stream(
+      { messages: langchainMessages },
+      {
+        configurable: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
+          thread_id: body.id,
+          // Pass services for tools to use
+          chatToolsService: this.chatToolsService,
+          fileEditService: this.fileEditService,
+          analysisService: this.analysisService,
+        },
+        signal: abortController.signal,
+        // Include 'custom' to receive usage data from usageTrackingMiddleware
+        streamMode: ['values', 'messages', 'custom'],
+        // Pass context for usage tracking middleware
+        context: {
+          modelId,
+          modelService: this.modelService,
+        },
+        recursionLimit: 200,
+      },
+    );
 
     // Set SSE headers
     void response.header('content-type', 'text/event-stream');
