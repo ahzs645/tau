@@ -2,6 +2,7 @@ export const toolName = {
   webSearch: 'web_search',
   webBrowser: 'web_browser',
   imageAnalysis: 'analyze_image',
+  captureObservations: 'capture_observations',
   readFile: 'read_file',
   editFile: 'edit_file',
   listDirectory: 'list_directory',
@@ -19,14 +20,16 @@ export const toolName = {
 export const toolNames = Object.values(toolName) as [(typeof toolName)[keyof typeof toolName]];
 
 /**
- * Client-side tools that use LangGraph interrupt() and are handled on the client.
+ * Client-side tools that are executed on the frontend via WebSocket.
  * These tools require the client to execute the action and return the result.
- * Server-only tools (transfers, web search) are NOT included here.
+ *
+ * Note: edit_file and analyze_image are NOT included here because they are
+ * orchestrated on the backend (they call these client tools internally).
+ * Server-only tools (transfers, web search) are also NOT included here.
  */
 export const clientToolNames = [
-  toolName.imageAnalysis,
+  toolName.captureObservations,
   toolName.readFile,
-  toolName.editFile,
   toolName.listDirectory,
   toolName.createFile,
   toolName.deleteFile,
@@ -34,8 +37,6 @@ export const clientToolNames = [
   toolName.globSearch,
   toolName.getKernelResult,
 ] as const;
-
-export type ClientToolName = (typeof clientToolNames)[number];
 
 export const toolMode = {
   none: 'none',

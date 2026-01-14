@@ -10,8 +10,9 @@ export const readFileInputSchema = z.object({
 });
 
 export const readFileOutputSchema = z.object({
-  content: z.string().describe('The content of the file with line numbers prefixed.'),
+  content: z.string().describe('The raw content of the file.'),
   totalLines: z.number().describe('The total number of lines in the file.'),
+  startLine: z.number().optional().describe('The starting line number (1-based) of the returned content.'),
 });
 
 export type ReadFileInput = z.infer<typeof readFileInputSchema>;

@@ -1,5 +1,5 @@
 import type { InferUITools, Tool as AiTool } from 'ai';
-import type { toolName, toolMode } from '#constants/tool.constants.js';
+import type { toolName, toolMode, clientToolNames } from '#constants/tool.constants.js';
 import type { EditFileInput, EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
 import type { ImageAnalysisInput, ImageAnalysisOutput } from '#schemas/tools/image-analysis.tool.schema.js';
 import type { WebBrowserInput, WebBrowserOutput } from '#schemas/tools/web-browser.tool.schema.js';
@@ -12,6 +12,10 @@ import type { GrepInput, GrepOutput } from '#schemas/tools/grep.tool.schema.js';
 import type { GlobSearchInput, GlobSearchOutput } from '#schemas/tools/glob-search.tool.schema.js';
 import type { GetKernelResultInput, GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
 import type { ReasoningInput, ReasoningOutput } from '#schemas/tools/reasoning.tool.schema.js';
+import type {
+  CaptureObservationsInput,
+  CaptureObservationsOutput,
+} from '#schemas/tools/capture-observations.tool.schema.js';
 import type {
   TransferToCadExpertInput,
   TransferToCadExpertOutput,
@@ -26,6 +30,8 @@ import type {
 } from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
 
 export type ToolName = (typeof toolName)[keyof typeof toolName];
+
+export type ClientToolName = (typeof clientToolNames)[number];
 
 /**
  * The tool mode. One of:
@@ -44,6 +50,7 @@ export type ToolSelection = ToolMode | ToolName[];
 export type MyTools = InferUITools<{
   [toolName.editFile]: AiTool<EditFileInput, EditFileOutput>;
   [toolName.imageAnalysis]: AiTool<ImageAnalysisInput, ImageAnalysisOutput>;
+  [toolName.captureObservations]: AiTool<CaptureObservationsInput, CaptureObservationsOutput>;
   [toolName.webBrowser]: AiTool<WebBrowserInput, WebBrowserOutput>;
   [toolName.webSearch]: AiTool<WebSearchInput, WebSearchOutput>;
   [toolName.readFile]: AiTool<ReadFileInput, ReadFileOutput>;
