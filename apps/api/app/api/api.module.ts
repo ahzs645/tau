@@ -9,9 +9,13 @@ import { PrivacyModule } from '#api/privacy/privacy.module.js';
 import { ProviderModule } from '#api/providers/provider.module.js';
 import { TestApiModule } from '#api/test-api/test-api.module.js';
 import { ToolModule } from '#api/tools/tool.module.js';
+import { WebSocketModule } from '#api/websocket/websocket.module.js';
 
 @Module({
   imports: [
+    // Shared infrastructure modules
+    WebSocketModule,
+
     // Production modules
     AnalysisModule,
     ChatModule,
