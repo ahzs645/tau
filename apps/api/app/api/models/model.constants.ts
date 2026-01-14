@@ -110,24 +110,24 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         },
       },
     },
-    'gpt-5.1-codex-max': {
-      id: 'openai-gpt-5.1-codex-max',
-      name: 'GPT-5.1 Codex Max',
-      slug: 'gpt-5.1-codex-max',
+    'gpt-5.2-codex': {
+      id: 'openai-gpt-5.2-codex',
+      name: 'GPT-5.2 Codex',
+      slug: 'gpt-5.2-codex',
       provider: {
         id: 'openai',
         name: 'OpenAI',
       },
-      model: 'gpt-5.1-codex-max',
+      model: 'gpt-5.2-codex',
       details: {
         family: 'gpt',
-        families: ['GPT-5.1'],
+        families: ['GPT-5.2'],
         contextWindow: 400_000,
         maxTokens: 128_000,
         cost: {
-          inputTokens: 1.25,
-          outputTokens: 10,
-          cachedReadTokens: 0.125,
+          inputTokens: 1.75,
+          outputTokens: 14,
+          cachedReadTokens: 0.175,
           cachedWriteTokens: 0,
         },
       },
