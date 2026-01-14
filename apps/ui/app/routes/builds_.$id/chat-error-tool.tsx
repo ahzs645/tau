@@ -23,7 +23,7 @@ export const ChatErrorTool = memo(function ({
   return (
     <div
       className={cn(
-        'flex flex-col gap-2 rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm',
+        'flex min-w-0 flex-col gap-2 overflow-hidden rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm',
         className,
       )}
     >
@@ -33,7 +33,7 @@ export const ChatErrorTool = memo(function ({
       </div>
       <MarkdownViewer
         className={cn(
-          'text-xs wrap-break-word text-muted-foreground',
+          'min-w-0 text-xs break-all text-muted-foreground',
           // Inline-code styles for error messages
           '[&_code]:text-destructive',
           '[&_code]:border-destructive/30',
