@@ -257,6 +257,13 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   return <ChatMessageToolReasoning key={part.toolCallId} part={part} />;
                 }
 
+                // Internal tools (not rendered in chat)
+                case 'tool-capture_observations': {
+                  // `capture_observations` is an internal tool used by analyze_image
+                  // It's executed on the client but its output is consumed by the backend
+                  return null;
+                }
+
                 case 'data-usage': {
                   // Usage data parts are rendered separately in the footer
                   return null;

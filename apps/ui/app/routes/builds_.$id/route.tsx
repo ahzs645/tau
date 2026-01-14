@@ -5,14 +5,13 @@ import type { Route } from './+types/route.js';
 import { ChatInterface } from '#routes/builds_.$id/chat-interface.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import type { Handle } from '#types/matches.types.js';
-import { useChatConstants } from '#utils/chat.utils.js';
-import { ChatProvider } from '#hooks/use-chat.js';
+import { ChatProvider, useChatContext } from '#hooks/use-chat.js';
 import { BuildNameEditor } from '#routes/builds_.$id/build-name-editor.js';
 import { ViewContextProvider } from '#routes/builds_.$id/chat-interface-view-context.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { BuildCommandPaletteItems } from '#routes/builds_.$id/build-command-items.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
-import { useChatTools } from '#hooks/use-chat-tools.js';
+import { useChatToolsWebSocket } from '#hooks/use-chat-tools-websocket.js';
 
 // Define provider component at module level for stable reference across HMR
 function RouteProvider({ children }: { readonly children?: React.ReactNode }): React.JSX.Element {
@@ -42,8 +41,16 @@ export const handle: Handle = {
   enableFloatingSidebar: true,
 };
 
-// Chat component - simplified since ChatProvider handles loading/persistence
+// Chat component - handles keyboard shortcuts and WebSocket tool connection
 function Chat(): React.JSX.Element {
+  const { activeChatId, isLoadingChat } = useChatContext();
+
+  // Connect WebSocket for tool execution (only in build context)
+  useChatToolsWebSocket({
+    chatId: activeChatId,
+    enabled: !isLoadingChat,
+  });
+
   useKeydown(
     {
       key: 's',
@@ -64,12 +71,9 @@ function ChatWithProvider(): React.JSX.Element {
   const description = useSelector(buildRef, (state) => state.context.build?.description);
   const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId);
 
-  // Get chat tools factory
-  const { createOnToolCall } = useChatTools();
-
   return (
     <ViewContextProvider>
-      <ChatProvider value={{ ...useChatConstants, createOnToolCall }} chatId={activeChatId} resourceId={buildId}>
+      <ChatProvider chatId={activeChatId} resourceId={buildId}>
         {name ? <title>{name}</title> : null}
         {description ? <meta name="description" content={description} /> : null}
         <Chat />

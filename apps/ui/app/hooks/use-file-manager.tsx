@@ -11,21 +11,31 @@ import { joinPath } from '#utils/path.utils.js';
 type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
 
 /**
- * Creates a waitFor predicate that throws if the machine enters the error state.
- * This prevents infinite hangs when operations fail.
+ * Creates a waitFor predicate that returns true if either the success condition is met
+ * OR the machine enters the error state. This prevents infinite hangs when operations fail.
+ * After waitFor returns, callers should check if the machine is in error state.
  */
 function createErrorAwareWaitPredicate(
   predicate: (state: FileManagerSnapshot) => boolean,
-  errorMessage: string,
 ): (state: FileManagerSnapshot) => boolean {
   return (state: FileManagerSnapshot) => {
+    // Return true if we're in error state (to stop waiting)
     if (state.matches('error')) {
-      const contextError = state.context.error;
-      throw new Error(contextError?.message ?? errorMessage);
+      return true;
     }
 
     return predicate(state);
   };
+}
+
+/**
+ * Checks if the snapshot is in error state and throws with the error message.
+ */
+function assertNotErrorState(snapshot: FileManagerSnapshot, fallbackMessage: string): void {
+  if (snapshot.matches('error')) {
+    const errorMessage = snapshot.context.error?.message ?? fallbackMessage;
+    throw new Error(errorMessage);
+  }
 }
 
 type WriteFileOptions = {
@@ -69,17 +79,21 @@ export function FileManagerProvider({
   const loadDirectory = useCallback(
     async (path: string) => {
       // Ensure the actor is ready before loading the directory
-      await waitFor(
+      const readySnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+
       // Send the load directory event
       actorRef.send({ type: 'loadDirectory', path });
+
       // Ensure the directory is loaded before returning
-      await waitFor(
+      const loadedSnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path), 'Directory load failed'),
+        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path)),
       );
+      assertNotErrorState(loadedSnapshot, 'Directory load failed');
     },
     [actorRef],
   );
@@ -87,17 +101,21 @@ export function FileManagerProvider({
   const writeFile = useCallback(
     async (path: string, data: Uint8Array, options: WriteFileOptions) => {
       // Ensure the actor is ready before writing the file
-      await waitFor(
+      const readySnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+
       // Send the write file event
       actorRef.send({ type: 'writeFile', path, data, source: options.source });
+
       // Ensure the file is written before returning
-      await waitFor(
+      const writtenSnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path), 'File write failed'),
+        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path)),
       );
+      assertNotErrorState(writtenSnapshot, 'File write failed');
     },
     [actorRef],
   );
@@ -105,17 +123,22 @@ export function FileManagerProvider({
   const readFile = useCallback(
     async (path: string): Promise<Uint8Array> => {
       // Ensure the actor is ready before reading the file
-      await waitFor(
+      const readySnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+
       // Send the read file event
       actorRef.send({ type: 'readFile', path });
-      // Ensure the file is read before returning
+
+      // Wait for file to be read or error to occur
       const snapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path), 'File read failed'),
+        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path)),
       );
+      assertNotErrorState(snapshot, 'File read failed');
+
       const file = snapshot.context.openFiles.get(path);
 
       if (!file) {
@@ -131,8 +154,10 @@ export function FileManagerProvider({
     async (path: string): Promise<Blob> => {
       const snapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(snapshot, 'File manager initialization failed');
+
       const worker = snapshot.context.wrappedWorker;
       if (!worker) {
         throw new Error('File manager worker not initialized');
@@ -145,15 +170,19 @@ export function FileManagerProvider({
 
   const writeFiles = useCallback(
     async (files: Record<string, { content: Uint8Array }>) => {
-      await waitFor(
+      const readySnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+
       actorRef.send({ type: 'writeFiles', files });
-      await waitFor(
+
+      const writtenSnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'Files write failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(writtenSnapshot, 'Files write failed');
     },
     [actorRef],
   );
@@ -162,18 +191,22 @@ export function FileManagerProvider({
     async (sourcePath: string, destinationPath: string) => {
       const snapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(snapshot, 'File manager initialization failed');
+
       const worker = snapshot.context.wrappedWorker;
       if (!worker) {
         throw new Error('File manager worker not initialized');
       }
 
       await worker.copyDirectory(sourcePath, destinationPath);
-      await waitFor(
+
+      const copiedSnapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'Directory copy failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(copiedSnapshot, 'Directory copy failed');
     },
     [actorRef],
   );
@@ -182,8 +215,10 @@ export function FileManagerProvider({
     async (path: string): Promise<boolean> => {
       const snapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(snapshot, 'File manager initialization failed');
+
       const worker = snapshot.context.wrappedWorker;
       if (!worker) {
         throw new Error('File manager worker not initialized');
@@ -201,8 +236,10 @@ export function FileManagerProvider({
     async (path: string): Promise<string[]> => {
       const snapshot = await waitFor(
         actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready'), 'File manager initialization failed'),
+        createErrorAwareWaitPredicate((state) => state.matches('ready')),
       );
+      assertNotErrorState(snapshot, 'File manager initialization failed');
+
       const worker = snapshot.context.wrappedWorker;
       if (!worker) {
         throw new Error('File manager worker not initialized');

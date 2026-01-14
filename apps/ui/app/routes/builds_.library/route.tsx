@@ -469,7 +469,7 @@ function UnifiedBuildList({
   if (projects.length === 0) {
     return (
       <EmptyItems className="min-h-[60vh]">
-        <ChatProvider value={{}}>
+        <ChatProvider>
           <div className="mx-auto max-w-2xl space-y-6">
             <div className="flex flex-col items-center space-y-4 text-center">
               <PackageX className="size-16 text-muted-foreground" strokeWidth={1} />

@@ -104,7 +104,7 @@ export default function ChatStart(): React.JSX.Element {
             </h1>
           </div>
 
-          <ChatProvider value={{}}>
+          <ChatProvider>
             <div className="space-y-4">
               <div className="flex justify-center">
                 <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />
