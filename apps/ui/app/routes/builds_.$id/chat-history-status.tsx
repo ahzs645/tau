@@ -78,7 +78,7 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
   return (
     <div
       className={cn(
-        'sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border/50 bg-background/95 px-3 py-1.5 text-xs backdrop-blur supports-backdrop-filter:bg-background/60',
+        'sticky top-0 z-10 flex items-center justify-between gap-2 border-b px-3 py-1.5 text-xs',
         className,
       )}
     >
