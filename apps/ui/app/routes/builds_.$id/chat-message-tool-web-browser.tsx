@@ -3,9 +3,11 @@ import { Globe } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import { createFaviconUrl, extractDomainFromUrl } from '#utils/url.utils.js';
 import { ChatToolInline } from '#components/chat/chat-tool-inline.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolWebBrowser({
   part,
@@ -26,6 +28,11 @@ export function ChatMessageToolWebBrowser({
             Visiting {domain}...
           </ChatToolInline>
         );
+      }
+
+      // Check for structured tool errors in output-available case
+      if (isToolExecutionError(part.output)) {
+        return <ChatToolError error={part.output} />;
       }
 
       return (

@@ -11,6 +11,7 @@ import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { ChatHistorySelector } from '#routes/builds_.$id/chat-history-selector.js';
+import { ChatHistoryStatus } from '#routes/builds_.$id/chat-history-status.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
   FloatingPanel,
@@ -169,10 +170,13 @@ export const ChatHistory = memo(function (props: {
           />
         )}
       >
-        {/* Header with search */}
+        {/* Header with chat selector */}
         <FloatingPanelContentHeader>
           <ChatHistorySelector onNewChat={handleNewChat} />
         </FloatingPanelContentHeader>
+
+        {/* Sticky status bar - last activity, model, cost */}
+        <ChatHistoryStatus />
 
         {/* Main chat content area */}
         <Virtuoso

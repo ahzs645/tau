@@ -1,5 +1,6 @@
 import { errorCategory, errorCategories } from '@taucad/types';
 import type { ErrorCategory, ChatError } from '@taucad/types';
+import { categoryTitles } from '@taucad/chat';
 
 /**
  * Checks if error is a client-side network error (never reaches the API).
@@ -14,9 +15,10 @@ function isNetworkError(message: string): boolean {
 }
 
 /**
- * Parses the JSON error from the API.
+ * Parses a ChatError from JSON.
+ * The API always sends errors in ChatError format, so we just parse and validate.
  */
-function tryParseApiError(message: string): ChatError | undefined {
+function tryParseChatError(message: string): ChatError | undefined {
   if (!message.startsWith('{')) {
     return undefined;
   }
@@ -24,6 +26,7 @@ function tryParseApiError(message: string): ChatError | undefined {
   try {
     const parsed = JSON.parse(message) as Record<string, unknown>;
 
+    // Validate required fields
     if (
       typeof parsed['category'] === 'string' &&
       typeof parsed['title'] === 'string' &&
@@ -54,22 +57,27 @@ function tryParseApiError(message: string): ChatError | undefined {
 }
 
 /**
- * Parses an Error object into a NormalizedChatError for persistence.
+ * Parses an Error object into a ChatError for persistence.
  * This is used to store errors in the chat entity so they survive page reloads.
+ *
+ * The API always sends errors in ChatError format, so this function just:
+ * 1. Handles client-side network errors (which never reach the API)
+ * 2. Parses the structured ChatError from the API response
+ * 3. Falls back to a generic error for unexpected formats
  */
 export function parseErrorForPersistence(error: Error): ChatError {
   // Handle client-side network errors (these never reach the API)
   if (isNetworkError(error.message)) {
     return {
       category: errorCategory.network,
-      title: 'Connection Error',
+      title: categoryTitles[errorCategory.network],
       message: 'Unable to connect to the server. Please check your internet connection.',
       raw: error.message,
     };
   }
 
-  // Parse structured error from API
-  const parsed = tryParseApiError(error.message);
+  // Parse structured ChatError from API
+  const parsed = tryParseChatError(error.message);
   if (parsed) {
     return parsed;
   }
@@ -77,7 +85,7 @@ export function parseErrorForPersistence(error: Error): ChatError {
   // Fallback for unexpected formats
   return {
     category: errorCategory.generic,
-    title: 'Error',
+    title: categoryTitles[errorCategory.generic],
     message: error.message,
     raw: error.message,
   };

@@ -2,9 +2,11 @@ import type { UIToolInvocation } from 'ai';
 import { LoaderCircle, X } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 /**
  * Extract the filename from a path.
@@ -52,6 +54,12 @@ export function ChatMessageToolDeleteFile({
 
     case 'output-available': {
       const { input, output } = part;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(output)) {
+        return <ChatToolError error={output} />;
+      }
+
       const { targetFile } = input;
       const { success } = output;
       const filename = getFilename(targetFile);

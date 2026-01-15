@@ -2,7 +2,9 @@ import type { UIToolInvocation } from 'ai';
 import { X } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import { CollapsibleFileOperation } from '#components/chat/chat-tool-file-operation.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolCreateFile({
   part,
@@ -23,6 +25,12 @@ export function ChatMessageToolCreateFile({
 
     case 'output-available': {
       const { input, output } = part;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(output)) {
+        return <ChatToolError error={output} />;
+      }
+
       const { targetFile, content } = input;
       const { success, diffStats } = output;
 

@@ -2,9 +2,11 @@ import type { UIToolInvocation } from 'ai';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import { FileLink } from '#components/files/file-link.js';
 import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 function formatLineRange(offset?: number, limit?: number): string {
   if (offset === undefined && limit === undefined) {
@@ -45,7 +47,13 @@ export function ChatMessageToolReadFile({
     }
 
     case 'output-available': {
-      const { input } = part;
+      const { output, input } = part;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(output)) {
+        return <ChatToolError error={output} />;
+      }
+
       const { targetFile } = input;
       const lineRange = formatLineRange(input.offset, input.limit);
       const startLine = input.offset ?? 1;

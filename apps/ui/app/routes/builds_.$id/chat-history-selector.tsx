@@ -1,4 +1,4 @@
-import { Plus, Pencil, Trash, History, DollarSign, AlertCircle } from 'lucide-react';
+import { Plus, Pencil, Trash, History, AlertCircle } from 'lucide-react';
 import { useState, useRef, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useChat } from '@ai-sdk/react';
@@ -8,13 +8,11 @@ import { ChatHistorySettings } from '#routes/builds_.$id/chat-history-settings.j
 import { Button } from '#components/ui/button.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useChats } from '#hooks/use-chats.js';
-import { useChatSelector } from '#hooks/use-chat.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { cn } from '#utils/ui.utils.js';
 import { useChatConstants } from '#utils/chat.utils.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { formatRelativeTime } from '#utils/date.utils.js';
-import { formatCurrency } from '#utils/currency.utils.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '#components/ui/dialog.js';
 import { Input } from '#components/ui/input.js';
 import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
@@ -22,8 +20,6 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { FloatingPanelContentHeaderActions } from '#components/ui/floating-panel.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 
 const newChatKeyCombination = {
   key: 'c',
@@ -34,24 +30,9 @@ const newChatKeyCombination = {
 export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => void }): ReactNode {
   const { buildRef, buildId, setLastChatId } = useBuild();
   const { chats, createChat, updateChatName, deleteChat, isLoading: isChatsLoading } = useChats(buildId);
-  const [showModelCost] = useCookie(cookieName.chatModelCost, true);
 
   const isBuildLoading = useSelector(buildRef, (state) => state.context.isLoading);
   const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId) ?? '';
-
-  // Calculate total cost from all usage data parts across all messages
-  const totalCost = useChatSelector((state) => {
-    let cost = 0;
-    for (const message of state.messages) {
-      for (const part of message.parts) {
-        if (part.type === 'data-usage') {
-          cost += part.data.totalCost;
-        }
-      }
-    }
-
-    return cost;
-  });
 
   // Derive activeChat and groupedChats from chats
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [chats, activeChatId]);
@@ -241,12 +222,6 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
     <>
       <div className={cn('wrap ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
         <span className="truncate">{activeChat?.name}</span>
-        {showModelCost && totalCost > 0 ? (
-          <span className="mt-0.5 flex shrink-0 items-center gap-0 text-xs text-muted-foreground">
-            <DollarSign className="size-3" />
-            {formatCurrency(totalCost, { significantFigures: 2 })}
-          </span>
-        ) : undefined}
       </div>
       <FloatingPanelContentHeaderActions className="h-7.75">
         <Tooltip>

@@ -11,7 +11,7 @@ import { ViewContextProvider } from '#routes/builds_.$id/chat-interface-view-con
 import { useKeydown } from '#hooks/use-keydown.js';
 import { BuildCommandPaletteItems } from '#routes/builds_.$id/build-command-items.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
-import { useChatToolsWebSocket } from '#hooks/use-chat-tools-websocket.js';
+import { useChatToolsConnection } from '#hooks/use-chat-tools-socket.js';
 
 // Define provider component at module level for stable reference across HMR
 function RouteProvider({ children }: { readonly children?: React.ReactNode }): React.JSX.Element {
@@ -45,8 +45,8 @@ export const handle: Handle = {
 function Chat(): React.JSX.Element {
   const { activeChatId, isLoadingChat } = useChatContext();
 
-  // Connect WebSocket for tool execution (only in build context)
-  useChatToolsWebSocket({
+  // Connect to Socket.IO for tool execution (uses singleton service)
+  useChatToolsConnection({
     chatId: activeChatId,
     enabled: !isLoadingChat,
   });

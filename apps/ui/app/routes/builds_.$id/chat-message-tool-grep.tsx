@@ -3,6 +3,7 @@ import { Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -13,6 +14,7 @@ import {
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolGrep({
   part,
@@ -39,6 +41,12 @@ export function ChatMessageToolGrep({
 
     case 'output-available': {
       const { input, output } = part;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(output)) {
+        return <ChatToolError error={output} />;
+      }
+
       const { pattern } = input;
       const { matches, totalMatches, truncated } = output;
 

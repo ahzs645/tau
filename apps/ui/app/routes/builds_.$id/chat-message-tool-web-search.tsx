@@ -3,6 +3,7 @@ import { ChevronRight, Globe, HelpCircle } from 'lucide-react';
 import type { UIToolInvocation } from 'ai';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -15,6 +16,7 @@ import { ExternalLink } from '#components/external-link.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { extractDomainFromUrl, createFaviconUrl } from '#utils/url.utils.js';
 import { cn } from '#utils/ui.utils.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 const maxVisibleSources = 5;
 
@@ -156,6 +158,11 @@ export function ChatMessageToolWebSearch({
     case 'output-available': {
       const sources = part.output;
       const { query } = part.input;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(sources)) {
+        return <ChatToolError error={sources} />;
+      }
 
       if (sources.length === 0) {
         return (

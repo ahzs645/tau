@@ -2,6 +2,7 @@ import type { UIToolInvocation } from 'ai';
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
 import type { MyTools } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import type { IssueSeverity, KernelIssue } from '@taucad/types';
 import {
   ChatToolCard,
@@ -15,6 +16,7 @@ import {
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { FileLink } from '#components/files/file-link.js';
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 /**
  * Maps issue severity to appropriate icon component.
@@ -110,6 +112,12 @@ export function ChatMessageToolGetKernelResult({
 
     case 'output-available': {
       const { output } = part;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(output)) {
+        return <ChatToolError error={output} />;
+      }
+
       const { status, kernelIssues } = output;
 
       const hasIssues = kernelIssues && kernelIssues.length > 0;

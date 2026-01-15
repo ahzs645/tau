@@ -22,6 +22,7 @@ export * from '#schemas/message.schema.js';
 export * from '#schemas/message-data.schema.js';
 export * from '#schemas/tool-schemas-registry.js';
 export * from '#utils/tool-error.utils.js';
+export * from '#utils/chat-error.utils.js';
 
 export type * from '#types/message.types.js';
 export type * from '#types/tool.types.js';

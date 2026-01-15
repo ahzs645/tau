@@ -2,6 +2,7 @@ import type { UIToolInvocation } from 'ai';
 import { Eye, Check, X, Lightbulb, HelpCircle } from 'lucide-react';
 import type { MyTools, RequirementResult } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
+import { isToolExecutionError } from '@taucad/chat';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { ImagePreviewGroup } from '#components/ui/image-preview-group.js';
@@ -15,6 +16,7 @@ import {
 } from '#components/chat/chat-tool-card.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { RequirementIndicator } from '#components/chat/requirement-indicator.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 /**
  * Returns the appropriate status icon for a requirement result
@@ -108,6 +110,12 @@ export function ChatMessageToolImageAnalysis({
 
     case 'output-available': {
       const { input, output: result } = part;
+
+      // Check for structured tool errors
+      if (isToolExecutionError(result)) {
+        return <ChatToolError error={result} />;
+      }
+
       const { requirements = [] } = input;
       const { observations = [], aggregatedResults = [] } = result;
 
