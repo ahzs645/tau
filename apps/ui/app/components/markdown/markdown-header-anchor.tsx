@@ -35,15 +35,15 @@ export function createHeaderAnchor(
     const id = slugify(text);
 
     return (
-      <Tag id={id} className={cn('group flex scroll-mt-24 items-center gap-2', headingClassName, className)} {...rest}>
+      <Tag id={id} className={cn('group scroll-mt-(--header-height)', headingClassName, className)} {...rest}>
         {children}
         <a
           href={`#${id}`}
           aria-label="Link to this section"
-          className="rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted-foreground/10 focus:bg-muted-foreground/20 focus:opacity-100 focus:outline-none"
+          className="ml-1 inline-flex items-center justify-center rounded p-1 transition-opacity group-hover:opacity-100 hover:bg-muted-foreground/10 focus:bg-muted-foreground/20 focus:opacity-100 focus:outline-none md:opacity-0"
           tabIndex={-1}
         >
-          <LinkIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+          <LinkIcon className="inline size-3 text-muted-foreground md:size-4" aria-hidden="true" />
         </a>
       </Tag>
     );
