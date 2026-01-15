@@ -62,10 +62,10 @@ export class ModelService implements OnModuleInit {
     return {
       // Some providers include cached read tokens in the input tokens,
       // so we need to subtract them if necessary.
-      inputTokens: usage.inputTokens - (provider.inputTokensIncludesCachedReadTokens ? usage.cachedReadTokens : 0),
+      inputTokens: usage.inputTokens - (provider.inputTokensIncludesCacheReadTokens ? usage.cacheReadTokens : 0),
       outputTokens: usage.outputTokens,
-      cachedReadTokens: usage.cachedReadTokens,
-      cachedWriteTokens: usage.cachedWriteTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
     };
   }
 
@@ -78,23 +78,23 @@ export class ModelService implements OnModuleInit {
     // Convert cost per million tokens to cost per token
     const inputCostPerToken = modelConfig.details.cost.inputTokens / 1_000_000;
     const outputCostPerToken = modelConfig.details.cost.outputTokens / 1_000_000;
-    const cachedReadCostPerToken = modelConfig.details.cost.cachedReadTokens / 1_000_000;
-    const cachedWriteCostPerToken = modelConfig.details.cost.cachedWriteTokens / 1_000_000;
+    const cacheReadCostPerToken = modelConfig.details.cost.cacheReadTokens / 1_000_000;
+    const cacheWriteCostPerToken = modelConfig.details.cost.cacheWriteTokens / 1_000_000;
 
     // Calculate individual costs
     const inputTokensCost = usage.inputTokens * inputCostPerToken;
     const outputTokensCost = usage.outputTokens * outputCostPerToken;
-    const cachedReadTokensCost = usage.cachedReadTokens * cachedReadCostPerToken;
-    const cachedWriteTokensCost = usage.cachedWriteTokens * cachedWriteCostPerToken;
+    const cacheReadTokensCost = usage.cacheReadTokens * cacheReadCostPerToken;
+    const cacheWriteTokensCost = usage.cacheWriteTokens * cacheWriteCostPerToken;
 
     // Calculate total cost
-    const totalCost = inputTokensCost + outputTokensCost + cachedReadTokensCost + cachedWriteTokensCost;
+    const totalCost = inputTokensCost + outputTokensCost + cacheReadTokensCost + cacheWriteTokensCost;
 
     return {
       inputTokensCost,
       outputTokensCost,
-      cachedReadTokensCost,
-      cachedWriteTokensCost,
+      cacheReadTokensCost,
+      cacheWriteTokensCost,
       totalCost,
     };
   }
@@ -125,8 +125,8 @@ export class ModelService implements OnModuleInit {
               cost: {
                 inputTokens: 0,
                 outputTokens: 0,
-                cachedReadTokens: 0,
-                cachedWriteTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
               },
             },
             configuration: {

@@ -54,7 +54,7 @@ export class ProviderService {
         configuration: {
           apiKey: configService.get('OPENAI_API_KEY', { infer: true }),
         },
-        inputTokensIncludesCachedReadTokens: true,
+        inputTokensIncludesCacheReadTokens: true,
         createClass: (options) => new ChatOpenAI({ useResponsesApi: true, ...options }),
       },
       ollama: {
@@ -63,7 +63,7 @@ export class ProviderService {
           // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
           baseURL: 'http://localhost:11434',
         },
-        inputTokensIncludesCachedReadTokens: false,
+        inputTokensIncludesCacheReadTokens: false,
         createClass: (options) => new ChatOllama(options),
       },
       sambanova: {
@@ -73,7 +73,7 @@ export class ProviderService {
           // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
           baseURL: 'https://api.sambanova.ai/v1',
         },
-        inputTokensIncludesCachedReadTokens: false,
+        inputTokensIncludesCacheReadTokens: false,
         createClass: (options) => new ChatOpenAI(options),
       },
       anthropic: {
@@ -81,7 +81,7 @@ export class ProviderService {
         configuration: {
           apiKey: configService.get('ANTHROPIC_API_KEY', { infer: true }),
         },
-        inputTokensIncludesCachedReadTokens: false,
+        inputTokensIncludesCacheReadTokens: false,
         createClass: (options) =>
           new ChatAnthropic({
             ...options,
@@ -94,7 +94,7 @@ export class ProviderService {
         configuration: {
           apiKey: undefined,
         },
-        inputTokensIncludesCachedReadTokens: false,
+        inputTokensIncludesCacheReadTokens: false,
         createClass(options) {
           const credentials = configService.get('GOOGLE_VERTEX_AI_CREDENTIALS', { infer: true });
           return new ChatVertexAI({
@@ -111,7 +111,7 @@ export class ProviderService {
         configuration: {
           apiKey: configService.get('CEREBRAS_API_KEY', { infer: true }),
         },
-        inputTokensIncludesCachedReadTokens: false,
+        inputTokensIncludesCacheReadTokens: false,
         createClass: (options) => new ChatCerebras(options),
       },
     };

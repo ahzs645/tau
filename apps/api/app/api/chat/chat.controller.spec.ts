@@ -158,8 +158,8 @@ describe('ChatController', () => {
       getModelCost: vi.fn().mockReturnValue({
         inputTokensCost: 0,
         outputTokensCost: 0,
-        cachedReadTokensCost: 0,
-        cachedWriteTokensCost: 0,
+        cacheReadTokensCost: 0,
+        cacheWriteTokensCost: 0,
         totalCost: 0,
       }),
     };

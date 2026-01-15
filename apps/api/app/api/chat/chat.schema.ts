@@ -3,15 +3,15 @@ import { z } from 'zod';
 export const chatUsageTokensSchema = z.object({
   inputTokens: z.number().describe('The number of input tokens consumed'),
   outputTokens: z.number().describe('The number of output tokens consumed'),
-  cachedReadTokens: z.number().describe('The number of cached input tokens read'),
-  cachedWriteTokens: z.number().describe('The number of cached output tokens written'),
+  cacheReadTokens: z.number().describe('The number of cached input tokens read'),
+  cacheWriteTokens: z.number().describe('The number of cached output tokens written'),
 });
 
 export const chatUsageCostSchema = z.object({
   inputTokensCost: z.number().describe('The cost of the input tokens consumed'),
   outputTokensCost: z.number().describe('The cost of the output tokens consumed'),
-  cachedReadTokensCost: z.number().describe('The cost of the cached input tokens read'),
-  cachedWriteTokensCost: z.number().describe('The cost of the cached output tokens written'),
+  cacheReadTokensCost: z.number().describe('The cost of the cached input tokens read'),
+  cacheWriteTokensCost: z.number().describe('The cost of the cached output tokens written'),
   totalCost: z.number().describe('The total cost of the usage'),
 });
 

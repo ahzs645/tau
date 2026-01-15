@@ -23,8 +23,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 5,
           outputTokens: 25,
-          cachedReadTokens: 0.5,
-          cachedWriteTokens: 6.25,
+          cacheReadTokens: 0.5,
+          cacheWriteTokens: 6.25,
         },
       },
       configuration: {
@@ -61,8 +61,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 3,
           outputTokens: 15,
-          cachedReadTokens: 0.3,
-          cachedWriteTokens: 3.75,
+          cacheReadTokens: 0.3,
+          cacheWriteTokens: 3.75,
         },
       },
       configuration: {
@@ -97,8 +97,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 1.75,
           outputTokens: 14,
-          cachedReadTokens: 0.175,
-          cachedWriteTokens: 0,
+          cacheReadTokens: 0.175,
+          cacheWriteTokens: 0,
         },
       },
       configuration: {
@@ -127,8 +127,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 1.75,
           outputTokens: 14,
-          cachedReadTokens: 0.175,
-          cachedWriteTokens: 0,
+          cacheReadTokens: 0.175,
+          cacheWriteTokens: 0,
         },
       },
       configuration: {
@@ -157,8 +157,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 2,
           outputTokens: 8,
-          cachedReadTokens: 0.5,
-          cachedWriteTokens: 0,
+          cacheReadTokens: 0.5,
+          cacheWriteTokens: 0,
         },
       },
       configuration: {
@@ -185,8 +185,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
           outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
-          cachedReadTokens: 0,
-          cachedWriteTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
         },
       },
       configuration: {

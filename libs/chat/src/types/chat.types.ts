@@ -18,15 +18,15 @@ export type MessageAnnotation = {
 export type ChatUsageTokens = {
   inputTokens: number;
   outputTokens: number;
-  cachedReadTokens: number;
-  cachedWriteTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type ChatUsageCost = {
   inputTokensCost: number;
   outputTokensCost: number;
-  cachedReadTokensCost: number;
-  cachedWriteTokensCost: number;
+  cacheReadTokensCost: number;
+  cacheWriteTokensCost: number;
   totalCost: number;
 };
 

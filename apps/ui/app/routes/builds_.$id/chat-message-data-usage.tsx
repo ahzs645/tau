@@ -15,12 +15,12 @@ import { cookieName } from '#constants/cookie.constants.js';
 type UsageTotals = {
   inputTokens: number;
   outputTokens: number;
-  cachedReadTokens: number;
-  cachedWriteTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   inputTokensCost: number;
   outputTokensCost: number;
-  cachedReadTokensCost: number;
-  cachedWriteTokensCost: number;
+  cacheReadTokensCost: number;
+  cacheWriteTokensCost: number;
   totalCost: number;
 };
 
@@ -48,24 +48,24 @@ export function ChatMessageDataUsage({
     const calculated: UsageTotals = {
       inputTokens: 0,
       outputTokens: 0,
-      cachedReadTokens: 0,
-      cachedWriteTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       inputTokensCost: 0,
       outputTokensCost: 0,
-      cachedReadTokensCost: 0,
-      cachedWriteTokensCost: 0,
+      cacheReadTokensCost: 0,
+      cacheWriteTokensCost: 0,
       totalCost: 0,
     };
 
     for (const usage of usageParts) {
       calculated.inputTokens += usage.inputTokens;
       calculated.outputTokens += usage.outputTokens;
-      calculated.cachedReadTokens += usage.cachedReadTokens;
-      calculated.cachedWriteTokens += usage.cachedWriteTokens;
+      calculated.cacheReadTokens += usage.cacheReadTokens;
+      calculated.cacheWriteTokens += usage.cacheWriteTokens;
       calculated.inputTokensCost += usage.inputTokensCost;
       calculated.outputTokensCost += usage.outputTokensCost;
-      calculated.cachedReadTokensCost += usage.cachedReadTokensCost;
-      calculated.cachedWriteTokensCost += usage.cachedWriteTokensCost;
+      calculated.cacheReadTokensCost += usage.cacheReadTokensCost;
+      calculated.cacheWriteTokensCost += usage.cacheWriteTokensCost;
       calculated.totalCost += usage.totalCost;
     }
 
@@ -81,7 +81,7 @@ export function ChatMessageDataUsage({
     return undefined;
   }
 
-  const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedReadTokens + totals.cachedWriteTokens;
+  const totalTokens = totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
 
   return (
     <HoverCard openDelay={100} closeDelay={100}>
@@ -119,7 +119,7 @@ export function ChatMessageDataUsage({
                 <>
                   {usageParts.map((usage, index) => {
                     const turnTokens =
-                      usage.inputTokens + usage.outputTokens + usage.cachedReadTokens + usage.cachedWriteTokens;
+                      usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
                     return (
                       <TableRow key={usage.id}>
                         <TableCell className="flex flex-row items-center gap-1">
@@ -128,11 +128,11 @@ export function ChatMessageDataUsage({
                             <div className="space-y-1 text-xs">
                               <div>Input: {formatNumberAbbreviation(usage.inputTokens)} tokens</div>
                               <div>Output: {formatNumberAbbreviation(usage.outputTokens)} tokens</div>
-                              {usage.cachedReadTokens > 0 && (
-                                <div>Cached Read: {formatNumberAbbreviation(usage.cachedReadTokens)} tokens</div>
+                              {usage.cacheReadTokens > 0 && (
+                                <div>Cache Read: {formatNumberAbbreviation(usage.cacheReadTokens)} tokens</div>
                               )}
-                              {usage.cachedWriteTokens > 0 && (
-                                <div>Cached Write: {formatNumberAbbreviation(usage.cachedWriteTokens)} tokens</div>
+                              {usage.cacheWriteTokens > 0 && (
+                                <div>Cache Write: {formatNumberAbbreviation(usage.cacheWriteTokens)} tokens</div>
                               )}
                             </div>
                           </InfoTooltip>
@@ -175,37 +175,37 @@ export function ChatMessageDataUsage({
                       {formatCurrency(totals.outputTokensCost, { significantFigures: 2 })}
                     </TableCell>
                   </TableRow>
-                  {totals.cachedReadTokens > 0 && (
+                  {totals.cacheReadTokens > 0 && (
                     <TableRow>
                       <TableCell className="flex flex-row items-center gap-1">
-                        <span>Cached Read</span>
+                        <span>Cache Read</span>
                         <InfoTooltip>
                           The number of tokens read from the prompt cache. This improves performance by avoiding
                           re-processing the same prompt.
                         </InfoTooltip>
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatNumberAbbreviation(totals.cachedReadTokens)}
+                        {formatNumberAbbreviation(totals.cacheReadTokens)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatCurrency(totals.cachedReadTokensCost, { significantFigures: 2 })}
+                        {formatCurrency(totals.cacheReadTokensCost, { significantFigures: 2 })}
                       </TableCell>
                     </TableRow>
                   )}
-                  {totals.cachedWriteTokens > 0 ? (
+                  {totals.cacheWriteTokens > 0 ? (
                     <TableRow>
                       <TableCell className="flex flex-row items-center gap-1">
-                        <span>Cached Write</span>
+                        <span>Cache Write</span>
                         <InfoTooltip>
                           The number of tokens written to the prompt cache. This improves performance by avoiding
                           re-processing the same prompt.
                         </InfoTooltip>
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatNumberAbbreviation(totals.cachedWriteTokens)}
+                        {formatNumberAbbreviation(totals.cacheWriteTokens)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatCurrency(totals.cachedWriteTokensCost, { significantFigures: 2 })}
+                        {formatCurrency(totals.cacheWriteTokensCost, { significantFigures: 2 })}
                       </TableCell>
                     </TableRow>
                   ) : undefined}

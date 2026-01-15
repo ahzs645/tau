@@ -9,12 +9,12 @@ export const usageDataSchema = z.object({
   model: z.string(),
   inputTokens: z.number(),
   outputTokens: z.number(),
-  cachedReadTokens: z.number(),
-  cachedWriteTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
   inputTokensCost: z.number(),
   outputTokensCost: z.number(),
-  cachedReadTokensCost: z.number(),
-  cachedWriteTokensCost: z.number(),
+  cacheReadTokensCost: z.number(),
+  cacheWriteTokensCost: z.number(),
   totalCost: z.number(),
 });
 

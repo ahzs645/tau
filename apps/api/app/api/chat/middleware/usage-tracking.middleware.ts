@@ -44,8 +44,8 @@ export const usageTrackingMiddleware = createMiddleware({
       const rawUsage = {
         inputTokens: usage.input_tokens,
         outputTokens: usage.output_tokens,
-        cachedReadTokens: usage.input_token_details?.cache_read ?? 0,
-        cachedWriteTokens: usage.output_token_details?.reasoning ?? 0,
+        cacheReadTokens: usage.input_token_details?.cache_read ?? 0,
+        cacheWriteTokens: usage.output_token_details?.reasoning ?? 0,
       };
 
       // Normalize tokens (some providers include cached tokens in input count)

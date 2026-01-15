@@ -8,7 +8,7 @@ export const modelFamilySchema = z.enum(['gpt', 'claude', 'gemini']);
 
 export const providerSchema = z.object({
   provider: providerIdSchema,
-  inputTokensIncludesCachedReadTokens: z.boolean().describe('Whether the input tokens include cached read tokens'),
+  inputTokensIncludesCacheReadTokens: z.boolean().describe('Whether the input tokens include cached read tokens'),
   configuration: z
     .object({
       apiKey: z.string().describe('The API key of the provider').optional(),
