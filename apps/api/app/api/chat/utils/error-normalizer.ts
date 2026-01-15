@@ -5,6 +5,7 @@
 
 import { errorCategory } from '@taucad/types';
 import type { ErrorCategory, ChatError } from '@taucad/types';
+import { httpStatusToCategory, categoryTitles } from '@taucad/chat';
 
 /**
  * LangChain error codes that may be present on wrapped errors.
@@ -46,60 +47,6 @@ const langChainCodeToCategory: Record<LangChainErrorCode, ErrorCategory> = {
   UNREACHABLE_NODE: errorCategory.server,
 };
 /* eslint-enable @typescript-eslint/naming-convention -- re-enable after SCREAMING_SNAKE_CASE section */
-
-/**
- * Maps HTTP status codes to error categories.
- */
-function httpStatusToCategory(status: number): ErrorCategory {
-  switch (status) {
-    case 400: {
-      return errorCategory.toolError;
-    }
-
-    case 401: {
-      return errorCategory.auth;
-    }
-
-    case 403: {
-      return errorCategory.credits;
-    }
-
-    case 404: {
-      return errorCategory.server;
-    }
-
-    case 429: {
-      return errorCategory.rateLimit;
-    }
-
-    case 503:
-    case 529: {
-      return errorCategory.overloaded;
-    }
-
-    default: {
-      if (status >= 500) {
-        return errorCategory.server;
-      }
-
-      return errorCategory.generic;
-    }
-  }
-}
-
-/**
- * Default titles for each error category.
- */
-const categoryTitles: Record<ErrorCategory, string> = {
-  [errorCategory.credits]: 'Credit Limit Reached',
-  [errorCategory.rateLimit]: 'Rate Limit Exceeded',
-  [errorCategory.overloaded]: 'Service Temporarily Unavailable',
-  [errorCategory.toolError]: 'Processing Error',
-  [errorCategory.auth]: 'Authentication Error',
-  [errorCategory.network]: 'Connection Error',
-  [errorCategory.server]: 'Server Error',
-  [errorCategory.generic]: 'Error',
-};
 
 /**
  * Patterns to wrap in inline code blocks for better readability.

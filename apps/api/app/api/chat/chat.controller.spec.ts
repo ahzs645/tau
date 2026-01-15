@@ -9,7 +9,10 @@ import type { StreamTextResult as StreamTextResultType, ToolSet } from 'ai';
 import type { ChatUsageTokens, MyUIMessage } from '@taucad/chat';
 import { ChatController } from '#api/chat/chat.controller.js';
 import { ChatService } from '#api/chat/chat.service.js';
+import { ChatToolsService } from '#api/chat/chat-tools.service.js';
 import { ModelService } from '#api/models/model.service.js';
+import { FileEditService } from '#api/file-edit/file-edit.service.js';
+import { AnalysisService } from '#api/analysis/analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
 
 // Mock the @ai-sdk/langchain module
@@ -161,6 +164,12 @@ describe('ChatController', () => {
       }),
     };
 
+    const mockChatToolsService = {};
+
+    const mockFileEditService = {};
+
+    const mockAnalysisService = {};
+
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
       providers: [
@@ -169,8 +178,20 @@ describe('ChatController', () => {
           useValue: mockChatService,
         },
         {
+          provide: ChatToolsService,
+          useValue: mockChatToolsService,
+        },
+        {
           provide: ModelService,
           useValue: mockModelService,
+        },
+        {
+          provide: FileEditService,
+          useValue: mockFileEditService,
+        },
+        {
+          provide: AnalysisService,
+          useValue: mockAnalysisService,
         },
         Reflector,
       ],

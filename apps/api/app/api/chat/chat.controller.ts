@@ -1,4 +1,4 @@
-import { Body, Controller, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Logger, Post, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -15,7 +15,9 @@ import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.j
 import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform.js';
 import { createErrorTransform } from '#api/chat/utils/error-transform.js';
 import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
+import { ChatExceptionFilter } from '#api/chat/chat-exception.filter.js';
 
+@UseFilters(ChatExceptionFilter)
 @UseGuards(AuthGuard)
 @Controller({ path: 'chat', version: '1' })
 export class ChatController {
