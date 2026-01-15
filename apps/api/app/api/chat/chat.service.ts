@@ -60,17 +60,18 @@ export class ChatService {
 
     // Combine all tools into a single array for the unified agent
     const allTools = [
-      // CAD and filesystem tools
-      tools.edit_file,
+      // CAD tools
+      tools.reasoning,
       tools.analyze_image,
+      tools.get_kernel_result,
+      // Filesystem tools
+      tools.edit_file,
       tools.read_file,
       tools.list_directory,
       tools.create_file,
       tools.delete_file,
       tools.grep,
       tools.glob_search,
-      tools.get_kernel_result,
-      tools.reasoning,
       // Research tools
       tools.web_search,
       tools.web_browser,
@@ -82,7 +83,6 @@ export class ChatService {
 
     // Create a unified agent with createAgent from LangChain v1
     // Uses SystemMessage with cache control for Anthropic prompt caching
-    // Uses model instead of llm, and does NOT use pre-bound models with tools
     const agent = createAgent({
       model,
       tools: allTools,
