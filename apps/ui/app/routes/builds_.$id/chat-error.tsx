@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
 import type React from 'react';
 import { ChevronRight, RefreshCcw } from 'lucide-react';
 import { errorCategory } from '@taucad/types';
@@ -37,21 +37,15 @@ export const ChatError = memo(function ({
   readonly onOpenChange?: (open: boolean) => void;
   readonly className?: string;
 }): React.ReactNode {
-  // Read both AI SDK error (runtime) and persisted error (from storage)
-  const error = useChatSelector((state) => state.error);
-  const persistedError = useChatSelector((state) => state.persistedError);
-  const { regenerate } = useChatActions();
-
-  // Prefer AI SDK error when present, fallback to persisted error for page reloads
-  const parsedError = useMemo((): NormalizedChatError | undefined => {
-    // If there's a runtime error from AI SDK, parse it
-    if (error) {
-      return parseErrorForPersistence(error);
+  // Derive parsed error inside selector - prefer runtime error, fallback to persisted
+  const parsedError = useChatSelector((state): NormalizedChatError | undefined => {
+    if (state.error) {
+      return parseErrorForPersistence(state.error);
     }
 
-    // Otherwise, use the persisted error (already normalized)
-    return persistedError;
-  }, [error, persistedError]);
+    return state.persistedError;
+  });
+  const { regenerate } = useChatActions();
 
   if (!parsedError) {
     return null;
