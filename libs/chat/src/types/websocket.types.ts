@@ -8,6 +8,8 @@ export type WsCloseCode = (typeof wsCloseCode)[keyof typeof wsCloseCode];
  */
 export type ToolCallRequest = {
   type: 'tool_call_request';
+  /** The chat ID this request is for */
+  chatId: string;
   /** Unique ID for this request (used to match response) */
   requestId: string;
   /** The tool call ID from the LLM */
@@ -103,6 +105,19 @@ export type ToolNoConnectionError = {
 };
 
 /**
- * All possible structured tool errors.
+ * Structured validation error returned to LLM when tool output validation fails.
+ * The LLM can use this information to understand what went wrong and potentially retry.
  */
-export type ToolExecutionError = ToolTimeoutError | ToolDisconnectedError | ToolNoConnectionError;
+export type ToolValidationError = {
+  errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+  validationErrors: Array<{ path: string; message: string }>;
+  rawOutput: unknown;
+};
+
+/**
+ * All possible structured tool errors including validation errors.
+ */
+export type ToolExecutionError = ToolTimeoutError | ToolDisconnectedError | ToolNoConnectionError | ToolValidationError;
