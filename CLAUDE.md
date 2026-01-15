@@ -34,11 +34,15 @@ pnpm test                   # Run all tests
 pnpm lint                   # Lint all projects
 pnpm typecheck              # Type check all projects
 
-# Database (PostgreSQL via Docker)
-pnpm db:up                  # Start database
-pnpm db:down                # Stop database
-pnpm db:reset               # Reset database (destroys data)
-pnpm db:logs                # View database logs
+# Infrastructure (PostgreSQL + Redis via Docker)
+pnpm infra:up               # Start all infrastructure
+pnpm infra:down             # Stop all infrastructure
+pnpm infra:reset            # Reset infrastructure (destroys data)
+pnpm infra:logs             # View all logs
+pnpm infra:logs:postgres    # View Postgres logs
+pnpm infra:logs:redis       # View Redis logs
+
+# Database (Drizzle ORM)
 pnpm db:generate            # Generate Drizzle migrations
 pnpm db:migrate             # Run migrations
 pnpm db:studio              # Open Drizzle Studio
@@ -93,7 +97,7 @@ nx test ui -- src/utils/test.spec.ts
    cp apps/api/.env.example apps/api/.env.local
    ```
 
-2. Start database: `pnpm db:up`
+2. Start infrastructure: `pnpm infra:up`
 
 3. Start development: `pnpm dev`
 
