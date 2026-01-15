@@ -1,8 +1,12 @@
-import type { IncomingMessage } from 'node:http';
+import { Buffer } from 'node:buffer';
+import { createServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
 import type { OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WebSocketServer, WebSocket } from 'ws';
+import { Server as SocketIoServer } from 'socket.io';
 import type { Environment } from '#config/environment.config.js';
 
 export type WebSocketConnectionHandler = (socket: WebSocket, request: IncomingMessage) => void | Promise<void>;
@@ -11,17 +15,22 @@ export type WebSocketConnectionHandler = (socket: WebSocket, request: IncomingMe
  * Shared WebSocket server for development mode.
  *
  * In dev mode, vite-plugin-node doesn't support WebSocket connections,
- * so we need a standalone WebSocket server on a separate port.
- * This service provides a single shared server that multiple gateways
- * can register their path handlers with.
+ * so we need a standalone server on a separate port.
  *
- * Each gateway registers a handler for its specific path, and this service
- * routes incoming connections to the appropriate handler based on the URL path.
+ * This service provides a single HTTP server on port+1 that handles:
+ * - Raw WebSocket connections (for Zoo proxy) via path handlers
+ * - Socket.IO connections (for chat tools) via Socket.IO namespaces
+ *
+ * The upgrade event is intercepted to route connections based on path:
+ * - Paths starting with Socket.IO's path go to Socket.IO
+ * - Other registered paths go to raw WebSocket handlers
  */
 @Injectable()
 export class DevWebSocketService implements OnModuleDestroy {
   private readonly logger = new Logger(DevWebSocketService.name);
+  private httpServer: HttpServer | undefined;
   private wss: WebSocketServer | undefined;
+  private io: SocketIoServer | undefined;
   private readonly wsPort: number;
   private readonly pathHandlers = new Map<string, WebSocketConnectionHandler>();
   private initialized = false;
@@ -39,7 +48,19 @@ export class DevWebSocketService implements OnModuleDestroy {
   }
 
   /**
-   * Register a handler for a specific path.
+   * Get the Socket.IO server instance.
+   * Initializes the server if not already done.
+   */
+  public getSocketIoServer(): SocketIoServer {
+    if (!this.initialized) {
+      this.initServer();
+    }
+
+    return this.io!;
+  }
+
+  /**
+   * Register a handler for a specific raw WebSocket path.
    * The handler will be called when a WebSocket connection is made to that path.
    */
   public registerPathHandler(path: string, handler: WebSocketConnectionHandler): void {
@@ -48,7 +69,7 @@ export class DevWebSocketService implements OnModuleDestroy {
     }
 
     this.pathHandlers.set(path, handler);
-    this.logger.debug(`Registered WebSocket handler for path: ${path}`);
+    this.logger.debug(`Registered raw WebSocket handler for path: ${path}`);
 
     // Initialize the server if not already done
     if (!this.initialized) {
@@ -65,17 +86,26 @@ export class DevWebSocketService implements OnModuleDestroy {
   }
 
   /**
-   * Stop the WebSocket server when the module is destroyed.
+   * Stop the servers when the module is destroyed.
    */
   public onModuleDestroy(): void {
+    if (this.io) {
+      void this.io.close();
+    }
+
     if (this.wss) {
       this.wss.close();
-      this.logger.log('Shared WebSocket server stopped');
     }
+
+    if (this.httpServer) {
+      this.httpServer.close();
+    }
+
+    this.logger.log('Dev WebSocket server stopped');
   }
 
   /**
-   * Initialize the WebSocket server.
+   * Initialize the combined HTTP/WebSocket/Socket.IO server.
    */
   private initServer(): void {
     if (this.initialized) {
@@ -83,35 +113,61 @@ export class DevWebSocketService implements OnModuleDestroy {
     }
 
     this.initialized = true;
-    this.wss = new WebSocketServer({ port: this.wsPort });
 
-    this.wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
-      void this.handleConnection(socket, request);
+    // Create HTTP server
+    this.httpServer = createServer((_request, response) => {
+      response.writeHead(200);
+      response.end('Tau Dev WebSocket Server');
     });
 
-    this.wss.on('error', (error) => {
-      this.logger.error(`WebSocket server error: ${error.message}`);
+    // Create raw WebSocket server with noServer mode
+    this.wss = new WebSocketServer({ noServer: true });
+
+    // Create Socket.IO server attached to HTTP server
+    // Socket.IO will handle its own upgrade requests for its path
+    this.io = new SocketIoServer(this.httpServer, {
+      cors: {
+        origin: true, // Allow all origins in dev
+        credentials: true,
+      },
+      transports: ['websocket'],
+      // Don't destroy upgrades that Socket.IO doesn't handle
+      // This allows raw WebSocket to handle other paths
     });
 
-    this.logger.log(`Shared WebSocket server started on port ${this.wsPort} (dev mode)`);
-  }
+    // Handle upgrade requests manually to route between Socket.IO and raw WebSocket
+    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Buffer required by ws library
+    this.httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const { pathname } = new URL(request.url ?? '/', `http://localhost:${this.wsPort}`);
 
-  /**
-   * Handle an incoming WebSocket connection by routing to the appropriate handler.
-   */
-  private async handleConnection(socket: WebSocket, request: IncomingMessage): Promise<void> {
-    const url = new URL(request.url ?? '/', `http://localhost:${this.wsPort}`);
-    const { pathname } = url;
+      // Check if this is a Socket.IO path (Socket.IO uses /socket.io/ by default,
+      // but namespaces like /v1/chat/tools are accessed via /socket.io/?nsp=/v1/chat/tools)
+      // Socket.IO's engine handles paths starting with /socket.io/
+      if (pathname.startsWith('/socket.io')) {
+        // Socket.IO handles this via its attachment to httpServer
+        // The upgrade event is already being listened to by Socket.IO
+        return;
+      }
 
-    this.logger.debug(`WebSocket connection to ${pathname}`);
+      // Check for registered raw WebSocket paths
+      const handler = this.pathHandlers.get(pathname);
+      if (handler) {
+        this.wss!.handleUpgrade(request, socket, head, (ws) => {
+          this.wss!.emit('connection', ws, request);
+          void handler(ws, request);
+        });
+        return;
+      }
 
-    const handler = this.pathHandlers.get(pathname);
-
-    if (handler) {
-      await handler(socket, request);
-    } else {
+      // No handler found
       this.logger.warn(`No handler registered for WebSocket path: ${pathname}`);
-      socket.close(4004, 'Unknown path');
-    }
+      socket.destroy();
+    });
+
+    this.httpServer.listen(this.wsPort, () => {
+      this.logger.log(`Dev WebSocket server started on port ${this.wsPort}`);
+      this.logger.log(`  - Raw WebSocket: ws://localhost:${this.wsPort}/v1/kernels/zoo`);
+      this.logger.log(`  - Socket.IO: http://localhost:${this.wsPort} (namespaces for paths)`);
+    });
   }
 }

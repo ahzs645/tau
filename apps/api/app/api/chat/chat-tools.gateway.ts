@@ -1,131 +1,278 @@
-import type { IncomingMessage } from 'node:http';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/member-ordering -- NestJS gateway has specific method ordering requirements */
+/* eslint-disable new-cap -- NestJS decorators use PascalCase */
+import { Inject, Logger } from '@nestjs/common';
 import type { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { HttpAdapterHost } from '@nestjs/core';
-import type { FastifyInstance } from 'fastify';
-import { WebSocket } from 'ws';
+import type { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit } from '@nestjs/websockets';
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, ConnectedSocket, MessageBody } from '@nestjs/websockets';
+import type { Server, Socket, Namespace } from 'socket.io';
 import type { Auth } from 'better-auth';
 import { fromNodeHeaders } from 'better-auth/node';
-import { wsCloseCode } from '@taucad/chat/constants';
+import type { ToolCallResult } from '@taucad/chat';
 import { authInstanceKey } from '#constants/auth.constant.js';
 import { ChatToolsService } from '#api/chat/chat-tools.service.js';
 import { DevWebSocketService } from '#api/websocket/dev-websocket.service.js';
 
-const chatToolsWebSocketPath = '/v1/chat/tools';
+const chatToolsPath = '/v1/chat/tools';
 
 /**
- * WebSocket Gateway for chat tool execution.
+ * WebSocket Gateway for chat tool execution using Socket.IO.
  *
  * Provides a bidirectional channel for executing client-side tools
  * during LLM chat sessions. The backend sends tool call requests,
  * and the client executes them and returns results.
  *
- * In development: Uses the shared DevWebSocketService on port+1 because
- * vite-plugin-node doesn't support WebSocket connections.
+ * In development: Uses DevWebSocketService's Socket.IO server on port+1
+ * because vite-plugin-node doesn't support WebSocket connections.
  *
- * In production: Uses @fastify/websocket on the main Fastify server
- * for simpler deployment (single port).
+ * In production: Uses Socket.IO with Redis adapter for horizontal scaling
+ * across multiple API instances.
  */
-@Injectable()
-export class ChatToolsGateway implements OnModuleInit, OnModuleDestroy {
+@WebSocketGateway({
+  path: chatToolsPath,
+  transports: ['websocket'],
+  cors: false, // CORS handled by NestJS/Fastify
+})
+export class ChatToolsGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleInit, OnModuleDestroy
+{
+  @WebSocketServer()
+  // @ts-expect-error Injected by NestJS in production, manually set in dev
+  private readonly server!: Server;
+
   private readonly logger = new Logger(ChatToolsGateway.name);
+  private devServer: Namespace | undefined;
 
   public constructor(
     private readonly chatToolsService: ChatToolsService,
     private readonly devWebSocketService: DevWebSocketService,
-    @Inject(HttpAdapterHost) private readonly httpAdapterHost: HttpAdapterHost,
     @Inject(authInstanceKey) private readonly auth: Auth,
   ) {}
 
   /**
-   * Start the WebSocket server when the module initializes.
+   * Initialize the gateway based on environment.
    */
   public onModuleInit(): void {
-    // Use import.meta.env.DEV to detect Vite dev mode
-    // vite-plugin-node doesn't support WebSockets, so we use a standalone server in dev
     if (import.meta.env.DEV) {
-      this.initDevWebSocket();
-    } else {
-      this.initFastifyWebSocket();
+      this.initDevSocketIo();
     }
   }
 
   /**
-   * Clean up when the module is destroyed.
+   * Clean up when module is destroyed.
    */
   public onModuleDestroy(): void {
-    if (import.meta.env.DEV) {
-      this.devWebSocketService.unregisterPathHandler(chatToolsWebSocketPath);
-    }
+    // DevWebSocketService handles its own cleanup
   }
 
   /**
-   * Initialize WebSocket handler for development mode.
-   * Uses the shared DevWebSocketService.
+   * Initialize Socket.IO handlers for development mode.
+   * Uses the shared DevWebSocketService's Socket.IO server.
    */
-  private initDevWebSocket(): void {
-    this.devWebSocketService.registerPathHandler(chatToolsWebSocketPath, async (socket, request) => {
-      await this.handleConnection(socket, request);
+  private initDevSocketIo(): void {
+    const io = this.devWebSocketService.getSocketIoServer();
+
+    // Create a namespace for chat tools
+    this.devServer = io.of(chatToolsPath);
+
+    // Set up connection handling
+    this.devServer.on('connection', (socket: Socket) => {
+      void this.handleDevConnection(socket);
     });
 
-    const wsPort = this.devWebSocketService.getPort();
-    this.logger.log(`Chat tools available at ws://localhost:${wsPort}${chatToolsWebSocketPath} (dev mode)`);
+    const port = this.devWebSocketService.getPort();
+    this.logger.log(`Chat tools Socket.IO available at http://localhost:${port}${chatToolsPath} (dev mode)`);
   }
 
   /**
-   * Initialize WebSocket routes on Fastify for production.
-   * Uses @fastify/websocket which works when NestJS runs directly (not through vite-plugin-node).
+   * Handle connection in dev mode (manually wired up).
    */
-  private initFastifyWebSocket(): void {
-    const fastify = this.httpAdapterHost.httpAdapter.getInstance<FastifyInstance>();
+  private async handleDevConnection(client: Socket): Promise<void> {
+    this.logger.debug(`[Dev] Client connecting: ${client.id}`);
 
-    // Register the chat tools WebSocket route
-    fastify.get(chatToolsWebSocketPath, { websocket: true }, async (socket: WebSocket, request) => {
-      await this.handleConnection(socket, request.raw);
-    });
+    try {
+      // Authenticate using cookies from the handshake request
+      const session = await this.auth.api.getSession({
+        headers: fromNodeHeaders(client.handshake.headers),
+      });
 
-    this.logger.log(`Chat tools WebSocket registered at ${chatToolsWebSocketPath} (production mode)`);
-  }
-
-  /**
-   * Handle a new WebSocket connection.
-   * Authenticates the connection and sets up message handling.
-   */
-  private async handleConnection(socket: WebSocket, request: IncomingMessage): Promise<void> {
-    this.logger.debug('New chat tools WebSocket connection');
-
-    // Authenticate the connection using better-auth
-    const session = await this.auth.api.getSession({
-      headers: fromNodeHeaders(request.headers),
-    });
-
-    if (!session) {
-      this.logger.warn('Unauthenticated WebSocket connection rejected');
-      socket.close(wsCloseCode.unauthenticated, 'Authentication required');
-      return;
-    }
-
-    this.logger.debug(`Authenticated chat tools connection for user ${session.user.id}`);
-
-    // Set up message handling
-    socket.on('message', (data, isBinary) => {
-      // WebSocket messages for chat tools are always JSON text, never binary
-      if (isBinary) {
-        this.logger.warn('Received unexpected binary WebSocket message');
+      if (!session) {
+        this.logger.warn(`[Dev] Unauthenticated connection rejected: ${client.id}`);
+        client.emit('error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
+        client.disconnect(true);
         return;
       }
 
-      // Convert RawData to string - data is either a string or Uint8Array in text mode
-      const messageString = typeof data === 'string' ? data : new TextDecoder().decode(data as Uint8Array);
-      this.chatToolsService.handleMessage(socket, messageString);
-    });
+      // Store user info on socket for later use
+      client.data.userId = session.user.id;
+      this.logger.debug(`[Dev] Authenticated connection: ${client.id} (user: ${session.user.id})`);
 
-    socket.on('close', () => {
-      this.logger.debug('Chat tools WebSocket connection closed');
-    });
+      // Set up message handlers
+      client.on('join', (data: { chatId: string }) => {
+        const result = this.handleJoinMessage(client, data);
+        // Socket.IO acknowledgment
+        client.emit('join_ack', result);
+      });
 
-    socket.on('error', (socketError) => {
-      this.logger.error('Chat tools WebSocket error:', socketError);
-    });
+      client.on('leave', (data: { chatId: string }) => {
+        this.handleLeaveMessage(client, data);
+      });
+
+      client.on('tool_call_result', (message: ToolCallResult) => {
+        this.chatToolsService.handleToolCallResult(message);
+      });
+
+      client.on('disconnect', () => {
+        this.handleDevDisconnect(client);
+      });
+    } catch (authError) {
+      this.logger.error(`[Dev] Authentication error for ${client.id}:`, authError);
+      client.emit('error', { code: 'AUTH_ERROR', message: 'Authentication failed' });
+      client.disconnect(true);
+    }
+  }
+
+  /**
+   * Handle disconnect in dev mode.
+   */
+  private handleDevDisconnect(client: Socket): void {
+    // Clean up all chat registrations for this socket
+    this.chatToolsService.handleSocketDisconnect(client);
+    this.logger.debug(`[Dev] Client disconnected: ${client.id}`);
+  }
+
+  /**
+   * Shared join logic for both dev and prod.
+   * Supports joining multiple rooms - doesn't leave previous rooms.
+   */
+  private handleJoinMessage(client: Socket, data: { chatId: string }): { success: boolean } {
+    const { chatId } = data;
+
+    if (!chatId) {
+      this.logger.warn(`Join request without chatId from ${client.id}`);
+      return { success: false };
+    }
+
+    // Join chat room and register connection
+    void client.join(chatId);
+    this.chatToolsService.registerConnection(chatId, client);
+
+    this.logger.debug(`Client ${client.id} joined chat: ${chatId}`);
+    return { success: true };
+  }
+
+  /**
+   * Shared leave logic for both dev and prod.
+   */
+  private handleLeaveMessage(client: Socket, data: { chatId: string }): void {
+    const { chatId } = data;
+
+    if (!chatId) {
+      this.logger.warn(`Leave request without chatId from ${client.id}`);
+      return;
+    }
+
+    // Leave the room and unregister
+    void client.leave(chatId);
+    this.chatToolsService.unregisterConnection(chatId, client);
+
+    this.logger.debug(`Client ${client.id} left chat: ${chatId}`);
+  }
+
+  // ============================================
+  // Production mode handlers (NestJS decorators)
+  // ============================================
+
+  /**
+   * Called when the Socket.IO server is initialized (production only).
+   */
+  public afterInit(_server: Server): void {
+    if (import.meta.env.PROD) {
+      this.logger.log('Chat tools Socket.IO gateway initialized (production)');
+    }
+  }
+
+  /**
+   * Handle client joining a chat room (production only).
+   */
+  @SubscribeMessage('join')
+  public handleJoin(@ConnectedSocket() client: Socket, @MessageBody() data: { chatId: string }): { success: boolean } {
+    // In dev mode, this is handled by the dev connection handler
+    if (import.meta.env.DEV) {
+      return { success: false };
+    }
+
+    return this.handleJoinMessage(client, data);
+  }
+
+  /**
+   * Handle client leaving a chat room (production only).
+   */
+  @SubscribeMessage('leave')
+  public handleLeave(@ConnectedSocket() client: Socket, @MessageBody() data: { chatId: string }): void {
+    // In dev mode, this is handled by the dev connection handler
+    if (import.meta.env.DEV) {
+      return;
+    }
+
+    this.handleLeaveMessage(client, data);
+  }
+
+  /**
+   * Handle tool call results from the client (production only).
+   */
+  @SubscribeMessage('tool_call_result')
+  public handleToolCallResult(@ConnectedSocket() _client: Socket, @MessageBody() message: ToolCallResult): void {
+    // In dev mode, this is handled by the dev connection handler
+    if (import.meta.env.DEV) {
+      return;
+    }
+
+    this.chatToolsService.handleToolCallResult(message);
+  }
+
+  /**
+   * Handle a new client connection (production only).
+   */
+  public async handleConnection(client: Socket): Promise<void> {
+    // In dev mode, this is handled by handleDevConnection
+    if (import.meta.env.DEV) {
+      return;
+    }
+
+    this.logger.debug(`Client connecting: ${client.id}`);
+
+    try {
+      const session = await this.auth.api.getSession({
+        headers: fromNodeHeaders(client.handshake.headers),
+      });
+
+      if (!session) {
+        this.logger.warn(`Unauthenticated connection rejected: ${client.id}`);
+        client.emit('error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
+        client.disconnect(true);
+        return;
+      }
+
+      client.data.userId = session.user.id;
+      this.logger.debug(`Authenticated connection: ${client.id} (user: ${session.user.id})`);
+    } catch (authError) {
+      this.logger.error(`Authentication error for ${client.id}:`, authError);
+      client.emit('error', { code: 'AUTH_ERROR', message: 'Authentication failed' });
+      client.disconnect(true);
+    }
+  }
+
+  /**
+   * Handle client disconnection (production only).
+   */
+  public handleDisconnect(client: Socket): void {
+    // In dev mode, this is handled by handleDevDisconnect
+    if (import.meta.env.DEV) {
+      return;
+    }
+
+    // Clean up all chat registrations for this socket
+    this.chatToolsService.handleSocketDisconnect(client);
+    this.logger.debug(`Client disconnected: ${client.id}`);
   }
 }

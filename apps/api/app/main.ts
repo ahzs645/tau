@@ -18,6 +18,8 @@ import { getFastifyLoggingConfig } from '#logger/fastify.logger.js';
 import { corsBaseConfiguration } from '#constants/cors.constant.js';
 import { createCorsOriginValidatorFromList } from '#utils/cors.utils.js';
 import { httpBodyLimit } from '#constants/http-body.constant.js';
+import { RedisService } from '#redis/redis.service.js';
+import { RedisIoAdapter } from '#api/websocket/redis-io.adapter.js';
 
 async function bootstrap() {
   const fastifyAdapter = new FastifyAdapter({
@@ -56,6 +58,12 @@ async function bootstrap() {
   await app.register(helmet);
 
   if (import.meta.env.PROD) {
+    // Set up Socket.IO with Redis adapter for horizontal scaling
+    const redisService = app.get(RedisService);
+    const redisIoAdapter = new RedisIoAdapter(app, redisService);
+    await redisIoAdapter.connectToRedis();
+    app.useWebSocketAdapter(redisIoAdapter);
+
     const port = appConfig.get('PORT', { infer: true });
     await app.listen(port, '0.0.0.0'); // Listen on all network interfaces
     Logger.log(`🚀 Application is running on: http://localhost:${port}`, 'Bootstrap');

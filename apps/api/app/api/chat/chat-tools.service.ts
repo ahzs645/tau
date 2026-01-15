@@ -1,16 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { WebSocket } from 'ws';
+import type { Socket } from 'socket.io';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { idPrefix } from '@taucad/types/constants';
+import { toolSchemasRegistry } from '@taucad/chat';
 import type {
   ToolCallRequest,
   ToolCallResult,
   ToolExecutionError,
-  WsConnectMessage,
-  ClientToServerMessage,
+  ToolValidationError,
   ClientToolName,
 } from '@taucad/chat';
-import { wsCloseCode } from '@taucad/chat/constants';
 
 /** Timeout for tool execution in milliseconds (60 seconds) */
 const toolExecutionTimeoutMs = 60_000;
@@ -25,93 +24,75 @@ type PendingRequest = {
 };
 
 /**
- * Service for managing WebSocket-based tool execution.
+ * Service for managing Socket.IO-based tool execution.
  * Handles:
- * - WebSocket connections per chatId (one connection per chat, last wins)
- * - Sending tool call requests to clients
+ * - Socket.IO rooms for routing tool requests to clients
+ * - Sending tool call requests to clients in specific chat rooms
  * - Receiving and routing tool call results
  * - Timeout handling with structured error responses
+ * - Zod-based validation of tool results
+ *
+ * Architecture:
+ * - One Socket.IO connection per browser tab (managed by client singleton)
+ * - Socket can join multiple chat rooms simultaneously
+ * - Tool requests are emitted directly to the socket in the room
  */
 @Injectable()
 export class ChatToolsService {
   private readonly logger = new Logger(ChatToolsService.name);
 
-  /** Active WebSocket connections by chatId */
-  private readonly connections = new Map<string, WebSocket>();
+  /** Active Socket.IO connections by chatId (for direct emission) */
+  private readonly connections = new Map<string, Socket>();
 
   /** Pending tool call requests by requestId */
   private readonly pendingRequests = new Map<string, PendingRequest>();
 
   /**
-   * Register a WebSocket connection for a chat.
-   * If a connection already exists for this chatId, it will be closed.
+   * Register a Socket.IO connection for a chat room.
+   * Multiple sockets can join the same room (e.g., multiple tabs).
+   * The socket should already be joined to the room via Socket.IO.
    */
-  public registerConnection(chatId: string, socket: WebSocket): void {
-    const existing = this.connections.get(chatId);
-
-    if (existing && existing.readyState === 1) {
-      // WebSocket.OPEN = 1
-      this.logger.debug(`Closing existing connection for chat ${chatId} (superseded)`);
-      existing.close(wsCloseCode.superseded, 'Superseded by new connection');
-    }
-
+  public registerConnection(chatId: string, socket: Socket): void {
+    // Store the socket for direct emission (last one wins for this chatId)
+    // In practice, with room-based routing, we'll use this for direct sends
     this.connections.set(chatId, socket);
-    this.logger.debug(`Registered connection for chat ${chatId}`);
-
-    // Clean up on close
-    socket.on('close', () => {
-      // Only remove if this is still the active connection
-      if (this.connections.get(chatId) === socket) {
-        this.connections.delete(chatId);
-        this.logger.debug(`Connection closed for chat ${chatId}`);
-
-        // Reject any pending requests for this chat
-        this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
-      }
-    });
+    this.logger.debug(`Registered connection for chat ${chatId} (socket: ${socket.id})`);
   }
 
   /**
-   * Unregister a WebSocket connection for a chat.
+   * Unregister a Socket.IO connection for a chat room.
+   * Called when client leaves a room or disconnects.
    */
-  public unregisterConnection(chatId: string, socket: WebSocket): void {
-    // Only unregister if this is the active connection
+  public unregisterConnection(chatId: string, socket: Socket): void {
+    // Only remove if this socket is the registered one for this chat
     if (this.connections.get(chatId) === socket) {
       this.connections.delete(chatId);
       this.logger.debug(`Unregistered connection for chat ${chatId}`);
+
+      // Reject any pending requests for this chat
+      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
     }
   }
 
   /**
-   * Handle an incoming message from a WebSocket client.
+   * Handle socket disconnection - clean up all rooms the socket was in.
    */
-  public handleMessage(socket: WebSocket, data: string): void {
-    try {
-      const message = JSON.parse(data) as ClientToServerMessage;
+  public handleSocketDisconnect(socket: Socket): void {
+    // Find and remove all chat registrations for this socket
+    for (const [chatId, registeredSocket] of this.connections) {
+      if (registeredSocket === socket) {
+        this.connections.delete(chatId);
+        this.logger.debug(`Cleaned up chat ${chatId} on socket disconnect`);
 
-      switch (message.type) {
-        case 'connect': {
-          this.handleConnectMessage(socket, message);
-          break;
-        }
-
-        case 'tool_call_result': {
-          this.handleToolCallResult(message);
-          break;
-        }
-
-        default: {
-          this.logger.warn(`Unknown message type: ${(message as { type: string }).type}`);
-        }
+        // Reject pending requests for this chat
+        this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
       }
-    } catch (parseError) {
-      this.logger.error(`Failed to parse WebSocket message: ${String(parseError)}`);
     }
   }
 
   /**
    * Send a tool call request to the client and wait for the result.
-   * Returns a Promise that resolves with the tool result or rejects on timeout/error.
+   * Returns a Promise that resolves with the tool result or a ToolExecutionError.
    */
   public async sendToolCallRequest(
     chatId: string,
@@ -121,8 +102,7 @@ export class ChatToolsService {
   ): Promise<unknown> {
     const socket = this.connections.get(chatId);
 
-    if (!socket || socket.readyState !== 1) {
-      // WebSocket.OPEN = 1
+    if (!socket?.connected) {
       const noConnectionError: ToolExecutionError = {
         errorCode: 'NO_CLIENT_CONNECTION',
         message: `No WebSocket client connected for chat ${chatId}. The user may have closed the browser tab.`,
@@ -135,7 +115,7 @@ export class ChatToolsService {
 
     const requestId = generatePrefixedId(idPrefix.request);
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       // Set up timeout
       const timeoutId = setTimeout(() => {
         const pending = this.pendingRequests.get(requestId);
@@ -156,23 +136,25 @@ export class ChatToolsService {
       // Store pending request
       this.pendingRequests.set(requestId, {
         resolve,
-        reject,
+        // eslint-disable-next-line @typescript-eslint/no-empty-function -- Not used, we always resolve with errors
+        reject() {},
         timeoutId,
         toolName,
         toolCallId,
         chatId,
       });
 
-      // Send request to client
+      // Send request to client via Socket.IO emit
       const request: ToolCallRequest = {
         type: 'tool_call_request',
+        chatId,
         requestId,
         toolCallId,
         toolName,
         args,
       };
 
-      socket.send(JSON.stringify(request));
+      socket.emit('tool_call_request', request);
       this.logger.debug(`Sent tool call request ${requestId} for ${toolName} to chat ${chatId}`);
     });
   }
@@ -182,24 +164,14 @@ export class ChatToolsService {
    */
   public isConnected(chatId: string): boolean {
     const socket = this.connections.get(chatId);
-    return socket !== undefined && socket.readyState === 1; // WebSocket.OPEN = 1
-  }
-
-  /**
-   * Handle a connect message from a client.
-   */
-  private handleConnectMessage(socket: WebSocket, message: WsConnectMessage): void {
-    const { chatId } = message;
-    this.registerConnection(chatId, socket);
-
-    // Send acknowledgment
-    socket.send(JSON.stringify({ type: 'connected', chatId }));
+    return socket?.connected ?? false;
   }
 
   /**
    * Handle a tool call result from a client.
+   * Called by the gateway when receiving a tool_call_result event.
    */
-  private handleToolCallResult(message: ToolCallResult): void {
+  public handleToolCallResult(message: ToolCallResult): void {
     const { requestId, result, error: clientError } = message;
     const pending = this.pendingRequests.get(requestId);
 
@@ -221,15 +193,65 @@ export class ChatToolsService {
         toolCallId: pending.toolCallId,
       };
       pending.resolve(errorResult);
+      return;
+    }
+
+    // Validate the result against the tool's output schema
+    const validated = this.validateToolResult(pending.toolName, pending.toolCallId, result);
+
+    if (validated.success) {
+      pending.resolve(validated.data);
     } else {
-      pending.resolve(result);
+      // Return validation error to LLM so it can understand what went wrong
+      pending.resolve(validated.error);
     }
 
     this.logger.debug(`Resolved tool call ${requestId} for ${pending.toolName}`);
   }
 
   /**
-   * Reject all pending requests for a chat (e.g., when client disconnects).
+   * Validate tool result against its Zod schema.
+   * Returns the validated data if successful, or a ToolValidationError if validation fails.
+   */
+  private validateToolResult(
+    toolName: ClientToolName,
+    toolCallId: string,
+    result: unknown,
+  ): { success: true; data: unknown } | { success: false; error: ToolValidationError } {
+    const schemas = toolSchemasRegistry[toolName];
+
+    if (!schemas) {
+      // Unknown tool - pass through (shouldn't happen with type safety)
+      this.logger.warn(`No schema found for tool: ${toolName}`);
+      return { success: true, data: result };
+    }
+
+    const parseResult = schemas.outputSchema.safeParse(result);
+
+    if (parseResult.success) {
+      return { success: true, data: parseResult.data };
+    }
+
+    // Build validation error for LLM
+    const validationError: ToolValidationError = {
+      errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED',
+      message: `Tool "${toolName}" returned invalid output. The client may have returned malformed data.`,
+      toolName,
+      toolCallId,
+      validationErrors: parseResult.error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+      rawOutput: result,
+    };
+
+    this.logger.warn(`Tool validation failed for ${toolName}:`, validationError.validationErrors);
+
+    return { success: false, error: validationError };
+  }
+
+  /**
+   * Resolve all pending requests for a chat with an error (e.g., when client disconnects).
    */
   private rejectPendingRequestsForChat(
     chatId: string,
