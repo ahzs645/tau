@@ -78,6 +78,7 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
   return (
     <div
       className={cn(
+        '@container',
         'sticky top-0 z-10 flex items-center justify-between gap-2 border-b px-3 py-1.5 text-xs',
         className,
       )}
@@ -87,7 +88,8 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
         {updatedAt ? (
           <div className="flex items-center gap-1 text-muted-foreground">
             <Clock className="size-3" />
-            <span className="hidden sm:inline">{formatRelativeTime(updatedAt)}</span>
+            <span className="@[20rem]:hidden">{formatRelativeTime(updatedAt, { short: true })}</span>
+            <span className="hidden @[20rem]:inline">{formatRelativeTime(updatedAt)}</span>
           </div>
         ) : undefined}
       </div>
