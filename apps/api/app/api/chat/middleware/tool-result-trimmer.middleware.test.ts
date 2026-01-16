@@ -476,7 +476,7 @@ describe('toolResultTrimmerMiddleware', () => {
       };
     }
 
-    it('should remove stack and stackFrames from kernel issues', async () => {
+    it('should preserve stack and stackFrames in kernel issues for debugging', async () => {
       const output = createGetKernelResultOutput();
       const toolMessage = new ToolMessage({
         content: JSON.stringify(output),
@@ -503,6 +503,11 @@ describe('toolResultTrimmerMiddleware', () => {
             },
             severity: 'error',
             type: 'compilation',
+            stack: 'Error: Syntax error\n  at line 5\n  at compile()',
+            stackFrames: [
+              { fileName: 'main.scad', lineNumber: 5, functionName: 'compile' },
+              { fileName: 'kernel.js', lineNumber: 100, functionName: 'execute' },
+            ],
           },
         ],
       });

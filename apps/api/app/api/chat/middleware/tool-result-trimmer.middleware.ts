@@ -305,7 +305,9 @@ const toolResultTrimmers: Record<string, ToolResultTrimmer> = {
               ...(issue.location ? { location: issue.location } : {}),
               severity: issue.severity,
               ...(issue.type ? { type: issue.type } : {}),
-              // REMOVED: stack, stackFrames - verbose and rarely needed
+              // Keep stack and stackFrames - important for LLM to debug error origins
+              ...(issue.stack ? { stack: issue.stack } : {}),
+              ...(issue.stackFrames ? { stackFrames: issue.stackFrames } : {}),
             })),
           }
         : {}),
