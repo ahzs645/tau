@@ -131,7 +131,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
         <When shouldRender={!isEditing}>
           <div
             className={cn(
-              'flex flex-col gap-2',
+              'flex flex-col gap-0.5',
               isUser &&
                 'max-h-58.5 cursor-pointer overflow-hidden rounded-sm border bg-background px-3 py-2 hover:border-primary',
             )}
