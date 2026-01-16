@@ -5,12 +5,12 @@ import { DefaultChatTransport } from 'ai';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { ENV } from '#environment.config.js';
 
-export const useChatConstants = {
+export const useChatConstants: Parameters<typeof useChat>[0] = {
   transport: new DefaultChatTransport({
     api: `${ENV.TAU_API_URL}/v1/chat`,
     credentials: 'include',
   }),
-} as const satisfies Parameters<typeof useChat>[0];
+};
 
 /**
  * Extract the mime type from a data URL
