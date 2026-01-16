@@ -7,8 +7,7 @@ export const jscadConfig: KernelConfig = {
 
   codeStandards: `Output ES modules JavaScript. Import from \`@jscad/modeling\` submodules. Export \`defaultParams\` object and default \`main(params)\` function returning geometry.`,
 
-  commonErrorPatterns:
-    'incorrect import paths, invalid dimensions, failed boolean operations, malformed vector arrays',
+  commonErrorPatterns: 'incorrect import paths, invalid dimensions, failed boolean operations, malformed vector arrays',
 
   fileLayoutMode: 'full-nesting',
   canonicalExample,
