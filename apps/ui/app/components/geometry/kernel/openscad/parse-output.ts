@@ -12,14 +12,41 @@ export type AddErrorFn = (error: KernelIssue) => void;
 export type GetFileContentsFn = (fileName: string) => string | undefined;
 
 /**
- * Normalize a filename by removing leading slashes.
+ * Extract the basename (filename without directory path) from a full path.
+ *
+ * @param path - The full file path.
+ * @returns The basename (e.g., 'main.scad' from 'site/main.scad').
+ */
+function getBasename(path: string): string {
+  const lastSlashIndex = path.lastIndexOf('/');
+  return lastSlashIndex === -1 ? path : path.slice(lastSlashIndex + 1);
+}
+
+/**
+ * Normalize a filename by removing leading slashes and optionally mapping
+ * the main file basename to its full relative path.
+ *
  * OpenSCAD outputs absolute paths like "/main.scad" but we want relative paths.
+ * Additionally, when the main file is in a subdirectory (e.g., "site/backyard.scad"),
+ * OpenSCAD only reports the basename, so we need to map it back to the full path.
  *
  * @param fileName - The filename to normalize.
- * @returns The normalized filename without leading slashes.
+ * @param mainFilePath - Optional full relative path of the main file (e.g., "site/backyard.scad").
+ * @returns The normalized filename, with main file basename mapped to full path if applicable.
  */
-function normalizeFileName(fileName: string): string {
-  return fileName.replace(/^\/+/, '');
+function normalizeFileName(fileName: string, mainFilePath?: string): string {
+  const normalized = fileName.replace(/^\/+/, '');
+
+  // If a main file path is provided and the normalized filename matches its basename,
+  // return the full path instead of just the basename
+  if (mainFilePath) {
+    const mainBasename = getBasename(mainFilePath);
+    if (normalized === mainBasename) {
+      return mainFilePath;
+    }
+  }
+
+  return normalized;
 }
 
 /**
@@ -121,19 +148,20 @@ function createErrorLocation(
  * @param message - The stderr line to parse.
  * @param addError - Callback to invoke when an error is parsed.
  * @param getFileContents - Optional function to lazily fetch file content for calculating column positions.
- * @param activeFileName - Optional active file name for warnings without file location.
+ * @param mainFilePath - Optional full relative path of the main file (e.g., "site/backyard.scad").
+ *                       Used to map basename errors back to full paths for FileLink navigation.
  */
 export function parseStderrLine(
   message: string,
   addError: AddErrorFn,
   getFileContents?: GetFileContentsFn,
-  activeFileName?: string,
+  mainFilePath?: string,
 ): void {
   // Pattern 1: ERROR: Parser error in file "foo.scad", line 10: syntax error
   let match = /^ERROR: Parser error in file "([^"]+)", line (\d+): (.*)$/.exec(message);
   if (match) {
     const [, file, line, error] = match;
-    const fileName = normalizeFileName(file ?? '');
+    const fileName = normalizeFileName(file ?? '', mainFilePath);
     const lineNumber = Number(line);
     addError({
       message: error ?? 'Unknown error',
@@ -148,7 +176,7 @@ export function parseStderrLine(
   match = /^ERROR: Parser error: (.*?) in file ([^,]+), line (\d+)$/.exec(message);
   if (match) {
     const [, error, file, line] = match;
-    const fileName = normalizeFileName(file ?? '');
+    const fileName = normalizeFileName(file ?? '', mainFilePath);
     const lineNumber = Number(line);
     addError({
       message: error ?? 'Unknown error',
@@ -163,7 +191,7 @@ export function parseStderrLine(
   match = /^WARNING: (.*?),? in file ([^,]+), line (\d+)\.?/.exec(message);
   if (match) {
     const [, warning, file, line] = match;
-    const fileName = normalizeFileName(file ?? '');
+    const fileName = normalizeFileName(file ?? '', mainFilePath);
     const lineNumber = Number(line);
     addError({
       message: warning ?? 'Unknown warning',
@@ -178,7 +206,7 @@ export function parseStderrLine(
   match = /^ERROR: (Assertion .*?) in file "?([^",]+)"?, line (\d+)/.exec(message);
   if (match) {
     const [, error, file, line] = match;
-    const fileName = normalizeFileName(file ?? '');
+    const fileName = normalizeFileName(file ?? '', mainFilePath);
     const lineNumber = Number(line);
     addError({
       message: error ?? 'Assertion failed',
@@ -193,7 +221,7 @@ export function parseStderrLine(
   match = /^ERROR: (.*?) in file "?([^",]+)"?, line (\d+)/.exec(message);
   if (match) {
     const [, error, file, line] = match;
-    const fileName = normalizeFileName(file ?? '');
+    const fileName = normalizeFileName(file ?? '', mainFilePath);
     const lineNumber = Number(line);
     addError({
       message: error ?? 'Unknown error',
@@ -210,7 +238,7 @@ export function parseStderrLine(
     addError({
       message:
         'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
-      location: activeFileName ? { fileName: activeFileName, startLineNumber: 1, startColumn: 1 } : undefined,
+      location: mainFilePath ? { fileName: mainFilePath, startLineNumber: 1, startColumn: 1 } : undefined,
       type: 'runtime',
       severity: 'warning',
     });

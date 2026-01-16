@@ -85,6 +85,55 @@ describe('parseStderrLine', () => {
       expect(errors[0]?.location?.fileName).toBe('lib/utils.scad');
       expect(errors[0]?.location?.startLineNumber).toBe(42);
     });
+
+    it('should map main file basename to full path when mainFilePath is provided', () => {
+      const errors: KernelIssue[] = [];
+      // When OpenSCAD reports error for "backyard.scad" but the main file is "site/backyard.scad"
+      parseStderrLine(
+        'ERROR: Parser error: syntax error in file /backyard.scad, line 10',
+        (error) => {
+          errors.push(error);
+        },
+        undefined,
+        'site/backyard.scad', // mainFilePath
+      );
+
+      expect(errors).toHaveLength(1);
+      // Should map basename to full path
+      expect(errors[0]?.location?.fileName).toBe('site/backyard.scad');
+    });
+
+    it('should not map included file paths when mainFilePath is provided', () => {
+      const errors: KernelIssue[] = [];
+      // Error in an included file - should not be mapped to mainFilePath
+      parseStderrLine(
+        'ERROR: Parser error: syntax error in file /lib/broken.scad, line 5',
+        (error) => {
+          errors.push(error);
+        },
+        undefined,
+        'site/main.scad', // mainFilePath (different file)
+      );
+
+      expect(errors).toHaveLength(1);
+      // Should preserve the included file's path, not map to mainFilePath
+      expect(errors[0]?.location?.fileName).toBe('lib/broken.scad');
+    });
+
+    it('should map warnings to full path when mainFilePath is provided', () => {
+      const errors: KernelIssue[] = [];
+      parseStderrLine(
+        "WARNING: Ignoring unknown module 'foo' in file main.scad, line 5",
+        (error) => {
+          errors.push(error);
+        },
+        undefined,
+        'site/main.scad', // mainFilePath
+      );
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.location?.fileName).toBe('site/main.scad');
+    });
   });
 
   describe('Column positions from file contents (1-based)', () => {

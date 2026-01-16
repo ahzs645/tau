@@ -1007,6 +1007,76 @@ cube([10, 10, 10]);`,
       });
     });
 
+    describe('File path handling for subdirectory files', () => {
+      it('should use full relative path in error location when main file is in subdirectory', async () => {
+        // Simulate a file at site/backyard.scad that has an error
+        const worker = createGeometryWorker({
+          'site/backyard.scad': `x += 5;
+cube([10, 10, 10]);`,
+        });
+        // Note: filename includes the subdirectory path
+        const result = await worker.computeGeometryEntry({ filename: 'site/backyard.scad', path: '' }, {});
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues.length).toBeGreaterThan(0);
+          // The error location should preserve the full relative path, not just the basename
+          expect(result.issues[0]?.location?.fileName).toBe('site/backyard.scad');
+        }
+      });
+
+      it('should use full relative path in warning location when main file is in subdirectory', async () => {
+        // Simulate a file at site/main.scad that has a warning (undefined module)
+        const worker = createGeometryWorker({
+          'site/main.scad': `undefined_module();
+cube([10, 10, 10]);`,
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'site/main.scad', path: '' }, {});
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.issues.length).toBeGreaterThan(0);
+          // The warning location should preserve the full relative path
+          expect(result.issues[0]?.location?.fileName).toBe('site/main.scad');
+        }
+      });
+
+      it('should preserve correct paths for errors in included files from subdirectory main file', async () => {
+        // Main file in site/ includes a file from lib/
+        const worker = createGeometryWorker({
+          'site/main.scad': `include <../lib/broken.scad>
+cube([10, 10, 10]);`,
+          'lib/broken.scad': `x += 5;`, // Syntax error in included file
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'site/main.scad', path: '' }, {});
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues.length).toBeGreaterThan(0);
+          // Error in included file should show its path (lib/broken.scad)
+          const brokenFileError = result.issues.find((i) => i.location?.fileName.includes('broken.scad'));
+          expect(brokenFileError).toBeDefined();
+          // Should preserve the relative path from the project root
+          expect(brokenFileError?.location?.fileName).toMatch(/lib\/broken\.scad$/);
+        }
+      });
+
+      it('should preserve correct paths for warnings about missing includes', async () => {
+        const worker = createGeometryWorker({
+          'site/main.scad': `include <../furniture/missing.scad>
+cube([10, 10, 10]);`,
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'site/main.scad', path: '' }, {});
+
+        // Should still produce geometry (the cube)
+        expect(result.success).toBe(true);
+        if (result.success) {
+          // Should have a warning about the missing include
+          expect(result.issues.some((i) => i.message.includes('missing.scad'))).toBe(true);
+        }
+      });
+    });
+
     describe('OpenSCAD error format coverage', () => {
       it('should parse undefined function error', async () => {
         const worker = createGeometryWorker({

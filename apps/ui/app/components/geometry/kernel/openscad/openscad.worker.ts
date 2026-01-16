@@ -190,7 +190,9 @@ export class OpenScadWorker extends KernelWorker {
         return createKernelSuccess([]);
       }
 
-      const instance = await this.createInstance(addError, getFileContents, filename);
+      // Pass the full activeFilePath to createInstance so error file paths can be
+      // mapped from basename back to full relative path for FileLink navigation
+      const instance = await this.createInstance(addError, getFileContents, this.activeFilePath);
       await this.mountFilesystem(instance, this.basePath, fileContentsCache);
       await this.mountFonts(instance);
 
@@ -426,13 +428,14 @@ export class OpenScadWorker extends KernelWorker {
    *
    * @param addError - Optional callback to receive parsed errors from stderr in real-time.
    * @param getFileContents - Optional function to lazily fetch file contents for error highlighting.
-   * @param activeFileName - Optional active file name for warnings without file location.
+   * @param mainFilePath - Optional full relative path of the main file (e.g., "site/backyard.scad").
+   *                       Used to map basename errors back to full paths for FileLink navigation.
    * @returns The OpenSCAD instance.
    */
   private async createInstance(
     addError?: AddErrorFn,
     getFileContents?: GetFileContentsFn,
-    activeFileName?: string,
+    mainFilePath?: string,
   ): Promise<OpenSCAD> {
     const instance = await createOpenSCAD({
       noInitialRun: true,
@@ -442,7 +445,7 @@ export class OpenScadWorker extends KernelWorker {
       printErr: (message) => {
         this.printErr(message);
         if (addError) {
-          parseStderrLine(message, addError, getFileContents, activeFileName);
+          parseStderrLine(message, addError, getFileContents, mainFilePath);
         }
       },
     });
