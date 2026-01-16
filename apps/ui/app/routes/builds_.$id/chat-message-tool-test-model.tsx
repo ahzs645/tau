@@ -1,8 +1,7 @@
-import type { UIToolInvocation } from 'ai';
 import { FlaskConical, X, Lightbulb } from 'lucide-react';
-import type { MyTools, TestFailure } from '@taucad/chat';
+import type { ToolInvocation, TestFailure } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import { useChatSelector } from '#hooks/use-chat.js';
 import {
   ChatToolCard,
@@ -49,7 +48,7 @@ function TestFailureItem({
 export function ChatMessageToolTestModel({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.testModel]>;
+  readonly part: ToolInvocation<typeof toolName.testModel>;
 }): React.JSX.Element {
   const chatStatus = useChatSelector((state) => state.status);
   const isLoading = chatStatus === 'streaming' && ['input-streaming', 'input-available'].includes(part.state);
@@ -71,12 +70,6 @@ export function ChatMessageToolTestModel({
 
     case 'output-available': {
       const { output: result } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(result)) {
-        return <ChatToolError error={result} />;
-      }
-
       const { failures = [], total = 0 } = result;
       const passedCount = total - failures.length;
       const failedCount = failures.length;
@@ -118,6 +111,11 @@ export function ChatMessageToolTestModel({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <ChatToolCard variant="card" status="error" isDefaultOpen={false}>
           <ChatToolCardHeader>

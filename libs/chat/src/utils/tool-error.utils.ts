@@ -9,6 +9,7 @@ export const toolErrorCodes = [
   'NO_CLIENT_CONNECTION',
   'TOOL_INPUT_VALIDATION_FAILED',
   'TOOL_OUTPUT_VALIDATION_FAILED',
+  'TOOL_EXECUTION_ERROR',
 ] as const;
 
 export type ToolErrorCode = (typeof toolErrorCodes)[number];
@@ -51,6 +52,10 @@ export function getToolErrorTitle(errorCode: ToolErrorCode): string {
     case 'TOOL_OUTPUT_VALIDATION_FAILED': {
       return 'Validation Failed';
     }
+
+    case 'TOOL_EXECUTION_ERROR': {
+      return 'Tool Error';
+    }
   }
 }
 
@@ -78,5 +83,30 @@ export function getToolErrorDescription(errorCode: ToolErrorCode): string {
     case 'TOOL_OUTPUT_VALIDATION_FAILED': {
       return 'The tool returned data in an unexpected format.';
     }
+
+    case 'TOOL_EXECUTION_ERROR': {
+      return 'An error occurred while executing the tool.';
+    }
   }
+}
+
+/**
+ * Parse the errorText from output-error state into a ToolExecutionError.
+ * Used to extract structured error information from the JSON-stringified
+ * error text returned by the tool error handler middleware.
+ *
+ * @param errorText - The error text from the tool invocation's output-error state
+ * @returns The parsed ToolExecutionError if valid, undefined otherwise
+ */
+export function parseToolErrorText(errorText: string): ToolExecutionError | undefined {
+  try {
+    const parsed: unknown = JSON.parse(errorText);
+    if (isToolExecutionError(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Not valid JSON, return undefined
+  }
+
+  return undefined;
 }

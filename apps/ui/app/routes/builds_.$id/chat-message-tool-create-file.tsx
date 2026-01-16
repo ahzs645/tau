@@ -1,15 +1,14 @@
-import type { UIToolInvocation } from 'ai';
 import { X } from 'lucide-react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import { CollapsibleFileOperation } from '#components/chat/chat-tool-file-operation.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolCreateFile({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.createFile]>;
+  readonly part: ToolInvocation<typeof toolName.createFile>;
 }): React.JSX.Element {
   switch (part.state) {
     case 'input-streaming':
@@ -25,12 +24,6 @@ export function ChatMessageToolCreateFile({
 
     case 'output-available': {
       const { input, output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { targetFile, content } = input;
       const { success, diffStats } = output;
 
@@ -48,6 +41,11 @@ export function ChatMessageToolCreateFile({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <div className="flex items-center gap-2 rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <X className="size-4" />

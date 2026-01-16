@@ -19,8 +19,19 @@ const errorIcons = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
   NO_CLIENT_CONNECTION: WifiOff,
   // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
+  TOOL_INPUT_VALIDATION_FAILED: TriangleAlert,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
   TOOL_OUTPUT_VALIDATION_FAILED: TriangleAlert,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
+  TOOL_EXECUTION_ERROR: TriangleAlert,
 } as const;
+
+/**
+ * Formats tool name for display (e.g., "read_file" -> "read_file").
+ */
+function formatToolName(toolName: string): string {
+  return toolName;
+}
 
 /**
  * Unified error display component for tool execution errors.
@@ -32,25 +43,24 @@ export function ChatToolError({ error, className }: ChatToolErrorProps): React.J
   const Icon = errorIcons[error.errorCode];
   const title = getToolErrorTitle(error.errorCode);
   const description = getToolErrorDescription(error.errorCode);
+  const toolName = formatToolName(error.toolName);
 
-  // Determine if we have expandable details
+  // Determine if we have expandable details (validation errors have extra info)
   const hasDetails =
-    error.errorCode === 'TOOL_OUTPUT_VALIDATION_FAILED' &&
+    (error.errorCode === 'TOOL_INPUT_VALIDATION_FAILED' || error.errorCode === 'TOOL_OUTPUT_VALIDATION_FAILED') &&
     (error.validationErrors.length > 0 || error.rawOutput !== undefined);
 
   if (!hasDetails) {
-    // Simple non-expandable error display
+    // Simple non-expandable error display - single line layout
     return (
-      <div
-        className={cn(
-          'flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2',
-          className,
-        )}
-      >
-        <Icon className="size-4 shrink-0 text-destructive" />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-destructive">{title}</div>
-          <div className="text-xs text-muted-foreground">{description}</div>
+      <div className={cn('@container/error overflow-hidden rounded-md border bg-neutral/10', className)}>
+        <div className="flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs">
+          <Icon className="size-3 shrink-0 text-destructive" />
+          <span className="font-medium text-destructive">{title}</span>
+          <span className="text-muted-foreground/50">·</span>
+          <code className="text-muted-foreground">{toolName}</code>
+          <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>
+          <span className="hidden min-w-0 truncate text-muted-foreground @xs/error:inline">{description}</span>
         </div>
       </div>
     );
@@ -62,24 +72,23 @@ export function ChatToolError({ error, className }: ChatToolErrorProps): React.J
   return (
     <Collapsible
       open={isOpen}
-      className={cn(
-        'group/collapsible overflow-hidden rounded-md border border-destructive/30 bg-destructive/5',
-        className,
-      )}
+      className={cn('group/collapsible @container/error overflow-hidden rounded-md border bg-neutral/10', className)}
       onOpenChange={setIsOpen}
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 p-2 text-left hover:bg-destructive/10">
-        <Icon className="size-4 shrink-0 text-destructive" />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-destructive">{title}</div>
-          <div className="text-xs text-muted-foreground">{description}</div>
-        </div>
+      <CollapsibleTrigger className="flex h-7 w-full items-center gap-1.5 px-2 text-left text-xs hover:bg-accent/50">
+        <Icon className="size-3 shrink-0 text-destructive" />
+        <span className="font-medium text-destructive">{title}</span>
+        <span className="text-muted-foreground/50">·</span>
+        <code className="text-muted-foreground">{toolName}</code>
+        <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>
+        <span className="hidden min-w-0 truncate text-muted-foreground @xs/error:inline">{description}</span>
+        <div className="flex-1" />
         <ChevronRight
-          className={cn('size-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}
+          className={cn('size-3 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}
         />
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-destructive/20">
-        <div className="space-y-3 p-3">
+      <CollapsibleContent className="border-t">
+        <div className="space-y-2 p-2">
           {validationError.validationErrors.length > 0 && (
             <div className="space-y-1">
               <div className="text-xs font-medium text-destructive">Validation Errors:</div>

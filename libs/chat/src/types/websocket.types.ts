@@ -136,6 +136,22 @@ export type ToolOutputValidationError = {
 export type ToolValidationError = ToolInputValidationError | ToolOutputValidationError;
 
 /**
+ * Generic tool execution error for unexpected failures.
+ * Used when a tool throws an error that doesn't fit other categories.
+ */
+export type ToolGenericExecutionError = {
+  errorCode: 'TOOL_EXECUTION_ERROR';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+};
+
+/**
  * All possible structured tool errors including validation errors.
  */
-export type ToolExecutionError = ToolTimeoutError | ToolDisconnectedError | ToolNoConnectionError | ToolValidationError;
+export type ToolExecutionError =
+  | ToolTimeoutError
+  | ToolDisconnectedError
+  | ToolNoConnectionError
+  | ToolValidationError
+  | ToolGenericExecutionError;

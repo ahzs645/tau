@@ -11,6 +11,7 @@ import type { ToolSelection } from '@taucad/chat';
 import { ModelService } from '#api/models/model.service.js';
 import { usageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
 import { messageLoggingMiddleware } from '#api/chat/middleware/message-logging.middleware.js';
+import { toolErrorHandlerMiddleware } from '#api/chat/middleware/tool-error-handler.middleware.js';
 import { createCachedSystemMessage } from '#api/chat/utils/create-cached-system-message.js';
 import { ToolService } from '#api/tools/tool.service.js';
 import { buildNameGenerationSystemPrompt } from '#api/chat/prompts/cad-name.prompt.js';
@@ -90,6 +91,8 @@ export class ChatService {
       systemPrompt,
       checkpointer,
       middleware: [
+        // Handle tool errors and convert to structured JSON (must wrap tool calls)
+        toolErrorHandlerMiddleware,
         // Trim tool results (e.g., remove base64 images) before sending to the LLM
         toolResultTrimmerMiddleware,
         // Log messages before each model call (for debugging)

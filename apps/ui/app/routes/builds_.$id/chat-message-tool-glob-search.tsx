@@ -1,9 +1,8 @@
-import type { UIToolInvocation } from 'ai';
 import { Files, File } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -19,7 +18,7 @@ import { ChatToolError } from '#components/chat/chat-tool-error.js';
 export function ChatMessageToolGlobSearch({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.globSearch]>;
+  readonly part: ToolInvocation<typeof toolName.globSearch>;
 }): ReactNode {
   switch (part.state) {
     case 'input-streaming':
@@ -41,12 +40,6 @@ export function ChatMessageToolGlobSearch({
 
     case 'output-available': {
       const { input, output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { pattern } = input;
       const { files, totalFiles } = output;
 
@@ -88,6 +81,11 @@ export function ChatMessageToolGlobSearch({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
           <ChatToolCardHeader>

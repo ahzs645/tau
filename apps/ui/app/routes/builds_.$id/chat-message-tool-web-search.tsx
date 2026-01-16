@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { ChevronRight, Globe, HelpCircle } from 'lucide-react';
-import type { UIToolInvocation } from 'ai';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -109,7 +108,7 @@ export function ChatMessageToolWebSearch({
   part,
   hasContent,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.webSearch]>;
+  readonly part: ToolInvocation<typeof toolName.webSearch>;
   /**
    * Whether there is subsequent content in the message after this tool.
    * When true, the sources list will collapse. When false, it stays open.
@@ -145,6 +144,11 @@ export function ChatMessageToolWebSearch({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
           <ChatToolCardHeader className="text-destructive">
@@ -158,11 +162,6 @@ export function ChatMessageToolWebSearch({
     case 'output-available': {
       const sources = part.output;
       const { query } = part.input;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(sources)) {
-        return <ChatToolError error={sources} />;
-      }
 
       if (sources.length === 0) {
         return (

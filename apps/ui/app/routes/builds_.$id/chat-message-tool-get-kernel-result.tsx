@@ -1,8 +1,7 @@
-import type { UIToolInvocation } from 'ai';
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import type { IssueSeverity, KernelIssue } from '@taucad/types';
 import {
   ChatToolCard,
@@ -93,7 +92,7 @@ function getIssueSummary(issues: KernelIssue[]): { summary: string; hasErrors: b
 export function ChatMessageToolGetKernelResult({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.getKernelResult]>;
+  readonly part: ToolInvocation<typeof toolName.getKernelResult>;
 }): React.JSX.Element {
   switch (part.state) {
     case 'input-streaming':
@@ -112,12 +111,6 @@ export function ChatMessageToolGetKernelResult({
 
     case 'output-available': {
       const { output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { status, kernelIssues } = output;
 
       const hasIssues = kernelIssues && kernelIssues.length > 0;
@@ -186,6 +179,11 @@ export function ChatMessageToolGetKernelResult({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
           <ChatToolCardHeader className="text-destructive hover:text-destructive">

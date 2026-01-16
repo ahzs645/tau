@@ -1,8 +1,7 @@
-import type { UIToolInvocation } from 'ai';
 import { LoaderCircle, X } from 'lucide-react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
@@ -19,7 +18,7 @@ function getFilename(path: string): string {
 export function ChatMessageToolDeleteFile({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.deleteFile]>;
+  readonly part: ToolInvocation<typeof toolName.deleteFile>;
 }): React.JSX.Element {
   switch (part.state) {
     case 'input-streaming':
@@ -54,12 +53,6 @@ export function ChatMessageToolDeleteFile({
 
     case 'output-available': {
       const { input, output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { targetFile } = input;
       const { success } = output;
       const filename = getFilename(targetFile);
@@ -110,6 +103,11 @@ export function ChatMessageToolDeleteFile({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <div className="@container/code overflow-hidden rounded-md border border-destructive/50 bg-destructive/10">
           <div className="flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-destructive">

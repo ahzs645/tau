@@ -1,4 +1,4 @@
-import type { InferUITools, Tool as AiTool } from 'ai';
+import type { InferUITools, Tool as AiTool, UIToolInvocation } from 'ai';
 import type { toolName, toolMode, clientToolNames } from '#constants/tool.constants.js';
 import type { EditFileInput, EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
 import type {
@@ -71,3 +71,11 @@ export type MyTools = InferUITools<{
   [toolName.transferToResearchExpert]: AiTool<TransferToResearchExpertInput, TransferToResearchExpertOutput>;
   [toolName.transferBackToSupervisor]: AiTool<TransferBackToSupervisorInput, TransferBackToSupervisorOutput>;
 }>;
+
+/**
+ * Type-safe tool invocation for a specific tool.
+ * Wraps UIToolInvocation with the correct input/output types from MyTools.
+ *
+ * Usage: ToolInvocation<typeof toolName.readFile>
+ */
+export type ToolInvocation<T extends keyof MyTools> = UIToolInvocation<MyTools[T]>;

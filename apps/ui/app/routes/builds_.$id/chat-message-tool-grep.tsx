@@ -1,9 +1,8 @@
-import type { UIToolInvocation } from 'ai';
 import { Search } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -16,11 +15,7 @@ import {
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
-export function ChatMessageToolGrep({
-  part,
-}: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.grep]>;
-}): ReactNode {
+export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<typeof toolName.grep> }): ReactNode {
   switch (part.state) {
     case 'input-streaming':
     case 'input-available': {
@@ -41,12 +36,6 @@ export function ChatMessageToolGrep({
 
     case 'output-available': {
       const { input, output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { pattern } = input;
       const { matches, totalMatches, truncated } = output;
 
@@ -113,6 +102,11 @@ export function ChatMessageToolGrep({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
           <ChatToolCardHeader>

@@ -1,9 +1,8 @@
-import type { UIToolInvocation } from 'ai';
 import { FolderOpen, Folder, File } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -19,7 +18,7 @@ import { ChatToolError } from '#components/chat/chat-tool-error.js';
 export function ChatMessageToolListDirectory({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.listDirectory]>;
+  readonly part: ToolInvocation<typeof toolName.listDirectory>;
 }): ReactNode {
   switch (part.state) {
     case 'input-streaming':
@@ -40,12 +39,6 @@ export function ChatMessageToolListDirectory({
 
     case 'output-available': {
       const { output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { entries, path } = output;
 
       // Sort entries: directories first, then files
@@ -92,6 +85,11 @@ export function ChatMessageToolListDirectory({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return (
         <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
           <ChatToolCardHeader>

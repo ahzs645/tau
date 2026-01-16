@@ -1,9 +1,8 @@
-import type { UIToolInvocation } from 'ai';
 import { useState } from 'react';
 import { Brain } from 'lucide-react';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import { defaultMarkdownControls, MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import {
@@ -18,7 +17,7 @@ import { ChatToolError } from '#components/chat/chat-tool-error.js';
 export function ChatMessageToolReasoning({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.reasoning]>;
+  readonly part: ToolInvocation<typeof toolName.reasoning>;
 }): React.JSX.Element {
   const isStreaming = useChatSelector((state) => state.status === 'streaming');
   const [isOpen, setIsOpen] = useState(false);
@@ -27,6 +26,11 @@ export function ChatMessageToolReasoning({
   const thinking = part.input?.thinking ?? '';
 
   if (part.state === 'output-error') {
+    const error = parseToolErrorText(part.errorText);
+    if (error) {
+      return <ChatToolError error={error} />;
+    }
+
     return (
       <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
         <ChatToolCardHeader>
@@ -39,11 +43,6 @@ export function ChatMessageToolReasoning({
 
   if (part.state === 'approval-requested' || part.state === 'approval-responded' || part.state === 'output-denied') {
     throw new Error(`Unexpected ${toolName.reasoning} state: ${part.state}`);
-  }
-
-  // Check for structured tool errors in output-available state
-  if (part.state === 'output-available' && isToolExecutionError(part.output)) {
-    return <ChatToolError error={part.output} />;
   }
 
   // Determine if content should be visible

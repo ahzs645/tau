@@ -1,7 +1,6 @@
-import type { UIToolInvocation } from 'ai';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import { CollapsibleFileOperation } from '#components/chat/chat-tool-file-operation.js';
 import { CopyButton } from '#components/copy-button.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
@@ -9,7 +8,7 @@ import { ChatToolError } from '#components/chat/chat-tool-error.js';
 export function ChatMessageToolFileEdit({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.editFile]>;
+  readonly part: ToolInvocation<typeof toolName.editFile>;
 }): React.JSX.Element {
   switch (part.state) {
     case 'input-streaming':
@@ -24,12 +23,6 @@ export function ChatMessageToolFileEdit({
 
     case 'output-available': {
       const { input, output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { targetFile = '' } = input;
       const { diffStats } = output;
 
@@ -56,6 +49,11 @@ export function ChatMessageToolFileEdit({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return <div>File edit failed</div>;
     }
 

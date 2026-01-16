@@ -1,7 +1,6 @@
-import type { UIToolInvocation } from 'ai';
-import type { MyTools } from '@taucad/chat';
+import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { isToolExecutionError } from '@taucad/chat';
+import { parseToolErrorText } from '@taucad/chat';
 import { CollapsibleFileOperation } from '#components/chat/chat-tool-file-operation.js';
 import { CopyButton } from '#components/copy-button.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
@@ -11,7 +10,7 @@ const testFile = 'test.json';
 export function ChatMessageToolEditTests({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.editTests]>;
+  readonly part: ToolInvocation<typeof toolName.editTests>;
 }): React.JSX.Element {
   switch (part.state) {
     case 'input-streaming':
@@ -24,12 +23,6 @@ export function ChatMessageToolEditTests({
 
     case 'output-available': {
       const { output } = part;
-
-      // Check for structured tool errors
-      if (isToolExecutionError(output)) {
-        return <ChatToolError error={output} />;
-      }
-
       const { diffStats } = output;
 
       // Use the actual edited content for display
@@ -55,6 +48,11 @@ export function ChatMessageToolEditTests({
     }
 
     case 'output-error': {
+      const error = parseToolErrorText(part.errorText);
+      if (error) {
+        return <ChatToolError error={error} />;
+      }
+
       return <div>Edit tests failed</div>;
     }
 
