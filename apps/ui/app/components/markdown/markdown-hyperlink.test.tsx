@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { MemoryRouter } from 'react-router';
 import { isExternalLink, MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
 
 describe('isExternalLink', () => {
@@ -66,21 +67,33 @@ describe('MarkdownHyperlink', () => {
 
   describe('internal links', () => {
     it('opens in same tab for relative paths', () => {
-      render(<MarkdownHyperlink href="/legal/privacy">Internal Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/legal/privacy">Internal Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Internal Link' });
       expect(link).not.toHaveAttribute('target');
     });
 
     it('opens in same tab for anchor links', () => {
-      render(<MarkdownHyperlink href="#section-1">Anchor Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="#section-1">Anchor Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Anchor Link' });
       expect(link).not.toHaveAttribute('target');
     });
 
     it('does not set rel for internal links', () => {
-      render(<MarkdownHyperlink href="/legal/privacy">Internal Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/legal/privacy">Internal Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Internal Link' });
       expect(link).not.toHaveAttribute('rel');
@@ -89,21 +102,33 @@ describe('MarkdownHyperlink', () => {
 
   describe('styling', () => {
     it('applies underline class', () => {
-      render(<MarkdownHyperlink href="/test">Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/test">Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Link' });
       expect(link).toHaveClass('underline');
     });
 
     it('applies underline-offset-3 class', () => {
-      render(<MarkdownHyperlink href="/test">Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/test">Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Link' });
       expect(link).toHaveClass('underline-offset-3');
     });
 
     it('applies transition classes', () => {
-      render(<MarkdownHyperlink href="/test">Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/test">Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Link' });
       expect(link).toHaveClass('transition-all', 'duration-200');
@@ -111,9 +136,11 @@ describe('MarkdownHyperlink', () => {
 
     it('applies additional className from props', () => {
       render(
-        <MarkdownHyperlink href="/test" className="custom-class">
-          Link
-        </MarkdownHyperlink>,
+        <MemoryRouter>
+          <MarkdownHyperlink href="/test" className="custom-class">
+            Link
+          </MarkdownHyperlink>
+        </MemoryRouter>,
       );
 
       const link = screen.getByRole('link', { name: 'Link' });
@@ -123,23 +150,33 @@ describe('MarkdownHyperlink', () => {
 
   describe('attributes', () => {
     it('sets href attribute', () => {
-      render(<MarkdownHyperlink href="/legal/privacy">Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/legal/privacy">Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'Link' });
       expect(link).toHaveAttribute('href', '/legal/privacy');
     });
 
     it('renders children', () => {
-      render(<MarkdownHyperlink href="/test">Click me</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href="/test">Click me</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       expect(screen.getByText('Click me')).toBeInTheDocument();
     });
 
     it('passes through additional props', () => {
       render(
-        <MarkdownHyperlink href="/test" data-testid="custom-link">
-          Link
-        </MarkdownHyperlink>,
+        <MemoryRouter>
+          <MarkdownHyperlink href="/test" data-testid="custom-link">
+            Link
+          </MarkdownHyperlink>
+        </MemoryRouter>,
       );
 
       expect(screen.getByTestId('custom-link')).toBeInTheDocument();

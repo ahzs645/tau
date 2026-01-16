@@ -129,7 +129,7 @@ describe('createHeaderAnchor', () => {
     render(<H1>Test Heading</H1>);
 
     const heading = screen.getByRole('heading', { level: 1 });
-    expect(heading).toHaveClass('scroll-mt-24');
+    expect(heading).toHaveClass('scroll-mt-(--header-height)');
   });
 
   it('renders link icon inside anchor', () => {
