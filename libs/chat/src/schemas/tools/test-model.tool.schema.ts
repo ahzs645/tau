@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { diffStatsSchema } from '#schemas/tools/diff.schema.js';
+import { diffStatsWithContentSchema } from '#schemas/tools/diff.schema.js';
 
 // =============================================================================
 // View and Observation Schemas (internal use for capturing screenshots)
@@ -124,6 +124,6 @@ export type EditTestsInput = z.infer<typeof editTestsInputSchema>;
  */
 export const editTestsOutputSchema = z.object({
   success: z.boolean().describe('Whether the edit was successfully applied'),
-  diffStats: diffStatsSchema.describe('Statistics and content diff for the changes made'),
+  diffStats: diffStatsWithContentSchema.describe('Statistics and content diff for the changes made'),
 });
 export type EditTestsOutput = z.infer<typeof editTestsOutputSchema>;

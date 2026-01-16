@@ -1,5 +1,5 @@
 import type { ToolUIPart } from 'ai';
-import type { DiffStats } from '@taucad/chat';
+import type { DiffStatsWithContent } from '@taucad/chat';
 import type { CodeLanguage } from '@taucad/types';
 import { useState, useEffect, useRef } from 'react';
 import { File, FilePlus, LoaderCircle, X, ChevronRight, Check, RotateCcw, Play } from 'lucide-react';
@@ -220,7 +220,7 @@ type CollapsibleFileOperationTriggerProps = {
   /**
    * Diff statistics for displaying change indicator.
    */
-  readonly diffStats?: DiffStats;
+  readonly diffStats?: DiffStatsWithContent;
 };
 
 // eslint-disable-next-line complexity -- UI component with many conditional rendering paths
@@ -352,7 +352,7 @@ type CollapsibleFileOperationProps = {
   /**
    * Diff statistics for displaying change indicator.
    */
-  readonly diffStats?: DiffStats;
+  readonly diffStats?: DiffStatsWithContent;
 };
 
 export function CollapsibleFileOperation({

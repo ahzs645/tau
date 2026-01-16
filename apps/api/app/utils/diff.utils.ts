@@ -1,4 +1,4 @@
-export type DiffStats = {
+export type DiffStatsSummary = {
   linesAdded: number;
   linesRemoved: number;
 };
@@ -7,7 +7,7 @@ export type DiffStats = {
  * Parse a unified diff string to extract line counts.
  * Counts lines starting with + (added) and - (removed), excluding header lines.
  */
-export function parseDiffStats(udiff: string): DiffStats {
+export function parseDiffStats(udiff: string): DiffStatsSummary {
   const lines = udiff.split('\n');
   let linesAdded = 0;
   let linesRemoved = 0;

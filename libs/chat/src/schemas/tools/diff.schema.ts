@@ -4,14 +4,14 @@ import { z } from 'zod';
  * Diff statistics for file operations.
  * Contains line counts and full content for diff visualization.
  */
-export type DiffStats = {
+export type DiffStatsWithContent = {
   linesAdded: number;
   linesRemoved: number;
   originalContent: string;
   modifiedContent: string;
 };
 
-export const diffStatsSchema: z.ZodType<DiffStats> = z.object({
+export const diffStatsWithContentSchema: z.ZodType<DiffStatsWithContent> = z.object({
   linesAdded: z.number().describe('Number of lines added'),
   linesRemoved: z.number().describe('Number of lines removed'),
   originalContent: z.string().describe('Original file content before changes'),
