@@ -1,12 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
 import { globSearchInputSchema } from '@taucad/chat';
-import type { GlobSearchOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
-
-const globSearchJsonSchema = z.toJSONSchema(globSearchInputSchema);
 
 export const globSearchToolDefinition = {
   name: toolName.globSearch,
@@ -21,13 +17,12 @@ Common glob patterns:
 - "**/*.ext" - All files with extension in any directory
 - "dir/**/*" - All files under a specific directory
 - "**/prefix_*" - Files starting with a prefix in any directory`,
-  schema: globSearchJsonSchema,
+  schema: globSearchInputSchema,
 } as const;
 
 export const globSearchTool = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.globSearch, args);
-  return result as GlobSearchOutput;
+  return chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.globSearch, args);
 }, globSearchToolDefinition);

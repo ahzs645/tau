@@ -1,12 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
 import { grepInputSchema } from '@taucad/chat';
-import type { GrepOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
-
-const grepJsonSchema = z.toJSONSchema(grepInputSchema);
 
 export const grepToolDefinition = {
   name: toolName.grep,
@@ -24,13 +20,12 @@ Use this tool when you need to:
 - Find specific code patterns or function calls
 - Locate variable or function definitions
 - Search for text across multiple files`,
-  schema: grepJsonSchema,
+  schema: grepInputSchema,
 } as const;
 
 export const grepTool = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.grep, args);
-  return result as GrepOutput;
+  return chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.grep, args);
 }, grepToolDefinition);

@@ -1,12 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
-import { readFileInputSchema } from '@taucad/chat';
-import type { ReadFileOutput } from '@taucad/chat';
+import { readFileInputSchema, isToolExecutionError } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
-
-const readFileJsonSchema = z.toJSONSchema(readFileInputSchema);
 
 export const readFileToolDefinition = {
   name: toolName.readFile,
@@ -20,7 +16,7 @@ Use this tool when you need to:
 - Examine the contents of a specific file
 - Understand existing code before making modifications
 - Review configuration files or documentation`,
-  schema: readFileJsonSchema,
+  schema: readFileInputSchema,
 } as const;
 
 /**
@@ -36,12 +32,12 @@ export const readFileTool = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 
-  const result = (await chatToolsService.sendToolCallRequest(
-    chatId,
-    toolCallId,
-    toolName.readFile,
-    args,
-  )) as ReadFileOutput;
+  const result = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, args);
+
+  // Return error objects directly to the LLM
+  if (isToolExecutionError(result)) {
+    return result;
+  }
 
   // Add line numbers to the raw content for LLM display
   const startLine = result.startLine ?? 1;

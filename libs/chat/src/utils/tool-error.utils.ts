@@ -7,6 +7,7 @@ export const toolErrorCodes = [
   'TOOL_EXECUTION_TIMEOUT',
   'CLIENT_DISCONNECTED',
   'NO_CLIENT_CONNECTION',
+  'TOOL_INPUT_VALIDATION_FAILED',
   'TOOL_OUTPUT_VALIDATION_FAILED',
 ] as const;
 
@@ -43,6 +44,10 @@ export function getToolErrorTitle(errorCode: ToolErrorCode): string {
       return 'No Connection';
     }
 
+    case 'TOOL_INPUT_VALIDATION_FAILED': {
+      return 'Invalid Input';
+    }
+
     case 'TOOL_OUTPUT_VALIDATION_FAILED': {
       return 'Validation Failed';
     }
@@ -64,6 +69,10 @@ export function getToolErrorDescription(errorCode: ToolErrorCode): string {
 
     case 'NO_CLIENT_CONNECTION': {
       return 'No browser tab is connected. Please refresh the page.';
+    }
+
+    case 'TOOL_INPUT_VALIDATION_FAILED': {
+      return 'The tool received invalid input arguments.';
     }
 
     case 'TOOL_OUTPUT_VALIDATION_FAILED': {

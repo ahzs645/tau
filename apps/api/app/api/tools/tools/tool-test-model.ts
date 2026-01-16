@@ -1,12 +1,9 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
-import { testModelInputSchema, testFileSchema } from '@taucad/chat';
-import type { TestModelOutput, CaptureObservationsOutput, VisualTestRequirement } from '@taucad/chat';
+import { testModelInputSchema, testFileSchema, isToolExecutionError } from '@taucad/chat';
+import type { TestModelOutput, VisualTestRequirement } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
-
-const testModelJsonSchema = z.toJSONSchema(testModelInputSchema);
 
 export const testModelToolDefinition = {
   name: toolName.testModel,
@@ -22,7 +19,7 @@ Returns:
 If failures is empty, all tests passed.
 
 Note: Reads requirements from test.json. Use edit_tests to add/modify requirements first.`,
-  schema: testModelJsonSchema,
+  schema: testModelInputSchema,
 } as const;
 
 export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
@@ -30,9 +27,14 @@ export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
   const { toolCallId } = runtime;
 
   // Step 1: Read test.json to get requirements
-  const testFileContent = (await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, {
+  const testFileContent = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, {
     targetFile: 'test.json',
-  })) as { content: string };
+  });
+
+  // Return error objects directly to the LLM
+  if (isToolExecutionError(testFileContent)) {
+    return testFileContent;
+  }
 
   // Check if test.json exists
   if (testFileContent.content.startsWith('Error reading file:') || testFileContent.content === '') {
@@ -90,12 +92,17 @@ export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
   }
 
   // Step 2: Capture observations from the frontend via WebSocket
-  const captureResult = (await chatToolsService.sendToolCallRequest(
+  const captureResult = await chatToolsService.sendToolCallRequest(
     chatId,
     toolCallId,
     toolName.captureObservations,
     {},
-  )) as CaptureObservationsOutput;
+  );
+
+  // Return error objects directly to the LLM
+  if (isToolExecutionError(captureResult)) {
+    return captureResult;
+  }
 
   const { observations } = captureResult;
 

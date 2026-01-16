@@ -10,12 +10,9 @@ import { MemoryVectorStore } from '@langchain/classic/vectorstores/memory';
 import { formatDocumentsAsString } from '@langchain/classic/util/document';
 import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
 import { webBrowserInputSchema } from '@taucad/chat';
 import type { WebBrowserInput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-
-const webBrowserJsonSchema = z.toJSONSchema(webBrowserInputSchema);
 
 // Interface for WebBrowser options
 export type WebBrowserOptions = {
@@ -106,7 +103,7 @@ const webBrowserImpl = async (input: WebBrowserInput, options: WebBrowserOptions
 const webBrowserToolDefinition = {
   name: toolName.webBrowser,
   description: 'Useful for when you need to find something on or summarize a webpage.',
-  schema: webBrowserJsonSchema,
+  schema: webBrowserInputSchema,
 } as const;
 
 /**

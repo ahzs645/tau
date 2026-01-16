@@ -105,10 +105,23 @@ export type ToolNoConnectionError = {
 };
 
 /**
+ * Structured validation error returned to LLM when tool input validation fails.
+ * The LLM can use this information to understand what went wrong and potentially retry.
+ */
+export type ToolInputValidationError = {
+  errorCode: 'TOOL_INPUT_VALIDATION_FAILED';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+  validationErrors: Array<{ path: string; message: string }>;
+  rawOutput: unknown;
+};
+
+/**
  * Structured validation error returned to LLM when tool output validation fails.
  * The LLM can use this information to understand what went wrong and potentially retry.
  */
-export type ToolValidationError = {
+export type ToolOutputValidationError = {
   errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED';
   message: string;
   toolName: string;
@@ -116,6 +129,11 @@ export type ToolValidationError = {
   validationErrors: Array<{ path: string; message: string }>;
   rawOutput: unknown;
 };
+
+/**
+ * Combined validation error type for both input and output validation failures.
+ */
+export type ToolValidationError = ToolInputValidationError | ToolOutputValidationError;
 
 /**
  * All possible structured tool errors including validation errors.

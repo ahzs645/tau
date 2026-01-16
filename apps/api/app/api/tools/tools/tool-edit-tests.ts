@@ -1,13 +1,9 @@
-import type { DynamicStructuredTool, ToolRuntime } from '@langchain/core/tools';
+import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
-import { editTestsInputSchema } from '@taucad/chat';
-import type { EditTestsInput, EditTestsOutput, ReadFileOutput, CreateFileInput } from '@taucad/chat';
+import { editTestsInputSchema, isToolExecutionError } from '@taucad/chat';
+import type { EditTestsOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
-
-const editTestsJsonSchema = z.toJSONSchema(editTestsInputSchema);
 
 export const editTestsToolDefinition = {
   name: toolName.editTests,
@@ -34,7 +30,7 @@ Example edit to add a new requirement:
 - Bad: "TOP view shows hole", "Boolean difference applied"
 
 Use this tool BEFORE making model changes (TDD approach).`,
-  schema: editTestsJsonSchema,
+  schema: editTestsInputSchema,
 } as const;
 
 const testFile = 'test.json';
@@ -48,17 +44,21 @@ const defaultTestFile = JSON.stringify(
   2,
 );
 
-export const editTestsTool: DynamicStructuredTool<JSONSchema, EditTestsOutput, EditTestsInput, EditTestsOutput> = tool(
-  async (input, runtime: ToolRuntime) => {
-    const args = input as EditTestsInput;
+export const editTestsTool = tool(
+  async (args, runtime: ToolRuntime) => {
     const { chatToolsService, fileEditService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
     const { toolCallId } = runtime;
     const { codeEdit } = args;
 
     // Step 1: Read the current test.json content via WebSocket
-    const readResult = (await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, {
+    const readResult = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, {
       targetFile: testFile,
-    })) as ReadFileOutput;
+    });
+
+    // Return error objects directly to the LLM
+    if (isToolExecutionError(readResult)) {
+      return readResult;
+    }
 
     // If file doesn't exist, use default content
     const originalContent =
@@ -75,7 +75,7 @@ export const editTestsTool: DynamicStructuredTool<JSONSchema, EditTestsOutput, E
     });
 
     if (!editResult.success || !editResult.editedContent) {
-      return {
+      const result: EditTestsOutput = {
         success: false,
         diffStats: {
           linesAdded: 0,
@@ -84,16 +84,22 @@ export const editTestsTool: DynamicStructuredTool<JSONSchema, EditTestsOutput, E
           modifiedContent: originalContent,
         },
       };
+      return result;
     }
 
     // Step 3: Write the edited content back via WebSocket
-    await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.createFile, {
+    const writeResult = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.createFile, {
       targetFile: testFile,
       content: editResult.editedContent,
-    } satisfies CreateFileInput);
+    });
+
+    // Return error objects directly to the LLM
+    if (isToolExecutionError(writeResult)) {
+      return writeResult;
+    }
 
     // Return the result with diff stats
-    return {
+    const result: EditTestsOutput = {
       success: true,
       diffStats: {
         linesAdded: editResult.diffStats?.linesAdded ?? 0,
@@ -102,6 +108,7 @@ export const editTestsTool: DynamicStructuredTool<JSONSchema, EditTestsOutput, E
         modifiedContent: editResult.editedContent,
       },
     };
+    return result;
   },
   editTestsToolDefinition,
 );

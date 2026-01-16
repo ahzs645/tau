@@ -1,13 +1,9 @@
-import type { DynamicStructuredTool, ToolRuntime } from '@langchain/core/tools';
+import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
-import { editFileInputSchema } from '@taucad/chat';
-import type { EditFileInput, EditFileOutput, ReadFileInput, ReadFileOutput, CreateFileInput } from '@taucad/chat';
+import { editFileInputSchema, isToolExecutionError } from '@taucad/chat';
+import type { EditFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import type { JSONSchema } from '@langchain/core/utils/json_schema';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
-
-const editFileJsonSchema = z.toJSONSchema(editFileInputSchema);
 
 export const editFileToolDefinition = {
   name: toolName.editFile,
@@ -31,74 +27,83 @@ You should bias towards repeating as few lines of the original file as possible 
 Each edit should contain sufficient context of unchanged lines around the code you're editing to resolve ambiguity.
 If you plan on deleting a section, you must provide surrounding context to indicate the deletion.
 DO NOT omit spans of pre-existing code without using the // ... existing code ... comment to indicate its absence.`,
-  schema: editFileJsonSchema,
+  schema: editFileInputSchema,
 } as const;
 
-export const editFileTool: DynamicStructuredTool<JSONSchema, EditFileOutput, EditFileInput, EditFileOutput> = tool(
-  async (input, runtime: ToolRuntime) => {
-    const args = input as EditFileInput;
-    const { chatToolsService, fileEditService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
-    const { toolCallId } = runtime;
-    const { targetFile, codeEdit } = args;
+export const editFileTool = tool(async (args, runtime: ToolRuntime) => {
+  const { chatToolsService, fileEditService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+  const { toolCallId } = runtime;
+  const { targetFile, codeEdit } = args;
 
-    // Step 1: Read the original file content via WebSocket
-    // The frontend returns raw content without line numbers
-    const readResult = (await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, {
-      targetFile,
-    } satisfies ReadFileInput)) as ReadFileOutput;
+  // Step 1: Read the original file content via WebSocket
+  // The frontend returns raw content without line numbers
+  const readResult = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.readFile, {
+    targetFile,
+  });
 
-    // Check if read failed
-    if (readResult.content.startsWith('Error reading file:')) {
-      return {
-        success: false,
-        diffStats: {
-          linesAdded: 0,
-          linesRemoved: 0,
-          originalContent: '',
-          modifiedContent: '',
-        },
-      };
-    }
+  // Return error objects directly to the LLM
+  if (isToolExecutionError(readResult)) {
+    return readResult;
+  }
 
-    // Frontend sends raw content (no line numbers)
-    const originalContent = readResult.content;
-
-    // Step 2: Apply the edit using FileEditService
-    const editResult = await fileEditService.applyFileEdit({
-      targetFile,
-      originalContent,
-      codeEdit,
-      instructions: 'Apply the code edit',
-    });
-
-    if (!editResult.success || !editResult.editedContent) {
-      return {
-        success: false,
-        diffStats: {
-          linesAdded: 0,
-          linesRemoved: 0,
-          originalContent,
-          modifiedContent: originalContent,
-        },
-      };
-    }
-
-    // Step 3: Write the edited content back via WebSocket
-    await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.createFile, {
-      targetFile,
-      content: editResult.editedContent,
-    } satisfies CreateFileInput);
-
-    // Return the result with diff stats
-    return {
-      success: true,
+  // Check if read failed (file doesn't exist)
+  if (readResult.content.startsWith('Error reading file:')) {
+    const result: EditFileOutput = {
+      success: false,
       diffStats: {
-        linesAdded: editResult.diffStats?.linesAdded ?? 0,
-        linesRemoved: editResult.diffStats?.linesRemoved ?? 0,
-        originalContent,
-        modifiedContent: editResult.editedContent,
+        linesAdded: 0,
+        linesRemoved: 0,
+        originalContent: '',
+        modifiedContent: '',
       },
     };
-  },
-  editFileToolDefinition,
-);
+    return result;
+  }
+
+  // Frontend sends raw content (no line numbers)
+  const originalContent = readResult.content;
+
+  // Step 2: Apply the edit using FileEditService
+  const editResult = await fileEditService.applyFileEdit({
+    targetFile,
+    originalContent,
+    codeEdit,
+    instructions: 'Apply the code edit',
+  });
+
+  if (!editResult.success || !editResult.editedContent) {
+    const result: EditFileOutput = {
+      success: false,
+      diffStats: {
+        linesAdded: 0,
+        linesRemoved: 0,
+        originalContent,
+        modifiedContent: originalContent,
+      },
+    };
+    return result;
+  }
+
+  // Step 3: Write the edited content back via WebSocket
+  const writeResult = await chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.createFile, {
+    targetFile,
+    content: editResult.editedContent,
+  });
+
+  // Return error objects directly to the LLM
+  if (isToolExecutionError(writeResult)) {
+    return writeResult;
+  }
+
+  // Return the result with diff stats
+  const result: EditFileOutput = {
+    success: true,
+    diffStats: {
+      linesAdded: editResult.diffStats?.linesAdded ?? 0,
+      linesRemoved: editResult.diffStats?.linesRemoved ?? 0,
+      originalContent,
+      modifiedContent: editResult.editedContent,
+    },
+  };
+  return result;
+}, editFileToolDefinition);

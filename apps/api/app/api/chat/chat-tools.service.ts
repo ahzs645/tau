@@ -4,11 +4,13 @@ import { generatePrefixedId } from '@taucad/utils/id';
 import { idPrefix } from '@taucad/types/constants';
 import { toolSchemasRegistry } from '@taucad/chat';
 import type {
+  ToolSchemasRegistry,
+  ClientToolInput,
+  ClientToolOutput,
   ToolCallRequest,
   ToolCallResult,
   ToolExecutionError,
   ToolValidationError,
-  ClientToolName,
 } from '@taucad/chat';
 
 /** Timeout for tool execution in milliseconds (60 seconds) */
@@ -18,7 +20,7 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
   timeoutId: ReturnType<typeof setTimeout>;
-  toolName: ClientToolName;
+  toolName: keyof ToolSchemasRegistry;
   toolCallId: string;
   chatId: string;
 };
@@ -92,14 +94,24 @@ export class ChatToolsService {
 
   /**
    * Send a tool call request to the client and wait for the result.
-   * Returns a Promise that resolves with the tool result or a ToolExecutionError.
+   * Returns a Promise that resolves with the validated tool result or a ToolExecutionError/ToolValidationError.
+   *
+   * Type-safe: The tool name determines the expected input and output types.
+   * Both input args and output results are validated against their Zod schemas.
+   *
+   * @template T - The client tool name (must be a key in ToolSchemasRegistry)
+   * @param chatId - The chat room ID
+   * @param toolCallId - The tool call ID for tracking
+   * @param toolName - The name of the tool to execute
+   * @param args - The input arguments (type-checked against tool's input schema)
+   * @returns The validated output (type-checked against tool's output schema) or an error object
    */
-  public async sendToolCallRequest(
+  public async sendToolCallRequest<T extends keyof ToolSchemasRegistry>(
     chatId: string,
     toolCallId: string,
-    toolName: ClientToolName,
-    args: unknown,
-  ): Promise<unknown> {
+    toolName: T,
+    args: ClientToolInput<T>,
+  ): Promise<ClientToolOutput<T> | ToolExecutionError | ToolValidationError> {
     const socket = this.connections.get(chatId);
 
     if (!socket?.connected) {
@@ -111,6 +123,13 @@ export class ChatToolsService {
       };
       this.logger.warn(`No connection for chat ${chatId}, returning error to LLM`);
       return noConnectionError;
+    }
+
+    // Validate input args against the tool's input schema
+    const inputValidation = this.validateToolInput(toolName, toolCallId, args);
+    if (!inputValidation.success) {
+      this.logger.warn(`Input validation failed for ${toolName}:`, inputValidation.error.validationErrors);
+      return inputValidation.error;
     }
 
     const requestId = generatePrefixedId(idPrefix.request);
@@ -135,7 +154,7 @@ export class ChatToolsService {
 
       // Store pending request
       this.pendingRequests.set(requestId, {
-        resolve,
+        resolve: resolve as (value: unknown) => void,
         // eslint-disable-next-line @typescript-eslint/no-empty-function -- Not used, we always resolve with errors
         reject() {},
         timeoutId,
@@ -151,7 +170,7 @@ export class ChatToolsService {
         requestId,
         toolCallId,
         toolName,
-        args,
+        args: inputValidation.data,
       };
 
       socket.emit('tool_call_request', request);
@@ -210,22 +229,47 @@ export class ChatToolsService {
   }
 
   /**
+   * Validate tool input against its Zod schema.
+   * Returns the validated data if successful, or a ToolValidationError if validation fails.
+   */
+  private validateToolInput<T extends keyof ToolSchemasRegistry>(
+    toolName: T,
+    toolCallId: string,
+    input: unknown,
+  ): { success: true; data: ClientToolInput<T> } | { success: false; error: ToolValidationError } {
+    const schemas = toolSchemasRegistry[toolName];
+    const parseResult = schemas.inputSchema.safeParse(input);
+
+    if (parseResult.success) {
+      return { success: true, data: parseResult.data as ClientToolInput<T> };
+    }
+
+    // Build validation error for LLM
+    const validationError: ToolValidationError = {
+      errorCode: 'TOOL_INPUT_VALIDATION_FAILED',
+      message: `Tool "${toolName}" received invalid input. The provided arguments don't match the expected schema.`,
+      toolName,
+      toolCallId,
+      validationErrors: parseResult.error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+      rawOutput: input,
+    };
+
+    return { success: false, error: validationError };
+  }
+
+  /**
    * Validate tool result against its Zod schema.
    * Returns the validated data if successful, or a ToolValidationError if validation fails.
    */
   private validateToolResult(
-    toolName: ClientToolName,
+    toolName: keyof ToolSchemasRegistry,
     toolCallId: string,
     result: unknown,
   ): { success: true; data: unknown } | { success: false; error: ToolValidationError } {
     const schemas = toolSchemasRegistry[toolName];
-
-    if (!schemas) {
-      // Unknown tool - pass through (shouldn't happen with type safety)
-      this.logger.warn(`No schema found for tool: ${toolName}`);
-      return { success: true, data: result };
-    }
-
     const parseResult = schemas.outputSchema.safeParse(result);
 
     if (parseResult.success) {
