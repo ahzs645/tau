@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import { parseToolErrorText } from '@taucad/chat';
-import { createFaviconUrl, extractDomainFromUrl } from '#utils/url.utils.js';
+import { createFaviconUrl, extractDomainFromUrl, safeExtractDomainFromUrl } from '#utils/url.utils.js';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -23,7 +23,7 @@ export function ChatMessageToolWebBrowser({
     case 'input-available':
     case 'input-streaming': {
       const url = part.input?.url ?? '';
-      const domain = url ? extractDomainFromUrl(url, { includeTld: true }) : '';
+      const domain = url ? safeExtractDomainFromUrl(url, { includeTld: true }) : undefined;
 
       return (
         <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
