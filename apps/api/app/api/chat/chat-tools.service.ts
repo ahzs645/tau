@@ -204,9 +204,9 @@ export class ChatToolsService {
     this.pendingRequests.delete(requestId);
 
     if (clientError) {
-      // Client reported an error - resolve with error object for LLM
+      // Client reported an error during execution (client is still connected)
       const errorResult: ToolExecutionError = {
-        errorCode: 'CLIENT_DISCONNECTED', // Use a generic error type
+        errorCode: 'TOOL_EXECUTION_ERROR',
         message: clientError,
         toolName: pending.toolName,
         toolCallId: pending.toolCallId,
