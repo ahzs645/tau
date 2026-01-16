@@ -6,8 +6,8 @@ import { useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
-import { Theme, useTheme } from 'remix-themes';
 import { useColor } from '#hooks/use-color.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
 import { createViewportGizmoCubeAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.js';
 
 type ViewportGizmoCubeProps = {
@@ -48,7 +48,7 @@ export function ViewportGizmoCube({
   }));
 
   const { serialized } = useColor();
-  const [theme] = useTheme();
+  const { theme } = useTheme();
 
   const handleChange = useCallback((): void => {
     invalidate();

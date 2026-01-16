@@ -1,6 +1,7 @@
 import type { LinksFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 import { Links, Meta, Scripts, ScrollRestoration, useRouteLoaderData } from 'react-router';
-import { PreventFlashOnWrongTheme, Theme, ThemeProvider, useTheme } from 'remix-themes';
+import { PreventFlashOnWrongTheme, Theme, ThemeProvider } from 'remix-themes';
+import { useTheme } from '#hooks/use-theme.js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
@@ -71,7 +72,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export function Layout({ children }: { readonly children: ReactNode }): React.JSX.Element {
   const data = useRouteLoaderData<typeof loader>('root');
-  const ssrTheme = data?.theme ?? Theme.LIGHT;
+  // Preserve null for system theme - remix-themes needs null to detect system preference
+  const ssrTheme = data?.theme ?? null;
   const queryClient = useMemo(
     () =>
       new QueryClient({
@@ -117,9 +119,9 @@ function LayoutDocument({
 }: {
   readonly children: ReactNode;
   readonly env: Record<string, string>;
-  readonly ssrTheme: Theme;
+  readonly ssrTheme: Theme | null;
 }): React.JSX.Element {
-  const [theme] = useTheme();
+  const { theme } = useTheme();
   const color = useColor();
   const { setFaviconColor } = useFavicon();
 
@@ -133,7 +135,7 @@ function LayoutDocument({
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
-        <PreventFlashOnWrongTheme ssrTheme={Boolean(ssrTheme)} />
+        <PreventFlashOnWrongTheme ssrTheme={ssrTheme !== null} />
         <Links />
       </head>
       <body>

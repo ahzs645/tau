@@ -1,7 +1,10 @@
 import { useCallback } from 'react';
-import { Theme, useTheme } from 'remix-themes';
+import { Theme, useTheme as useRemixTheme } from 'remix-themes';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
+
+// Re-export Theme enum so consumers don't need to depend on remix-themes directly
+export { Theme };
 
 // Null is used to represent the system theme
 // eslint-disable-next-line @typescript-eslint/no-restricted-types -- null is used to represent the system theme, as it's serializable in JSON
@@ -31,16 +34,28 @@ export const themeOptions: ThemeOption[] = [
   },
 ];
 
-type UseThemeToggleReturn = {
-  theme: ThemeWithSystem;
+type UseThemeReturn = {
+  /** The resolved theme - always 'light' or 'dark', never 'system' */
+  theme: Theme;
+  /** The user's theme preference including 'system' (null) option */
+  themeWithSystem: ThemeWithSystem;
   setTheme: (theme: ThemeWithSystem) => void;
   cycleTheme: () => void;
   currentOption: ThemeOption;
 };
 
-export function useThemeToggle(): UseThemeToggleReturn {
-  const [, setRemixTheme] = useTheme();
-  const [theme, setThemeCookie] = useCookie<ThemeWithSystem>(cookieName.colorTheme, null);
+/**
+ * Hook for managing theme state.
+ *
+ * @returns theme - The resolved theme, always 'light' or 'dark'
+ * @returns themeWithSystem - The user's preference including 'system' (null)
+ * @returns setTheme - Function to set the theme preference
+ * @returns cycleTheme - Function to cycle through theme options
+ * @returns currentOption - The current theme option object
+ */
+export function useTheme(): UseThemeReturn {
+  const [resolvedTheme, setRemixTheme] = useRemixTheme();
+  const [themeWithSystem, setThemeCookie] = useCookie<ThemeWithSystem>(cookieName.colorTheme, null);
 
   const setTheme = useCallback(
     (newTheme: ThemeWithSystem) => {
@@ -52,21 +67,25 @@ export function useThemeToggle(): UseThemeToggleReturn {
 
   const cycleTheme = useCallback(() => {
     let newTheme: ThemeWithSystem;
-    if (theme === Theme.LIGHT) {
+    if (themeWithSystem === Theme.LIGHT) {
       newTheme = Theme.DARK;
-    } else if (theme === Theme.DARK) {
+    } else if (themeWithSystem === Theme.DARK) {
       newTheme = null;
     } else {
       newTheme = Theme.LIGHT;
     }
 
     setTheme(newTheme);
-  }, [theme, setTheme]);
+  }, [themeWithSystem, setTheme]);
 
-  const currentOption = themeOptions.find((option) => option.id === theme) ?? themeOptions[2]!;
+  const currentOption = themeOptions.find((option) => option.id === themeWithSystem) ?? themeOptions[2]!;
+
+  // resolvedTheme from remix-themes is always defined as 'light' or 'dark'
+  const theme = resolvedTheme ?? Theme.LIGHT;
 
   return {
     theme,
+    themeWithSystem,
     setTheme,
     cycleTheme,
     currentOption,

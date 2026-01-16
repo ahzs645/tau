@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef, useId, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import { Theme, useTheme } from 'remix-themes';
 import type { GeometrySvg } from '@taucad/types';
 // @ts-expect-error - no types available
 import panzoom from '@panzoom/panzoom/dist/panzoom.es.js';
@@ -10,6 +9,7 @@ import { useBuild } from '#hooks/use-build.js';
 import { usePanzoomReset } from '#components/geometry/graphics/svg/use-panzoom-reset.js';
 import { axesColors } from '#constants/color.constants.js';
 import { SvgInvalidError } from '#components/geometry/graphics/svg/svg-invalid-error.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
 
 type Viewbox = {
   xMin: number;
@@ -33,7 +33,7 @@ function SvgGrid({ viewbox, transform }: SvgGridProps): React.ReactElement {
   const { xMin, yMin, width, height } = viewbox;
   const { graphicsRef: graphicsActor } = useBuild();
   const gridSizes = useSelector(graphicsActor, (state) => state.context.gridSizes);
-  const [theme] = useTheme();
+  const { theme } = useTheme();
   const id = useId();
 
   // Calculate theme-aware grid color

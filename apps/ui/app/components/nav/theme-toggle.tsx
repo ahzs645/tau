@@ -3,10 +3,10 @@ import { SidebarMenuButton } from '#components/ui/sidebar.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { useThemeToggle } from '#hooks/use-theme-toggle.js';
+import { useTheme } from '#hooks/use-theme.js';
 
 export function ThemeToggle(): React.JSX.Element {
-  const { theme, cycleTheme } = useThemeToggle();
+  const { themeWithSystem, cycleTheme } = useTheme();
 
   const { formattedKeyCombination } = useKeydown(
     {
@@ -21,7 +21,7 @@ export function ThemeToggle(): React.JSX.Element {
       <TooltipTrigger asChild>
         <SidebarMenuButton
           className="group relative w-auto overflow-hidden"
-          data-theme={theme ?? 'system'}
+          data-theme={themeWithSystem ?? 'system'}
           onClick={cycleTheme}
         >
           <Sun className="h-[1.2rem] w-[1.2rem] origin-right -translate-x-[400%] rotate-[-180deg] transition-transform duration-500 group-data-[theme=light]:translate-x-0 group-data-[theme=light]:rotate-0" />

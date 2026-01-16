@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
-import { useTheme } from 'remix-themes';
 import { diffLines } from 'diff';
 import type { CodeLanguage } from '@taucad/types';
 import { highlighter, diffTransformer } from '#lib/shiki.js';
 import { cn } from '#utils/ui.utils.js';
+import { useTheme } from '#hooks/use-theme.js';
 
 /** Number of context lines to show above and below each change group. */
 const contextLines = 1;
@@ -215,7 +215,7 @@ export function DiffViewer({
   language,
   className,
 }: DiffViewerProps): React.JSX.Element {
-  const [theme] = useTheme();
+  const { theme } = useTheme();
 
   const segments = useMemo(
     () => processDiffWithContext(originalContent, modifiedContent),
