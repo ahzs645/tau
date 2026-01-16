@@ -190,7 +190,7 @@ export class OpenScadWorker extends KernelWorker {
         return createKernelSuccess([]);
       }
 
-      const instance = await this.createInstance(addError, getFileContents);
+      const instance = await this.createInstance(addError, getFileContents, filename);
       await this.mountFilesystem(instance, this.basePath, fileContentsCache);
       await this.mountFonts(instance);
 
@@ -211,6 +211,14 @@ export class OpenScadWorker extends KernelWorker {
       const result = instance.callMain(args);
 
       if (result !== 0) {
+        // Check if there are actual errors (not just warnings)
+        const hasActualErrors = collectedIssues.some((issue) => issue.severity === 'error');
+
+        // If we only have warnings (e.g., empty top level object), treat as success with warnings
+        if (!hasActualErrors && collectedIssues.length > 0) {
+          return createKernelSuccess([], collectedIssues);
+        }
+
         // Return all collected issues (errors + warnings) for full diagnostic context
         if (collectedIssues.length > 0) {
           return createKernelError(collectedIssues);
@@ -418,9 +426,14 @@ export class OpenScadWorker extends KernelWorker {
    *
    * @param addError - Optional callback to receive parsed errors from stderr in real-time.
    * @param getFileContents - Optional function to lazily fetch file contents for error highlighting.
+   * @param activeFileName - Optional active file name for warnings without file location.
    * @returns The OpenSCAD instance.
    */
-  private async createInstance(addError?: AddErrorFn, getFileContents?: GetFileContentsFn): Promise<OpenSCAD> {
+  private async createInstance(
+    addError?: AddErrorFn,
+    getFileContents?: GetFileContentsFn,
+    activeFileName?: string,
+  ): Promise<OpenSCAD> {
     const instance = await createOpenSCAD({
       noInitialRun: true,
       print: (message) => {
@@ -429,7 +442,7 @@ export class OpenScadWorker extends KernelWorker {
       printErr: (message) => {
         this.printErr(message);
         if (addError) {
-          parseStderrLine(message, addError, getFileContents);
+          parseStderrLine(message, addError, getFileContents, activeFileName);
         }
       },
     });

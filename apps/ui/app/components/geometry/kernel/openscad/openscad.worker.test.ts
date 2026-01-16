@@ -852,6 +852,28 @@ describe('OpenScadWorker', () => {
         expect(typeof result.success).toBe('boolean');
       });
 
+      it('should return warning when file only defines modules without rendering', async () => {
+        const worker = createGeometryWorker({
+          'module_only.scad': `// This file only defines a module but never calls it
+module my_cube(size = 10) {
+  cube([size, size, size]);
+}
+
+// No call to my_cube() - nothing to render
+`,
+        });
+        const result = await worker.computeGeometryEntry({ filename: 'module_only.scad', path: '' }, {});
+
+        // Should succeed (not an error) but with a warning
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.issues.length).toBeGreaterThan(0);
+          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
+          expect(result.issues.some((i) => i.message.includes('No geometry to render'))).toBe(true);
+          expect(result.issues.some((i) => i.message.includes('Call a module'))).toBe(true);
+        }
+      });
+
       it('should parse error message correctly for += operator', async () => {
         const worker = createGeometryWorker({
           'compound_assign.scad': `

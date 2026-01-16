@@ -7,7 +7,8 @@ import { toolName, toolMode } from '@taucad/chat/constants';
 import type { Environment } from '#config/environment.config.js';
 import { createWebBrowserTool } from '#api/tools/tools/tool-web-browser.js';
 import { editFileTool } from '#api/tools/tools/tool-edit-file.js';
-import { imageAnalysisTool } from '#api/tools/tools/tool-image-analysis.js';
+import { testModelTool } from '#api/tools/tools/tool-test-model.js';
+import { editTestsTool } from '#api/tools/tools/tool-edit-tests.js';
 import { createWebSearchTool } from '#api/tools/tools/tool-web-search.js';
 import { readFileTool } from '#api/tools/tools/tool-read-file.js';
 import { listDirectoryTool } from '#api/tools/tools/tool-list-directory.js';
@@ -48,7 +49,8 @@ export class ToolService {
         forceSummary: false,
       }),
       [toolName.editFile]: editFileTool,
-      [toolName.imageAnalysis]: imageAnalysisTool,
+      [toolName.testModel]: testModelTool,
+      [toolName.editTests]: editTestsTool,
       [toolName.readFile]: readFileTool,
       [toolName.listDirectory]: listDirectoryTool,
       [toolName.createFile]: createFileTool,
@@ -63,7 +65,8 @@ export class ToolService {
       [toolName.webSearch]: toolCategoryToTool[toolName.webSearch].name,
       [toolName.webBrowser]: toolCategoryToTool[toolName.webBrowser].name,
       [toolName.editFile]: toolCategoryToTool[toolName.editFile].name,
-      [toolName.imageAnalysis]: toolCategoryToTool[toolName.imageAnalysis].name,
+      [toolName.testModel]: toolCategoryToTool[toolName.testModel].name,
+      [toolName.editTests]: toolCategoryToTool[toolName.editTests].name,
       [toolName.readFile]: toolCategoryToTool[toolName.readFile].name,
       [toolName.listDirectory]: toolCategoryToTool[toolName.listDirectory].name,
       [toolName.createFile]: toolCategoryToTool[toolName.createFile].name,

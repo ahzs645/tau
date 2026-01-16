@@ -2,7 +2,7 @@ import { createMiddleware } from 'langchain';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { toolName } from '@taucad/chat/constants';
-import type { ImageAnalysisOutput, Observation } from '@taucad/chat';
+import type { TestModelOutput } from '@taucad/chat';
 
 /**
  * Type for a tool result trimmer function.
@@ -11,35 +11,100 @@ import type { ImageAnalysisOutput, Observation } from '@taucad/chat';
 type ToolResultTrimmer<T = unknown> = (result: T) => T;
 
 /**
+ * Type for a content shape detector function.
+ * Returns true if the parsed content matches the expected shape for a tool.
+ */
+type ContentShapeDetector = (content: unknown) => boolean;
+
+/**
+ * Checks if content has the shape of TestModelOutput.
+ * Looks for a failures array and total count.
+ */
+function isTestModelShape(content: unknown): boolean {
+  if (typeof content !== 'object' || content === null) {
+    return false;
+  }
+
+  const record = content as Record<string, unknown>;
+
+  return Array.isArray(record['failures']) && typeof record['total'] === 'number';
+}
+
+/**
+ * Registry of content shape detectors.
+ * Maps tool names to functions that detect if content matches that tool's output shape.
+ * Used as a fallback when message.name is undefined.
+ */
+const contentShapeDetectors: Record<string, ContentShapeDetector> = {
+  [toolName.testModel]: isTestModelShape,
+};
+
+/**
+ * Detects the tool name based on the shape of the parsed content.
+ * Returns undefined if no matching shape is found.
+ */
+function detectToolNameFromContent(content: unknown): string | undefined {
+  for (const [name, detector] of Object.entries(contentShapeDetectors)) {
+    if (detector(content)) {
+      return name;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Registry of tool result trimmers.
  * Each key is a tool name, and the value is a function that trims the result.
  */
 const toolResultTrimmers: Record<string, ToolResultTrimmer> = {
   /**
-   * Trims the image analysis result by removing the src field from observations.
-   * This prevents significant token bloat from base64 image data in the message history.
+   * Trims the test model result by removing the 'passed' count.
+   * The LLM can infer it from total - failures.length if needed.
+   * The output is already minimal (failures only), so this is a minor optimization.
    */
-  [toolName.imageAnalysis](result: unknown): unknown {
-    const typedResult = result as ImageAnalysisOutput;
+  [toolName.testModel](result: unknown): unknown {
+    const typedResult = result as TestModelOutput;
 
-    // Trim src from observations to reduce token usage
-    const trimmedObservations: Observation[] = typedResult.observations.map((obs) => ({
-      ...obs,
-      src: '', // Remove the base64 image data
-    }));
-
+    // Remove 'passed' count - LLM can infer from total - failures.length
     return {
-      ...typedResult,
-      observations: trimmedObservations,
+      failures: typedResult.failures,
+      total: typedResult.total,
     };
   },
 };
 
 /**
- * Type guard to check if a message is a ToolMessage.
+ * Type guard to check if a message is a ToolMessage or a deserialized plain object
+ * that represents a ToolMessage.
+ *
+ * Handles three cases:
+ * 1. Actual ToolMessage instances (via ToolMessage.isInstance)
+ * 2. Plain objects deserialized from checkpoint storage with type: "tool"
+ * 3. Messages that have getType method returning "tool" (deprecated LangChain pattern)
  */
 function isToolMessage(message: BaseMessage): message is ToolMessage {
-  return message instanceof ToolMessage;
+  // Check for actual ToolMessage instances first
+  if (ToolMessage.isInstance(message)) {
+    return true;
+  }
+
+  // Check for deserialized plain objects with type: "tool"
+  // These lose their prototype chain when stored/loaded from PostgresSaver
+  // Cast through unknown to access properties on potentially deserialized objects
+  const messageRecord = message as unknown as Record<string, unknown>;
+
+  // Check for type property (present on deserialized messages)
+  if (messageRecord['type'] === 'tool') {
+    return true;
+  }
+
+  // Check for getType method (deprecated but still used in some places)
+  if (typeof messageRecord['getType'] === 'function') {
+    return (messageRecord['getType'] as () => string)() === 'tool';
+  }
+
+  return false;
 }
 
 /**
@@ -56,33 +121,52 @@ function parseToolContent(content: string): unknown | undefined {
 
 /**
  * Trims tool message content if a trimmer is registered for the tool.
+ * Falls back to content-based detection when message.name is undefined
+ * (common with messages created by `@ai-sdk/langchain` adapter).
+ *
+ * Handles both proper ToolMessage instances and deserialized plain objects.
  */
 function trimToolMessage(message: ToolMessage): BaseMessage {
-  const toolNameValue = message.name;
+  // Access properties defensively to handle both ToolMessage and plain objects
+  const messageRecord = message as unknown as Record<string, unknown>;
+  const {
+    content,
+    name,
+    tool_call_id: toolCallId,
+  } = messageRecord as {
+    content: unknown;
+    name: string | undefined;
+    tool_call_id: string;
+  };
 
-  // Check if we have a trimmer for this tool
+  // Only handle string content (JSON)
+  if (typeof content !== 'string') {
+    return message;
+  }
+
+  const parsed = parseToolContent(content);
+  if (parsed === undefined) {
+    return message;
+  }
+
+  // Try to find trimmer by message.name first, fall back to content detection
+  const toolNameValue = name ?? detectToolNameFromContent(parsed);
   const trimmer = toolNameValue ? toolResultTrimmers[toolNameValue] : undefined;
+
   if (!trimmer) {
     return message;
   }
 
-  // Handle string content (JSON)
-  if (typeof message.content === 'string') {
-    const parsed = parseToolContent(message.content);
-    if (parsed === undefined) {
-      return message;
-    }
+  const trimmed = trimmer(parsed);
 
-    const trimmed = trimmer(parsed);
-
-    return new ToolMessage({
-      ...message,
-      content: JSON.stringify(trimmed),
-    });
-  }
-
-  // For non-string content, return as-is
-  return message;
+  // Create a proper ToolMessage instance with trimmed content
+  // This also rehydrates deserialized plain objects into proper instances
+  return new ToolMessage({
+    content: JSON.stringify(trimmed),
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+    tool_call_id: toolCallId,
+    name: toolNameValue,
+  });
 }
 
 /**
@@ -91,11 +175,11 @@ function trimToolMessage(message: ToolMessage): BaseMessage {
  * Uses the `wrapModelCall` hook to intercept model requests and trim
  * ToolMessage content based on registered trimmers for each tool.
  *
- * This helps reduce token usage by removing large data (like base64 images)
+ * This helps reduce token usage by removing unnecessary data
  * from the message history that the LLM doesn't need to see again.
  *
  * Currently trims:
- * - analyze_image: Removes the `src` field from observations
+ * - test_model: Removes the `passed` count (can be inferred from total - failures.length)
  */
 export const toolResultTrimmerMiddleware = createMiddleware({
   name: 'ToolResultTrimmer',

@@ -37,9 +37,14 @@ const toolMetadata: Partial<Record<ToolName, ToolMetadata>> = {
     description: 'Browse and analyze web pages',
     icon: Eye,
   },
-  [toolName.imageAnalysis]: {
-    label: 'Image Analysis',
-    description: 'Analyze images',
+  [toolName.testModel]: {
+    label: 'Test Model',
+    description: 'Run visual tests on the 3D model',
+    icon: Image,
+  },
+  [toolName.editTests]: {
+    label: 'Edit Tests',
+    description: 'Edit test requirements in test.json',
     icon: Image,
   },
 };

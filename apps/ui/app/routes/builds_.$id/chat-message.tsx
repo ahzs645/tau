@@ -24,7 +24,8 @@ import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatMessageToolWebSearch } from '#routes/builds_.$id/chat-message-tool-web-search.js';
 import { ChatMessageToolWebBrowser } from '#routes/builds_.$id/chat-message-tool-web-browser.js';
 import { ChatMessageToolFileEdit } from '#routes/builds_.$id/chat-message-tool-edit-file.js';
-import { ChatMessageToolImageAnalysis } from '#routes/builds_.$id/chat-message-tool-image-analysis.js';
+import { ChatMessageToolTestModel } from '#routes/builds_.$id/chat-message-tool-test-model.js';
+import { ChatMessageToolEditTests } from '#routes/builds_.$id/chat-message-tool-edit-tests.js';
 import { ChatMessageToolReadFile } from '#routes/builds_.$id/chat-message-tool-read-file.js';
 import { ChatMessageToolListDirectory } from '#routes/builds_.$id/chat-message-tool-list-directory.js';
 import { ChatMessageToolCreateFile } from '#routes/builds_.$id/chat-message-tool-create-file.js';
@@ -208,8 +209,12 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   return <ChatMessageToolFileEdit key={part.toolCallId} part={part} />;
                 }
 
-                case 'tool-analyze_image': {
-                  return <ChatMessageToolImageAnalysis key={part.toolCallId} part={part} />;
+                case 'tool-test_model': {
+                  return <ChatMessageToolTestModel key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-edit_tests': {
+                  return <ChatMessageToolEditTests key={part.toolCallId} part={part} />;
                 }
 
                 case 'tool-transfer_to_cad_expert': {
@@ -259,7 +264,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
 
                 // Internal tools (not rendered in chat)
                 case 'tool-capture_observations': {
-                  // `capture_observations` is an internal tool used by analyze_image
+                  // `capture_observations` is an internal tool used by test_model
                   // It's executed on the client but its output is consumed by the backend
                   return null;
                 }

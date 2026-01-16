@@ -62,7 +62,8 @@ export class ChatService {
     const allTools = [
       // CAD tools
       tools.reasoning,
-      tools.analyze_image,
+      tools.test_model,
+      tools.edit_tests,
       tools.get_kernel_result,
       // Filesystem tools
       tools.edit_file,

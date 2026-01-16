@@ -51,6 +51,22 @@ export class ModelService implements OnModuleInit {
     };
   }
 
+  /**
+   * Check if streaming doubles cache token counts for a given model.
+   * Some providers (like Anthropic) report cache values in both message_start
+   * and message_delta events, causing them to be summed during chunk aggregation.
+   */
+  public streamingDoublesCacheTokens(modelId: string): boolean {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    if (!modelConfig) {
+      return false;
+    }
+
+    const provider = this.providerService.getProvider(modelConfig.provider.id);
+
+    return Boolean(provider.streamingDoublesCacheTokens);
+  }
+
   public normalizeUsageTokens(modelId: string, usage: ChatUsageTokens): ChatUsageTokens {
     const modelConfig = this.models.find((model) => model.id === modelId);
     if (!modelConfig) {
@@ -60,9 +76,12 @@ export class ModelService implements OnModuleInit {
     const provider = this.providerService.getProvider(modelConfig.provider.id);
 
     return {
-      // Some providers include cached read tokens in the input tokens,
+      // Some providers include cached tokens in the input tokens,
       // so we need to subtract them if necessary.
-      inputTokens: usage.inputTokens - (provider.inputTokensIncludesCacheReadTokens ? usage.cacheReadTokens : 0),
+      inputTokens:
+        usage.inputTokens -
+        (provider.inputTokensIncludesCacheReadTokens ? usage.cacheReadTokens : 0) -
+        (provider.inputTokensIncludesCacheWriteTokens ? usage.cacheWriteTokens : 0),
       outputTokens: usage.outputTokens,
       cacheReadTokens: usage.cacheReadTokens,
       cacheWriteTokens: usage.cacheWriteTokens,

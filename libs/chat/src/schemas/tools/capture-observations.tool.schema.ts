@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { observationSchema } from '#schemas/tools/image-analysis.tool.schema.js';
+import { observationSchema } from '#schemas/tools/test-model.tool.schema.js';
 
 /**
  * Input schema for capture_observations tool.

@@ -55,6 +55,8 @@ export class ProviderService {
           apiKey: configService.get('OPENAI_API_KEY', { infer: true }),
         },
         inputTokensIncludesCacheReadTokens: true,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOpenAI({ useResponsesApi: true, ...options }),
       },
       ollama: {
@@ -64,6 +66,8 @@ export class ProviderService {
           baseURL: 'http://localhost:11434',
         },
         inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOllama(options),
       },
       sambanova: {
@@ -74,6 +78,8 @@ export class ProviderService {
           baseURL: 'https://api.sambanova.ai/v1',
         },
         inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOpenAI(options),
       },
       anthropic: {
@@ -81,7 +87,11 @@ export class ProviderService {
         configuration: {
           apiKey: configService.get('ANTHROPIC_API_KEY', { infer: true }),
         },
-        inputTokensIncludesCacheReadTokens: false,
+        // LangChain adds cache tokens to input_tokens for Anthropic streaming
+        inputTokensIncludesCacheReadTokens: true,
+        inputTokensIncludesCacheWriteTokens: true,
+        // LangChain's streaming aggregation doubles cache values (message_start + message_delta)
+        streamingDoublesCacheTokens: true,
         createClass: (options) =>
           new ChatAnthropic({
             ...options,
@@ -95,6 +105,8 @@ export class ProviderService {
           apiKey: undefined,
         },
         inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
         createClass(options) {
           const credentials = configService.get('GOOGLE_VERTEX_AI_CREDENTIALS', { infer: true });
           return new ChatVertexAI({
@@ -112,6 +124,8 @@ export class ProviderService {
           apiKey: configService.get('CEREBRAS_API_KEY', { infer: true }),
         },
         inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatCerebras(options),
       },
     };

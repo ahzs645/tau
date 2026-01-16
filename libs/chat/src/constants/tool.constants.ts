@@ -1,8 +1,9 @@
 export const toolName = {
   webSearch: 'web_search',
   webBrowser: 'web_browser',
-  imageAnalysis: 'analyze_image',
-  captureObservations: 'capture_observations',
+  testModel: 'test_model',
+  editTests: 'edit_tests',
+  captureObservations: 'capture_observations', // Internal tool used by test_model
   readFile: 'read_file',
   editFile: 'edit_file',
   listDirectory: 'list_directory',
@@ -23,7 +24,7 @@ export const toolNames = Object.values(toolName) as [(typeof toolName)[keyof typ
  * Client-side tools that are executed on the frontend via WebSocket.
  * These tools require the client to execute the action and return the result.
  *
- * Note: edit_file and analyze_image are NOT included here because they are
+ * Note: edit_file, edit_tests, and test_model are NOT included here because they are
  * orchestrated on the backend (they call these client tools internally).
  * Server-only tools (transfers, web search) are also NOT included here.
  */

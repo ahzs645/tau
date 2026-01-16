@@ -2,142 +2,59 @@ import { Injectable, Logger } from '@nestjs/common';
 import { openai } from '@ai-sdk/openai';
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
-import type { Observation, ObservationResult, RequirementResult, EvaluationCriteria } from '@taucad/chat';
-import { createImageAnalysisSystemPrompt } from '#api/analysis/prompts/image-analysis-prompt.js';
-import { AnalyzeObservationsResponseDto } from '#api/analysis/analysis.dto.js';
+import type { Observation, TestModelOutput, VisualTestRequirement, TestFailure } from '@taucad/chat';
+import { createMultiViewAnalysisPrompt } from '#api/analysis/prompts/multi-view-analysis-prompt.js';
 
 /**
- * Service for analyzing CAD model observations (screenshots from different views)
+ * Service for running visual tests on CAD models.
+ * Uses a single multi-view LLM call for fast, holistic analysis.
  */
 @Injectable()
 export class AnalysisService {
   private readonly logger = new Logger(AnalysisService.name);
 
   /**
-   * Analyze multiple observations in parallel and aggregate results.
+   * Run visual tests against captured observations.
+   * Makes a SINGLE LLM call with ALL views for holistic evaluation.
    *
-   * @param observations - Array of observations (each with id, side, src)
-   * @param requirements - Array of requirement strings to verify
-   * @returns Aggregated analysis results with per-observation details
+   * @param observations - Array of captured screenshots (6 orthographic views)
+   * @param requirements - Array of visual test requirements from test.json
+   * @returns TestModelOutput with only failures (passed tests are implicit)
    */
-  public async analyzeObservations(
+  public async runVisualTests(
     observations: Observation[],
-    requirements: string[],
-  ): Promise<AnalyzeObservationsResponseDto> {
-    this.logger.log(`Analyzing ${observations.length} observations against ${requirements.length} requirements`);
-    this.logger.debug(
-      'Observation IDs:',
-      observations.map((observation) => observation.id),
-    );
-    this.logger.debug('Requirements:', requirements);
+    requirements: VisualTestRequirement[],
+  ): Promise<TestModelOutput> {
+    this.logger.log(`Running ${requirements.length} visual tests against ${observations.length} views`);
 
-    // Run all analyses in parallel
-    this.logger.log('Starting parallel analysis of all observations...');
-    const observationResults = await Promise.all(
-      observations.map(async (observation) => this.analyzeObservation(observation, requirements)),
-    );
-    this.logger.log('All observations analyzed successfully');
+    // Sort observations to ensure consistent order: front, back, right, left, top, bottom
+    const viewOrder = ['front', 'back', 'right', 'left', 'top', 'bottom'] as const;
+    const sortedObservations = viewOrder
+      .map((side) => observations.find((obs) => obs.side === side))
+      .filter((obs): obs is Observation => obs !== undefined);
 
-    // Aggregate results per requirement using failure-based logic:
-    // - FAILED if ANY view returns 'failed', OR if ALL views return 'indeterminate'
-    // - PASSED if at least one view returns 'passed' and no views return 'failed'
-    const aggregatedResults: RequirementResult[] = await Promise.all(
-      requirements.map(async (requirement, requirementIndex) => {
-        // Collect ALL failed results for this requirement
-        type ViewFailure = { side: string; reason: string; suggestion: string };
-        const viewFailures: ViewFailure[] = [];
+    if (sortedObservations.length !== 6) {
+      this.logger.warn(`Expected 6 views, got ${sortedObservations.length}`);
+    }
 
-        for (const observationResult of observationResults) {
-          const result = observationResult.results[requirementIndex];
-          if (result?.status === 'failed') {
-            viewFailures.push({
-              side: observationResult.side,
-              reason: result.reason,
-              suggestion: result.suggestion,
-            });
-          }
-        }
-
-        if (viewFailures.length > 0) {
-          // If only one failure, use it directly (no summarization needed)
-          const firstFailure = viewFailures[0];
-          if (viewFailures.length === 1 && firstFailure) {
-            return {
-              status: 'failed' as const,
-              requirement,
-              reason: firstFailure.reason,
-              suggestion: firstFailure.suggestion,
-            };
-          }
-
-          // Multiple failures: use LLM to summarize into coherent reason + suggestion
-          const { reason, suggestion } = await this.summarizeFailures(requirement, viewFailures);
-          return { status: 'failed' as const, requirement, reason, suggestion };
-        }
-
-        // Check if ALL views are indeterminate (no view could verify)
-        const allIndeterminate = observationResults.every((observationResult) => {
-          const result = observationResult.results[requirementIndex];
-          return result?.status === 'indeterminate';
-        });
-
-        if (allIndeterminate) {
-          return {
-            status: 'failed' as const,
-            requirement,
-            reason: 'No view could verify this requirement',
-            suggestion: 'Ensure the feature is visible from at least one orthographic view',
-          };
-        }
-
-        // At least one view passed and none failed
-        return { status: 'passed' as const, requirement };
-      }),
-    );
-
-    const evaluationCriteria: EvaluationCriteria = {
-      totalObservations: observations.length,
-    };
-
-    return {
-      observationResults,
-      aggregatedResults,
-      evaluationCriteria,
-    };
-  }
-
-  /**
-   * Analyze a single observation against requirements
-   */
-  private async analyzeObservation(observation: Observation, requirements: string[]): Promise<ObservationResult> {
-    this.logger.debug(`Analyzing observation ${observation.id} (${observation.side} view)`);
-
-    const systemPrompt = createImageAnalysisSystemPrompt(observation.side);
+    const systemPrompt = createMultiViewAnalysisPrompt();
     const userPrompt = this.formatRequirementsPrompt(requirements);
 
     try {
-      // Use generateText with Output.object for structured output generation
-      // This replaces the deprecated generateObject function and uses OpenAI's strict mode
-      //
-      // Note: We use a flattened schema instead of discriminatedUnion because OpenAI's
-      // structured outputs don't support 'oneOf' (which is what Zod's discriminatedUnion compiles to).
-      // The LLM will populate reason/suggestion based on the status value.
-      // OpenAI structured outputs require ALL properties to be required (no optional fields).
-      // We use .nullable() so fields are required but can be null when not applicable.
-      const llmRequirementResultSchema = z.object({
-        status: z.enum(['passed', 'failed', 'indeterminate']),
-        requirement: z.string(),
-        reason: z.string().nullable().describe('Required when status is "failed" or "indeterminate", null otherwise'),
+      // Single LLM call with ALL views
+      const llmResultSchema = z.object({
+        id: z.string(),
+        status: z.enum(['passed', 'failed']),
+        reason: z.string().nullable().describe('Required when status is "failed", null otherwise'),
         suggestion: z.string().nullable().describe('Required when status is "failed", null otherwise'),
       });
 
       const responseSchema = z.object({
-        results: z.array(llmRequirementResultSchema),
+        results: z.array(llmResultSchema),
       });
 
       const { output } = await generateText({
         model: openai('gpt-4o'),
-
         output: Output.object({
           schema: responseSchema,
         }),
@@ -147,127 +64,74 @@ export class AnalysisService {
             role: 'user',
             content: [
               { type: 'text', text: userPrompt },
-              { type: 'image', image: observation.src },
+              // Include all views in order
+              ...sortedObservations.map((obs) => ({
+                type: 'image' as const,
+                image: obs.src,
+              })),
             ],
           },
         ],
       });
 
-      // Transform the flat LLM output to the proper discriminated union type
-      const results: RequirementResult[] = output.results.map((result) => {
-        switch (result.status) {
-          case 'passed': {
-            return { status: 'passed' as const, requirement: result.requirement };
-          }
+      // Extract only failures
+      const failures: TestFailure[] = output.results
+        .filter((result) => result.status === 'failed')
+        .map((result) => {
+          // Find the original requirement to get its description
+          const requirement = requirements.find((req) => req.id === result.id);
 
-          case 'failed': {
-            return {
-              status: 'failed' as const,
-              requirement: result.requirement,
-              reason: result.reason ?? 'No reason provided',
-              suggestion: result.suggestion ?? 'Review the model',
-            };
-          }
+          return {
+            id: result.id,
+            requirement: requirement?.description ?? result.id,
+            reason: result.reason ?? 'No reason provided',
+            suggestion: result.suggestion ?? 'Review the model',
+          };
+        });
 
-          case 'indeterminate': {
-            return {
-              status: 'indeterminate' as const,
-              requirement: result.requirement,
-              reason: result.reason ?? 'Unable to determine from this view',
-            };
-          }
+      const passedCount = output.results.filter((r) => r.status === 'passed').length;
 
-          default: {
-            const _exhaustiveCheck: never = result.status;
-            throw new Error(`Invalid status: ${String(_exhaustiveCheck)}`);
-          }
-        }
-      });
+      this.logger.log(`Test results: ${passedCount} passed, ${failures.length} failed`);
 
       return {
-        id: observation.id,
-        side: observation.side,
-        results,
+        failures,
+        passed: passedCount,
+        total: requirements.length,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to analyze observation ${observation.id}: ${errorMessage}`);
+      this.logger.error(`Visual test analysis failed: ${errorMessage}`);
+
       if (error instanceof Error && error.stack) {
         this.logger.debug(`Stack trace: ${error.stack}`);
       }
 
-      // Return failed results for all requirements on error
+      // On error, return all requirements as failed with actionable message
+      const failures: TestFailure[] = requirements.map((req) => ({
+        id: req.id,
+        requirement: req.description,
+        reason: `Analysis error: ${errorMessage}`,
+        suggestion: 'Check API connectivity and retry. If the problem persists, simplify requirements.',
+      }));
+
       return {
-        id: observation.id,
-        side: observation.side,
-        results: requirements.map((requirement) => ({
-          status: 'failed' as const,
-          requirement,
-          reason: `Analysis failed for ${observation.side} view: ${errorMessage}`,
-          suggestion: 'Retry the analysis',
-        })),
+        failures,
+        passed: 0,
+        total: requirements.length,
       };
     }
   }
 
   /**
-   * Format requirements into a prompt for the image analyzer
+   * Format requirements into a user prompt for the multi-view analyzer.
    */
-  private formatRequirementsPrompt(requirements: string[]): string {
-    const requirementsList = requirements.map((requirement, index) => `${index + 1}. ${requirement}`).join('\n');
-    return `Please analyze this CAD model screenshot and verify the following requirements:\n\n${requirementsList}`;
-  }
+  private formatRequirementsPrompt(requirements: VisualTestRequirement[]): string {
+    const requirementsList = requirements.map((req) => `- ID: ${req.id}\n  Requirement: ${req.description}`).join('\n');
 
-  /**
-   * Summarize multiple view failures into a single coherent reason and suggestion.
-   * Uses a fast text model to synthesize all failures intelligently.
-   */
-  private async summarizeFailures(
-    requirement: string,
-    viewFailures: Array<{ side: string; reason: string; suggestion: string }>,
-  ): Promise<{ reason: string; suggestion: string }> {
-    this.logger.debug(`Summarizing ${viewFailures.length} failures for requirement: ${requirement}`);
+    return `Verify the following requirements against the 6 orthographic views provided:
 
-    const failureDetails = viewFailures
-      .map((failure) => `${failure.side.toUpperCase()}: ${failure.reason} → Suggestion: ${failure.suggestion}`)
-      .join('\n');
+${requirementsList}
 
-    const responseSchema = z.object({
-      reason: z.string(),
-      suggestion: z.string(),
-    });
-
-    try {
-      const { output } = await generateText({
-        model: openai('gpt-4o-mini'),
-        output: Output.object({
-          schema: responseSchema,
-        }),
-        system: `You are a helpful assistant that summarizes CAD model verification failures. Given multiple view-specific failures for a single requirement, synthesize them into ONE clear reason and ONE actionable suggestion. Be concise but preserve all important details.`,
-        messages: [
-          {
-            role: 'user',
-            content: `Summarize these CAD model verification failures for requirement "${requirement}" into ONE clear reason and ONE actionable suggestion:
-
-${failureDetails}`,
-          },
-        ],
-      });
-
-      return {
-        reason: output.reason,
-        suggestion: output.suggestion,
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to summarize failures: ${errorMessage}`);
-
-      // Fallback: use the first failure's details (viewFailures is guaranteed non-empty)
-      const firstFailure = viewFailures[0] ?? { reason: 'Unknown failure', suggestion: 'Review the model' };
-      return {
-        reason: `Failed in ${viewFailures.length} views. ${firstFailure.reason}`,
-        suggestion: firstFailure.suggestion,
-      };
-    }
+The views are provided in order: FRONT, BACK, RIGHT, LEFT, TOP, BOTTOM.`;
   }
 }

@@ -114,12 +114,21 @@ function createErrorLocation(
  * - `ERROR: Parser error in file "foo.scad", line 10: syntax error`
  * - `ERROR: Parser error: syntax error in file foo.scad, line 10`
  * - `WARNING: message in file foo.scad, line 10`
+ * - `ERROR: Assertion 'condition' failed in file "foo.scad", line 10`
+ * - `ERROR: message in file "foo.scad", line 10` (generic error)
+ * - `Current top level object is empty.` (special case: no geometry rendered)
  *
  * @param message - The stderr line to parse.
  * @param addError - Callback to invoke when an error is parsed.
  * @param getFileContents - Optional function to lazily fetch file content for calculating column positions.
+ * @param activeFileName - Optional active file name for warnings without file location.
  */
-export function parseStderrLine(message: string, addError: AddErrorFn, getFileContents?: GetFileContentsFn): void {
+export function parseStderrLine(
+  message: string,
+  addError: AddErrorFn,
+  getFileContents?: GetFileContentsFn,
+  activeFileName?: string,
+): void {
   // Pattern 1: ERROR: Parser error in file "foo.scad", line 10: syntax error
   let match = /^ERROR: Parser error in file "([^"]+)", line (\d+): (.*)$/.exec(message);
   if (match) {
@@ -160,6 +169,49 @@ export function parseStderrLine(message: string, addError: AddErrorFn, getFileCo
       message: warning ?? 'Unknown warning',
       location: createErrorLocation(fileName, lineNumber, getFileContents),
       type: 'compilation',
+      severity: 'warning',
+    });
+    return;
+  }
+
+  // Pattern 4: Assertion failures - ERROR: Assertion 'condition' failed in file "foo.scad", line 10
+  match = /^ERROR: (Assertion .*?) in file "?([^",]+)"?, line (\d+)/.exec(message);
+  if (match) {
+    const [, error, file, line] = match;
+    const fileName = normalizeFileName(file ?? '');
+    const lineNumber = Number(line);
+    addError({
+      message: error ?? 'Assertion failed',
+      location: createErrorLocation(fileName, lineNumber, getFileContents),
+      type: 'runtime',
+      severity: 'error',
+    });
+    return;
+  }
+
+  // Pattern 5: Generic ERROR messages with file/line info
+  match = /^ERROR: (.*?) in file "?([^",]+)"?, line (\d+)/.exec(message);
+  if (match) {
+    const [, error, file, line] = match;
+    const fileName = normalizeFileName(file ?? '');
+    const lineNumber = Number(line);
+    addError({
+      message: error ?? 'Unknown error',
+      location: createErrorLocation(fileName, lineNumber, getFileContents),
+      type: 'runtime',
+      severity: 'error',
+    });
+    return;
+  }
+
+  // Pattern 6: Empty top level object (no geometry to render)
+  // This occurs when a file only defines modules but doesn't call any of them
+  if (message.includes('Current top level object is empty')) {
+    addError({
+      message:
+        'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
+      location: activeFileName ? { fileName: activeFileName, startLineNumber: 1, startColumn: 1 } : undefined,
+      type: 'runtime',
       severity: 'warning',
     });
   }

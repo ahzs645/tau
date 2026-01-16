@@ -3,7 +3,7 @@ export * from '#schemas/tools/diff.schema.js';
 export * from '#schemas/tools/web-search.tool.schema.js';
 export * from '#schemas/tools/web-browser.tool.schema.js';
 export * from '#schemas/tools/edit-file.tool.schema.js';
-export * from '#schemas/tools/image-analysis.tool.schema.js';
+export * from '#schemas/tools/test-model.tool.schema.js';
 export * from '#schemas/tools/read-file.tool.schema.js';
 export * from '#schemas/tools/list-directory.tool.schema.js';
 export * from '#schemas/tools/create-file.tool.schema.js';
