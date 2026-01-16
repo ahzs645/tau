@@ -18,6 +18,7 @@ function encodeText(text: string): Uint8Array {
 
 /**
  * Create a mock FileManager that returns files from an in-memory record.
+ * Handles path normalization to strip basePath prefixes.
  */
 function createMockFileManager(files: Record<string, string>): FileManager {
   const encodedFiles: Record<string, Uint8Array> = {};
@@ -26,17 +27,27 @@ function createMockFileManager(files: Record<string, string>): FileManager {
     encodedFiles[path] = encodeText(content);
   }
 
+  // Normalize path by removing leading slashes and basePath prefixes
+  const normalizePath = (filepath: string): string => {
+    return filepath.replace(/^\/+/, '').replace(/^builds\/test\//, '');
+  };
+
   return {
-    readFile: vi.fn(async (filepath: string) => {
-      const content = encodedFiles[filepath];
+    readFile: vi.fn(async (filepath: string, encoding?: string) => {
+      const normalizedPath = normalizePath(filepath);
+      const content = encodedFiles[normalizedPath];
 
       if (!content) {
         throw new Error(`File not found: ${filepath}`);
       }
 
+      if (encoding === 'utf8') {
+        return new TextDecoder().decode(content);
+      }
+
       return content;
     }),
-    exists: vi.fn(async (filepath: string) => filepath in encodedFiles),
+    exists: vi.fn(async (filepath: string) => normalizePath(filepath) in encodedFiles),
     readdir: vi.fn(async () => Object.keys(encodedFiles)),
     getDirectoryContents: vi.fn(async () => encodedFiles),
     copyDirectory: vi.fn(),
@@ -104,10 +115,12 @@ function createGeometryMockFileManager(files: Record<string, string>): FileManag
 
 /**
  * Create a GeometryFile for testing.
+ * Note: filename should be relative (e.g., 'main.scad' or 'project/main.scad'),
+ * path is the base directory path where files are stored.
  */
 function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
   return {
-    filename: `${basePath}/${filename}`,
+    filename,
     path: basePath,
   };
 }
@@ -409,6 +422,250 @@ describe('OpenScadWorker', () => {
           additionalProperties: false,
         });
       });
+    });
+
+    describe('File scoping (use/include)', () => {
+      it('should NOT extract parameters from files not referenced via use or include', async () => {
+        // This test verifies the bug fix: parameters should only come from files
+        // that are actually referenced via use/include, not all .scad files in project
+        const { jsonSchema, defaultParameters } = await extractParameters(
+          {
+            'main.scad': `
+              // No use or include statements - should only have main_param
+              main_param = 100;
+              cube([main_param, 10, 10]);
+            `,
+            'unrelated.scad': `
+              // This file is NOT referenced by main.scad
+              unrelated_param = 50;
+              sphere(r=unrelated_param);
+            `,
+            'another_unrelated.scad': `
+              another_param = 25;
+            `,
+          },
+          'main.scad',
+        );
+
+        // Should ONLY have main_param, NOT unrelated_param or another_param
+        expect(jsonSchema).toEqual({
+          type: 'object',
+          properties: {
+            main_param: { type: 'number', title: 'main_param', default: 100 },
+          },
+          additionalProperties: false,
+        });
+
+        expect(defaultParameters).toEqual({ main_param: 100 });
+      });
+
+      it('should extract parameters from files referenced via include', async () => {
+        const { defaultParameters } = await extractParameters(
+          {
+            'main.scad': `
+              include <lib/config.scad>
+              main_size = 100;
+              cube([main_size, lib_size, 10]);
+            `,
+            'lib/config.scad': `
+              lib_size = 50;
+            `,
+            'unrelated.scad': `
+              // NOT included - should be ignored
+              ignored_param = 25;
+            `,
+          },
+          'main.scad',
+        );
+
+        // Should have main_size and lib_size, but NOT ignored_param
+        expect(defaultParameters).toHaveProperty('main_size', 100);
+        expect(defaultParameters).toHaveProperty('Config');
+        expect((defaultParameters as Record<string, Record<string, unknown>>)['Config']).toHaveProperty('lib_size', 50);
+        expect(defaultParameters).not.toHaveProperty('ignored_param');
+        expect(defaultParameters).not.toHaveProperty('Unrelated');
+      });
+
+      /**
+       * IMPORTANT NOTE:
+       * This contrasts with the OpenSCAD `use` behavior, where parameters are not extracted
+       * from the referenced file. However this implementation DOES extract parameters from
+       * the referenced file for better usability to ensure the user can modify those parameters.
+       * 
+       * @see https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/Include_Statement
+       */
+      it('should extract parameters from files referenced via use', async () => {
+        const { defaultParameters } = await extractParameters(
+          {
+            'main.scad': `
+              use <helpers.scad>
+              main_value = 100;
+              my_helper(main_value);
+            `,
+            'helpers.scad': `
+              helper_param = 20;
+              module my_helper(v) { cube([v, helper_param, 10]); }
+            `,
+            'not_used.scad': `
+              // NOT used - should be ignored
+              not_used_param = 999;
+            `,
+          },
+          'main.scad',
+        );
+
+        // Should have main_value and helper_param, but NOT not_used_param
+        expect(defaultParameters).toHaveProperty('main_value', 100);
+        expect(defaultParameters).toHaveProperty('Helpers');
+        expect((defaultParameters as Record<string, Record<string, unknown>>)['Helpers']).toHaveProperty(
+          'helper_param',
+          20,
+        );
+        expect(defaultParameters).not.toHaveProperty('not_used_param');
+        expect(defaultParameters).not.toHaveProperty('Not_used');
+      });
+
+      it('should recursively extract parameters from nested includes', async () => {
+        const { defaultParameters } = await extractParameters(
+          {
+            'main.scad': `
+              include <level1.scad>
+              main_param = 1;
+            `,
+            'level1.scad': `
+              include <level2.scad>
+              level1_param = 2;
+            `,
+            'level2.scad': `
+              level2_param = 3;
+            `,
+            'not_included.scad': `
+              // NOT in the include chain
+              ignored = 999;
+            `,
+          },
+          'main.scad',
+        );
+
+        // Should have all params from the include chain
+        expect(defaultParameters).toHaveProperty('main_param', 1);
+        expect(defaultParameters).toHaveProperty('Level1');
+        expect((defaultParameters as Record<string, Record<string, unknown>>)['Level1']).toHaveProperty(
+          'level1_param',
+          2,
+        );
+        expect(defaultParameters).toHaveProperty('Level2');
+        expect((defaultParameters as Record<string, Record<string, unknown>>)['Level2']).toHaveProperty(
+          'level2_param',
+          3,
+        );
+        // Should NOT have params from non-included file
+        expect(defaultParameters).not.toHaveProperty('ignored');
+        expect(defaultParameters).not.toHaveProperty('Not_included');
+      });
+
+      it('should handle mixed use and include statements', async () => {
+        const { defaultParameters } = await extractParameters(
+          {
+            'main.scad': `
+              include <config.scad>
+              use <utils.scad>
+              main_val = 10;
+            `,
+            'config.scad': `
+              config_val = 20;
+            `,
+            'utils.scad': `
+              utils_val = 30;
+            `,
+            'orphan.scad': `
+              orphan_val = 40;
+            `,
+          },
+          'main.scad',
+        );
+
+        expect(defaultParameters).toHaveProperty('main_val', 10);
+        expect(defaultParameters).toHaveProperty('Config');
+        expect(defaultParameters).toHaveProperty('Utils');
+        expect(defaultParameters).not.toHaveProperty('orphan_val');
+        expect(defaultParameters).not.toHaveProperty('Orphan');
+      });
+
+      it('should handle circular includes without infinite loop', async () => {
+        const { defaultParameters } = await extractParameters(
+          {
+            'a.scad': `
+              include <b.scad>
+              a_param = 1;
+            `,
+            'b.scad': `
+              include <a.scad>
+              b_param = 2;
+            `,
+          },
+          'a.scad',
+        );
+
+        // Should extract from both files without hanging
+        expect(defaultParameters).toHaveProperty('a_param', 1);
+        expect(defaultParameters).toHaveProperty('B');
+        expect((defaultParameters as Record<string, Record<string, unknown>>)['B']).toHaveProperty('b_param', 2);
+      });
+
+      it('should handle relative paths with ../', async () => {
+        const { defaultParameters } = await extractParameters(
+          {
+            'project/main.scad': `
+              include <../lib/shared.scad>
+              project_param = 100;
+            `,
+            'lib/shared.scad': `
+              shared_param = 50;
+            `,
+            'other/unused.scad': `
+              unused_param = 999;
+            `,
+          },
+          'project/main.scad',
+        );
+
+        expect(defaultParameters).toHaveProperty('project_param', 100);
+        expect(defaultParameters).toHaveProperty('Shared');
+        expect((defaultParameters as Record<string, Record<string, unknown>>)['Shared']).toHaveProperty(
+          'shared_param',
+          50,
+        );
+        expect(defaultParameters).not.toHaveProperty('unused_param');
+      });
+
+      it(
+        'should stop recursion at depth limit of 50',
+        async () => {
+          // Create a deeply nested chain that would exceed 50 levels
+          const files: Record<string, string> = {};
+
+          // Create 60 levels of nesting
+          for (let i = 0; i < 60; i++) {
+            const nextFile = i < 59 ? `include <level${i + 1}.scad>\n` : '';
+            files[`level${i}.scad`] = `${nextFile}param${i} = ${i};`;
+          }
+
+          const { defaultParameters } = await extractParameters(files, 'level0.scad');
+
+          // Should have params from first 50 levels (0-49), but not beyond
+          expect(defaultParameters).toHaveProperty('param0', 0);
+
+          // Check that we have Level49 but not Level50
+          // (main file is depth 0, so Level49 is the 50th file)
+          expect(defaultParameters).toHaveProperty('Level49');
+
+          // Level50 and beyond should NOT be included (depth limit reached)
+          expect(defaultParameters).not.toHaveProperty('Level50');
+          expect(defaultParameters).not.toHaveProperty('param50');
+        },
+        { timeout: 30_000 },
+      );
     });
 
     describe('Edge cases', () => {

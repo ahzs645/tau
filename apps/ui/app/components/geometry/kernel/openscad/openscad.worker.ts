@@ -85,20 +85,22 @@ export class OpenScadWorker extends KernelWorker {
 
   protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
     try {
-      // Get all .scad files in the project to extract parameters from each
-      // OpenSCAD's customizer only sees parameters declared in the main file,
-      // not from included files. We need to extract from each file separately.
-      const allScadFiles = await this.getAllScadFiles();
+      // Get only .scad files that are transitively referenced from the main file
+      // via use/include statements. This prevents extracting parameters from
+      // unrelated files in the project.
+      // Use activeFilePath (the full relative path) to correctly resolve relative includes.
+      const mainFilePath = this.activeFilePath || filename;
+      const referencedFiles = await this.getReferencedScadFiles(mainFilePath);
 
-      this.debug(`Extracting parameters from ${allScadFiles.length} files`, {
+      this.debug(`Extracting parameters from ${referencedFiles.length} referenced files`, {
         operation: 'extractParameters',
-        data: { files: allScadFiles, mainFile: filename },
+        data: { files: referencedFiles, mainFile: filename },
       });
 
-      // Collect parameters from all files
+      // Collect parameters from all referenced files
       const allParameters: OpenScadParameterExport['parameters'] = [];
 
-      for (const scadFile of allScadFiles) {
+      for (const scadFile of referencedFiles) {
         // Create a fresh OpenSCAD instance for each file
         // This is necessary because OpenSCAD WASM doesn't properly support multiple callMain invocations
         // eslint-disable-next-line no-await-in-loop -- Sequential processing required: each file needs its own instance
@@ -111,7 +113,8 @@ export class OpenScadWorker extends KernelWorker {
         }
 
         // Add file context to group name for parameters from non-main files
-        const isMainFile = scadFile === filename;
+        // Compare with mainFilePath (full relative path) not filename (basename)
+        const isMainFile = scadFile === mainFilePath;
         for (const parameter of parameters) {
           // Skip internal OpenSCAD parameters
           if (parameter.name.startsWith('$')) {
@@ -362,21 +365,164 @@ export class OpenScadWorker extends KernelWorker {
   }
 
   /**
-   * Get all .scad files in the current project directory.
-   *
-   * @returns Array of relative file paths to .scad files.
+   * Maximum recursion depth for resolving use/include dependencies.
+   * Prevents infinite loops in circular dependencies.
    */
-  private async getAllScadFiles(): Promise<string[]> {
-    const files = await this.fileManager.getDirectoryContents(this.basePath);
-    const scadFiles: string[] = [];
+  private static readonly MAX_INCLUDE_DEPTH = 50;
 
-    for (const [relativePath] of Object.entries(files)) {
-      if (relativePath.endsWith('.scad')) {
-        scadFiles.push(relativePath);
+  /**
+   * Regex to match OpenSCAD use and include statements.
+   * Matches: use <path/to/file.scad> or include <path/to/file.scad>
+   * Also handles quoted paths: use "path/to/file.scad"
+   */
+  private static readonly USE_INCLUDE_REGEX = /^\s*(?:use|include)\s*[<"]([^>"]+)[>"]/gm;
+
+  /**
+   * Parse use and include statements from OpenSCAD code.
+   *
+   * @param code - The OpenSCAD source code.
+   * @returns Array of file paths referenced via use or include.
+   */
+  private parseUseIncludeStatements(code: string): string[] {
+    const paths: string[] = [];
+    let match: RegExpExecArray | null;
+
+    // Reset regex state for fresh matching
+    OpenScadWorker.USE_INCLUDE_REGEX.lastIndex = 0;
+
+    while ((match = OpenScadWorker.USE_INCLUDE_REGEX.exec(code)) !== null) {
+      const path = match[1];
+      if (path) {
+        paths.push(path);
       }
     }
 
-    return scadFiles;
+    return paths;
+  }
+
+  /**
+   * Resolve a relative path from a base file's directory.
+   * Handles ../ and ./ path segments.
+   *
+   * @param basePath - The path of the file containing the use/include statement.
+   * @param relativePath - The relative path from the use/include statement.
+   * @returns The resolved absolute path relative to the project root.
+   */
+  private resolveIncludePath(basePath: string, relativePath: string): string {
+    // Get the directory of the base file
+    const lastSlash = basePath.lastIndexOf('/');
+    const baseDir = lastSlash >= 0 ? basePath.slice(0, lastSlash) : '';
+
+    // Combine base directory with relative path
+    const combinedPath = baseDir ? `${baseDir}/${relativePath}` : relativePath;
+
+    // Normalize the path by resolving . and .. segments
+    const segments = combinedPath.split('/');
+    const resolved: string[] = [];
+
+    for (const segment of segments) {
+      if (segment === '..') {
+        resolved.pop();
+      } else if (segment !== '.' && segment !== '') {
+        resolved.push(segment);
+      }
+    }
+
+    return resolved.join('/');
+  }
+
+  /**
+   * Get the project root path by stripping the subdirectory from basePath.
+   * This is the original file.path from the GeometryFile.
+   *
+   * @returns The project root path (e.g., '/builds/test' for basePath '/builds/test/project').
+   */
+  private getProjectRootPath(): string {
+    // Extract the subdirectory from activeFilePath (e.g., 'project' from 'project/main.scad')
+    const lastSlash = this.activeFilePath.lastIndexOf('/');
+    const subDirectory = lastSlash >= 0 ? this.activeFilePath.slice(0, lastSlash) : '';
+
+    // Remove the subdirectory from basePath to get the project root
+    if (subDirectory && this.basePath.endsWith(`/${subDirectory}`)) {
+      return this.basePath.slice(0, -(subDirectory.length + 1));
+    }
+
+    return this.basePath;
+  }
+
+  /**
+   * Read a file relative to the project root, not relative to basePath.
+   * Used for dependency resolution where paths may be outside the main file's directory.
+   *
+   * @param relativePath - Path relative to the project root.
+   * @returns The file contents as string.
+   */
+  private async readFileFromProjectRoot(relativePath: string): Promise<string> {
+    const projectRoot = this.getProjectRootPath();
+    const fullPath = `${projectRoot}/${relativePath}`;
+    // Cast is needed because Remote<FileManager> doesn't properly resolve overloads
+    return this.fileManager.readFile(fullPath, 'utf8') as unknown as Promise<string>;
+  }
+
+  /**
+   * Get all .scad files that are transitively referenced from the main file
+   * via use and include statements.
+   *
+   * @param mainFile - The main entry point file (relative to project root).
+   * @returns Array of relative file paths to .scad files (including the main file).
+   */
+  private async getReferencedScadFiles(mainFile: string): Promise<string[]> {
+    const visited = new Set<string>();
+    const result: string[] = [];
+
+    // Recursive helper with depth tracking
+    const resolveFile = async (filePath: string, depth: number): Promise<void> => {
+      // Normalize path for consistent tracking
+      const normalizedPath = filePath.replace(/^\/+/, '');
+
+      // Check depth limit
+      if (depth >= OpenScadWorker.MAX_INCLUDE_DEPTH) {
+        this.debug(`Max include depth (${OpenScadWorker.MAX_INCLUDE_DEPTH}) reached for ${normalizedPath}`, {
+          operation: 'getReferencedScadFiles',
+        });
+        return;
+      }
+
+      // Skip if already visited (handles circular dependencies)
+      if (visited.has(normalizedPath)) {
+        return;
+      }
+
+      visited.add(normalizedPath);
+
+      // Try to read the file from project root (not basePath)
+      // This allows resolving paths like '../lib/shared.scad' correctly
+      let code: string;
+      try {
+        code = await this.readFileFromProjectRoot(normalizedPath);
+      } catch {
+        this.debug(`Could not read file ${normalizedPath} for dependency resolution`, {
+          operation: 'getReferencedScadFiles',
+        });
+        return;
+      }
+
+      // Add this file to results
+      result.push(normalizedPath);
+
+      // Parse use/include statements and recursively resolve
+      const dependencies = this.parseUseIncludeStatements(code);
+
+      for (const depPath of dependencies) {
+        const resolvedPath = this.resolveIncludePath(normalizedPath, depPath);
+        // eslint-disable-next-line no-await-in-loop -- Sequential processing required for proper depth tracking
+        await resolveFile(resolvedPath, depth + 1);
+      }
+    };
+
+    await resolveFile(mainFile, 0);
+
+    return result;
   }
 
   /**
