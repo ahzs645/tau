@@ -9,20 +9,11 @@ import type {
   GetKernelResultOutput,
   CaptureObservationsOutput,
   ReadFileOutput,
-  ListDirectoryOutput,
-  GrepOutput,
-  GlobSearchOutput,
 } from '@taucad/chat';
 
 // =============================================================================
 // Configuration
 // =============================================================================
-
-/**
- * Number of recent tool messages to keep in full detail.
- * Tool messages beyond this threshold will have progressive trimming applied.
- */
-const recencyWindowSize = 5;
 
 /**
  * Type for a tool result trimmer function.
@@ -333,77 +324,6 @@ const toolResultTrimmers: Record<string, ToolResultTrimmer> = {
 };
 
 // =============================================================================
-// Progressive Trimmers (Applied to Older Messages)
-// =============================================================================
-// These trimmers are applied to tool messages beyond the recency window.
-// They replace detailed content with summaries to further reduce token usage.
-
-/**
- * Registry of progressive tool result trimmers.
- * Applied to older messages (beyond recencyWindowSize) for additional token savings.
- * These replace detailed content with compact summaries.
- */
-const progressiveToolResultTrimmers: Record<string, ToolResultTrimmer> = {
-  /**
-   * Progressively trims read_file by replacing content with a summary.
-   * The LLM has already processed this content in an earlier turn.
-   */
-  [toolName.readFile](result: unknown): unknown {
-    const typedResult = result as ReadFileOutput;
-
-    return {
-      // Replace content with a summary
-      content: `[File content trimmed: ${typedResult.totalLines} lines]`,
-      totalLines: typedResult.totalLines,
-      ...(typedResult.startLine ? { startLine: typedResult.startLine } : {}),
-    };
-  },
-
-  /**
-   * Progressively trims list_directory by replacing entries with a summary.
-   */
-  [toolName.listDirectory](result: unknown): unknown {
-    const typedResult = result as ListDirectoryOutput;
-    const fileCount = typedResult.entries.filter((entry) => entry.type === 'file').length;
-    const dirCount = typedResult.entries.filter((entry) => entry.type === 'dir').length;
-
-    return {
-      // Replace entries with a summary
-      entries: `[Directory listing trimmed: ${fileCount} files, ${dirCount} directories]`,
-      path: typedResult.path,
-    };
-  },
-
-  /**
-   * Progressively trims grep by replacing matches with a summary.
-   */
-  [toolName.grep](result: unknown): unknown {
-    const typedResult = result as GrepOutput;
-    const uniqueFiles = new Set(typedResult.matches.map((m) => m.file)).size;
-
-    return {
-      // Replace matches with a summary
-      matches: `[Grep results trimmed: ${typedResult.totalMatches} matches in ${uniqueFiles} files]`,
-      totalMatches: typedResult.totalMatches,
-      ...(typedResult.truncated ? { truncated: typedResult.truncated } : {}),
-    };
-  },
-
-  /**
-   * Progressively trims glob_search by replacing files with a summary.
-   */
-  [toolName.globSearch](result: unknown): unknown {
-    const typedResult = result as GlobSearchOutput;
-
-    return {
-      // Replace files with a summary
-      files: `[File list trimmed: ${typedResult.totalFiles} files matched]`,
-      totalFiles: typedResult.totalFiles,
-    };
-  },
-};
-
-// =============================================================================
 // Stale File Detection
 // =============================================================================
 // Track which files have been modified (create_file/edit_file) to invalidate
@@ -558,8 +478,6 @@ function parseToolContent(content: string): unknown | undefined {
  * Context passed to trimToolMessage for stale file detection.
  */
 type TrimContext = {
-  /** If true, applies progressive trimming for additional token savings */
-  isOldMessage: boolean;
   /** If true, the file was modified after this read (for read_file only) */
   isStaleRead: boolean;
 };
@@ -572,10 +490,10 @@ type TrimContext = {
  * Handles both proper ToolMessage instances and deserialized plain objects.
  *
  * @param message - The tool message to trim
- * @param context - Trimming context (recency, stale status)
+ * @param context - Trimming context (stale status)
  */
 function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessage {
-  const { isOldMessage, isStaleRead } = context;
+  const { isStaleRead } = context;
   // Access properties defensively to handle both ToolMessage and plain objects
   const messageRecord = message as unknown as Record<string, unknown>;
   const {
@@ -601,9 +519,9 @@ function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessag
   // Try to find trimmer by message.name first, fall back to content detection
   const toolNameValue = name ?? detectToolNameFromContent(parsed);
 
-  // Apply immediate trimmer first (if available)
-  const immediateTrimmer = toolNameValue ? toolResultTrimmers[toolNameValue] : undefined;
-  let trimmed = immediateTrimmer ? immediateTrimmer(parsed) : parsed;
+  // Apply immediate trimmer (if available)
+  const trimmer = toolNameValue ? toolResultTrimmers[toolNameValue] : undefined;
+  let trimmed = trimmer ? trimmer(parsed) : parsed;
 
   // Handle stale read_file results (file was modified after this read)
   if (isStaleRead && toolNameValue === toolName.readFile) {
@@ -613,13 +531,6 @@ function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessag
       totalLines: typedResult.totalLines,
       ...(typedResult.startLine ? { startLine: typedResult.startLine } : {}),
     };
-  }
-  // Apply progressive trimmer for old messages (if available and not already stale)
-  else if (isOldMessage) {
-    const progressiveTrimmer = toolNameValue ? progressiveToolResultTrimmers[toolNameValue] : undefined;
-    if (progressiveTrimmer) {
-      trimmed = progressiveTrimmer(trimmed);
-    }
   }
 
   // If no trimming was done, return original message
@@ -646,26 +557,16 @@ function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessag
  * This helps reduce token usage by removing unnecessary data
  * from the message history that the LLM doesn't need to see again.
  *
- * Trimming strategy:
- * 1. Immediate trimming (all messages): Removes redundant data like full file content
- * 2. Progressive trimming (older messages): Replaces content with summaries
- * 3. Stale file detection: Marks read_file results as stale if file was modified after
+ * Trimming is applied uniformly to all messages to ensure stable content
+ * for Anthropic prompt caching. Consistent content enables cache hits
+ * across conversation turns.
  *
- * The recency window (recencyWindowSize) determines which messages get
- * progressive trimming. Messages beyond this window are considered "old".
- *
- * Immediate trimming (all messages):
+ * Trimming (all messages):
  * - test_model: Removes the `passed` count (can be inferred from total - failures.length)
  * - create_file: Removes `diffStats.originalContent` and `diffStats.modifiedContent`
  * - edit_file: Removes `diffStats.originalContent` and `diffStats.modifiedContent`
- * - get_kernel_result: Removes `stack` and `stackFrames` from kernel issues
+ * - get_kernel_result: Keeps essential error info for debugging
  * - capture_observations: Removes base64 `src` image data from observations
- *
- * Progressive trimming (for older messages beyond recency window):
- * - read_file: Replaces content with "[File content trimmed: N lines]"
- * - list_directory: Replaces entries with summary count
- * - grep: Replaces matches with summary count
- * - glob_search: Replaces files with summary count
  *
  * Stale detection:
  * - read_file: If file was modified by create_file/edit_file after this read,
@@ -677,28 +578,12 @@ export const toolResultTrimmerMiddleware = createMiddleware({
   async wrapModelCall(request, handler) {
     const { messages } = request;
 
-    // First pass: identify tool message indices (from the end)
-    // We need to count from the end to determine recency
-    const toolMessageIndices: number[] = [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      if (message && isToolMessage(message)) {
-        toolMessageIndices.push(i);
-      }
-    }
-
-    // Create a set of indices that are "old" (beyond recency window)
-    // The first recencyWindowSize tool messages (from the end) are recent
-    const oldToolMessageIndices = new Set(toolMessageIndices.slice(recencyWindowSize));
-
     // Build file modification map for stale detection
     const fileModificationMap = buildFileModificationMap(messages);
 
-    // Second pass: trim messages with recency-aware and stale-aware trimming
+    // Trim messages with stale-aware trimming
     const trimmedMessages = messages.map((message, index) => {
       if (isToolMessage(message)) {
-        const isOldMessage = oldToolMessageIndices.has(index);
-
         // Check if this is a stale read_file result
         let isStaleRead = false;
         const messageRecord = message as unknown as Record<string, unknown>;
@@ -727,7 +612,7 @@ export const toolResultTrimmerMiddleware = createMiddleware({
           }
         }
 
-        return trimToolMessage(message, { isOldMessage, isStaleRead });
+        return trimToolMessage(message, { isStaleRead });
       }
 
       return message;

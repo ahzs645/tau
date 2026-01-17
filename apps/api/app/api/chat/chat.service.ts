@@ -19,6 +19,7 @@ import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/git-commi
 import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
 import type { Environment } from '#config/environment.config.js';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
+import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
 
 @Injectable()
 export class ChatService {
@@ -79,12 +80,29 @@ export class ChatService {
       tools.web_browser,
     ].filter((tool) => tool !== undefined);
 
-    // Build the system prompt with cache control for Anthropic prompt caching
+    // ==========================================================================
+    // Prompt Caching Strategy (2 breakpoints)
+    // ==========================================================================
+    // We use TWO cache breakpoints for optimal caching:
+    //
+    // 1. SYSTEM MESSAGE (here): Large (~15K+ tokens), stable content.
+    //    - Cached via createCachedSystemMessage
+    //    - Written once, read on every subsequent model call
+    //    - Cannot be moved to middleware because systemPrompt is passed
+    //      separately to createAgent, not in the messages array
+    //
+    // 2. LAST MESSAGE (middleware): Dynamic, growing conversation.
+    //    - Cached via promptCachingMiddleware on every model call
+    //    - Incrementally caches as conversation grows
+    //    - Handles HumanMessage, AIMessage, and ToolMessage
+    //
+    // Anthropic allows up to 4 breakpoints per request. This 2-breakpoint
+    // strategy ensures the stable system prompt is cached separately from
+    // the dynamic conversation, maximizing cache hits.
+    // ==========================================================================
     const systemPromptText = await getCadSystemPrompt(selectedKernel);
     const systemPrompt = createCachedSystemMessage(systemPromptText);
 
-    // Create a unified agent with createAgent from LangChain v1
-    // Uses SystemMessage with cache control for Anthropic prompt caching
     const agent = createAgent({
       model,
       tools: allTools,
@@ -95,6 +113,8 @@ export class ChatService {
         toolErrorHandlerMiddleware,
         // Trim tool results (e.g., remove base64 images) before sending to the LLM
         toolResultTrimmerMiddleware,
+        // Add cache_control to last message for incremental caching (breakpoint 2)
+        promptCachingMiddleware,
         // Log messages before each model call (for debugging)
         messageLoggingMiddleware,
         // Track token usage and costs after each model call
