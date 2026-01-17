@@ -1,6 +1,6 @@
 import { errorCategory, errorCategories } from '@taucad/types';
 import type { ErrorCategory, ChatError } from '@taucad/types';
-import { categoryTitles } from '@taucad/chat';
+import { errorCategoryTitles } from '@taucad/chat';
 
 /**
  * Checks if error is a client-side network error (never reaches the API).
@@ -70,7 +70,7 @@ export function parseErrorForPersistence(error: Error): ChatError {
   if (isNetworkError(error.message)) {
     return {
       category: errorCategory.network,
-      title: categoryTitles[errorCategory.network],
+      title: errorCategoryTitles[errorCategory.network],
       message: 'Unable to connect to the server. Please check your internet connection.',
       raw: error.message,
     };
@@ -85,7 +85,7 @@ export function parseErrorForPersistence(error: Error): ChatError {
   // Fallback for unexpected formats
   return {
     category: errorCategory.generic,
-    title: categoryTitles[errorCategory.generic],
+    title: errorCategoryTitles[errorCategory.generic],
     message: error.message,
     raw: error.message,
   };

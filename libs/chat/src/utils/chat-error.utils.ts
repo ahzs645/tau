@@ -46,7 +46,7 @@ export function httpStatusToCategory(status: number): ErrorCategory {
  * Default titles for each error category.
  * Used to provide user-friendly titles for error messages.
  */
-export const categoryTitles: Record<ErrorCategory, string> = {
+export const errorCategoryTitles: Record<ErrorCategory, string> = {
   [errorCategory.credits]: 'Credit Limit Reached',
   [errorCategory.rateLimit]: 'Rate Limit Exceeded',
   [errorCategory.overloaded]: 'Service Temporarily Unavailable',
