@@ -43,43 +43,46 @@ describe('injectSnapshotContext', () => {
       const result = injectSnapshotContext(messages, fullSnapshot);
 
       expect(result).toHaveLength(1);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      // Context is prepended as first part
+      expect(result[0]?.parts).toHaveLength(2);
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
+      const originalPart = result[0]?.parts[1] as { type: 'text'; text: string };
 
       // Should have editor_context wrapper
-      expect(text).toContain('<editor_context>');
-      expect(text).toContain('</editor_context>');
+      expect(contextPart.text).toContain('<editor_context>');
+      expect(contextPart.text).toContain('</editor_context>');
 
       // Should have active file
-      expect(text).toContain('<active_file>');
-      expect(text).toContain('src/index.ts');
-      expect(text).toContain('</active_file>');
+      expect(contextPart.text).toContain('<active_file>');
+      expect(contextPart.text).toContain('src/index.ts');
+      expect(contextPart.text).toContain('</active_file>');
 
       // Should have open files
-      expect(text).toContain('<open_files>');
-      expect(text).toContain('src/index.ts, src/utils/helper.ts');
-      expect(text).toContain('</open_files>');
+      expect(contextPart.text).toContain('<open_files>');
+      expect(contextPart.text).toContain('src/index.ts, src/utils/helper.ts');
+      expect(contextPart.text).toContain('</open_files>');
 
       // Should have project layout with generated tree
-      expect(text).toContain('<project_layout>');
-      expect(text).toContain('/project/');
-      expect(text).toContain('src/');
-      expect(text).toContain('index.ts');
-      expect(text).toContain('helper.ts');
-      expect(text).toContain('</project_layout>');
+      expect(contextPart.text).toContain('<project_layout>');
+      expect(contextPart.text).toContain('/project/');
+      expect(contextPart.text).toContain('src/');
+      expect(contextPart.text).toContain('index.ts');
+      expect(contextPart.text).toContain('helper.ts');
+      expect(contextPart.text).toContain('</project_layout>');
 
-      // Should preserve original message
-      expect(text).toContain('Help me with my code');
+      // Should preserve original message in second part
+      expect(originalPart.text).toBe('Help me with my code');
     });
 
     it('should format context in correct order: activeFile, openFiles, fileTree', () => {
       const messages = [createUserMessage('Test')];
 
       const result = injectSnapshotContext(messages, fullSnapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      const activeFileIndex = text.indexOf('<active_file>');
-      const openFilesIndex = text.indexOf('<open_files>');
-      const projectLayoutIndex = text.indexOf('<project_layout>');
+      const activeFileIndex = contextPart.text.indexOf('<active_file>');
+      const openFilesIndex = contextPart.text.indexOf('<open_files>');
+      const projectLayoutIndex = contextPart.text.indexOf('<project_layout>');
 
       expect(activeFileIndex).toBeLessThan(openFilesIndex);
       expect(openFilesIndex).toBeLessThan(projectLayoutIndex);
@@ -92,11 +95,11 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('<project_layout>');
-      expect(text).not.toContain('<active_file>');
-      expect(text).not.toContain('<open_files>');
+      expect(contextPart.text).toContain('<project_layout>');
+      expect(contextPart.text).not.toContain('<active_file>');
+      expect(contextPart.text).not.toContain('<open_files>');
     });
 
     it('should inject only activeFile when only activeFile is provided', () => {
@@ -106,12 +109,12 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('<active_file>');
-      expect(text).toContain('main.scad');
-      expect(text).not.toContain('<project_layout>');
-      expect(text).not.toContain('<open_files>');
+      expect(contextPart.text).toContain('<active_file>');
+      expect(contextPart.text).toContain('main.scad');
+      expect(contextPart.text).not.toContain('<project_layout>');
+      expect(contextPart.text).not.toContain('<open_files>');
     });
 
     it('should inject only openFiles when only openFiles is provided', () => {
@@ -124,12 +127,12 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('<open_files>');
-      expect(text).toContain('file1.scad, file2.scad');
-      expect(text).not.toContain('<project_layout>');
-      expect(text).not.toContain('<active_file>');
+      expect(contextPart.text).toContain('<open_files>');
+      expect(contextPart.text).toContain('file1.scad, file2.scad');
+      expect(contextPart.text).not.toContain('<project_layout>');
+      expect(contextPart.text).not.toContain('<active_file>');
     });
 
     it('should skip openFiles section when openFiles array is empty', () => {
@@ -140,10 +143,10 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('<project_layout>');
-      expect(text).not.toContain('<open_files>');
+      expect(contextPart.text).toContain('<project_layout>');
+      expect(contextPart.text).not.toContain('<open_files>');
     });
 
     it('should skip fileTree section when fileTree array is empty', () => {
@@ -154,10 +157,10 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('<active_file>');
-      expect(text).not.toContain('<project_layout>');
+      expect(contextPart.text).toContain('<active_file>');
+      expect(contextPart.text).not.toContain('<project_layout>');
     });
   });
 
@@ -192,10 +195,12 @@ describe('injectSnapshotContext', () => {
 
       expect(result).toHaveLength(3);
       // First message should be unchanged
+      expect(result[0]?.parts).toHaveLength(1);
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toBe('First question');
-      // Last user message should have context
+      // Last user message should have context prepended as first part
+      expect(result[2]?.parts).toHaveLength(2);
       expect((result[2]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
-      expect((result[2]?.parts[0] as { type: 'text'; text: string }).text).toContain('Second question');
+      expect((result[2]?.parts[1] as { type: 'text'; text: string }).text).toBe('Second question');
     });
 
     it('should return empty array for empty messages array', () => {
@@ -223,13 +228,16 @@ describe('injectSnapshotContext', () => {
 
       const result = injectSnapshotContext(messages, fullSnapshot);
 
-      expect(result[0]?.parts).toHaveLength(2);
+      // Context prepended as first part, then original parts follow
+      expect(result[0]?.parts).toHaveLength(3);
       expect(result[0]?.parts[0]).toHaveProperty('type', 'text');
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
-      expect(result[0]?.parts[1]).toHaveProperty('type', 'file');
+      expect(result[0]?.parts[1]).toHaveProperty('type', 'text');
+      expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toBe('Check this image');
+      expect(result[0]?.parts[2]).toHaveProperty('type', 'file');
     });
 
-    it('should prepend context to each text part', () => {
+    it('should add context only once even with multiple text parts', () => {
       const messageWithMultipleTextParts: UIMessage = {
         id: 'msg-1',
         role: 'user',
@@ -242,11 +250,11 @@ describe('injectSnapshotContext', () => {
 
       const result = injectSnapshotContext(messages, fullSnapshot);
 
-      // Each text part gets the context prepended
+      // Context is only in the first part, original parts are unchanged
+      expect(result[0]?.parts).toHaveLength(3);
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
-      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('Part one');
-      expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toContain('<editor_context>');
-      expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toContain('Part two');
+      expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toBe('Part one');
+      expect((result[0]?.parts[2] as { type: 'text'; text: string }).text).toBe('Part two');
     });
 
     it('should not mutate original messages array', () => {
@@ -259,6 +267,31 @@ describe('injectSnapshotContext', () => {
       expect(result[0]).not.toBe(originalMessage);
       expect((originalMessage.parts[0] as { type: 'text'; text: string }).text).toBe('Original text');
     });
+
+    it('should prepend text part with editor context when message has no text parts', () => {
+      const messageWithOnlyFile: UIMessage = {
+        id: 'msg-1',
+        role: 'user',
+        parts: [
+          {
+            type: 'file',
+            mediaType: 'image/png',
+            url: 'https://example.com/image.png',
+          },
+        ],
+      };
+      const messages = [messageWithOnlyFile];
+
+      const result = injectSnapshotContext(messages, fullSnapshot);
+
+      // Context prepended as first part, then original file part
+      expect(result[0]?.parts).toHaveLength(2);
+      expect(result[0]?.parts[0]).toHaveProperty('type', 'text');
+      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<active_file>');
+      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<project_layout>');
+      expect(result[0]?.parts[1]).toHaveProperty('type', 'file');
+    });
   });
 
   describe('context formatting', () => {
@@ -269,9 +302,9 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('The file currently being rendered by the CAD engine: lib/shapes.scad');
+      expect(contextPart.text).toContain('The file currently being rendered by the CAD engine: lib/shapes.scad');
     });
 
     it('should format open files as comma-separated list', () => {
@@ -285,28 +318,30 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toContain('Files currently open in the editor tabs: a.scad, b.scad, c.scad');
+      expect(contextPart.text).toContain('Files currently open in the editor tabs: a.scad, b.scad, c.scad');
     });
 
     it('should wrap all context in editor_context tags', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, fullSnapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(text).toMatch(/^<editor_context>\n/);
-      expect(text).toContain('</editor_context>\n\nHello');
+      expect(contextPart.text).toMatch(/^<editor_context>\n/);
+      expect(contextPart.text).toMatch(/<\/editor_context>\n\n$/);
     });
 
-    it('should end context with double newline before user message', () => {
+    it('should end context part with double newline', () => {
       const messages = [createUserMessage('My question')];
 
       const result = injectSnapshotContext(messages, fullSnapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
+      const originalPart = result[0]?.parts[1] as { type: 'text'; text: string };
 
-      expect(text).toMatch(/<\/editor_context>\n\nMy question$/);
+      expect(contextPart.text).toMatch(/<\/editor_context>\n\n$/);
+      expect(originalPart.text).toBe('My question');
     });
 
     it('should generate tree structure from fileTree entries', () => {
@@ -321,16 +356,16 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
       // Should have project root
-      expect(text).toContain('/project/');
+      expect(contextPart.text).toContain('/project/');
       // Should have directory with trailing slash
-      expect(text).toContain('lib/');
+      expect(contextPart.text).toContain('lib/');
       // Should have files with sizes
-      expect(text).toContain('shapes.scad (2KB)');
-      expect(text).toContain('utils.scad (1KB)');
-      expect(text).toContain('main.scad (5KB)');
+      expect(contextPart.text).toContain('shapes.scad (2KB)');
+      expect(contextPart.text).toContain('utils.scad (1KB)');
+      expect(contextPart.text).toContain('main.scad (5KB)');
     });
 
     it('should sort directories before files in tree output', () => {
@@ -344,10 +379,10 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      const libIndex = text.indexOf('lib/');
-      const mainIndex = text.indexOf('main.scad');
+      const libIndex = contextPart.text.indexOf('lib/');
+      const mainIndex = contextPart.text.indexOf('main.scad');
 
       // Directory should come before file
       expect(libIndex).toBeLessThan(mainIndex);
@@ -361,12 +396,12 @@ describe('injectSnapshotContext', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, snapshot);
-      const { text } = result[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
       // Should not have project_layout for empty tree
-      expect(text).not.toContain('<project_layout>');
+      expect(contextPart.text).not.toContain('<project_layout>');
       // Should still have active file
-      expect(text).toContain('<active_file>');
+      expect(contextPart.text).toContain('<active_file>');
     });
   });
 });

@@ -194,14 +194,9 @@ ${contextParts.join('\n\n')}
 
 `;
 
-  // Create updated message with context prepended to text content
-  const updatedParts = lastUserMessage.parts.map((part) => {
-    if (part.type === 'text') {
-      return { ...part, text: editorContext + part.text };
-    }
-
-    return part;
-  });
+  // Prepend a new text part with the editor context at the beginning
+  const contextPart = { type: 'text' as const, text: editorContext };
+  const updatedParts = [contextPart, ...lastUserMessage.parts];
 
   return [
     ...messages.slice(0, lastUserMessageIndex),
