@@ -132,7 +132,7 @@ export function useChatToolsConnection(options: UseChatToolsConnectionOptions): 
   const { status, error } = useChatToolsStatus();
 
   // Get dependencies for tool handlers
-  const { graphicsRef: graphicsActor, cadRef: cadActor, getMainFilename, buildId } = useBuild();
+  const { graphicsRef: graphicsActor, cadRef: cadActor } = useBuild();
   const fileManager = useFileManager();
   const { fileManagerRef } = fileManager;
   const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
@@ -142,13 +142,11 @@ export function useChatToolsConnection(options: UseChatToolsConnectionOptions): 
   // without causing effect re-runs when deps change
   const depsRef = useRef<ToolHandlerDependencies | undefined>(undefined);
   depsRef.current = {
-    buildId,
     fileManager,
     fileManagerRef,
     graphicsRef: graphicsActor,
     cadRef: cadActor,
     fileTree,
-    getMainFilename,
     screenshotQuality,
   };
 

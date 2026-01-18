@@ -44,8 +44,6 @@ type FileWriteSource = 'editor' | 'user' | 'machine';
  * Dependencies required for tool execution
  */
 export type ToolHandlerDependencies = {
-  /** Build ID for path resolution */
-  buildId: string;
   /** File manager for read/write operations */
   fileManager: {
     readFile: (path: string) => Promise<Uint8Array>;
@@ -59,8 +57,6 @@ export type ToolHandlerDependencies = {
   cadRef: ActorRefFrom<typeof cadMachine>;
   /** File tree for grep/glob operations */
   fileTree: Map<string, FileEntry>;
-  /** Get main filename function */
-  getMainFilename: () => Promise<string>;
   /** Screenshot quality setting */
   screenshotQuality: number;
 };
@@ -103,17 +99,7 @@ export type ToolHandlers = {
  * Returns an object with handler functions for each tool.
  */
 export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers {
-  const { buildId, fileManager, fileManagerRef, graphicsRef, cadRef, fileTree, getMainFilename, screenshotQuality } =
-    deps;
-
-  // Helper to resolve paths relative to build root
-  const resolvePath = (targetFile: string): string => {
-    if (targetFile.startsWith('/') || targetFile.startsWith(`builds/${buildId}`)) {
-      return targetFile;
-    }
-
-    return targetFile;
-  };
+  const { fileManager, fileManagerRef, graphicsRef, cadRef, fileTree, screenshotQuality } = deps;
 
   // Handler for capture observations tool - captures screenshots from all orthographic views
   const handleCaptureObservations = async (): Promise<CaptureObservationsOutput> => {
@@ -180,10 +166,8 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
   // Handler for read file tool
   // Returns raw content without line numbers - line numbers are added by the backend
   const handleReadFile = async (input: ReadFileInput): Promise<ReadFileOutput> => {
-    const resolvedPath = resolvePath(input.targetFile);
-
     try {
-      const fileContent = await fileManager.readFile(resolvedPath);
+      const fileContent = await fileManager.readFile(input.targetFile);
       const text = decodeTextFile(fileContent);
       const lines = text.split('\n');
       const totalLines = lines.length;
@@ -208,13 +192,11 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
 
   // Handler for list directory tool
   const handleListDirectory = (input: ListDirectoryInput): ListDirectoryOutput => {
-    const resolvedPath = input.path === '' ? '' : resolvePath(input.path);
-
     const entries: ListDirectoryOutput['entries'] = [];
 
     for (const [entryPath, entry] of fileTree.entries()) {
       const parentPath = entryPath.includes('/') ? entryPath.slice(0, entryPath.lastIndexOf('/')) : '';
-      if (parentPath === resolvedPath) {
+      if (parentPath === input.path) {
         entries.push({
           name: entry.name,
           type: entry.type,
@@ -223,18 +205,16 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
       }
     }
 
-    return { entries, path: resolvedPath || '/' };
+    return { entries, path: input.path || '/' };
   };
 
   // Handler for create file tool
   const handleCreateFile = async (input: CreateFileInput): Promise<CreateFileOutput> => {
-    const resolvedPath = resolvePath(input.targetFile);
-
     await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
 
     fileManagerRef.send({
       type: 'writeFile',
-      path: resolvedPath,
+      path: input.targetFile,
       data: encodeTextFile(input.content),
       source: 'machine',
     });
@@ -243,7 +223,7 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
 
     return {
       success: true,
-      message: `File created: ${resolvedPath}`,
+      message: `File created: ${input.targetFile}`,
       diffStats: {
         linesAdded: lineCount,
         linesRemoved: 0,
@@ -255,13 +235,11 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
 
   // Handler for delete file tool
   const handleDeleteFile = async (input: DeleteFileInput): Promise<DeleteFileOutput> => {
-    const resolvedPath = resolvePath(input.targetFile);
-
     await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
 
-    fileManagerRef.send({ type: 'deleteFile', path: resolvedPath, source: 'machine' });
+    fileManagerRef.send({ type: 'deleteFile', path: input.targetFile, source: 'machine' });
 
-    return { success: true, message: `File deleted: ${resolvedPath}` };
+    return { success: true, message: `File deleted: ${input.targetFile}` };
   };
 
   // Handler for grep tool
@@ -278,7 +256,7 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
           continue;
         }
 
-        if (input.path && !path.startsWith(resolvePath(input.path))) {
+        if (input.path && !path.startsWith(input.path)) {
           continue;
         }
 
@@ -342,7 +320,7 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
     const files: string[] = [];
 
     try {
-      const basePath = input.path ? resolvePath(input.path) : '';
+      const basePath = input.path ?? '';
 
       for (const [path, entry] of fileTree.entries()) {
         if (entry.type !== 'file') {
@@ -367,12 +345,9 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
   // Handler for get kernel result tool
   const handleGetKernelResult = async (input: GetKernelResultInput): Promise<GetKernelResultOutput> => {
     try {
-      const mainFilePath = await getMainFilename();
-      const resolvedPath = input.targetFile ? resolvePath(input.targetFile) : mainFilePath;
-
       const cadSnapshot = await waitFor(cadRef, (state) => state.value === 'ready' || state.value === 'error');
 
-      const kernelIssues = cadSnapshot.context.kernelIssues.get(resolvedPath);
+      const kernelIssues = cadSnapshot.context.kernelIssues.get(input.targetFile);
 
       const hasErrors = kernelIssues?.some((issue) => issue.severity === 'error') ?? false;
       const status = cadSnapshot.value === 'error' || hasErrors ? 'error' : 'ready';
