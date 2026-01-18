@@ -60,6 +60,8 @@ export function CollapsibleContainer({
       {shouldShowToggle ? (
         <Button
           size="xs"
+          aria-label={isExpanded ? 'Collapse code block' : 'Expand code block'}
+          aria-expanded={isExpanded}
           className="h-4 w-full shrink-0 rounded-none bg-transparent text-center text-foreground/50 hover:bg-neutral/10"
           onClick={() => {
             setIsExpanded((previous) => !previous);
