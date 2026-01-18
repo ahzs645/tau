@@ -79,7 +79,7 @@ export function BuildNameEditor(): React.JSX.Element {
   // Render display content based on state
   const renderDisplayContent = (value: string): React.ReactNode => {
     if (isBuildError) {
-      return 'Build Not Found';
+      return 'Build not found';
     }
 
     if (value === '') {
