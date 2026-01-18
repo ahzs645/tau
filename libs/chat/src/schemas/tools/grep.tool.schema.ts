@@ -1,7 +1,14 @@
+import safeRegex from 'safe-regex';
 import { z } from 'zod';
 
 export const grepInputSchema = z.object({
-  pattern: z.string().describe('The regular expression pattern to search for in file contents.'),
+  pattern: z
+    .string()
+    .refine((pattern) => safeRegex(pattern), {
+      message:
+        'The regex pattern is potentially unsafe (may cause catastrophic backtracking). Please simplify the pattern by reducing nested quantifiers or alternations.',
+    })
+    .describe('The regular expression pattern to search for in file contents.'),
   path: z.string().optional().describe('The file or directory path to search in. Defaults to project root.'),
   glob: z
     .string()
