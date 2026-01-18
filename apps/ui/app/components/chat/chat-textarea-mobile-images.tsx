@@ -27,7 +27,11 @@ export const ChatTextareaMobileImages = memo(function ({
         // eslint-disable-next-line react/no-array-index-key -- unique key for each image
         <div key={`image-${index}-${image}`} className="relative">
           {/* Thumbnail - tap to open dialog */}
-          <ImagePreview src={image} alt={`Uploaded ${index + 1}`} dialogProps={{ [focusTrapAttribute]: '' }}>
+          <ImagePreview
+            src={image}
+            alt={`Uploaded ${index + 1}`}
+            dialogProps={{ [focusTrapAttribute]: focusTrapAttribute }}
+          >
             <ImagePreviewTrigger>
               <div className="size-8 overflow-hidden rounded-xs border focus:ring-2 focus:ring-primary focus:outline-none">
                 <ImagePreviewImage className="size-full object-cover" />
