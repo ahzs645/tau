@@ -16,9 +16,6 @@ import type {
 /** Timeout for tool execution in milliseconds (60 seconds) */
 const toolExecutionTimeoutMs = 60_000;
 
-/** Maximum number of consecutive connection failures before telling the LLM to stop retrying */
-const maxConnectionFailures = 3;
-
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
@@ -52,9 +49,6 @@ export class ChatToolsService {
   /** Pending tool call requests by requestId */
   private readonly pendingRequests = new Map<string, PendingRequest>();
 
-  /** Tracks consecutive connection failures per chatId to detect persistent disconnection */
-  private readonly connectionFailureCounts = new Map<string, number>();
-
   /**
    * Register a Socket.IO connection for a chat room.
    * Multiple sockets can join the same room (e.g., multiple tabs).
@@ -64,9 +58,6 @@ export class ChatToolsService {
     // Store the socket for direct emission (last one wins for this chatId)
     // In practice, with room-based routing, we'll use this for direct sends
     this.connections.set(chatId, socket);
-
-    // Reset connection failure counter when a connection is established
-    this.connectionFailureCounts.delete(chatId);
 
     this.logger.debug(`Registered connection for chat ${chatId} (socket: ${socket.id})`);
   }
@@ -125,31 +116,11 @@ export class ChatToolsService {
     const socket = this.connections.get(chatId);
 
     if (!socket?.connected) {
-      // Track consecutive connection failures
-      const failureCount = (this.connectionFailureCounts.get(chatId) ?? 0) + 1;
-      this.connectionFailureCounts.set(chatId, failureCount);
-
-      this.logger.warn(`No connection for chat ${chatId}, attempt ${failureCount}/${maxConnectionFailures}`);
-
-      // Build error message with attempt counter
-      const isMaxAttempts = failureCount >= maxConnectionFailures;
-      const attemptInfo = `(attempt ${failureCount}/${maxConnectionFailures})`;
-      const baseMessage = `No WebSocket client connected ${attemptInfo}. The user may have closed the browser tab.`;
-      const message = isMaxAttempts
-        ? `${baseMessage} Retrying will not help - the client is disconnected. Do not attempt to use tools that require client connection.`
-        : baseMessage;
-
-      const noConnectionError: ToolExecutionError = {
-        errorCode: 'NO_CLIENT_CONNECTION',
-        message,
-        toolName,
-        toolCallId,
-      };
-      return noConnectionError;
+      throw new Error(
+        'CLIENT_DISCONNECTED: No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
+          'DO NOT RETRY this or any other tool - inform the user that you cannot proceed because they are no longer connected.',
+      );
     }
-
-    // Reset failure count on successful connection
-    this.connectionFailureCounts.delete(chatId);
 
     // Validate input args against the tool's input schema
     const inputValidation = this.validateToolInput(toolName, toolCallId, args);

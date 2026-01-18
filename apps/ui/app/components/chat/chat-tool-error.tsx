@@ -42,7 +42,8 @@ export function ChatToolError({ error, className }: ChatToolErrorProps): React.J
   const [isOpen, setIsOpen] = useState(false);
   const Icon = errorIcons[error.errorCode];
   const title = getToolErrorTitle(error.errorCode);
-  const description = getToolErrorDescription(error.errorCode);
+  // Use the actual error message from backend, falling back to static description
+  const description = error.message || getToolErrorDescription(error.errorCode);
   const toolName = formatToolName(error.toolName);
 
   // Determine if we have expandable details (validation errors have extra info)
@@ -56,7 +57,7 @@ export function ChatToolError({ error, className }: ChatToolErrorProps): React.J
       <div className={cn('@container/error overflow-hidden rounded-md border bg-neutral/10', className)}>
         <div className="flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs">
           <Icon className="size-3 shrink-0 text-destructive" />
-          <span className="font-medium text-destructive">{title}</span>
+          <span className="shrink-0 font-medium whitespace-nowrap text-destructive">{title}</span>
           <span className="text-muted-foreground/50">·</span>
           <code className="text-muted-foreground">{toolName}</code>
           <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>
@@ -77,7 +78,7 @@ export function ChatToolError({ error, className }: ChatToolErrorProps): React.J
     >
       <CollapsibleTrigger className="flex h-7 w-full items-center gap-1.5 px-2 text-left text-xs hover:bg-accent/50">
         <Icon className="size-3 shrink-0 text-destructive" />
-        <span className="font-medium text-destructive">{title}</span>
+        <span className="shrink-0 font-medium whitespace-nowrap text-destructive">{title}</span>
         <span className="text-muted-foreground/50">·</span>
         <code className="text-muted-foreground">{toolName}</code>
         <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>
