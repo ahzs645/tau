@@ -22,8 +22,6 @@ export function ImportProcessingView({
   variant,
   onCancel,
 }: ImportProcessingViewProperties): React.JSX.Element {
-  const Icon = variant === 'github' ? () => <SvgIcon id="github" className="size-8 text-primary" /> : Upload;
-
   return (
     <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
       <div className="w-full max-w-2xl space-y-6">
@@ -55,7 +53,10 @@ export function ImportProcessingView({
                 </span>
               ) : undefined}
             </div>
-            <Progress value={progress.total > 0 ? (progress.processed / progress.total) * 100 : undefined} className="h-2" />
+            <Progress
+              value={progress.total > 0 ? (progress.processed / progress.total) * 100 : undefined}
+              className="h-2"
+            />
           </div>
 
           {onCancel ? (
