@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Brain } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import { MarkdownViewerChat } from '#components/markdown/markdown-viewer-chat.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import {
@@ -26,19 +25,7 @@ export function ChatMessageToolReasoning({
   const thinking = part.input?.thinking ?? '';
 
   if (part.state === 'output-error') {
-    const error = parseToolErrorText(part.errorText);
-    if (error) {
-      return <ChatToolError error={error} />;
-    }
-
-    return (
-      <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
-        <ChatToolCardHeader>
-          <ChatToolCardIcon isError icon={Brain} />
-          <ChatToolCardTitle>Reasoning failed: {part.errorText}</ChatToolCardTitle>
-        </ChatToolCardHeader>
-      </ChatToolCard>
-    );
+    return <ChatToolError errorText={part.errorText} fallbackIcon={Brain} fallbackTitle="Reasoning failed" />;
   }
 
   if (part.state === 'approval-requested' || part.state === 'approval-responded' || part.state === 'output-denied') {

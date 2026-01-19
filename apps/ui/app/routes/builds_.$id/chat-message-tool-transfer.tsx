@@ -1,11 +1,11 @@
 import type { ToolUIPart } from 'ai';
 import { getToolName } from 'ai';
 import { Compass, BookOpen, Users, ArrowRight, CornerDownLeft, LoaderCircle, Check } from 'lucide-react';
-import { isToolExecutionError } from '@taucad/chat';
+import { isToolExecutionError } from '@taucad/chat/utils';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { cn } from '#utils/ui.utils.js';
-import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { StructuredToolError } from '#components/chat/chat-tool-error.js';
 
 const snakeToSentenceCase = (string_: string): string =>
   string_.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase());
@@ -106,7 +106,7 @@ export function ChatMessageToolTransfer({ part }: { readonly part: ToolUIPart })
 
   // Check for structured tool errors in output-available state
   if (part.state === 'output-available' && isToolExecutionError(part.output)) {
-    return <ChatToolError error={part.output} />;
+    return <StructuredToolError error={part.output} />;
   }
 
   // This component has unique agent-specific styling, so we keep it custom

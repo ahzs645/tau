@@ -1,7 +1,6 @@
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import type { IssueSeverity, KernelIssue } from '@taucad/types';
 import {
   ChatToolCard,
@@ -179,19 +178,7 @@ export function ChatMessageToolGetKernelResult({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
-          <ChatToolCardHeader className="text-destructive hover:text-destructive">
-            <ChatToolCardIcon isError icon={XCircle} />
-            <ChatToolCardTitle>Failed to check kernel status: {part.errorText}</ChatToolCardTitle>
-          </ChatToolCardHeader>
-        </ChatToolCard>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={XCircle} fallbackTitle="Failed to check kernel status" />;
     }
 
     case 'approval-requested':

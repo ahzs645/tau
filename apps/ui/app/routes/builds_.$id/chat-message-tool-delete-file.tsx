@@ -1,7 +1,6 @@
 import { LoaderCircle, X } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
@@ -103,19 +102,7 @@ export function ChatMessageToolDeleteFile({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <div className="@container/code overflow-hidden rounded-md border border-destructive/50 bg-destructive/10">
-          <div className="flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-destructive">
-            <X className="size-3" />
-            <span>Failed to delete file</span>
-          </div>
-        </div>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={X} fallbackTitle="Failed to delete file" />;
     }
 
     case 'approval-requested':

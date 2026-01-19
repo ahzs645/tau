@@ -1,7 +1,6 @@
-import { X } from 'lucide-react';
+import { FilePlus } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import { CollapsibleFileOperation } from '#components/chat/chat-tool-file-operation.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
@@ -41,17 +40,7 @@ export function ChatMessageToolCreateFile({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <div className="flex items-center gap-2 rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <X className="size-4" />
-          <span>Failed to create file</span>
-        </div>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FilePlus} fallbackTitle="Failed to create file" />;
     }
 
     case 'approval-requested':

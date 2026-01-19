@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { ChevronRight, Globe, HelpCircle } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -144,19 +143,7 @@ export function ChatMessageToolWebSearch({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <ChatToolCard variant="minimal" status="error" isCollapsible={false}>
-          <ChatToolCardHeader className="text-destructive">
-            <ChatToolCardIcon icon={Globe} />
-            <ChatToolCardTitle>Web search failed</ChatToolCardTitle>
-          </ChatToolCardHeader>
-        </ChatToolCard>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle="Web search failed" />;
     }
 
     case 'output-available': {

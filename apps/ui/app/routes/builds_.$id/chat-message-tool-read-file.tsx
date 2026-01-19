@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
+import { FileText } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import { FileLink } from '#components/files/file-link.js';
 import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
@@ -63,12 +63,7 @@ export function ChatMessageToolReadFile({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return <span className="text-sm text-destructive">Failed to read file</span>;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FileText} fallbackTitle="Failed to read file" />;
     }
 
     case 'approval-requested':

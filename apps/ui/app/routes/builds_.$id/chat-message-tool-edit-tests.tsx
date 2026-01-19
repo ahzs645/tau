@@ -1,6 +1,6 @@
+import { FlaskConical } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import { CollapsibleFileOperation } from '#components/chat/chat-tool-file-operation.js';
 import { CopyButton } from '#components/copy-button.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
@@ -48,12 +48,7 @@ export function ChatMessageToolEditTests({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return <div>Edit tests failed</div>;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FlaskConical} fallbackTitle="Edit tests failed" />;
     }
 
     case 'approval-requested':

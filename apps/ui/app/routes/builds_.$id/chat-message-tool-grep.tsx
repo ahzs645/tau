@@ -2,7 +2,6 @@ import { Search } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -102,19 +101,7 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
-          <ChatToolCardHeader>
-            <ChatToolCardIcon isError icon={Search} />
-            <ChatToolCardTitle>Search failed</ChatToolCardTitle>
-          </ChatToolCardHeader>
-        </ChatToolCard>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Search} fallbackTitle="Search failed" />;
     }
 
     case 'approval-requested':

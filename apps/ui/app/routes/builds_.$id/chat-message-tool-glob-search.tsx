@@ -2,7 +2,6 @@ import { Files, File } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import {
   ChatToolCard,
   ChatToolCardHeader,
@@ -81,19 +80,7 @@ export function ChatMessageToolGlobSearch({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <ChatToolCard variant="minimal" status="error" isDefaultOpen={false}>
-          <ChatToolCardHeader>
-            <ChatToolCardIcon isError icon={Files} />
-            <ChatToolCardTitle>File search failed</ChatToolCardTitle>
-          </ChatToolCardHeader>
-        </ChatToolCard>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Files} fallbackTitle="File search failed" />;
     }
 
     case 'approval-requested':
