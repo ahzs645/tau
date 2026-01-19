@@ -19,6 +19,10 @@ import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-tr
 function createTestModelOutput(failures: TestFailure[], passed: number): TestModelOutput {
   return {
     failures,
+    passes: Array.from({ length: passed }, (_, index) => ({
+      id: `pass_${index + 1}`,
+      requirement: `Passed requirement ${index + 1}`,
+    })),
     passed,
     total: failures.length + passed,
   };

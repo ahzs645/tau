@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { openai } from '@ai-sdk/openai';
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
-import type { Observation, TestModelOutput, VisualTestRequirement, TestFailure } from '@taucad/chat';
+import type { Observation, TestModelOutput, VisualTestRequirement, TestFailure, TestPass } from '@taucad/chat';
 import { createMultiViewAnalysisPrompt } from '#api/analysis/prompts/multi-view-analysis-prompt.js';
 
 /**
@@ -74,7 +74,7 @@ export class AnalysisService {
         ],
       });
 
-      // Extract only failures
+      // Extract failures with detailed feedback
       const failures: TestFailure[] = output.results
         .filter((result) => result.status === 'failed')
         .map((result) => {
@@ -89,13 +89,24 @@ export class AnalysisService {
           };
         });
 
-      const passedCount = output.results.filter((r) => r.status === 'passed').length;
+      // Extract passes (simpler, just id and description)
+      const passes: TestPass[] = output.results
+        .filter((result) => result.status === 'passed')
+        .map((result) => {
+          const requirement = requirements.find((request) => request.id === result.id);
 
-      this.logger.log(`Test results: ${passedCount} passed, ${failures.length} failed`);
+          return {
+            id: result.id,
+            requirement: requirement?.description ?? result.id,
+          };
+        });
+
+      this.logger.log(`Test results: ${passes.length} passed, ${failures.length} failed`);
 
       return {
         failures,
-        passed: passedCount,
+        passes,
+        passed: passes.length,
         total: requirements.length,
       };
     } catch (error) {
@@ -116,6 +127,7 @@ export class AnalysisService {
 
       return {
         failures,
+        passes: [],
         passed: 0,
         total: requirements.length,
       };

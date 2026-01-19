@@ -48,6 +48,7 @@ export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
           suggestion: 'Use edit_tests to create test.json with requirements before running tests',
         },
       ],
+      passes: [],
       passed: 0,
       total: 0,
     };
@@ -70,6 +71,7 @@ export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
           suggestion: 'Ensure test.json has valid JSON with a "requirements" array',
         },
       ],
+      passes: [],
       passed: 0,
       total: 0,
     };
@@ -85,6 +87,7 @@ export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
   if (visualRequirements.length === 0) {
     const result: TestModelOutput = {
       failures: [],
+      passes: [],
       passed: 0,
       total: 0,
     };

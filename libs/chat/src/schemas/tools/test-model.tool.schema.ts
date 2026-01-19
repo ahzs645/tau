@@ -84,7 +84,7 @@ export const testModelInputSchema = z.object({});
 export type TestModelInput = z.infer<typeof testModelInputSchema>;
 
 /**
- * Test failure result - only failures are reported to the LLM.
+ * Test failure result - failures include detailed feedback for the LLM.
  */
 export const testFailureSchema = z.object({
   id: z.string().describe('ID of the failed requirement'),
@@ -95,11 +95,21 @@ export const testFailureSchema = z.object({
 export type TestFailure = z.infer<typeof testFailureSchema>;
 
 /**
+ * Test pass result - passes are simpler, just id and description.
+ */
+export const testPassSchema = z.object({
+  id: z.string().describe('ID of the passed requirement'),
+  requirement: z.string().describe('Description of the requirement that passed'),
+});
+export type TestPass = z.infer<typeof testPassSchema>;
+
+/**
  * Output schema for test_model tool.
- * Simplified output with only failures - passed tests are implicit.
+ * Includes both failures (with detailed feedback) and passes (for UI display).
  */
 export const testModelOutputSchema = z.object({
   failures: z.array(testFailureSchema).describe('Array of failed tests with actionable feedback'),
+  passes: z.array(testPassSchema).describe('Array of passed tests'),
   passed: z.number().describe('Number of tests that passed'),
   total: z.number().describe('Total number of tests run'),
 });

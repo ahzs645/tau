@@ -1,7 +1,6 @@
-import { FlaskConical, X, Lightbulb } from 'lucide-react';
-import type { ToolInvocation, TestFailure } from '@taucad/chat';
+import { FlaskConical, X, Lightbulb, Check } from 'lucide-react';
+import type { ToolInvocation, TestFailure, TestPass } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { parseToolErrorText } from '@taucad/chat';
 import { useChatSelector } from '#hooks/use-chat.js';
 import {
   ChatToolCard,
@@ -13,6 +12,22 @@ import {
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { RequirementIndicator } from '#components/chat/requirement-indicator.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
+
+/**
+ * Renders a single test pass (just the requirement description)
+ */
+function TestPassItem({ pass, index }: { readonly pass: TestPass; readonly index: number }): React.JSX.Element {
+  return (
+    <div className="flex items-start gap-2 text-xs">
+      <div className="mt-0.5 shrink-0">
+        <Check className="size-3.5 text-success" />
+      </div>
+      <div className="text-muted-foreground">
+        {index + 1}. {pass.requirement}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Renders a single test failure with reason and suggestion
@@ -70,26 +85,35 @@ export function ChatMessageToolTestModel({
 
     case 'output-available': {
       const { output: result } = part;
-      const { failures = [], total = 0 } = result;
-      const passedCount = total - failures.length;
+      const { failures = [], passes = [] } = result;
+      const passedCount = passes.length;
       const failedCount = failures.length;
 
-      // All tests passed
+      // All tests passed - show passes in collapsible content
       if (failures.length === 0) {
         return (
-          <ChatToolCard key="output" variant="minimal" status={isLoading ? 'loading' : 'ready'}>
+          <ChatToolCard key="output" variant="minimal" status={isLoading ? 'loading' : 'ready'} isDefaultOpen={false}>
             <ChatToolCardHeader>
               <ChatToolCardIcon icon={FlaskConical} />
               <ChatToolCardTitle>
                 <ChatToolAction>All tests passed</ChatToolAction>
               </ChatToolCardTitle>
-              <RequirementIndicator failedCount={0} passedCount={total} />
+              <RequirementIndicator failedCount={0} passedCount={passedCount} />
             </ChatToolCardHeader>
+            <ChatToolCardContent>
+              <div className="space-y-1 py-1">
+                {passes.map((pass, index) => {
+                  const key = `${pass.id}-${index}`;
+
+                  return <TestPassItem key={key} pass={pass} index={index} />;
+                })}
+              </div>
+            </ChatToolCardContent>
           </ChatToolCard>
         );
       }
 
-      // Some tests failed - show details
+      // Some tests failed - show failures first, then passes
       return (
         <ChatToolCard key="output" variant="card" status={isLoading ? 'loading' : 'ready'}>
           <ChatToolCardHeader>
@@ -104,6 +128,15 @@ export function ChatMessageToolTestModel({
 
                 return <TestFailureItem key={key} failure={failure} index={index} />;
               })}
+              {passes.length > 0 && (
+                <div className="mt-3 space-y-1 border-t pt-2">
+                  {passes.map((pass, index) => {
+                    const key = `${pass.id}-${index}`;
+
+                    return <TestPassItem key={key} pass={pass} index={index} />;
+                  })}
+                </div>
+              )}
             </div>
           </ChatToolCardContent>
         </ChatToolCard>
@@ -111,19 +144,7 @@ export function ChatMessageToolTestModel({
     }
 
     case 'output-error': {
-      const error = parseToolErrorText(part.errorText);
-      if (error) {
-        return <ChatToolError error={error} />;
-      }
-
-      return (
-        <ChatToolCard variant="card" status="error" isDefaultOpen={false}>
-          <ChatToolCardHeader>
-            <ChatToolCardIcon isError icon={FlaskConical} />
-            <ChatToolCardTitle>Test run failed</ChatToolCardTitle>
-          </ChatToolCardHeader>
-        </ChatToolCard>
-      );
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FlaskConical} fallbackTitle="Test run failed" />;
     }
 
     case 'approval-requested':
