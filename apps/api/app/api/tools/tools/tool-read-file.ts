@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { readFileInputSchema, isToolExecutionError } from '@taucad/chat';
+import { readFileInputSchema } from '@taucad/chat';
+import { isToolExecutionError } from '@taucad/chat/utils';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 

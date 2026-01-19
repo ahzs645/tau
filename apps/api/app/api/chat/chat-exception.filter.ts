@@ -13,7 +13,7 @@ import { ZodSerializationException, ZodValidationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
 import { errorCategory } from '@taucad/types';
 import type { ChatError } from '@taucad/types';
-import { httpStatusToCategory, categoryTitles } from '@taucad/chat';
+import { httpStatusToCategory, errorCategoryTitles } from '@taucad/chat/utils';
 import { httpHeader } from '#constants/http-header.constant.js';
 
 @Catch()
@@ -41,7 +41,7 @@ export class ChatExceptionFilter implements ExceptionFilter {
         statusCode = HttpStatus.BAD_REQUEST;
         chatError = {
           category: errorCategory.toolError,
-          title: categoryTitles[errorCategory.toolError],
+          title: errorCategoryTitles[errorCategory.toolError],
           message: `Validation failed: ${message}`,
           code: 'VALIDATION_ERROR',
           httpStatus: statusCode,
@@ -74,7 +74,7 @@ export class ChatExceptionFilter implements ExceptionFilter {
 
       chatError = {
         category,
-        title: categoryTitles[category],
+        title: errorCategoryTitles[category],
         message,
         code,
         httpStatus: statusCode,
@@ -85,7 +85,7 @@ export class ChatExceptionFilter implements ExceptionFilter {
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
       chatError = {
         category: errorCategory.server,
-        title: categoryTitles[errorCategory.server],
+        title: errorCategoryTitles[errorCategory.server],
         message: 'Internal server error',
         code: 'INTERNAL_SERVER_ERROR',
         httpStatus: statusCode,
@@ -97,7 +97,7 @@ export class ChatExceptionFilter implements ExceptionFilter {
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
       chatError = {
         category: errorCategory.server,
-        title: categoryTitles[errorCategory.server],
+        title: errorCategoryTitles[errorCategory.server],
         message: 'Internal server error',
         code: 'INTERNAL_SERVER_ERROR',
         httpStatus: statusCode,

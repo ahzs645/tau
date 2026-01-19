@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { testModelInputSchema, testFileSchema, isToolExecutionError } from '@taucad/chat';
+import { testModelInputSchema, testFileSchema } from '@taucad/chat';
+import { isToolExecutionError } from '@taucad/chat/utils';
 import type { TestModelOutput, VisualTestRequirement } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';

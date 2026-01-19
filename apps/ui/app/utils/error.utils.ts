@@ -1,6 +1,6 @@
 import { errorCategory, errorCategories } from '@taucad/types';
 import type { ErrorCategory, ChatError } from '@taucad/types';
-import { errorCategoryTitles } from '@taucad/chat';
+import { errorCategoryTitles } from '@taucad/chat/utils';
 
 /**
  * Checks if error is a client-side network error (never reaches the API).

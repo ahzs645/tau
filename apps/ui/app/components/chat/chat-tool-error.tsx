@@ -1,13 +1,19 @@
 import { useState } from 'react';
 import { Clock, Unplug, WifiOff, ChevronRight, TriangleAlert } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { ToolExecutionError } from '@taucad/chat';
-import { getToolErrorTitle, getToolErrorDescription } from '@taucad/chat';
+import { getToolErrorTitle, getToolErrorDescription, parseToolErrorText } from '@taucad/chat/utils';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { CodeBlockContent, Pre } from '#components/code/code-block.js';
 import { cn } from '#utils/ui.utils.js';
 
 type ChatToolErrorProps = {
-  readonly error: ToolExecutionError;
+  /** Raw error text from the tool invocation's output-error state */
+  readonly errorText: string;
+  /** Icon to display in the fallback error UI */
+  readonly fallbackIcon: LucideIcon;
+  /** Title to display in the fallback error UI */
+  readonly fallbackTitle: string;
   readonly className?: string;
 };
 
@@ -35,10 +41,45 @@ function formatToolName(toolName: string): string {
 
 /**
  * Unified error display component for tool execution errors.
+ * Parses the error text and renders either a structured error display
+ * or a simple fallback with the provided icon and title.
+ */
+export function ChatToolError({
+  errorText,
+  fallbackIcon,
+  fallbackTitle,
+  className,
+}: ChatToolErrorProps): React.JSX.Element {
+  const error = parseToolErrorText(errorText);
+
+  if (!error) {
+    // Fallback for non-structured errors
+    const FallbackIcon = fallbackIcon;
+    return (
+      <div className={cn('overflow-hidden rounded-md border bg-neutral/10', className)}>
+        <div className="flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs">
+          <FallbackIcon className="size-3 shrink-0 text-destructive" />
+          <span className="font-medium text-destructive">{fallbackTitle}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return <StructuredToolError error={error} className={className} />;
+}
+
+type StructuredToolErrorProps = {
+  readonly error: ToolExecutionError;
+  readonly className?: string;
+};
+
+/**
+ * Component for rendering structured tool execution errors.
+ * Use this when you already have a parsed ToolExecutionError object.
  * Renders different styles based on error type, with expandable details
  * for validation errors.
  */
-export function ChatToolError({ error, className }: ChatToolErrorProps): React.JSX.Element {
+export function StructuredToolError({ error, className }: StructuredToolErrorProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
   const Icon = errorIcons[error.errorCode];
   const title = getToolErrorTitle(error.errorCode);
