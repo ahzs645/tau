@@ -18,8 +18,8 @@ export default function AuthPage(): React.JSX.Element {
             <TooltipTrigger asChild className="flex items-center gap-2 font-medium">
               <Link to="/">
                 <Tau className="size-7 text-primary" />
-                <h1 className="-mb-0.5 -ml-3 font-mono text-2xl font-semibold tracking-wider text-primary italic group-data-[collapsible=icon]:hidden">
-                  au
+                <h1 className="-mb-2 -ml-3.5 font-mono text-2xl font-semibold tracking-tight text-primary group-data-[collapsible=icon]:hidden">
+                  AU
                 </h1>
               </Link>
             </TooltipTrigger>

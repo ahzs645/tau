@@ -22,10 +22,10 @@ export function AppSidebar({ ...properties }: React.ComponentProps<typeof Sideba
         <SidebarMenuButton
           asChild
           tooltip="Home"
-          className="gap-0 p-0! group-data-[collapsible=icon]:p-0! [&>svg]:size-7"
+          className="gap-0 p-1! group-data-[collapsible=icon]:p-0! [&>svg]:size-5"
         >
           <Link to="/">
-            <Tau className="overflow-clip rounded-md text-primary" />
+            <Tau className="text-primary" />
             <span className="sr-only">Home</span>
           </Link>
         </SidebarMenuButton>
