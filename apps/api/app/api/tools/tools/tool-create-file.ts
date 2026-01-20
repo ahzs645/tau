@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { createFileInputSchema } from '@taucad/chat';
+import type { ChatTool, CreateFileInput, CreateFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -19,7 +20,12 @@ Note: This tool will overwrite an existing file if one exists at the specified p
   schema: createFileInputSchema,
 } as const;
 
-export const createFileTool = tool(async (args, runtime: ToolRuntime) => {
+export const createFileTool: ChatTool<
+  typeof createFileInputSchema,
+  CreateFileInput,
+  CreateFileOutput,
+  typeof toolName.createFile
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 

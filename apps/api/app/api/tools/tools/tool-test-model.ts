@@ -2,7 +2,7 @@ import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { testModelInputSchema, testFileSchema } from '@taucad/chat';
 import { isToolExecutionError } from '@taucad/chat/utils';
-import type { TestModelOutput, VisualTestRequirement } from '@taucad/chat';
+import type { ChatTool, TestModelInput, TestModelOutput, VisualTestRequirement } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -23,7 +23,12 @@ Note: Reads requirements from test.json. Use edit_tests to add/modify requiremen
   schema: testModelInputSchema,
 } as const;
 
-export const testModelTool = tool(async (_input, runtime: ToolRuntime) => {
+export const testModelTool: ChatTool<
+  typeof testModelInputSchema,
+  TestModelInput,
+  TestModelOutput,
+  typeof toolName.testModel
+> = tool(async (_input, runtime: ToolRuntime) => {
   const { chatToolsService, analysisService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 

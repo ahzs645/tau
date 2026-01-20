@@ -1,3 +1,4 @@
+import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { InferUITools, Tool as AiTool, UIToolInvocation } from 'ai';
 import type { toolName, toolMode, clientToolNames } from '#constants/tool.constants.js';
 import type { EditFileInput, EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
@@ -33,6 +34,7 @@ import type {
   TransferBackToSupervisorInput,
   TransferBackToSupervisorOutput,
 } from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
+import type { ToolExecutionError } from '#types/websocket.types.js';
 
 export type ToolName = (typeof toolName)[keyof typeof toolName];
 
@@ -79,3 +81,34 @@ export type MyTools = InferUITools<{
  * Usage: ToolInvocation<typeof toolName.readFile>
  */
 export type ToolInvocation<T extends keyof MyTools> = UIToolInvocation<MyTools[T]>;
+
+/**
+ * A LangChain DynamicStructuredTool that can return either the success output
+ * or a ToolExecutionError. This is used for all chat tools that communicate
+ * with the client via WebSocket, where errors can occur during execution.
+ *
+ * @template SchemaT - The Zod schema type for the tool input
+ * @template SchemaOutputT - The parsed output type from the schema (usually z.infer<SchemaT>)
+ * @template SchemaInputT - The input type to the schema (usually same as SchemaOutputT)
+ * @template SuccessOutputT - The success output type of the tool
+ * @template NameT - The literal string type of the tool name
+ *
+ * @example
+ * ```ts
+ * export const myTool: ChatTool<
+ *   typeof myInputSchema,
+ *   MyInput,
+ *   MyOutput,
+ *   typeof toolName.myTool
+ * > = tool(async (args, runtime) => {
+ *   // ...
+ * }, myToolDefinition);
+ * ```
+ */
+export type ChatTool<
+  SchemaT,
+  SchemaOutputT,
+  SuccessOutputT,
+  NameT extends string,
+  SchemaInputT = SchemaOutputT,
+> = DynamicStructuredTool<SchemaT, SchemaOutputT, SchemaInputT, SuccessOutputT | ToolExecutionError, NameT>;

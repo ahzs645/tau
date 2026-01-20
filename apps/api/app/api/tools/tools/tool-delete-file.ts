@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { deleteFileInputSchema } from '@taucad/chat';
+import type { ChatTool, DeleteFileInput, DeleteFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -20,7 +21,12 @@ The operation will fail gracefully if:
   schema: deleteFileInputSchema,
 } as const;
 
-export const deleteFileTool = tool(async (args, runtime: ToolRuntime) => {
+export const deleteFileTool: ChatTool<
+  typeof deleteFileInputSchema,
+  DeleteFileInput,
+  DeleteFileOutput,
+  typeof toolName.deleteFile
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 

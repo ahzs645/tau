@@ -2,6 +2,7 @@ import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { readFileInputSchema } from '@taucad/chat';
 import { isToolExecutionError } from '@taucad/chat/utils';
+import type { ChatTool, ReadFileInput, ReadFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -29,7 +30,12 @@ function addLineNumbers(content: string, startLine: number): string {
   return lines.map((line, idx) => `${String(startLine + idx).padStart(6)}|${line}`).join('\n');
 }
 
-export const readFileTool = tool(async (args, runtime: ToolRuntime) => {
+export const readFileTool: ChatTool<
+  typeof readFileInputSchema,
+  ReadFileInput,
+  ReadFileOutput,
+  typeof toolName.readFile
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 

@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { grepInputSchema } from '@taucad/chat';
+import type { ChatTool, GrepInput, GrepOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -23,9 +24,12 @@ Use this tool when you need to:
   schema: grepInputSchema,
 } as const;
 
-export const grepTool = tool(async (args, runtime: ToolRuntime) => {
-  const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
-  const { toolCallId } = runtime;
+export const grepTool: ChatTool<typeof grepInputSchema, GrepInput, GrepOutput, typeof toolName.grep> = tool(
+  async (args, runtime: ToolRuntime) => {
+    const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
+    const { toolCallId } = runtime;
 
-  return chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.grep, args);
-}, grepToolDefinition);
+    return chatToolsService.sendToolCallRequest(chatId, toolCallId, toolName.grep, args);
+  },
+  grepToolDefinition,
+);

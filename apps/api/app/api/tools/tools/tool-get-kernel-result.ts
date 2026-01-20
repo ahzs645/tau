@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { getKernelResultInputSchema } from '@taucad/chat';
+import type { ChatTool, GetKernelResultInput, GetKernelResultOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -21,7 +22,12 @@ Best Practice: Always call this tool after making file changes to ensure the mod
   schema: getKernelResultInputSchema,
 } as const;
 
-export const getKernelResultTool = tool(async (args, runtime: ToolRuntime) => {
+export const getKernelResultTool: ChatTool<
+  typeof getKernelResultInputSchema,
+  GetKernelResultInput,
+  GetKernelResultOutput,
+  typeof toolName.getKernelResult
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 

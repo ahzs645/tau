@@ -32,49 +32,58 @@ type ToolSchemaEntry<Input = unknown, Output = unknown> = {
 };
 
 /**
- * Type-safe registry mapping client tool names to their Zod schemas.
- * This provides compile-time type inference for tool inputs and outputs.
- */
-export const toolSchemasRegistry = {
-  [toolName.listDirectory]: {
-    inputSchema: listDirectoryInputSchema,
-    outputSchema: listDirectoryOutputSchema,
-  } satisfies ToolSchemaEntry<ListDirectoryInput, ListDirectoryOutput>,
-  [toolName.readFile]: {
-    inputSchema: readFileInputSchema,
-    outputSchema: readFileOutputSchema,
-  } satisfies ToolSchemaEntry<ReadFileInput, ReadFileOutput>,
-  [toolName.createFile]: {
-    inputSchema: createFileInputSchema,
-    outputSchema: createFileOutputSchema,
-  } satisfies ToolSchemaEntry<CreateFileInput, CreateFileOutput>,
-  [toolName.deleteFile]: {
-    inputSchema: deleteFileInputSchema,
-    outputSchema: deleteFileOutputSchema,
-  } satisfies ToolSchemaEntry<DeleteFileInput, DeleteFileOutput>,
-  [toolName.grep]: {
-    inputSchema: grepInputSchema,
-    outputSchema: grepOutputSchema,
-  } satisfies ToolSchemaEntry<GrepInput, GrepOutput>,
-  [toolName.globSearch]: {
-    inputSchema: globSearchInputSchema,
-    outputSchema: globSearchOutputSchema,
-  } satisfies ToolSchemaEntry<GlobSearchInput, GlobSearchOutput>,
-  [toolName.getKernelResult]: {
-    inputSchema: getKernelResultInputSchema,
-    outputSchema: getKernelResultOutputSchema,
-  } satisfies ToolSchemaEntry<GetKernelResultInput, GetKernelResultOutput>,
-  [toolName.captureObservations]: {
-    inputSchema: captureObservationsInputSchema,
-    outputSchema: captureObservationsOutputSchema,
-  } satisfies ToolSchemaEntry<CaptureObservationsInput, CaptureObservationsOutput>,
-} as const;
-
-/**
  * Type representing the tool schemas registry.
  * Used for type inference in sendToolCallRequest.
  */
-export type ToolSchemasRegistry = typeof toolSchemasRegistry;
+export type ToolSchemasRegistry = {
+  [toolName.listDirectory]: ToolSchemaEntry<ListDirectoryInput, ListDirectoryOutput>;
+  [toolName.readFile]: ToolSchemaEntry<ReadFileInput, ReadFileOutput>;
+  [toolName.createFile]: ToolSchemaEntry<CreateFileInput, CreateFileOutput>;
+  [toolName.deleteFile]: ToolSchemaEntry<DeleteFileInput, DeleteFileOutput>;
+  [toolName.grep]: ToolSchemaEntry<GrepInput, GrepOutput>;
+  [toolName.globSearch]: ToolSchemaEntry<GlobSearchInput, GlobSearchOutput>;
+  [toolName.getKernelResult]: ToolSchemaEntry<GetKernelResultInput, GetKernelResultOutput>;
+  [toolName.captureObservations]: ToolSchemaEntry<CaptureObservationsInput, CaptureObservationsOutput>;
+};
+
+/**
+ * Type-safe registry mapping client tool names to their Zod schemas.
+ * This provides compile-time type inference for tool inputs and outputs.
+ */
+export const toolSchemasRegistry: ToolSchemasRegistry = {
+  [toolName.listDirectory]: {
+    inputSchema: listDirectoryInputSchema,
+    outputSchema: listDirectoryOutputSchema,
+  },
+  [toolName.readFile]: {
+    inputSchema: readFileInputSchema,
+    outputSchema: readFileOutputSchema,
+  },
+  [toolName.createFile]: {
+    inputSchema: createFileInputSchema,
+    outputSchema: createFileOutputSchema,
+  },
+  [toolName.deleteFile]: {
+    inputSchema: deleteFileInputSchema,
+    outputSchema: deleteFileOutputSchema,
+  },
+  [toolName.grep]: {
+    inputSchema: grepInputSchema,
+    outputSchema: grepOutputSchema,
+  },
+  [toolName.globSearch]: {
+    inputSchema: globSearchInputSchema,
+    outputSchema: globSearchOutputSchema,
+  },
+  [toolName.getKernelResult]: {
+    inputSchema: getKernelResultInputSchema,
+    outputSchema: getKernelResultOutputSchema,
+  },
+  [toolName.captureObservations]: {
+    inputSchema: captureObservationsInputSchema,
+    outputSchema: captureObservationsOutputSchema,
+  },
+};
 
 /**
  * Helper type to extract input type for a given client tool name.

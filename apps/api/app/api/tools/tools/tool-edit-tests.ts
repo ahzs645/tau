@@ -2,7 +2,7 @@ import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { editTestsInputSchema } from '@taucad/chat';
 import { isToolExecutionError } from '@taucad/chat/utils';
-import type { EditTestsOutput } from '@taucad/chat';
+import type { ChatTool, EditTestsInput, EditTestsOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -45,7 +45,12 @@ const defaultTestFile = JSON.stringify(
   2,
 );
 
-export const editTestsTool = tool(async (args, runtime: ToolRuntime) => {
+export const editTestsTool: ChatTool<
+  typeof editTestsInputSchema,
+  EditTestsInput,
+  EditTestsOutput,
+  typeof toolName.editTests
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, fileEditService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
   const { codeEdit } = args;

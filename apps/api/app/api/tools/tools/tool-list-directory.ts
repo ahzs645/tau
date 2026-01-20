@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { listDirectoryInputSchema } from '@taucad/chat';
+import type { ChatTool, ListDirectoryInput, ListDirectoryOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -17,7 +18,12 @@ The path should be relative to the project root. Use an empty string "" to list 
   schema: listDirectoryInputSchema,
 } as const;
 
-export const listDirectoryTool = tool(async (args, runtime: ToolRuntime) => {
+export const listDirectoryTool: ChatTool<
+  typeof listDirectoryInputSchema,
+  ListDirectoryInput,
+  ListDirectoryOutput,
+  typeof toolName.listDirectory
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 

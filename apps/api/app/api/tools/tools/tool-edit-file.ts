@@ -2,7 +2,7 @@ import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { editFileInputSchema } from '@taucad/chat';
 import { isToolExecutionError } from '@taucad/chat/utils';
-import type { EditFileOutput } from '@taucad/chat';
+import type { ChatTool, EditFileInput, EditFileOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -31,7 +31,12 @@ DO NOT omit spans of pre-existing code without using the // ... existing code ..
   schema: editFileInputSchema,
 } as const;
 
-export const editFileTool = tool(async (args, runtime: ToolRuntime) => {
+export const editFileTool: ChatTool<
+  typeof editFileInputSchema,
+  EditFileInput,
+  EditFileOutput,
+  typeof toolName.editFile
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, fileEditService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
   const { targetFile, codeEdit } = args;

@@ -1,6 +1,7 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { globSearchInputSchema } from '@taucad/chat';
+import type { ChatTool, GlobSearchInput, GlobSearchOutput } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import type { ChatToolsConfigurable } from '#api/tools/tool.types.js';
 
@@ -20,7 +21,12 @@ Common glob patterns:
   schema: globSearchInputSchema,
 } as const;
 
-export const globSearchTool = tool(async (args, runtime: ToolRuntime) => {
+export const globSearchTool: ChatTool<
+  typeof globSearchInputSchema,
+  GlobSearchInput,
+  GlobSearchOutput,
+  typeof toolName.globSearch
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatToolsService, thread_id: chatId } = runtime.configurable as ChatToolsConfigurable;
   const { toolCallId } = runtime;
 
