@@ -360,8 +360,12 @@ export default function ImportRoute(): React.JSX.Element {
         selectedMainFile={diskSelectedMainFile}
         variant="disk"
         repo={diskImportName}
-        onSelectMainFile={(file) => diskActorRef.send({ type: 'selectMainFile', file })}
-        onConfirm={() => diskActorRef.send({ type: 'confirmImport' })}
+        onSelectMainFile={(file) => {
+          diskActorRef.send({ type: 'selectMainFile', file });
+        }}
+        onConfirm={() => {
+          diskActorRef.send({ type: 'confirmImport' });
+        }}
         onCancel={() => {
           diskActorRef.send({ type: 'reset' });
           setActiveMode(undefined);
@@ -438,83 +442,7 @@ export default function ImportRoute(): React.JSX.Element {
             </div>
 
             {/* Side-by-side cards when no valid repo */}
-            {!isValidRepo ? (
-              <>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {/* GitHub Import Card */}
-                  <div className="space-y-2 rounded-lg border bg-sidebar p-6">
-                    <div className="mb-4 flex items-center gap-3">
-                      <div className="flex size-10 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
-                        <SvgIcon id="github" className="size-5 text-primary" />
-                      </div>
-                      <div>
-                        <h2 className="font-medium">Import from GitHub</h2>
-                        <p className="text-xs text-muted-foreground">Enter a repository URL</p>
-                      </div>
-                    </div>
-
-                    <div className="group relative">
-                      <Input
-                        id="repo-url"
-                        type="url"
-                        placeholder="https://github.com/owner/repo"
-                        value={repoUrl}
-                        className="pr-8 font-mono text-sm"
-                        onChange={(event) => {
-                          setActiveMode('github');
-                          gitHubActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
-                        }}
-                      />
-                      {repoUrl.length > 0 ? (
-                        <Button
-                          variant="secondary"
-                          size="icon"
-                          className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground"
-                          type="button"
-                          aria-label="Clear URL"
-                          onClick={() => {
-                            gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
-                          }}
-                        >
-                          <X className="size-3.5" />
-                        </Button>
-                      ) : undefined}
-                    </div>
-                  </div>
-
-                  {/* Disk Upload Card */}
-                  <UploadCard
-                    onFilesSelected={handleFilesSelected}
-                    onFolderSelected={handleFolderSelected}
-                    onZipSelected={handleZipSelected}
-                    onDataTransfer={handleDataTransfer}
-                  />
-                </div>
-
-                <SuggestedClones
-                  onSelect={(repository) => {
-                    setActiveMode('github');
-                    // Use github.com without protocol to avoid browser normalizing // to /
-                    const repoUrlValue = `github.com/${repository.owner}/${repository.repo}`;
-                    const parameters = new URLSearchParams();
-
-                    if (repository.ref !== 'main') {
-                      parameters.set('ref', repository.ref);
-                    }
-
-                    if (repository.mainFile) {
-                      parameters.set('main', repository.mainFile);
-                    }
-
-                    const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
-                    const targetUrl = `/import/${repoUrlValue}${queryString}`;
-
-                    // Use React Router navigate for proper history management
-                    void navigate(targetUrl);
-                  }}
-                />
-              </>
-            ) : (
+            {isValidRepo ? (
               <div className="space-y-4">
                 {/* Repository URL Input */}
                 <div className="space-y-2 rounded-lg border bg-sidebar p-6">
@@ -563,8 +491,8 @@ export default function ImportRoute(): React.JSX.Element {
                     <div className="flex flex-col gap-1">
                       <div className="font-semibold">Repository Not Found</div>
                       <div className="text-sm">
-                        The repository may not exist, be private, or you may not have access to it. Please check the
-                        URL and try again.
+                        The repository may not exist, be private, or you may not have access to it. Please check the URL
+                        and try again.
                       </div>
                     </div>
                   </div>
@@ -687,6 +615,82 @@ export default function ImportRoute(): React.JSX.Element {
                   />
                 </div>
               </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {/* GitHub Import Card */}
+                  <div className="space-y-2 rounded-lg border bg-sidebar p-6">
+                    <div className="mb-4 flex items-center gap-3">
+                      <div className="flex size-10 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
+                        <SvgIcon id="github" className="size-5 text-primary" />
+                      </div>
+                      <div>
+                        <h2 className="font-medium">Import from GitHub</h2>
+                        <p className="text-xs text-muted-foreground">Enter a repository URL</p>
+                      </div>
+                    </div>
+
+                    <div className="group relative">
+                      <Input
+                        id="repo-url"
+                        type="url"
+                        placeholder="https://github.com/owner/repo"
+                        value={repoUrl}
+                        className="pr-8 font-mono text-sm"
+                        onChange={(event) => {
+                          setActiveMode('github');
+                          gitHubActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
+                        }}
+                      />
+                      {repoUrl.length > 0 ? (
+                        <Button
+                          variant="secondary"
+                          size="icon"
+                          className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground"
+                          type="button"
+                          aria-label="Clear URL"
+                          onClick={() => {
+                            gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
+                          }}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      ) : undefined}
+                    </div>
+                  </div>
+
+                  {/* Disk Upload Card */}
+                  <UploadCard
+                    onFilesSelected={handleFilesSelected}
+                    onFolderSelected={handleFolderSelected}
+                    onZipSelected={handleZipSelected}
+                    onDataTransfer={handleDataTransfer}
+                  />
+                </div>
+
+                <SuggestedClones
+                  onSelect={(repository) => {
+                    setActiveMode('github');
+                    // Use github.com without protocol to avoid browser normalizing // to /
+                    const repoUrlValue = `github.com/${repository.owner}/${repository.repo}`;
+                    const parameters = new URLSearchParams();
+
+                    if (repository.ref !== 'main') {
+                      parameters.set('ref', repository.ref);
+                    }
+
+                    if (repository.mainFile) {
+                      parameters.set('main', repository.mainFile);
+                    }
+
+                    const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
+                    const targetUrl = `/import/${repoUrlValue}${queryString}`;
+
+                    // Use React Router navigate for proper history management
+                    void navigate(targetUrl);
+                  }}
+                />
+              </>
             )}
           </div>
         </div>
@@ -710,15 +714,28 @@ export default function ImportRoute(): React.JSX.Element {
           variant="github"
           owner={owner}
           repo={repo}
-          onSelectMainFile={(file) => gitHubActorRef.send({ type: 'selectMainFile', file })}
-          onConfirm={() => gitHubActorRef.send({ type: 'confirmImport' })}
-          onCancel={() => gitHubActorRef.send({ type: 'retry' })}
+          onSelectMainFile={(file) => {
+            gitHubActorRef.send({ type: 'selectMainFile', file });
+          }}
+          onConfirm={() => {
+            gitHubActorRef.send({ type: 'confirmImport' });
+          }}
+          onCancel={() => {
+            gitHubActorRef.send({ type: 'retry' });
+          }}
         />
       );
     }
 
     case gitHubState.matches('error'): {
-      return <ImportErrorView error={gitHubError} onRetry={() => gitHubActorRef.send({ type: 'retry' })} />;
+      return (
+        <ImportErrorView
+          error={gitHubError}
+          onRetry={() => {
+            gitHubActorRef.send({ type: 'retry' });
+          }}
+        />
+      );
     }
 
     default: {

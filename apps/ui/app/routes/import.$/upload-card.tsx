@@ -33,10 +33,10 @@ export function UploadCard({
 
       // Check if it's a drag event with data transfer items (for folder support)
       const dropEvent = event as React.DragEvent;
-      if (dropEvent?.dataTransfer?.items && dropEvent.dataTransfer.items.length > 0) {
+      if (dropEvent.dataTransfer.items.length > 0) {
         // Check if any item is a directory
         const hasDirectory = [...dropEvent.dataTransfer.items].some((item) => {
-          const entry = item.webkitGetAsEntry?.();
+          const entry = item.webkitGetAsEntry();
 
           return entry?.isDirectory;
         });
@@ -63,10 +63,10 @@ export function UploadCard({
     onDrop: handleDrop,
     disabled: isDisabled,
     noClick: true, // We handle clicks separately for folder/file buttons
-    onDragEnter: () => {
+    onDragEnter() {
       setIsDraggingOver(true);
     },
-    onDragLeave: () => {
+    onDragLeave() {
       setIsDraggingOver(false);
     },
   });
@@ -97,7 +97,7 @@ export function UploadCard({
         return;
       }
 
-      const files = event.target.files;
+      const { files } = event.target;
 
       // Check if single ZIP file
       if (files.length === 1 && isZipFile(files[0]!)) {
@@ -129,22 +129,22 @@ export function UploadCard({
       {/* Hidden file inputs */}
       <input
         ref={folderInputRef}
+        multiple
         type="file"
+        disabled={isDisabled}
         className="hidden"
         // @ts-expect-error -- webkitdirectory is not in the standard types
         webkitdirectory="true"
-        multiple
         onChange={handleFolderChange}
-        disabled={isDisabled}
       />
       <input
         ref={fileInputRef}
+        multiple
         type="file"
         className="hidden"
-        multiple
         accept={importFileAcceptString}
-        onChange={handleFileChange}
         disabled={isDisabled}
+        onChange={handleFileChange}
       />
 
       {/* Header - always visible */}
@@ -163,7 +163,12 @@ export function UploadCard({
         </div>
         <div>
           <h2 className="font-medium">Upload from Disk</h2>
-          <p className={cn('text-xs transition-colors duration-200', isDropping ? 'text-primary' : 'text-muted-foreground')}>
+          <p
+            className={cn(
+              'text-xs transition-colors duration-200',
+              isDropping ? 'text-primary' : 'text-muted-foreground',
+            )}
+          >
             {isDropping ? 'Drop files here' : 'Select or drop files'}
           </p>
         </div>
@@ -181,8 +186,8 @@ export function UploadCard({
           variant="outline"
           size="sm"
           className="flex-1"
-          onClick={handleFolderClick}
           disabled={isDisabled}
+          onClick={handleFolderClick}
         >
           <Folder className="mr-1.5 size-4" />
           <span className="hidden sm:inline">Select Folder</span>
@@ -193,8 +198,8 @@ export function UploadCard({
           variant="outline"
           size="sm"
           className="flex-1"
-          onClick={handleFileClick}
           disabled={isDisabled}
+          onClick={handleFileClick}
         >
           <Files className="mr-1.5 size-4" />
           <span className="hidden sm:inline">Select Files</span>
