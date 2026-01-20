@@ -11,11 +11,9 @@ export const ChatErrorUnauthorized = memo(function ({ className }: { readonly cl
   const { signIn, signUp } = useAuthLinks();
 
   return (
-    <div
-      className={cn('flex flex-col gap-3 rounded-md border border-secondary bg-secondary/50 p-3 text-sm', className)}
-    >
+    <div className={cn('flex flex-col gap-3 rounded-md border bg-muted p-3 text-sm', className)}>
       <div className="flex flex-col gap-1">
-        <p className="font-medium text-secondary-foreground">Sign in to continue</p>
+        <p className="font-medium text-foreground">Sign in to continue</p>
         <p className="text-xs text-muted-foreground">Create an account or sign in to chat with Tau.</p>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
