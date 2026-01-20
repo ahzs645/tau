@@ -1,11 +1,12 @@
 import type { LinksFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 import { Links, Meta, Scripts, ScrollRestoration, useRouteLoaderData } from 'react-router';
-import { PreventFlashOnWrongTheme, Theme, ThemeProvider } from 'remix-themes';
-import { useTheme } from '#hooks/use-theme.js';
+import { PreventFlashOnWrongTheme, ThemeProvider } from 'remix-themes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Model } from '@taucad/chat';
+import { useTheme } from '#hooks/use-theme.js';
+import type { ThemeWithSystem } from '#hooks/use-theme.js';
 import { getEnvironment } from '#environment.config.js';
 import { metaConfig } from '#constants/meta.constants.js';
 import { Page } from '#components/layout/page.js';
@@ -119,7 +120,7 @@ function LayoutDocument({
 }: {
   readonly children: ReactNode;
   readonly env: Record<string, string>;
-  readonly ssrTheme: Theme | null;
+  readonly ssrTheme: ThemeWithSystem;
 }): React.JSX.Element {
   const { theme } = useTheme();
   const color = useColor();
