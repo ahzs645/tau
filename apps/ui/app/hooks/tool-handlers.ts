@@ -206,9 +206,7 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
     return { entries, path: input.path || '/' };
   };
 
-  /**
-   * Handler for create file tool.
-   */
+  // Handler for create file tool
   const handleCreateFile = async (input: CreateFileInput): Promise<CreateFileOutput> => {
     try {
       // Call fileManager.writeFile directly - this properly awaits the operation
@@ -240,11 +238,7 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
     }
   };
 
-  /**
-   * Handler for delete file tool.
-   *
-   * FIX: Now properly awaits the file delete operation before returning.
-   */
+  // Handler for delete file tool
   const handleDeleteFile = async (input: DeleteFileInput): Promise<DeleteFileOutput> => {
     try {
       // Call fileManager.deleteFile directly - this properly awaits the operation
