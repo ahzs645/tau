@@ -100,8 +100,8 @@ export function ChatMessageToolTestModel({
               </ChatToolCardTitle>
               <RequirementIndicator failedCount={0} passedCount={passedCount} />
             </ChatToolCardHeader>
-            <ChatToolCardContent>
-              <div className="space-y-1 py-1">
+            <ChatToolCardContent forceMount>
+              <div className="space-y-1 border-l border-foreground/20 py-1 pl-4">
                 {passes.map((pass, index) => {
                   const key = `${pass.id}-${index}`;
 
