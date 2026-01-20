@@ -134,7 +134,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               'flex flex-col gap-1',
               isUser &&
                 'max-h-58.5 cursor-pointer overflow-hidden rounded-sm border bg-background px-3 py-1 hover:border-primary',
-                fileParts.length > 0 && 'pt-3',
+              fileParts.length > 0 && 'pt-3',
             )}
             onClick={handleEditClick}
           >

@@ -4,7 +4,7 @@ import { LogIn, UserPlus } from 'lucide-react';
 import { NavLink } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
 
 export const ChatErrorUnauthorized = memo(function ({ className }: { readonly className?: string }): React.JSX.Element {
@@ -21,7 +21,7 @@ export const ChatErrorUnauthorized = memo(function ({ className }: { readonly cl
           <NavLink to={signIn} tabIndex={-1}>
             {({ isPending }) =>
               isPending ? (
-                <LoadingSpinner />
+                <Loader />
               ) : (
                 <>
                   <LogIn className="size-4" />
@@ -35,7 +35,7 @@ export const ChatErrorUnauthorized = memo(function ({ className }: { readonly cl
           <NavLink to={signUp} tabIndex={-1}>
             {({ isPending }) =>
               isPending ? (
-                <LoadingSpinner />
+                <Loader />
               ) : (
                 <>
                   <UserPlus className="size-4" />

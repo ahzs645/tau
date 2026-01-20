@@ -8,7 +8,7 @@ import type { Route } from './+types/route.js';
 import type { Handle } from '#types/matches.types.js';
 import { importGitHubMachine } from '#machines/import-github.machine.js';
 import { importDiskMachine } from '#machines/import-disk.machine.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { Progress } from '#components/ui/progress.js';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
@@ -751,7 +751,7 @@ export default function ImportRoute(): React.JSX.Element {
                   <span className="flex items-center gap-2 font-medium">
                     {gitHubState.matches('downloading') ? (
                       <>
-                        <LoadingSpinner />
+                        <Loader />
                         <span>Downloading...</span>
                       </>
                     ) : (
@@ -785,7 +785,7 @@ export default function ImportRoute(): React.JSX.Element {
                     <span className="flex items-center gap-2 font-medium">
                       {gitHubState.matches('extracting') ? (
                         <>
-                          <LoadingSpinner />
+                          <Loader />
                           <span>Extracting files...</span>
                         </>
                       ) : (
@@ -814,7 +814,7 @@ export default function ImportRoute(): React.JSX.Element {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2 font-medium">
-                      <LoadingSpinner />
+                      <Loader />
                       <span>Creating build...</span>
                     </span>
                   </div>

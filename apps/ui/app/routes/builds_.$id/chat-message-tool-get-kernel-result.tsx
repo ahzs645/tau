@@ -178,7 +178,13 @@ export function ChatMessageToolGetKernelResult({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={XCircle} fallbackTitle="Failed to check kernel status" />;
+      return (
+        <ChatToolError
+          errorText={part.errorText}
+          fallbackIcon={XCircle}
+          fallbackTitle="Failed to check kernel status"
+        />
+      );
     }
 
     case 'approval-requested':

@@ -7,7 +7,7 @@ import { useBuild } from '#hooks/use-build.js';
 import { useChatManager } from '#hooks/use-chat-manager.js';
 import { useChatConstants } from '#utils/chat.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { InlineTextEditor } from '#components/inline-text-editor.js';
 
 const animationDuration = 2000;
@@ -83,7 +83,7 @@ export function BuildNameEditor(): React.JSX.Element {
     }
 
     if (value === '') {
-      return <LoadingSpinner />;
+      return <Loader />;
     }
 
     return value;

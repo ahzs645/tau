@@ -4,7 +4,7 @@ import { CreditCard } from 'lucide-react';
 import { NavLink } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 export const ChatErrorCredits = memo(function ({ className }: { readonly className?: string }): React.JSX.Element {
   return (
@@ -20,7 +20,7 @@ export const ChatErrorCredits = memo(function ({ className }: { readonly classNa
           <NavLink to="/settings/billing" tabIndex={-1}>
             {({ isPending }) =>
               isPending ? (
-                <LoadingSpinner />
+                <Loader />
               ) : (
                 <>
                   <CreditCard className="size-4" />

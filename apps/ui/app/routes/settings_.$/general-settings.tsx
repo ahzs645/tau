@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
-import { Check, ChevronDown, Laptop, Loader2, Moon, ShieldCheck, Sun } from 'lucide-react';
+import { Check, ChevronDown, Laptop, Moon, ShieldCheck, Sun } from 'lucide-react';
+import { Loader } from '#components/ui/loader.js';
 import { usePrivacyPreferences } from '#hooks/use-privacy-preferences.js';
 import { Theme, useTheme, themeOptions } from '#hooks/use-theme.js';
 import type { ThemeWithSystem } from '#hooks/use-theme.js';
@@ -68,7 +69,7 @@ export function GeneralSettings(): React.JSX.Element {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        <Loader className="size-6 text-muted-foreground" />
       </div>
     );
   }

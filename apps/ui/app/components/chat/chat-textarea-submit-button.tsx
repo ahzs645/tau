@@ -4,7 +4,7 @@ import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 type ChatTextareaSubmitButtonProperties = {
   readonly status: string;
@@ -46,7 +46,7 @@ export const ChatTextareaSubmitButton = memo(function ({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button size="icon" className="size-7 rounded-full" disabled={isDisabled || isSubmitting} onClick={onSubmit}>
-          {isSubmitting ? <LoadingSpinner className="size-4" /> : <ArrowUp className="size-5" />}
+          {isSubmitting ? <Loader className="size-4" /> : <ArrowUp className="size-5" />}
         </Button>
       </TooltipTrigger>
       <TooltipContent className="flex items-center gap-2 align-baseline">

@@ -11,8 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '#components/ui/avatar.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardFooter } from '#components/ui/card.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
-import { HammerAnimation } from '#components/hammer-animation.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useChatManager } from '#hooks/use-chat-manager.js';
@@ -205,7 +204,7 @@ function ProjectCard({
             <div className="size-full object-cover">
               {['initializing', 'booting'].includes(status) ? (
                 <div className="flex size-full items-center justify-center">
-                  <HammerAnimation className="size-10" />
+                  <Loader className="size-10" />
                 </div>
               ) : null}
               <div
@@ -299,7 +298,7 @@ function ProjectCard({
                   >
                     <span className="text-xs sm:text-sm">Remix</span>
                     {isForking ? (
-                      <LoadingSpinner className="size-3.5 sm:size-4" />
+                      <Loader className="size-3.5 sm:size-4" />
                     ) : (
                       <ArrowRight className="size-3.5 sm:size-4" />
                     )}

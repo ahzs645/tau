@@ -1,8 +1,7 @@
 /**
  * Import route utilities and derived constants.
  */
-import { kernelConfigurations } from '@taucad/types/constants';
-import { languageFromExtension } from '@taucad/types/constants';
+import { kernelConfigurations, languageFromExtension } from '@taucad/types/constants';
 import type { CodeLanguage } from '@taucad/types';
 
 /**
@@ -12,7 +11,7 @@ import type { CodeLanguage } from '@taucad/types';
 // eslint-disable-next-line unicorn/no-array-reduce -- inverting a mapping
 const extensionFromLanguage = Object.entries(languageFromExtension).reduce(
   (acc, [extension, language]) => {
-    acc[language as CodeLanguage] = `.${extension}`;
+    acc[language] = `.${extension}`;
     return acc;
   },
   {} as Record<CodeLanguage, string>,

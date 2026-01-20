@@ -6,7 +6,7 @@ import { Box } from 'lucide-react';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { HammerAnimation } from '#components/hammer-animation.js';
+import { Loader } from '#components/ui/loader.js';
 
 type Files = Map<string, { filename: string; content: Uint8Array }>;
 
@@ -91,7 +91,7 @@ function ImportViewerContent({ files, buildId }: ImportViewerContentProperties):
   if (isLoading) {
     return (
       <div className="flex size-full items-center justify-center">
-        <HammerAnimation className="size-12" />
+        <Loader className="size-12" />
       </div>
     );
   }
@@ -110,7 +110,7 @@ function ImportViewerContent({ files, buildId }: ImportViewerContentProperties):
 
   return (
     <div className="flex size-full items-center justify-center">
-      <HammerAnimation className="size-12" />
+      <Loader className="size-12" />
     </div>
   );
 }

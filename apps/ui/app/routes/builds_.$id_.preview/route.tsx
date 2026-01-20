@@ -1,10 +1,11 @@
 import { useParams, Link, useNavigate } from 'react-router';
 import { useCallback, useState } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { Download, Star, GitFork, FileCode, Eye, Code, ChevronDown, SlidersHorizontal, Loader2 } from 'lucide-react';
+import { Download, Star, GitFork, FileCode, Eye, Code, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import type { ExportFormat } from '@taucad/types';
 import { fileExtensionFromExportFormat } from '@taucad/types/constants';
+import { Loader } from '#components/ui/loader.js';
 import { Button } from '#components/ui/button.js';
 import type { Handle } from '#types/matches.types.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
@@ -51,7 +52,7 @@ function ViewerStatus({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
       )}
     >
       <span className="font-mono text-sm text-muted-foreground capitalize">{state}...</span>
-      <Loader2 className="size-4 animate-spin text-primary" />
+      <Loader className="size-4" />
     </div>
   ) : null;
 }

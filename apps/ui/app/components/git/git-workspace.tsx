@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react';
 import type { ActorRefFrom } from 'xstate';
 import { useSelector } from '@xstate/react';
-import { Sparkles, GitCommit, Upload, Download, Loader2 } from 'lucide-react';
+import { Sparkles, GitCommit, Upload, Download } from 'lucide-react';
+import { Loader } from '#components/ui/loader.js';
 import type { gitMachine } from '#machines/git.machine.js';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
@@ -176,7 +177,7 @@ export function GitWorkspace({ gitRef }: GitWorkspaceProperties): React.ReactNod
                 title="Generate commit message with AI"
                 onClick={handleGenerateCommitMessage}
               >
-                {isGeneratingMessage ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                {isGeneratingMessage ? <Loader className="size-4" /> : <Sparkles className="size-4" />}
               </Button>
             </div>
             <div className="flex gap-2">

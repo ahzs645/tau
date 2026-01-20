@@ -5,7 +5,7 @@ import { useContext } from 'react';
 import { NavLink } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
 
@@ -40,17 +40,17 @@ export function NavUser(): React.JSX.Element {
       <SignedOut>
         <Button asChild variant="overlay" className="hidden select-none lg:flex">
           <NavLink to={signIn} tabIndex={-1}>
-            {({ isPending }) => (isPending ? <LoadingSpinner /> : 'Sign In')}
+            {({ isPending }) => (isPending ? <Loader /> : 'Sign In')}
           </NavLink>
         </Button>
         <Button asChild className="hidden select-none">
           <NavLink to={signUp} tabIndex={-1}>
-            {({ isPending }) => (isPending ? <LoadingSpinner /> : 'Sign Up')}
+            {({ isPending }) => (isPending ? <Loader /> : 'Sign Up')}
           </NavLink>
         </Button>
         <Button asChild size="icon" variant="overlay" className="text-primary select-none lg:hidden">
           <NavLink to={signIn} tabIndex={-1}>
-            {({ isPending }) => (isPending ? <LoadingSpinner /> : <LogIn />)}
+            {({ isPending }) => (isPending ? <Loader /> : <LogIn />)}
           </NavLink>
         </Button>
       </SignedOut>

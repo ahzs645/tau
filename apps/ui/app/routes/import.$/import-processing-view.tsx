@@ -1,5 +1,5 @@
 import { XCircle, Upload } from 'lucide-react';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { Progress } from '#components/ui/progress.js';
 import { Button } from '#components/ui/button.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
@@ -44,7 +44,7 @@ export function ImportProcessingView({
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span className="flex items-center gap-2 font-medium">
-                <LoadingSpinner />
+                <Loader />
                 <span>{statusText}</span>
               </span>
               {progress.total > 0 ? (

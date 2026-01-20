@@ -3,7 +3,7 @@ import { NavLink, useMatch, useNavigate } from 'react-router';
 import { SidebarGroup, SidebarMenuButton } from '#components/ui/sidebar.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useKeydown } from '#hooks/use-keydown.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 export function NavChat(): React.JSX.Element {
   const navigate = useNavigate();
@@ -40,7 +40,7 @@ export function NavChat(): React.JSX.Element {
             variant="outline"
           >
             <span>
-              {isPending ? <LoadingSpinner /> : <PackagePlus className="size-4 shrink-0" />}
+              {isPending ? <Loader /> : <PackagePlus className="size-4 shrink-0" />}
               <span className="flex-1 whitespace-nowrap">New Build</span>
               <KeyShortcut className="ml-2 shrink-0">{formattedKeyCombination}</KeyShortcut>
             </span>

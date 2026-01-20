@@ -8,7 +8,7 @@ import { languageFromExtension } from '@taucad/types/constants';
 import type { IssueSeverity } from '@taucad/types';
 import { CodeEditor } from '#components/code/code-editor.client.js';
 import { cn } from '#utils/ui.utils.js';
-import { HammerAnimation } from '#components/hammer-animation.js';
+import { Loader } from '#components/ui/loader.js';
 import { registerMonaco } from '#lib/monaco.js';
 import { setKclLspFileManager } from '#lib/kcl-language/kcl-register-language.js';
 import { ChatEditorBreadcrumbs } from '#routes/builds_.$id/chat-editor-breadcrumbs.js';
@@ -305,7 +305,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
           <ChatEditorBinaryWarning onForceOpen={handleForceOpenBinary} />
         ) : (
           <CodeEditor
-            loading={<HammerAnimation className="size-20 animate-spin stroke-1 text-primary ease-in-out" />}
+            loading={<Loader className="size-20 stroke-1 text-primary" />}
             className="h-full bg-background"
             defaultLanguage={activeFile.language}
             defaultValue={editorContent}

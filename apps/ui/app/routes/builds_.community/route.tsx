@@ -16,7 +16,7 @@ import {
 import { sampleBuilds } from '#constants/build-examples.js';
 import { CommunityBuildGrid } from '#components/project-grid.js';
 import type { Handle } from '#types/matches.types.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -98,7 +98,7 @@ export default function CadCommunity(): React.JSX.Element {
           <span className="text-muted-foreground">({sortedProjects.length})</span>
         </div>
         <Button asChild>
-          <NavLink to="/">{({ isPending }) => (isPending ? <LoadingSpinner /> : 'New Build')}</NavLink>
+          <NavLink to="/">{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
         </Button>
       </div>
 

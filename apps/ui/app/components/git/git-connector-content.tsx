@@ -2,8 +2,8 @@ import { useCallback, useContext, useState, useEffect } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import { AuthUIContext } from '@daveyplate/better-auth-ui';
-import { Loader2 } from 'lucide-react';
 import { Link } from 'react-router';
+import { Loader } from '#components/ui/loader.js';
 import type { gitMachine } from '#machines/git.machine.js';
 import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
@@ -99,7 +99,7 @@ export function GitConnectorContent({ gitRef }: GitConnectorContentProperties): 
 function CheckingAuth(): React.JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center gap-4 py-12">
-      <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      <Loader className="size-8 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">Checking authentication...</p>
     </div>
   );
