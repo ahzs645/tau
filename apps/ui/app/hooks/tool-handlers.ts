@@ -32,7 +32,6 @@ import type { FileEntry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { screenshotRequestMachine, orthographicViews } from '#machines/screenshot-request.machine.js';
-import type { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 import { decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
@@ -41,16 +40,15 @@ import { decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 type FileWriteSource = 'editor' | 'user' | 'machine';
 
 /**
- * Dependencies required for tool execution
+ * Dependencies required for tool execution.
  */
 export type ToolHandlerDependencies = {
-  /** File manager for read/write operations */
+  /** File manager for read/write/delete operations (calls worker directly) */
   fileManager: {
     readFile: (path: string) => Promise<Uint8Array>;
     writeFile: (path: string, data: Uint8Array, options: { source: FileWriteSource }) => Promise<void>;
+    deleteFile: (path: string, options: { source: FileWriteSource }) => Promise<void>;
   };
-  /** File manager actor ref for state machine operations */
-  fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   /** Graphics actor ref for screenshots */
   graphicsRef: ActorRefFrom<typeof graphicsMachine>;
   /** CAD actor ref for kernel status */
@@ -99,7 +97,7 @@ export type ToolHandlers = {
  * Returns an object with handler functions for each tool.
  */
 export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers {
-  const { fileManager, fileManagerRef, graphicsRef, cadRef, fileTree, screenshotQuality } = deps;
+  const { fileManager, graphicsRef, cadRef, fileTree, screenshotQuality } = deps;
 
   // Handler for capture observations tool - captures screenshots from all orthographic views
   const handleCaptureObservations = async (): Promise<CaptureObservationsOutput> => {
@@ -208,38 +206,54 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
     return { entries, path: input.path || '/' };
   };
 
-  // Handler for create file tool
+  /**
+   * Handler for create file tool.
+   */
   const handleCreateFile = async (input: CreateFileInput): Promise<CreateFileOutput> => {
-    await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
+    try {
+      // Call fileManager.writeFile directly - this properly awaits the operation
+      await fileManager.writeFile(input.targetFile, encodeTextFile(input.content), { source: 'machine' });
 
-    fileManagerRef.send({
-      type: 'writeFile',
-      path: input.targetFile,
-      data: encodeTextFile(input.content),
-      source: 'machine',
-    });
+      const lineCount = input.content.split('\n').length;
 
-    const lineCount = input.content.split('\n').length;
-
-    return {
-      success: true,
-      message: `File created: ${input.targetFile}`,
-      diffStats: {
-        linesAdded: lineCount,
-        linesRemoved: 0,
-        originalContent: '',
-        modifiedContent: input.content,
-      },
-    };
+      return {
+        success: true,
+        message: `File created: ${input.targetFile}`,
+        diffStats: {
+          linesAdded: lineCount,
+          linesRemoved: 0,
+          originalContent: '',
+          modifiedContent: input.content,
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to create file: ${getErrorMessage(error)}`,
+        diffStats: {
+          linesAdded: 0,
+          linesRemoved: 0,
+          originalContent: '',
+          modifiedContent: '',
+        },
+      };
+    }
   };
 
-  // Handler for delete file tool
+  /**
+   * Handler for delete file tool.
+   *
+   * FIX: Now properly awaits the file delete operation before returning.
+   */
   const handleDeleteFile = async (input: DeleteFileInput): Promise<DeleteFileOutput> => {
-    await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
+    try {
+      // Call fileManager.deleteFile directly - this properly awaits the operation
+      await fileManager.deleteFile(input.targetFile, { source: 'machine' });
 
-    fileManagerRef.send({ type: 'deleteFile', path: input.targetFile, source: 'machine' });
-
-    return { success: true, message: `File deleted: ${input.targetFile}` };
+      return { success: true, message: `File deleted: ${input.targetFile}` };
+    } catch (error) {
+      return { success: false, message: `Failed to delete file: ${getErrorMessage(error)}` };
+    }
   };
 
   // Handler for grep tool

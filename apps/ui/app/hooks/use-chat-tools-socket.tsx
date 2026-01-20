@@ -143,7 +143,6 @@ export function useChatToolsConnection(options: UseChatToolsConnectionOptions): 
   const depsRef = useRef<ToolHandlerDependencies | undefined>(undefined);
   depsRef.current = {
     fileManager,
-    fileManagerRef,
     graphicsRef: graphicsActor,
     cadRef: cadActor,
     fileTree,

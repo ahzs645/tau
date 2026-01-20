@@ -118,12 +118,14 @@ export const ChatEditorFileTree = memo(function ({
   'use no memo'; // Opt out of React Compiler memoization
   const { buildRef, fileExplorerRef, gitRef, cadRef } = useBuild();
   const buildId = useSelector(buildRef, (state) => state.context.buildId);
-  const { fileManagerRef } = useFileManager();
+  const fileManager = useFileManager();
+  const { fileManagerRef, readFile, writeFile, renameFile, deleteFile } = fileManager;
 
   useEffect(() => {
     // FileExplorer → FileManager → CAD coordination
     const fileOpenedSub = fileExplorerRef.on('fileOpened', (event) => {
-      fileManagerRef.send({ type: 'readFile', path: event.path });
+      // Read file directly - this properly awaits the worker call
+      void readFile(event.path);
 
       // Only send setFile when switching to a different file
       // This prevents unnecessary re-renders when clicking on an already open file
@@ -186,7 +188,7 @@ export const ChatEditorFileTree = memo(function ({
       fileDeletedSub.unsubscribe();
       fileWrittenSub.unsubscribe();
     };
-  }, [buildRef, fileExplorerRef, fileManagerRef, cadRef, buildId]);
+  }, [buildRef, fileExplorerRef, fileManagerRef, cadRef, buildId, readFile]);
 
   // Derive file tree from file-manager (reactive selector)
   // Use custom equality to prevent unnecessary re-renders
@@ -400,8 +402,9 @@ export const ChatEditorFileTree = memo(function ({
           continue;
         }
 
-        // Move file/folder in fileManager
-        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
+        // Move file/folder in fileManager - awaits worker call
+        // eslint-disable-next-line no-await-in-loop -- Sequential rename required for consistency
+        await renameFile(oldPath, newPath);
 
         // Update file explorer paths atomically (no close/open to avoid fallback behavior)
         fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
@@ -422,7 +425,7 @@ export const ChatEditorFileTree = memo(function ({
         const wasExpanded = item.isExpanded();
 
         // Rename the folder directly - LightningFS supports directory rename natively
-        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
+        void renameFile(oldPath, newPath);
 
         // Update file explorer paths atomically (no close/open to avoid fallback behavior)
         fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
@@ -435,8 +438,8 @@ export const ChatEditorFileTree = memo(function ({
           });
         }
       } else {
-        // Rename file in fileManager
-        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
+        // Rename file in fileManager - calls worker directly
+        void renameFile(oldPath, newPath);
 
         // Update file explorer path atomically (no close/open to avoid fallback behavior)
         fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
@@ -585,14 +588,14 @@ export const ChatEditorFileTree = memo(function ({
         // Delete all files in folder
         const nested = fileTree.filter((f) => f.path.startsWith(`${path}/`));
         for (const file of nested) {
-          // Delete file from fileManager
-          fileManagerRef.send({ type: 'deleteFile', path: file.path, source: 'user' });
+          // Delete file from fileManager - calls worker directly
+          void deleteFile(file.path, { source: 'user' });
           // Close file in fileExplorer if it's open
           fileExplorerRef.send({ type: 'closeFile', path: file.path });
         }
       } else {
-        // Delete file from fileManager
-        fileManagerRef.send({ type: 'deleteFile', path, source: 'user' });
+        // Delete file from fileManager - calls worker directly
+        void deleteFile(path, { source: 'user' });
         // Close file in fileExplorer if it's open
         fileExplorerRef.send({ type: 'closeFile', path });
       }
@@ -600,7 +603,7 @@ export const ChatEditorFileTree = memo(function ({
 
     setDeleteDialogOpen(false);
     setItemsToDelete([]);
-  }, [fileExplorerRef, fileManagerRef, fileTree, itemsToDelete]);
+  }, [fileExplorerRef, deleteFile, fileTree, itemsToDelete]);
 
   const handleDuplicate = useCallback((_items: Array<ItemInstance<TreeItemData>>) => {
     // Duplication requires file-manager content, which isn't exposed yet
@@ -629,13 +632,9 @@ export const ChatEditorFileTree = memo(function ({
           const uint8Array = new Uint8Array(arrayBuffer);
           const filePath = directory ? `${directory}/${file.name}` : file.name;
 
-          // Write file to fileManager
-          fileManagerRef.send({
-            type: 'writeFile',
-            path: filePath,
-            data: uint8Array,
-            source: 'user',
-          });
+          // Write file to fileManager - calls worker directly
+          // eslint-disable-next-line no-await-in-loop -- Files need to be written sequentially
+          await writeFile(filePath, uint8Array, { source: 'user' });
 
           // Open file in fileExplorer
           fileExplorerRef.send({ type: 'openFile', path: filePath, source: 'user' });
@@ -650,7 +649,7 @@ export const ChatEditorFileTree = memo(function ({
 
       setUploadTargetPath(undefined);
     },
-    [uploadTargetPath, tree, fileManagerRef, fileExplorerRef],
+    [uploadTargetPath, tree, writeFile, fileExplorerRef],
   );
 
   // Get display name for delete dialog
@@ -853,12 +852,7 @@ export const ChatEditorFileTree = memo(function ({
                   level={0}
                   onSubmit={(name) => {
                     const gitkeepPath = `${name}/.gitkeep`;
-                    fileManagerRef.send({
-                      type: 'writeFile',
-                      path: gitkeepPath,
-                      data: encodeTextFile(''),
-                      source: 'user',
-                    });
+                    void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
                     setPendingFolder(undefined);
                     setExpandedItems((previous) => [...previous, name]);
                   }}
@@ -881,12 +875,7 @@ export const ChatEditorFileTree = memo(function ({
                   allPaths={allPaths}
                   level={0}
                   onSubmit={(filename) => {
-                    fileManagerRef.send({
-                      type: 'writeFile',
-                      path: filename,
-                      data: encodeTextFile(pendingFile.content),
-                      source: 'user',
-                    });
+                    void writeFile(filename, encodeTextFile(pendingFile.content), { source: 'user' });
                     fileExplorerRef.send({ type: 'openFile', path: filename, source: 'user' });
                     setPendingFile(undefined);
                   }}
@@ -927,12 +916,7 @@ export const ChatEditorFileTree = memo(function ({
                         onSubmit={(name) => {
                           const folderPath = `${pendingFolder.parentPath}/${name}`;
                           const gitkeepPath = `${folderPath}/.gitkeep`;
-                          fileManagerRef.send({
-                            type: 'writeFile',
-                            path: gitkeepPath,
-                            data: encodeTextFile(''),
-                            source: 'user',
-                          });
+                          void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
                           setPendingFolder(undefined);
                           setExpandedItems((previous) => [...previous, folderPath]);
                         }}
@@ -956,12 +940,7 @@ export const ChatEditorFileTree = memo(function ({
                         level={itemLevel + 1}
                         onSubmit={(filename) => {
                           const filePath = `${pendingFile.parentPath}/${filename}`;
-                          fileManagerRef.send({
-                            type: 'writeFile',
-                            path: filePath,
-                            data: encodeTextFile(pendingFile.content),
-                            source: 'user',
-                          });
+                          void writeFile(filePath, encodeTextFile(pendingFile.content), { source: 'user' });
                           fileExplorerRef.send({ type: 'openFile', path: filePath, source: 'user' });
                           setPendingFile(undefined);
                         }}

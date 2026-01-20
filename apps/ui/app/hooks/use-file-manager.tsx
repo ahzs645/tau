@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
-import { createContext, useContext, useMemo, useCallback, useEffect } from 'react';
+import { createContext, useContext, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom, SnapshotFrom } from 'xstate';
+import type { Remote } from 'comlink';
 import type { FileTreeEntry } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource } from '#machines/file-manager.machine.js';
+import type { FileManager as FileWorker } from '#machines/file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
 
 type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
@@ -13,13 +15,11 @@ type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
 /**
  * Creates a waitFor predicate that returns true if either the success condition is met
  * OR the machine enters the error state. This prevents infinite hangs when operations fail.
- * After waitFor returns, callers should check if the machine is in error state.
  */
 function createErrorAwareWaitPredicate(
   predicate: (state: FileManagerSnapshot) => boolean,
 ): (state: FileManagerSnapshot) => boolean {
   return (state: FileManagerSnapshot) => {
-    // Return true if we're in error state (to stop waiting)
     if (state.matches('error')) {
       return true;
     }
@@ -42,12 +42,17 @@ type WriteFileOptions = {
   source: FileWriteSource;
 };
 
+type DeleteFileOptions = {
+  source: FileWriteSource;
+};
+
 type FileManagerContextType = {
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
-  loadDirectory: (path: string) => Promise<void>;
   writeFile: (path: string, data: Uint8Array, options: WriteFileOptions) => Promise<void>;
   writeFiles: (files: Record<string, { content: Uint8Array }>) => Promise<void>;
   readFile: (path: string) => Promise<Uint8Array>;
+  renameFile: (oldPath: string, newPath: string) => Promise<void>;
+  deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
@@ -72,200 +77,220 @@ export function FileManagerProvider({
     },
   });
 
+  // Store rootDirectory in ref to avoid stale closures
+  const rootDirectoryRef = useRef(rootDirectory);
+  rootDirectoryRef.current = rootDirectory;
+
+  // Handle root directory changes
   useEffect(() => {
     actorRef.send({ type: 'setRoot', path: rootDirectory });
   }, [actorRef, rootDirectory]);
 
-  const loadDirectory = useCallback(
-    async (path: string) => {
-      // Ensure the actor is ready before loading the directory
-      const readySnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+  /**
+   * Wait for the file manager to be ready and return the wrapped worker.
+   * This follows the established buildManagerMachine pattern.
+   */
+  const getReadiedWorker = useCallback(async (): Promise<Remote<FileWorker>> => {
+    const snapshot = await waitFor(
+      actorRef,
+      createErrorAwareWaitPredicate((state) => state.matches('ready')),
+    );
+    assertNotErrorState(snapshot, 'File manager initialization failed');
 
-      // Send the load directory event
-      actorRef.send({ type: 'loadDirectory', path });
+    const worker = snapshot.context.wrappedWorker;
+    if (!worker) {
+      throw new Error('File manager worker not initialized');
+    }
 
-      // Ensure the directory is loaded before returning
-      const loadedSnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path)),
-      );
-      assertNotErrorState(loadedSnapshot, 'Directory load failed');
-    },
-    [actorRef],
-  );
+    return worker;
+  }, [actorRef]);
 
+  /**
+   * Write a single file to the filesystem.
+   * Calls worker directly, then sends single consolidated event.
+   * Machine handles: updating openFiles, emitting UI event, spawning background refresh.
+   */
   const writeFile = useCallback(
-    async (path: string, data: Uint8Array, options: WriteFileOptions) => {
-      // Ensure the actor is ready before writing the file
-      const readySnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+    async (path: string, data: Uint8Array, options: WriteFileOptions): Promise<void> => {
+      const worker = await getReadiedWorker();
+      const absolutePath = joinPath(rootDirectoryRef.current, path);
 
-      // Send the write file event
-      actorRef.send({ type: 'writeFile', path, data, source: options.source });
+      // Call worker directly - this is the operation confirmation
+      await worker.writeFile(absolutePath, data);
 
-      // Ensure the file is written before returning
-      const writtenSnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path)),
-      );
-      assertNotErrorState(writtenSnapshot, 'File write failed');
+      // Single consolidated event - machine handles context update, emit, and refresh
+      actorRef.send({ type: 'fileWritten', path, data, source: options.source });
     },
-    [actorRef],
+    [actorRef, getReadiedWorker],
   );
 
+  /**
+   * Write multiple files to the filesystem.
+   * Uses worker's batch write for efficiency.
+   * Machine spawns background refresh to update file tree.
+   */
+  const writeFiles = useCallback(
+    async (files: Record<string, { content: Uint8Array }>): Promise<void> => {
+      const worker = await getReadiedWorker();
+
+      // Convert to absolute paths
+      const absoluteFiles: Record<string, { content: Uint8Array }> = {};
+      const paths: string[] = [];
+
+      for (const [path, file] of Object.entries(files)) {
+        const absolutePath = joinPath(rootDirectoryRef.current, path);
+        absoluteFiles[absolutePath] = file;
+        paths.push(path);
+      }
+
+      // Call worker directly - batch write
+      await worker.writeFiles(absoluteFiles);
+
+      // Single consolidated event - machine spawns background refresh
+      actorRef.send({ type: 'filesWritten', paths });
+    },
+    [actorRef, getReadiedWorker],
+  );
+
+  /**
+   * Read a file from the filesystem.
+   * Calls worker directly, then caches in open files.
+   * No file tree refresh needed for reads.
+   */
   const readFile = useCallback(
     async (path: string): Promise<Uint8Array> => {
-      // Ensure the actor is ready before reading the file
-      const readySnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(readySnapshot, 'File manager initialization failed');
+      const worker = await getReadiedWorker();
+      const absolutePath = joinPath(rootDirectoryRef.current, path);
 
-      // Send the read file event
-      actorRef.send({ type: 'readFile', path });
+      // Call worker directly
+      const data = await worker.readFile(absolutePath);
 
-      // Wait for file to be read or error to occur
-      const snapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.context.openFiles.has(path)),
-      );
-      assertNotErrorState(snapshot, 'File read failed');
+      // Single consolidated event - machine updates openFiles and emits
+      actorRef.send({ type: 'fileRead', path, data });
 
-      const file = snapshot.context.openFiles.get(path);
+      return data;
+    },
+    [actorRef, getReadiedWorker],
+  );
 
-      if (!file) {
-        throw new Error(`File not found in open files: ${path}`);
+  /**
+   * Rename a file or directory.
+   * Machine handles optimistic update, emit, and background refresh.
+   */
+  const renameFile = useCallback(
+    async (oldPath: string, newPath: string): Promise<void> => {
+      // Skip no-op renames
+      if (oldPath === newPath) {
+        return;
       }
 
-      return file;
+      const worker = await getReadiedWorker();
+      const absoluteOldPath = joinPath(rootDirectoryRef.current, oldPath);
+      const absoluteNewPath = joinPath(rootDirectoryRef.current, newPath);
+
+      // Call worker directly
+      await worker.rename(absoluteOldPath, absoluteNewPath);
+
+      // Single consolidated event - machine handles optimistic update, emit, and refresh
+      actorRef.send({ type: 'fileRenamed', oldPath, newPath });
     },
-    [actorRef],
+    [actorRef, getReadiedWorker],
   );
 
-  const getZippedDirectory = useCallback(
-    async (path: string): Promise<Blob> => {
-      const snapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(snapshot, 'File manager initialization failed');
+  /**
+   * Delete a file from the filesystem.
+   * Machine handles optimistic delete, emit, and background refresh.
+   */
+  const deleteFile = useCallback(
+    async (path: string, options: DeleteFileOptions): Promise<void> => {
+      const worker = await getReadiedWorker();
+      const absolutePath = joinPath(rootDirectoryRef.current, path);
 
-      const worker = snapshot.context.wrappedWorker;
-      if (!worker) {
-        throw new Error('File manager worker not initialized');
-      }
+      // Call worker directly
+      await worker.unlink(absolutePath);
 
-      return worker.getZippedDirectory(path);
+      // Single consolidated event - machine handles optimistic delete, emit, and refresh
+      actorRef.send({ type: 'fileDeleted', path, source: options.source });
     },
-    [actorRef],
+    [actorRef, getReadiedWorker],
   );
 
-  const writeFiles = useCallback(
-    async (files: Record<string, { content: Uint8Array }>) => {
-      const readySnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(readySnapshot, 'File manager initialization failed');
-
-      actorRef.send({ type: 'writeFiles', files });
-
-      const writtenSnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(writtenSnapshot, 'Files write failed');
-    },
-    [actorRef],
-  );
-
-  const copyDirectory = useCallback(
-    async (sourcePath: string, destinationPath: string) => {
-      const snapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(snapshot, 'File manager initialization failed');
-
-      const worker = snapshot.context.wrappedWorker;
-      if (!worker) {
-        throw new Error('File manager worker not initialized');
-      }
-
-      await worker.copyDirectory(sourcePath, destinationPath);
-
-      const copiedSnapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(copiedSnapshot, 'Directory copy failed');
-    },
-    [actorRef],
-  );
-
+  /**
+   * Check if a path exists in the filesystem.
+   */
   const exists = useCallback(
     async (path: string): Promise<boolean> => {
-      const snapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(snapshot, 'File manager initialization failed');
-
-      const worker = snapshot.context.wrappedWorker;
-      if (!worker) {
-        throw new Error('File manager worker not initialized');
-      }
-
-      // Join path with rootDirectory to match machine behavior
-      const absolutePath = joinPath(snapshot.context.rootDirectory, path);
-
+      const worker = await getReadiedWorker();
+      const absolutePath = joinPath(rootDirectoryRef.current, path);
       return worker.exists(absolutePath);
     },
-    [actorRef],
+    [getReadiedWorker],
   );
 
+  /**
+   * List directory contents.
+   */
   const readdir = useCallback(
     async (path: string): Promise<string[]> => {
-      const snapshot = await waitFor(
-        actorRef,
-        createErrorAwareWaitPredicate((state) => state.matches('ready')),
-      );
-      assertNotErrorState(snapshot, 'File manager initialization failed');
-
-      const worker = snapshot.context.wrappedWorker;
-      if (!worker) {
-        throw new Error('File manager worker not initialized');
-      }
-
-      // Join path with rootDirectory to match machine behavior
-      const absolutePath = joinPath(snapshot.context.rootDirectory, path);
-
+      const worker = await getReadiedWorker();
+      const absolutePath = joinPath(rootDirectoryRef.current, path);
       return worker.readdir(absolutePath);
     },
-    [actorRef],
+    [getReadiedWorker],
   );
 
-  const value = useMemo<FileManagerContextType>(() => {
-    return {
+  /**
+   * Get a zipped archive of a directory.
+   */
+  const getZippedDirectory = useCallback(
+    async (path: string): Promise<Blob> => {
+      const worker = await getReadiedWorker();
+      return worker.getZippedDirectory(path);
+    },
+    [getReadiedWorker],
+  );
+
+  /**
+   * Copy a directory to a new location.
+   * Machine spawns background refresh to update file tree.
+   */
+  const copyDirectory = useCallback(
+    async (sourcePath: string, destinationPath: string): Promise<void> => {
+      const worker = await getReadiedWorker();
+      await worker.copyDirectory(sourcePath, destinationPath);
+
+      // Single consolidated event - machine spawns background refresh
+      actorRef.send({ type: 'filesWritten', paths: [] });
+    },
+    [actorRef, getReadiedWorker],
+  );
+
+  const value = useMemo<FileManagerContextType>(
+    () => ({
       fileManagerRef: actorRef,
-      loadDirectory,
       writeFile,
       writeFiles,
       readFile,
+      renameFile,
+      deleteFile,
       exists,
       readdir,
       getZippedDirectory,
       copyDirectory,
-    };
-  }, [actorRef, loadDirectory, writeFile, writeFiles, readFile, exists, readdir, getZippedDirectory, copyDirectory]);
+    }),
+    [
+      actorRef,
+      writeFile,
+      writeFiles,
+      readFile,
+      renameFile,
+      deleteFile,
+      exists,
+      readdir,
+      getZippedDirectory,
+      copyDirectory,
+    ],
+  );
 
   return <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
 }
