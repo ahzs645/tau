@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Socket } from 'socket.io';
 import { ChatToolsService } from '#api/chat/chat-tools.service.js';
 
 // Mock the dependencies
@@ -23,115 +24,40 @@ describe('ChatToolsService', () => {
     service = new ChatToolsService();
   });
 
-  describe('connection failure tracking', () => {
-    it('should return NO_CLIENT_CONNECTION error with attempt 1/3 on first failure', async () => {
-      const result = await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({
-          errorCode: 'NO_CLIENT_CONNECTION',
-          message: expect.stringContaining('(attempt 1/3)'),
+  describe('sendToolCallRequest', () => {
+    it('should throw CLIENT_DISCONNECTED error when no socket is registered', async () => {
+      await expect(
+        service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
+          targetFile: 'test.txt',
         }),
-      );
+      ).rejects.toThrow('CLIENT_DISCONNECTED');
     });
 
-    it('should return NO_CLIENT_CONNECTION error with attempt 2/3 on second failure', async () => {
-      // First failure
-      await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', { targetFile: 'test.txt' });
-
-      // Second failure
-      const result = await service.sendToolCallRequest('chat_123', 'call_2', 'read_file', {
-        targetFile: 'test.txt',
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({
-          errorCode: 'NO_CLIENT_CONNECTION',
-          message: expect.stringContaining('(attempt 2/3)'),
-        }),
-      );
-    });
-
-    it('should return NO_CLIENT_CONNECTION error with do not retry message on third failure', async () => {
-      // First failure
-      await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', { targetFile: 'test.txt' });
-
-      // Second failure
-      await service.sendToolCallRequest('chat_123', 'call_2', 'read_file', { targetFile: 'test.txt' });
-
-      // Third failure
-      const result = await service.sendToolCallRequest('chat_123', 'call_3', 'read_file', {
-        targetFile: 'test.txt',
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({
-          errorCode: 'NO_CLIENT_CONNECTION',
-          message: expect.stringContaining('(attempt 3/3)'),
-        }),
-      );
-      expect(result).toEqual(
-        expect.objectContaining({
-          message: expect.stringContaining('Retrying will not help'),
-        }),
-      );
-    });
-
-    it('should track failures independently per chatId', async () => {
-      // Two failures for chat_123
-      await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', { targetFile: 'test.txt' });
-      await service.sendToolCallRequest('chat_123', 'call_2', 'read_file', { targetFile: 'test.txt' });
-
-      // First failure for chat_456 - should show attempt 1/3
-      const result = await service.sendToolCallRequest('chat_456', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({
-          errorCode: 'NO_CLIENT_CONNECTION',
-          message: expect.stringContaining('(attempt 1/3)'),
-        }),
-      );
-    });
-
-    it('should reset failure count when connection is registered', async () => {
-      // Two failures
-      await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', { targetFile: 'test.txt' });
-      await service.sendToolCallRequest('chat_123', 'call_2', 'read_file', { targetFile: 'test.txt' });
-
-      // Register a connection (simulating reconnection)
+    it('should throw CLIENT_DISCONNECTED error when socket is disconnected', async () => {
       const mockSocket = {
         id: 'socket_123',
-        connected: false, // Still disconnected for the test
-      } as unknown as import('socket.io').Socket;
+        connected: false,
+      } as unknown as Socket;
       service.registerConnection('chat_123', mockSocket);
 
-      // Next failure should be counted as first (counter was reset)
-      const result = await service.sendToolCallRequest('chat_123', 'call_3', 'read_file', {
-        targetFile: 'test.txt',
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({
-          errorCode: 'NO_CLIENT_CONNECTION',
-          message: expect.stringContaining('(attempt 1/3)'),
+      await expect(
+        service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
+          targetFile: 'test.txt',
         }),
-      );
+      ).rejects.toThrow('CLIENT_DISCONNECTED');
     });
   });
 
   describe('registerConnection', () => {
-    it('should reset failure count when registering connection', () => {
+    it('should register a socket connection without throwing', () => {
       const mockSocket = {
         id: 'socket_123',
         connected: true,
-      } as unknown as import('socket.io').Socket;
+      } as unknown as Socket;
 
-      // This should not throw and should reset any existing failure count
-      expect(() => service.registerConnection('chat_123', mockSocket)).not.toThrow();
+      expect(() => {
+        service.registerConnection('chat_123', mockSocket);
+      }).not.toThrow();
     });
   });
 
@@ -144,7 +70,7 @@ describe('ChatToolsService', () => {
       const mockSocket = {
         id: 'socket_123',
         connected: false,
-      } as unknown as import('socket.io').Socket;
+      } as unknown as Socket;
       service.registerConnection('chat_123', mockSocket);
 
       expect(service.isConnected('chat_123')).toBe(false);
@@ -154,7 +80,7 @@ describe('ChatToolsService', () => {
       const mockSocket = {
         id: 'socket_123',
         connected: true,
-      } as unknown as import('socket.io').Socket;
+      } as unknown as Socket;
       service.registerConnection('chat_123', mockSocket);
 
       expect(service.isConnected('chat_123')).toBe(true);
