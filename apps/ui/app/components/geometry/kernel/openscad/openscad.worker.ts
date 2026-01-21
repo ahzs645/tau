@@ -63,18 +63,16 @@ export class OpenScadWorker extends KernelWorker {
    * Maximum recursion depth for resolving use/include dependencies.
    * Prevents infinite loops in circular dependencies.
    */
-  private static get maxIncludeDepth() {
-    return 50;
-  }
+  // eslint-disable-next-line @typescript-eslint/class-literal-property-style -- Must be static to match useIncludeRegex pattern
+  private static readonly maxIncludeDepth = 50;
 
   /**
    * Regex to match OpenSCAD use and include statements.
    * Matches: use <path/to/file.scad> or include <path/to/file.scad>
    * Also handles quoted paths: use "path/to/file.scad"
    */
-  private static get useIncludeRegex() {
-    return /^\s*(?:use|include)\s*[<"]([^>"]+)[>"]/gm;
-  }
+  // eslint-disable-next-line @typescript-eslint/class-literal-property-style -- Must be static; a getter would return a new regex instance each access, breaking exec() loop state tracking via lastIndex
+  private static readonly useIncludeRegex = /^\s*(?:use|include)\s*[<"]([^>"]+)[>"]/gm;
 
   protected override readonly name: string = 'OpenScadWorker';
 
@@ -389,7 +387,7 @@ export class OpenScadWorker extends KernelWorker {
    */
   private parseUseIncludeStatements(code: string): string[] {
     const paths: string[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Regex exec returns null when no match is found
+    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- RegExp missing match returns null
     let match: RegExpExecArray | null;
 
     // Reset regex state for fresh matching
