@@ -66,7 +66,7 @@ export function sampleGroupSurface(group: THREE.Group, pointCount: number): Samp
   const meshes: THREE.Mesh[] = [];
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && object.geometry) {
-      meshes.push(object);
+      meshes.push(object as THREE.Mesh);
     }
   });
 
@@ -89,10 +89,6 @@ export function sampleGroupSurface(group: THREE.Group, pointCount: number): Samp
   const allRandomOffsets: number[] = [];
 
   for (const [meshIndex, mesh] of meshes.entries()) {
-    if (!mesh) {
-      continue;
-    }
-
     // Give the first mesh any remainder points
     const meshPointCount = pointsPerMesh + (meshIndex === 0 ? remainder : 0);
 

@@ -35,9 +35,7 @@ describe('promptCachingMiddleware', () => {
 
   describe('caching HumanMessage (last message)', () => {
     it('should add cache_control to last HumanMessage with string content', async () => {
-      const messages: BaseMessage[] = [
-        new HumanMessage('What is the capital of France?'),
-      ];
+      const messages: BaseMessage[] = [new HumanMessage('What is the capital of France?')];
 
       await callWrapModelCall({ messages }, handler);
 
@@ -52,6 +50,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[0]).toEqual({
         type: 'text',
         text: 'What is the capital of France?',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
     });
@@ -82,6 +81,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[1]).toEqual({
         type: 'text',
         text: 'Second part',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
     });
@@ -89,10 +89,7 @@ describe('promptCachingMiddleware', () => {
 
   describe('caching AIMessage (last message)', () => {
     it('should add cache_control to last AIMessage with string content', async () => {
-      const messages: BaseMessage[] = [
-        new HumanMessage('Hello'),
-        new AIMessage('Hi there!'),
-      ];
+      const messages: BaseMessage[] = [new HumanMessage('Hello'), new AIMessage('Hi there!')];
 
       await callWrapModelCall({ messages }, handler);
 
@@ -109,6 +106,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[0]).toEqual({
         type: 'text',
         text: 'Hi there!',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
     });
@@ -139,6 +137,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[1]).toEqual({
         type: 'text',
         text: 'Second thought',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
     });
@@ -163,6 +162,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[0]).toEqual({
         type: 'text',
         text: '',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
 
@@ -204,6 +204,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[0]).toEqual({
         type: 'text',
         text: '{"content": "file contents", "totalLines": 10}',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
 
@@ -241,6 +242,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[1]).toEqual({
         type: 'text',
         text: 'Part 2',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
     });
@@ -312,6 +314,7 @@ describe('promptCachingMiddleware', () => {
       expect(contentBlocks[0]).toEqual({
         type: 'text',
         text: 'Hello!',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
     });
