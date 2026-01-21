@@ -159,6 +159,12 @@ export class OpenScadWorker extends KernelWorker {
         };
 
         jsonSchema = processOpenScadParameters(mergedExport);
+        // NOTE: json-schema-default has a bug where it returns {} for oneOf properties with
+        // falsy defaults (e.g., 0, false, ""). Example: `shape_type = 0; // [0:Cube, 1:Sphere]`
+        // generates a schema with `default: 0` and oneOf, but jsonDefault() returns
+        // `{ shape_type: {} }` instead of `{ shape_type: 0 }`. This affects parameters where
+        // the first option (index 0) is the default. Consider post-processing to fix {} values
+        // by reading defaults directly from the schema, or replacing this library.
         defaultParameters = jsonDefault(jsonSchema) as Record<string, unknown>;
       } else {
         jsonSchema = { type: 'object', properties: {}, additionalProperties: false };
@@ -175,7 +181,7 @@ export class OpenScadWorker extends KernelWorker {
       return createKernelError([
         {
           message: errorMessage,
-          location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
+          location: { fileName: this.activeFilePath, startLineNumber: 1, startColumn: 1 },
           severity: 'error',
         },
       ]);
@@ -248,7 +254,7 @@ export class OpenScadWorker extends KernelWorker {
         return createKernelError([
           {
             message: 'OpenSCAD build failed',
-            location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
+            location: { fileName: this.activeFilePath, startLineNumber: 1, startColumn: 1 },
             severity: 'error',
           },
         ]);
@@ -279,7 +285,7 @@ export class OpenScadWorker extends KernelWorker {
       return createKernelError([
         {
           message: errorMessage,
-          location: { fileName: this.activeFilePath, startLineNumber: 0, startColumn: 0 },
+          location: { fileName: this.activeFilePath, startLineNumber: 1, startColumn: 1 },
           severity: 'error',
         },
       ]);
