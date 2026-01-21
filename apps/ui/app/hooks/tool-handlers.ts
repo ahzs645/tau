@@ -301,6 +301,14 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
       });
 
       const allFileMatches = await Promise.all(searchPromises);
+
+      // Count total matches before truncating
+      let totalMatches = 0;
+      for (const fileMatches of allFileMatches) {
+        totalMatches += fileMatches.length;
+      }
+
+      // Collect matches up to the limit
       for (const fileMatches of allFileMatches) {
         for (const match of fileMatches) {
           if (matches.length < maxMatches) {
@@ -311,8 +319,8 @@ export function createToolHandlers(deps: ToolHandlerDependencies): ToolHandlers 
 
       return {
         matches,
-        totalMatches: matches.length,
-        truncated: matches.length >= maxMatches,
+        totalMatches,
+        truncated: totalMatches > maxMatches,
       };
     } catch {
       return {
