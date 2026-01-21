@@ -50,4 +50,8 @@ export const metaConfig = {
    * The sales email address.
    */
   salesEmail: 'sales@tau.new',
+  /**
+   * The app domain used in marketing materials.
+   */
+  appDomain: 'tau.new',
 } as const;
