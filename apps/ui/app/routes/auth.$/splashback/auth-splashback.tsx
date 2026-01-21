@@ -755,7 +755,7 @@ export function AuthSplashback(): React.JSX.Element {
             {showContainer && !isFading ? (
               <motion.p
                 key={currentTagline}
-                className="absolute text-center text-md whitespace-nowrap text-muted-foreground"
+                className="text-md absolute text-center whitespace-nowrap text-muted-foreground"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
