@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router';
 import { Tau } from '#components/icons/tau.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import type { Handle } from '#types/matches.types.js';
+import { AuthSplashback } from '#routes/auth.$/splashback/auth-splashback.js';
 
 export const handle: Handle = {
   enablePageWrapper: false,
@@ -18,7 +19,7 @@ export default function AuthPage(): React.JSX.Element {
             <TooltipTrigger asChild className="flex items-center gap-2 font-medium">
               <Link to="/">
                 <Tau className="size-7 text-primary" />
-                <h1 className="-mb-2 -ml-3.5 font-mono text-2xl font-semibold tracking-tight text-primary group-data-[collapsible=icon]:hidden">
+                <h1 className="-mb-2.5 -ml-3.5 text-2xl font-bold tracking-tight text-primary group-data-[collapsible=icon]:hidden">
                   AU
                 </h1>
               </Link>
@@ -34,12 +35,8 @@ export default function AuthPage(): React.JSX.Element {
           />
         </div>
       </div>
-      <div className="relative hidden bg-muted lg:block">
-        <img
-          src="/placeholder.svg"
-          alt="Image"
-          className="absolute inset-0 h-full w-full object-cover dark:brightness-[0.2] dark:grayscale"
-        />
+      <div className="relative hidden lg:block">
+        <AuthSplashback />
       </div>
     </div>
   );
