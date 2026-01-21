@@ -74,7 +74,7 @@ export function ChatMessageToolDeleteFile({
               ) : (
                 <span className="min-w-0 truncate">{filename}</span>
               )}
-              <span className="text-destructive/50">Deleted</span>
+              <span className="text-destructive/80">Deleted</span>
             </div>
           </div>
         );
