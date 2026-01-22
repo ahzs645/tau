@@ -283,7 +283,7 @@ export function CollapsibleFileOperation({
               className="overflow-x-auto p-3 text-xs"
             />
           </div>
-        ) : null}
+        ) : undefined}
       </div>
     );
   }
@@ -309,7 +309,7 @@ export function CollapsibleFileOperation({
       return <CodePreview content={content} language={language} />;
     }
 
-    return null;
+    return undefined;
   };
 
   return (
