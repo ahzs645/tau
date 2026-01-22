@@ -135,8 +135,9 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
             <div className="space-y-1">
               <div className="text-xs font-medium text-destructive">Validation Errors:</div>
               <ul className="space-y-0.5 text-xs text-muted-foreground">
-                {validationError.validationErrors.map((error_) => (
-                  <li key={error_.path}>
+                {validationError.validationErrors.map((error_, index) => (
+                  // eslint-disable-next-line react/no-array-index-key -- ensure uniqueness for same path errors.
+                  <li key={`${error_.path}-${index}`}>
                     <code className="text-destructive">{error_.path || 'root'}</code>: {error_.message}
                   </li>
                 ))}
