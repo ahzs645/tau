@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '#app.module.js';
 import { DatabaseService } from '#database/database.service.js';
 import { RedisService } from '#redis/redis.service.js';
+import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 
 // Mock DatabaseService for tests that don't need database access
 const mockDatabaseService = {
@@ -31,6 +32,17 @@ const mockRedisService = {
   createDuplicateClient: () => mockRedisService.client,
 };
 
+// Mock CheckpointerService for tests that don't need LangGraph checkpointing
+const mockCheckpointerService = {
+  async onModuleInit() {
+    // No-op
+  },
+  async onModuleDestroy() {
+    // No-op
+  },
+  getCheckpointer: () => ({}),
+};
+
 describe('TestApiController (e2e)', () => {
   let app: NestFastifyApplication;
   let moduleRef: TestingModule;
@@ -43,6 +55,8 @@ describe('TestApiController (e2e)', () => {
       .useValue(mockDatabaseService)
       .overrideProvider(RedisService)
       .useValue(mockRedisService)
+      .overrideProvider(CheckpointerService)
+      .useValue(mockCheckpointerService)
       .compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

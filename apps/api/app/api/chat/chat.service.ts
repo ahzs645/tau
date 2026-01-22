@@ -4,8 +4,6 @@ import { createAgent } from 'langchain';
 import type { ReactAgent } from 'langchain';
 import { streamText } from 'ai';
 import type { ModelMessage } from 'ai';
-import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
-import { ConfigService } from '@nestjs/config';
 import type { KernelProvider } from '@taucad/types';
 import type { ToolSelection } from '@taucad/chat';
 import { ModelService } from '#api/models/model.service.js';
@@ -17,16 +15,16 @@ import { ToolService } from '#api/tools/tool.service.js';
 import { buildNameGenerationSystemPrompt } from '#api/chat/prompts/cad-name.prompt.js';
 import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/git-commit.prompt.js';
 import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
-import type { Environment } from '#config/environment.config.js';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
+import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 
 @Injectable()
 export class ChatService {
   public constructor(
     private readonly modelService: ModelService,
     private readonly toolService: ToolService,
-    private readonly configService: ConfigService<Environment, true>,
+    private readonly checkpointerService: CheckpointerService,
   ) {}
 
   public getBuildNameGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
@@ -52,11 +50,7 @@ export class ChatService {
   ): Promise<ReactAgent> {
     const { tools } = this.toolService.getTools(selectedToolChoice);
 
-    const databaseUrl = this.configService.get('DATABASE_URL', { infer: true });
-    const checkpointer = PostgresSaver.fromConnString(databaseUrl, {
-      schema: 'langgraph',
-    });
-    await checkpointer.setup();
+    const checkpointer = this.checkpointerService.getCheckpointer();
 
     const { model } = this.modelService.buildModel(modelId);
 
