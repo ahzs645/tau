@@ -17,6 +17,8 @@ export const errorCategory = {
   network: 'network',
   /** Server-side error */
   server: 'server',
+  /** Request was cancelled/aborted by user */
+  cancelled: 'cancelled',
   /** Generic/unknown error */
   generic: 'generic',
 } as const;

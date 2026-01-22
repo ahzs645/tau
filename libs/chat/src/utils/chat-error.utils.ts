@@ -54,5 +54,6 @@ export const errorCategoryTitles: Record<ErrorCategory, string> = {
   [errorCategory.auth]: 'Authentication Error',
   [errorCategory.network]: 'Connection Error',
   [errorCategory.server]: 'Server Error',
+  [errorCategory.cancelled]: 'Request Cancelled',
   [errorCategory.generic]: 'Error',
 };
