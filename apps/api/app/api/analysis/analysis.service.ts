@@ -74,32 +74,39 @@ export class AnalysisService {
         ],
       });
 
-      // Extract failures with detailed feedback
-      const failures: TestFailure[] = output.results
-        .filter((result) => result.status === 'failed')
-        .map((result) => {
-          // Find the original requirement to get its description
-          const requirement = requirements.find((request) => request.id === result.id);
+      // Create a map of results by ID for efficient lookup
+      const resultById = new Map(output.results.map((result) => [result.id, result]));
 
-          return {
+      // Process each requirement to ensure all are accounted for
+      const failures: TestFailure[] = [];
+      const passes: TestPass[] = [];
+
+      for (const requirement of requirements) {
+        const result = resultById.get(requirement.id);
+
+        if (!result) {
+          // Requirement was not returned by LLM - mark as failed
+          failures.push({
+            id: requirement.id,
+            requirement: requirement.description,
+            reason: 'No analysis result returned for this requirement',
+            suggestion: 'Retry the analysis. If the problem persists, simplify the requirement.',
+          });
+        } else if (result.status === 'failed') {
+          failures.push({
             id: result.id,
-            requirement: requirement?.description ?? result.id,
+            requirement: requirement.description,
             reason: result.reason ?? 'No reason provided',
             suggestion: result.suggestion ?? 'Review the model',
-          };
-        });
-
-      // Extract passes (simpler, just id and description)
-      const passes: TestPass[] = output.results
-        .filter((result) => result.status === 'passed')
-        .map((result) => {
-          const requirement = requirements.find((request) => request.id === result.id);
-
-          return {
+          });
+        } else {
+          // status === 'passed'
+          passes.push({
             id: result.id,
-            requirement: requirement?.description ?? result.id,
-          };
-        });
+            requirement: requirement.description,
+          });
+        }
+      }
 
       this.logger.log(`Test results: ${passes.length} passed, ${failures.length} failed`);
 
