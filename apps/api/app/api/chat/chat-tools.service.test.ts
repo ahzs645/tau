@@ -25,26 +25,48 @@ describe('ChatToolsService', () => {
   });
 
   describe('sendToolCallRequest', () => {
-    it('should throw CLIENT_DISCONNECTED error when no socket is registered', async () => {
-      await expect(
-        service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
-          targetFile: 'test.txt',
-        }),
-      ).rejects.toThrow('CLIENT_DISCONNECTED');
+    it('should return NO_CLIENT_CONNECTION error when no socket is registered', async () => {
+      const result = await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
+        targetFile: 'test.txt',
+      });
+
+      expect(result).toEqual({
+        errorCode: 'NO_CLIENT_CONNECTION',
+        message: expect.stringContaining('No WebSocket connection to the browser'),
+        toolName: 'read_file',
+        toolCallId: 'call_1',
+      });
     });
 
-    it('should throw CLIENT_DISCONNECTED error when socket is disconnected', async () => {
+    it('should return NO_CLIENT_CONNECTION error when socket is disconnected', async () => {
       const mockSocket = {
         id: 'socket_123',
         connected: false,
       } as unknown as Socket;
       service.registerConnection('chat_123', mockSocket);
 
-      await expect(
-        service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
-          targetFile: 'test.txt',
-        }),
-      ).rejects.toThrow('CLIENT_DISCONNECTED');
+      const result = await service.sendToolCallRequest('chat_123', 'call_1', 'read_file', {
+        targetFile: 'test.txt',
+      });
+
+      expect(result).toEqual({
+        errorCode: 'NO_CLIENT_CONNECTION',
+        message: expect.stringContaining('No WebSocket connection to the browser'),
+        toolName: 'read_file',
+        toolCallId: 'call_1',
+      });
+    });
+
+    it('should include chatId context in error metadata', async () => {
+      const result = await service.sendToolCallRequest('chat_456', 'call_2', 'read_file', {
+        targetFile: 'another.txt',
+      });
+
+      expect(result).toMatchObject({
+        errorCode: 'NO_CLIENT_CONNECTION',
+        toolName: 'read_file',
+        toolCallId: 'call_2',
+      });
     });
   });
 

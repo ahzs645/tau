@@ -116,10 +116,15 @@ export class ChatToolsService {
     const socket = this.connections.get(chatId);
 
     if (!socket?.connected) {
-      throw new Error(
-        'CLIENT_DISCONNECTED: No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
+      const noConnectionError: ToolExecutionError = {
+        errorCode: 'NO_CLIENT_CONNECTION',
+        message:
+          'No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
           'DO NOT RETRY this or any other tool - inform the user that you cannot proceed because they are no longer connected.',
-      );
+        toolName,
+        toolCallId,
+      };
+      return noConnectionError;
     }
 
     // Validate input args against the tool's input schema
