@@ -1,9 +1,9 @@
 import { createMiddleware } from 'langchain';
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
-import type { BaseMessage, ToolCall } from '@langchain/core/messages';
+import { ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import type { PartialDeep } from 'type-fest';
 import { toolName } from '@taucad/chat/constants';
-import type { ToolOutputRegistry, ReadFileOutput } from '@taucad/chat';
+import type { ToolOutputRegistry } from '@taucad/chat';
 
 // =============================================================================
 // Configuration
@@ -306,112 +306,6 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
   })),
 };
 
-// =============================================================================
-// Stale File Detection
-// =============================================================================
-// Track which files have been modified (create_file/edit_file) to invalidate
-// older read_file results for those files.
-
-/**
- * Type for tracking file modifications.
- * Maps file path to the earliest message index where it was modified.
- */
-type FileModificationMap = Map<string, number>;
-
-/**
- * Type guard to check if a message is an AIMessage with tool_calls.
- */
-function isAiMessageWithToolCalls(message: BaseMessage): message is AIMessage & { tool_calls: ToolCall[] } {
-  if (!AIMessage.isInstance(message)) {
-    return false;
-  }
-
-  const { tool_calls: toolCalls } = message as AIMessage;
-
-  return Array.isArray(toolCalls) && toolCalls.length > 0;
-}
-
-/**
- * Extracts the targetFile from a tool call's args if present.
- */
-function getTargetFileFromToolCall(toolCall: ToolCall): string | undefined {
-  const args = toolCall.args as Record<string, unknown>;
-  const { targetFile } = args;
-
-  return typeof targetFile === 'string' ? targetFile : undefined;
-}
-
-/**
- * Extracts modified file paths from AIMessage tool_calls.
- * Looks for create_file and edit_file tool calls and extracts the targetFile.
- */
-function extractModifiedFiles(message: AIMessage & { tool_calls: ToolCall[] }): string[] {
-  const modifiedFiles: string[] = [];
-
-  for (const toolCall of message.tool_calls) {
-    if (toolCall.name === toolName.createFile || toolCall.name === toolName.editFile) {
-      const targetFile = getTargetFileFromToolCall(toolCall);
-      if (targetFile) {
-        modifiedFiles.push(targetFile);
-      }
-    }
-  }
-
-  return modifiedFiles;
-}
-
-/**
- * Builds a map of file paths to the earliest message index where they were modified.
- * This is used to detect stale read_file results.
- */
-function buildFileModificationMap(messages: BaseMessage[]): FileModificationMap {
-  const modificationMap: FileModificationMap = new Map();
-
-  for (const [i, message] of messages.entries()) {
-    if (isAiMessageWithToolCalls(message)) {
-      const modifiedFiles = extractModifiedFiles(message);
-      for (const file of modifiedFiles) {
-        // Only record the earliest modification
-        if (!modificationMap.has(file)) {
-          modificationMap.set(file, i);
-        }
-      }
-    }
-  }
-
-  return modificationMap;
-}
-
-/**
- * Finds the targetFile from a read_file tool call by its ID.
- */
-function findReadFileTarget(toolCalls: ToolCall[], toolCallId: string): string | undefined {
-  for (const toolCall of toolCalls) {
-    if (toolCall.id === toolCallId && toolCall.name === toolName.readFile) {
-      return getTargetFileFromToolCall(toolCall);
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Extracts the targetFile from a read_file tool call ID by finding the corresponding
- * AIMessage with the tool call.
- */
-function getReadFileTargetFromToolCallId(messages: BaseMessage[], toolCallId: string): string | undefined {
-  for (const message of messages) {
-    if (isAiMessageWithToolCalls(message)) {
-      const targetFile = findReadFileTarget(message.tool_calls, toolCallId);
-      if (targetFile) {
-        return targetFile;
-      }
-    }
-  }
-
-  return undefined;
-}
-
 /**
  * Type guard to check if a message is a ToolMessage or a deserialized plain object
  * that represents a ToolMessage.
@@ -458,14 +352,6 @@ function parseToolContent(content: string): unknown | undefined {
 }
 
 /**
- * Context passed to trimToolMessage for stale file detection.
- */
-type TrimContext = {
-  /** If true, the file was modified after this read (for read_file only) */
-  isStaleRead: boolean;
-};
-
-/**
  * Trims tool message content if a trimmer is registered for the tool.
  * Falls back to content-based detection when message.name is undefined
  * (common with messages created by `@ai-sdk/langchain` adapter).
@@ -473,10 +359,8 @@ type TrimContext = {
  * Handles both proper ToolMessage instances and deserialized plain objects.
  *
  * @param message - The tool message to trim
- * @param context - Trimming context (stale status)
  */
-function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessage {
-  const { isStaleRead } = context;
+function trimToolMessage(message: ToolMessage): BaseMessage {
   // Access properties defensively to handle both ToolMessage and plain objects
   const messageRecord = message as unknown as Record<string, unknown>;
   const {
@@ -502,19 +386,9 @@ function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessag
   // Try to find trimmer by message.name first, fall back to content detection
   const toolNameValue = name ?? detectToolNameFromContent(parsed);
 
-  // Apply immediate trimmer (if available)
+  // Apply trimmer (if available)
   const trimmer = toolNameValue ? toolResultTrimmers[toolNameValue] : undefined;
-  let trimmed = trimmer ? trimmer(parsed) : parsed;
-
-  // Handle stale read_file results (file was modified after this read)
-  if (isStaleRead && toolNameValue === toolName.readFile) {
-    const typedResult = parsed as ReadFileOutput;
-    trimmed = {
-      content: '[File was modified after this read - content is stale]',
-      totalLines: typedResult.totalLines,
-      ...(typedResult.startLine ? { startLine: typedResult.startLine } : {}),
-    };
-  }
+  const trimmed = trimmer ? trimmer(parsed) : parsed;
 
   // If no trimming was done, return original message
   if (trimmed === parsed) {
@@ -543,10 +417,6 @@ function trimToolMessage(message: ToolMessage, context: TrimContext): BaseMessag
  * Trimming is applied uniformly to all messages to ensure stable content
  * for Anthropic prompt caching. Consistent content enables cache hits
  * across conversation turns.
- *
- * Stale detection:
- * - read_file: If file was modified by create_file/edit_file after this read,
- *   content is replaced with "[File was modified after this read - content is stale]"
  */
 export const toolResultTrimmerMiddleware = createMiddleware({
   name: 'ToolResultTrimmer',
@@ -554,41 +424,10 @@ export const toolResultTrimmerMiddleware = createMiddleware({
   async wrapModelCall(request, handler) {
     const { messages } = request;
 
-    // Build file modification map for stale detection
-    const fileModificationMap = buildFileModificationMap(messages);
-
-    // Trim messages with stale-aware trimming
-    const trimmedMessages = messages.map((message, index) => {
+    // Trim tool messages to reduce token usage
+    const trimmedMessages = messages.map((message) => {
       if (isToolMessage(message)) {
-        // Check if this is a stale read_file result
-        let isStaleRead = false;
-        const messageRecord = message as unknown as Record<string, unknown>;
-        const {
-          tool_call_id: toolCallId,
-          name: messageName,
-          content,
-        } = messageRecord as {
-          tool_call_id: string | undefined;
-          name: string | undefined;
-          content: unknown;
-        };
-        const isReadFileTool =
-          messageName === toolName.readFile ||
-          (typeof content === 'string' && isReadFileShape(parseToolContent(content) ?? {}));
-
-        if (isReadFileTool && toolCallId) {
-          // Find the targetFile from the corresponding tool call
-          const targetFile = getReadFileTargetFromToolCallId(messages, toolCallId);
-          if (targetFile) {
-            const modificationIndex = fileModificationMap.get(targetFile);
-            // If the file was modified after this read, mark it as stale
-            if (modificationIndex !== undefined && modificationIndex > index) {
-              isStaleRead = true;
-            }
-          }
-        }
-
-        return trimToolMessage(message, { isStaleRead });
+        return trimToolMessage(message);
       }
 
       return message;
