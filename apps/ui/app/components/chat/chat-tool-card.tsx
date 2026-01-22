@@ -186,6 +186,16 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
   }
 
   // Card variant
+  if (!isCollapsible) {
+    return (
+      <div
+        className={cn('flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground', className)}
+      >
+        {children}
+      </div>
+    );
+  }
+
   return (
     <CollapsibleTrigger
       className={cn(
@@ -222,7 +232,7 @@ type ChatToolCardIconProps = {
 };
 
 function ChatToolCardIcon({ icon: Icon, className, isError }: ChatToolCardIconProps): React.JSX.Element {
-  const { status, variant } = useChatToolCard();
+  const { status, variant, isCollapsible } = useChatToolCard();
 
   if (status === 'loading') {
     return <LoaderCircle className={cn('size-3 shrink-0 animate-spin', className)} />;
@@ -230,6 +240,11 @@ function ChatToolCardIcon({ icon: Icon, className, isError }: ChatToolCardIconPr
 
   // For card variant, this replaces the chevron when not hovering
   if (variant === 'card') {
+    // When not collapsible, render static icon without hover effects
+    if (!isCollapsible) {
+      return <Icon className={cn('size-3 shrink-0', isError && 'text-destructive', className)} />;
+    }
+
     return (
       <Icon
         className={cn(
