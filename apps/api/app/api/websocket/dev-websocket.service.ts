@@ -154,7 +154,7 @@ export class DevWebSocketService implements OnModuleDestroy {
       if (handler) {
         this.wss!.handleUpgrade(request, socket, head, (ws) => {
           this.wss!.emit('connection', ws, request);
-          void handler(ws, request);
+          void this.handleConnection(ws, request, handler);
         });
         return;
       }
@@ -169,5 +169,23 @@ export class DevWebSocketService implements OnModuleDestroy {
       this.logger.log(`  - Raw WebSocket: ws://localhost:${this.wsPort}/v1/kernels/zoo`);
       this.logger.log(`  - Socket.IO: http://localhost:${this.wsPort} (namespaces for paths)`);
     });
+  }
+
+  /**
+   * Handle a WebSocket connection with error handling.
+   */
+  private async handleConnection(
+    ws: WebSocket,
+    request: IncomingMessage,
+    handler: WebSocketConnectionHandler,
+  ): Promise<void> {
+    try {
+      await handler(ws, request);
+    } catch (error) {
+      this.logger.error('WebSocket handler error', error);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1011, 'Internal server error');
+      }
+    }
   }
 }
