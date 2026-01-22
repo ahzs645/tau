@@ -2,21 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import type { VisualTestRequirement, Observation } from '@taucad/chat';
+import { generateText } from 'ai';
 import { AnalysisService } from '#api/analysis/analysis.service.js';
 
 // Mock the AI SDK
 vi.mock('ai', () => ({
   generateText: vi.fn(),
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- AI SDK naming
   Output: {
-    object: vi.fn((config) => config),
+    object: vi.fn((config: unknown) => config),
   },
 }));
 
 vi.mock('@ai-sdk/openai', () => ({
   openai: vi.fn(() => 'mocked-model'),
 }));
-
-import { generateText } from 'ai';
 
 describe('AnalysisService', () => {
   let service: AnalysisService;
@@ -33,7 +33,7 @@ describe('AnalysisService', () => {
     ];
   }
 
-  function createMockRequirements(count: number = 3): VisualTestRequirement[] {
+  function createMockRequirements(count = 3): VisualTestRequirement[] {
     return Array.from({ length: count }, (_, i) => ({
       id: `req-${i + 1}`,
       description: `Requirement ${i + 1} description`,
@@ -97,7 +97,9 @@ describe('AnalysisService', () => {
       // Verify the failure messages are helpful
       for (const failure of missingFailures) {
         expect(failure.reason).toBe('No analysis result returned for this requirement');
-        expect(failure.suggestion).toBe('Retry the analysis. If the problem persists, simplify the requirement.');
+        expect(failure.suggestion).toBe(
+          'This is a fatal error. The LLM failed to return a result for this requirement.',
+        );
       }
     });
 
@@ -197,7 +199,7 @@ describe('AnalysisService', () => {
 
       for (const failure of result.failures) {
         expect(failure.reason).toContain('Analysis error: API connection failed');
-        expect(failure.suggestion).toBe('Check API connectivity and retry. If the problem persists, simplify requirements.');
+        expect(failure.suggestion).toBe('This is a fatal error. The API request failed.');
       }
     });
 

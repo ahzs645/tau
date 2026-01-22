@@ -5,6 +5,22 @@ import { z } from 'zod';
 import type { Observation, TestModelOutput, VisualTestRequirement, TestFailure, TestPass } from '@taucad/chat';
 import { createMultiViewAnalysisPrompt } from '#api/analysis/prompts/multi-view-analysis-prompt.js';
 
+const llmResultSchema = z.object({
+  id: z.string(),
+  status: z.enum(['passed', 'failed']),
+  reason: z.string().nullable().describe('Required when status is "failed", null otherwise'),
+  suggestion: z.string().nullable().describe('Required when status is "failed", null otherwise'),
+});
+
+const responseSchema = z.object({
+  results: z.array(llmResultSchema),
+});
+
+const systemPrompt = createMultiViewAnalysisPrompt();
+
+// Sort observations to ensure consistent order: front, back, right, left, top, bottom
+const viewOrder = ['front', 'back', 'right', 'left', 'top', 'bottom'] as const;
+
 /**
  * Service for running visual tests on CAD models.
  * Uses a single multi-view LLM call for fast, holistic analysis.
@@ -26,9 +42,6 @@ export class AnalysisService {
     requirements: VisualTestRequirement[],
   ): Promise<TestModelOutput> {
     this.logger.log(`Running ${requirements.length} visual tests against ${observations.length} views`);
-
-    // Sort observations to ensure consistent order: front, back, right, left, top, bottom
-    const viewOrder = ['front', 'back', 'right', 'left', 'top', 'bottom'] as const;
     const sortedObservations = viewOrder
       .map((side) => observations.find((obs) => obs.side === side))
       .filter((obs): obs is Observation => obs !== undefined);
@@ -37,21 +50,10 @@ export class AnalysisService {
       this.logger.warn(`Expected 6 views, got ${sortedObservations.length}`);
     }
 
-    const systemPrompt = createMultiViewAnalysisPrompt();
     const userPrompt = this.formatRequirementsPrompt(requirements);
 
     try {
       // Single LLM call with ALL views
-      const llmResultSchema = z.object({
-        id: z.string(),
-        status: z.enum(['passed', 'failed']),
-        reason: z.string().nullable().describe('Required when status is "failed", null otherwise'),
-        suggestion: z.string().nullable().describe('Required when status is "failed", null otherwise'),
-      });
-
-      const responseSchema = z.object({
-        results: z.array(llmResultSchema),
-      });
 
       const { output } = await generateText({
         model: openai('gpt-4o'),
@@ -90,7 +92,7 @@ export class AnalysisService {
             id: requirement.id,
             requirement: requirement.description,
             reason: 'No analysis result returned for this requirement',
-            suggestion: 'Retry the analysis. If the problem persists, simplify the requirement.',
+            suggestion: 'This is a fatal error. The LLM failed to return a result for this requirement.',
           });
         } else if (result.status === 'failed') {
           failures.push({
@@ -100,7 +102,7 @@ export class AnalysisService {
             suggestion: result.suggestion ?? 'Review the model',
           });
         } else {
-          // status === 'passed'
+          // Status === 'passed'
           passes.push({
             id: result.id,
             requirement: requirement.description,
@@ -124,12 +126,12 @@ export class AnalysisService {
         this.logger.debug(`Stack trace: ${error.stack}`);
       }
 
-      // On error, return all requirements as failed with actionable message
+      // On error, return all requirements as failed - this is a fatal infrastructure issue
       const failures: TestFailure[] = requirements.map((request) => ({
         id: request.id,
         requirement: request.description,
         reason: `Analysis error: ${errorMessage}`,
-        suggestion: 'Check API connectivity and retry. If the problem persists, simplify requirements.',
+        suggestion: 'This is a fatal error. The API request failed.',
       }));
 
       return {
