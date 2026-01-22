@@ -7,12 +7,13 @@ type ExternalLinkProps = {
   readonly children: ReactNode;
   readonly className?: string;
   /**
-   * Whether to show the arrow icon on hover.
+   * Whether to show the arrow icon.
    * @default true
    */
   readonly withArrow?: boolean;
   /**
-   * Whether to always show the arrow, regardless of hover state.
+   * Whether to show the arrow only on hover.
+   * When true, the arrow is hidden until hover. When false, the arrow is always visible.
    * @default true
    */
   readonly isArrowOnHoverOnly?: boolean;
