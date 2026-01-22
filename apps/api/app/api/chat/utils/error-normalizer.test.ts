@@ -35,6 +35,46 @@ describe('normalizeError', () => {
     });
   });
 
+  describe('abort errors', () => {
+    it('should detect AbortError by name', () => {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+
+      const result = parseNormalizedError(normalizeError(error));
+
+      expect(result.category).toBe('cancelled');
+      expect(result.title).toBe('Request Cancelled');
+    });
+
+    it('should detect abort error by message containing "aborted"', () => {
+      const error = new Error('Request was aborted by user');
+
+      const result = parseNormalizedError(normalizeError(error));
+
+      expect(result.category).toBe('cancelled');
+      expect(result.title).toBe('Request Cancelled');
+    });
+
+    it('should detect abort error by message containing "Aborted"', () => {
+      const error = new Error('Aborted');
+
+      const result = parseNormalizedError(normalizeError(error));
+
+      expect(result.category).toBe('cancelled');
+      expect(result.title).toBe('Request Cancelled');
+      expect(result.raw).toBe('Aborted');
+    });
+
+    it('should preserve raw message for abort errors', () => {
+      const error = new Error('Operation aborted due to timeout');
+
+      const result = parseNormalizedError(normalizeError(error));
+
+      expect(result.category).toBe('cancelled');
+      expect(result.raw).toBe('Operation aborted due to timeout');
+    });
+  });
+
   describe('LangChain error codes', () => {
     it('should detect INVALID_TOOL_RESULTS and set tool_error category', () => {
       const error = Object.assign(new Error('Tool results mismatch'), {
@@ -444,66 +484,6 @@ describe('normalizeError', () => {
       expect(result.code).toBe('INVALID_TOOL_RESULTS');
       expect(result.httpStatus).toBe(400);
       expect(result.requestId).toBe('req-full');
-    });
-  });
-
-  describe('markdown formatting', () => {
-    it('should wrap tool_use and tool_result in backticks', () => {
-      const error = new Error('tool_use block must be followed by a tool_result block');
-
-      const result = parseNormalizedError(normalizeError(error));
-
-      expect(result.message).toContain('`tool_use`');
-      expect(result.message).toContain('`tool_result`');
-    });
-
-    it('should wrap call IDs in backticks', () => {
-      const error = new Error('Missing tool result for call_abc123xyz');
-
-      const result = parseNormalizedError(normalizeError(error));
-
-      expect(result.message).toContain('`call_abc123xyz`');
-    });
-
-    it('should wrap API error types in backticks', () => {
-      const errorMessage = JSON.stringify({
-        type: 'error',
-        error: {
-          type: 'invalid_request_error',
-          message: 'Got invalid_request_error from API',
-        },
-      });
-      const error = new Error(errorMessage);
-
-      const result = parseNormalizedError(normalizeError(error));
-
-      expect(result.message).toContain('`invalid_request_error`');
-    });
-
-    it('should wrap HTTP methods in backticks', () => {
-      const error = new Error('POST request failed');
-
-      const result = parseNormalizedError(normalizeError(error));
-
-      expect(result.message).toContain('`POST`');
-    });
-
-    it('should preserve raw message without formatting', () => {
-      const error = new Error('tool_use and tool_result error');
-
-      const result = parseNormalizedError(normalizeError(error));
-
-      expect(result.raw).toBe('tool_use and tool_result error');
-      expect(result.raw).not.toContain('`');
-    });
-
-    it('should not double-wrap already backticked content', () => {
-      const error = new Error('Check the `tool_use` block');
-
-      const result = parseNormalizedError(normalizeError(error));
-
-      // Should not have ``tool_use``
-      expect(result.message).not.toContain('``');
     });
   });
 });

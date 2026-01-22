@@ -49,66 +49,6 @@ const langChainCodeToCategory: Record<LangChainErrorCode, ErrorCategory> = {
 /* eslint-enable @typescript-eslint/naming-convention -- re-enable after SCREAMING_SNAKE_CASE section */
 
 /**
- * Patterns to wrap in inline code blocks for better readability.
- */
-const codePatterns = [
-  // Tool-related identifiers
-  /\b(tool_use|tool_result|tool_call|tool_calls|tool_call_id)\b/g,
-  // API error types (snake_case identifiers)
-  /\b(invalid_request_error|authentication_error|permission_error|rate_limit_error|overloaded_error|api_error)\b/g,
-  // Function/method names with parentheses
-  /\b([a-zA-Z_]\w*)\(\)/g,
-  // UUIDs and call IDs (common in error messages)
-  /\b(call_[\w-]+)\b/g,
-  /\b(toolu_[\w-]+)\b/g,
-  // HTTP methods
-  /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b/g,
-  // Status codes in context
-  /\b(status\s+)(\d{3})\b/gi,
-];
-
-/**
- * Applies a single pattern to wrap matches in backticks.
- */
-function applyCodePattern(text: string, pattern: RegExp, isStatusPattern: boolean): string {
-  return text.replace(pattern, (match, ...groups) => {
-    // Handle special case for "status 400" pattern
-    if (isStatusPattern) {
-      const prefix = groups[0] as string;
-      const code = groups[1] as string;
-      return `${prefix}\`${code}\``;
-    }
-
-    // Skip if already wrapped in backticks (check the offset position)
-    const offset = groups.at(-2) as number;
-    if (offset > 0 && text[offset - 1] === '`') {
-      return match;
-    }
-
-    return `\`${match}\``;
-  });
-}
-
-/**
- * Formats an error message with markdown for better readability.
- * Wraps code-like patterns in inline code blocks.
- */
-function formatMessageWithMarkdown(message: string): string {
-  let formatted = message;
-
-  // Apply code patterns
-  for (const pattern of codePatterns) {
-    const isStatusPattern = pattern.source.includes('status');
-    formatted = applyCodePattern(formatted, pattern, isStatusPattern);
-  }
-
-  // Clean up any double backticks that might occur
-  formatted = formatted.replaceAll(/``+/g, '`');
-
-  return formatted;
-}
-
-/**
  * Checks if error has a status property (Anthropic/OpenAI SDK errors).
  */
 function hasStatus(error: unknown): error is { status: number } {
@@ -253,10 +193,35 @@ function parseJsonFromMessage(message: string): {
 }
 
 /**
+ * Checks if an error is an abort error (from AbortController).
+ */
+function isAbortError(error: unknown): boolean {
+  if (error instanceof Error) {
+    // Standard AbortError name used by AbortController
+    if (error.name === 'AbortError') {
+      return true;
+    }
+
+    // LangGraph/LangChain may wrap abort errors with specific messages
+    const lowerMessage = error.message.toLowerCase();
+    if (lowerMessage.includes('aborted') || lowerMessage.includes('abort')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Detects specific error patterns in message text.
  */
 function detectPatternCategory(message: string): ErrorCategory | undefined {
   const lowerMessage = message.toLowerCase();
+
+  // Abort/cancelled patterns (check first as they're explicit user actions)
+  if (lowerMessage.includes('aborted') || lowerMessage.includes('abort')) {
+    return errorCategory.cancelled;
+  }
 
   // Tool use without tool result pattern
   if (lowerMessage.includes('tool_use') && lowerMessage.includes('tool_result')) {
@@ -300,6 +265,7 @@ function detectPatternCategory(message: string): ErrorCategory | undefined {
  * Normalizes an error into a structured format for the UI.
  *
  * Detection priority:
+ * 0. Abort errors (explicit user cancellation - checked first)
  * 1. LangChain/LangGraph error codes (lc_error_code property)
  * 2. HTTP status codes (SDK error classes)
  * 3. JSON parsing from error message
@@ -317,8 +283,13 @@ export function normalizeError(error: unknown): string {
   // Extract help URL from raw message (LangChain appends troubleshooting URLs)
   const helpUrl = extractHelpUrl(rawMessage);
 
+  // 0. Check for abort errors first (explicit user cancellation)
+  if (isAbortError(error)) {
+    category = errorCategory.cancelled;
+  }
+
   // 1. Check for LangChain error codes
-  if (hasLcErrorCode(error)) {
+  if (category === errorCategory.generic && hasLcErrorCode(error)) {
     const lcCode = error.lc_error_code as LangChainErrorCode;
     if (lcCode in langChainCodeToCategory) {
       category = langChainCodeToCategory[lcCode];
@@ -418,11 +389,11 @@ export function normalizeError(error: unknown): string {
     }
   }
 
-  // Build the normalized error with markdown-formatted message
+  // Build the normalized error
   const normalizedError: ChatError = {
     category,
     title: errorCategoryTitles[category],
-    message: formatMessageWithMarkdown(message),
+    message,
     raw: rawMessage,
   };
 
