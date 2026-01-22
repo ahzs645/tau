@@ -23,11 +23,11 @@ Use this tool when you need to:
 
 /**
  * Add line numbers to raw content for LLM display.
- * Format: "     1|content" where the number is right-padded to 6 chars.
+ * Format: "1|content" (no padding to save tokens).
  */
 function addLineNumbers(content: string, startLine: number): string {
   const lines = content.split('\n');
-  return lines.map((line, idx) => `${String(startLine + idx).padStart(6)}|${line}`).join('\n');
+  return lines.map((line, idx) => `${startLine + idx}|${line}`).join('\n');
 }
 
 export const readFileTool: ChatTool<
