@@ -65,7 +65,16 @@ export class ChatExceptionFilter implements ExceptionFilter {
         code = this.getErrorCode(exception);
       } else if (typeof exceptionResponse === 'object') {
         const responseObject = exceptionResponse as Record<string, unknown>;
-        message = typeof responseObject['message'] === 'string' ? responseObject['message'] : exception.message;
+        const responseMessage = responseObject['message'];
+        if (typeof responseMessage === 'string') {
+          message = responseMessage;
+        } else if (Array.isArray(responseMessage)) {
+          // NestJS ValidationPipe returns message as string[] for validation errors
+          message = responseMessage.join('; ');
+        } else {
+          message = exception.message;
+        }
+
         code = typeof responseObject['code'] === 'string' ? responseObject['code'] : this.getErrorCode(exception);
       } else {
         message = exception.message || 'An error occurred';
