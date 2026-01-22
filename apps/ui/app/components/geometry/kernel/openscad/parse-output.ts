@@ -68,7 +68,7 @@ function getLine(
   }
 
   const content = getFileContents(fileName);
-  if (!content) {
+  if (content === undefined) {
     return undefined;
   }
 

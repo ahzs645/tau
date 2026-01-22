@@ -239,6 +239,31 @@ describe('parseStderrLine', () => {
       expect(errors[0]?.location?.startColumn).toBe(1); // 1-based fallback
       expect(errors[0]?.location?.endColumn).toBe(1000);
     });
+
+    it('should handle empty file content without fallback', () => {
+      // Empty string is valid content (file exists but is empty)
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+      const getFileContents = createGetFileContents({ 'main.scad': '' });
+
+      const errors: KernelIssue[] = [];
+      parseStderrLine(
+        'ERROR: Parser error: syntax error in file /main.scad, line 1',
+        (error) => {
+          errors.push(error);
+        },
+        getFileContents,
+      );
+
+      expect(errors).toHaveLength(1);
+      // Empty file has one empty line, so line 1 returns '' which gives startColumn=1, endColumn=1
+      expect(errors[0]?.location).toEqual({
+        fileName: 'main.scad',
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: 1,
+        endColumn: 1, // Not 1000 - empty string is valid content
+      });
+    });
   });
 
   describe('Warnings', () => {
