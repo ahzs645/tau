@@ -42,12 +42,27 @@ export class AnalysisService {
     requirements: VisualTestRequirement[],
   ): Promise<TestModelOutput> {
     this.logger.log(`Running ${requirements.length} visual tests against ${observations.length} views`);
-    const sortedObservations = viewOrder
-      .map((side) => observations.find((obs) => obs.side === side))
-      .filter((obs): obs is Observation => obs !== undefined);
 
-    if (sortedObservations.length !== 6) {
-      this.logger.warn(`Expected 6 views, got ${sortedObservations.length}`);
+    // Build sorted observations and check for missing views
+    // We must fail fast if any view is missing - filtering shifts image order relative to the prompt,
+    // which would cause the model to mislabel sides (e.g., thinking "right" is "left")
+    const sortedObservations: Observation[] = [];
+    const missingViews: string[] = [];
+
+    for (const side of viewOrder) {
+      const obs = observations.find((o) => o.side === side);
+      if (obs) {
+        sortedObservations.push(obs);
+      } else {
+        missingViews.push(side);
+      }
+    }
+
+    if (missingViews.length > 0) {
+      const missingViewsList = missingViews.join(', ');
+      throw new Error(
+        `Missing required views: ${missingViewsList}. All 6 orthographic views (front, back, right, left, top, bottom) are required for accurate analysis.`,
+      );
     }
 
     const userPrompt = this.formatRequirementsPrompt(requirements);

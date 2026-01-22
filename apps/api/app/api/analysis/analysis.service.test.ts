@@ -238,32 +238,42 @@ describe('AnalysisService', () => {
       expect(imageContent?.[5]?.image).toBe('data:image/png;base64,bottom');
     });
 
-    it('should handle partial observations (less than 6 views)', async () => {
-      // Arrange
+    it('should throw an error when any view is missing', async () => {
+      // Arrange: only 2 out of 6 required views
       const partialObservations: Observation[] = [
         { id: 'front', side: 'front', src: 'data:image/png;base64,front' },
         { id: 'top', side: 'top', src: 'data:image/png;base64,top' },
       ];
       const requirements = createMockRequirements(1);
 
-      vi.mocked(generateText).mockResolvedValue({
-        output: {
-          results: [{ id: 'req-1', status: 'passed', reason: null, suggestion: null }],
-        },
-      } as never);
+      // Act & Assert
+      await expect(service.runVisualTests(partialObservations, requirements)).rejects.toThrow(
+        'Missing required views: back, right, left, bottom. All 6 orthographic views (front, back, right, left, top, bottom) are required for accurate analysis.',
+      );
 
-      // Act
-      const result = await service.runVisualTests(partialObservations, requirements);
+      // Verify LLM was never called
+      expect(generateText).not.toHaveBeenCalled();
+    });
 
-      // Assert
-      expect(result.passed).toBe(1);
-      expect(result.total).toBe(1);
+    it('should throw an error listing all missing views', async () => {
+      // Arrange: missing just one view
+      const observations: Observation[] = [
+        { id: 'front', side: 'front', src: 'data:image/png;base64,front' },
+        { id: 'back', side: 'back', src: 'data:image/png;base64,back' },
+        { id: 'right', side: 'right', src: 'data:image/png;base64,right' },
+        { id: 'left', side: 'left', src: 'data:image/png;base64,left' },
+        { id: 'top', side: 'top', src: 'data:image/png;base64,top' },
+        // bottom is missing
+      ];
+      const requirements = createMockRequirements(1);
 
-      // Verify only available views are sent
-      const callArgs = vi.mocked(generateText).mock.calls[0]?.[0];
-      const messages = callArgs?.messages as Array<{ content: Array<{ type: string }> }>;
-      const imageContent = messages[0]?.content.filter((c) => c.type === 'image');
-      expect(imageContent).toHaveLength(2);
+      // Act & Assert
+      await expect(service.runVisualTests(observations, requirements)).rejects.toThrow(
+        'Missing required views: bottom',
+      );
+
+      // Verify LLM was never called
+      expect(generateText).not.toHaveBeenCalled();
     });
 
     it('should provide default reason and suggestion when LLM omits them for failures', async () => {
