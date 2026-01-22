@@ -43,8 +43,8 @@ type PendingRequest = {
 export class ChatRpcService {
   private readonly logger = new Logger(ChatRpcService.name);
 
-  /** Active Socket.IO connections by chatId (for direct emission) */
-  private readonly connections = new Map<string, Socket>();
+  /** Active Socket.IO connections by chatId (supports multiple tabs per chat) */
+  private readonly connections = new Map<string, Set<Socket>>();
 
   /** Pending RPC requests by requestId */
   private readonly pendingRequests = new Map<string, PendingRequest>();
@@ -55,11 +55,18 @@ export class ChatRpcService {
    * The socket should already be joined to the room via Socket.IO.
    */
   public registerConnection(chatId: string, socket: Socket): void {
-    // Store the socket for direct emission (last one wins for this chatId)
-    // In practice, with room-based routing, we'll use this for direct sends
-    this.connections.set(chatId, socket);
+    let socketSet = this.connections.get(chatId);
 
-    this.logger.debug(`Registered connection for chat ${chatId} (socket: ${socket.id})`);
+    if (!socketSet) {
+      socketSet = new Set<Socket>();
+      this.connections.set(chatId, socketSet);
+    }
+
+    socketSet.add(socket);
+
+    this.logger.debug(
+      `Registered connection for chat ${chatId} (socket: ${socket.id}, total sockets: ${socketSet.size})`,
+    );
   }
 
   /**
@@ -67,12 +74,21 @@ export class ChatRpcService {
    * Called when client leaves a room or disconnects.
    */
   public unregisterConnection(chatId: string, socket: Socket): void {
-    // Only remove if this socket is the registered one for this chat
-    if (this.connections.get(chatId) === socket) {
-      this.connections.delete(chatId);
-      this.logger.debug(`Unregistered connection for chat ${chatId}`);
+    const socketSet = this.connections.get(chatId);
 
-      // Reject any pending requests for this chat
+    if (!socketSet) {
+      return;
+    }
+
+    socketSet.delete(socket);
+    this.logger.debug(
+      `Unregistered connection for chat ${chatId} (socket: ${socket.id}, remaining sockets: ${socketSet.size})`,
+    );
+
+    // Only clean up the map entry and reject pending requests when no sockets remain
+    if (socketSet.size === 0) {
+      this.connections.delete(chatId);
+      this.logger.debug(`All connections removed for chat ${chatId}`);
       this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
     }
   }
@@ -81,14 +97,20 @@ export class ChatRpcService {
    * Handle socket disconnection - clean up all rooms the socket was in.
    */
   public handleSocketDisconnect(socket: Socket): void {
-    // Find and remove all chat registrations for this socket
-    for (const [chatId, registeredSocket] of this.connections) {
-      if (registeredSocket === socket) {
-        this.connections.delete(chatId);
-        this.logger.debug(`Cleaned up chat ${chatId} on socket disconnect`);
+    // Find and remove this socket from all chat registrations
+    for (const [chatId, socketSet] of this.connections) {
+      if (socketSet.has(socket)) {
+        socketSet.delete(socket);
+        this.logger.debug(
+          `Cleaned up socket ${socket.id} from chat ${chatId} on disconnect (remaining sockets: ${socketSet.size})`,
+        );
 
-        // Reject pending requests for this chat
-        this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
+        // Only reject pending requests when no sockets remain for this chat
+        if (socketSet.size === 0) {
+          this.connections.delete(chatId);
+          this.logger.debug(`All connections removed for chat ${chatId} on socket disconnect`);
+          this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
+        }
       }
     }
   }
@@ -113,9 +135,12 @@ export class ChatRpcService {
     rpcName: T,
     args: RpcInput<T>,
   ): Promise<RpcResult<T> | ToolExecutionError | ToolValidationError> {
-    const socket = this.connections.get(chatId);
+    const socketSet = this.connections.get(chatId);
 
-    if (!socket?.connected) {
+    // Find the first connected socket from the set
+    const socket = socketSet ? this.getConnectedSocket(socketSet) : undefined;
+
+    if (!socket) {
       const noConnectionError: ToolExecutionError = {
         errorCode: 'NO_CLIENT_CONNECTION',
         message:
@@ -184,8 +209,8 @@ export class ChatRpcService {
    * Check if a client is connected for a chat.
    */
   public isConnected(chatId: string): boolean {
-    const socket = this.connections.get(chatId);
-    return socket?.connected ?? false;
+    const socketSet = this.connections.get(chatId);
+    return socketSet ? this.getConnectedSocket(socketSet) !== undefined : false;
   }
 
   /**
@@ -228,6 +253,31 @@ export class ChatRpcService {
     }
 
     this.logger.debug(`Resolved RPC call ${requestId} for ${pending.rpcName}`);
+  }
+
+  /**
+   * Get the first connected socket from a set of sockets.
+   * Returns undefined if no sockets are connected.
+   *
+   * Note: We intentionally return only ONE socket for RPC requests because:
+   * 1. RPC requests expect exactly one response - the pendingRequests map tracks
+   *    a single promise per requestId. Broadcasting to all sockets would cause
+   *    multiple responses, with only the first being processed.
+   * 2. Tool execution should happen once, not duplicated across every open tab.
+   *
+   * Multi-tab support provides connection resilience (chat stays connected as long
+   * as any tab is open) and proper disconnect handling (pending requests are only
+   * rejected when the last socket disconnects). For real-time updates across all
+   * tabs, a separate broadcast mechanism would be needed.
+   */
+  private getConnectedSocket(socketSet: Set<Socket>): Socket | undefined {
+    for (const socket of socketSet) {
+      if (socket.connected) {
+        return socket;
+      }
+    }
+
+    return undefined;
   }
 
   /**
