@@ -35,6 +35,4 @@ module holes() {
     }
 }
 
-sphere(5);
-
 echo(version=version());
