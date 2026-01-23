@@ -20,6 +20,7 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { FloatingPanelContentHeaderActions } from '#components/ui/floating-panel.js';
+import { useChatRpcStatus } from '#hooks/use-chat-rpc-socket.js';
 
 const newChatKeyCombination = {
   key: 'c',
@@ -30,6 +31,10 @@ const newChatKeyCombination = {
 export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => void }): ReactNode {
   const { buildRef, buildId, setLastChatId } = useBuild();
   const { chats, createChat, updateChatName, deleteChat, isLoading: isChatsLoading } = useChats(buildId);
+
+  // Connection status for visual indicator
+  const { status: connectionStatus, error: connectionError } = useChatRpcStatus();
+  const isDisconnected = connectionStatus === 'disconnected' || connectionStatus === 'error';
 
   const isBuildLoading = useSelector(buildRef, (state) => state.context.isLoading);
   const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId) ?? '';
@@ -222,6 +227,22 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
     <>
       <div className={cn('wrap ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
         <span className="truncate">{activeChat?.name}</span>
+        {isDisconnected ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="relative flex size-2 shrink-0">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-destructive" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <div className="text-xs">
+                <div className="font-medium">Connection {connectionStatus}</div>
+                {connectionError ? <div className="text-muted-foreground">{connectionError}</div> : null}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
       </div>
       <FloatingPanelContentHeaderActions className="h-7.75">
         <Tooltip>

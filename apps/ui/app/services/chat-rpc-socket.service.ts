@@ -65,6 +65,10 @@ export class ChatRpcSocketService {
   /** Set of status change listeners */
   private readonly statusListeners = new Set<StatusListener>();
 
+  /** Event handler references for cleanup */
+  private handleVisibilityChange: (() => void) | undefined;
+  private handleOnline: (() => void) | undefined;
+
   /** Private constructor to enforce singleton pattern */
   private constructor() {
     // Singleton - use getInstance()
@@ -106,6 +110,8 @@ export class ChatRpcSocketService {
    * Disconnect from the Socket.IO server.
    */
   public disconnect(): void {
+    this.cleanupVisibilityHandlers();
+
     if (this.socket) {
       this.socket.disconnect();
       this.socket = undefined;
@@ -234,10 +240,31 @@ export class ChatRpcSocketService {
     });
 
     socket.on('disconnect', (reason) => {
-      this.setStatus('disconnected');
+      // Map disconnect reasons to user-friendly error messages
+      const errorMessages: Record<string, string> = {
+        'io server disconnect': 'Server closed connection',
+        'io client disconnect': 'Disconnected by client',
+        'transport close': 'Connection lost',
+        'ping timeout': 'Connection timed out',
+        'transport error': 'Transport error',
+      };
 
+      const errorMessage = errorMessages[reason];
+      if (errorMessage) {
+        this.setStatus('disconnected', errorMessage);
+      } else {
+        this.setStatus('disconnected');
+      }
+
+      // Socket.IO disables auto-reconnection for 'io server disconnect'
+      // We need to manually reconnect after a delay
       if (reason === 'io server disconnect') {
-        this.setError('Server closed connection');
+        console.warn('[ChatRpcSocket] Server disconnected, manually reconnecting...');
+        setTimeout(() => {
+          if (this.socket && !this.socket.connected) {
+            this.socket.connect();
+          }
+        }, 1000);
       }
     });
 
@@ -248,6 +275,10 @@ export class ChatRpcSocketService {
     // Socket.IO manager events for reconnection
     socket.io.on('reconnect_attempt', () => {
       this.setStatus('reconnecting');
+    });
+
+    socket.io.on('reconnect_error', (reconnectError) => {
+      console.warn('[ChatRpcSocket] Reconnection error:', reconnectError.message);
     });
 
     socket.io.on('reconnect', () => {
@@ -276,22 +307,41 @@ export class ChatRpcSocketService {
 
   /**
    * Set up visibility and network status handlers.
+   * Stores handler references for proper cleanup.
    */
   private setupVisibilityHandlers(): void {
-    const handleVisibilityChange = (): void => {
+    // Clean up existing listeners first to prevent stacking
+    this.cleanupVisibilityHandlers();
+
+    this.handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible' && this.socket && !this.socket.connected) {
         this.socket.connect();
       }
     };
 
-    const handleOnline = (): void => {
+    this.handleOnline = (): void => {
       if (this.socket && !this.socket.connected) {
         this.socket.connect();
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    globalThis.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    globalThis.addEventListener('online', this.handleOnline);
+  }
+
+  /**
+   * Clean up visibility and network status handlers.
+   */
+  private cleanupVisibilityHandlers(): void {
+    if (this.handleVisibilityChange) {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      this.handleVisibilityChange = undefined;
+    }
+
+    if (this.handleOnline) {
+      globalThis.removeEventListener('online', this.handleOnline);
+      this.handleOnline = undefined;
+    }
   }
 
   /**
