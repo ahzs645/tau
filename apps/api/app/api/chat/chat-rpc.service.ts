@@ -9,8 +9,8 @@ import type {
   RpcResult,
   RpcRequest,
   RpcResponse,
-  ToolExecutionError,
-  ToolValidationError,
+  RpcExecutionError,
+  RpcValidationError,
 } from '@taucad/chat';
 
 /** Timeout for RPC execution in milliseconds (60 seconds) */
@@ -21,7 +21,6 @@ type PendingRequest = {
   reject: (reason: unknown) => void;
   timeoutId: ReturnType<typeof setTimeout>;
   rpcName: keyof RpcSchemasRegistry;
-  toolCallId: string;
   chatId: string;
 };
 
@@ -117,43 +116,43 @@ export class ChatRpcService {
 
   /**
    * Send an RPC request to the client and wait for the result.
-   * Returns a Promise that resolves with the validated result or a ToolExecutionError/ToolValidationError.
+   * Returns a Promise that resolves with the validated result or an RpcExecutionError/RpcValidationError.
    *
    * Type-safe: The RPC name determines the expected input and result types.
    * Both input args and results are validated against their Zod schemas.
    *
+   * Note: This service returns RPC-layer errors, not tool-layer errors.
+   * The tool layer should convert RPC errors to tool errors using rpcErrorToToolError().
+   *
    * @template T - The RPC name (must be a key in RpcSchemasRegistry)
    * @param chatId - The chat room ID
-   * @param toolCallId - The tool call ID for tracking
+   * @param toolCallId - The tool call ID (passed through to RpcRequest for client tracking)
    * @param rpcName - The name of the RPC operation to execute
    * @param args - The input arguments (type-checked against RPC's input schema)
-   * @returns The validated result (type-checked against RPC's result schema) or an error object
+   * @returns The validated result (type-checked against RPC's result schema) or an RPC error object
    */
   public async sendRpcRequest<T extends keyof RpcSchemasRegistry>(
     chatId: string,
     toolCallId: string,
     rpcName: T,
     args: RpcInput<T>,
-  ): Promise<RpcResult<T> | ToolExecutionError | ToolValidationError> {
+  ): Promise<RpcResult<T> | RpcExecutionError | RpcValidationError> {
     const socketSet = this.connections.get(chatId);
 
     // Find the first connected socket from the set
     const socket = socketSet ? this.getConnectedSocket(socketSet) : undefined;
 
     if (!socket) {
-      const noConnectionError: ToolExecutionError = {
-        errorCode: 'NO_CLIENT_CONNECTION',
-        message:
-          'No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
-          'DO NOT RETRY this or any other tool - inform the user that you cannot proceed because they are no longer connected.',
-        toolName: rpcName,
-        toolCallId,
+      const noConnectionError: RpcExecutionError = {
+        errorCode: 'NO_CONNECTION',
+        message: 'No WebSocket connection to the browser. The user has likely closed or navigated away from the page.',
+        rpcName,
       };
       return noConnectionError;
     }
 
     // Validate input args against the RPC's input schema
-    const inputValidation = this.validateRpcInput(rpcName, toolCallId, args);
+    const inputValidation = this.validateRpcInput(rpcName, args);
     if (!inputValidation.success) {
       this.logger.warn(`Input validation failed for ${rpcName}:`, inputValidation.error.validationErrors);
       return inputValidation.error;
@@ -168,14 +167,13 @@ export class ChatRpcService {
 
         if (pending) {
           this.pendingRequests.delete(requestId);
-          const timeoutError: ToolExecutionError = {
-            errorCode: 'TOOL_EXECUTION_TIMEOUT',
+          const timeoutError: RpcExecutionError = {
+            errorCode: 'TIMEOUT',
             message: `RPC execution timed out after ${rpcExecutionTimeoutMs / 1000} seconds. The client may be disconnected or unresponsive.`,
-            toolName: pending.rpcName,
-            toolCallId: pending.toolCallId,
+            rpcName: pending.rpcName,
           };
           this.logger.warn(`RPC call ${requestId} timed out for chat ${chatId}`);
-          resolve(timeoutError); // Resolve with error object so LLM can reason about it
+          resolve(timeoutError);
         }
       }, rpcExecutionTimeoutMs);
 
@@ -186,7 +184,6 @@ export class ChatRpcService {
         reject() {},
         timeoutId,
         rpcName,
-        toolCallId,
         chatId,
       });
 
@@ -232,23 +229,22 @@ export class ChatRpcService {
 
     if (clientError) {
       // Client reported an error during execution (client is still connected)
-      const errorResult: ToolExecutionError = {
-        errorCode: 'TOOL_EXECUTION_ERROR',
+      const errorResult: RpcExecutionError = {
+        errorCode: 'UNHANDLED_CLIENT_ERROR',
         message: clientError,
-        toolName: pending.rpcName,
-        toolCallId: pending.toolCallId,
+        rpcName: pending.rpcName,
       };
       pending.resolve(errorResult);
       return;
     }
 
     // Validate the result against the RPC's result schema
-    const validated = this.validateRpcResult(pending.rpcName, pending.toolCallId, result);
+    const validated = this.validateRpcResult(pending.rpcName, result);
 
     if (validated.success) {
       pending.resolve(validated.data);
     } else {
-      // Return validation error to LLM so it can understand what went wrong
+      // Return validation error so caller can handle it
       pending.resolve(validated.error);
     }
 
@@ -282,13 +278,12 @@ export class ChatRpcService {
 
   /**
    * Validate RPC input against its Zod schema.
-   * Returns the validated data if successful, or a ToolValidationError if validation fails.
+   * Returns the validated data if successful, or an RpcValidationError if validation fails.
    */
   private validateRpcInput<T extends keyof RpcSchemasRegistry>(
     rpcName: T,
-    toolCallId: string,
     input: unknown,
-  ): { success: true; data: RpcInput<T> } | { success: false; error: ToolValidationError } {
+  ): { success: true; data: RpcInput<T> } | { success: false; error: RpcValidationError } {
     const schemas = rpcSchemasRegistry[rpcName];
     const parseResult = schemas.inputSchema.safeParse(input);
 
@@ -296,12 +291,11 @@ export class ChatRpcService {
       return { success: true, data: parseResult.data as RpcInput<T> };
     }
 
-    // Build validation error for LLM
-    const validationError: ToolValidationError = {
-      errorCode: 'TOOL_INPUT_VALIDATION_FAILED',
+    // Build validation error
+    const validationError: RpcValidationError = {
+      errorCode: 'INPUT_VALIDATION_FAILED',
       message: `RPC "${rpcName}" received invalid input. The provided arguments don't match the expected schema.`,
-      toolName: rpcName,
-      toolCallId,
+      rpcName,
       validationErrors: parseResult.error.issues.map((issue) => ({
         path: issue.path.join('.'),
         message: issue.message,
@@ -314,13 +308,12 @@ export class ChatRpcService {
 
   /**
    * Validate RPC result against its Zod schema.
-   * Returns the validated data if successful, or a ToolValidationError if validation fails.
+   * Returns the validated data if successful, or an RpcValidationError if validation fails.
    */
   private validateRpcResult(
     rpcName: keyof RpcSchemasRegistry,
-    toolCallId: string,
     result: unknown,
-  ): { success: true; data: unknown } | { success: false; error: ToolValidationError } {
+  ): { success: true; data: unknown } | { success: false; error: RpcValidationError } {
     const schemas = rpcSchemasRegistry[rpcName];
     const parseResult = schemas.resultSchema.safeParse(result);
 
@@ -328,12 +321,11 @@ export class ChatRpcService {
       return { success: true, data: parseResult.data };
     }
 
-    // Build validation error for LLM
-    const validationError: ToolValidationError = {
-      errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED',
+    // Build validation error
+    const validationError: RpcValidationError = {
+      errorCode: 'OUTPUT_VALIDATION_FAILED',
       message: `RPC "${rpcName}" returned invalid result. The client may have returned malformed data.`,
-      toolName: rpcName,
-      toolCallId,
+      rpcName,
       validationErrors: parseResult.error.issues.map((issue) => ({
         path: issue.path.join('.'),
         message: issue.message,
@@ -349,10 +341,7 @@ export class ChatRpcService {
   /**
    * Resolve all pending requests for a chat with an error (e.g., when client disconnects).
    */
-  private rejectPendingRequestsForChat(
-    chatId: string,
-    errorType: 'CLIENT_DISCONNECTED' | 'TOOL_EXECUTION_TIMEOUT',
-  ): void {
+  private rejectPendingRequestsForChat(chatId: string, errorType: 'CLIENT_DISCONNECTED' | 'TIMEOUT'): void {
     for (const [requestId, pending] of this.pendingRequests) {
       if (pending.chatId === chatId) {
         clearTimeout(pending.timeoutId);
@@ -363,14 +352,12 @@ export class ChatRpcService {
             ? 'WebSocket client disconnected before RPC execution completed.'
             : `RPC execution timed out after ${rpcExecutionTimeoutMs / 1000} seconds.`;
 
-        const disconnectError: ToolExecutionError = {
+        const disconnectError: RpcExecutionError = {
           errorCode: errorType,
           message: errorMessage,
-          toolName: pending.rpcName,
-          toolCallId: pending.toolCallId,
+          rpcName: pending.rpcName,
         };
 
-        // Resolve with error object so LLM can reason about it
         pending.resolve(disconnectError);
         this.logger.debug(`Resolved pending request ${requestId} with ${errorType}`);
       }

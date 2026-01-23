@@ -1,4 +1,5 @@
-import type { ToolExecutionError } from '#types/websocket.types.js';
+import type { ToolExecutionError } from '#types/tool.types.js';
+import type { RpcExecutionError, RpcValidationError } from '#types/rpc.types.js';
 
 /**
  * All possible tool execution error codes.
@@ -26,6 +27,96 @@ export function isToolExecutionError(value: unknown): value is ToolExecutionErro
     typeof (value as { errorCode: unknown }).errorCode === 'string' &&
     toolErrorCodes.includes((value as { errorCode: string }).errorCode as ToolErrorCode)
   );
+}
+
+/**
+ * Convert an RPC execution error to a tool execution error.
+ * Use this in tool implementations to convert RPC-layer errors to tool-layer errors
+ * that can be returned to the LLM.
+ *
+ * @param rpcError - The RPC execution error or validation error from ChatRpcService
+ * @param toolName - The name of the tool (for error attribution)
+ * @param toolCallId - The tool call ID (for tracking)
+ * @returns A ToolExecutionError that can be returned to the LLM
+ *
+ * @example
+ * ```typescript
+ * const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName, args);
+ *
+ * if (isRpcExecutionError(result)) {
+ *   return rpcErrorToToolError(result, toolName.readFile, toolCallId);
+ * }
+ * ```
+ */
+export function rpcErrorToToolError(
+  rpcError: RpcExecutionError | RpcValidationError,
+  toolName: string,
+  toolCallId: string,
+): ToolExecutionError {
+  // Map RPC error codes to tool error codes
+  switch (rpcError.errorCode) {
+    case 'TIMEOUT': {
+      return {
+        errorCode: 'TOOL_EXECUTION_TIMEOUT',
+        message: rpcError.message,
+        toolName,
+        toolCallId,
+      };
+    }
+
+    case 'CLIENT_DISCONNECTED': {
+      return {
+        errorCode: 'CLIENT_DISCONNECTED',
+        message: rpcError.message,
+        toolName,
+        toolCallId,
+      };
+    }
+
+    case 'NO_CONNECTION': {
+      return {
+        errorCode: 'NO_CLIENT_CONNECTION',
+        message:
+          'No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
+          'DO NOT RETRY this or any other tool - inform the user that you cannot proceed because they are no longer connected.',
+        toolName,
+        toolCallId,
+      };
+    }
+
+    case 'INPUT_VALIDATION_FAILED': {
+      const validationError = rpcError as RpcValidationError;
+      return {
+        errorCode: 'TOOL_INPUT_VALIDATION_FAILED',
+        message: validationError.message,
+        toolName,
+        toolCallId,
+        validationErrors: validationError.validationErrors,
+        rawOutput: validationError.rawOutput,
+      };
+    }
+
+    case 'OUTPUT_VALIDATION_FAILED': {
+      const validationError = rpcError as RpcValidationError;
+      return {
+        errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED',
+        message: validationError.message,
+        toolName,
+        toolCallId,
+        validationErrors: validationError.validationErrors,
+        rawOutput: validationError.rawOutput,
+      };
+    }
+
+    case 'UNHANDLED_CLIENT_ERROR': {
+      return {
+        errorCode: 'TOOL_EXECUTION_ERROR',
+        message: rpcError.message,
+        toolName,
+        toolCallId,
+      };
+    }
+  }
 }
 
 /**

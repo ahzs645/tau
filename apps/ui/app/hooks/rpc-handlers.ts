@@ -28,12 +28,12 @@ import type {
   GetKernelResultRpcResult,
   CaptureObservationsRpcInput,
   CaptureObservationsRpcResult,
-  RpcErrorCode,
+  RpcClientErrorCode,
   RpcName,
   Observation,
   ViewSide,
 } from '@taucad/chat';
-import { toolName } from '@taucad/chat/constants';
+import { rpcName } from '@taucad/chat/constants';
 import type { FileEntry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
@@ -84,7 +84,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 // Helper to determine error code from error
-function getErrorCode(error: unknown): RpcErrorCode {
+function getErrorCode(error: unknown): RpcClientErrorCode {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
     if (message.includes('not found') || message.includes('enoent')) {
@@ -444,42 +444,42 @@ export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
     const { rpcName: currentRpcName, args } = rpcCall;
 
     switch (currentRpcName) {
-      case toolName.captureObservations: {
+      case rpcName.captureObservations: {
         return handleCaptureObservations(args as CaptureObservationsRpcInput);
       }
 
-      case toolName.readFile: {
+      case rpcName.readFile: {
         return handleReadFile(args as ReadFileRpcInput);
       }
 
-      case toolName.listDirectory: {
+      case rpcName.listDirectory: {
         return handleListDirectory(args as ListDirectoryRpcInput);
       }
 
-      case toolName.createFile: {
+      case rpcName.createFile: {
         return handleCreateFile(args as CreateFileRpcInput);
       }
 
-      case toolName.deleteFile: {
+      case rpcName.deleteFile: {
         return handleDeleteFile(args as DeleteFileRpcInput);
       }
 
-      case toolName.grep: {
+      case rpcName.grep: {
         return handleGrep(args as GrepRpcInput);
       }
 
-      case toolName.globSearch: {
+      case rpcName.globSearch: {
         return handleGlobSearch(args as GlobSearchRpcInput);
       }
 
-      case toolName.getKernelResult: {
+      case rpcName.getKernelResult: {
         return handleGetKernelResult(args as GetKernelResultRpcInput);
       }
 
       default: {
         return {
           success: false,
-          errorCode: 'UNKNOWN' as RpcErrorCode,
+          errorCode: 'UNKNOWN' as RpcClientErrorCode,
           message: `Unknown RPC: ${String(currentRpcName)}`,
         };
       }

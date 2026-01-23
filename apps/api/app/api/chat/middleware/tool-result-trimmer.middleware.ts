@@ -103,34 +103,6 @@ function isGetKernelResultShape(content: unknown): boolean {
 }
 
 /**
- * Checks if content has the shape of CaptureObservationsOutput.
- * Unique: has observations array where each item has id + side.
- */
-function isCaptureObservationsShape(content: unknown): boolean {
-  if (!isObject(content)) {
-    return false;
-  }
-
-  const { observations } = content;
-  if (!Array.isArray(observations)) {
-    return false;
-  }
-
-  // Check that at least one observation has the expected shape
-  // (empty array is valid but we can't distinguish it)
-  if (observations.length === 0) {
-    return true; // Could be empty observations, but matches shape
-  }
-
-  const firstObs: unknown = observations[0];
-  if (!isObject(firstObs)) {
-    return false;
-  }
-
-  return typeof firstObs['id'] === 'string' && typeof firstObs['side'] === 'string';
-}
-
-/**
  * Checks if content has the shape of ReadFileOutput.
  * Unique: has content string + totalLines number.
  */
@@ -191,7 +163,6 @@ const contentShapeDetectors: Record<string, ContentShapeDetector> = {
   [toolName.createFile]: isDiffStatsShape,
   [toolName.editFile]: isDiffStatsShape,
   [toolName.getKernelResult]: isGetKernelResultShape,
-  [toolName.captureObservations]: isCaptureObservationsShape,
   [toolName.readFile]: isReadFileShape,
   [toolName.listDirectory]: isListDirectoryShape,
   [toolName.grep]: isGrepShape,
@@ -284,19 +255,6 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
           })),
         }
       : {}),
-  })),
-
-  /**
-   * Trims capture_observations by removing base64 image data.
-   * The images have already been processed/displayed to the user.
-   * Keeps only metadata (id, side) for reference.
-   */
-  [toolName.captureObservations]: createTrimmer(toolName.captureObservations, (result) => ({
-    observations: result.observations.map((obs) => ({
-      id: obs.id,
-      side: obs.side,
-      // REMOVED: src - base64 image data, already processed
-    })),
   })),
 };
 

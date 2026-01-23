@@ -1,4 +1,11 @@
-import type { RpcName } from '#types/tool.types.js';
+/**
+ * WebSocket Transport Types
+ *
+ * This file contains types for WebSocket message transport only.
+ * Tool-specific types are in tool.types.ts.
+ * RPC protocol types are in rpc.types.ts.
+ */
+import type { RpcName } from '#types/rpc.types.js';
 import type { wsCloseCode } from '#constants/websocket.constants.js';
 
 export type WsCloseCode = (typeof wsCloseCode)[keyof typeof wsCloseCode];
@@ -73,86 +80,3 @@ export type ServerToClientMessage = RpcRequest | WsConnectedMessage | WsErrorMes
  * All possible messages from client to server.
  */
 export type ClientToServerMessage = RpcResponse | WsConnectMessage;
-
-/**
- * Structured error returned to LLM when tool execution times out.
- */
-export type ToolTimeoutError = {
-  errorCode: 'TOOL_EXECUTION_TIMEOUT';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
-
-/**
- * Structured error returned to LLM when client disconnects during tool execution.
- */
-export type ToolDisconnectedError = {
-  errorCode: 'CLIENT_DISCONNECTED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
-
-/**
- * Structured error returned to LLM when no client is connected.
- */
-export type ToolNoConnectionError = {
-  errorCode: 'NO_CLIENT_CONNECTION';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
-
-/**
- * Structured validation error returned to LLM when tool input validation fails.
- * The LLM can use this information to understand what went wrong and potentially retry.
- */
-export type ToolInputValidationError = {
-  errorCode: 'TOOL_INPUT_VALIDATION_FAILED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-  validationErrors: Array<{ path: string; message: string }>;
-  rawOutput: unknown;
-};
-
-/**
- * Structured validation error returned to LLM when tool output validation fails.
- * The LLM can use this information to understand what went wrong and potentially retry.
- */
-export type ToolOutputValidationError = {
-  errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-  validationErrors: Array<{ path: string; message: string }>;
-  rawOutput: unknown;
-};
-
-/**
- * Combined validation error type for both input and output validation failures.
- */
-export type ToolValidationError = ToolInputValidationError | ToolOutputValidationError;
-
-/**
- * Generic tool execution error for unexpected failures.
- * Used when a tool throws an error that doesn't fit other categories.
- */
-export type ToolGenericExecutionError = {
-  errorCode: 'TOOL_EXECUTION_ERROR';
-  message: string;
-  toolName: string;
-  toolCallId: string;
-};
-
-/**
- * All possible structured tool errors including validation errors.
- * These are returned to the LLM so it can reason about errors.
- */
-export type ToolExecutionError =
-  | ToolTimeoutError
-  | ToolDisconnectedError
-  | ToolNoConnectionError
-  | ToolValidationError
-  | ToolGenericExecutionError;

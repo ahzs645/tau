@@ -1,6 +1,6 @@
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { InferUITools, Tool as AiTool, UIToolInvocation } from 'ai';
-import type { toolName, toolMode, clientToolNames, allRpcNames } from '#constants/tool.constants.js';
+import type { toolName, toolMode } from '#constants/tool.constants.js';
 import type { EditFileInput, EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
 import type {
   TestModelInput,
@@ -19,10 +19,6 @@ import type { GlobSearchInput, GlobSearchOutput } from '#schemas/tools/glob-sear
 import type { GetKernelResultInput, GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
 import type { ReasoningInput, ReasoningOutput } from '#schemas/tools/reasoning.tool.schema.js';
 import type {
-  CaptureObservationsInput,
-  CaptureObservationsOutput,
-} from '#schemas/tools/capture-observations.tool.schema.js';
-import type {
   TransferToCadExpertInput,
   TransferToCadExpertOutput,
 } from '#schemas/tools/transfer-to-cad-expert.tool.schema.js';
@@ -34,17 +30,99 @@ import type {
   TransferBackToSupervisorInput,
   TransferBackToSupervisorOutput,
 } from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
-import type { ToolExecutionError } from '#types/websocket.types.js';
 
-export type ToolName = (typeof toolName)[keyof typeof toolName];
-
-export type ClientToolName = (typeof clientToolNames)[number];
+// =============================================================================
+// Tool Error Types
+// =============================================================================
 
 /**
- * RPC operation names - all operations that can be executed via WebSocket.
- * Includes both client-visible tools and internal RPCs (like captureObservations).
+ * Structured error returned to LLM when tool execution times out.
  */
-export type RpcName = (typeof allRpcNames)[number];
+export type ToolTimeoutError = {
+  errorCode: 'TOOL_EXECUTION_TIMEOUT';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+};
+
+/**
+ * Structured error returned to LLM when client disconnects during tool execution.
+ */
+export type ToolDisconnectedError = {
+  errorCode: 'CLIENT_DISCONNECTED';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+};
+
+/**
+ * Structured error returned to LLM when no client is connected.
+ */
+export type ToolNoConnectionError = {
+  errorCode: 'NO_CLIENT_CONNECTION';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+};
+
+/**
+ * Structured validation error returned to LLM when tool input validation fails.
+ * The LLM can use this information to understand what went wrong and potentially retry.
+ */
+export type ToolInputValidationError = {
+  errorCode: 'TOOL_INPUT_VALIDATION_FAILED';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+  validationErrors: Array<{ path: string; message: string }>;
+  rawOutput: unknown;
+};
+
+/**
+ * Structured validation error returned to LLM when tool output validation fails.
+ * The LLM can use this information to understand what went wrong and potentially retry.
+ */
+export type ToolOutputValidationError = {
+  errorCode: 'TOOL_OUTPUT_VALIDATION_FAILED';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+  validationErrors: Array<{ path: string; message: string }>;
+  rawOutput: unknown;
+};
+
+/**
+ * Combined validation error type for both input and output validation failures.
+ */
+export type ToolValidationError = ToolInputValidationError | ToolOutputValidationError;
+
+/**
+ * Generic tool execution error for unexpected failures.
+ * Used when a tool throws an error that doesn't fit other categories.
+ */
+export type ToolGenericExecutionError = {
+  errorCode: 'TOOL_EXECUTION_ERROR';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+};
+
+/**
+ * All possible structured tool errors including validation errors.
+ * These are returned to the LLM so it can reason about errors.
+ */
+export type ToolExecutionError =
+  | ToolTimeoutError
+  | ToolDisconnectedError
+  | ToolNoConnectionError
+  | ToolValidationError
+  | ToolGenericExecutionError;
+
+// =============================================================================
+// Tool Name Types
+// =============================================================================
+
+export type ToolName = (typeof toolName)[keyof typeof toolName];
 
 /**
  * The tool mode. One of:
@@ -64,7 +142,6 @@ export type MyTools = InferUITools<{
   [toolName.editFile]: AiTool<EditFileInput, EditFileOutput>;
   [toolName.testModel]: AiTool<TestModelInput, TestModelOutput>;
   [toolName.editTests]: AiTool<EditTestsInput, EditTestsOutput>;
-  [toolName.captureObservations]: AiTool<CaptureObservationsInput, CaptureObservationsOutput>;
   [toolName.webBrowser]: AiTool<WebBrowserInput, WebBrowserOutput>;
   [toolName.webSearch]: AiTool<WebSearchInput, WebSearchOutput>;
   [toolName.readFile]: AiTool<ReadFileInput, ReadFileOutput>;

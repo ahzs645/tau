@@ -7,7 +7,6 @@ import type {
   CreateFileOutput,
   EditFileOutput,
   GetKernelResultOutput,
-  CaptureObservationsOutput,
 } from '@taucad/chat';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
@@ -524,40 +523,6 @@ describe('toolResultTrimmerMiddleware', () => {
       const parsed = JSON.parse(trimmedMessage.content as string) as unknown;
 
       expect(parsed).toEqual({ status: 'ready' });
-    });
-  });
-
-  describe('capture_observations trimmer', () => {
-    function createCaptureObservationsOutput(): CaptureObservationsOutput {
-      return {
-        observations: [
-          { id: 'obs_1', side: 'front', src: 'data:image/png;base64,iVBORw0KGgo...very_long_base64_string' },
-          { id: 'obs_2', side: 'top', src: 'data:image/png;base64,another_very_long_base64_string' },
-        ],
-      };
-    }
-
-    it('should remove base64 src from observations', async () => {
-      const output = createCaptureObservationsOutput();
-      const toolMessage = new ToolMessage({
-        content: JSON.stringify(output),
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
-        tool_call_id: 'call_obs_1',
-        name: toolName.captureObservations,
-      });
-
-      await callWrapModelCall({ messages: [toolMessage] }, handler);
-
-      const [request] = handler.mock.calls[0] as [TestRequest];
-      const trimmedMessage = request.messages[0] as ToolMessage;
-      const parsed = JSON.parse(trimmedMessage.content as string) as unknown;
-
-      expect(parsed).toEqual({
-        observations: [
-          { id: 'obs_1', side: 'front' },
-          { id: 'obs_2', side: 'top' },
-        ],
-      });
     });
   });
 });

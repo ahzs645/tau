@@ -10,7 +10,7 @@
  */
 import type { z } from 'zod';
 import { z as zod } from 'zod';
-import { toolName } from '#constants/tool.constants.js';
+import { rpcName } from '#constants/rpc.constants.js';
 import { diffStatsWithContentSchema } from '#schemas/tools/diff.schema.js';
 import { kernelIssueSchema } from '#schemas/tools/issue.schema.js';
 import { observationSchema } from '#schemas/tools/test-model.tool.schema.js';
@@ -24,7 +24,7 @@ import { observationSchema } from '#schemas/tools/test-model.tool.schema.js';
  * These are distinct from infrastructure errors (timeout, disconnect) which
  * are handled by ToolExecutionError.
  */
-export const rpcErrorCodeSchema = zod.enum([
+export const rpcClientErrorCodeSchema = zod.enum([
   'FILE_NOT_FOUND',
   'PERMISSION_DENIED',
   'IO_ERROR',
@@ -36,75 +36,84 @@ export const rpcErrorCodeSchema = zod.enum([
  * Base error schema for all RPC failures.
  * Used as the error variant in discriminated unions.
  */
-export const rpcErrorSchema = zod.object({
+export const rpcClientErrorSchema = zod.object({
   success: zod.literal(false),
-  errorCode: rpcErrorCodeSchema,
+  errorCode: rpcClientErrorCodeSchema,
   message: zod.string(),
 });
 
 // =============================================================================
-// ReadFile RPC
+// RPC Definition Helper
 // =============================================================================
 
-export const readFileRpcInputSchema = zod.object({
-  targetFile: zod.string(),
-  offset: zod.number().optional(),
-  limit: zod.number().optional(),
+/**
+ * Helper to define RPC schemas with reduced boilerplate.
+ *
+ * Takes an input schema and a success data schema (without `success: true`),
+ * and automatically:
+ * - Adds `success: true` to create the full success schema
+ * - Creates a discriminated union result schema with error handling
+ *
+ * @example
+ * ```typescript
+ * const readFileRpc = defineRpc({
+ *   input: zod.object({ targetFile: zod.string() }),
+ *   success: zod.object({ content: zod.string(), totalLines: zod.number() }),
+ * });
+ *
+ * // Use: readFileRpc.inputSchema, readFileRpc.successSchema, readFileRpc.resultSchema
+ * // Types: z.infer<typeof readFileRpc.inputSchema>, etc.
+ * ```
+ */
+function defineRpc<Input extends zod.ZodRawShape, Success extends zod.ZodRawShape>(config: {
+  input: zod.ZodObject<Input>;
+  success: zod.ZodObject<Success>;
+}) {
+  const successSchema = config.success.extend({ success: zod.literal(true) });
+  const resultSchema = zod.discriminatedUnion('success', [successSchema, rpcClientErrorSchema]);
+
+  return {
+    inputSchema: config.input,
+    successSchema,
+    resultSchema,
+  };
+}
+
+// =============================================================================
+// RPC Definitions
+// =============================================================================
+
+const readFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+    offset: zod.number().optional(),
+    limit: zod.number().optional(),
+  }),
+  success: zod.object({
+    content: zod.string(),
+    totalLines: zod.number(),
+    startLine: zod.number().optional(),
+  }),
 });
 
-export const readFileRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  content: zod.string(),
-  totalLines: zod.number(),
-  startLine: zod.number().optional(),
+const createFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+    content: zod.string(),
+  }),
+  success: zod.object({
+    message: zod.string().optional(),
+    diffStats: diffStatsWithContentSchema,
+  }),
 });
 
-export const readFileRpcResultSchema = zod.discriminatedUnion('success', [readFileRpcSuccessSchema, rpcErrorSchema]);
-
-// =============================================================================
-// CreateFile RPC
-// =============================================================================
-
-export const createFileRpcInputSchema = zod.object({
-  targetFile: zod.string(),
-  content: zod.string(),
-});
-
-export const createFileRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  message: zod.string().optional(),
-  diffStats: diffStatsWithContentSchema,
-});
-
-export const createFileRpcResultSchema = zod.discriminatedUnion('success', [
-  createFileRpcSuccessSchema,
-  rpcErrorSchema,
-]);
-
-// =============================================================================
-// DeleteFile RPC
-// =============================================================================
-
-export const deleteFileRpcInputSchema = zod.object({
-  targetFile: zod.string(),
-});
-
-export const deleteFileRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  message: zod.string(),
-});
-
-export const deleteFileRpcResultSchema = zod.discriminatedUnion('success', [
-  deleteFileRpcSuccessSchema,
-  rpcErrorSchema,
-]);
-
-// =============================================================================
-// ListDirectory RPC
-// =============================================================================
-
-export const listDirectoryRpcInputSchema = zod.object({
-  path: zod.string(),
+const deleteFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+  }),
+  success: zod.object({
+    message: zod.string(),
+  }),
 });
 
 const directoryEntrySchema = zod.object({
@@ -113,26 +122,14 @@ const directoryEntrySchema = zod.object({
   size: zod.number(),
 });
 
-export const listDirectoryRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  entries: zod.array(directoryEntrySchema),
-  path: zod.string(),
-});
-
-export const listDirectoryRpcResultSchema = zod.discriminatedUnion('success', [
-  listDirectoryRpcSuccessSchema,
-  rpcErrorSchema,
-]);
-
-// =============================================================================
-// Grep RPC
-// =============================================================================
-
-export const grepRpcInputSchema = zod.object({
-  pattern: zod.string(),
-  path: zod.string().optional(),
-  glob: zod.string().optional(),
-  caseSensitive: zod.boolean().optional(),
+const listDirectoryRpc = defineRpc({
+  input: zod.object({
+    path: zod.string(),
+  }),
+  success: zod.object({
+    entries: zod.array(directoryEntrySchema),
+    path: zod.string(),
+  }),
 });
 
 const grepMatchSchema = zod.object({
@@ -141,69 +138,83 @@ const grepMatchSchema = zod.object({
   content: zod.string(),
 });
 
-export const grepRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  matches: zod.array(grepMatchSchema),
-  totalMatches: zod.number(),
-  truncated: zod.boolean().optional(),
+const grepRpc = defineRpc({
+  input: zod.object({
+    pattern: zod.string(),
+    path: zod.string().optional(),
+    glob: zod.string().optional(),
+    caseSensitive: zod.boolean().optional(),
+  }),
+  success: zod.object({
+    matches: zod.array(grepMatchSchema),
+    totalMatches: zod.number(),
+    truncated: zod.boolean().optional(),
+  }),
 });
 
-export const grepRpcResultSchema = zod.discriminatedUnion('success', [grepRpcSuccessSchema, rpcErrorSchema]);
-
-// =============================================================================
-// GlobSearch RPC
-// =============================================================================
-
-export const globSearchRpcInputSchema = zod.object({
-  pattern: zod.string(),
-  path: zod.string().optional(),
+const globSearchRpc = defineRpc({
+  input: zod.object({
+    pattern: zod.string(),
+    path: zod.string().optional(),
+  }),
+  success: zod.object({
+    files: zod.array(zod.string()),
+    totalFiles: zod.number(),
+  }),
 });
 
-export const globSearchRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  files: zod.array(zod.string()),
-  totalFiles: zod.number(),
+const getKernelResultRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+  }),
+  success: zod.object({
+    status: zod.enum(['ready', 'error', 'pending']),
+    kernelIssues: zod.array(kernelIssueSchema).optional(),
+  }),
 });
 
-export const globSearchRpcResultSchema = zod.discriminatedUnion('success', [
-  globSearchRpcSuccessSchema,
-  rpcErrorSchema,
-]);
-
-// =============================================================================
-// GetKernelResult RPC
-// =============================================================================
-
-export const getKernelResultRpcInputSchema = zod.object({
-  targetFile: zod.string(),
+const captureObservationsRpc = defineRpc({
+  input: zod.object({}),
+  success: zod.object({
+    observations: zod.array(observationSchema),
+  }),
 });
 
-export const getKernelResultRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  status: zod.enum(['ready', 'error', 'pending']),
-  kernelIssues: zod.array(kernelIssueSchema).optional(),
-});
-
-export const getKernelResultRpcResultSchema = zod.discriminatedUnion('success', [
-  getKernelResultRpcSuccessSchema,
-  rpcErrorSchema,
-]);
-
 // =============================================================================
-// CaptureObservations RPC (Internal - used by test_model)
+// Exported Schemas (for backwards compatibility)
 // =============================================================================
 
-export const captureObservationsRpcInputSchema = zod.object({});
+export const readFileRpcInputSchema = readFileRpc.inputSchema;
+export const readFileRpcSuccessSchema = readFileRpc.successSchema;
+export const readFileRpcResultSchema = readFileRpc.resultSchema;
 
-export const captureObservationsRpcSuccessSchema = zod.object({
-  success: zod.literal(true),
-  observations: zod.array(observationSchema),
-});
+export const createFileRpcInputSchema = createFileRpc.inputSchema;
+export const createFileRpcSuccessSchema = createFileRpc.successSchema;
+export const createFileRpcResultSchema = createFileRpc.resultSchema;
 
-export const captureObservationsRpcResultSchema = zod.discriminatedUnion('success', [
-  captureObservationsRpcSuccessSchema,
-  rpcErrorSchema,
-]);
+export const deleteFileRpcInputSchema = deleteFileRpc.inputSchema;
+export const deleteFileRpcSuccessSchema = deleteFileRpc.successSchema;
+export const deleteFileRpcResultSchema = deleteFileRpc.resultSchema;
+
+export const listDirectoryRpcInputSchema = listDirectoryRpc.inputSchema;
+export const listDirectoryRpcSuccessSchema = listDirectoryRpc.successSchema;
+export const listDirectoryRpcResultSchema = listDirectoryRpc.resultSchema;
+
+export const grepRpcInputSchema = grepRpc.inputSchema;
+export const grepRpcSuccessSchema = grepRpc.successSchema;
+export const grepRpcResultSchema = grepRpc.resultSchema;
+
+export const globSearchRpcInputSchema = globSearchRpc.inputSchema;
+export const globSearchRpcSuccessSchema = globSearchRpc.successSchema;
+export const globSearchRpcResultSchema = globSearchRpc.resultSchema;
+
+export const getKernelResultRpcInputSchema = getKernelResultRpc.inputSchema;
+export const getKernelResultRpcSuccessSchema = getKernelResultRpc.successSchema;
+export const getKernelResultRpcResultSchema = getKernelResultRpc.resultSchema;
+
+export const captureObservationsRpcInputSchema = captureObservationsRpc.inputSchema;
+export const captureObservationsRpcSuccessSchema = captureObservationsRpc.successSchema;
+export const captureObservationsRpcResultSchema = captureObservationsRpc.resultSchema;
 
 // =============================================================================
 // RPC Schemas Registry
@@ -219,14 +230,14 @@ type RpcSchemaEntry<Input = unknown, Result = unknown> = {
  * Used for type inference in sendRpcRequest.
  */
 export type RpcSchemasRegistry = {
-  [toolName.readFile]: RpcSchemaEntry<ReadFileRpcInput, ReadFileRpcResult>;
-  [toolName.createFile]: RpcSchemaEntry<CreateFileRpcInput, CreateFileRpcResult>;
-  [toolName.deleteFile]: RpcSchemaEntry<DeleteFileRpcInput, DeleteFileRpcResult>;
-  [toolName.listDirectory]: RpcSchemaEntry<ListDirectoryRpcInput, ListDirectoryRpcResult>;
-  [toolName.grep]: RpcSchemaEntry<GrepRpcInput, GrepRpcResult>;
-  [toolName.globSearch]: RpcSchemaEntry<GlobSearchRpcInput, GlobSearchRpcResult>;
-  [toolName.getKernelResult]: RpcSchemaEntry<GetKernelResultRpcInput, GetKernelResultRpcResult>;
-  [toolName.captureObservations]: RpcSchemaEntry<CaptureObservationsRpcInput, CaptureObservationsRpcResult>;
+  [rpcName.readFile]: RpcSchemaEntry<ReadFileRpcInput, ReadFileRpcResult>;
+  [rpcName.createFile]: RpcSchemaEntry<CreateFileRpcInput, CreateFileRpcResult>;
+  [rpcName.deleteFile]: RpcSchemaEntry<DeleteFileRpcInput, DeleteFileRpcResult>;
+  [rpcName.listDirectory]: RpcSchemaEntry<ListDirectoryRpcInput, ListDirectoryRpcResult>;
+  [rpcName.grep]: RpcSchemaEntry<GrepRpcInput, GrepRpcResult>;
+  [rpcName.globSearch]: RpcSchemaEntry<GlobSearchRpcInput, GlobSearchRpcResult>;
+  [rpcName.getKernelResult]: RpcSchemaEntry<GetKernelResultRpcInput, GetKernelResultRpcResult>;
+  [rpcName.captureObservations]: RpcSchemaEntry<CaptureObservationsRpcInput, CaptureObservationsRpcResult>;
 };
 
 /**
@@ -234,35 +245,35 @@ export type RpcSchemasRegistry = {
  * Used by ChatRpcService for validating WebSocket RPC inputs/results.
  */
 export const rpcSchemasRegistry: RpcSchemasRegistry = {
-  [toolName.readFile]: {
+  [rpcName.readFile]: {
     inputSchema: readFileRpcInputSchema,
     resultSchema: readFileRpcResultSchema,
   },
-  [toolName.createFile]: {
+  [rpcName.createFile]: {
     inputSchema: createFileRpcInputSchema,
     resultSchema: createFileRpcResultSchema,
   },
-  [toolName.deleteFile]: {
+  [rpcName.deleteFile]: {
     inputSchema: deleteFileRpcInputSchema,
     resultSchema: deleteFileRpcResultSchema,
   },
-  [toolName.listDirectory]: {
+  [rpcName.listDirectory]: {
     inputSchema: listDirectoryRpcInputSchema,
     resultSchema: listDirectoryRpcResultSchema,
   },
-  [toolName.grep]: {
+  [rpcName.grep]: {
     inputSchema: grepRpcInputSchema,
     resultSchema: grepRpcResultSchema,
   },
-  [toolName.globSearch]: {
+  [rpcName.globSearch]: {
     inputSchema: globSearchRpcInputSchema,
     resultSchema: globSearchRpcResultSchema,
   },
-  [toolName.getKernelResult]: {
+  [rpcName.getKernelResult]: {
     inputSchema: getKernelResultRpcInputSchema,
     resultSchema: getKernelResultRpcResultSchema,
   },
-  [toolName.captureObservations]: {
+  [rpcName.captureObservations]: {
     inputSchema: captureObservationsRpcInputSchema,
     resultSchema: captureObservationsRpcResultSchema,
   },
@@ -286,8 +297,8 @@ export type RpcResult<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasRe
 // Inferred Types
 // =============================================================================
 
-export type RpcErrorCode = z.infer<typeof rpcErrorCodeSchema>;
-export type RpcError = z.infer<typeof rpcErrorSchema>;
+export type RpcClientErrorCode = z.infer<typeof rpcClientErrorCodeSchema>;
+export type RpcClientError = z.infer<typeof rpcClientErrorSchema>;
 
 export type ReadFileRpcInput = z.infer<typeof readFileRpcInputSchema>;
 export type ReadFileRpcSuccess = z.infer<typeof readFileRpcSuccessSchema>;

@@ -1,9 +1,9 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { createFileInputSchema, isRpcError } from '@taucad/chat';
-import { isToolExecutionError } from '@taucad/chat/utils';
+import { createFileInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
+import { rpcErrorToToolError } from '@taucad/chat/utils';
 import type { ChatTool, CreateFileInput, CreateFileOutput, ToolExecutionError } from '@taucad/chat';
-import { toolName } from '@taucad/chat/constants';
+import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const createFileToolDefinition = {
@@ -30,15 +30,15 @@ export const createFileTool: ChatTool<
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, toolName.createFile, args);
+  const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.createFile, args);
 
-  // Handle infrastructure errors (timeout, disconnect)
-  if (isToolExecutionError(result)) {
-    return result;
+  // Handle RPC infrastructure errors (timeout, disconnect, validation)
+  if (isRpcExecutionError(result)) {
+    return rpcErrorToToolError(result, toolName.createFile, toolCallId);
   }
 
   // Handle RPC business errors (permission denied, etc.)
-  if (isRpcError(result)) {
+  if (isRpcClientError(result)) {
     const error: ToolExecutionError = {
       errorCode: 'TOOL_EXECUTION_ERROR',
       message: `Cannot create file "${args.targetFile}": ${result.message}`,

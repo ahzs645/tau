@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useSelector } from '@xstate/react';
 import type { RpcRequest, RpcResponse, RpcName } from '@taucad/chat';
-import { allRpcNames } from '@taucad/chat/constants';
+import { rpcNames } from '@taucad/chat/constants';
 import { ChatRpcSocketService } from '#services/chat-rpc-socket.service.js';
 import type { ConnectionStatus, RpcRequestHandler } from '#services/chat-rpc-socket.service.js';
 import { createRpcHandlers } from '#hooks/rpc-handlers.js';
@@ -165,7 +165,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
     const { requestId, toolCallId, rpcName: currentRpcName, args } = request;
 
     // Verify this is a valid RPC operation
-    const isValidRpc = (allRpcNames as readonly RpcName[]).includes(currentRpcName);
+    const isValidRpc = (rpcNames as readonly RpcName[]).includes(currentRpcName);
     if (!isValidRpc) {
       console.warn(`[ChatRpcSocket] Received request for unknown RPC: ${currentRpcName}`);
       return {

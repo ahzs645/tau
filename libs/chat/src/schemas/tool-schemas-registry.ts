@@ -5,7 +5,6 @@ import type { CreateFileOutput } from '#schemas/tools/create-file.tool.schema.js
 import type { GrepOutput } from '#schemas/tools/grep.tool.schema.js';
 import type { GlobSearchOutput } from '#schemas/tools/glob-search.tool.schema.js';
 import type { GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
-import type { CaptureObservationsOutput } from '#schemas/tools/capture-observations.tool.schema.js';
 import type { TestModelOutput } from '#schemas/tools/test-model.tool.schema.js';
 import type { EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
 
@@ -21,7 +20,6 @@ export type ToolOutputRegistry = {
   [toolName.createFile]: CreateFileOutput;
   [toolName.editFile]: EditFileOutput;
   [toolName.getKernelResult]: GetKernelResultOutput;
-  [toolName.captureObservations]: CaptureObservationsOutput;
   [toolName.readFile]: ReadFileOutput;
   [toolName.listDirectory]: ListDirectoryOutput;
   [toolName.grep]: GrepOutput;

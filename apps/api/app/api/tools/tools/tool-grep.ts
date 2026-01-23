@@ -1,9 +1,9 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { grepInputSchema, isRpcError } from '@taucad/chat';
-import { isToolExecutionError } from '@taucad/chat/utils';
+import { grepInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
+import { rpcErrorToToolError } from '@taucad/chat/utils';
 import type { ChatTool, GrepInput, GrepOutput, ToolExecutionError } from '@taucad/chat';
-import { toolName } from '@taucad/chat/constants';
+import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const grepToolDefinition = {
@@ -30,15 +30,15 @@ export const grepTool: ChatTool<typeof grepInputSchema, GrepInput, GrepOutput, t
     const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
     const { toolCallId } = runtime;
 
-    const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, toolName.grep, args);
+    const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.grep, args);
 
-    // Handle infrastructure errors (timeout, disconnect)
-    if (isToolExecutionError(result)) {
-      return result;
+    // Handle RPC infrastructure errors (timeout, disconnect, validation)
+    if (isRpcExecutionError(result)) {
+      return rpcErrorToToolError(result, toolName.grep, toolCallId);
     }
 
     // Handle RPC business errors
-    if (isRpcError(result)) {
+    if (isRpcClientError(result)) {
       const error: ToolExecutionError = {
         errorCode: 'TOOL_EXECUTION_ERROR',
         message: `Grep search failed: ${result.message}`,

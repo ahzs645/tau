@@ -1,9 +1,9 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { editTestsInputSchema, isRpcError } from '@taucad/chat';
-import { isToolExecutionError } from '@taucad/chat/utils';
+import { editTestsInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
+import { rpcErrorToToolError } from '@taucad/chat/utils';
 import type { ChatTool, EditTestsInput, EditTestsOutput, ToolExecutionError } from '@taucad/chat';
-import { toolName } from '@taucad/chat/constants';
+import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const editTestsToolDefinition = {
@@ -56,18 +56,18 @@ export const editTestsTool: ChatTool<
   const { codeEdit } = args;
 
   // Step 1: Read the current test.json content via RPC
-  const readResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, toolName.readFile, {
+  const readResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, {
     targetFile: testFile,
   });
 
-  // Handle infrastructure errors (timeout, disconnect)
-  if (isToolExecutionError(readResult)) {
-    return readResult;
+  // Handle RPC infrastructure errors (timeout, disconnect, validation)
+  if (isRpcExecutionError(readResult)) {
+    return rpcErrorToToolError(readResult, toolName.editTests, toolCallId);
   }
 
-  // Handle RPC errors - only use default for "file not found", propagate other errors
+  // Handle RPC client errors - only use default for "file not found", propagate other errors
   let originalContent: string;
-  if (isRpcError(readResult)) {
+  if (isRpcClientError(readResult)) {
     if (readResult.errorCode === 'FILE_NOT_FOUND') {
       // File doesn't exist yet, use default content
       originalContent = defaultTestFile;
@@ -85,7 +85,7 @@ export const editTestsTool: ChatTool<
     originalContent = readResult.content === '' ? defaultTestFile : readResult.content;
   }
 
-  // Step 2: Apply the edit using FileEditService (Morph fast-apply)
+  // Step 2: Apply the edit using FileEditService
   const editResult = await fileEditService.applyFileEdit({
     targetFile: testFile,
     originalContent,
@@ -104,18 +104,18 @@ export const editTestsTool: ChatTool<
   }
 
   // Step 3: Write the edited content back via RPC
-  const writeResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, toolName.createFile, {
+  const writeResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.createFile, {
     targetFile: testFile,
     content: editResult.editedContent,
   });
 
-  // Handle infrastructure errors (timeout, disconnect)
-  if (isToolExecutionError(writeResult)) {
-    return writeResult;
+  // Handle RPC infrastructure errors (timeout, disconnect, validation)
+  if (isRpcExecutionError(writeResult)) {
+    return rpcErrorToToolError(writeResult, toolName.editTests, toolCallId);
   }
 
-  // Handle RPC business errors (permission denied, etc.)
-  if (isRpcError(writeResult)) {
+  // Handle RPC client errors (permission denied, etc.)
+  if (isRpcClientError(writeResult)) {
     const error: ToolExecutionError = {
       errorCode: 'TOOL_EXECUTION_ERROR',
       message: `Cannot save test.json: ${writeResult.message}`,

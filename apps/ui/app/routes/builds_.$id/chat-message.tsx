@@ -263,14 +263,6 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   return <ChatMessageToolReasoning key={part.toolCallId} part={part} />;
                 }
 
-                // Internal RPCs (not rendered in chat UI)
-                case 'tool-capture_observations': {
-                  // `capture_observations` is an internal RPC used by test_model
-                  // It's executed on the client via WebSocket but its output is consumed by the backend
-                  // Not shown to the user as it's part of the test_model workflow
-                  return null;
-                }
-
                 case 'data-usage': {
                   // Usage data parts are rendered separately in the footer
                   return null;
