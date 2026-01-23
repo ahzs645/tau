@@ -381,6 +381,16 @@ export default function PersonalCadProjects(): React.JSX.Element {
             onSubmit={onSubmit}
           />
         </TabsContent>
+        <TabsContent enableAnimation={false} value="software">
+          <UnifiedBuildList
+            projects={filteredBuilds.filter((p) => Object.keys(p.assets).includes('software'))}
+            viewMode={viewMode}
+            actions={actions}
+            selectedKernel={kernel}
+            onKernelChange={setKernel}
+            onSubmit={onSubmit}
+          />
+        </TabsContent>
       </Tabs>
     </div>
   );
