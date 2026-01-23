@@ -293,6 +293,30 @@ export type RpcInput<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasReg
  */
 export type RpcResult<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasRegistry[T]['resultSchema']>;
 
+/**
+ * Discriminated union of all RPC calls.
+ * Each variant links the RPC name to its corresponding input type,
+ * enabling TypeScript to narrow the `args` type when switching on `rpcName`.
+ *
+ * @example
+ * ```typescript
+ * function handleRpc(call: RpcCall): Promise<unknown> {
+ *   switch (call.rpcName) {
+ *     case 'read_file':
+ *       // call.args is automatically narrowed to ReadFileRpcInput
+ *       return handleReadFile(call.args);
+ *     // ...
+ *   }
+ * }
+ * ```
+ */
+export type RpcCall = {
+  [K in keyof RpcSchemasRegistry]: {
+    rpcName: K;
+    args: RpcInput<K>;
+  };
+}[keyof RpcSchemasRegistry];
+
 // =============================================================================
 // Inferred Types
 // =============================================================================

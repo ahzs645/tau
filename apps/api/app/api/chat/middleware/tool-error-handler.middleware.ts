@@ -1,6 +1,17 @@
+import type { Logger } from '@nestjs/common';
 import { createMiddleware } from 'langchain';
 import { ToolMessage } from '@langchain/core/messages';
+import { z } from 'zod';
 import type { ToolInputValidationError, ToolGenericExecutionError } from '@taucad/chat';
+import { ToolError } from '@taucad/chat/utils';
+
+/**
+ * Context schema for tool error handler middleware.
+ * Requires a logger instance for error logging.
+ */
+const toolErrorContextSchema = z.object({
+  logger: z.custom<Logger>(),
+});
 
 /**
  * Parse validation error details from a LangChain schema validation error message.
@@ -95,19 +106,44 @@ function parseToolError(
  */
 export const toolErrorHandlerMiddleware = createMiddleware({
   name: 'ToolErrorHandler',
+  contextSchema: toolErrorContextSchema,
 
   async wrapToolCall(request, handler) {
+    const { logger } = request.runtime.context;
+
     try {
       return await handler(request);
     } catch (error) {
       const toolName = request.toolCall.name;
       const toolCallId = request.toolCall.id ?? 'unknown';
 
-      // Parse the error into a structured format
+      // Check for structured ToolError first (from assertRpcSuccess/assertRpcExecution)
+      if (error instanceof ToolError) {
+        const { errorCode, message } = error.data;
+        logger.warn(`Tool error [${toolCallId}] ${toolName}: ${errorCode} - ${message}`, error.stack);
+
+        return new ToolMessage({
+          content: JSON.stringify(error.data),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: toolCallId,
+          name: toolName,
+          status: 'error',
+        });
+      }
+
+      // Parse unstructured errors into a structured format
       const structuredError = parseToolError(
         error instanceof Error ? error : new Error(String(error)),
         toolName,
         toolCallId,
+      );
+
+      // Log unstructured errors with full stack trace for debugging
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      logger.error(
+        `Unhandled tool error [${toolCallId}] ${toolName}: ${structuredError.errorCode} - ${errorMessage}`,
+        errorStack,
       );
 
       // Return a ToolMessage with JSON content

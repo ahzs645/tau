@@ -1,8 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { readFileInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type { ChatTool, ReadFileInput, ReadFileOutput, ToolExecutionError } from '@taucad/chat';
+import { readFileInputSchema } from '@taucad/chat';
+import { assertRpcSuccess } from '@taucad/chat/utils';
+import type { ChatTool, ReadFileInput, ReadFileOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -41,21 +41,8 @@ export const readFileTool: ChatTool<
 
   const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, args);
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(result)) {
-    return rpcErrorToToolError(result, toolName.readFile, toolCallId);
-  }
-
-  // Handle RPC business errors (file not found, permission denied)
-  if (isRpcClientError(result)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Cannot read file "${args.targetFile}": ${result.message}`,
-      toolName: toolName.readFile,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(result, toolName.readFile, toolCallId, `Cannot read file "${args.targetFile}"`);
 
   // Add line numbers to the raw content for LLM display
   const startLine = result.startLine ?? 1;

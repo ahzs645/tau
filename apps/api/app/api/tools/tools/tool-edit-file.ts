@@ -1,8 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { editFileInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type { ChatTool, EditFileInput, EditFileOutput, ToolExecutionError } from '@taucad/chat';
+import { editFileInputSchema } from '@taucad/chat';
+import { assertRpcSuccess, ToolError } from '@taucad/chat/utils';
+import type { ChatTool, EditFileInput, EditFileOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -47,21 +47,8 @@ export const editFileTool: ChatTool<
     targetFile,
   });
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(readResult)) {
-    return rpcErrorToToolError(readResult, toolName.editFile, toolCallId);
-  }
-
-  // Handle RPC business errors (file not found, permission denied)
-  if (isRpcClientError(readResult)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Cannot edit file "${targetFile}": ${readResult.message}`,
-      toolName: toolName.editFile,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(readResult, toolName.editFile, toolCallId, `Cannot read file "${targetFile}"`);
 
   // Frontend sends raw content (no line numbers)
   const originalContent = readResult.content;
@@ -75,13 +62,12 @@ export const editFileTool: ChatTool<
   });
 
   if (!editResult.success) {
-    const error: ToolExecutionError = {
+    throw new ToolError({
       errorCode: 'TOOL_EXECUTION_ERROR',
       message: `Failed to apply edit to "${targetFile}": ${editResult.error}`,
       toolName: toolName.editFile,
       toolCallId,
-    };
-    return error;
+    });
   }
 
   // Step 3: Write the edited content back via RPC
@@ -90,21 +76,8 @@ export const editFileTool: ChatTool<
     content: editResult.editedContent,
   });
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(writeResult)) {
-    return rpcErrorToToolError(writeResult, toolName.editFile, toolCallId);
-  }
-
-  // Handle RPC business errors (permission denied, etc.)
-  if (isRpcClientError(writeResult)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Cannot save edited file "${targetFile}": ${writeResult.message}`,
-      toolName: toolName.editFile,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(writeResult, toolName.editFile, toolCallId, `Cannot save edited file "${targetFile}"`)
 
   // Return the result with diff stats (success only - no success property)
   const result: EditFileOutput = {

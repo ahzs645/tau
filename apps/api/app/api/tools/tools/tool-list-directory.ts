@@ -1,8 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { listDirectoryInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type { ChatTool, ListDirectoryInput, ListDirectoryOutput, ToolExecutionError } from '@taucad/chat';
+import { listDirectoryInputSchema } from '@taucad/chat';
+import { assertRpcSuccess } from '@taucad/chat/utils';
+import type { ChatTool, ListDirectoryInput, ListDirectoryOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -30,21 +30,8 @@ export const listDirectoryTool: ChatTool<
 
   const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.listDirectory, args);
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(result)) {
-    return rpcErrorToToolError(result, toolName.listDirectory, toolCallId);
-  }
-
-  // Handle RPC business errors
-  if (isRpcClientError(result)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Cannot list directory "${args.path}": ${result.message}`,
-      toolName: toolName.listDirectory,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(result, toolName.listDirectory, toolCallId, `Cannot list directory "${args.path}"`);
 
   // Return success output
   return {

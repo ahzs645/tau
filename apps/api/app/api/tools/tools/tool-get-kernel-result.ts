@@ -1,8 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { getKernelResultInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type { ChatTool, GetKernelResultInput, GetKernelResultOutput, ToolExecutionError } from '@taucad/chat';
+import { getKernelResultInputSchema } from '@taucad/chat';
+import { assertRpcSuccess } from '@taucad/chat/utils';
+import type { ChatTool, GetKernelResultInput, GetKernelResultOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -34,21 +34,8 @@ export const getKernelResultTool: ChatTool<
 
   const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.getKernelResult, args);
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(result)) {
-    return rpcErrorToToolError(result, toolName.getKernelResult, toolCallId);
-  }
-
-  // Handle RPC business errors
-  if (isRpcClientError(result)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Cannot get kernel result for "${args.targetFile}": ${result.message}`,
-      toolName: toolName.getKernelResult,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(result, toolName.getKernelResult, toolCallId, `Cannot get kernel result for "${args.targetFile}"`);
 
   // Return success output
   return {

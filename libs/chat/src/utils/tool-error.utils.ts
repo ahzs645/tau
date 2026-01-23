@@ -1,5 +1,7 @@
 import type { ToolExecutionError } from '#types/tool.types.js';
 import type { RpcExecutionError, RpcValidationError } from '#types/rpc.types.js';
+import type { RpcClientError } from '#schemas/rpc.schema.js';
+import { isRpcExecutionError, isRpcClientError } from '#types/rpc.types.js';
 
 /**
  * All possible tool execution error codes.
@@ -200,4 +202,117 @@ export function parseToolErrorText(errorText: string): ToolExecutionError | unde
   }
 
   return undefined;
+}
+
+// =============================================================================
+// ToolError Class
+// =============================================================================
+
+/**
+ * Error class for tool execution failures.
+ * Carries structured error data that middleware can extract.
+ *
+ * @example
+ * ```typescript
+ * throw new ToolError({
+ *   errorCode: 'TOOL_EXECUTION_ERROR',
+ *   message: 'Cannot read file',
+ *   toolName: 'read_file',
+ *   toolCallId: 'call_123',
+ * });
+ * ```
+ */
+export class ToolError extends Error {
+  public readonly data: ToolExecutionError;
+
+  public constructor(data: ToolExecutionError) {
+    super(data.message);
+    this.name = 'ToolError';
+    this.data = data;
+  }
+}
+
+// =============================================================================
+// RPC Assertion Functions
+// =============================================================================
+
+/**
+ * Assert RPC execution succeeded (no infrastructure errors).
+ * Throws ToolError for timeout, disconnect, validation failures.
+ * Allows RpcClientError to pass through for custom handling.
+ *
+ * Use this when you need to handle client errors specially (e.g., FILE_NOT_FOUND
+ * should use default content instead of failing).
+ *
+ * @param result - The RPC result to check
+ * @param toolName - The name of the tool (for error attribution)
+ * @param toolCallId - The tool call ID (for tracking)
+ * @throws ToolError if result is an RpcExecutionError or RpcValidationError
+ *
+ * @example
+ * ```typescript
+ * const result = await chatRpcService.sendRpcRequest(...);
+ *
+ * assertRpcExecution(result, toolName.editTests, toolCallId);
+ *
+ * // Now result is narrowed to RpcClientError | SuccessType
+ * if (isRpcClientError(result)) {
+ *   if (result.errorCode === 'FILE_NOT_FOUND') {
+ *     // Handle gracefully - use default content
+ *   } else {
+ *     throw new ToolError({...});
+ *   }
+ * }
+ *
+ * // Use result.content
+ * ```
+ */
+export function assertRpcExecution<T>(
+  result: T | RpcExecutionError | RpcValidationError,
+  toolName: string,
+  toolCallId: string,
+): asserts result is Exclude<T, RpcExecutionError | RpcValidationError> {
+  if (isRpcExecutionError(result)) {
+    throw new ToolError(rpcErrorToToolError(result, toolName, toolCallId));
+  }
+}
+
+/**
+ * Assert RPC fully succeeded (no infrastructure OR client errors).
+ * Throws ToolError for any non-success result.
+ *
+ * Use this for the common case where any error should fail the tool.
+ *
+ * @param result - The RPC result to check
+ * @param toolName - The name of the tool (for error attribution)
+ * @param toolCallId - The tool call ID (for tracking)
+ * @param clientErrorMessage - Optional custom message for client errors
+ * @throws ToolError if result is any kind of error
+ *
+ * @example
+ * ```typescript
+ * const result = await chatRpcService.sendRpcRequest(...);
+ *
+ * assertRpcSuccess(result, toolName.readFile, toolCallId, 'Cannot read file');
+ *
+ * // result is now narrowed to success type
+ * const content = result.content;
+ * ```
+ */
+export function assertRpcSuccess<T extends { success: boolean }>(
+  result: T | RpcExecutionError | RpcValidationError,
+  toolName: string,
+  toolCallId: string,
+  clientErrorMessage?: string,
+): asserts result is Exclude<T, RpcExecutionError | RpcValidationError | RpcClientError> {
+  assertRpcExecution(result, toolName, toolCallId);
+
+  if (isRpcClientError(result)) {
+    throw new ToolError({
+      errorCode: 'TOOL_EXECUTION_ERROR',
+      message: clientErrorMessage ?? result.message,
+      toolName,
+      toolCallId,
+    });
+  }
 }

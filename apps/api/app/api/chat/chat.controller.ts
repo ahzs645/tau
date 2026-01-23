@@ -124,10 +124,11 @@ export class ChatController {
         signal: abortController.signal,
         // Include 'custom' to receive usage data from usageTrackingMiddleware
         streamMode: ['values', 'messages', 'custom'],
-        // Pass context for usage tracking middleware
+        // Pass context for middleware (usage tracking, tool error handling)
         context: {
           modelId,
           modelService: this.modelService,
+          logger: this.logger,
         },
         recursionLimit: 200,
       },

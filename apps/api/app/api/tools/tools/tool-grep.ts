@@ -1,8 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { grepInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type { ChatTool, GrepInput, GrepOutput, ToolExecutionError } from '@taucad/chat';
+import { grepInputSchema } from '@taucad/chat';
+import { assertRpcSuccess } from '@taucad/chat/utils';
+import type { ChatTool, GrepInput, GrepOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -32,21 +32,8 @@ export const grepTool: ChatTool<typeof grepInputSchema, GrepInput, GrepOutput, t
 
     const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.grep, args);
 
-    // Handle RPC infrastructure errors (timeout, disconnect, validation)
-    if (isRpcExecutionError(result)) {
-      return rpcErrorToToolError(result, toolName.grep, toolCallId);
-    }
-
-    // Handle RPC business errors
-    if (isRpcClientError(result)) {
-      const error: ToolExecutionError = {
-        errorCode: 'TOOL_EXECUTION_ERROR',
-        message: `Grep search failed: ${result.message}`,
-        toolName: toolName.grep,
-        toolCallId,
-      };
-      return error;
-    }
+    // Assert RPC success - throws ToolError for any infrastructure or client error
+    assertRpcSuccess(result, toolName.grep, toolCallId, 'Grep search failed');
 
     // Return success output
     return {

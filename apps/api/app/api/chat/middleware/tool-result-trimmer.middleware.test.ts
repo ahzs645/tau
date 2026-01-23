@@ -1,13 +1,7 @@
 import { ToolMessage, HumanMessage, AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { toolName } from '@taucad/chat/constants';
-import type {
-  TestModelOutput,
-  TestFailure,
-  CreateFileOutput,
-  EditFileOutput,
-  GetKernelResultOutput,
-} from '@taucad/chat';
+import type { TestModelOutput, TestFailure, CreateFileOutput, EditFileOutput, GetKernelResultOutput } from '@taucad/chat';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 
@@ -525,4 +519,5 @@ describe('toolResultTrimmerMiddleware', () => {
       expect(parsed).toEqual({ status: 'ready' });
     });
   });
+
 });

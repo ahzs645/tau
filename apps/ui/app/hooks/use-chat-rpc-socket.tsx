@@ -18,7 +18,7 @@ import { rpcNames } from '@taucad/chat/constants';
 import { ChatRpcSocketService } from '#services/chat-rpc-socket.service.js';
 import type { ConnectionStatus, RpcRequestHandler } from '#services/chat-rpc-socket.service.js';
 import { createRpcHandlers } from '#hooks/rpc-handlers.js';
-import type { RpcHandlerDependencies } from '#hooks/rpc-handlers.js';
+import type { RpcHandlerDependencies, RpcCallInput } from '#hooks/rpc-handlers.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
@@ -177,14 +177,19 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
       };
     }
 
+    // After validation, we can safely construct the typed RPC call.
+    // The server has validated the args against the schema before sending.
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Boundary assertion after runtime validation
+    const rpcCall = {
+      toolCallId,
+      rpcName: currentRpcName,
+      args,
+    } as RpcCallInput;
+
     try {
       const handlers = createRpcHandlers(deps);
 
-      const result = await handlers.executeRpcCall({
-        toolCallId,
-        rpcName: currentRpcName,
-        args,
-      });
+      const result = await handlers.executeRpcCall(rpcCall);
 
       return {
         type: 'rpc_response',

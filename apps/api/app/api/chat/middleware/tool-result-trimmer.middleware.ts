@@ -256,6 +256,7 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
         }
       : {}),
   })),
+
 };
 
 /**

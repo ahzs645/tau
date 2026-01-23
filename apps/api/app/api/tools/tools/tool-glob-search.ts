@@ -1,8 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { globSearchInputSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type { ChatTool, GlobSearchInput, GlobSearchOutput, ToolExecutionError } from '@taucad/chat';
+import { globSearchInputSchema } from '@taucad/chat';
+import { assertRpcSuccess } from '@taucad/chat/utils';
+import type { ChatTool, GlobSearchInput, GlobSearchOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -33,21 +33,8 @@ export const globSearchTool: ChatTool<
 
   const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.globSearch, args);
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(result)) {
-    return rpcErrorToToolError(result, toolName.globSearch, toolCallId);
-  }
-
-  // Handle RPC business errors
-  if (isRpcClientError(result)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Glob search failed: ${result.message}`,
-      toolName: toolName.globSearch,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(result, toolName.globSearch, toolCallId, 'Glob search failed');
 
   // Return success output
   return {

@@ -1,14 +1,8 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { testModelInputSchema, testFileSchema, isRpcClientError, isRpcExecutionError } from '@taucad/chat';
-import { rpcErrorToToolError } from '@taucad/chat/utils';
-import type {
-  ChatTool,
-  TestModelInput,
-  TestModelOutput,
-  VisualTestRequirement,
-  ToolExecutionError,
-} from '@taucad/chat';
+import { testModelInputSchema, testFileSchema, isRpcClientError } from '@taucad/chat';
+import { assertRpcExecution, assertRpcSuccess } from '@taucad/chat/utils';
+import type { ChatTool, TestModelInput, TestModelOutput, VisualTestRequirement } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -43,12 +37,10 @@ export const testModelTool: ChatTool<
     targetFile: 'test.json',
   });
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(testFileContent)) {
-    return rpcErrorToToolError(testFileContent, toolName.testModel, toolCallId);
-  }
+  // Assert infrastructure success - throws ToolError for timeout, disconnect, validation
+  assertRpcExecution(testFileContent, toolName.testModel, toolCallId);
 
-  // Handle RPC business errors (file not found)
+  // Handle client errors (file not found) gracefully - return as test failure, not tool error
   if (isRpcClientError(testFileContent)) {
     const result: TestModelOutput = {
       failures: [
@@ -128,21 +120,8 @@ export const testModelTool: ChatTool<
   // Step 2: Capture observations from the frontend via RPC
   const captureResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.captureObservations, {});
 
-  // Handle RPC infrastructure errors (timeout, disconnect, validation)
-  if (isRpcExecutionError(captureResult)) {
-    return rpcErrorToToolError(captureResult, toolName.testModel, toolCallId);
-  }
-
-  // Handle RPC business errors
-  if (isRpcClientError(captureResult)) {
-    const error: ToolExecutionError = {
-      errorCode: 'TOOL_EXECUTION_ERROR',
-      message: `Failed to capture observations: ${captureResult.message}`,
-      toolName: toolName.testModel,
-      toolCallId,
-    };
-    return error;
-  }
+  // Assert RPC success - throws ToolError for any infrastructure or client error
+  assertRpcSuccess(captureResult, toolName.testModel, toolCallId, 'Failed to capture observations');
 
   const { observations } = captureResult;
 
