@@ -17,7 +17,13 @@ import type { RpcRequest, RpcResponse } from '@taucad/chat';
 import { ENV } from '#environment.config.js';
 
 /** Connection status for UI display */
-export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'error';
+export type ConnectionStatus =
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'reconnecting'
+  | 'error'
+  | 'unauthenticated';
 
 /** Handler for incoming RPC requests */
 export type RpcRequestHandler = (request: RpcRequest) => Promise<RpcResponse>;
@@ -69,6 +75,9 @@ export class ChatRpcSocketService {
   private handleVisibilityChange: (() => void) | undefined;
   private handleOnline: (() => void) | undefined;
 
+  /** Whether connection was rejected due to authentication failure - prevents reconnection attempts */
+  private isAuthenticationFailure = false;
+
   /** Private constructor to enforce singleton pattern */
   private constructor() {
     // Singleton - use getInstance()
@@ -82,6 +91,9 @@ export class ChatRpcSocketService {
     if (this.socket?.connected) {
       return;
     }
+
+    // Reset auth failure flag for new connection attempt (e.g., after user logs in)
+    this.isAuthenticationFailure = false;
 
     // If we have an existing socket that's not connected, clean it up
     if (this.socket) {
@@ -240,6 +252,11 @@ export class ChatRpcSocketService {
     });
 
     socket.on('disconnect', (reason) => {
+      // Don't update status or reconnect if this was an auth failure - already handled by error event
+      if (this.isAuthenticationFailure) {
+        return;
+      }
+
       // Map disconnect reasons to user-friendly error messages
       const errorMessages: Record<string, string> = {
         'io server disconnect': 'Server closed connection',
@@ -301,6 +318,17 @@ export class ChatRpcSocketService {
 
     // Handle server errors
     socket.on('error', (serverError: { code: string; message: string }) => {
+      // Check for authentication-related errors
+      if (serverError.code === 'UNAUTHENTICATED' || serverError.code === 'AUTH_ERROR') {
+        this.isAuthenticationFailure = true;
+        this.setStatus('unauthenticated');
+
+        // Disconnect to stop the Manager's reconnection loop
+        // This sets skipReconnect = true in the Manager
+        socket.disconnect();
+        return;
+      }
+
       this.setError(serverError.message);
     });
   }
@@ -314,12 +342,22 @@ export class ChatRpcSocketService {
     this.cleanupVisibilityHandlers();
 
     this.handleVisibilityChange = (): void => {
+      // Don't attempt reconnection if auth failed
+      if (this.isAuthenticationFailure) {
+        return;
+      }
+
       if (document.visibilityState === 'visible' && this.socket && !this.socket.connected) {
         this.socket.connect();
       }
     };
 
     this.handleOnline = (): void => {
+      // Don't attempt reconnection if auth failed
+      if (this.isAuthenticationFailure) {
+        return;
+      }
+
       if (this.socket && !this.socket.connected) {
         this.socket.connect();
       }
