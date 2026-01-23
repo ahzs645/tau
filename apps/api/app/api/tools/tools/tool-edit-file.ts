@@ -77,7 +77,7 @@ export const editFileTool: ChatTool<
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(writeResult, toolName.editFile, toolCallId, `Cannot save edited file "${targetFile}"`)
+  assertRpcSuccess(writeResult, toolName.editFile, toolCallId, `Cannot save file`);
 
   // Return the result with diff stats (success only - no success property)
   const result: EditFileOutput = {
