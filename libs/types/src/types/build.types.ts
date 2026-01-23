@@ -20,8 +20,6 @@ export type Build = {
   id: string;
   name: string;
   description: string;
-  stars: number;
-  forks: number;
   author: {
     name: string;
     avatar: string;

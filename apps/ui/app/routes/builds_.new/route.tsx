@@ -93,8 +93,6 @@ function useBuildCreation() {
         const newBuild = {
           name: buildData.name.trim(),
           description: buildData.description.trim(),
-          stars: 0,
-          forks: 0,
           author: {
             name: user?.name ?? 'You',
             avatar: user?.image ?? '/avatar-sample.png',

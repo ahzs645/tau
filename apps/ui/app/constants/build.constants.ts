@@ -20,8 +20,6 @@ export function createInitialBuild(options: CreateInitialBuildOptions): CreateIn
   const buildData: Omit<Build, 'id' | 'createdAt' | 'updatedAt'> = {
     name: buildName,
     description: '',
-    stars: 0,
-    forks: 0,
     author: {
       name: 'You',
       avatar: '/avatar-sample.png',

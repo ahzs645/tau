@@ -46,8 +46,6 @@ function createHeroBuild(fileContent: Uint8Array): HeroBuild {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     tags: ['openscad', 'parametric', 'qr-code'],
-    stars: 0,
-    forks: 0,
     thumbnail: '/tau-desktop.jpg',
     files: { [mainFile]: { content: fileContent } },
   };
@@ -208,8 +206,6 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
         name: 'QR Code Generator',
         description: 'A parametric QR code generator built with OpenSCAD',
         thumbnail: '/tau-desktop.jpg',
-        stars: 0,
-        forks: 0,
         author: {
           name: 'Community',
           avatar: '/avatar-sample.png',

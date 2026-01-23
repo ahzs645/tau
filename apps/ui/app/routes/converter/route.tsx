@@ -434,8 +434,6 @@ export default function ConverterRoute(): React.JSX.Element {
     id: 'converter',
     name: 'Converter',
     description: 'Transient build context for the converter page',
-    stars: 0,
-    forks: 0,
     author: {
       name: 'Tau',
       avatar: '',

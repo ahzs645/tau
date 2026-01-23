@@ -30,7 +30,7 @@ export const handle: Handle = {
 };
 
 const itemsPerPage = 9;
-type SortOption = 'newest' | 'oldest' | 'stars' | 'forks';
+type SortOption = 'newest' | 'oldest';
 
 export default function CadCommunity(): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,14 +65,6 @@ export default function CadCommunity(): React.JSX.Element {
 
       case 'oldest': {
         return a.createdAt - b.createdAt;
-      }
-
-      case 'stars': {
-        return b.stars - a.stars;
-      }
-
-      case 'forks': {
-        return b.forks - a.forks;
       }
 
       default: {
@@ -165,20 +157,6 @@ export default function CadCommunity(): React.JSX.Element {
                     }}
                   >
                     Oldest
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      setSortOption('stars');
-                    }}
-                  >
-                    Most Stars
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      setSortOption('forks');
-                    }}
-                  >
-                    Most Forks
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>

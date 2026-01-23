@@ -42,8 +42,6 @@ function createImportBuild(files: Files, mainFile: string, owner: string, repo: 
     createdAt: Date.now(),
     updatedAt: Date.now(),
     tags: [],
-    stars: 0,
-    forks: 0,
     thumbnail: '',
     files: buildFiles,
   };

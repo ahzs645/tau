@@ -105,8 +105,6 @@ export default function ImportRoute(): React.JSX.Element {
             {
               name: `${input.owner}/${input.repo}`,
               description: `Imported from GitHub: https://github.com/${input.owner}/${input.repo}`,
-              stars: 0,
-              forks: 0,
               author: {
                 name: 'You',
                 avatar: '/avatar-sample.png',
@@ -152,8 +150,6 @@ export default function ImportRoute(): React.JSX.Element {
             {
               name: input.importName,
               description: `Imported from disk`,
-              stars: 0,
-              forks: 0,
               author: {
                 name: 'You',
                 avatar: '/avatar-sample.png',

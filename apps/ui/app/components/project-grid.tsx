@@ -1,4 +1,4 @@
-import { Star, Eye, ArrowRight } from 'lucide-react';
+import { Eye, ArrowRight } from 'lucide-react';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useSelector } from '@xstate/react';
@@ -69,17 +69,7 @@ export function CommunityBuildGrid({
   );
 }
 
-function ProjectCard({
-  id,
-  name,
-  description,
-  thumbnail,
-  stars,
-  author,
-  tags,
-  assets,
-  files,
-}: CommunityBuildCardProperties) {
+function ProjectCard({ id, name, description, thumbnail, author, tags, assets, files }: CommunityBuildCardProperties) {
   const [showPreview, setShowPreview] = useState(false);
   const [isForking, setIsForking] = useState(false);
   const [hasLoadedModel, setHasLoadedModel] = useState(false);
@@ -110,11 +100,6 @@ function ProjectCard({
     }
   }, [showPreview, hasLoadedModel, buildRef]);
 
-  const handleStar = useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    // TODO: Implement star functionality
-  }, []);
-
   const handleFork = useCallback(
     async (event: React.MouseEvent) => {
       event.stopPropagation();
@@ -131,8 +116,6 @@ function ProjectCard({
           name: `${name} (Remixed)`,
           description,
           thumbnail,
-          stars: 0,
-          forks: 0,
           author, // TODO: This should be the current user in a real implementation
           tags,
           assets,
@@ -273,20 +256,6 @@ function ProjectCard({
               <span className="line-clamp-1 text-sm text-muted-foreground">{author.name}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-end sm:gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="group flex h-7 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-yellow sm:h-8 sm:px-3 sm:text-sm"
-                    onClick={handleStar}
-                  >
-                    {stars}
-                    <Star className="size-3.5 sm:size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Star this project</TooltipContent>
-              </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
