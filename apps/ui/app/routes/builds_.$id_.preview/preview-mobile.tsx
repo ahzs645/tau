@@ -218,10 +218,15 @@ export const PreviewMobile = memo(function PreviewMobile({
         ) : null}
 
         {/* Floating Action Button - Code dropdown, positioned above the nav */}
-        <div className={cn('absolute right-4 bottom-[calc(var(--nav-height)+var(--spacing)*4)] z-10', !isModelTab && 'hidden')}>
+        <div
+          className={cn(
+            'absolute right-4 bottom-[calc(var(--nav-height)+var(--spacing)*4)] z-10',
+            !isModelTab && 'hidden',
+          )}
+        >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="default" size="lg" className="rounded-full shadow-lg">
+              <Button variant="default" size="lg" className="shadow-lg rounded-full">
                 <Code className="mr-2 size-4" />
                 Code
                 <ChevronDown className="ml-2 size-4" />
@@ -284,19 +289,11 @@ export const PreviewMobile = memo(function PreviewMobile({
             <TabsContent enableAnimation={false} value="files" className="flex h-full flex-col overflow-hidden p-4">
               <PreviewFiles files={files} />
             </TabsContent>
-            <TabsContent
-              enableAnimation={false}
-              value="parameters"
-              className="flex h-full flex-col overflow-hidden"
-            >
+            <TabsContent enableAnimation={false} value="parameters" className="flex h-full flex-col overflow-hidden">
               <PreviewParameters />
             </TabsContent>
             <TabsContent enableAnimation={false} value="model" className="flex h-full flex-col" />
-            <TabsContent
-              enableAnimation={false}
-              value="details"
-              className="flex h-full flex-col overflow-y-auto"
-            >
+            <TabsContent enableAnimation={false} value="details" className="flex h-full flex-col overflow-y-auto">
               <PreviewDetails build={build} geometriesCount={geometries.length} onExport={handleExport} />
             </TabsContent>
           </Tabs>

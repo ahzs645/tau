@@ -1,14 +1,7 @@
 import { memo, useCallback, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useActorRef, useSelector } from '@xstate/react';
-import {
-  Download,
-  FileCode,
-  Eye,
-  Code,
-  ChevronDown,
-  SlidersHorizontal,
-} from 'lucide-react';
+import { Download, FileCode, Eye, Code, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import type { ExportFormat } from '@taucad/types';
 import { fileExtensionFromExportFormat } from '@taucad/types/constants';
 import { Loader } from '#components/ui/loader.js';

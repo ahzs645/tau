@@ -86,10 +86,7 @@ export function PreviewParameters(): React.JSX.Element {
                   onClick={toggleAllExpanded}
                 >
                   <ChevronRight
-                    className={cn(
-                      'size-4 transition-transform duration-300 ease-in-out',
-                      isAllExpanded && 'rotate-90',
-                    )}
+                    className={cn('size-4 transition-transform duration-300 ease-in-out', isAllExpanded && 'rotate-90')}
                   />
                 </Button>
               </TooltipTrigger>
