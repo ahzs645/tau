@@ -34,7 +34,7 @@ type PreviewMobileProps = {
   readonly staticBuildFiles?: Record<string, { content: Uint8Array }>;
 };
 
-export const PreviewMobile = memo(function PreviewMobile({
+export const PreviewMobile = memo(function ({
   isStaticBuild,
   staticBuildFiles,
 }: PreviewMobileProps): React.JSX.Element {

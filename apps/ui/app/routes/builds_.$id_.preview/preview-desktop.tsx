@@ -52,7 +52,7 @@ function ViewerStatus({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
   ) : null;
 }
 
-export const PreviewDesktop = memo(function PreviewDesktop({
+export const PreviewDesktop = memo(function ({
   isStaticBuild,
   staticBuildFiles,
 }: PreviewDesktopProps): React.JSX.Element {
