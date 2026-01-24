@@ -1,6 +1,6 @@
 import { AuthView } from '@daveyplate/better-auth-ui';
 import { Link, useLocation } from 'react-router';
-import { Tau } from '#components/icons/tau.js';
+import { TauWordmark } from '#components/icons/tau-wordmark.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import type { Handle } from '#types/matches.types.js';
 import { AuthSplashback } from '#routes/auth.$/splashback/auth-splashback.js';
@@ -18,10 +18,7 @@ export default function AuthPage(): React.JSX.Element {
           <Tooltip>
             <TooltipTrigger asChild className="flex items-center gap-2 font-medium">
               <Link to="/">
-                <Tau className="size-7 text-primary" />
-                <h1 className="-mb-2.5 -ml-3.5 text-2xl font-bold tracking-tight text-primary group-data-[collapsible=icon]:hidden">
-                  AU
-                </h1>
+                <TauWordmark className="h-7 text-primary" />
               </Link>
             </TooltipTrigger>
             <TooltipContent side="right">Go home</TooltipContent>

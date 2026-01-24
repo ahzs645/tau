@@ -10,7 +10,7 @@ import {
   SidebarMenuButton,
   SidebarRail,
 } from '#components/ui/sidebar.js';
-import { Tau } from '#components/icons/tau.js';
+import { TauWordmark } from '#components/icons/tau-wordmark.js';
 import { NavChat } from '#components/nav/nav-chat.js';
 import { navRoutes } from '#constants/route.constants.js';
 import { NavFooter } from '#components/nav/nav-footer.js';
@@ -22,10 +22,10 @@ export function AppSidebar({ ...properties }: React.ComponentProps<typeof Sideba
         <SidebarMenuButton
           asChild
           tooltip="Home"
-          className="gap-0 p-1! group-data-[collapsible=icon]:p-0! [&>svg]:size-5"
+          className="gap-0 p-1! group-data-[collapsible=icon]:p-0! [&>svg]:h-7 [&>svg]:w-auto"
         >
           <Link to="/">
-            <Tau className="text-primary" />
+            <TauWordmark className="py-1 text-primary" />
             <span className="sr-only">Home</span>
           </Link>
         </SidebarMenuButton>
