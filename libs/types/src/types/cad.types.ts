@@ -52,7 +52,21 @@ export type GeometryVideoStream = {
   stream: ReadableStream | MediaStream;
 };
 
-export type Geometry = GeometrySvg | GeometryGltf | GeometryVideoStream;
+/**
+ * Union of base geometry types (without hash).
+ * Used internally by kernel workers and middleware.
+ */
+export type GeometryBase = GeometrySvg | GeometryGltf | GeometryVideoStream;
+
+/**
+ * Geometry with unique hash identifier.
+ * The hash is computed from all dependencies and added by kernel-worker.ts.
+ * Used as React key and for cache invalidation.
+ */
+export type Geometry = GeometryBase & {
+  /** Unique hash identifier for this geometry (based on dependencies) */
+  hash: string;
+};
 
 export type EngineeringDiscipline = keyof typeof engineeringDisciplines;
 

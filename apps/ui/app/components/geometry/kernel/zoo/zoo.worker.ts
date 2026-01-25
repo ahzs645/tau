@@ -10,13 +10,14 @@ import type {
 } from '@taucad/types';
 import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
-import { KclUtils } from '#components/geometry/kernel/zoo/kcl-utils.js';
+import { KclUtils, kclWasmUrl } from '#components/geometry/kernel/zoo/kcl-utils.js';
 import { isKclError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { convertKclErrorToKernelIssue, mapErrorToKclError } from '#components/geometry/kernel/zoo/error-mappers.js';
 import { getErrorPosition } from '#components/geometry/kernel/zoo/source-range-utils.js';
 import { asBuffer } from '#utils/file.utils.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
+import { discoverKclDependencies } from '#components/geometry/kernel/zoo/kcl-import-resolver.js';
 
 type ZooOptions = {
   /** Base URL for the Zoo API proxy (e.g., wss://api.tau.new/v1/kernels/zoo) */
@@ -49,6 +50,19 @@ class ZooWorker extends KernelWorker<ZooOptions> {
 
   protected override async canHandle(_filename: string, extension: string): Promise<boolean> {
     return extension === 'kcl';
+  }
+
+  protected override async discoverDependencies(filename: string): Promise<string[]> {
+    const utils = await this.getKclUtils();
+    return discoverKclDependencies(
+      filename,
+      async (path) => this.readFile(path, 'utf8'),
+      async (code) => utils.parseKcl(code),
+    );
+  }
+
+  protected override getAssetUrls(): string[] {
+    return [kclWasmUrl];
   }
 
   protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {

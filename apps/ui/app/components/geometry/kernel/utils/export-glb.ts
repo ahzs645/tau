@@ -115,12 +115,14 @@ type TriangleData = {
  * Group faces by their unique color and convert to geometry arrays.
  * Each unique color becomes a separate ColorGroupGeometry.
  *
+ * Always transforms vertices from Z-up/mm to Y-up/meters for spec-compliant GLTF.
+ *
  * This approach (like Replicad) ensures:
  * - Opaque colors get OPAQUE materials
  * - Transparent colors get BLEND materials
  * - No vertex color issues with transparency
  */
-function groupFacesByColor(meshData: IndexedPolyhedron, enableTransform: boolean): ColorGroupGeometry[] {
+function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
   const { vertices, faces, colors } = meshData;
 
   // First pass: group triangles by color
@@ -160,14 +162,9 @@ function groupFacesByColor(meshData: IndexedPolyhedron, enableTransform: boolean
       }
 
       // Transform vertices from z-up to y-up coordinate system and convert units (mm to m)
-      let transformedV1 = v1;
-      let transformedV2 = v2;
-      let transformedV3 = v3;
-      if (enableTransform) {
-        transformedV1 = transformVerticesGltf(v1);
-        transformedV2 = transformVerticesGltf(v2);
-        transformedV3 = transformVerticesGltf(v3);
-      }
+      const transformedV1 = transformVerticesGltf(v1);
+      const transformedV2 = transformVerticesGltf(v2);
+      const transformedV3 = transformVerticesGltf(v3);
 
       // Calculate normal for this triangle (after transformation)
       const normal = calculateTriangleNormal(transformedV1, transformedV2, transformedV3);
@@ -244,12 +241,14 @@ function groupFacesByColor(meshData: IndexedPolyhedron, enableTransform: boolean
 }
 
 /**
- * Create a GLTF document from mesh data (shared between GLB and GLTF exports)
+ * Create a GLTF document from mesh data (shared between GLB and GLTF exports).
+ *
+ * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  *
  * Uses the Replicad approach: each unique color gets its own primitive with its own material.
  * This ensures opaque geometry uses OPAQUE mode and transparent geometry uses BLEND mode.
  */
-function createGltfDocument(meshData: IndexedPolyhedron, enableTransform: boolean): Document {
+function createGltfDocument(meshData: IndexedPolyhedron): Document {
   const document = new Document();
   document.createBuffer();
 
@@ -257,7 +256,7 @@ function createGltfDocument(meshData: IndexedPolyhedron, enableTransform: boolea
   const mesh = document.createMesh();
 
   // Group faces by color and create geometry for each group
-  const colorGroups = groupFacesByColor(meshData, enableTransform);
+  const colorGroups = groupFacesByColor(meshData);
 
   if (colorGroups.length === 0) {
     // Create a simple point if no geometry
@@ -337,20 +336,24 @@ function createGltfDocument(meshData: IndexedPolyhedron, enableTransform: boolea
 }
 
 /**
- * Create a GLB (binary GLTF) blob from mesh data with colors
+ * Create a GLB (binary GLTF) blob from mesh data with colors.
+ *
+ * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  */
-export async function createGlb(meshData: IndexedPolyhedron, enableTransform: boolean): Promise<Uint8Array> {
-  const document = createGltfDocument(meshData, enableTransform);
+export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array> {
+  const document = createGltfDocument(meshData);
   const glbBuffer = await new NodeIO().writeBinary(document);
   return glbBuffer;
 }
 
 /**
- * Create a GLTF (JSON format) blob from mesh data with colors
+ * Create a GLTF (JSON format) blob from mesh data with colors.
+ *
+ * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  * Note: This creates a self-contained GLTF with embedded binary data
  */
-export async function createGltf(meshData: IndexedPolyhedron, enableTransform: boolean): Promise<Uint8Array> {
-  const document = createGltfDocument(meshData, enableTransform);
+export async function createGltf(meshData: IndexedPolyhedron): Promise<Uint8Array> {
+  const document = createGltfDocument(meshData);
 
   // Use writeJSON which returns both the JSON and binary data
   const gltfData = await new NodeIO().writeJSON(document);

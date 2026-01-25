@@ -19,6 +19,8 @@ import { createKernelError, createKernelSuccess } from '#components/geometry/ker
 import {
   initOpenCascade,
   initOpenCascadeWithExceptions,
+  opencascadeWasmUrl,
+  opencascadeWithExceptionsWasmUrl,
 } from '#components/geometry/kernel/replicad/init-open-cascade.js';
 import { runInCjsContext, buildEsModule, registerKernelModules } from '#components/geometry/kernel/replicad/vm.js';
 import { renderOutput } from '#components/geometry/kernel/replicad/utils/render-output.js';
@@ -46,6 +48,16 @@ type ReplicadOptions = {
    * @default false
    */
   withExceptions: boolean;
+  /**
+   * Mesh configuration for geometry tessellation.
+   * Controls the quality of the mesh output.
+   */
+  meshConfiguration?: {
+    /** The mesh tolerance in millimeters for linear distances. */
+    linearTolerance: number;
+    /** The mesh tolerance in degrees for angular distances. */
+    angularTolerance: number;
+  };
 };
 
 class ReplicadWorker extends KernelWorker<ReplicadOptions> {
@@ -167,6 +179,15 @@ try {
     );
   }
 
+  protected override async discoverDependencies(filename: string): Promise<string[]> {
+    // Replicad currently only supports single-file operations
+    return [filename];
+  }
+
+  protected override getAssetUrls(): string[] {
+    return [geistRegularUrl, opencascadeWasmUrl, opencascadeWithExceptionsWasmUrl];
+  }
+
   protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
     try {
       const code = await this.readFile(filename, 'utf8');
@@ -259,7 +280,7 @@ try {
 
       const gltfShapes = [];
       if (shapes3d.length > 0) {
-        const gltfBlob = await convertReplicadGeometriesToGltf(shapes3d, 'glb', false);
+        const gltfBlob = await convertReplicadGeometriesToGltf(shapes3d, 'glb');
         const gltfEndTime = performance.now();
         this.log(`GLTF conversion took ${gltfEndTime - gltfStartTime}ms`, {
           operation: 'computeGeometry',

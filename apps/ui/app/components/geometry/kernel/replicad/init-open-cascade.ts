@@ -4,10 +4,16 @@
 
 import opencascade from 'replicad-opencascadejs/src/replicad_single.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
-import opencascadeWasm from 'replicad-opencascadejs/src/replicad_single.wasm?url';
+import opencascadeWasmUrl from 'replicad-opencascadejs/src/replicad_single.wasm?url';
 import opencascadeWithExceptions from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
-import opencascadeWithExceptionsWasm from 'replicad-opencascadejs/src/replicad_with_exceptions.wasm?url';
+import opencascadeWithExceptionsWasmUrl from 'replicad-opencascadejs/src/replicad_with_exceptions.wasm?url';
+
+// Export WASM URLs for cache key computation
+// eslint-disable-next-line no-barrel-files/no-barrel-files, unicorn/prefer-export-from -- export for cache key computation
+export { opencascadeWasmUrl };
+// eslint-disable-next-line no-barrel-files/no-barrel-files, unicorn/prefer-export-from -- export for cache key computation
+export { opencascadeWithExceptionsWasmUrl };
 
 // Types for OpenCascade modules
 type OpenCascadeModule = (options?: Partial<EmscriptenModule>) => Promise<OpenCascadeInstance>;
@@ -21,7 +27,7 @@ type OpenCascadeModuleWithExceptions = (
 export async function initOpenCascade(): Promise<OpenCascadeInstance> {
   // Initialize with optimized settings
   const instance = await (opencascade as OpenCascadeModule)({
-    locateFile: () => opencascadeWasm,
+    locateFile: () => opencascadeWasmUrl,
     // Use a larger memory allocation for better performance
     // eslint-disable-next-line @typescript-eslint/naming-convention -- this is a valid property
     TOTAL_MEMORY: 256 * 1024 * 1024, // 256MB
@@ -31,13 +37,13 @@ export async function initOpenCascade(): Promise<OpenCascadeInstance> {
         return {}; // Skip streaming in environments without fetch
       }
 
-      WebAssembly.instantiateStreaming(fetch(opencascadeWasm, { cache: 'force-cache' }), imports)
+      WebAssembly.instantiateStreaming(fetch(opencascadeWasmUrl, { cache: 'force-cache' }), imports)
         .then((output) => {
           successCallback(output.instance);
         })
         .catch(() => {
           // Fallback to traditional approach
-          void fetch(opencascadeWasm, { cache: 'force-cache' })
+          void fetch(opencascadeWasmUrl, { cache: 'force-cache' })
             .then(async (response) => response.arrayBuffer())
             .then(async (buffer) => WebAssembly.instantiate(buffer, imports))
             .then((output) => {
@@ -57,7 +63,7 @@ export async function initOpenCascade(): Promise<OpenCascadeInstance> {
 export async function initOpenCascadeWithExceptions(): Promise<OpenCascadeInstanceWithExceptions> {
   // Initialize with optimized settings
   const instance = await (opencascadeWithExceptions as OpenCascadeModuleWithExceptions)({
-    locateFile: () => opencascadeWithExceptionsWasm,
+    locateFile: () => opencascadeWithExceptionsWasmUrl,
     // Use a larger memory allocation for better performance
     // eslint-disable-next-line @typescript-eslint/naming-convention -- this is a valid property
     TOTAL_MEMORY: 256 * 1024 * 1024, // 256MB
@@ -67,13 +73,13 @@ export async function initOpenCascadeWithExceptions(): Promise<OpenCascadeInstan
         return {}; // Skip streaming in environments without fetch
       }
 
-      WebAssembly.instantiateStreaming(fetch(opencascadeWithExceptionsWasm, { cache: 'force-cache' }), imports)
+      WebAssembly.instantiateStreaming(fetch(opencascadeWithExceptionsWasmUrl, { cache: 'force-cache' }), imports)
         .then((output) => {
           successCallback(output.instance);
         })
         .catch(() => {
           // Fallback to traditional approach
-          void fetch(opencascadeWithExceptionsWasm, { cache: 'force-cache' })
+          void fetch(opencascadeWithExceptionsWasmUrl, { cache: 'force-cache' })
             .then(async (response) => response.arrayBuffer())
             .then(async (buffer) => WebAssembly.instantiate(buffer, imports))
             .then((output) => {

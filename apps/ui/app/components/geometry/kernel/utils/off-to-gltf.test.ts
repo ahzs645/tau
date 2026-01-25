@@ -22,7 +22,7 @@ describe('convertOffToGltf', () => {
 0.5 1 0
 3 0 1 2 0 0 255 127
 `;
-      const glbBuffer = await convertOffToGltf(offContent, 'glb', false);
+      const glbBuffer = await convertOffToGltf(offContent, 'glb');
       const document = await parseGlb(glbBuffer);
 
       // Get the mesh and check material color
@@ -54,7 +54,7 @@ describe('convertOffToGltf', () => {
 0.5 1 0
 3 0 1 2 255 0 0 128
 `;
-      const glbBuffer = await convertOffToGltf(offContent, 'glb', false);
+      const glbBuffer = await convertOffToGltf(offContent, 'glb');
       const document = await parseGlb(glbBuffer);
 
       const materials = document.getRoot().listMaterials();
@@ -72,7 +72,7 @@ describe('convertOffToGltf', () => {
 0.5 1 0
 3 0 1 2 255 0 0 255
 `;
-      const glbBuffer = await convertOffToGltf(offContent, 'glb', false);
+      const glbBuffer = await convertOffToGltf(offContent, 'glb');
       const document = await parseGlb(glbBuffer);
 
       const materials = document.getRoot().listMaterials();
@@ -94,7 +94,7 @@ describe('convertOffToGltf', () => {
 3 0 1 2 255 0 0 255
 3 3 4 5 0 255 0 128
 `;
-      const glbBuffer = await convertOffToGltf(offContent, 'glb', false);
+      const glbBuffer = await convertOffToGltf(offContent, 'glb');
       const document = await parseGlb(glbBuffer);
 
       // Should have 2 materials - one for each unique color
@@ -126,7 +126,7 @@ describe('convertOffToGltf', () => {
 0.5 1 0
 3 0 1 2 255 128 64
 `;
-      const glbBuffer = await convertOffToGltf(offContent, 'glb', false);
+      const glbBuffer = await convertOffToGltf(offContent, 'glb');
       const document = await parseGlb(glbBuffer);
 
       // Color should be on material
@@ -153,7 +153,7 @@ describe('convertOffToGltf', () => {
 0.5 1 0
 3 0 1 2 153 204 242 127
 `;
-      const glbBuffer = await convertOffToGltf(offContent, 'glb', false);
+      const glbBuffer = await convertOffToGltf(offContent, 'glb');
       const document = await parseGlb(glbBuffer);
 
       const materials = document.getRoot().listMaterials();

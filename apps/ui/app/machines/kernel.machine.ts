@@ -199,7 +199,10 @@ const createWorkersActor = fromPromise<
       wrappedReplicadWorker.initializeEntry(
         proxy({ onLog }),
         transfer({ fileManagerPort: replicadPort }, [replicadPort]),
-        { withExceptions: false },
+        {
+          withExceptions: false,
+          meshConfiguration: { linearTolerance: 0.1, angularTolerance: 0.1 },
+        },
       ),
       wrappedOpenscadWorker.initializeEntry(
         proxy({ onLog }),

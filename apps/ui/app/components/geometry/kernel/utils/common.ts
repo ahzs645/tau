@@ -148,17 +148,34 @@ export type IndexedPolyhedron = {
 };
 
 /**
- * Transform vertex coordinates from z-up to y-up coordinate system and convert units
+ * Transform vertex coordinates from z-up to y-up coordinate system and convert units.
  * Z-up to Y-up transformation: x' = x, y' = z, z' = -y
  * Unit conversion: millimeters to meters (divide by 1000)
  *
- * This is used when exporting geometry to glTF format, which uses y-up coordinates
- * and meter units, and source geometry uses z-up coordinates and millimeter units.
+ * This is used when creating glTF format, which uses y-up coordinates
+ * and meter units, from source geometry that uses z-up coordinates and millimeter units.
  */
 export function transformVerticesGltf(vertex: readonly [number, number, number]): [number, number, number] {
   const x = vertex[0] / 1000;
   const y = vertex[2] / 1000;
   const z = -vertex[1] / 1000;
+
+  // Normalize -0 to 0 to avoid JavaScript signed zero quirks
+  return [x === 0 ? 0 : x, y === 0 ? 0 : y, z === 0 ? 0 : z];
+}
+
+/**
+ * Inverse of transformVerticesGltf - transforms from y-up/meters to z-up/millimeters.
+ * Y-up to Z-up transformation: x = x', y = -z', z = y'
+ * Unit conversion: meters to millimeters (multiply by 1000)
+ *
+ * This is used when transforming valid glTF (Y-up, meters) for UI rendering
+ * which expects Z-up coordinates and millimeter units.
+ */
+export function inverseTransformVerticesGltf(vertex: readonly [number, number, number]): [number, number, number] {
+  const x = vertex[0] * 1000;
+  const y = -vertex[2] * 1000;
+  const z = vertex[1] * 1000;
 
   // Normalize -0 to 0 to avoid JavaScript signed zero quirks
   return [x === 0 ? 0 : x, y === 0 ? 0 : y, z === 0 ? 0 : z];

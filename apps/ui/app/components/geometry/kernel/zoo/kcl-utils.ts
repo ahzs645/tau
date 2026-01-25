@@ -11,7 +11,7 @@ import type { Configuration } from '@taucad/kcl-wasm-lib/bindings/Configuration'
 import type { System } from '@taucad/kcl-wasm-lib/bindings/ModelingCmd';
 import type { Context } from '@taucad/kcl-wasm-lib';
 import type { Models } from '@kittycad/lib';
-import wasmPath from '@taucad/kcl-wasm-lib/kcl.wasm?url';
+import kclWasmUrl from '@taucad/kcl-wasm-lib/kcl.wasm?url';
 import { EngineConnection, MockEngineConnection } from '#components/geometry/kernel/zoo/engine-connection.js';
 import type { WasmModule } from '#components/geometry/kernel/zoo/engine-connection.js';
 import type { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
@@ -22,6 +22,10 @@ import {
   extractWasmKclError,
 } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { createZooLogger } from '#components/geometry/kernel/zoo/zoo-logs.js';
+
+// Export WASM URL for cache key computation
+// eslint-disable-next-line no-barrel-files/no-barrel-files, unicorn/prefer-export-from -- export for cache key computation
+export { kclWasmUrl };
 
 const log = createZooLogger('KclUtils');
 
@@ -91,7 +95,7 @@ async function loadWasmModule(): Promise<WasmModule> {
   try {
     const wasmModule = await import('@taucad/kcl-wasm-lib');
 
-    await wasmModule.default(wasmPath);
+    await wasmModule.default(kclWasmUrl);
 
     return wasmModule;
   } catch (error) {

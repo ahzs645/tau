@@ -98,6 +98,16 @@ export class OpenScadWorker extends KernelWorker {
     return extension === 'scad';
   }
 
+  protected override async discoverDependencies(filename: string): Promise<string[]> {
+    // Use activeFilePath (the full relative path) to correctly resolve relative includes.
+    const mainFilePath = this.activeFilePath || filename;
+    return this.getReferencedScadFiles(mainFilePath);
+  }
+
+  protected override getAssetUrls(): string[] {
+    return [geistRegularUrl, geistBoldUrl];
+  }
+
   protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
     try {
       // Get only .scad files that are transitively referenced from the main file
@@ -225,7 +235,7 @@ export class OpenScadWorker extends KernelWorker {
 
       instance.FS.writeFile(inputFile, code);
 
-      const args = [inputFile, '--backend=manifold', '-o', outputFile];
+      const args = [inputFile, '-o', outputFile, '--backend=manifold'];
 
       if (parameters) {
         const flattenedParameters = flattenParametersForInjection(parameters);
@@ -263,7 +273,7 @@ export class OpenScadWorker extends KernelWorker {
       const offData = instance.FS.readFile(outputFile, { encoding: 'utf8' });
       this.offDataMemory[geometryId] = offData;
 
-      const gltfBlob = await convertOffToGltf(offData, 'glb', false);
+      const gltfBlob = await convertOffToGltf(offData, 'glb');
 
       const geometry: GeometryGltf = {
         format: 'gltf',
@@ -441,39 +451,6 @@ export class OpenScadWorker extends KernelWorker {
   }
 
   /**
-   * Get the project root path by stripping the subdirectory from basePath.
-   * This is the original file.path from the GeometryFile.
-   *
-   * @returns The project root path (e.g., '/builds/test' for basePath '/builds/test/project').
-   */
-  private getProjectRootPath(): string {
-    // Extract the subdirectory from activeFilePath (e.g., 'project' from 'project/main.scad')
-    const lastSlash = this.activeFilePath.lastIndexOf('/');
-    const subDirectory = lastSlash === -1 ? '' : this.activeFilePath.slice(0, lastSlash);
-
-    // Remove the subdirectory from basePath to get the project root
-    if (subDirectory && this.basePath.endsWith(`/${subDirectory}`)) {
-      return this.basePath.slice(0, -(subDirectory.length + 1));
-    }
-
-    return this.basePath;
-  }
-
-  /**
-   * Read a file relative to the project root, not relative to basePath.
-   * Used for dependency resolution where paths may be outside the main file's directory.
-   *
-   * @param relativePath - Path relative to the project root.
-   * @returns The file contents as string.
-   */
-  private async readFileFromProjectRoot(relativePath: string): Promise<string> {
-    const projectRoot = this.getProjectRootPath();
-    const fullPath = `${projectRoot}/${relativePath}`;
-    // Cast is needed because Remote<FileManager> doesn't properly resolve overloads
-    return this.fileManager.readFile(fullPath, 'utf8') as unknown as Promise<string>;
-  }
-
-  /**
    * Get all .scad files that are transitively referenced from the main file
    * via use and include statements.
    *
@@ -508,7 +485,7 @@ export class OpenScadWorker extends KernelWorker {
       // This allows resolving paths like '../lib/shared.scad' correctly
       let code: string;
       try {
-        code = await this.readFileFromProjectRoot(normalizedPath);
+        code = await this.readFileFromProjectRoot(normalizedPath, 'utf8');
       } catch {
         this.debug(`Could not read file ${normalizedPath} for dependency resolution`, {
           operation: 'getReferencedScadFiles',

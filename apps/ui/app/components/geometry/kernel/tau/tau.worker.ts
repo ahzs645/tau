@@ -35,6 +35,17 @@ class TauWorker extends KernelWorker {
     });
   }
 
+  protected override async discoverDependencies(filename: string): Promise<string[]> {
+    // TauWorker processes individual files without dependencies
+    return [filename];
+  }
+
+  protected override getAssetUrls(): string[] {
+    // TauWorker uses @taucad/converter which bundles WASM internally.
+    // Cache invalidation relies on the Tau framework version.
+    return [];
+  }
+
   protected override async computeGeometry(
     filename: string,
     _parameters?: Record<string, unknown>,

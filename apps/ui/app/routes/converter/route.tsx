@@ -174,7 +174,8 @@ function ConverterContent(): React.JSX.Element {
   );
 
   // Construct geometries array for CadViewer
-  const geometries: Geometry[] = glbData ? [{ format: 'gltf', content: glbData }] : [];
+  // Use a static hash for the converter (not using kernel worker infrastructure)
+  const geometries: Geometry[] = glbData ? [{ format: 'gltf', content: glbData, hash: 'converter' }] : [];
 
   const hasModel = glbData !== undefined;
 

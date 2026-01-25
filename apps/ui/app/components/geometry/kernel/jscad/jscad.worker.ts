@@ -5,7 +5,7 @@ import type {
   ExportFormat,
   ExportGeometryResult,
   ExtractParametersResult,
-  Geometry,
+  GeometryBase,
   KernelIssue,
   KernelErrorResult,
   KernelStackFrame,
@@ -177,6 +177,11 @@ class JscadWorker extends KernelWorker {
     return hasEsmImport || hasRequire || hasNamespaceUsage;
   }
 
+  protected override async discoverDependencies(filename: string): Promise<string[]> {
+    // JSCAD currently only supports single-file operations
+    return [filename];
+  }
+
   /**
    * Extract parameter definitions from JSCAD code
    *
@@ -343,7 +348,7 @@ class JscadWorker extends KernelWorker {
       }
 
       const gltfStartTime = performance.now();
-      const geometries: Geometry[] = [];
+      const geometries: GeometryBase[] = [];
 
       // Convert shapes sequentially
       const results = await Promise.allSettled(shapesArray.filter(Boolean).map(async (shape) => jscadToGltf(shape)));
