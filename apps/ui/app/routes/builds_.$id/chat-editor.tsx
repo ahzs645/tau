@@ -233,7 +233,23 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       if (existingModel) {
         // Update existing model if content is different
         if (existingModel.getValue() !== newContent) {
-          existingModel.setValue(newContent);
+          // Push a stack element to create a new undo stop point
+          existingModel.pushStackElement();
+
+          // Apply the edit as a proper undo-able operation
+          existingModel.pushEditOperations(
+            [], // No cursor state to preserve
+            [
+              {
+                range: existingModel.getFullModelRange(),
+                text: newContent,
+              },
+            ],
+            () => null, // No cursor computation needed
+          );
+
+          // Push another stack element to close this undo group
+          existingModel.pushStackElement();
         }
       } else if (source === 'user') {
         // For user operations (user created/uploaded), create a new model
