@@ -163,8 +163,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
 
         const exportResult = await utils.exportFromMemory({
           type: 'gltf',
-          storage: 'embedded',
-          presentation: 'pretty',
+          storage: 'binary',
         });
         if (exportResult.length === 0) {
           return createKernelSuccess([]);
@@ -287,8 +286,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
             const utils = await this.getKclUtilsWithEngine();
             const glbResult = await utils.exportFromMemory({
               type: 'gltf',
-              storage: 'embedded',
-              presentation: 'pretty',
+              storage: 'binary',
             });
             if (glbResult.length === 0) {
               return createKernelError([{ message: 'No GLB data received from KCL export', severity: 'error' }]);
@@ -317,7 +315,22 @@ class ZooWorker extends KernelWorker<ZooOptions> {
 
         case 'gltf': {
           try {
-            const blob = new Blob([asBuffer(gltfData.buffer)], {
+            const utils = await this.getKclUtilsWithEngine();
+            const gltfResult = await utils.exportFromMemory({
+              type: 'gltf',
+              storage: 'embedded',
+              presentation: 'pretty',
+            });
+            if (gltfResult.length === 0) {
+              return createKernelError([{ message: 'No GLTF data received from KCL export', severity: 'error' }]);
+            }
+
+            const gltfFile = gltfResult[0];
+            if (!gltfFile) {
+              return createKernelError([{ message: 'No GLTF file in export result', severity: 'error' }]);
+            }
+
+            const blob = new Blob([asBuffer(gltfFile.contents.buffer)], {
               type: 'model/gltf-json',
             });
             return createKernelSuccess([
