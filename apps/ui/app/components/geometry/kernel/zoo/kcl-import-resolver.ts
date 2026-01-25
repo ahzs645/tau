@@ -100,10 +100,34 @@ export async function discoverKclDependencies(
   const visited = new Set<string>();
   const result: string[] = [];
 
-  // Normalize path by removing leading slashes
-  const normalizePath = (path: string): string => path.replace(/^\/+/, '');
+  /**
+   * Normalize and canonicalize a file path.
+   * Removes leading slashes and resolves `.` and `..` segments to ensure
+   * consistent path representation for deduplication and cache key stability.
+   */
+  const normalizePath = (path: string): string => {
+    // Remove leading slashes
+    const normalized = path.replace(/^\/+/, '');
+    // Resolve . and .. segments
+    const parts = normalized.split('/');
+    const resolved: string[] = [];
+    for (const part of parts) {
+      if (part === '..') {
+        resolved.pop();
+      } else if (part !== '.' && part !== '') {
+        resolved.push(part);
+      }
+    }
 
-  // Maximum depth to prevent infinite loops in circular dependencies
+    return resolved.join('/');
+  };
+
+  /**
+   * Maximum import depth limit.
+   * 50 levels of import depth should handle any reasonable project structure
+   * while preventing infinite loops from circular imports that somehow bypass
+   * the visited check (e.g., due to path resolution edge cases).
+   */
   const maxDepth = 50;
 
   const resolveFile = async (filePath: string, depth: number): Promise<void> => {
