@@ -32,6 +32,7 @@ import type { KernelMiddleware } from '#components/geometry/kernel/utils/kernel-
 import { createMiddlewareRuntime } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
 import { gltfCoordinateTransformMiddleware } from '#components/geometry/kernel/utils/gltf-coordinate-transform.middleware.js';
+import { createKernelError } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { parameterCacheMiddleware } from '#components/geometry/kernel/utils/parameter-cache.middleware.js';
 
 /**
@@ -179,6 +180,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Handles common cleanup logic and then calls the protected cleanup method.
    */
   public async cleanupEntry(): Promise<void> {
+    this.assetHashCache.clear();
     await this.cleanup();
   }
 
@@ -258,13 +260,27 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const wrapHook = middleware.wrapExtractParameters;
 
         chain = async (request: ExtractParametersRequest) => {
-          const middlewareStart = performance.now();
-          const result = await wrapHook({ input: request.input, runtime }, inner);
-          const middlewareDuration = performance.now() - middlewareStart;
-          this.trace(`Middleware ${middlewareName} completed (${middlewareDuration.toFixed(2)}ms)`, {
-            operation: 'wrapExtractParameters',
-          });
-          return result;
+          try {
+            const middlewareStart = performance.now();
+            const result = await wrapHook({ input: request.input, runtime }, inner);
+            const middlewareDuration = performance.now() - middlewareStart;
+            this.trace(`Middleware ${middlewareName} completed (${middlewareDuration.toFixed(2)}ms)`, {
+              operation: 'wrapExtractParameters',
+            });
+            return result;
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.error(`Middleware ${middlewareName} failed: ${errorMessage}`, {
+              operation: 'wrapExtractParameters',
+            });
+            return createKernelError([
+              {
+                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                type: 'kernel',
+                severity: 'error',
+              },
+            ]);
+          }
         };
       }
     }
@@ -365,14 +381,28 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const wrapHook = middleware.wrapComputeGeometry;
 
         chain = async (request: ComputeGeometryRequest) => {
-          const middlewareStart = performance.now();
-          // Pass the runtime for THIS middleware, but chain passes through unchanged
-          const result = await wrapHook({ input: request.input, runtime }, inner);
-          const middlewareDuration = performance.now() - middlewareStart;
-          this.trace(`Middleware ${middlewareName} completed (${middlewareDuration.toFixed(2)}ms)`, {
-            operation: 'wrapComputeGeometry',
-          });
-          return result;
+          try {
+            const middlewareStart = performance.now();
+            // Pass the runtime for THIS middleware, but chain passes through unchanged
+            const result = await wrapHook({ input: request.input, runtime }, inner);
+            const middlewareDuration = performance.now() - middlewareStart;
+            this.trace(`Middleware ${middlewareName} completed (${middlewareDuration.toFixed(2)}ms)`, {
+              operation: 'wrapComputeGeometry',
+            });
+            return result;
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.error(`Middleware ${middlewareName} failed: ${errorMessage}`, {
+              operation: 'wrapComputeGeometry',
+            });
+            return createKernelError([
+              {
+                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                type: 'kernel',
+                severity: 'error',
+              },
+            ]);
+          }
         };
       }
     }
@@ -817,6 +847,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       },
       async ensureDirectoryExists(path: string): Promise<void> {
         await fileManager.ensureDirectoryExists(path);
+      },
+      async getDirectoryStat(path: string) {
+        return fileManager.getDirectoryStat(path);
+      },
+      async unlink(path: string): Promise<void> {
+        await fileManager.unlink(path);
       },
     };
   }

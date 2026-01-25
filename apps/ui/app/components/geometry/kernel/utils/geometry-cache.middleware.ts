@@ -28,6 +28,7 @@ import type {
   ExportGeometryHandler,
   GeometryBase,
   GeometryGltf,
+  MiddlewareFileManager,
 } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
@@ -173,6 +174,92 @@ function getCacheDir(basePath: string): string {
 }
 
 /**
+ * Maximum number of cache entries to keep.
+ * Uses LRU-style eviction based on file modification time.
+ */
+const maxCacheEntries = 100;
+
+/**
+ * Maximum age for cache entries in milliseconds (7 days).
+ * Entries older than this are eligible for cleanup.
+ */
+const maxCacheAgeMs = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Check if any geometries in the result have video-stream format.
+ * Video-stream geometries cannot be cached as they contain live streams.
+ *
+ * @param geometries - The geometries to check
+ * @returns True if any geometry is a video-stream
+ */
+function hasVideoStreamGeometry(geometries: readonly GeometryBase[]): boolean {
+  return geometries.some((geometry) => geometry.format === 'video-stream');
+}
+
+/**
+ * Clean up old cache entries to prevent unbounded cache growth.
+ * Deletes entries older than maxAgeMs and keeps only maxEntries most recent files.
+ *
+ * @param fileManager - The file manager for filesystem operations
+ * @param cacheDir - The cache directory path
+ * @param maxAgeMs - Maximum age in milliseconds for cache entries
+ * @param maxEntries - Maximum number of cache entries to keep
+ */
+async function cleanupOldCacheEntries(
+  fileManager: MiddlewareFileManager,
+  cacheDir: string,
+  maxAgeMs: number,
+  maxEntries: number,
+): Promise<void> {
+  try {
+    const files = await fileManager.getDirectoryStat(cacheDir);
+
+    // Filter to only .json cache files
+    const cacheFiles = files.filter((file) => file.type === 'file' && file.name.endsWith('.json'));
+
+    if (cacheFiles.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const filesToDelete: string[] = [];
+
+    // First pass: identify files older than maxAgeMs
+    for (const file of cacheFiles) {
+      const age = now - file.mtimeMs;
+      if (age > maxAgeMs) {
+        filesToDelete.push(`${cacheDir}/${file.path}`);
+      }
+    }
+
+    // Second pass: if still over maxEntries, delete oldest files
+    const remainingFiles = cacheFiles.filter((file) => {
+      const fullPath = `${cacheDir}/${file.path}`;
+      return !filesToDelete.includes(fullPath);
+    });
+
+    if (remainingFiles.length > maxEntries) {
+      // Sort by modification time (oldest first)
+      remainingFiles.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+      // Delete oldest files to get under maxEntries
+      const excessCount = remainingFiles.length - maxEntries;
+      for (let index = 0; index < excessCount; index++) {
+        const file = remainingFiles[index];
+        if (file) {
+          filesToDelete.push(`${cacheDir}/${file.path}`);
+        }
+      }
+    }
+
+    // Delete identified files
+    await Promise.all(filesToDelete.map(async (path) => fileManager.unlink(path)));
+  } catch {
+    // Cleanup errors are non-fatal - silently ignore
+  }
+}
+
+/**
  * Geometry cache middleware.
  *
  * Caches computeGeometry results based on all dependencies (files, middleware, framework, options).
@@ -227,20 +314,29 @@ export const geometryCacheMiddleware = createKernelMiddleware({
     runtime.logger.debug(`Cache miss for ${cacheKey}`);
     const result = await handler(request);
 
-    // 4. Write to cache on the way back up
+    // 4. Write to cache on the way back up (skip if video-stream geometries present)
     if (result.success && result.data.length > 0) {
-      try {
-        // Ensure cache directory exists
-        const cacheDir = getCacheDir(input.basePath);
-        await runtime.fileManager.ensureDirectoryExists(cacheDir);
+      // Skip caching if any geometry is a video-stream - these cannot be cached
+      // and would result in incomplete data on cache hit
+      if (hasVideoStreamGeometry(result.data)) {
+        runtime.logger.debug(`Skipping cache for ${cacheKey}: contains video-stream geometry`);
+      } else {
+        try {
+          // Ensure cache directory exists
+          const cacheDir = getCacheDir(input.basePath);
+          await runtime.fileManager.ensureDirectoryExists(cacheDir);
 
-        // Serialize all geometries to JSON (handles GLTF, SVG, video-stream)
-        const serialized = serializeGeometries(result.data);
-        await runtime.fileManager.writeFile(cachePath, serialized);
-        runtime.logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
-      } catch (error) {
-        // Cache write error - log and continue
-        runtime.logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);
+          // Serialize all geometries to JSON (handles GLTF, SVG)
+          const serialized = serializeGeometries(result.data);
+          await runtime.fileManager.writeFile(cachePath, serialized);
+          runtime.logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
+
+          // Cleanup old cache entries to prevent unbounded growth
+          await cleanupOldCacheEntries(runtime.fileManager, cacheDir, maxCacheAgeMs, maxCacheEntries);
+        } catch (error) {
+          // Cache write error - log and continue
+          runtime.logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);
+        }
       }
     }
 

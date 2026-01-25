@@ -4,6 +4,7 @@
  * Shared helper functions for testing kernel middleware.
  */
 
+import deepmerge from 'deepmerge';
 import type { PartialDeep } from 'type-fest';
 import type {
   ComputeGeometryResult,
@@ -52,12 +53,15 @@ export function createMockLogger(): KernelMiddlewareLogger & {
 export function createMockFileManager(options?: {
   existsResult?: boolean | ((path: string) => boolean | Promise<boolean>);
   readFileResult?: string | Uint8Array | ((path: string) => string | Uint8Array | Promise<string | Uint8Array>);
+  getDirectoryStatResult?: Array<{ path: string; name: string; type: 'file' | 'dir'; size: number; mtimeMs: number }>;
 }): MiddlewareFileManager & {
   exists: ReturnType<typeof vi.fn>;
   readFile: ReturnType<typeof vi.fn>;
   writeFile: ReturnType<typeof vi.fn>;
   mkdir: ReturnType<typeof vi.fn>;
   ensureDirectoryExists: ReturnType<typeof vi.fn>;
+  getDirectoryStat: ReturnType<typeof vi.fn>;
+  unlink: ReturnType<typeof vi.fn>;
 } {
   const existsFn = vi.fn().mockImplementation(async (path: string) => {
     if (typeof options?.existsResult === 'function') {
@@ -81,6 +85,8 @@ export function createMockFileManager(options?: {
     writeFile: vi.fn().mockResolvedValue(undefined),
     mkdir: vi.fn().mockResolvedValue(undefined),
     ensureDirectoryExists: vi.fn().mockResolvedValue(undefined),
+    getDirectoryStat: vi.fn().mockResolvedValue(options?.getDirectoryStatResult ?? []),
+    unlink: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -96,10 +102,8 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
   const stateContainer: { value: PartialDeep<T> } = { value: {} as PartialDeep<T> };
 
   const updateFn = vi.fn().mockImplementation((partial: Partial<T>) => {
-    // Merge partial into state
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test utility requires flexible typing
-    const merged: PartialDeep<T> = { ...stateContainer.value, ...partial } as PartialDeep<T>;
-    stateContainer.value = merged;
+    // Use deepmerge to match production createMiddlewareState behavior
+    stateContainer.value = deepmerge(stateContainer.value, partial) as PartialDeep<T>;
   });
 
   return {

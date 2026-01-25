@@ -22,6 +22,14 @@ import type { LogLevel, OnWorkerLog } from '#types/console.types.js';
 type EmptyZodObject = z.ZodObject<{}>;
 
 /**
+ * Type alias for an empty state object.
+ * Used as the default inferred state type when no state schema is provided.
+ * Equivalent to z.infer<EmptyZodObject>.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Represents an empty state object
+type EmptyState = {};
+
+/**
  * Configuration for creating a kernel middleware.
  *
  * @template StateSchema - Optional Zod object schema for the middleware state.
@@ -121,7 +129,7 @@ export function createKernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawS
 ): KernelMiddleware<StateSchema> {
   return {
     name: config.name,
-    version: config.version,
+    version: config.version ?? '1',
     stateSchema: config.stateSchema,
     wrapComputeGeometry: config.wrapComputeGeometry,
     wrapExportGeometry: config.wrapExportGeometry,
@@ -173,8 +181,7 @@ export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: strin
  * @param schema - Optional Zod object schema for validation
  * @returns State instance with value and update method
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export function createMiddlewareState<State extends Record<string, unknown> = {}>(
+export function createMiddlewareState<State extends Record<string, unknown> = EmptyState>(
   schema?: z.ZodObject<z.ZodRawShape>,
 ): MiddlewareState<State> {
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- initial value is empty object
@@ -224,8 +231,7 @@ export type CreateMiddlewareRuntimeOptions = {
  * @param options - Runtime configuration options
  * @returns Runtime instance for middleware wrap hooks
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export function createMiddlewareRuntime<State extends Record<string, unknown> = {}>(
+export function createMiddlewareRuntime<State extends Record<string, unknown> = EmptyState>(
   options: CreateMiddlewareRuntimeOptions,
 ): KernelMiddlewareRuntime<State> {
   const { onLog, middlewareName, fileManager, dependencies, dependencyHash, stateSchema } = options;

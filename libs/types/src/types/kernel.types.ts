@@ -264,6 +264,17 @@ export type MiddlewareState<T extends Record<string, unknown>> = {
 };
 
 /**
+ * File stat information returned by getDirectoryStat.
+ */
+export type MiddlewareFileStat = {
+  path: string;
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  mtimeMs: number;
+};
+
+/**
  * File manager interface for middleware filesystem operations.
  * This is a subset of the full FileManager interface available to middleware.
  */
@@ -279,6 +290,10 @@ export type MiddlewareFileManager = {
   exists(path: string): Promise<boolean>;
   /** Ensure a directory exists, creating parent directories as needed */
   ensureDirectoryExists(path: string): Promise<void>;
+  /** Get file stats for all files in a directory recursively */
+  getDirectoryStat(path: string): Promise<MiddlewareFileStat[]>;
+  /** Delete a file */
+  unlink(path: string): Promise<void>;
 };
 
 /**

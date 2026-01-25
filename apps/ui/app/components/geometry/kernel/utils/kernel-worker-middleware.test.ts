@@ -410,10 +410,15 @@ describe('kernel-worker middleware onion chain', () => {
 
       vi.spyOn(worker as never, 'computeGeometry').mockRejectedValue(new Error('Main operation failed'));
 
-      await expect(worker.runComputeGeometry()).rejects.toThrow('Main operation failed');
+      const result = await worker.runComputeGeometry();
+      expect(result.success).toBe(false);
+      if (!result.success && result.issues[0]) {
+        expect(result.issues[0].message).toContain('Main operation failed');
+        expect(result.issues[0].type).toBe('kernel');
+      }
     });
 
-    it('should propagate errors from middleware', async () => {
+    it('should catch errors from middleware and return error result', async () => {
       const middleware = createKernelMiddleware({
         name: 'ErrorMiddleware',
         async wrapComputeGeometry(_request, _handler) {
@@ -427,7 +432,13 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      await expect(worker.runComputeGeometry()).rejects.toThrow('Middleware error');
+      const result = await worker.runComputeGeometry();
+      expect(result.success).toBe(false);
+      if (!result.success && result.issues[0]) {
+        expect(result.issues[0].message).toContain('Middleware error in ErrorMiddleware');
+        expect(result.issues[0].message).toContain('Middleware error');
+        expect(result.issues[0].type).toBe('kernel');
+      }
     });
   });
 });

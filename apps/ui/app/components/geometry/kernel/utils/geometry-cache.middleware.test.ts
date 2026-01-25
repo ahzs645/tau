@@ -315,6 +315,144 @@ describe('geometryCacheMiddleware', () => {
         expect(request.runtime.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Cache write error'));
       });
     });
+
+    describe('video-stream handling', () => {
+      it('should skip caching when result contains video-stream geometry', async () => {
+        const request = createCacheRequest({ cacheExists: false });
+        // Create a handler that returns video-stream geometry
+        const mockStream = new ReadableStream();
+        const videoStreamResult = {
+          success: true as const,
+          data: [{ format: 'video-stream' as const, stream: mockStream }],
+          issues: [],
+        };
+        const handler = createMockHandler(videoStreamResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        const result = await wrapComputeGeometry!(request, handler);
+
+        // Handler should be called
+        expect(handler).toHaveBeenCalled();
+        expect(result).toBe(videoStreamResult);
+
+        // Should NOT write to cache
+        expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
+        // Should log that caching was skipped
+        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Skipping cache'));
+        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('video-stream'));
+      });
+
+      it('should cache when result contains only GLTF geometry', async () => {
+        const request = createCacheRequest({ cacheExists: false });
+        const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
+        const handler = createMockHandler(handlerResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        await wrapComputeGeometry!(request, handler);
+
+        // Should write to cache
+        expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
+      });
+
+      it('should skip caching when result contains mixed geometries including video-stream', async () => {
+        const request = createCacheRequest({ cacheExists: false });
+        // Mixed result with both GLTF and video-stream
+        const mockStream = new ReadableStream();
+        const mixedResult = {
+          success: true as const,
+          data: [
+            { format: 'gltf' as const, content: new Uint8Array([1, 2, 3]) },
+            { format: 'video-stream' as const, stream: mockStream },
+          ],
+          issues: [],
+        };
+        const handler = createMockHandler(mixedResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        await wrapComputeGeometry!(request, handler);
+
+        // Should NOT write to cache when any geometry is video-stream
+        expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('cache cleanup', () => {
+      it('should call cleanup after successful cache write', async () => {
+        const request = createCacheRequest({ cacheExists: false });
+        const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
+        const handler = createMockHandler(handlerResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        await wrapComputeGeometry!(request, handler);
+
+        // GetDirectoryStat should be called for cleanup
+        expect(request.runtime.fileManager.getDirectoryStat).toHaveBeenCalled();
+      });
+
+      it('should delete old cache entries', async () => {
+        const now = Date.now();
+        const oldMtimeMs = now - 8 * 24 * 60 * 60 * 1000; // 8 days ago (older than 7 day max age)
+        const request = createCacheRequest({ cacheExists: false });
+
+        // Mock getDirectoryStat to return old cache files
+        request.runtime.fileManager.getDirectoryStat.mockResolvedValue([
+          { path: 'old-cache.json', name: 'old-cache.json', type: 'file', size: 100, mtimeMs: oldMtimeMs },
+        ]);
+
+        const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
+        const handler = createMockHandler(handlerResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        await wrapComputeGeometry!(request, handler);
+
+        // Should delete old cache file
+        expect(request.runtime.fileManager.unlink).toHaveBeenCalled();
+      });
+
+      it('should delete excess cache entries when over max count', async () => {
+        const now = Date.now();
+        const request = createCacheRequest({ cacheExists: false });
+
+        // Create 102 files (2 over the 100 max)
+        const manyFiles = Array.from({ length: 102 }, (_, index) => ({
+          path: `cache-${index}.json`,
+          name: `cache-${index}.json`,
+          type: 'file' as const,
+          size: 100,
+          // Stagger mtimeMs so we can predict which get deleted (oldest first)
+          mtimeMs: now - index * 1000,
+        }));
+
+        request.runtime.fileManager.getDirectoryStat.mockResolvedValue(manyFiles);
+
+        const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
+        const handler = createMockHandler(handlerResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        await wrapComputeGeometry!(request, handler);
+
+        // Should delete 2 oldest files to get to 100
+        expect(request.runtime.fileManager.unlink).toHaveBeenCalledTimes(2);
+      });
+
+      it('should handle cleanup errors gracefully', async () => {
+        const request = createCacheRequest({ cacheExists: false });
+
+        // Make getDirectoryStat throw an error
+        request.runtime.fileManager.getDirectoryStat.mockRejectedValue(new Error('Stat error'));
+
+        const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
+        const handler = createMockHandler(handlerResult);
+
+        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        // Should not throw, cleanup errors are non-fatal
+        const result = await wrapComputeGeometry!(request, handler);
+
+        expect(result.success).toBe(true);
+        // Cache write should still have happened
+        expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('wrapExportGeometry', () => {
