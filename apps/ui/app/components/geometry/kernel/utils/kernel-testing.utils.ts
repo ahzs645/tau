@@ -284,10 +284,10 @@ export class MockKernelWorker extends KernelWorker {
     // Return minimal mock dependencies
     return [
       { type: 'file', path: 'test.kcl', contentHash: 'mock-hash' },
-      ...this.testMiddleware.map((mw, index) => ({
+      ...this.testMiddleware.map((middleware, index) => ({
         type: 'middleware' as const,
-        name: mw.name,
-        version: mw.version ?? '1',
+        name: middleware.name,
+        version: middleware.version ?? '1',
         index,
       })),
       { type: 'framework', name: 'tau' as const, version: 'test' },
