@@ -5,14 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { uint8ArrayToBase64 } from 'uint8array-extras';
-import type {
-  ComputeGeometryResult,
-  ComputeGeometryRequest,
-  ComputeGeometryHandler,
-  ExportGeometryRequest,
-  ExportGeometryHandler,
-  Dependency,
-} from '@taucad/types';
+import type { ComputeGeometryResult, ComputeGeometryRequest, ComputeGeometryHandler, Dependency } from '@taucad/types';
 import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
 import {
   createMockRuntime,
@@ -20,11 +13,6 @@ import {
   createGltfSuccessResult,
   createErrorResult,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
-
-type CacheState = {
-  cacheHit: boolean;
-  basePath: string;
-};
 
 /**
  * Create mock dependencies for testing.
@@ -62,15 +50,15 @@ function createCacheRequest(options?: {
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-}): ComputeGeometryRequest<CacheState> & {
-  runtime: ReturnType<typeof createMockRuntime<CacheState>>;
+}): ComputeGeometryRequest & {
+  runtime: ReturnType<typeof createMockRuntime>;
 } {
   // Create serialized content if cachedContent is provided
   const serializedContent = options?.cachedContent
     ? createSerializedCacheContent(options.cachedContent, options.dependencyHash ?? 'a'.repeat(64))
     : '';
 
-  const runtime = createMockRuntime<CacheState>({
+  const runtime = createMockRuntime({
     fileManagerOptions: {
       existsResult: options?.cacheExists ?? false,
       readFileResult: serializedContent,
@@ -88,7 +76,7 @@ function createCacheRequest(options?: {
 /**
  * Create a mock handler for testing.
  */
-function createMockHandler(result?: ComputeGeometryResult): ComputeGeometryHandler<CacheState> {
+function createMockHandler(result?: ComputeGeometryResult): ComputeGeometryHandler {
   return vi.fn().mockResolvedValue(result ?? createGltfSuccessResult(new Uint8Array([1, 2, 3])));
 }
 
@@ -128,21 +116,6 @@ describe('geometryCacheMiddleware', () => {
         }
       });
 
-      it('should update state with cacheHit: true', async () => {
-        const gltfContent = new Uint8Array([1, 2, 3]);
-        const request = createCacheRequest({
-          cacheExists: true,
-          cachedContent: gltfContent,
-        });
-        const handler = createMockHandler();
-
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
-
-        expect(request.runtime.state.update).toHaveBeenCalled();
-        expect(request.runtime.state.value.cacheHit).toBe(true);
-      });
-
       it('should log cache hit message', async () => {
         const gltfContent = new Uint8Array([1, 2, 3]);
         const request = createCacheRequest({
@@ -169,17 +142,6 @@ describe('geometryCacheMiddleware', () => {
 
         expect(handler).toHaveBeenCalled();
         expect(result).toBe(handlerResult);
-      });
-
-      it('should update state with cacheHit: false', async () => {
-        const request = createCacheRequest({ cacheExists: false });
-        const handler = createMockHandler();
-
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
-
-        expect(request.runtime.state.update).toHaveBeenCalled();
-        expect(request.runtime.state.value.cacheHit).toBe(false);
       });
 
       it('should log cache miss message', async () => {
@@ -296,7 +258,6 @@ describe('geometryCacheMiddleware', () => {
         // Should treat as cache miss and call handler
         expect(handler).toHaveBeenCalled();
         expect(result).toBe(handlerResult);
-        expect(request.runtime.state.value.cacheHit).toBe(false);
       });
 
       it('should handle file write errors gracefully', async () => {
@@ -414,6 +375,7 @@ describe('geometryCacheMiddleware', () => {
         const request = createCacheRequest({ cacheExists: false });
 
         // Create 102 files (2 over the 100 max)
+        // eslint-disable-next-line max-nested-callbacks -- better readability
         const manyFiles = Array.from({ length: 102 }, (_, index) => ({
           path: `cache-${index}.json`,
           name: `cache-${index}.json`,
@@ -455,148 +417,13 @@ describe('geometryCacheMiddleware', () => {
     });
   });
 
-  describe('wrapExportGeometry', () => {
-    it('should throw error when state is missing', async () => {
-      const runtime = createMockRuntime<CacheState>({
-        dependencies: createMockDependencies(),
-      });
-      // State not updated - basePath is undefined
-      const request: ExportGeometryRequest<CacheState> = {
-        input: { fileType: 'gltf' },
-        runtime,
-      };
-      const handler: ExportGeometryHandler<CacheState> = vi.fn();
-
-      const { wrapExportGeometry } = geometryCacheMiddleware;
-      const result = await wrapExportGeometry!(request, handler);
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.issues[0]?.message).toContain('geometry not computed');
-      }
-    });
-
-    it('should return cached GLTF for gltf export', async () => {
-      const cachedContent = new Uint8Array([1, 2, 3, 4]);
-      const serializedContent = createSerializedCacheContent(cachedContent);
-      const runtime = createMockRuntime<CacheState>({
-        fileManagerOptions: {
-          existsResult: true,
-          readFileResult: serializedContent,
-        },
-        dependencies: createMockDependencies(),
-      });
-      // Simulate state from computeGeometry
-      runtime.state.update({ basePath: 'builds/test', cacheHit: true });
-
-      const request: ExportGeometryRequest<CacheState> = {
-        input: { fileType: 'gltf' },
-        runtime,
-      };
-      const handler: ExportGeometryHandler<CacheState> = vi.fn();
-
-      const { wrapExportGeometry } = geometryCacheMiddleware;
-      const result = await wrapExportGeometry!(request, handler);
-
-      expect(result.success).toBe(true);
-      expect(handler).not.toHaveBeenCalled();
-
-      if (result.success) {
-        expect(result.data[0]?.name).toBe('model.gltf');
-      }
-    });
-
-    it('should return cached GLB for glb export', async () => {
-      const cachedContent = new Uint8Array([1, 2, 3, 4]);
-      const serializedContent = createSerializedCacheContent(cachedContent);
-      const runtime = createMockRuntime<CacheState>({
-        fileManagerOptions: {
-          existsResult: true,
-          readFileResult: serializedContent,
-        },
-        dependencies: createMockDependencies(),
-      });
-      runtime.state.update({ basePath: 'builds/test', cacheHit: true });
-
-      const request: ExportGeometryRequest<CacheState> = {
-        input: { fileType: 'glb' },
-        runtime,
-      };
-      const handler: ExportGeometryHandler<CacheState> = vi.fn();
-
-      const { wrapExportGeometry } = geometryCacheMiddleware;
-      const result = await wrapExportGeometry!(request, handler);
-
-      expect(result.success).toBe(true);
-      expect(handler).not.toHaveBeenCalled();
-
-      if (result.success) {
-        expect(result.data[0]?.name).toBe('model.glb');
-      }
-    });
-
-    it('should delegate to handler for non-GLTF formats', async () => {
-      const cachedContent = new Uint8Array([1, 2, 3]);
-      const serializedContent = createSerializedCacheContent(cachedContent);
-      const runtime = createMockRuntime<CacheState>({
-        fileManagerOptions: {
-          existsResult: true,
-          readFileResult: serializedContent,
-        },
-        dependencies: createMockDependencies(),
-      });
-      runtime.state.update({ basePath: 'builds/test', cacheHit: true });
-
-      const request: ExportGeometryRequest<CacheState> = {
-        input: { fileType: 'stl' },
-        runtime,
-      };
-      const handlerResult = {
-        success: true as const,
-        data: [{ blob: new Blob(), name: 'model.stl' }],
-        issues: [],
-      };
-      const handler: ExportGeometryHandler<CacheState> = vi.fn().mockResolvedValue(handlerResult);
-
-      const { wrapExportGeometry } = geometryCacheMiddleware;
-      const result = await wrapExportGeometry!(request, handler);
-
-      expect(handler).toHaveBeenCalled();
-      expect(result).toBe(handlerResult);
-    });
-
-    it('should return error if cache is missing', async () => {
-      const runtime = createMockRuntime<CacheState>({
-        fileManagerOptions: {
-          existsResult: false,
-        },
-        dependencies: createMockDependencies(),
-      });
-      runtime.state.update({ basePath: 'builds/test', cacheHit: true });
-
-      const request: ExportGeometryRequest<CacheState> = {
-        input: { fileType: 'gltf' },
-        runtime,
-      };
-      const handler: ExportGeometryHandler<CacheState> = vi.fn();
-
-      const { wrapExportGeometry } = geometryCacheMiddleware;
-      const result = await wrapExportGeometry!(request, handler);
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.issues[0]?.message).toContain('cached geometry not found');
-      }
-    });
-  });
-
   describe('cache key behavior with parameter changes', () => {
     it('should use dependencyHash for cache key lookup', async () => {
       const dependencyHash = 'abc123'.repeat(11).slice(0, 64);
       const cachedContent = new Uint8Array([1, 2, 3]);
       const serializedContent = createSerializedCacheContent(cachedContent, dependencyHash);
 
-      const runtime = createMockRuntime<CacheState>({
+      const runtime = createMockRuntime({
         fileManagerOptions: {
           existsResult: true,
           readFileResult: serializedContent,
@@ -609,7 +436,7 @@ describe('geometryCacheMiddleware', () => {
         input: createMockInput(),
         runtime,
       };
-      const handler: ComputeGeometryHandler<CacheState> = vi.fn();
+      const handler: ComputeGeometryHandler = vi.fn();
 
       const { wrapComputeGeometry } = geometryCacheMiddleware;
       await wrapComputeGeometry!(request, handler);
@@ -623,7 +450,7 @@ describe('geometryCacheMiddleware', () => {
       const dependencyHash = 'hash2'.repeat(13).slice(0, 64);
 
       // Cache doesn't exist for this new hash
-      const runtime = createMockRuntime<CacheState>({
+      const runtime = createMockRuntime({
         fileManagerOptions: {
           existsResult: false,
         },
@@ -637,7 +464,7 @@ describe('geometryCacheMiddleware', () => {
       };
 
       const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-      const handler: ComputeGeometryHandler<CacheState> = vi.fn().mockResolvedValue(handlerResult);
+      const handler: ComputeGeometryHandler = vi.fn().mockResolvedValue(handlerResult);
 
       const { wrapComputeGeometry } = geometryCacheMiddleware;
       await wrapComputeGeometry!(request, handler);
@@ -651,7 +478,7 @@ describe('geometryCacheMiddleware', () => {
       const cachedContent = new Uint8Array([1, 2, 3]);
       const serializedContent = createSerializedCacheContent(cachedContent, dependencyHash);
 
-      const runtime = createMockRuntime<CacheState>({
+      const runtime = createMockRuntime({
         fileManagerOptions: {
           existsResult: true,
           readFileResult: serializedContent,
@@ -665,7 +492,7 @@ describe('geometryCacheMiddleware', () => {
         runtime,
       };
 
-      const handler: ComputeGeometryHandler<CacheState> = vi.fn();
+      const handler: ComputeGeometryHandler = vi.fn();
 
       const { wrapComputeGeometry } = geometryCacheMiddleware;
       await wrapComputeGeometry!(request, handler);

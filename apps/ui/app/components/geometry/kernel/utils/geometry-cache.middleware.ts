@@ -12,39 +12,12 @@
  *
  * Short-circuited results still flow through upstream middleware (e.g., transform)
  * because each middleware wraps around the next in the onion model.
- *
- * For exportGeometry, retrieves the pre-transform geometry from the cache.
- * Throws an error if cache is missing (architecture guarantees compute runs before export).
  */
 
-import { z } from 'zod';
 import { uint8ArrayToBase64, base64ToUint8Array } from 'uint8array-extras';
-import type {
-  ComputeGeometryResult,
-  ComputeGeometryRequest,
-  ComputeGeometryHandler,
-  ExportGeometryResult,
-  ExportGeometryRequest,
-  ExportGeometryHandler,
-  GeometryBase,
-  GeometryGltf,
-  MiddlewareFileManager,
-} from '@taucad/types';
+import type { ComputeGeometryResult, GeometryResponse, MiddlewareFileManager } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
-import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
-
-/**
- * Schema for the cache middleware state.
- * State persists for the duration of one wrap hook execution.
- */
-const cacheStateSchema = z.object({
-  /** Whether the cache was hit */
-  cacheHit: z.boolean(),
-  /** The base path (needed for export) */
-  basePath: z.string(),
-});
-
-type CacheState = z.infer<typeof cacheStateSchema>;
+import { createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 
 /**
  * Serialized geometry format for cache storage.
@@ -72,7 +45,7 @@ type SerializedGeometry =
  * @param geometries - The geometries to serialize
  * @returns JSON string of serialized geometries
  */
-function serializeGeometries(geometries: readonly GeometryBase[]): string {
+function serializeGeometries(geometries: readonly GeometryResponse[]): string {
   const serialized: SerializedGeometry[] = geometries.map((geometry): SerializedGeometry => {
     switch (geometry.format) {
       case 'gltf': {
@@ -114,9 +87,9 @@ function serializeGeometries(geometries: readonly GeometryBase[]): string {
  * @param data - JSON string of serialized geometries
  * @returns The deserialized geometries (excluding video-stream which can't be cached)
  */
-function deserializeGeometries(data: string): GeometryBase[] {
+function deserializeGeometries(data: string): GeometryResponse[] {
   const serialized = JSON.parse(data) as SerializedGeometry[];
-  const geometries: GeometryBase[] = [];
+  const geometries: GeometryResponse[] = [];
 
   for (const item of serialized) {
     switch (item.format) {
@@ -192,7 +165,7 @@ const maxCacheAgeMs = 7 * 24 * 60 * 60 * 1000;
  * @param geometries - The geometries to check
  * @returns True if any geometry is a video-stream
  */
-function hasVideoStreamGeometry(geometries: readonly GeometryBase[]): boolean {
+function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolean {
   return geometries.some((geometry) => geometry.format === 'video-stream');
 }
 
@@ -268,19 +241,14 @@ async function cleanupOldCacheEntries(
  * - Write to cache after handler() returns (on cache miss)
  * - Short-circuited results still flow through upstream middleware
  *
- * For exportGeometry:
- * - Retrieves pre-transform geometry from cache
- * - Throws error if cache miss (should never happen given architecture)
+ * Export operations are not cached - they are delegated to kernel workers
+ * which handle format-specific conversion (e.g., GLTF JSON vs GLB binary).
  */
 export const geometryCacheMiddleware = createKernelMiddleware({
   name: 'GeometryCache',
-  version: '2.0.0',
-  stateSchema: cacheStateSchema,
+  version: '1.0.0',
 
-  async wrapComputeGeometry(
-    request: ComputeGeometryRequest<CacheState>,
-    handler: ComputeGeometryHandler<CacheState>,
-  ): Promise<ComputeGeometryResult> {
+  async wrapComputeGeometry(request, handler): Promise<ComputeGeometryResult> {
     const { input, runtime } = request;
 
     // Use pre-computed dependency hash as cache key
@@ -293,7 +261,6 @@ export const geometryCacheMiddleware = createKernelMiddleware({
 
       if (cacheExists) {
         // Cache hit - read and return cached result
-        runtime.state.update({ cacheHit: true, basePath: input.basePath });
         runtime.logger.debug(`Cache hit for ${cacheKey}`);
 
         // Read and deserialize all geometry types from JSON
@@ -310,7 +277,6 @@ export const geometryCacheMiddleware = createKernelMiddleware({
     }
 
     // 2. Cache miss - execute downstream
-    runtime.state.update({ cacheHit: false, basePath: input.basePath });
     runtime.logger.debug(`Cache miss for ${cacheKey}`);
     const result = await handler(request);
 
@@ -341,79 +307,5 @@ export const geometryCacheMiddleware = createKernelMiddleware({
     }
 
     return result;
-  },
-
-  async wrapExportGeometry(
-    request: ExportGeometryRequest<CacheState>,
-    handler: ExportGeometryHandler<CacheState>,
-  ): Promise<ExportGeometryResult> {
-    const { runtime } = request;
-    const { basePath } = runtime.state.value;
-
-    // Use pre-computed dependency hash as cache key
-    const cacheKey = runtime.dependencyHash;
-
-    // Cache should always exist at this point - computeGeometry runs before exportGeometry
-    if (!basePath) {
-      return createKernelError([
-        {
-          message: 'Export failed: geometry not computed. This indicates a bug in the kernel architecture.',
-          type: 'kernel',
-          severity: 'error',
-        },
-      ]);
-    }
-
-    const cachePath = getCachePath(basePath, cacheKey);
-
-    try {
-      const cacheExists = await runtime.fileManager.exists(cachePath);
-
-      if (!cacheExists) {
-        // This should never happen given the architecture
-        return createKernelError([
-          {
-            message: `Export failed: cached geometry not found at ${cacheKey}. This indicates a bug in the caching middleware.`,
-            type: 'kernel',
-            severity: 'error',
-          },
-        ]);
-      }
-
-      // Read and deserialize geometry from cache
-      const cachedData = await runtime.fileManager.readFile(cachePath, 'utf8');
-      const geometries = deserializeGeometries(cachedData);
-
-      // For GLTF/GLB export, find GLTF geometry and return it
-      if (request.input.fileType === 'gltf' || request.input.fileType === 'glb') {
-        const gltfGeometry = geometries.find((g): g is GeometryGltf => g.format === 'gltf');
-
-        if (!gltfGeometry) {
-          return createKernelError([
-            {
-              message: 'Export failed: no GLTF geometry found in cache.',
-              type: 'kernel',
-              severity: 'error',
-            },
-          ]);
-        }
-
-        const blob = new Blob([gltfGeometry.content], { type: 'model/gltf-binary' });
-        const filename = request.input.fileType === 'glb' ? 'model.glb' : 'model.gltf';
-
-        return createKernelSuccess([{ blob, name: filename }]);
-      }
-
-      // For other formats, delegate to the worker's export logic
-      return await handler(request);
-    } catch (error) {
-      return createKernelError([
-        {
-          message: `Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          type: 'kernel',
-          severity: 'error',
-        },
-      ]);
-    }
   },
 });
