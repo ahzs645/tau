@@ -1,6 +1,6 @@
 import type { PartialDeep } from 'type-fest';
 import type { backendProviders, kernelProviders } from '#constants/kernel.constants.js';
-import type { Geometry, GeometryBase } from '#types/cad.types.js';
+import type { Geometry, GeometryResponse } from '#types/cad.types.js';
 import type { ExportFormat } from '#types/file.types.js';
 
 export type KernelStackFrame = {
@@ -57,7 +57,7 @@ export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
  * Used by kernel workers and middleware - geometries don't have hash yet.
  * The hash is added by kernel-worker.ts after the middleware chain.
  */
-export type ComputeGeometryResult = KernelResult<GeometryBase[]>;
+export type ComputeGeometryResult = KernelResult<GeometryResponse[]>;
 
 /**
  * Completed result type for computeGeometry.

@@ -35,7 +35,7 @@ type SerializedGeometry =
       strokeType?: string;
       name: string;
     }
-  | { format: 'video-stream' }; // Cannot cache streams, just store format marker
+  | { format: 'webrtc' }; // Cannot cache streams, just store format marker
 
 /**
  * Serialize geometries for cache storage.
@@ -62,9 +62,9 @@ function serializeGeometries(geometries: readonly GeometryResponse[]): string {
         return { format, color, paths, viewbox, opacity, strokeType, name };
       }
 
-      case 'video-stream': {
+      case 'webrtc': {
         // Cannot cache streams - store marker only
-        return { format: 'video-stream' };
+        return { format: 'webrtc' };
       }
 
       default: {
@@ -114,7 +114,7 @@ function deserializeGeometries(data: string): GeometryResponse[] {
         break;
       }
 
-      case 'video-stream': {
+      case 'webrtc': {
         // Cannot restore streams from cache - skip
         break;
       }
@@ -166,7 +166,7 @@ const maxCacheAgeMs = 7 * 24 * 60 * 60 * 1000;
  * @returns True if any geometry is a video-stream
  */
 function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolean {
-  return geometries.some((geometry) => geometry.format === 'video-stream');
+  return geometries.some((geometry) => geometry.format === 'webrtc');
 }
 
 /**

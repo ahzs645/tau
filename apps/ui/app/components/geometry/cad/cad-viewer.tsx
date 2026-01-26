@@ -47,8 +47,8 @@ export function CadViewer({
             throw new Error('2D geometries are not supported');
           }
 
-          case 'video-stream': {
-            throw new Error('Video stream geometries are not supported');
+          case 'webrtc': {
+            throw new Error('WebRTC geometries are not supported');
           }
 
           default: {

@@ -47,23 +47,32 @@ export type GeometryGltf = {
  * A placeholder for a video stream geometry from a remote server
  * for server-rendered 3D geometries.
  */
-export type GeometryVideoStream = {
-  format: 'video-stream';
+export type GeometryWebRtc = {
+  format: 'webrtc';
   stream: ReadableStream | MediaStream;
 };
 
 /**
- * Union of base geometry types (without hash).
- * Used internally by kernel workers and middleware.
+ * The type of geometry that is returned by the kernel worker.
+ *
+ * One of:
+ * - `GeometrySvg`
+ * - `GeometryGltf`
+ * - `GeometryVideoStream`
  */
-export type GeometryBase = GeometrySvg | GeometryGltf | GeometryVideoStream;
+export type GeometryResponse = GeometrySvg | GeometryGltf | GeometryWebRtc;
 
 /**
  * Geometry with unique hash identifier.
- * The hash is computed from all dependencies and added by kernel-worker.ts.
- * Used as React key and for cache invalidation.
+ * The hash is computed from all dependencies, including:
+ * - File content hashes
+ * - Middleware signatures
+ * - Framework version
+ * - Kernel options
+ * - Parameters
+ * - Bundled assets
  */
-export type Geometry = GeometryBase & {
+export type Geometry = GeometryResponse & {
   /** Unique hash identifier for this geometry (based on dependencies) */
   hash: string;
 };

@@ -5,7 +5,7 @@ import type {
   ExportFormat,
   ExportGeometryResult,
   ExtractParametersResult,
-  GeometryBase,
+  GeometryResponse,
   KernelIssue,
   KernelErrorResult,
   KernelStackFrame,
@@ -348,7 +348,7 @@ class JscadWorker extends KernelWorker {
       }
 
       const gltfStartTime = performance.now();
-      const geometries: GeometryBase[] = [];
+      const geometries: GeometryResponse[] = [];
 
       // Convert shapes sequentially
       const results = await Promise.allSettled(shapesArray.filter(Boolean).map(async (shape) => jscadToGltf(shape)));

@@ -284,7 +284,7 @@ describe('geometryCacheMiddleware', () => {
         const mockStream = new ReadableStream();
         const videoStreamResult = {
           success: true as const,
-          data: [{ format: 'video-stream' as const, stream: mockStream }],
+          data: [{ format: 'webrtc' as const, stream: mockStream }],
           issues: [],
         };
         const handler = createMockHandler(videoStreamResult);
@@ -300,7 +300,7 @@ describe('geometryCacheMiddleware', () => {
         expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
         // Should log that caching was skipped
         expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Skipping cache'));
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('video-stream'));
+        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('webrtc'));
       });
 
       it('should cache when result contains only GLTF geometry', async () => {
@@ -323,7 +323,7 @@ describe('geometryCacheMiddleware', () => {
           success: true as const,
           data: [
             { format: 'gltf' as const, content: new Uint8Array([1, 2, 3]) },
-            { format: 'video-stream' as const, stream: mockStream },
+            { format: 'webrtc' as const, stream: mockStream },
           ],
           issues: [],
         };
