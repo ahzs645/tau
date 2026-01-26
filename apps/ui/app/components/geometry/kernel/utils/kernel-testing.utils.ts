@@ -10,7 +10,7 @@ import type {
   ComputeGeometryResult,
   ComputeGeometryRequest,
   ComputeGeometryInput,
-  GeometryBase,
+  GeometryResponse,
   KernelMiddlewareRuntime,
   KernelMiddlewareLogger,
   MiddlewareState,
@@ -103,7 +103,10 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
 
   const updateFn = vi.fn().mockImplementation((partial: Partial<T>) => {
     // Use deepmerge to match production createMiddlewareState behavior
-    stateContainer.value = deepmerge(stateContainer.value, partial) as PartialDeep<T>;
+    // Use arrayMerge to replace arrays instead of concatenating (matches kernel-middleware.ts)
+    stateContainer.value = deepmerge(stateContainer.value, partial, {
+      arrayMerge: (_target: unknown[], source: unknown[]) => source,
+    }) as PartialDeep<T>;
   });
 
   return {
@@ -143,7 +146,7 @@ export function createMockRuntime<T extends Record<string, unknown> = Record<str
  * Create a successful ComputeGeometryResultInternal with geometries.
  * Used for testing middleware which works with internal types (without hash).
  */
-export function createSuccessResult(geometries: GeometryBase[]): ComputeGeometryResult {
+export function createSuccessResult(geometries: GeometryResponse[]): ComputeGeometryResult {
   return {
     success: true,
     data: geometries,

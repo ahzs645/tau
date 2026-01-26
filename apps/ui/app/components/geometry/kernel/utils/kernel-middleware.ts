@@ -193,7 +193,10 @@ export function createMiddlewareState<State extends Record<string, unknown> = Em
     },
     update(partial: Partial<State>) {
       // First, construct the merged object using deepmerge for proper nested object handling
-      const merged = deepmerge(stateValue, partial) as PartialDeep<State>;
+      // Use arrayMerge to replace arrays instead of concatenating (default deepmerge behavior)
+      const merged = deepmerge(stateValue, partial, {
+        arrayMerge: (_target: unknown[], source: unknown[]) => source,
+      }) as PartialDeep<State>;
 
       // Then validate against schema if provided
       if (schema) {
