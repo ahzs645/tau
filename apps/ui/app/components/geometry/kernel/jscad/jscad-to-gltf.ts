@@ -1,7 +1,7 @@
 import { geometries, maths } from '@jscad/modeling';
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
-import { transformVerticesGltf } from '#components/geometry/kernel/utils/common.js';
+import { transformNormalArray, transformVerticesGltf } from '#components/geometry/kernel/utils/common.js';
 
 /**
  * Type guard to check if a shape has a color property
@@ -196,31 +196,6 @@ function transformVertexArray(vertices: number[]): Float32Array {
   }
 
   return transformedVertices;
-}
-
-/**
- * Transform a flat array of normals from z-up to y-up coordinate system.
- * Only applies rotation (no scaling since normals are direction vectors).
- *
- * @param normals - Flat array of normal vectors [nx1, ny1, nz1, nx2, ny2, nz2, ...]
- * @returns Float32Array with transformed normals
- */
-function transformNormalArray(normals: number[]): Float32Array {
-  const transformedNormals = new Float32Array(normals.length);
-
-  for (let i = 0; i < normals.length; i += 3) {
-    const x = normals[i] ?? 0;
-    const y = normals[i + 1] ?? 0;
-    const z = normals[i + 2] ?? 0;
-
-    // Apply rotation only (no scaling for direction vectors)
-    // Z-up to Y-up: x' = x, y' = z, z' = -y
-    transformedNormals[i] = x;
-    transformedNormals[i + 1] = z;
-    transformedNormals[i + 2] = -y;
-  }
-
-  return transformedNormals;
 }
 
 /**

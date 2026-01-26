@@ -163,3 +163,29 @@ export function transformVerticesGltf(vertex: readonly [number, number, number])
   // Normalize -0 to 0 to avoid JavaScript signed zero quirks
   return [x === 0 ? 0 : x, y === 0 ? 0 : y, z === 0 ? 0 : z];
 }
+
+/**
+ * Transform normal vectors from z-up to y-up coordinate system.
+ * Unlike vertices, normals are direction vectors so no unit conversion is needed.
+ * Z-up to Y-up transformation: x' = x, y' = z, z' = -y
+ *
+ * @param normals - Flat array of normal components [x1, y1, z1, x2, y2, z2, ...]
+ * @returns Float32Array with transformed normals
+ */
+export function transformNormalArray(normals: number[]): Float32Array {
+  const transformedNormals = new Float32Array(normals.length);
+
+  for (let i = 0; i < normals.length; i += 3) {
+    const x = normals[i] ?? 0;
+    const y = normals[i + 1] ?? 0;
+    const z = normals[i + 2] ?? 0;
+
+    // Apply rotation only (no scaling for direction vectors)
+    // Z-up to Y-up: x' = x, y' = z, z' = -y
+    transformedNormals[i] = x;
+    transformedNormals[i + 1] = z;
+    transformedNormals[i + 2] = -y;
+  }
+
+  return transformedNormals;
+}
