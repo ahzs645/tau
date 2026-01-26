@@ -85,7 +85,7 @@ function serializeGeometries(geometries: readonly GeometryResponse[]): string {
  * Returns GeometryBase (without hash) - hash is added by kernel-worker.ts.
  *
  * @param data - JSON string of serialized geometries
- * @returns The deserialized geometries (excluding video-stream which can't be cached)
+ * @returns The deserialized geometries (excluding webrtc which can't be cached)
  */
 function deserializeGeometries(data: string): GeometryResponse[] {
   const serialized = JSON.parse(data) as SerializedGeometry[];
@@ -159,11 +159,11 @@ const maxCacheEntries = 100;
 const maxCacheAgeMs = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Check if any geometries in the result have video-stream format.
+ * Check if any geometries in the result have webrtc format.
  * Video-stream geometries cannot be cached as they contain live streams.
  *
  * @param geometries - The geometries to check
- * @returns True if any geometry is a video-stream
+ * @returns True if any geometry is a webrtc
  */
 function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolean {
   return geometries.some((geometry) => geometry.format === 'webrtc');
@@ -280,12 +280,12 @@ export const geometryCacheMiddleware = createKernelMiddleware({
     runtime.logger.debug(`Cache miss for ${cacheKey}`);
     const result = await handler(request);
 
-    // 4. Write to cache on the way back up (skip if video-stream geometries present)
+    // 4. Write to cache on the way back up (skip if webrtc geometries present)
     if (result.success && result.data.length > 0) {
-      // Skip caching if any geometry is a video-stream - these cannot be cached
+      // Skip caching if any geometry is a webrtc - these cannot be cached
       // and would result in incomplete data on cache hit
       if (hasVideoStreamGeometry(result.data)) {
-        runtime.logger.debug(`Skipping cache for ${cacheKey}: contains video-stream geometry`);
+        runtime.logger.debug(`Skipping cache for ${cacheKey}: contains webrtc geometry`);
       } else {
         try {
           // Ensure cache directory exists

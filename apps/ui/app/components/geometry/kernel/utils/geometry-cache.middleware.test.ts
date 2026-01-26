@@ -277,10 +277,10 @@ describe('geometryCacheMiddleware', () => {
       });
     });
 
-    describe('video-stream handling', () => {
-      it('should skip caching when result contains video-stream geometry', async () => {
+    describe('webrtc handling', () => {
+      it('should skip caching when result contains webrtc geometry', async () => {
         const request = createCacheRequest({ cacheExists: false });
-        // Create a handler that returns video-stream geometry
+        // Create a handler that returns webrtc geometry
         const mockStream = new ReadableStream();
         const videoStreamResult = {
           success: true as const,
@@ -315,9 +315,9 @@ describe('geometryCacheMiddleware', () => {
         expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
       });
 
-      it('should skip caching when result contains mixed geometries including video-stream', async () => {
+      it('should skip caching when result contains mixed geometries including webrtc', async () => {
         const request = createCacheRequest({ cacheExists: false });
-        // Mixed result with both GLTF and video-stream
+        // Mixed result with both GLTF and webrtc
         const mockStream = new ReadableStream();
         const mixedResult = {
           success: true as const,
@@ -332,7 +332,7 @@ describe('geometryCacheMiddleware', () => {
         const { wrapComputeGeometry } = geometryCacheMiddleware;
         await wrapComputeGeometry!(request, handler);
 
-        // Should NOT write to cache when any geometry is video-stream
+        // Should NOT write to cache when any geometry is webrtc
         expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
       });
     });
