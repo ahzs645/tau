@@ -93,15 +93,25 @@ const splitErrors = (input: CompilationError[]): { errors: CompilationError[]; w
 
 /**
  * Load WASM binary using feature detection (try/catch) rather than environment checks.
- * Tries fetch first (works in browsers), falls back to fs.readFile (Node.js).
+ * Tries fetch first (works in browsers), falls back to fs.readFile for file:// URLs (Node.js).
  * @see https://www.zachleat.com/web/dynamic-import/ - similar pattern to import-module-string
  */
 async function loadWasmBinary(url: string): Promise<ArrayBuffer> {
   try {
     // Try fetch first - works in browsers and some Node.js versions
     const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch WASM binary from ${url}: ${response.status} ${response.statusText}`);
+    }
+
     return await response.arrayBuffer();
-  } catch {
+  } catch (error) {
+    // Only attempt Node.js fs fallback for file:// URLs
+    if (!url.startsWith('file:')) {
+      throw error;
+    }
+
     // Fallback: use Node.js fs for file:// URLs
     // Dynamic imports avoid bundler issues in browser builds
     // eslint-disable-next-line @typescript-eslint/naming-convention -- Node.js API
