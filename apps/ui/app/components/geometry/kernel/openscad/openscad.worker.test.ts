@@ -1,5 +1,6 @@
-import type { GeometryFile } from '@taucad/types';
+import type { CreateGeometryResult, GeometryFile } from '@taucad/types';
 import { describe, it, expect } from 'vitest';
+import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
 import { OpenScadWorker } from '#components/geometry/kernel/openscad/openscad.worker.js';
 import {
   seedTestFilesystem,
@@ -83,6 +84,22 @@ async function createGeometryAndGetOffData(
     success: result.success,
   };
 }
+
+/**
+ * Helper to create geometry and return the full result for geometry validation.
+ */
+async function createGeometry(
+  files: Record<string, string>,
+  mainFile: string,
+  parameters: Record<string, unknown> = {},
+): Promise<CreateGeometryResult> {
+  const worker = await createWorker(files);
+  const geometryFile = createGeometryFile(mainFile);
+  return worker.createGeometryEntry(geometryFile, parameters);
+}
+
+// Create geometry test helpers instance for geometry assertions
+const geometryHelpers = createGeometryTestHelpers();
 
 /**
  * Parse OFF face lines and count color components.
@@ -888,6 +905,174 @@ describe('OpenScadWorker', () => {
 
         expect(success).toBe(true);
         expect(offData).toBeDefined();
+      });
+    });
+
+    describe('Geometry validation', () => {
+      it('should produce valid GLTF for a cube with correct dimensions', async () => {
+        const result = await createGeometry({ 'box.scad': 'cube([20, 15, 10]);' }, 'box.scad');
+
+        expect(result.success).toBe(true);
+
+        // Geometry quality assertions (20x15x10 box)
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 15, 10], 0.5);
+      });
+
+      it('should produce valid GLTF for a sphere with correct dimensions', async () => {
+        const result = await createGeometry({ 'sphere.scad': '$fn=32; sphere(r=10);' }, 'sphere.scad');
+
+        expect(result.success).toBe(true);
+
+        // Sphere radius 10, diameter 20
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+      });
+
+      it('should produce valid GLTF for a cylinder with correct dimensions', async () => {
+        const result = await createGeometry({ 'cylinder.scad': '$fn=32; cylinder(h=30, r=8);' }, 'cylinder.scad');
+
+        expect(result.success).toBe(true);
+
+        // Cylinder: radius 8 (diameter 16), height 30
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [16, 16, 30], 0.5);
+      });
+
+      it('should produce valid GLTF for translated geometry', async () => {
+        const result = await createGeometry(
+          { 'translated.scad': 'translate([50, 25, 10]) cube([20, 20, 20]);' },
+          'translated.scad',
+        );
+
+        expect(result.success).toBe(true);
+
+        // Translated cube should have correct size
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        // Center should be at [50+10, 25+10, 10+10] = [60, 35, 20]
+        await geometryHelpers.expectBoundingBoxCenter(result, [60, 35, 20], 0.5);
+      });
+
+      it('should produce valid GLTF for boolean difference', async () => {
+        const scadCode = `
+          $fn=32;
+          difference() {
+            cube([30, 30, 30], center=true);
+            sphere(r=18);
+          }
+        `;
+        const result = await createGeometry({ 'difference.scad': scadCode }, 'difference.scad');
+
+        expect(result.success).toBe(true);
+
+        // Boolean difference produces 1 mesh
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        // Outer dimensions are 30x30x30 (sphere removes interior)
+        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 30], 0.5);
+      });
+
+      it('should produce valid GLTF for boolean union', async () => {
+        const scadCode = `
+          union() {
+            cube([20, 20, 20]);
+            translate([10, 10, 20]) cube([20, 20, 20]);
+          }
+        `;
+        const result = await createGeometry({ 'union.scad': scadCode }, 'union.scad');
+
+        expect(result.success).toBe(true);
+
+        // Boolean union produces 1 mesh
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        // Bounding box spans both cubes: 0 to 30 in X/Y, 0 to 40 in Z
+        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 40], 0.5);
+      });
+
+      it('should produce valid GLTF for hull operation', async () => {
+        const scadCode = `
+          $fn=32;
+          hull() {
+            sphere(r=5);
+            translate([30, 0, 0]) sphere(r=5);
+          }
+        `;
+        const result = await createGeometry({ 'hull.scad': scadCode }, 'hull.scad');
+
+        expect(result.success).toBe(true);
+
+        // Hull produces 1 mesh (capsule-like shape)
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        // Two spheres at radius 5, 30 apart: total width 40, height/depth 10
+        await geometryHelpers.expectBoundingBoxSize(result, [40, 10, 10], 0.5);
+      });
+
+      it('should produce valid GLTF for linear extrude', async () => {
+        const scadCode = `
+          linear_extrude(height=25)
+            square([15, 10]);
+        `;
+        const result = await createGeometry({ 'extrude.scad': scadCode }, 'extrude.scad');
+
+        expect(result.success).toBe(true);
+
+        // Extruded rectangle: 15x10 base, height 25
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [15, 10, 25], 0.5);
+      });
+
+      it('should produce valid GLTF for rotate extrude', async () => {
+        const scadCode = `
+          $fn=32;
+          rotate_extrude()
+            translate([20, 0, 0])
+              circle(r=5);
+        `;
+        const result = await createGeometry({ 'rotate_extrude.scad': scadCode }, 'rotate_extrude.scad');
+
+        expect(result.success).toBe(true);
+
+        // Torus: center at 20, circle radius 5
+        // Total diameter: (20+5)*2 = 50, height: 10
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 50, 10], 0.5);
+      });
+
+      it('should produce valid GLTF for scaled geometry', async () => {
+        const result = await createGeometry({ 'scaled.scad': 'scale([2, 3, 4]) cube([10, 10, 10]);' }, 'scaled.scad');
+
+        expect(result.success).toBe(true);
+
+        // Scaled cube: 10*2=20, 10*3=30, 10*4=40
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 30, 40], 0.5);
+      });
+
+      it('should produce valid GLTF with parameterized geometry', async () => {
+        const scadCode = `
+          width = 50;
+          height = 30;
+          depth = 20;
+          cube([width, height, depth]);
+        `;
+        const result = await createGeometry({ 'params.scad': scadCode }, 'params.scad');
+
+        expect(result.success).toBe(true);
+
+        // Cube with parameters: 50x30x20
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 20], 0.5);
       });
     });
 
