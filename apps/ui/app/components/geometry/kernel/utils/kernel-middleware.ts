@@ -181,6 +181,10 @@ export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: strin
  * Create a type-safe state for a middleware.
  * The state validates updates against the Zod schema if provided.
  *
+ * Note: Array updates replace the entire array rather than concatenating.
+ * For example: state.update({ items: [1, 2] }) then state.update({ items: [3] })
+ * results in { items: [3] }, not { items: [1, 2, 3] }.
+ *
  * @param schema - Optional Zod object schema for validation
  * @returns State instance with value and update method
  */
@@ -191,9 +195,23 @@ export function createMiddlewareState<State extends Record<string, unknown> = Em
   let stateValue: PartialDeep<State> = {} as PartialDeep<State>;
 
   return {
+    /**
+     * Get the current state value.
+     * @returns The current state value.
+     */
     get value() {
       return stateValue;
     },
+    /**
+     * Update the state with partial data.
+     * Values are validated against the Zod schema before being merged.
+     *
+     * Note: Array updates replace the entire array rather than concatenating.
+     * For example: state.update({ items: [1, 2] }) then state.update({ items: [3] })
+     * results in { items: [3] }, not { items: [1, 2, 3] }.
+     *
+     * @param partial - Partial data to merge into the state
+     */
     update(partial: Partial<State>) {
       // First, construct the merged object using deepmerge for proper nested object handling
       // Use arrayMerge to replace arrays instead of concatenating (default deepmerge behavior)
