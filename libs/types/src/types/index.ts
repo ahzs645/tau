@@ -1,6 +1,4 @@
 /* eslint-disable no-barrel-files/no-barrel-files -- package entry point. */
-// Re-export constants for convenience (also available via @taucad/types/constants)
-export { errorCategory, errorCategories } from '#constants/api.constants.js';
 
 // Types
 export type * from '#types/api.types.js';
@@ -14,6 +12,7 @@ export type * from '#types/git.types.js';
 export type * from '#types/graphics.types.js';
 export type * from '#types/id.types.js';
 export type * from '#types/kernel.types.js';
+export type * from '#types/logger.types.js';
 export type * from '#types/manufacturing.types.js';
 export type * from '#types/schema.types.js';
 export type * from '#types/json-value.types.js';

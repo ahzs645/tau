@@ -3,7 +3,7 @@
  * Converts various error formats into a structured JSON format for the UI.
  */
 
-import { errorCategory } from '@taucad/types';
+import { errorCategory } from '@taucad/types/constants';
 import type { ErrorCategory, ChatError } from '@taucad/types';
 import { httpStatusToCategory, errorCategoryTitles } from '@taucad/chat/utils';
 

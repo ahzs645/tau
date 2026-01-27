@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import type React from 'react';
 import { ChevronRight, RefreshCcw } from 'lucide-react';
-import { errorCategory } from '@taucad/types';
+import { errorCategory } from '@taucad/types/constants';
 import type { ChatError as NormalizedChatError } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';

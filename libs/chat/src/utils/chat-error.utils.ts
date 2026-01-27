@@ -1,4 +1,4 @@
-import { errorCategory } from '@taucad/types';
+import { errorCategory } from '@taucad/types/constants';
 import type { ErrorCategory } from '@taucad/types';
 
 /**
