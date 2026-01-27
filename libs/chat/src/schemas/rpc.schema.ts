@@ -181,42 +181,6 @@ const captureObservationsRpc = defineRpc({
 });
 
 // =============================================================================
-// Exported Schemas (for backwards compatibility)
-// =============================================================================
-
-export const readFileRpcInputSchema = readFileRpc.inputSchema;
-export const readFileRpcSuccessSchema = readFileRpc.successSchema;
-export const readFileRpcResultSchema = readFileRpc.resultSchema;
-
-export const createFileRpcInputSchema = createFileRpc.inputSchema;
-export const createFileRpcSuccessSchema = createFileRpc.successSchema;
-export const createFileRpcResultSchema = createFileRpc.resultSchema;
-
-export const deleteFileRpcInputSchema = deleteFileRpc.inputSchema;
-export const deleteFileRpcSuccessSchema = deleteFileRpc.successSchema;
-export const deleteFileRpcResultSchema = deleteFileRpc.resultSchema;
-
-export const listDirectoryRpcInputSchema = listDirectoryRpc.inputSchema;
-export const listDirectoryRpcSuccessSchema = listDirectoryRpc.successSchema;
-export const listDirectoryRpcResultSchema = listDirectoryRpc.resultSchema;
-
-export const grepRpcInputSchema = grepRpc.inputSchema;
-export const grepRpcSuccessSchema = grepRpc.successSchema;
-export const grepRpcResultSchema = grepRpc.resultSchema;
-
-export const globSearchRpcInputSchema = globSearchRpc.inputSchema;
-export const globSearchRpcSuccessSchema = globSearchRpc.successSchema;
-export const globSearchRpcResultSchema = globSearchRpc.resultSchema;
-
-export const getKernelResultRpcInputSchema = getKernelResultRpc.inputSchema;
-export const getKernelResultRpcSuccessSchema = getKernelResultRpc.successSchema;
-export const getKernelResultRpcResultSchema = getKernelResultRpc.resultSchema;
-
-export const captureObservationsRpcInputSchema = captureObservationsRpc.inputSchema;
-export const captureObservationsRpcSuccessSchema = captureObservationsRpc.successSchema;
-export const captureObservationsRpcResultSchema = captureObservationsRpc.resultSchema;
-
-// =============================================================================
 // RPC Schemas Registry
 // =============================================================================
 
@@ -246,36 +210,36 @@ export type RpcSchemasRegistry = {
  */
 export const rpcSchemasRegistry: RpcSchemasRegistry = {
   [rpcName.readFile]: {
-    inputSchema: readFileRpcInputSchema,
-    resultSchema: readFileRpcResultSchema,
+    inputSchema: readFileRpc.inputSchema,
+    resultSchema: readFileRpc.resultSchema,
   },
   [rpcName.createFile]: {
-    inputSchema: createFileRpcInputSchema,
-    resultSchema: createFileRpcResultSchema,
+    inputSchema: createFileRpc.inputSchema,
+    resultSchema: createFileRpc.resultSchema,
   },
   [rpcName.deleteFile]: {
-    inputSchema: deleteFileRpcInputSchema,
-    resultSchema: deleteFileRpcResultSchema,
+    inputSchema: deleteFileRpc.inputSchema,
+    resultSchema: deleteFileRpc.resultSchema,
   },
   [rpcName.listDirectory]: {
-    inputSchema: listDirectoryRpcInputSchema,
-    resultSchema: listDirectoryRpcResultSchema,
+    inputSchema: listDirectoryRpc.inputSchema,
+    resultSchema: listDirectoryRpc.resultSchema,
   },
   [rpcName.grep]: {
-    inputSchema: grepRpcInputSchema,
-    resultSchema: grepRpcResultSchema,
+    inputSchema: grepRpc.inputSchema,
+    resultSchema: grepRpc.resultSchema,
   },
   [rpcName.globSearch]: {
-    inputSchema: globSearchRpcInputSchema,
-    resultSchema: globSearchRpcResultSchema,
+    inputSchema: globSearchRpc.inputSchema,
+    resultSchema: globSearchRpc.resultSchema,
   },
   [rpcName.getKernelResult]: {
-    inputSchema: getKernelResultRpcInputSchema,
-    resultSchema: getKernelResultRpcResultSchema,
+    inputSchema: getKernelResultRpc.inputSchema,
+    resultSchema: getKernelResultRpc.resultSchema,
   },
   [rpcName.captureObservations]: {
-    inputSchema: captureObservationsRpcInputSchema,
-    resultSchema: captureObservationsRpcResultSchema,
+    inputSchema: captureObservationsRpc.inputSchema,
+    resultSchema: captureObservationsRpc.resultSchema,
   },
 };
 
@@ -324,34 +288,34 @@ export type RpcCall = {
 export type RpcClientErrorCode = z.infer<typeof rpcClientErrorCodeSchema>;
 export type RpcClientError = z.infer<typeof rpcClientErrorSchema>;
 
-export type ReadFileRpcInput = z.infer<typeof readFileRpcInputSchema>;
-export type ReadFileRpcSuccess = z.infer<typeof readFileRpcSuccessSchema>;
-export type ReadFileRpcResult = z.infer<typeof readFileRpcResultSchema>;
+export type ReadFileRpcInput = z.infer<typeof readFileRpc.inputSchema>;
+export type ReadFileRpcSuccess = z.infer<typeof readFileRpc.successSchema>;
+export type ReadFileRpcResult = z.infer<typeof readFileRpc.resultSchema>;
 
-export type CreateFileRpcInput = z.infer<typeof createFileRpcInputSchema>;
-export type CreateFileRpcSuccess = z.infer<typeof createFileRpcSuccessSchema>;
-export type CreateFileRpcResult = z.infer<typeof createFileRpcResultSchema>;
+export type CreateFileRpcInput = z.infer<typeof createFileRpc.inputSchema>;
+export type CreateFileRpcSuccess = z.infer<typeof createFileRpc.successSchema>;
+export type CreateFileRpcResult = z.infer<typeof createFileRpc.resultSchema>;
 
-export type DeleteFileRpcInput = z.infer<typeof deleteFileRpcInputSchema>;
-export type DeleteFileRpcSuccess = z.infer<typeof deleteFileRpcSuccessSchema>;
-export type DeleteFileRpcResult = z.infer<typeof deleteFileRpcResultSchema>;
+export type DeleteFileRpcInput = z.infer<typeof deleteFileRpc.inputSchema>;
+export type DeleteFileRpcSuccess = z.infer<typeof deleteFileRpc.successSchema>;
+export type DeleteFileRpcResult = z.infer<typeof deleteFileRpc.resultSchema>;
 
-export type ListDirectoryRpcInput = z.infer<typeof listDirectoryRpcInputSchema>;
-export type ListDirectoryRpcSuccess = z.infer<typeof listDirectoryRpcSuccessSchema>;
-export type ListDirectoryRpcResult = z.infer<typeof listDirectoryRpcResultSchema>;
+export type ListDirectoryRpcInput = z.infer<typeof listDirectoryRpc.inputSchema>;
+export type ListDirectoryRpcSuccess = z.infer<typeof listDirectoryRpc.successSchema>;
+export type ListDirectoryRpcResult = z.infer<typeof listDirectoryRpc.resultSchema>;
 
-export type GrepRpcInput = z.infer<typeof grepRpcInputSchema>;
-export type GrepRpcSuccess = z.infer<typeof grepRpcSuccessSchema>;
-export type GrepRpcResult = z.infer<typeof grepRpcResultSchema>;
+export type GrepRpcInput = z.infer<typeof grepRpc.inputSchema>;
+export type GrepRpcSuccess = z.infer<typeof grepRpc.successSchema>;
+export type GrepRpcResult = z.infer<typeof grepRpc.resultSchema>;
 
-export type GlobSearchRpcInput = z.infer<typeof globSearchRpcInputSchema>;
-export type GlobSearchRpcSuccess = z.infer<typeof globSearchRpcSuccessSchema>;
-export type GlobSearchRpcResult = z.infer<typeof globSearchRpcResultSchema>;
+export type GlobSearchRpcInput = z.infer<typeof globSearchRpc.inputSchema>;
+export type GlobSearchRpcSuccess = z.infer<typeof globSearchRpc.successSchema>;
+export type GlobSearchRpcResult = z.infer<typeof globSearchRpc.resultSchema>;
 
-export type GetKernelResultRpcInput = z.infer<typeof getKernelResultRpcInputSchema>;
-export type GetKernelResultRpcSuccess = z.infer<typeof getKernelResultRpcSuccessSchema>;
-export type GetKernelResultRpcResult = z.infer<typeof getKernelResultRpcResultSchema>;
+export type GetKernelResultRpcInput = z.infer<typeof getKernelResultRpc.inputSchema>;
+export type GetKernelResultRpcSuccess = z.infer<typeof getKernelResultRpc.successSchema>;
+export type GetKernelResultRpcResult = z.infer<typeof getKernelResultRpc.resultSchema>;
 
-export type CaptureObservationsRpcInput = z.infer<typeof captureObservationsRpcInputSchema>;
-export type CaptureObservationsRpcSuccess = z.infer<typeof captureObservationsRpcSuccessSchema>;
-export type CaptureObservationsRpcResult = z.infer<typeof captureObservationsRpcResultSchema>;
+export type CaptureObservationsRpcInput = z.infer<typeof captureObservationsRpc.inputSchema>;
+export type CaptureObservationsRpcSuccess = z.infer<typeof captureObservationsRpc.successSchema>;
+export type CaptureObservationsRpcResult = z.infer<typeof captureObservationsRpc.resultSchema>;
