@@ -12,7 +12,7 @@ const log = createKclLogger('Codec');
 /**
  * Encode a JSON-RPC message to bytes with LSP headers.
  */
-export function encodeMessage(json: JSONRPCRequest | JSONRPCResponse): Uint8Array {
+export function encodeMessage(json: JSONRPCRequest | JSONRPCResponse): Uint8Array<ArrayBuffer> {
   const message = JSON.stringify(json);
   const delimited = addHeaders(message);
 
@@ -23,7 +23,7 @@ export function encodeMessage(json: JSONRPCRequest | JSONRPCResponse): Uint8Arra
  * Decode bytes to a JSON-RPC message, stripping LSP headers.
  * Note: For handling multiple concatenated messages, use parseMessages directly.
  */
-export function decodeMessage<T>(data: Uint8Array): T {
+export function decodeMessage<T>(data: Uint8Array<ArrayBuffer>): T {
   try {
     const delimited = decodeBytes(data);
     const messages = parseMessages(delimited);

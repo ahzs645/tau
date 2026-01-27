@@ -1,7 +1,7 @@
 import { geometries, maths } from '@jscad/modeling';
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
-import { transformNormalArray, transformVerticesGltf } from '#components/geometry/kernel/utils/common.js';
+import { transformNormalArray, transformVertexArray } from '#components/geometry/kernel/utils/common.js';
 
 /**
  * Type guard to check if a shape has a color property
@@ -164,38 +164,6 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
   }
 
   return { vertices, normals, indices };
-}
-
-/**
- * Transform a flat array of vertex positions from z-up to y-up coordinate system and convert units.
- *
- * JSCAD uses z-up coordinates and millimeter units, while glTF uses y-up coordinates and meter units.
- * This transformation is always applied to produce spec-compliant GLTF.
- *
- * @param vertices - Flat array of vertex positions [x1, y1, z1, x2, y2, z2, ...]
- * @returns Float32Array with transformed positions
- */
-function transformVertexArray(vertices: number[]): Float32Array {
-  const transformedVertices = new Float32Array(vertices.length);
-
-  for (let i = 0; i < vertices.length; i += 3) {
-    const x = vertices[i];
-    const y = vertices[i + 1];
-    const z = vertices[i + 2];
-
-    if (x === undefined || y === undefined || z === undefined) {
-      continue;
-    }
-
-    const vertex: [number, number, number] = [x, y, z];
-    const transformed = transformVerticesGltf(vertex);
-
-    transformedVertices[i] = transformed[0];
-    transformedVertices[i + 1] = transformed[1];
-    transformedVertices[i + 2] = transformed[2];
-  }
-
-  return transformedVertices;
 }
 
 /**
@@ -390,7 +358,7 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  * const coloredGltf = await jscadToGltf([redSphere, blueCube]);
  * ```
  */
-export async function jscadToGltf(shape: unknown): Promise<Uint8Array> {
+export async function jscadToGltf(shape: unknown): Promise<Uint8Array<ArrayBuffer>> {
   // Handle array of geometries
   const shapes = Array.isArray(shape) ? shape : [shape];
 

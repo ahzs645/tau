@@ -59,7 +59,7 @@ export async function loadGltfWithMaterial(options: LoadGltfOptions): Promise<Lo
       return undefined;
     }
 
-    const gltf = await loader.parseAsync(geometry.content.buffer as ArrayBuffer, '');
+    const gltf = await loader.parseAsync(geometry.content.buffer, '');
 
     const material = new THREE.MeshStandardMaterial({
       color,

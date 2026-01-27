@@ -151,7 +151,7 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
 
       // Write files to filesystem on first preview toggle (temporary until in-memory fs)
       if (!showPreview && !hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array }> = {};
+        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
         for (const [path, file] of Object.entries(files)) {
           buildFiles[`/builds/${id}/${path}`] = file;
         }

@@ -13,11 +13,11 @@ type ColorGroupGeometry = {
   /** The RGBA color for this group's material */
   color: Color;
   /** Flattened vertex positions [x1,y1,z1, x2,y2,z2, ...] */
-  positions: Float32Array;
+  positions: Float32Array<ArrayBuffer>;
   /** Triangle indices [i1,i2,i3, ...] */
-  indices: Uint32Array;
+  indices: Uint32Array<ArrayBuffer>;
   /** Per-vertex normals [nx1,ny1,nz1, ...] */
-  normals: Float32Array;
+  normals: Float32Array<ArrayBuffer>;
 };
 
 /**
@@ -340,7 +340,7 @@ function createGltfDocument(meshData: IndexedPolyhedron): Document {
  *
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  */
-export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array> {
+export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocument(meshData);
   const glbBuffer = await new NodeIO().writeBinary(document);
   return glbBuffer;
@@ -352,7 +352,7 @@ export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  * Note: This creates a self-contained GLTF with embedded binary data
  */
-export async function createGltf(meshData: IndexedPolyhedron): Promise<Uint8Array> {
+export async function createGltf(meshData: IndexedPolyhedron): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocument(meshData);
 
   // Use writeJSON which returns both the JSON and binary data

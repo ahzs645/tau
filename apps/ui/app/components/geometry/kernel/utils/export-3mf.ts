@@ -202,7 +202,7 @@ export function export3mf(data: IndexedPolyhedron, extruderColors?: Array<[numbe
   ].join('\n');
 
   // Create the ZIP archive using UZIP
-  const archive: Record<string, Uint8Array> = {
+  const archive: Record<string, Uint8Array<ArrayBuffer>> = {
     // eslint-disable-next-line @typescript-eslint/naming-convention -- 3MF file format requires this naming convention
     '3D/3dmodel.model': new TextEncoder().encode(modelXml),
     // eslint-disable-next-line @typescript-eslint/naming-convention -- 3MF file format requires this naming convention

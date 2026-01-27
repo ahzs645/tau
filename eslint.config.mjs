@@ -2,6 +2,7 @@ import xo from 'xo';
 import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import nxEslintPlugin from '@nx/eslint-plugin';
 import noBarrelFilesPlugin from 'eslint-plugin-no-barrel-files';
+import pluginEnforceUint8ArrayArrayBuffer from '@protontech/eslint-plugin-enforce-uint8array-arraybuffer';
 
 /**
  * Boolean property prefixes.
@@ -61,6 +62,14 @@ const config = [
   ...xo.xoToEslintConfig([{ space: true, react: true, prettier: 'compat' }]),
   noBarrelFilesPlugin.flat,
   eslintPluginPrettierRecommended,
+  {
+    plugins: {
+      '@protontech/enforce-uint8array-arraybuffer': pluginEnforceUint8ArrayArrayBuffer,
+    },
+    rules: {
+      '@protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer': 'error',
+    },
+  },
   {
     // Ensure TypeScript support is properly configured
     languageOptions: {

@@ -40,7 +40,7 @@ function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonl
 /**
  * Create serialized cache content (JSON format with base64 for GLTF).
  */
-function createSerializedCacheContent(content: Uint8Array, hash = 'a'.repeat(64)): string {
+function createSerializedCacheContent(content: Uint8Array<ArrayBuffer>, hash = 'a'.repeat(64)): string {
   // Convert Uint8Array to base64 (same as the middleware does)
   const base64 = uint8ArrayToBase64(content);
 
@@ -53,7 +53,7 @@ function createSerializedCacheContent(content: Uint8Array, hash = 'a'.repeat(64)
 
 function createCacheTestContext(options?: {
   cacheExists?: boolean;
-  cachedContent?: Uint8Array;
+  cachedContent?: Uint8Array<ArrayBuffer>;
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
@@ -385,7 +385,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
         // Create 102 files (2 over the 100 max)
-        // eslint-disable-next-line max-nested-callbacks -- better readability
+
         const manyFiles = Array.from({ length: 102 }, (_, index) => ({
           path: `cache-${index}.json`,
           name: `cache-${index}.json`,

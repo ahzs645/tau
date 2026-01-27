@@ -60,7 +60,7 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
     return result;
   }
 
-  protected async mapToGlb(parseResult: OcctImportResult, _options: OcctOptions): Promise<Uint8Array> {
+  protected async mapToGlb(parseResult: OcctImportResult, _options: OcctOptions): Promise<Uint8Array<ArrayBuffer>> {
     if (!parseResult.success) {
       throw new Error('Failed to parse OCCT file');
     }

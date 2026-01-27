@@ -45,7 +45,7 @@ export const convertFile = async (
  * @param inputFormat - The input format.
  * @returns A promise that resolves to GLB data.
  */
-export const importToGlb = async (inputFiles: File[], inputFormat: InputFormat): Promise<Uint8Array> => {
+export const importToGlb = async (inputFiles: File[], inputFormat: InputFormat): Promise<Uint8Array<ArrayBuffer>> => {
   // Validate input format
   if (!supportedImportFormats.includes(inputFormat)) {
     throw new Error(`Unsupported input format: ${inputFormat}`);
@@ -73,7 +73,7 @@ export const importToGlb = async (inputFiles: File[], inputFormat: InputFormat):
  * @param outputFormat - The output format.
  * @returns A promise that resolves to an array of output files.
  */
-export const exportFromGlb = async (glbData: Uint8Array, outputFormat: OutputFormat): Promise<File[]> => {
+export const exportFromGlb = async (glbData: Uint8Array<ArrayBuffer>, outputFormat: OutputFormat): Promise<File[]> => {
   // Validate output format
   if (!supportedExportFormats.includes(outputFormat)) {
     throw new Error(`Unsupported output format: ${outputFormat}`);

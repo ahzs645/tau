@@ -48,7 +48,7 @@ export type FileSystemRequest = {
  */
 export type FileReadResponse = {
   requestId: number;
-  data: Uint8Array | undefined;
+  data: Uint8Array<ArrayBuffer> | undefined;
   error?: string;
 };
 
@@ -77,7 +77,7 @@ export type LspWorkerEvent = {
   worker: string;
   eventType: LspWorkerEventType;
   eventData:
-    | Uint8Array
+    | Uint8Array<ArrayBuffer>
     | KclLspWorkerOptions
     | FileSystemRequest
     | FileReadResponse

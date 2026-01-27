@@ -96,7 +96,7 @@ export default function ImportRoute(): React.JSX.Element {
     importGitHubMachine.provide({
       actors: {
         createBuildActor: fromPromise(async ({ input }) => {
-          const buildFiles: Record<string, { content: Uint8Array }> = {};
+          const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
           for (const [path, file] of input.files) {
             buildFiles[path] = { content: file.content };
           }
@@ -141,7 +141,7 @@ export default function ImportRoute(): React.JSX.Element {
     importDiskMachine.provide({
       actors: {
         createBuildActor: fromPromise(async ({ input }) => {
-          const buildFiles: Record<string, { content: Uint8Array }> = {};
+          const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
           for (const [path, file] of input.files) {
             buildFiles[path] = { content: file.content };
           }

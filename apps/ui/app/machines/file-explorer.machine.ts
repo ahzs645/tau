@@ -5,7 +5,7 @@ export type FileItem = {
   id: string;
   name: string;
   path: string;
-  content: Uint8Array;
+  content: Uint8Array<ArrayBuffer>;
   language?: string;
   isDirectory?: boolean;
   children?: FileItem[];

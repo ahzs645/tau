@@ -62,5 +62,5 @@ export type Format = InputFormat | OutputFormat;
 
 export type File = {
   name: string;
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
 };

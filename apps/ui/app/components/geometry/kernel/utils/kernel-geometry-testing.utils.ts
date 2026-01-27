@@ -52,7 +52,7 @@ const createNodeIo = (): NodeIO => {
 /**
  * Convert GLB/GLTF data to gltf-transform Document.
  */
-const glbToDocument = async (glbData: Uint8Array): Promise<Document> => {
+const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<Document> => {
   const io = createNodeIo();
   return io.readBinary(glbData);
 };
@@ -60,7 +60,7 @@ const glbToDocument = async (glbData: Uint8Array): Promise<Document> => {
 /**
  * Get inspect report from GLB/GLTF data.
  */
-export const getInspectReport = async (glbData: Uint8Array): Promise<InspectReport> => {
+export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promise<InspectReport> => {
   const document = await glbToDocument(glbData);
   return inspect(document);
 };
@@ -68,7 +68,7 @@ export const getInspectReport = async (glbData: Uint8Array): Promise<InspectRepo
 /**
  * Validate that GLB data is properly formatted.
  */
-export const validateGlbData = (glb: Uint8Array): void => {
+export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
   if (glb.length === 0) {
     throw new Error('GLB data cannot be empty');
   }
@@ -146,7 +146,7 @@ export const getBoundingBoxFromInspect = (
 /**
  * Type guard to check if a geometry response is GLTF format.
  */
-function isGltfResponse(response: GeometryResponse): response is { format: 'gltf'; content: Uint8Array } {
+function isGltfResponse(response: GeometryResponse): response is { format: 'gltf'; content: Uint8Array<ArrayBuffer> } {
   return response.format === 'gltf';
 }
 
@@ -154,7 +154,7 @@ function isGltfResponse(response: GeometryResponse): response is { format: 'gltf
  * Extract GLTF content from a CreateGeometryResult.
  * Returns the first GLTF geometry found, or undefined if none.
  */
-export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array | undefined {
+export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<ArrayBuffer> | undefined {
   if (!result.success) {
     return undefined;
   }
@@ -167,7 +167,7 @@ export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array 
  * Extract all GLTF contents from a CreateGeometryResult.
  * Returns an array of all GLTF geometries found.
  */
-export function extractAllGltfFromResult(result: CreateGeometryResult): Uint8Array[] {
+export function extractAllGltfFromResult(result: CreateGeometryResult): Array<Uint8Array<ArrayBuffer>> {
   if (!result.success) {
     return [];
   }

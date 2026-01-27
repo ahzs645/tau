@@ -375,7 +375,7 @@ class GitHubApiClient {
     repo: string,
     ref: string,
     signal?: AbortSignal,
-  ): Promise<{ stream: ReadableStream<Uint8Array>; size: number | undefined }> {
+  ): Promise<{ stream: ReadableStream<Uint8Array<ArrayBuffer>>; size: number | undefined }> {
     // Convert short ref to full ref for GitHub API (required for Content-Length header)
     // refs/heads/main, refs/tags/v1.0, etc work; short refs like "main" don't return Content-Length
     const fullRef = ref.startsWith('refs/') ? ref : `refs/heads/${ref}`;

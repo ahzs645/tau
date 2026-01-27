@@ -100,7 +100,7 @@ function createMockStreamResult(): DeepMockProxy<StreamTextResult> {
   // Create the mock stream chain that the controller expects
   // The controller calls: toUIMessageStream().pipeThrough(...).pipeThrough(...)
   const mockUiMessageStream = mockDeep<ReturnType<StreamTextResult['toUIMessageStream']>>();
-  const mockFinalStream = mockDeep<ReadableStream<Uint8Array>>();
+  const mockFinalStream = mockDeep<ReadableStream<Uint8Array<ArrayBuffer>>>();
   const mockIntermediateStream = mockDeep<ReadableStream>();
   mockIntermediateStream.pipeThrough.mockReturnValue(mockFinalStream);
   mockUiMessageStream.pipeThrough.mockReturnValue(mockIntermediateStream);

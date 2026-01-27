@@ -31,7 +31,7 @@ import { PreviewParameters } from '#routes/builds_.$id_.preview/preview-paramete
 
 type PreviewDesktopProps = {
   readonly isStaticBuild: boolean;
-  readonly staticBuildFiles?: Record<string, { content: Uint8Array }>;
+  readonly staticBuildFiles?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
 };
 
 function ViewerStatus({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {

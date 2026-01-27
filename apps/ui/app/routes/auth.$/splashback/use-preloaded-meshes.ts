@@ -60,7 +60,7 @@ async function loadMesh(geometry: Geometry, color: string): Promise<LoadedMesh |
 
   try {
     const loader = new GLTFLoader();
-    const gltf = await loader.parseAsync(geometry.content.buffer as ArrayBuffer, '');
+    const gltf = await loader.parseAsync(geometry.content.buffer, '');
 
     const material = new THREE.MeshStandardMaterial({
       color,

@@ -22,12 +22,12 @@ type UploadedFileInfo = {
 
 export type ExportedFile = {
   readonly filename: string;
-  readonly content: Uint8Array;
+  readonly content: Uint8Array<ArrayBuffer>;
   readonly format: OutputFormat;
 };
 
 type ConverterProperties = {
-  readonly getGlbData: () => Promise<Uint8Array>;
+  readonly getGlbData: () => Promise<Uint8Array<ArrayBuffer>>;
   readonly selectedFormats: OutputFormat[];
   readonly shouldUseZipForMultiple: boolean;
   readonly uploadedFile?: UploadedFileInfo;
@@ -94,7 +94,7 @@ export function Converter({
       return;
     }
 
-    let data: Uint8Array;
+    let data: Uint8Array<ArrayBuffer>;
 
     try {
       // Lazily fetch GLB data when download is triggered
@@ -178,7 +178,7 @@ export function Converter({
             );
 
             // Add all files to zip machine
-            const filesToZip: Array<{ filename: string; content: Uint8Array }> = [];
+            const filesToZip: Array<{ filename: string; content: Uint8Array<ArrayBuffer> }> = [];
             const exportedFiles: ExportedFile[] = [];
             for (const { format, files } of results) {
               for (const file of files) {

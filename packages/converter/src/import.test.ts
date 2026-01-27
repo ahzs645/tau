@@ -61,7 +61,7 @@ const createCubeTestCase = (
     skip?: boolean;
     skipReason?: string;
     fixtureName?: string;
-    dataSource?: () => Promise<Uint8Array>;
+    dataSource?: () => Promise<Uint8Array<ArrayBuffer>>;
   } = {},
 ): LoaderTestCase => ({
   format,
@@ -501,7 +501,7 @@ describe('importFiles', () => {
     const skipDescription = testCase.skip ? ` [SKIPPED]: ${testCase.skipReason}` : '';
 
     describeFunction(`'${testCase.format}' loader${variantDescription}${skipDescription}`, () => {
-      let glbData: Uint8Array;
+      let glbData: Uint8Array<ArrayBuffer>;
       let inspectReport: InspectReport;
 
       beforeEach(async () => {

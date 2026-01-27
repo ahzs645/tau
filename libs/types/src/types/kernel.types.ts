@@ -302,7 +302,7 @@ export type KernelFilesystem = {
   /** Read file as text */
   readFile(path: string, encoding: 'utf8'): Promise<string>;
   /** Read file as binary */
-  readFile(path: string): Promise<Uint8Array>;
+  readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   /** Check if path exists */
   exists(path: string): Promise<boolean>;
   /** List directory entries */
@@ -310,7 +310,7 @@ export type KernelFilesystem = {
 
   // ---- Write operations (all absolute paths) ----
   /** Write file */
-  writeFile(path: string, data: Uint8Array | string): Promise<void>;
+  writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
   /** Create directory */
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   /** Delete file */
@@ -320,7 +320,7 @@ export type KernelFilesystem = {
 
   // ---- Directory operations (all absolute paths) ----
   /** Get directory contents as map of relative paths to content */
-  getDirectoryContents(path: string): Promise<Record<string, Uint8Array>>;
+  getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   /** Get file stats for directory recursively */
   getDirectoryStat(path: string): Promise<FileStat[]>;
 };

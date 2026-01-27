@@ -23,7 +23,7 @@ type AssimpExporterOptions = {
  * Uses assimpjs exporter which takes GLTF/GLB as input and exports to the target format.
  */
 export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
-  public async parseAsync(glbData: Uint8Array, options?: Partial<AssimpExporterOptions>): Promise<File[]> {
+  public async parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<AssimpExporterOptions>): Promise<File[]> {
     if (glbData.length === 0) {
       throw new Error('GLB data cannot be empty');
     }

@@ -24,7 +24,7 @@ type FileManagerContext = {
   worker: Worker | undefined;
   wrappedWorker: Remote<FileWorker> | undefined;
   fileTree: Map<string, FileEntry>;
-  openFiles: Map<string, Uint8Array>;
+  openFiles: Map<string, Uint8Array<ArrayBuffer>>;
   error: Error | undefined;
   rootDirectory: string;
   shouldInitializeOnStart: boolean;
@@ -119,8 +119,8 @@ type FileManagerEventLifecycle = { type: 'initialize' } | { type: 'setRoot'; pat
 // Hook calls worker directly, then sends ONE event to machine
 // Machine updates context, emits UI event, spawns background refresh
 type FileManagerEventMutation =
-  | { type: 'fileWritten'; path: string; data: Uint8Array; source: FileWriteSource }
-  | { type: 'fileRead'; path: string; data: Uint8Array }
+  | { type: 'fileWritten'; path: string; data: Uint8Array<ArrayBuffer>; source: FileWriteSource }
+  | { type: 'fileRead'; path: string; data: Uint8Array<ArrayBuffer> }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
   | { type: 'fileDeleted'; path: string; source: FileWriteSource }
   | { type: 'filesWritten'; paths: string[] };
@@ -139,8 +139,8 @@ type FileManagerInput = {
 
 // Emitted events for UI consumers (toasts, Monaco updates, etc.)
 type FileManagerEmitted =
-  | { type: 'fileWritten'; path: string; data: Uint8Array; source: FileWriteSource }
-  | { type: 'fileRead'; path: string; data: Uint8Array }
+  | { type: 'fileWritten'; path: string; data: Uint8Array<ArrayBuffer>; source: FileWriteSource }
+  | { type: 'fileRead'; path: string; data: Uint8Array<ArrayBuffer> }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
   | { type: 'fileDeleted'; path: string; source: FileWriteSource };
 
@@ -312,7 +312,7 @@ export const fileManagerMachine = setup({
         assertEvent(event, 'fileRenamed');
         const { oldPath, newPath } = event;
 
-        const newMap = new Map<string, Uint8Array>();
+        const newMap = new Map<string, Uint8Array<ArrayBuffer>>();
         const prefix = `${oldPath}/`;
 
         for (const [path, content] of context.openFiles.entries()) {

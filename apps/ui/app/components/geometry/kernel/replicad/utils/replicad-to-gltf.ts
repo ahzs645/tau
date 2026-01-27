@@ -1,37 +1,8 @@
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
 import { normalizeColor } from '#components/geometry/kernel/replicad/utils/normalize-color.js';
-import { transformNormalArray, transformVerticesGltf } from '#components/geometry/kernel/utils/common.js';
+import { transformNormalArray, transformVertexArray } from '#components/geometry/kernel/utils/common.js';
 import type { GeometryReplicad } from '#components/geometry/kernel/replicad/replicad.types.js';
-
-/**
- * Transform a flat array of vertex positions from z-up to y-up coordinate system and convert units.
- *
- * Replicad uses z-up coordinates and millimeter units, while glTF uses y-up coordinates and meter units.
- * This transformation is always applied to produce spec-compliant GLTF.
- */
-function transformVertexArray(vertices: number[]): Float32Array {
-  const transformedVertices = new Float32Array(vertices.length);
-
-  for (let i = 0; i < vertices.length; i += 3) {
-    const x = vertices[i];
-    const y = vertices[i + 1];
-    const z = vertices[i + 2];
-
-    if (x === undefined || y === undefined || z === undefined) {
-      continue;
-    }
-
-    const vertex: [number, number, number] = [x, y, z];
-    const transformed = transformVerticesGltf(vertex);
-
-    transformedVertices[i] = transformed[0];
-    transformedVertices[i + 1] = transformed[1];
-    transformedVertices[i + 2] = transformed[2];
-  }
-
-  return transformedVertices;
-}
 
 /**
  * Create a glTF primitive directly from replicad Shape3D data.
@@ -194,7 +165,7 @@ function createGltfDocumentFromReplicadShapes(geometries: GeometryReplicad[]): D
  *
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  */
-async function createGlbFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array> {
+async function createGlbFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocumentFromReplicadShapes(geometries);
   const glbBuffer = await new NodeIO().writeBinary(document);
   return glbBuffer;
@@ -205,7 +176,7 @@ async function createGlbFromReplicadShapes(geometries: GeometryReplicad[]): Prom
  *
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  */
-async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array> {
+async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocumentFromReplicadShapes(geometries);
 
   // Use writeJSON which returns both the JSON and binary data
@@ -260,7 +231,7 @@ async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Pro
 export async function convertReplicadGeometriesToGltf(
   geometries: GeometryReplicad[],
   format: 'glb' | 'gltf' = 'glb',
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   if (format === 'gltf') {
     return createGltfFromReplicadShapes(geometries);
   }

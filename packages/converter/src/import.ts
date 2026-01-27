@@ -82,7 +82,7 @@ export type SupportedImportFormat = keyof typeof loaderFromInputFormat;
 
 export const supportedImportFormats = Object.keys(loaderFromInputFormat) as SupportedImportFormat[];
 
-export const importFiles = async (files: File[], format: SupportedImportFormat): Promise<Uint8Array> => {
+export const importFiles = async (files: File[], format: SupportedImportFormat): Promise<Uint8Array<ArrayBuffer>> => {
   const loader = loaderFromInputFormat[format];
 
   loader.initialize({ format });

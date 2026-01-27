@@ -46,7 +46,7 @@ import { fileManager } from '#machines/file-manager.js';
  *
  * @param files - Record of absolute paths to file contents
  */
-export async function seedTestFilesystem(files: Record<string, string | Uint8Array>): Promise<void> {
+export async function seedTestFilesystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
   // Use central config with InMemory backend - this sets the "first wins" state
   await configureFilesystem('memory');
 
@@ -143,7 +143,10 @@ export type MockFilesystemOptions = {
   /** Result for exists calls */
   existsResult?: boolean | ((path: string) => boolean | Promise<boolean>);
   /** Result for readFile calls */
-  readFileResult?: string | Uint8Array | ((path: string) => string | Uint8Array | Promise<string | Uint8Array>);
+  readFileResult?:
+    | string
+    | Uint8Array<ArrayBuffer>
+    | ((path: string) => string | Uint8Array<ArrayBuffer> | Promise<string | Uint8Array<ArrayBuffer>>);
   /** Result for getDirectoryStat calls */
   getDirectoryStatResult?: FileStat[];
 };
@@ -213,9 +216,9 @@ export function createMockFilesystem(options?: MockFilesystemOptions): MockFiles
 
   // Define readFile with overload signatures - delegates to mock
   function readFile(path: string, encoding: 'utf8'): Promise<string>;
-  function readFile(path: string): Promise<Uint8Array>;
-  async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array> {
-    return readFileFn(path, encoding) as Promise<string | Uint8Array>;
+  function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
+    return readFileFn(path, encoding) as Promise<string | Uint8Array<ArrayBuffer>>;
   }
 
   // Mocks object for test assertions
@@ -238,11 +241,12 @@ export function createMockFilesystem(options?: MockFilesystemOptions): MockFiles
     // Simple delegates to mocks
     exists: async (path: string) => existsFn(path) as Promise<boolean>,
     readdir: async (path: string) => readdirFn(path) as Promise<string[]>,
-    writeFile: async (path: string, data: Uint8Array | string) => writeFileFn(path, data) as Promise<void>,
+    writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data) as Promise<void>,
     mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFn(path, options_) as Promise<void>,
     ensureDirectoryExists: async (path: string) => ensureDirectoryExistsFn(path) as Promise<void>,
     getDirectoryStat: async (path: string) => getDirectoryStatFn(path) as Promise<FileStat[]>,
-    getDirectoryContents: async (path: string) => getDirectoryContentsFn(path) as Promise<Record<string, Uint8Array>>,
+    getDirectoryContents: async (path: string) =>
+      getDirectoryContentsFn(path) as Promise<Record<string, Uint8Array<ArrayBuffer>>>,
     unlink: async (path: string) => unlinkFn(path) as Promise<void>,
 
     // Expose mocks for test assertions
@@ -318,7 +322,7 @@ export function createSuccessResult(geometries: GeometryResponse[]): CreateGeome
 /**
  * Create a successful CreateGeometryResultInternal with a single GLTF geometry.
  */
-export function createGltfSuccessResult(content: Uint8Array): CreateGeometryResult {
+export function createGltfSuccessResult(content: Uint8Array<ArrayBuffer>): CreateGeometryResult {
   return createSuccessResult([{ format: 'gltf', content }]);
 }
 

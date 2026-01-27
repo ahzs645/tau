@@ -13,7 +13,7 @@ import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 const log = createKclLogger('Navigation');
 
 type FileManagerApi = {
-  readFile: (path: string) => Promise<Uint8Array>;
+  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
 };
 
 type NavigationServiceOptions = {
@@ -24,7 +24,7 @@ type NavigationServiceOptions = {
   /** Build ID for namespacing Monaco URIs */
   buildId: string;
   /** Decode file content from Uint8Array to string */
-  decodeTextFile: (data: Uint8Array) => string;
+  decodeTextFile: (data: Uint8Array<ArrayBuffer>) => string;
 };
 
 type PendingNavigation = {

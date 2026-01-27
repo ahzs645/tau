@@ -58,7 +58,7 @@ type InspectComparison = {
 /**
  * Load GLB data from test fixture
  */
-const loadGlbFixture = (fixture: ExportTestCase['fixture']): Uint8Array => {
+const loadGlbFixture = (fixture: ExportTestCase['fixture']): Uint8Array<ArrayBuffer> => {
   const filename = `${fixture}.glb`;
   return loadFixture(filename);
 };
@@ -67,11 +67,11 @@ const loadGlbFixture = (fixture: ExportTestCase['fixture']): Uint8Array => {
  * Perform round-trip test: GLB → Export → Import → Compare
  */
 const performRoundTripTest = async (
-  glbData: Uint8Array,
+  glbData: Uint8Array<ArrayBuffer>,
   format: SupportedExportFormat,
 ): Promise<{
   exportedFiles: File[];
-  roundTripGlbData: Uint8Array;
+  roundTripGlbData: Uint8Array<ArrayBuffer>;
   comparison: InspectComparison;
 }> => {
   // Get original inspect report
@@ -428,9 +428,9 @@ describe('exportFiles', () => {
         return;
       }
 
-      let glbData: Uint8Array;
+      let glbData: Uint8Array<ArrayBuffer>;
       let exportedFiles: File[];
-      let roundTripGlbData: Uint8Array;
+      let roundTripGlbData: Uint8Array<ArrayBuffer>;
       let comparison: InspectComparison;
 
       beforeEach(async () => {

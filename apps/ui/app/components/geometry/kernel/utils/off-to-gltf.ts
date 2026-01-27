@@ -11,7 +11,10 @@ import { createGlb, createGltf } from '#components/geometry/kernel/utils/export-
  * @param offContent - The OFF file content as string
  * @param format - The output format: 'glb' for binary GLTF, 'gltf' for JSON GLTF
  */
-export async function convertOffToGltf(offContent: string, format: 'glb' | 'gltf' = 'glb'): Promise<Uint8Array> {
+export async function convertOffToGltf(
+  offContent: string,
+  format: 'glb' | 'gltf' = 'glb',
+): Promise<Uint8Array<ArrayBuffer>> {
   // Parse the OFF file
   const offData = parseOff(offContent);
 

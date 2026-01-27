@@ -28,7 +28,7 @@ import {
  * @param positions - Array of vertex positions [x1, y1, z1, x2, y2, z2, ...]
  * @returns The binary GLTF data
  */
-async function createTestGltf(positions: number[]): Promise<Uint8Array> {
+async function createTestGltf(positions: number[]): Promise<Uint8Array<ArrayBuffer>> {
   const io = new NodeIO();
   const document = new Document();
 
@@ -86,7 +86,7 @@ async function createTestGltf(positions: number[]): Promise<Uint8Array> {
  * @param data - The binary GLTF data
  * @returns Array of vertex positions [x1, y1, z1, x2, y2, z2, ...]
  */
-async function readGltfPositions(data: Uint8Array): Promise<number[]> {
+async function readGltfPositions(data: Uint8Array<ArrayBuffer>): Promise<number[]> {
   const io = new NodeIO();
   const document = await io.readBinary(data);
 

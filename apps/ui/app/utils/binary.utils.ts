@@ -6,12 +6,12 @@ import type { Binary as BSONBinary } from 'bson';
  * @param buffer - The binary buffer containing the UUID bytes.
  * @returns A string representation of the UUID in the format 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'.
  */
-export function binaryToUuid(binaryData: Uint8Array | BSONBinary | string): string {
+export function binaryToUuid(binaryData: Uint8Array<ArrayBuffer> | BSONBinary | string): string {
   if (typeof binaryData === 'string') {
     return binaryData;
   }
 
-  let buffer: Uint8Array;
+  let buffer: Uint8Array<ArrayBuffer>;
 
   // Handle MongoDB BSON Binary object
   if ('_bsontype' in binaryData) {

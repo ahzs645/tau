@@ -51,8 +51,8 @@ type FileWriteSource = 'editor' | 'user' | 'machine';
 export type RpcHandlerDependencies = {
   /** File manager for read/write/delete operations (calls worker directly) */
   fileManager: {
-    readFile: (path: string) => Promise<Uint8Array>;
-    writeFile: (path: string, data: Uint8Array, options: { source: FileWriteSource }) => Promise<void>;
+    readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
+    writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: { source: FileWriteSource }) => Promise<void>;
     deleteFile: (path: string, options: { source: FileWriteSource }) => Promise<void>;
   };
   /** Graphics actor ref for screenshots */

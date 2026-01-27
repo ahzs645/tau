@@ -13,7 +13,7 @@ export type UseCadFilesOptions = {
   /** Main entry file name (e.g., 'main.js') */
   readonly mainFile: string;
   /** Map of file paths to file contents */
-  readonly files: Record<string, { content: Uint8Array }>;
+  readonly files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   /** Optional parameters to pass to the CAD kernel */
   readonly parameters?: Record<string, unknown>;
   /** Whether the build should be triggered (default: true) */
@@ -127,7 +127,7 @@ export function useCadFiles(options: UseCadFilesOptions): UseCadFilesResult {
   // Write files and trigger build
   const runBuild = useCallback(async () => {
     // Write files to virtual filesystem
-    const buildFiles: Record<string, { content: Uint8Array }> = {};
+    const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
     for (const [path, file] of Object.entries(files)) {
       buildFiles[`/builds/${buildId}/${path}`] = file;
     }

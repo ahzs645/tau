@@ -14,7 +14,7 @@ import { decodeTextFile } from '#utils/filesystem.utils.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 
 type FileManagerApi = {
-  readFile: (path: string) => Promise<Uint8Array>;
+  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
 };
 
 type CodeEditorProperties = EditorProps & {

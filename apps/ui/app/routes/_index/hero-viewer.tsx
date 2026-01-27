@@ -24,10 +24,10 @@ import { Loader } from '#components/ui/loader.js';
 
 const heroBuildId = 'hero-qrcode-v2';
 
-type Files = Record<string, { content: Uint8Array }>;
+type Files = Record<string, { content: Uint8Array<ArrayBuffer> }>;
 type HeroBuild = Build & { files: Files };
 
-function createHeroBuild(fileContent: Uint8Array): HeroBuild {
+function createHeroBuild(fileContent: Uint8Array<ArrayBuffer>): HeroBuild {
   const mainFile = 'main.scad';
   return {
     id: heroBuildId,
@@ -111,7 +111,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
   const cadStatus = useSelector(cadRef, (snapshot) => snapshot.value);
 
   // Get GLB data from geometries (same pattern as chat-converter.tsx)
-  const getGlbData = useCallback((): Uint8Array => {
+  const getGlbData = useCallback((): Uint8Array<ArrayBuffer> => {
     const gltfGeometry = geometries.find((g) => g.format === 'gltf');
     if (!gltfGeometry) {
       throw new Error('No GLB geometry available. Model must be rendered first.');
@@ -125,7 +125,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
     async function initializeAndLoadModel(): Promise<void> {
       // Write files to filesystem on first load (matching project-grid.tsx path format)
       if (!hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array }> = {};
+        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
         for (const [path, file] of Object.entries(files)) {
           buildFiles[`/builds/${heroBuildId}/${path}`] = file;
         }

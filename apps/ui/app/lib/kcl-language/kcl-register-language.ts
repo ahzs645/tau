@@ -526,7 +526,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
     // (mock execution for single-file hover/intellisense doesn't need real file access)
     const mockEngine = new engineModule.MockEngineConnection();
     const mockFileSystem = {
-      async readFile(): Promise<Uint8Array> {
+      async readFile(): Promise<Uint8Array<ArrayBuffer>> {
         throw new Error('Mock file system does not support file reads');
       },
       exists: async (): Promise<boolean> => false,

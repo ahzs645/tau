@@ -79,7 +79,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     return document;
   }
 
-  protected async mapToGlb(document: Document, options: ThreeDmLoaderOptions): Promise<Uint8Array> {
+  protected async mapToGlb(document: Document, options: ThreeDmLoaderOptions): Promise<Uint8Array<ArrayBuffer>> {
     const io = await createNodeIo();
 
     // Apply transformations

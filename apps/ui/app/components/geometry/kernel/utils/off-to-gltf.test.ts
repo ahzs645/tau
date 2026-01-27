@@ -6,7 +6,7 @@ import { convertOffToGltf } from '#components/geometry/kernel/utils/off-to-gltf.
 /**
  * Parse a GLB buffer back to a glTF-Transform Document for inspection.
  */
-async function parseGlb(glbBuffer: Uint8Array): Promise<Document> {
+async function parseGlb(glbBuffer: Uint8Array<ArrayBuffer>): Promise<Document> {
   const io = new NodeIO();
   return io.readBinary(glbBuffer);
 }

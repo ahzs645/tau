@@ -16,7 +16,7 @@ export class FileSystemManager {
    * Called from WASM.
    * Reads a file using a path relative to basePath.
    */
-  public async readFile(path: string): Promise<Uint8Array> {
+  public async readFile(path: string): Promise<Uint8Array<ArrayBuffer>> {
     return this.filesystem.readFile(this.resolvePath(path));
   }
 

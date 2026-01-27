@@ -107,7 +107,7 @@ export class OpenScadWorker extends KernelWorker {
    * Cached font data to avoid re-fetching on every OpenSCAD instance.
    * Maps filename to Uint8Array of font data.
    */
-  private fontCache: Map<string, Uint8Array> | undefined;
+  private fontCache: Map<string, Uint8Array<ArrayBuffer>> | undefined;
 
   /**
    * Get the raw OFF data for a geometry (for testing/debugging purposes).

@@ -43,7 +43,7 @@ export class ZooWorker extends KernelWorker<ZooOptions> {
   ];
 
   protected override readonly name: string = 'ZooWorker';
-  private gltfDataMemory: Record<string, Uint8Array> = {};
+  private gltfDataMemory: Record<string, Uint8Array<ArrayBuffer>> = {};
   private kclUtils: KclUtils | undefined;
   private fileSystemManager!: FileSystemManager;
   private baseUrl = '';

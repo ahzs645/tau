@@ -16,7 +16,7 @@ type BuildManagerContextType = {
   buildManagerRef: ActorRefFrom<typeof buildManagerMachine>;
   createBuild: (
     build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>,
-    files: Record<string, { content: Uint8Array }>,
+    files: Record<string, { content: Uint8Array<ArrayBuffer> }>,
   ) => Promise<Build>;
   updateBuild: (
     buildId: string,
@@ -65,13 +65,13 @@ export function BuildManagerProvider({ children }: { readonly children: ReactNod
   const createBuild = useCallback(
     async (
       buildData: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>,
-      files: Record<string, { content: Uint8Array }>,
+      files: Record<string, { content: Uint8Array<ArrayBuffer> }>,
     ): Promise<Build> => {
       const worker = await getReadiedWorker();
 
       const build = await worker.createBuild(buildData);
 
-      const buildFiles: Record<string, { content: Uint8Array }> = {};
+      const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       for (const [path, file] of Object.entries(files)) {
         buildFiles[`/builds/${build.id}/${path}`] = file;
       }

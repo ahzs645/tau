@@ -33,24 +33,24 @@ function isRequest(message: Message): message is RequestMessage {
  * responses, notifications, and requests.
  * Implements WritableStream for WASM LSP compatibility.
  */
-export class StreamDemuxer implements WritableStream<Uint8Array> {
+export class StreamDemuxer implements WritableStream<Uint8Array<ArrayBuffer>> {
   public readonly responses = new PromiseMap<number | string, ResponseMessage>();
   public readonly notifications = new Queue<NotificationMessage>();
   public readonly requests = new Queue<RequestMessage>();
 
-  private readonly stream: WritableStream<Uint8Array>;
+  private readonly stream: WritableStream<Uint8Array<ArrayBuffer>>;
 
   public constructor() {
     log.debug('Creating StreamDemuxer');
     // Store reference to add method for use in stream
-    const addMessage = (chunk: Uint8Array): void => {
+    const addMessage = (chunk: Uint8Array<ArrayBuffer>): void => {
       log.debug('WritableStream.write called with chunk length:', chunk.length);
       this.add(chunk);
     };
 
     // Create a WritableStream that processes incoming messages
-    this.stream = new WritableStream<Uint8Array>({
-      write(chunk: Uint8Array): void {
+    this.stream = new WritableStream<Uint8Array<ArrayBuffer>>({
+      write(chunk: Uint8Array<ArrayBuffer>): void {
         addMessage(chunk);
       },
     });
@@ -60,7 +60,7 @@ export class StreamDemuxer implements WritableStream<Uint8Array> {
    * Add raw bytes (from WASM WritableStream) to the appropriate queues.
    * Handles multiple LSP messages concatenated in a single write.
    */
-  public add(bytes: Uint8Array): void {
+  public add(bytes: Uint8Array<ArrayBuffer>): void {
     log.debug('add() called with bytes length:', bytes.length);
 
     // Decode bytes to string and parse all LSP messages
@@ -95,7 +95,7 @@ export class StreamDemuxer implements WritableStream<Uint8Array> {
     return this.stream.close();
   }
 
-  public getWriter(): WritableStreamDefaultWriter<Uint8Array> {
+  public getWriter(): WritableStreamDefaultWriter<Uint8Array<ArrayBuffer>> {
     return this.stream.getWriter();
   }
 

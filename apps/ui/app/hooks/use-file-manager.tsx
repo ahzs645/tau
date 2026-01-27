@@ -48,9 +48,9 @@ type DeleteFileOptions = {
 
 type FileManagerContextType = {
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
-  writeFile: (path: string, data: Uint8Array, options: WriteFileOptions) => Promise<void>;
-  writeFiles: (files: Record<string, { content: Uint8Array }>) => Promise<void>;
-  readFile: (path: string) => Promise<Uint8Array>;
+  writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
+  writeFiles: (files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>;
+  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
   exists: (path: string) => Promise<boolean>;
@@ -111,7 +111,7 @@ export function FileManagerProvider({
    * Machine handles: updating openFiles, emitting UI event, spawning background refresh.
    */
   const writeFile = useCallback(
-    async (path: string, data: Uint8Array, options: WriteFileOptions): Promise<void> => {
+    async (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions): Promise<void> => {
       const worker = await getReadiedWorker();
       const absolutePath = joinPath(rootDirectoryRef.current, path);
 
@@ -130,11 +130,11 @@ export function FileManagerProvider({
    * Machine spawns background refresh to update file tree.
    */
   const writeFiles = useCallback(
-    async (files: Record<string, { content: Uint8Array }>): Promise<void> => {
+    async (files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void> => {
       const worker = await getReadiedWorker();
 
       // Convert to absolute paths
-      const absoluteFiles: Record<string, { content: Uint8Array }> = {};
+      const absoluteFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       const paths: string[] = [];
 
       for (const [path, file] of Object.entries(files)) {
@@ -158,7 +158,7 @@ export function FileManagerProvider({
    * No file tree refresh needed for reads.
    */
   const readFile = useCallback(
-    async (path: string): Promise<Uint8Array> => {
+    async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
       const worker = await getReadiedWorker();
       const absolutePath = joinPath(rootDirectoryRef.current, path);
 

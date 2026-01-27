@@ -115,7 +115,10 @@ export type GlbTransformOptions = {
  * @param options - Transformation options
  * @returns Promise<Uint8Array> - The transformed GLB data
  */
-export async function applyGlbTransforms(glbData: Uint8Array, options: GlbTransformOptions = {}): Promise<Uint8Array> {
+export async function applyGlbTransforms(
+  glbData: Uint8Array<ArrayBuffer>,
+  options: GlbTransformOptions = {},
+): Promise<Uint8Array<ArrayBuffer>> {
   const { transformYtoZup = true, scaleMetersToMillimeters = true } = options;
 
   // Skip transformation if neither is enabled

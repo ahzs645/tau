@@ -54,7 +54,7 @@ export type ExportOptions = SetRequired<Partial<OutputFormat3d>, 'type'> & {
 
 export type ExportedFile = {
   name: string;
-  contents: Uint8Array;
+  contents: Uint8Array<ArrayBuffer>;
 };
 
 export type KclExportResult = {

@@ -34,7 +34,7 @@ function useIsStaticBuild(): boolean {
 /**
  * Hook to access static build files (for cloning)
  */
-function useStaticBuildFiles(): Record<string, { content: Uint8Array }> | undefined {
+function useStaticBuildFiles(): Record<string, { content: Uint8Array<ArrayBuffer> }> | undefined {
   const staticBuild = useContext(StaticBuildContext);
   return staticBuild?.files;
 }
@@ -64,7 +64,7 @@ function StaticBuildProvider({
       }
 
       hasWrittenFilesRef.current = true;
-      const buildFiles: Record<string, { content: Uint8Array }> = {};
+      const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       for (const [path, file] of Object.entries(staticBuild.files)) {
         buildFiles[`/builds/${buildId}/${path}`] = file;
       }

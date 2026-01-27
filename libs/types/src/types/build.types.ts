@@ -1,7 +1,7 @@
 import type { EngineeringDiscipline } from '#types/cad.types.js';
 
 export type File = {
-  content: Uint8Array;
+  content: Uint8Array<ArrayBuffer>;
   // Could add metadata in the future
   lastModified?: number;
   size?: number;

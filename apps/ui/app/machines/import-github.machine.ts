@@ -41,7 +41,7 @@ export type ImportGitHubContext = {
   extractProgress: { processed: number; total: number };
   unzipRef: ActorRefFrom<UnzipMachineActor> | undefined;
   unzipSubscription: { unsubscribe: () => void } | undefined;
-  files: Map<string, { filename: string; content: Uint8Array }>;
+  files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
   buildId: string | undefined;
   error: Error | undefined;
   fetchErrors: {
@@ -111,7 +111,7 @@ type ImportGitHubEventInternal =
     }
   | {
       type: 'extractionComplete';
-      files: Map<string, { filename: string; content: Uint8Array }>;
+      files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
     }
   | {
       type: 'extractionError';
@@ -266,7 +266,7 @@ const downloadZipActor = fromPromise<
 
   const reader = stream.getReader();
 
-  const chunks: Uint8Array[] = [];
+  const chunks: Array<Uint8Array<ArrayBuffer>> = [];
   let receivedLength = 0;
   let lastProgressUpdate = 0;
   const progressUpdateInterval = 100; // Update every 100ms
@@ -326,7 +326,7 @@ const createBuildActor = fromPromise<
     repo: string;
     ref: string;
     mainFile: string;
-    files: Map<string, { filename: string; content: Uint8Array }>;
+    files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
   }
 >(async () => {
   throw new Error('Not implemented');

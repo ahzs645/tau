@@ -11,7 +11,7 @@ type Model = {
   language: KernelProvider;
 };
 
-type Files = Record<string, { content: Uint8Array }>;
+type Files = Record<string, { content: Uint8Array<ArrayBuffer> }>;
 
 export type BuildWithFiles = Build & { files: Files };
 

@@ -38,7 +38,7 @@ export type GeometrySvg = {
  */
 export type GeometryGltf = {
   format: 'gltf';
-  content: Uint8Array;
+  content: Uint8Array<ArrayBuffer>;
 };
 
 /**

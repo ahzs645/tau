@@ -50,7 +50,7 @@ async function sampleFromGeometry(geometry: Geometry, pointCount: number): Promi
 
   try {
     const loader = new GLTFLoader();
-    const gltf = await loader.parseAsync(geometry.content.buffer as ArrayBuffer, '');
+    const gltf = await loader.parseAsync(geometry.content.buffer, '');
 
     // Find the first mesh in the scene
     let foundMesh: THREE.Mesh | undefined;

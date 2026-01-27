@@ -26,7 +26,10 @@ type BuildContextType = {
   screenshotRef: ActorRefFrom<typeof screenshotCapabilityMachine>;
   cameraRef: ActorRefFrom<typeof cameraCapabilityMachine>;
   logRef: ActorRefFrom<typeof logMachine>;
-  setCodeParameters: (files: Record<string, { content: Uint8Array }>, parameters: Record<string, unknown>) => void;
+  setCodeParameters: (
+    files: Record<string, { content: Uint8Array<ArrayBuffer> }>,
+    parameters: Record<string, unknown>,
+  ) => void;
   setParameters: (parameters: Record<string, unknown>) => void;
   updateName: (name: string) => void;
   updateDescription: (description: string) => void;
@@ -144,7 +147,7 @@ export function BuildProvider({
 
   // Memoize callbacks
   const setCodeParameters = useCallback(
-    (files: Record<string, { content: Uint8Array }>, parameters: Record<string, unknown>) => {
+    (files: Record<string, { content: Uint8Array<ArrayBuffer> }>, parameters: Record<string, unknown>) => {
       actorRef.send({ type: 'updateCodeParameters', files, parameters });
     },
     [actorRef],

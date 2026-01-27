@@ -80,7 +80,7 @@ type TreeItemData = {
   path: string;
   name: string;
   isFolder: boolean;
-  content?: Uint8Array;
+  content?: Uint8Array<ArrayBuffer>;
   gitStatus?: FileItem['gitStatus'];
 };
 

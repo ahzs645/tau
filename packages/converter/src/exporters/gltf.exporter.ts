@@ -20,7 +20,7 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
     this.io = new NodeIO().registerExtensions(allExtensions);
   }
 
-  public async parseAsync(glbData: Uint8Array, options?: Partial<GltfExporterOptions>): Promise<File[]> {
+  public async parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<GltfExporterOptions>): Promise<File[]> {
     if (glbData.length === 0) {
       throw new Error('GLB data cannot be empty');
     }

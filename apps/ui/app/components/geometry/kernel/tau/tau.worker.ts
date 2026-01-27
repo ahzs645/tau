@@ -20,7 +20,7 @@ import { asBuffer } from '#utils/file.utils.js';
 class TauWorker extends KernelWorker {
   protected static override readonly supportedExportFormats: ExportFormat[] = supportedExportFormats as ExportFormat[];
   protected override readonly name: string = 'TauWorker';
-  private glbDataMemory: Record<string, Uint8Array> = {};
+  private glbDataMemory: Record<string, Uint8Array<ArrayBuffer>> = {};
 
   protected override async cleanup(): Promise<void> {
     this.glbDataMemory = {};

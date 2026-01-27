@@ -5,7 +5,7 @@
 
 export type FileData = {
   filename: string;
-  content: Uint8Array;
+  content: Uint8Array<ArrayBuffer>;
 };
 
 export type FileMap = Map<string, FileData>;

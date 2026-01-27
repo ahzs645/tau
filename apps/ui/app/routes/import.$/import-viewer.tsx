@@ -8,7 +8,7 @@ import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { Loader } from '#components/ui/loader.js';
 
-type Files = Map<string, { filename: string; content: Uint8Array }>;
+type Files = Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
 
 type ImportViewerProperties = {
   readonly files: Files;
@@ -17,10 +17,10 @@ type ImportViewerProperties = {
   readonly repo: string;
 };
 
-type ImportBuild = Build & { files: Record<string, { content: Uint8Array }> };
+type ImportBuild = Build & { files: Record<string, { content: Uint8Array<ArrayBuffer> }> };
 
 function createImportBuild(files: Files, mainFile: string, owner: string, repo: string): ImportBuild {
-  const buildFiles: Record<string, { content: Uint8Array }> = {};
+  const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
   for (const [path, file] of files) {
     buildFiles[path] = { content: file.content };
   }
@@ -48,7 +48,7 @@ function createImportBuild(files: Files, mainFile: string, owner: string, repo: 
 }
 
 type ImportViewerContentProperties = {
-  readonly files: Record<string, { content: Uint8Array }>;
+  readonly files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   readonly buildId: string;
 };
 
@@ -66,7 +66,7 @@ function ImportViewerContent({ files, buildId }: ImportViewerContentProperties):
   useEffect(() => {
     async function initializeAndLoadModel(): Promise<void> {
       if (!hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array }> = {};
+        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
         for (const [path, file] of Object.entries(files)) {
           buildFiles[`/builds/${buildId}/${path}`] = file;
         }

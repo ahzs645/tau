@@ -1226,7 +1226,7 @@ describe('Parameters - Search Highlighting', () => {
     // Search term "config" matches "Config" in "Configuration" (case-insensitive)
     const highlight = within(group).getByLabelText('Highlighted: Config');
     expect(highlight).toBeTruthy();
-    expect(highlight.textContent?.toLowerCase()).toBe('config');
+    expect(highlight.textContent.toLowerCase()).toBe('config');
   });
 });
 

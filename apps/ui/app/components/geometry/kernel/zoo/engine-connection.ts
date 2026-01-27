@@ -6,6 +6,7 @@ import { binaryToUuid } from '#utils/binary.utils.js';
 import { KclError, KclAuthError, KclConnectionError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import type { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
 import { createZooLogger } from '#components/geometry/kernel/zoo/zoo-logs.js';
+import { asBuffer } from '#utils/file.utils.js';
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- required
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
@@ -49,7 +50,7 @@ const getWebSocket = async (): Promise<typeof WebSocket> => {
 
 // Mock engine connection for local operations that don't need websocket
 export class MockEngineConnection {
-  public async sendModelingCommandFromWasm(): Promise<Uint8Array> {
+  public async sendModelingCommandFromWasm(): Promise<Uint8Array<ArrayBuffer>> {
     throw KclError.simple('engine', 'Mock execution should not require websocket commands');
   }
 
@@ -142,7 +143,7 @@ export class EngineConnection {
     _id: string,
     cmd: string,
     _pathString: string,
-  ): Promise<Uint8Array> {
+  ): Promise<Uint8Array<ArrayBuffer>> {
     if (!this.isConnected) {
       // If the connection is not connected, we need to cleanup and re-initialize.
       // This lazy initialization ensures we only create and use a connection when it's required.
@@ -155,7 +156,7 @@ export class EngineConnection {
 
       const response = (await this.sendCommand(modelingCommand)) as WebSocketResponse;
 
-      return msgpackEncode(response);
+      return asBuffer(msgpackEncode(response));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

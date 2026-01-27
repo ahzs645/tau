@@ -6,7 +6,7 @@ export type CreateInitialBuildOptions = {
   chatId: string;
   initialMessage: MyUIMessage;
   mainFileName: string;
-  emptyCodeContent: Uint8Array;
+  emptyCodeContent: Uint8Array<ArrayBuffer>;
 };
 
 export type CreateInitialBuildResult = {

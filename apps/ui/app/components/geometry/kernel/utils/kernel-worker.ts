@@ -637,8 +637,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Define readFile with proper overload signatures
     function readFile(path: string, encoding: 'utf8'): Promise<string>;
-    function readFile(path: string): Promise<Uint8Array>;
-    async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array> {
+    function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+    async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
       const start = performance.now();
       worker.logger.trace(`Reading file: ${path}`);
       const data = await fileManager.readFile(path, encoding);
@@ -668,7 +668,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         return entries;
       },
 
-      writeFile: async (path: string, data: Uint8Array | string) => fileManager.writeFile(path, data),
+      writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => fileManager.writeFile(path, data),
       mkdir: async (path: string, options?: { recursive?: boolean }) =>
         fileManager.mkdir(path, { mode: 0o777, ...options }),
       unlink: async (path: string) => fileManager.unlink(path),
@@ -835,7 +835,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param content - The file content as Uint8Array
    * @returns Full SHA-256 hash as hex string (64 characters)
    */
-  private async hashContent(content: Uint8Array): Promise<string> {
+  private async hashContent(content: Uint8Array<ArrayBuffer>): Promise<string> {
     const hashBuffer = await crypto.subtle.digest('SHA-256', content);
     const hashArray = [...new Uint8Array(hashBuffer)];
     return hashArray.map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -868,7 +868,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private async hashGeometryContent(geometry: GeometryResponse): Promise<string> {
     const encoder = new TextEncoder();
-    let data: Uint8Array;
+    let data: Uint8Array<ArrayBuffer>;
 
     switch (geometry.format) {
       case 'gltf': {

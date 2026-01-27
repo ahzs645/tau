@@ -71,7 +71,7 @@ export const ChatConverter = memo(function (properties: {
   const fileManager = useFileManager();
 
   // State for GLB data (lazy-loaded)
-  const [glbData, setGlbData] = useState<Uint8Array | undefined>(undefined);
+  const [glbData, setGlbData] = useState<Uint8Array<ArrayBuffer> | undefined>(undefined);
 
   // Derive uploadedFile from buildName so it updates reactively
   const uploadedFile = useMemo<UploadedFileInfo>(
@@ -88,7 +88,7 @@ export const ChatConverter = memo(function (properties: {
   const [useZipForMultiple, setUseZipForMultiple] = useCookie<boolean>(cookieName.converterMultifileZip, true);
 
   // Lazy GLB provider sourced from CAD geometries
-  const getGlbData = useCallback(async (): Promise<Uint8Array> => {
+  const getGlbData = useCallback(async (): Promise<Uint8Array<ArrayBuffer>> => {
     if (glbData) {
       return glbData;
     }
@@ -136,7 +136,7 @@ export const ChatConverter = memo(function (properties: {
   const handleExport = useCallback(
     async (files: ExportedFile[]) => {
       // Save each exported file to the build's file system
-      const exportedFiles: Record<string, { content: Uint8Array }> = {};
+      const exportedFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
 
       for (const file of files) {
         exportedFiles[`/exports/${file.filename}`] = { content: file.content };

@@ -9,7 +9,7 @@ type AssimpOptions = {
   format: InputFormat;
 };
 
-export class AssimpLoader extends BaseLoader<Uint8Array, AssimpOptions> {
+export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOptions> {
   /**
    * @description Whether the format requires a Y-to-Z up transformation.
    */
@@ -27,7 +27,7 @@ export class AssimpLoader extends BaseLoader<Uint8Array, AssimpOptions> {
     ase: true,
   };
 
-  protected async parseAsync(files: File[], options: AssimpOptions): Promise<Uint8Array> {
+  protected async parseAsync(files: File[], options: AssimpOptions): Promise<Uint8Array<ArrayBuffer>> {
     // Initialize assimpjs
     const ajs = await assimpjs({
       locateFile() {
@@ -72,7 +72,7 @@ export class AssimpLoader extends BaseLoader<Uint8Array, AssimpOptions> {
     return glbData;
   }
 
-  protected mapToGlb(parseResult: Uint8Array): Uint8Array {
+  protected mapToGlb(parseResult: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
     return parseResult;
   }
 

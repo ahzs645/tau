@@ -7,7 +7,7 @@ type PreviewGltfMeshProperties = {
   /**
    * The GLTF file to load.
    */
-  readonly gltfFile: Uint8Array;
+  readonly gltfFile: Uint8Array<ArrayBuffer>;
   /**
    * The color of the material.
    * @default '#14b8a6' (primary/teal)
@@ -65,7 +65,7 @@ export function PreviewGltfMesh({
         }
 
         const gltf = await loader.parseAsync(
-          gltfFile.buffer as ArrayBuffer,
+          gltfFile.buffer,
           '', // Path (not needed for ArrayBuffer)
         );
 

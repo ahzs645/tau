@@ -5,11 +5,11 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export function encodeBytes(input: string): Uint8Array {
+export function encodeBytes(input: string): Uint8Array<ArrayBuffer> {
   return encoder.encode(input);
 }
 
-export function decodeBytes(input: Uint8Array): string {
+export function decodeBytes(input: Uint8Array<ArrayBuffer>): string {
   return decoder.decode(input);
 }
 
