@@ -20,8 +20,12 @@ How to add a new kernel (repeatable recipe)
    - Location: `apps/ui/app/components/geometry/kernel/<kernel>/<kernel>.worker.ts`
    - Extend `KernelWorker` and implement:
      - `canHandle(file)` → quick gate to detect supported files
-     - `getParameters(file)` → return `{ defaultParameters, jsonSchema }`
-     - `createGeometry(file, parameters)` → return `Geometry[]` (e.g. GLTF blob)
+     - `async getParameters({ filePath, basePath }, { filesystem, logger })` → return `Promise<KernelResult<{ defaultParameters, jsonSchema }>>`
+       - `basePath` is required for multi-file projects to resolve relative imports
+       - Second parameter is `KernelRuntime` which provides `filesystem` and `logger` for implementations
+     - `async createGeometry({ filePath, basePath, parameters }, { filesystem, logger })` → return `Promise<KernelResult<GeometryResponse[]>>`
+       - `basePath` is required for multi-file projects to resolve relative imports
+       - Second parameter is `KernelRuntime` which provides `filesystem` and `logger` for implementations
      - `exportGeometry(format, geometryId?)` → return blobs for requested format(s)
    - Expose the worker via `comlink`:
      ```
