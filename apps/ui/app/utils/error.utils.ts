@@ -1,4 +1,4 @@
-import { errorCategory, errorCategories } from '@taucad/types';
+import { errorCategory, errorCategories } from '@taucad/types/constants';
 import type { ErrorCategory, ChatError } from '@taucad/types';
 import { errorCategoryTitles } from '@taucad/chat/utils';
 
