@@ -19,9 +19,6 @@ export type Face = number[];
 /**
  * RGBA color components in normalized range [0.0, 1.0].
  *
- * The alpha component is optional for backwards compatibility, but new code
- * should always include it. When alpha is omitted, it defaults to 1.0 (fully opaque).
- *
  * @example [1.0, 0.0, 0.0, 1.0] represents opaque red
  * @example [0.0, 0.0, 1.0, 0.5] represents semi-transparent blue
  * @example [0.5, 0.5, 0.5, 1.0] represents opaque 50% gray
