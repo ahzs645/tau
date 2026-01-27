@@ -32,8 +32,14 @@ export type ReadFileFunction = (path: string) => Promise<string>;
  * @param program - The parsed KCL program AST
  * @returns Array of relative file paths that are imported
  */
-export function extractLocalImportPaths(program: Node<Program>): string[] {
+// eslint-disable-next-line @typescript-eslint/no-restricted-types -- KCL WASM API
+export function extractLocalImportPaths(program: Node<Program> | null): string[] {
   const importPaths: string[] = [];
+
+  // Handle case where program or program.body is null (e.g., parse error)
+  if (!program) {
+    return importPaths;
+  }
 
   for (const bodyItem of program.body) {
     if (bodyItem.type === 'ImportStatement') {
