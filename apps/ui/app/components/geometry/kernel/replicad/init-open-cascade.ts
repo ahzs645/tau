@@ -26,7 +26,7 @@ type OpenCascadeModuleWithExceptions = (
 /**
  * Options for initializing OpenCascade.
  */
-export type InitOpenCascadeOptions = {
+type InitOpenCascadeOptions = {
   /** Optional callback to handle stdout messages. Defaults to no-op (silences logs). */
   print?: (text: string) => void;
   /** Optional callback to handle stderr messages. Defaults to no-op (silences logs). */
