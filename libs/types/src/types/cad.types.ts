@@ -58,7 +58,7 @@ export type GeometryWebRtc = {
  * One of:
  * - `GeometrySvg`
  * - `GeometryGltf`
- * - `GeometryVideoStream`
+ * - `GeometryWebRtc`
  */
 export type GeometryResponse = GeometrySvg | GeometryGltf | GeometryWebRtc;
 
