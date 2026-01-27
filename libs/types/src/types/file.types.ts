@@ -26,3 +26,11 @@ export type FileTreeEntry = {
 export type FileEntry = FileTreeEntry & {
   isLoaded: boolean;
 };
+
+export type FileStat = {
+  path: string;
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  mtimeMs: number;
+};
