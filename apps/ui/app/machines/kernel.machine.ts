@@ -9,6 +9,9 @@ import type {
   KernelIssue,
   KernelProvider as CadKernelProvider,
   GeometryFile,
+  LogLevel,
+  LogOrigin,
+  OnWorkerLog,
 } from '@taucad/types';
 import { isKernelSuccess } from '@taucad/types/guards';
 import type { JSONSchema7 } from 'json-schema';
@@ -23,7 +26,6 @@ import TauBuilderWorker from '#components/geometry/kernel/tau/tau.worker.js?work
 import type { JscadWorkerInterface as JscadWorker } from '#components/geometry/kernel/jscad/jscad.worker.types.js';
 import JscadBuilderWorker from '#components/geometry/kernel/jscad/jscad.worker.js?worker';
 import { assertActorDoneEvent } from '#lib/xstate.js';
-import type { LogLevel, LogOrigin, OnWorkerLog } from '#types/console.types.js';
 import { ENV } from '#environment.config.js';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
 

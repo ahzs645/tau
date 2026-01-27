@@ -5,4 +5,5 @@ export * from '#constants/code.constants.js';
 export * from '#constants/file.constants.js';
 export * from '#constants/id.constants.js';
 export * from '#constants/kernel.constants.js';
+export * from '#constants/logger.constants.js';
 export * from '#constants/manufacturing.constants.js';

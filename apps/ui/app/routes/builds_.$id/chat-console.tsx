@@ -1,12 +1,12 @@
 import { ChevronsDown, Filter, Settings, Trash } from 'lucide-react';
 import { useState, useCallback, memo } from 'react';
 import { useSelector } from '@xstate/react';
+import type { LogLevel, LogOrigin } from '@taucad/types';
+import { logLevels } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { cn } from '#utils/ui.utils.js';
-import type { LogLevel, LogOrigin } from '#types/console.types.js';
-import { logLevels } from '#types/console.types.js';
 import { Badge } from '#components/ui/badge.js';
 import {
   DropdownMenu,
