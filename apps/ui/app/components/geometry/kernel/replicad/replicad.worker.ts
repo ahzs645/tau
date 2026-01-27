@@ -164,7 +164,8 @@ try {
     { filesystem }: KernelRuntime,
   ): Promise<boolean> {
     // Check if the file format is a JavaScript/TypeScript file
-    if (!['ts', 'js', 'tsx', 'jsx'].includes(extension)) {
+    // JSX/TSX files are not supported as they require React transpilation
+    if (!['ts', 'js'].includes(extension)) {
       return false;
     }
 

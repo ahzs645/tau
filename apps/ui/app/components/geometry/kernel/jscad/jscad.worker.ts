@@ -177,7 +177,8 @@ export class JscadWorker extends KernelWorker {
     { filePath, extension }: CanHandleInput,
     { filesystem }: KernelRuntime,
   ): Promise<boolean> {
-    if (!['ts', 'js', 'tsx', 'jsx'].includes(extension)) {
+    // JSX/TSX files are not supported as they require React transpilation
+    if (!['ts', 'js'].includes(extension)) {
       return false;
     }
 
