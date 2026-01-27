@@ -362,6 +362,17 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
 }
 
 /**
+ * Create a GeometryFile for testing.
+ * Used to create test inputs for worker methods like canHandleEntry, getParametersEntry, createGeometryEntry.
+ */
+export function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
+  return {
+    filename,
+    path: basePath,
+  };
+}
+
+/**
  * Create a mock KernelRuntime for kernel method testing.
  * Uses the same filesystem and logger patterns as middleware runtime.
  */

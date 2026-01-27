@@ -1,10 +1,11 @@
-import type { CreateGeometryResult, GeometryFile } from '@taucad/types';
+import type { CreateGeometryResult } from '@taucad/types';
 import { describe, it, expect } from 'vitest';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
 import { OpenScadWorker } from '#components/geometry/kernel/openscad/openscad.worker.js';
 import {
   seedTestFilesystem,
   initializeWorkerForTesting,
+  createGeometryFile,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- OpenSCAD uses snake_case for parameter names */
@@ -12,18 +13,6 @@ import {
 // =============================================================================
 // Test Utilities
 // =============================================================================
-
-/**
- * Create a GeometryFile for testing.
- * Note: filename should be relative (e.g., 'main.scad' or 'project/main.scad'),
- * path is the base directory path where files are stored.
- */
-function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
-  return {
-    filename,
-    path: basePath,
-  };
-}
 
 /**
  * Initialize an OpenScadWorker for parameter extraction or geometry computation.

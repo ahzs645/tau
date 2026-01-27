@@ -1,9 +1,9 @@
-import type { GeometryFile } from '@taucad/types';
 import { describe, it, expect } from 'vitest';
 import { ZooWorker } from '#components/geometry/kernel/zoo/zoo.worker.js';
 import {
   seedTestFilesystem,
   initializeWorkerForTesting,
+  createGeometryFile,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'main.kcl' */
@@ -11,18 +11,6 @@ import {
 // =============================================================================
 // Test Utilities
 // =============================================================================
-
-/**
- * Create a GeometryFile for testing.
- * Note: filename should be relative (e.g., 'main.kcl' or 'project/main.kcl'),
- * path is the base directory path where files are stored.
- */
-function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
-  return {
-    filename,
-    path: basePath,
-  };
-}
 
 /**
  * Initialize a ZooWorker for parameter extraction.
