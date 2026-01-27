@@ -1,7 +1,7 @@
 /**
  * Parameter Cache Middleware
  *
- * Caches extractParameters results to avoid redundant parameter parsing.
+ * Caches getParameters results to avoid redundant parameter parsing.
  * Uses the pre-computed dependency hash from the runtime environment.
  *
  * Uses wrap-style hooks with onion model:
@@ -10,7 +10,7 @@
  * 3. Write result to cache on the way back up
  */
 
-import type { ExtractParametersResult } from '@taucad/types';
+import type { GetParametersResult } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
 
 /**
@@ -37,7 +37,7 @@ function getCacheDir(basePath: string): string {
 /**
  * Parameter cache middleware.
  *
- * Caches extractParameters results based on file dependencies.
+ * Caches getParameters results based on file dependencies.
  * Uses wrap-style hook with onion model execution:
  * - Check cache before calling handler()
  * - Write to cache after handler() returns (on cache miss)
@@ -46,47 +46,47 @@ export const parameterCacheMiddleware = createKernelMiddleware({
   name: 'ParameterCache',
   version: '1.0.0',
 
-  async wrapExtractParameters(request, handler) {
-    const { input, runtime } = request;
+  async wrapGetParameters(input, handler, { logger, filesystem, dependencyHash }) {
+    const { basePath } = input;
 
     // Use pre-computed dependency hash as cache key
-    const cacheKey = runtime.dependencyHash;
-    const cachePath = getCachePath(input.basePath, cacheKey);
+    const cacheKey = dependencyHash;
+    const cachePath = getCachePath(basePath, cacheKey);
 
     // 2. Check if cache exists
     try {
-      const cacheExists = await runtime.fileManager.exists(cachePath);
+      const cacheExists = await filesystem.exists(cachePath);
 
       if (cacheExists) {
         // Cache hit - read and return cached result
-        runtime.logger.debug(`Parameter cache hit for ${cacheKey}`);
+        logger.debug(`Parameter cache hit for ${cacheKey}`);
 
-        const cachedData = await runtime.fileManager.readFile(cachePath, 'utf8');
-        const cachedResult = JSON.parse(cachedData) as ExtractParametersResult;
+        const cachedData = await filesystem.readFile(cachePath, 'utf8');
+        const cachedResult = JSON.parse(cachedData) as GetParametersResult;
 
         return cachedResult;
       }
     } catch (error) {
       // Cache read error - treat as cache miss
-      runtime.logger.debug(`Parameter cache read error for ${cacheKey}: ${String(error)}`);
+      logger.debug(`Parameter cache read error for ${cacheKey}: ${String(error)}`);
     }
 
     // 3. Cache miss - execute downstream
-    runtime.logger.debug(`Parameter cache miss for ${cacheKey}`);
-    const result = await handler(request);
+    logger.debug(`Parameter cache miss for ${cacheKey}`);
+    const result = await handler(input);
 
     // 4. Write to cache on the way back up
     if (result.success) {
       try {
         // Ensure cache directory exists
-        const cacheDir = getCacheDir(input.basePath);
-        await runtime.fileManager.ensureDirectoryExists(cacheDir);
+        const cacheDir = getCacheDir(basePath);
+        await filesystem.ensureDirectoryExists(cacheDir);
 
-        await runtime.fileManager.writeFile(cachePath, JSON.stringify(result));
-        runtime.logger.debug(`Cached parameters at ${cacheKey}`);
+        await filesystem.writeFile(cachePath, JSON.stringify(result));
+        logger.debug(`Cached parameters at ${cacheKey}`);
       } catch (error) {
         // Cache write error - log and continue
-        runtime.logger.warn(`Parameter cache write error for ${cacheKey}: ${String(error)}`);
+        logger.warn(`Parameter cache write error for ${cacheKey}: ${String(error)}`);
       }
     }
 

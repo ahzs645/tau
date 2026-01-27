@@ -2,16 +2,17 @@ import type { z } from 'zod';
 import type { PartialDeep } from 'type-fest';
 import deepmerge from 'deepmerge';
 import type {
-  WrapComputeGeometryHook,
+  WrapCreateGeometryHook,
   WrapExportGeometryHook,
-  WrapExtractParametersHook,
-  KernelMiddlewareLogger,
+  WrapGetParametersHook,
+  KernelLogger,
   KernelMiddlewareRuntime,
   MiddlewareState,
-  MiddlewareFileManager,
+  KernelFilesystem,
   Dependency,
+  LogLevel,
+  OnWorkerLog,
 } from '@taucad/types';
-import type { LogLevel, OnWorkerLog } from '#types/console.types.js';
 
 /**
  * Type alias for an empty Zod object schema.
@@ -42,12 +43,12 @@ export type KernelMiddlewareConfig<StateSchema extends z.ZodObject<z.ZodRawShape
   version?: string;
   /** Optional Zod schema for type-safe state. Must be a z.object() schema. */
   stateSchema?: StateSchema;
-  /** Wrap-style hook for computeGeometry with onion model execution */
-  wrapComputeGeometry?: WrapComputeGeometryHook<z.infer<StateSchema>>;
+  /** Wrap-style hook for createGeometry with onion model execution */
+  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
   wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>>;
-  /** Wrap-style hook for extractParameters with onion model execution */
-  wrapExtractParameters?: WrapExtractParametersHook<z.infer<StateSchema>>;
+  /** Wrap-style hook for getParameters with onion model execution */
+  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>>;
 };
 
 /**
@@ -64,12 +65,12 @@ export type KernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawShape> = Em
   version?: string;
   /** Zod schema for validating state updates (if provided) */
   stateSchema?: StateSchema;
-  /** Wrap-style hook for computeGeometry with onion model execution */
-  wrapComputeGeometry?: WrapComputeGeometryHook<z.infer<StateSchema>>;
+  /** Wrap-style hook for createGeometry with onion model execution */
+  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
   wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>>;
-  /** Wrap-style hook for extractParameters with onion model execution */
-  wrapExtractParameters?: WrapExtractParametersHook<z.infer<StateSchema>>;
+  /** Wrap-style hook for getParameters with onion model execution */
+  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>>;
 };
 
 /**
@@ -84,13 +85,13 @@ export type KernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawShape> = Em
  *
  * @example
  * ```typescript
- * // Simple logging middleware
+ * // Simple logging middleware - destructure what you need
  * const loggingMiddleware = createKernelMiddleware({
  *   name: 'Logging',
- *   async wrapComputeGeometry(request, handler) {
- *     request.runtime.logger.debug('Computing geometry...');
- *     const result = await handler(request);
- *     request.runtime.logger.debug('Geometry computed');
+ *   async wrapCreateGeometry(input, handler, { logger }) {
+ *     logger.debug('Computing geometry...');
+ *     const result = await handler(input);
+ *     logger.debug('Geometry computed');
  *     return result;
  *   },
  * });
@@ -102,20 +103,19 @@ export type KernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawShape> = Em
  *     cacheKey: z.string(),
  *     cacheHit: z.boolean(),
  *   }),
- *   async wrapComputeGeometry(request, handler) {
- *     const { input, runtime } = request;
- *     const cacheKey = computeCacheKey(input);
+ *   async wrapCreateGeometry({ basePath }, handler, { state, dependencyHash }) {
+ *     const cacheKey = dependencyHash;
  *
  *     // Check cache - short-circuit on hit
  *     const cached = await checkCache(cacheKey);
  *     if (cached) {
- *       runtime.state.update({ cacheKey, cacheHit: true });
+ *       state.update({ cacheKey, cacheHit: true });
  *       return cached;  // Still flows through upstream middleware
  *     }
  *
  *     // Cache miss - execute downstream
- *     runtime.state.update({ cacheKey, cacheHit: false });
- *     const result = await handler(request);
+ *     state.update({ cacheKey, cacheHit: false });
+ *     const result = await handler(input);
  *
  *     // Write to cache on way back up
  *     await writeCache(cacheKey, result);
@@ -131,9 +131,9 @@ export function createKernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawS
     name: config.name,
     version: config.version ?? '1',
     stateSchema: config.stateSchema,
-    wrapComputeGeometry: config.wrapComputeGeometry,
+    wrapCreateGeometry: config.wrapCreateGeometry,
     wrapExportGeometry: config.wrapExportGeometry,
-    wrapExtractParameters: config.wrapExtractParameters,
+    wrapGetParameters: config.wrapGetParameters,
   };
 }
 
@@ -145,7 +145,7 @@ export function createKernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawS
  * @param middlewareName - Name of the middleware for origin.component
  * @returns Logger instance with convenience methods
  */
-export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: string): KernelMiddlewareLogger {
+export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: string): KernelLogger {
   const emit = (level: LogLevel, message: string, data?: unknown): void => {
     onLog({
       level,
@@ -170,6 +170,9 @@ export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: strin
     },
     error(message, options) {
       emit('error', message, options?.data);
+    },
+    custom(level, message, options) {
+      emit(level, message, options?.data);
     },
   };
 }
@@ -218,8 +221,8 @@ export type CreateMiddlewareRuntimeOptions = {
   onLog: OnWorkerLog;
   /** Name of the middleware */
   middlewareName: string;
-  /** File manager instance */
-  fileManager: MiddlewareFileManager;
+  /** Filesystem for all file operations */
+  filesystem: KernelFilesystem;
   /** Array of dependencies for cache key computation */
   dependencies: readonly Dependency[];
   /** Pre-computed SHA-256 hash of all dependencies */
@@ -229,7 +232,7 @@ export type CreateMiddlewareRuntimeOptions = {
 };
 
 /**
- * Create a middleware runtime with logger, file manager, state, and dependencies.
+ * Create a middleware runtime with logger, filesystem, state, and dependencies.
  *
  * @param options - Runtime configuration options
  * @returns Runtime instance for middleware wrap hooks
@@ -237,11 +240,11 @@ export type CreateMiddlewareRuntimeOptions = {
 export function createMiddlewareRuntime<State extends Record<string, unknown> = EmptyState>(
   options: CreateMiddlewareRuntimeOptions,
 ): KernelMiddlewareRuntime<State> {
-  const { onLog, middlewareName, fileManager, dependencies, dependencyHash, stateSchema } = options;
+  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema } = options;
 
   return {
     logger: createMiddlewareLogger(onLog, middlewareName),
-    fileManager,
+    filesystem,
     state: createMiddlewareState<State>(stateSchema),
     dependencies,
     dependencyHash,

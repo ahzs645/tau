@@ -8,9 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ComputeGeometryResult } from '@taucad/types';
+import type { CreateGeometryResult, OnWorkerLog } from '@taucad/types';
 import { MockKernelWorker } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
-import type { OnWorkerLog } from '#types/console.types.js';
 
 describe('kernel-worker hashing', () => {
   let onLog: ReturnType<typeof vi.fn>;
@@ -21,7 +20,7 @@ describe('kernel-worker hashing', () => {
 
   describe('geometry content hash', () => {
     it('should return full 129-character content hash in geometry.hash', async () => {
-      const successResult: ComputeGeometryResult = {
+      const successResult: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([1, 2, 3, 4, 5]) }],
         issues: [],
@@ -33,25 +32,24 @@ describe('kernel-worker hashing', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
 
       expect(result.success).toBe(true);
       if (result.success && result.data[0]) {
         const geometryHash = result.data[0].hash;
-        // Format: ${dependencyHash}-${contentHash} = 64 + 1 + 64 = 129 chars
-        expect(geometryHash).toMatch(/^[a-f\d]{64}-[a-f\d]{64}$/);
-        expect(geometryHash.length).toBe(129);
+        // Format: ${dependencyHash}-${index}-${contentHash} = 64 + 1 + N + 1 + 64 chars
+        expect(geometryHash).toMatch(/^[a-f\d]{64}-\d+-[a-f\d]{64}$/);
       }
     });
 
     it('should generate different content hashes for different geometry content', async () => {
-      const result1: ComputeGeometryResult = {
+      const result1: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }],
         issues: [],
       };
 
-      const result2: ComputeGeometryResult = {
+      const result2: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([4, 5, 6]) }],
         issues: [],
@@ -69,22 +67,23 @@ describe('kernel-worker hashing', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const output1 = await worker1.runComputeGeometry();
-      const output2 = await worker2.runComputeGeometry();
+      const output1 = await worker1.runCreateGeometry();
+      const output2 = await worker2.runCreateGeometry();
 
       expect(output1.success).toBe(true);
       expect(output2.success).toBe(true);
 
       if (output1.success && output2.success && output1.data[0] && output2.data[0]) {
-        // The content hash portion (after the dash) should differ
-        const contentHash1 = output1.data[0].hash.split('-')[1];
-        const contentHash2 = output2.data[0].hash.split('-')[1];
+        // The content hash portion (third part after splitting by dash) should differ
+        // Format: ${dependencyHash}-${index}-${contentHash}
+        const contentHash1 = output1.data[0].hash.split('-')[2];
+        const contentHash2 = output2.data[0].hash.split('-')[2];
         expect(contentHash1).not.toBe(contentHash2);
       }
     });
 
     it('should generate unique hashes for multiple geometries in same result', async () => {
-      const multiGeometryResult: ComputeGeometryResult = {
+      const multiGeometryResult: CreateGeometryResult = {
         success: true,
         data: [
           { format: 'gltf', content: new Uint8Array([1, 2, 3]) },
@@ -100,7 +99,7 @@ describe('kernel-worker hashing', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -109,9 +108,9 @@ describe('kernel-worker hashing', () => {
         const uniqueHashes = new Set(hashes);
         expect(uniqueHashes.size).toBe(hashes.length);
 
-        // All should have the 129-char format
+        // All should have the format: dependencyHash-index-contentHash
         for (const hash of hashes) {
-          expect(hash).toMatch(/^[a-f\d]{64}-[a-f\d]{64}$/);
+          expect(hash).toMatch(/^[a-f\d]{64}-\d+-[a-f\d]{64}$/);
         }
       }
     });
@@ -149,7 +148,7 @@ describe('kernel-worker hashing', () => {
       // MockKernelWorker overrides computeDependencies, so we can't test
       // the real asset hashing path here. This test documents the expected
       // behavior for integration testing.
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
       expect(result.success).toBe(true);
     });
   });

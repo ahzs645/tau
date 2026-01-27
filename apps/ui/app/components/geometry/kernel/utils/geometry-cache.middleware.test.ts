@@ -5,7 +5,13 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { uint8ArrayToBase64 } from 'uint8array-extras';
-import type { ComputeGeometryResult, ComputeGeometryRequest, ComputeGeometryHandler, Dependency } from '@taucad/types';
+import type {
+  CreateGeometryResult,
+  CreateGeometryHandler,
+  Dependency,
+  CreateGeometryInput,
+  KernelMiddlewareRuntime,
+} from '@taucad/types';
 import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
 import {
   createMockRuntime,
@@ -42,16 +48,19 @@ function createSerializedCacheContent(content: Uint8Array, hash = 'a'.repeat(64)
 }
 
 /**
- * Create a request with runtime configured for cache testing.
+ * Create input and runtime for cache testing.
  */
-function createCacheRequest(options?: {
+
+function createCacheTestContext(options?: {
   cacheExists?: boolean;
   cachedContent?: Uint8Array;
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-}): ComputeGeometryRequest & {
-  runtime: ReturnType<typeof createMockRuntime>;
+}): {
+  input: CreateGeometryInput;
+
+  runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
 } {
   // Create serialized content if cachedContent is provided
   const serializedContent = options?.cachedContent
@@ -59,7 +68,7 @@ function createCacheRequest(options?: {
     : '';
 
   const runtime = createMockRuntime({
-    fileManagerOptions: {
+    filesystemOverrides: {
       existsResult: options?.cacheExists ?? false,
       readFileResult: serializedContent,
     },
@@ -69,33 +78,34 @@ function createCacheRequest(options?: {
 
   return {
     input: createMockInput(options?.input),
-    runtime,
+
+    runtime: runtime as KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>,
   };
 }
 
 /**
  * Create a mock handler for testing.
  */
-function createMockHandler(result?: ComputeGeometryResult): ComputeGeometryHandler {
+function createMockHandler(result?: CreateGeometryResult): CreateGeometryHandler {
   return vi.fn().mockResolvedValue(result ?? createGltfSuccessResult(new Uint8Array([1, 2, 3])));
 }
 
 describe('geometryCacheMiddleware', () => {
-  describe('wrapComputeGeometry', () => {
+  describe('wrapCreateGeometry', () => {
     describe('cache hit', () => {
       it('should return cached result and not call handler', async () => {
         const gltfContent = new Uint8Array([1, 2, 3, 4]);
 
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheTestContext({
           cacheExists: true,
           cachedContent: gltfContent,
         });
         const handler = createMockHandler();
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        expect(wrapComputeGeometry).toBeDefined();
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        expect(wrapCreateGeometry).toBeDefined();
 
-        const result = await wrapComputeGeometry!(request, handler);
+        const result = await wrapCreateGeometry!(input, handler, runtime);
 
         // Handler should not be called on cache hit
         expect(handler).not.toHaveBeenCalled();
@@ -118,108 +128,108 @@ describe('geometryCacheMiddleware', () => {
 
       it('should log cache hit message', async () => {
         const gltfContent = new Uint8Array([1, 2, 3]);
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheTestContext({
           cacheExists: true,
           cachedContent: gltfContent,
         });
         const handler = createMockHandler();
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cache hit'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cache hit'));
       });
     });
 
     describe('cache miss', () => {
       it('should call handler and return its result', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([5, 6, 7]));
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        const result = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        const result = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(handler).toHaveBeenCalled();
         expect(result).toBe(handlerResult);
       });
 
       it('should log cache miss message', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handler = createMockHandler();
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cache miss'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cache miss'));
       });
 
       it('should write result to cache after handler returns', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const writePath = request.runtime.fileManager.writeFile.mock.calls[0]?.[0];
+        const writePath = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[0];
         expect(writePath).toContain('.tau/cache/geometry');
         expect(writePath).toContain('.json');
       });
 
       it('should ensure cache directory exists before writing', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.ensureDirectoryExists).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.ensureDirectoryExists).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = request.runtime.fileManager.ensureDirectoryExists.mock.calls[0]?.[0];
+        const dirPath = runtime.filesystem.mocks.ensureDirectoryExists.mock.calls[0]?.[0];
         expect(dirPath).toContain('.tau/cache/geometry');
       });
 
       it('should log cache write message', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cached 1 geometries'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cached 1 geometries'));
       });
 
       it('should not cache failed results', async () => {
         const errorResult = createErrorResult();
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handler = createMockHandler(errorResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).not.toHaveBeenCalled();
       });
     });
 
     describe('dependency hash usage', () => {
       it('should use runtime.dependencyHash for cache path', async () => {
         const dependencyHash = 'b'.repeat(64);
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheTestContext({
           cacheExists: false,
           dependencyHash,
         });
         const handler = createMockHandler();
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // Verify that writeFile was called with a path containing the dependency hash
-        expect(request.runtime.fileManager.writeFile).toHaveBeenCalledWith(
+        expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalledWith(
           expect.stringContaining(dependencyHash),
           expect.any(String),
         );
@@ -228,32 +238,32 @@ describe('geometryCacheMiddleware', () => {
       it('should use runtime.dependencyHash for cache lookup', async () => {
         const dependencyHash = 'c'.repeat(64);
         const cachedContent = new Uint8Array([1, 2, 3]);
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheTestContext({
           cacheExists: true,
           cachedContent,
           dependencyHash,
         });
         const handler = createMockHandler();
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // Verify that exists was called with a path containing the dependency hash
-        expect(request.runtime.fileManager.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
+        expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
       });
     });
 
     describe('error handling', () => {
       it('should handle file read errors gracefully', async () => {
-        const request = createCacheRequest({ cacheExists: true });
+        const { input, runtime } = createCacheTestContext({ cacheExists: true });
         // Make readFile throw an error
-        request.runtime.fileManager.readFile.mockRejectedValue(new Error('Read error'));
+        runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        const result = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        const result = await wrapCreateGeometry!(input, handler, runtime);
 
         // Should treat as cache miss and call handler
         expect(handler).toHaveBeenCalled();
@@ -261,25 +271,25 @@ describe('geometryCacheMiddleware', () => {
       });
 
       it('should handle file write errors gracefully', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         // Make writeFile throw an error
-        request.runtime.fileManager.writeFile.mockRejectedValue(new Error('Write error'));
+        runtime.filesystem.mocks.writeFile.mockRejectedValue(new Error('Write error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
         // Should not throw, just log warning
-        const result = await wrapComputeGeometry!(request, handler);
+        const result = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(result).toBe(handlerResult);
-        expect(request.runtime.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Cache write error'));
+        expect(runtime.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Cache write error'));
       });
     });
 
     describe('webrtc handling', () => {
       it('should skip caching when result contains webrtc geometry', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         // Create a handler that returns webrtc geometry
         const mockStream = new ReadableStream();
         const videoStreamResult = {
@@ -289,34 +299,34 @@ describe('geometryCacheMiddleware', () => {
         };
         const handler = createMockHandler(videoStreamResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        const result = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        const result = await wrapCreateGeometry!(input, handler, runtime);
 
         // Handler should be called
         expect(handler).toHaveBeenCalled();
         expect(result).toBe(videoStreamResult);
 
         // Should NOT write to cache
-        expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).not.toHaveBeenCalled();
         // Should log that caching was skipped
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Skipping cache'));
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('webrtc'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Skipping cache'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('webrtc'));
       });
 
       it('should cache when result contains only GLTF geometry', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // Should write to cache
-        expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalled();
       });
 
       it('should skip caching when result contains mixed geometries including webrtc', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         // Mixed result with both GLTF and webrtc
         const mockStream = new ReadableStream();
         const mixedResult = {
@@ -329,50 +339,50 @@ describe('geometryCacheMiddleware', () => {
         };
         const handler = createMockHandler(mixedResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // Should NOT write to cache when any geometry is webrtc
-        expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).not.toHaveBeenCalled();
       });
     });
 
     describe('cache cleanup', () => {
       it('should call cleanup after successful cache write', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // GetDirectoryStat should be called for cleanup
-        expect(request.runtime.fileManager.getDirectoryStat).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.getDirectoryStat).toHaveBeenCalled();
       });
 
       it('should delete old cache entries', async () => {
         const now = Date.now();
         const oldMtimeMs = now - 8 * 24 * 60 * 60 * 1000; // 8 days ago (older than 7 day max age)
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
         // Mock getDirectoryStat to return old cache files
-        request.runtime.fileManager.getDirectoryStat.mockResolvedValue([
+        runtime.filesystem.mocks.getDirectoryStat.mockResolvedValue([
           { path: 'old-cache.json', name: 'old-cache.json', type: 'file', size: 100, mtimeMs: oldMtimeMs },
         ]);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // Should delete old cache file
-        expect(request.runtime.fileManager.unlink).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.unlink).toHaveBeenCalled();
       });
 
       it('should delete excess cache entries when over max count', async () => {
         const now = Date.now();
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
         // Create 102 files (2 over the 100 max)
         // eslint-disable-next-line max-nested-callbacks -- better readability
@@ -385,34 +395,34 @@ describe('geometryCacheMiddleware', () => {
           mtimeMs: now - index * 1000,
         }));
 
-        request.runtime.fileManager.getDirectoryStat.mockResolvedValue(manyFiles);
+        runtime.filesystem.mocks.getDirectoryStat.mockResolvedValue(manyFiles);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
         // Should delete 2 oldest files to get to 100
-        expect(request.runtime.fileManager.unlink).toHaveBeenCalledTimes(2);
+        expect(runtime.filesystem.mocks.unlink).toHaveBeenCalledTimes(2);
       });
 
       it('should handle cleanup errors gracefully', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
         // Make getDirectoryStat throw an error
-        request.runtime.fileManager.getDirectoryStat.mockRejectedValue(new Error('Stat error'));
+        runtime.filesystem.mocks.getDirectoryStat.mockRejectedValue(new Error('Stat error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = geometryCacheMiddleware;
+        const { wrapCreateGeometry } = geometryCacheMiddleware;
         // Should not throw, cleanup errors are non-fatal
-        const result = await wrapComputeGeometry!(request, handler);
+        const result = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(result.success).toBe(true);
         // Cache write should still have happened
-        expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalled();
       });
     });
   });
@@ -424,7 +434,7 @@ describe('geometryCacheMiddleware', () => {
       const serializedContent = createSerializedCacheContent(cachedContent, dependencyHash);
 
       const runtime = createMockRuntime({
-        fileManagerOptions: {
+        filesystemOverrides: {
           existsResult: true,
           readFileResult: serializedContent,
         },
@@ -432,17 +442,15 @@ describe('geometryCacheMiddleware', () => {
         dependencyHash,
       });
 
-      const request = {
-        input: createMockInput(),
-        runtime,
-      };
-      const handler: ComputeGeometryHandler = vi.fn();
+      const input = createMockInput();
+      const handler: CreateGeometryHandler = vi.fn();
 
-      const { wrapComputeGeometry } = geometryCacheMiddleware;
-      await wrapComputeGeometry!(request, handler);
+      const { wrapCreateGeometry } = geometryCacheMiddleware;
+
+      await wrapCreateGeometry!(input, handler, runtime as KernelMiddlewareRuntime);
 
       // Verify cache was checked at the correct path using the dependency hash
-      expect(runtime.fileManager.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
+      expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
     });
 
     it('should result in cache miss when dependencyHash differs (simulating parameter change)', async () => {
@@ -451,23 +459,21 @@ describe('geometryCacheMiddleware', () => {
 
       // Cache doesn't exist for this new hash
       const runtime = createMockRuntime({
-        fileManagerOptions: {
+        filesystemOverrides: {
           existsResult: false,
         },
         dependencies: createMockDependencies([{ type: 'parameter', parametersHash: 'newParams123' }]),
         dependencyHash,
       });
 
-      const request = {
-        input: createMockInput(),
-        runtime,
-      };
+      const input = createMockInput();
 
       const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-      const handler: ComputeGeometryHandler = vi.fn().mockResolvedValue(handlerResult);
+      const handler: CreateGeometryHandler = vi.fn().mockResolvedValue(handlerResult);
 
-      const { wrapComputeGeometry } = geometryCacheMiddleware;
-      await wrapComputeGeometry!(request, handler);
+      const { wrapCreateGeometry } = geometryCacheMiddleware;
+
+      await wrapCreateGeometry!(input, handler, runtime as KernelMiddlewareRuntime);
 
       // Handler should be called because cache missed
       expect(handler).toHaveBeenCalled();
@@ -479,7 +485,7 @@ describe('geometryCacheMiddleware', () => {
       const serializedContent = createSerializedCacheContent(cachedContent, dependencyHash);
 
       const runtime = createMockRuntime({
-        fileManagerOptions: {
+        filesystemOverrides: {
           existsResult: true,
           readFileResult: serializedContent,
         },
@@ -487,15 +493,13 @@ describe('geometryCacheMiddleware', () => {
         dependencyHash,
       });
 
-      const request = {
-        input: createMockInput(),
-        runtime,
-      };
+      const input = createMockInput();
 
-      const handler: ComputeGeometryHandler = vi.fn();
+      const handler: CreateGeometryHandler = vi.fn();
 
-      const { wrapComputeGeometry } = geometryCacheMiddleware;
-      await wrapComputeGeometry!(request, handler);
+      const { wrapCreateGeometry } = geometryCacheMiddleware;
+
+      await wrapCreateGeometry!(input, handler, runtime as KernelMiddlewareRuntime);
 
       // Handler should NOT be called because cache hit
       expect(handler).not.toHaveBeenCalled();

@@ -301,7 +301,7 @@ const parseParametersActor = fromPromise<
   }
 
   try {
-    const parametersResult = await wrappedWorker.extractParametersEntry(file);
+    const parametersResult = await wrappedWorker.getParametersEntry(file);
 
     if (isKernelSuccess(parametersResult)) {
       const { defaultParameters, jsonSchema } = parametersResult.data as {
@@ -395,7 +395,7 @@ const evaluateCodeActor = fromPromise<
   // Merge default parameters with provided parameters
   const mergedParameters = deepmerge(defaultParameters, parameters);
 
-  const result = await wrappedWorker.computeGeometryEntry(file, mergedParameters);
+  const result = await wrappedWorker.createGeometryEntry(file, mergedParameters);
 
   // Handle the result pattern
   if (isKernelSuccess(result)) {
@@ -518,7 +518,7 @@ type KernelActorNames = keyof typeof kernelActors;
 // Define the types of events the machine can receive
 type KernelEventInternal =
   | { type: 'initializeKernel'; parentRef: CadActor }
-  | { type: 'computeGeometry'; file: GeometryFile; parameters: Record<string, unknown> }
+  | { type: 'createGeometry'; file: GeometryFile; parameters: Record<string, unknown> }
   | { type: 'exportGeometry'; format: ExportFormat };
 
 // Define the events that the workers can send to the kernel machine
@@ -688,7 +688,7 @@ export const kernelMachine = setup({
 
     ready: {
       on: {
-        computeGeometry: {
+        createGeometry: {
           target: 'determiningWorker',
         },
         exportGeometry: {
@@ -700,7 +700,7 @@ export const kernelMachine = setup({
     determiningWorker: {
       // Allow cancelling inflight operations
       on: {
-        computeGeometry: {
+        createGeometry: {
           target: 'determiningWorker',
         },
         exportGeometry: {
@@ -711,7 +711,7 @@ export const kernelMachine = setup({
         id: 'determineWorkerActor',
         src: 'determineWorkerActor',
         input({ context, event }) {
-          assertEvent(event, 'computeGeometry');
+          assertEvent(event, 'createGeometry');
           return {
             context,
             event: { file: event.file, parameters: event.parameters },
@@ -737,7 +737,7 @@ export const kernelMachine = setup({
     parsing: {
       // Allow cancelling inflight operations
       on: {
-        computeGeometry: {
+        createGeometry: {
           target: 'determiningWorker',
         },
         exportGeometry: {
@@ -781,7 +781,7 @@ export const kernelMachine = setup({
     evaluating: {
       // Allow cancelling inflight operations
       on: {
-        computeGeometry: {
+        createGeometry: {
           target: 'determiningWorker',
         },
         exportGeometry: {
@@ -812,7 +812,7 @@ export const kernelMachine = setup({
     exporting: {
       // Allow cancelling inflight operations
       on: {
-        computeGeometry: {
+        createGeometry: {
           target: 'determiningWorker',
         },
         exportGeometry: {

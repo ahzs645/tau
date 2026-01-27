@@ -5,7 +5,13 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { Document, NodeIO, Accessor } from '@gltf-transform/core';
-import type { ComputeGeometryRequest, ComputeGeometryHandler, GeometryGltf, GeometrySvg } from '@taucad/types';
+import type {
+  CreateGeometryInput,
+  CreateGeometryHandler,
+  GeometryGltf,
+  GeometrySvg,
+  KernelMiddlewareRuntime,
+} from '@taucad/types';
 import { gltfCoordinateTransformMiddleware } from '#components/geometry/kernel/utils/gltf-coordinate-transform.middleware.js';
 import {
   createMockRuntime,
@@ -101,26 +107,29 @@ async function readGltfPositions(data: Uint8Array): Promise<number[]> {
 }
 
 /**
- * Create a request for testing.
+ * Create input and runtime for testing.
  */
-function createTransformRequest(): ComputeGeometryRequest & {
-  runtime: ReturnType<typeof createMockRuntime>;
+function createTransformContext(): {
+  input: CreateGeometryInput;
+
+  runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
 } {
   return {
     input: createMockInput(),
-    runtime: createMockRuntime(),
+
+    runtime: createMockRuntime() as KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>,
   };
 }
 
 /**
  * Create a mock handler that returns the given result.
  */
-function createMockHandler(result: ReturnType<typeof createSuccessResult>): ComputeGeometryHandler {
+function createMockHandler(result: ReturnType<typeof createSuccessResult>): CreateGeometryHandler {
   return vi.fn().mockResolvedValue(result);
 }
 
 describe('gltfCoordinateTransformMiddleware', () => {
-  describe('wrapComputeGeometry', () => {
+  describe('wrapCreateGeometry', () => {
     describe('successful results with GLTF geometries', () => {
       it('should call handler and transform result', async () => {
         // Input: [1, 2, 3] in Y-up meters
@@ -128,13 +137,13 @@ describe('gltfCoordinateTransformMiddleware', () => {
         // Transform: x' = x*1000, y' = -z*1000, z' = y*1000
         const gltfData = await createTestGltf([1, 2, 3]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        expect(wrapComputeGeometry).toBeDefined();
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        expect(wrapCreateGeometry).toBeDefined();
 
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(handler).toHaveBeenCalled();
         expect(transformed.success).toBe(true);
@@ -165,11 +174,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
           1, // Vertex 3
         ]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         if (transformed.success) {
           const positions = await readGltfPositions((transformed.data[0] as GeometryGltf).content);
@@ -195,11 +204,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
           { format: 'gltf', content: gltfData1 },
           { format: 'gltf', content: gltfData2 },
         ]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(transformed.success).toBe(true);
 
@@ -213,11 +222,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
       it('should handle zero coordinates correctly', async () => {
         const gltfData = await createTestGltf([0, 0, 0]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         if (transformed.success) {
           const positions = await readGltfPositions((transformed.data[0] as GeometryGltf).content);
@@ -231,11 +240,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
       it('should preserve GLTF format in output', async () => {
         const gltfData = await createTestGltf([1, 2, 3]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         if (transformed.success) {
           expect(transformed.data[0]?.format).toBe('gltf');
@@ -252,11 +261,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
           name: 'test-svg',
         };
         const handlerResult = createSuccessResult([svgGeometry]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(transformed.success).toBe(true);
 
@@ -274,11 +283,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
           name: 'test-svg',
         };
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }, svgGeometry]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(transformed.success).toBe(true);
 
@@ -295,11 +304,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
     describe('failed results', () => {
       it('should pass through failed results unchanged', async () => {
         const errorResult = createErrorResult();
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = vi.fn().mockResolvedValue(errorResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(transformed).toEqual(errorResult);
       });
@@ -308,11 +317,11 @@ describe('gltfCoordinateTransformMiddleware', () => {
     describe('empty results', () => {
       it('should pass through results with empty data array', async () => {
         const emptyResult = createEmptySuccessResult();
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = vi.fn().mockResolvedValue(emptyResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        const transformed = await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        const transformed = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(transformed).toEqual(emptyResult);
       });
@@ -322,24 +331,24 @@ describe('gltfCoordinateTransformMiddleware', () => {
       it('should log trace message when transforming', async () => {
         const gltfData = await createTestGltf([1, 0, 0]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.logger.trace).toHaveBeenCalledWith('Transforming GLTF geometries to Z-up/mm');
+        expect(runtime.logger.trace).toHaveBeenCalledWith('Transforming GLTF geometries to Z-up/mm');
       });
 
       it('should not log when result is empty', async () => {
         const emptyResult = createEmptySuccessResult();
-        const request = createTransformRequest();
+        const { input, runtime } = createTransformContext();
         const handler = vi.fn().mockResolvedValue(emptyResult);
 
-        const { wrapComputeGeometry } = gltfCoordinateTransformMiddleware;
-        await wrapComputeGeometry!(request, handler);
+        const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
+        await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(request.runtime.logger.trace).not.toHaveBeenCalled();
+        expect(runtime.logger.trace).not.toHaveBeenCalled();
       });
     });
   });

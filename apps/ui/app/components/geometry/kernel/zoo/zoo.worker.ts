@@ -1,12 +1,21 @@
 import { expose } from 'comlink';
 import type {
-  ComputeGeometryResult,
+  CreateGeometryResult,
   ExportFormat,
   ExportGeometryResult,
-  ExtractParametersResult,
+  GetParametersResult,
   GeometryGltf,
   KernelIssue,
   KernelErrorResult,
+  KernelRuntime,
+  KernelFilesystem,
+  KernelLogger,
+  InitializeInput,
+  CanHandleInput,
+  GetDependenciesInput,
+  GetParametersInput,
+  CreateGeometryInput,
+  ExportGeometryInput,
 } from '@taucad/types';
 import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
@@ -37,10 +46,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
   private gltfDataMemory: Record<string, Uint8Array> = {};
   private kclUtils: KclUtils | undefined;
   private fileSystemManager!: FileSystemManager;
-
-  protected override async initialize(): Promise<void> {
-    this.fileSystemManager = new FileSystemManager(this.fileReader);
-  }
+  private baseUrl = '';
 
   protected override async cleanup(): Promise<void> {
     await this.kclUtils?.cleanup();
@@ -48,55 +54,75 @@ class ZooWorker extends KernelWorker<ZooOptions> {
     this.gltfDataMemory = {};
   }
 
-  protected override async canHandle(_filename: string, extension: string): Promise<boolean> {
+  protected override async initialize(
+    { options }: InitializeInput<ZooOptions>,
+    _runtime: KernelRuntime,
+  ): Promise<void> {
+    this.baseUrl = options.baseUrl;
+  }
+
+  protected override async canHandle({ extension }: CanHandleInput, _runtime: KernelRuntime): Promise<boolean> {
     return extension === 'kcl';
   }
 
-  protected override async discoverDependencies(filename: string): Promise<string[]> {
+  protected override async getDependencies(
+    { filePath, basePath }: GetDependenciesInput,
+    { filesystem }: KernelRuntime,
+  ): Promise<string[]> {
+    this.initializeFileSystemManager(basePath, filesystem);
     const utils = await this.getKclUtils();
-    return discoverKclDependencies(
-      filename,
-      async (path) => this.readFile(path, 'utf8'),
+    // Get relative path for dependency resolution
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
+    const relativePaths = await discoverKclDependencies(
+      relativeFilePath,
+      async (path) => filesystem.readFile(KernelWorker.resolveFromRoot(path, basePath), 'utf8'),
       async (code) => utils.parseKcl(code),
     );
+    // Convert relative paths to absolute paths
+    return relativePaths.map((relativePath) => KernelWorker.resolveFromRoot(relativePath, basePath));
   }
 
   protected override getAssetUrls(): string[] {
     return [kclWasmUrl];
   }
 
-  protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
-    const code = await this.readFile(filename, 'utf8');
+  protected override async getParameters(
+    { filePath, basePath }: GetParametersInput,
+    { filesystem, logger }: KernelRuntime,
+  ): Promise<GetParametersResult> {
+    this.initializeFileSystemManager(basePath, filesystem);
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
+    const code = await filesystem.readFile(filePath, 'utf8');
     try {
       const utils = await this.getKclUtils();
       const parseResult = await utils.parseKcl(code);
       const criticalErrors = this.filterNonWarningErrors(parseResult.errors);
       if (criticalErrors.length > 0) {
-        this.warn('KCL parsing errors during parameter extraction', { data: criticalErrors });
+        logger.warn('KCL parsing errors during parameter extraction', { data: criticalErrors });
         // Return ALL errors, not just the first one
-        const errors = this.mapCompilationErrorsToKernelIssues(criticalErrors, code, this.activeFilePath);
+        const errors = this.mapCompilationErrorsToKernelIssues(criticalErrors, code, relativeFilePath);
         return createKernelError(errors);
       }
 
       // Log warnings separately for diagnostics
       const warnings = parseResult.errors.filter((error) => error.severity === 'Warning');
       if (warnings.length > 0) {
-        this.warn('KCL parsing warnings during parameter extraction', { data: warnings });
+        logger.warn('KCL parsing warnings during parameter extraction', { data: warnings });
       }
 
       const executionResult = await utils.executeMockKcl(parseResult.program, 'main.kcl');
       const criticalExecutionErrors = this.filterNonWarningErrors(executionResult.errors);
       if (criticalExecutionErrors.length > 0) {
-        this.warn('KCL execution errors during parameter extraction', { data: criticalExecutionErrors });
+        logger.warn('KCL execution errors during parameter extraction', { data: criticalExecutionErrors });
         // Return ALL execution errors
-        const errors = this.mapCompilationErrorsToKernelIssues(criticalExecutionErrors, code, this.activeFilePath);
+        const errors = this.mapCompilationErrorsToKernelIssues(criticalExecutionErrors, code, relativeFilePath);
         return createKernelError(errors);
       }
 
       // Log warnings separately for diagnostics
       const executionWarnings = executionResult.errors.filter((error) => error.severity === 'Warning');
       if (executionWarnings.length > 0) {
-        this.warn('KCL execution warnings during parameter extraction', { data: executionWarnings });
+        logger.warn('KCL execution warnings during parameter extraction', { data: executionWarnings });
       }
 
       const { defaultParameters, jsonSchema } = KclUtils.convertKclVariablesToJsonSchema(executionResult.variables);
@@ -105,18 +131,20 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         jsonSchema,
       });
     } catch (error) {
-      const kclErrorResult = this.handleError(error, code, this.activeFilePath);
-      this.logKernelIssues(kclErrorResult.issues, 'extractParameters');
+      const kclErrorResult = this.handleError(error, code, relativeFilePath);
+      this.logKernelIssues(kclErrorResult.issues, logger);
       return kclErrorResult;
     }
   }
 
-  protected override async computeGeometry(
-    filename: string,
-    parameters?: Record<string, unknown>,
-    geometryId = 'defaultGeometry',
-  ): Promise<ComputeGeometryResult> {
-    const code = await this.readFile(filename, 'utf8');
+  protected override async createGeometry(
+    { filePath, basePath, parameters }: CreateGeometryInput,
+    { filesystem, logger }: KernelRuntime,
+  ): Promise<CreateGeometryResult> {
+    const geometryId = 'default';
+    this.initializeFileSystemManager(basePath, filesystem);
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
+    const code = await filesystem.readFile(filePath, 'utf8');
     try {
       const trimmedCode = code.trim();
       if (trimmedCode === '') {
@@ -129,28 +157,28 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         const parseResult = await utils.parseKcl(trimmedCode);
         const criticalParseErrors = this.filterNonWarningErrors(parseResult.errors);
         if (criticalParseErrors.length > 0) {
-          this.warn('KCL parsing errors', { data: criticalParseErrors });
+          logger.warn('KCL parsing errors', { data: criticalParseErrors });
           // Return ALL parse errors
-          const errors = this.mapCompilationErrorsToKernelIssues(criticalParseErrors, trimmedCode, this.activeFilePath);
+          const errors = this.mapCompilationErrorsToKernelIssues(criticalParseErrors, trimmedCode, relativeFilePath);
           return createKernelError(errors);
         }
 
         // Log warnings separately for diagnostics
         const parseWarnings = parseResult.errors.filter((error) => error.severity === 'Warning');
         if (parseWarnings.length > 0) {
-          this.warn('KCL parsing warnings', { data: parseWarnings });
+          logger.warn('KCL parsing warnings', { data: parseWarnings });
         }
 
-        const modifiedProgram = KclUtils.injectParametersIntoProgram(parseResult.program, parameters ?? {});
+        const modifiedProgram = KclUtils.injectParametersIntoProgram(parseResult.program, parameters);
         const executionResult = await utils.executeProgram(modifiedProgram, 'main.kcl');
         const criticalExecutionErrors = this.filterNonWarningErrors(executionResult.errors);
         if (criticalExecutionErrors.length > 0) {
-          this.warn('KCL execution errors', { data: criticalExecutionErrors });
+          logger.warn('KCL execution errors', { data: criticalExecutionErrors });
           // Return ALL execution errors
           const errors = this.mapCompilationErrorsToKernelIssues(
             criticalExecutionErrors,
             trimmedCode,
-            this.activeFilePath,
+            relativeFilePath,
           );
           return createKernelError(errors);
         }
@@ -158,7 +186,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         // Log warnings separately for diagnostics
         const executionWarnings = executionResult.errors.filter((error) => error.severity === 'Warning');
         if (executionWarnings.length > 0) {
-          this.warn('KCL execution warnings', { data: executionWarnings });
+          logger.warn('KCL execution warnings', { data: executionWarnings });
         }
 
         const exportResult = await utils.exportFromMemory({
@@ -187,22 +215,23 @@ class ZooWorker extends KernelWorker<ZooOptions> {
         };
         return createKernelSuccess([geometry]);
       } catch (error) {
-        const kclErrorResult = this.handleError(error, code, this.activeFilePath);
-        this.logKernelIssues(kclErrorResult.issues, 'computeGeometry');
+        const kclErrorResult = this.handleError(error, code, relativeFilePath);
+        this.logKernelIssues(kclErrorResult.issues, logger);
         return kclErrorResult;
       }
     } catch (error) {
-      const kclErrorResult = this.handleError(error, code, this.activeFilePath);
-      this.logKernelIssues(kclErrorResult.issues, 'computeGeometry');
+      const kclErrorResult = this.handleError(error, code, relativeFilePath);
+      this.logKernelIssues(kclErrorResult.issues, logger);
       return kclErrorResult;
     }
   }
 
   // eslint-disable-next-line complexity -- refactor to remove common boilerplate.
   protected override async exportGeometry(
-    fileType: ExportFormat,
-    geometryId = 'defaultGeometry',
+    { fileType }: ExportGeometryInput,
+    { logger }: KernelRuntime,
   ): Promise<ExportGeometryResult> {
+    const geometryId = 'default';
     try {
       const gltfData = this.gltfDataMemory[geometryId];
       if (!gltfData) {
@@ -245,7 +274,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
             ]);
           } catch (error) {
             const kclErrorResult = this.handleError(error);
-            this.logKernelIssues(kclErrorResult.issues, 'exportGeometry');
+            this.logKernelIssues(kclErrorResult.issues, logger);
             return kclErrorResult;
           }
         }
@@ -276,7 +305,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
             ]);
           } catch (error) {
             const kclErrorResult = this.handleError(error);
-            this.logKernelIssues(kclErrorResult.issues, 'exportGeometry');
+            this.logKernelIssues(kclErrorResult.issues, logger);
             return kclErrorResult;
           }
         }
@@ -308,7 +337,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
             ]);
           } catch (error) {
             const kclErrorResult = this.handleError(error);
-            this.logKernelIssues(kclErrorResult.issues, 'exportGeometry');
+            this.logKernelIssues(kclErrorResult.issues, logger);
             return kclErrorResult;
           }
         }
@@ -341,7 +370,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
             ]);
           } catch (error) {
             const kclErrorResult = this.handleError(error);
-            this.logKernelIssues(kclErrorResult.issues, 'exportGeometry');
+            this.logKernelIssues(kclErrorResult.issues, logger);
             return kclErrorResult;
           }
         }
@@ -352,7 +381,7 @@ class ZooWorker extends KernelWorker<ZooOptions> {
       }
     } catch (error) {
       const kclErrorResult = this.handleError(error);
-      this.logKernelIssues(kclErrorResult.issues, 'exportGeometry');
+      this.logKernelIssues(kclErrorResult.issues, logger);
       return kclErrorResult;
     }
   }
@@ -360,9 +389,9 @@ class ZooWorker extends KernelWorker<ZooOptions> {
   /**
    * Logs all kernel issues for debugging
    */
-  private logKernelIssues(errors: KernelIssue[], operation: string): void {
+  private logKernelIssues(errors: KernelIssue[], logger: KernelLogger): void {
     for (const kernelIssue of errors) {
-      this.error(kernelIssue.message, { operation });
+      logger.error(kernelIssue.message);
     }
   }
 
@@ -405,10 +434,21 @@ class ZooWorker extends KernelWorker<ZooOptions> {
     return convertKclErrorToKernelIssue(mappedError, code, fileName);
   }
 
+  /**
+   * Initialize the FileSystemManager with the given project root.
+   * Called before operations that need filesystem access.
+   *
+   * @param basePath - The project root path.
+   * @param filesystem - Filesystem interface for reading files.
+   */
+  private initializeFileSystemManager(basePath: string, filesystem: KernelFilesystem): void {
+    this.fileSystemManager = new FileSystemManager(filesystem, basePath);
+  }
+
   private async getKclUtilsInstance(): Promise<KclUtils> {
     this.kclUtils ??= new KclUtils({
       apiKey: '', // API key is injected by the server-side proxy
-      baseUrl: this.options.baseUrl,
+      baseUrl: this.baseUrl,
       fileSystemManager: this.fileSystemManager,
     });
     return this.kclUtils;

@@ -33,7 +33,7 @@ Import and extend the base `KernelWorker` class:
 
 ```typescript
 import { expose } from 'comlink';
-import type { ComputeGeometryResult, ExportFormat, ExportGeometryResult, ExtractParametersResult } from '@taucad/types';
+import type { CreateGeometryResult, ExportFormat, ExportGeometryResult, GetParametersResult } from '@taucad/types';
 import { createKernelSuccess, createKernelError } from '@taucad/types/guards';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 
@@ -72,12 +72,12 @@ protected async canHandle(filename: string, extension: string): Promise<boolean>
 }
 ```
 
-#### `extractParameters(path)`
+#### `getParameters(path)`
 
 Parse the file and extract parameters with their JSON Schema.
 
 ```typescript
-protected async extractParameters(path: string): Promise<ExtractParametersResult> {
+protected async getParameters(path: string): Promise<GetParametersResult> {
   try {
     const code = await this.readFile(path, 'utf8');
     const { defaultParameters, jsonSchema } = parseParameters(code);
@@ -95,16 +95,15 @@ protected async extractParameters(path: string): Promise<ExtractParametersResult
 }
 ```
 
-#### `computeGeometry(path, parameters, geometryId?)`
+#### `createGeometry(path, parameters, geometryId?)`
 
 Execute the code and generate geometry (typically as glTF).
 
 ```typescript
-protected async computeGeometry(
+protected async createGeometry(
   path: string,
   parameters: Record<string, unknown>,
-  geometryId?: string,
-): Promise<ComputeGeometryResult> {
+): Promise<CreateGeometryResult> {
   try {
     const code = await this.readFile(path, 'utf8');
     const geometry = await executeCode(code, parameters);
@@ -133,7 +132,6 @@ Export geometry to the requested format.
 ```typescript
 protected async exportGeometry(
   fileType: ExportFormat,
-  geometryId?: string,
   meshConfig?: { linearTolerance: number; angularTolerance: number },
 ): Promise<ExportGeometryResult> {
   // Export from cached geometry
@@ -364,7 +362,7 @@ const files = await this.readdir('path/to/dir');
 Use the built-in logging methods:
 
 ```typescript
-this.debug('Processing file', { operation: 'computeGeometry' });
+this.debug('Processing file', { operation: 'createGeometry' });
 this.warn('Deprecated feature used');
 this.error('Failed to parse', { data: { line: 42 } });
 ```

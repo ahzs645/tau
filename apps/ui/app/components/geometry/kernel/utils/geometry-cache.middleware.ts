@@ -1,7 +1,7 @@
 /**
  * Geometry Cache Middleware
  *
- * Caches computeGeometry results to avoid redundant kernel computations.
+ * Caches createGeometry results to avoid redundant kernel computations.
  * Uses a content-addressable cache based on all dependencies (file content hashes,
  * middleware signatures, framework version, and kernel options).
  *
@@ -15,7 +15,7 @@
  */
 
 import { uint8ArrayToBase64, base64ToUint8Array } from 'uint8array-extras';
-import type { GeometryResponse, MiddlewareFileManager } from '@taucad/types';
+import type { GeometryResponse, KernelFilesystem } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 
@@ -173,19 +173,19 @@ function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolea
  * Clean up old cache entries to prevent unbounded cache growth.
  * Deletes entries older than maxAgeMs and keeps only maxEntries most recent files.
  *
- * @param fileManager - The file manager for filesystem operations
+ * @param filesystem - The filesystem for file operations
  * @param cacheDir - The cache directory path
  * @param maxAgeMs - Maximum age in milliseconds for cache entries
  * @param maxEntries - Maximum number of cache entries to keep
  */
 async function cleanupOldCacheEntries(
-  fileManager: MiddlewareFileManager,
+  filesystem: KernelFilesystem,
   cacheDir: string,
   maxAgeMs: number,
   maxEntries: number,
 ): Promise<void> {
   try {
-    const files = await fileManager.getDirectoryStat(cacheDir);
+    const files = await filesystem.getDirectoryStat(cacheDir);
 
     // Filter to only .json cache files
     const cacheFiles = files.filter((file) => file.type === 'file' && file.name.endsWith('.json'));
@@ -226,7 +226,7 @@ async function cleanupOldCacheEntries(
     }
 
     // Delete identified files
-    await Promise.all(filesToDelete.map(async (path) => fileManager.unlink(path)));
+    await Promise.all(filesToDelete.map(async (path) => filesystem.unlink(path)));
   } catch {
     // Cleanup errors are non-fatal - silently ignore
   }
@@ -235,7 +235,7 @@ async function cleanupOldCacheEntries(
 /**
  * Geometry cache middleware.
  *
- * Caches computeGeometry results based on all dependencies (files, middleware, framework, options).
+ * Caches createGeometry results based on all dependencies (files, middleware, framework, options).
  * Uses wrap-style hook with onion model execution:
  * - Check cache before calling handler()
  * - Write to cache after handler() returns (on cache miss)
@@ -248,23 +248,23 @@ export const geometryCacheMiddleware = createKernelMiddleware({
   name: 'GeometryCache',
   version: '1.0.0',
 
-  async wrapComputeGeometry(request, handler) {
-    const { input, runtime } = request;
-
+  async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash }) {
+    const { basePath } = input;
+    logger.log('Checking geometry cache', { data: { ...input } });
     // Use pre-computed dependency hash as cache key
-    const cacheKey = runtime.dependencyHash;
-    const cachePath = getCachePath(input.basePath, cacheKey);
+    const cacheKey = dependencyHash;
+    const cachePath = getCachePath(basePath, cacheKey);
 
     // 1. Check if cache exists
     try {
-      const cacheExists = await runtime.fileManager.exists(cachePath);
+      const cacheExists = await filesystem.exists(cachePath);
 
       if (cacheExists) {
         // Cache hit - read and return cached result
-        runtime.logger.debug(`Cache hit for ${cacheKey}`);
+        logger.debug(`Cache hit for ${cacheKey}`);
 
         // Read and deserialize all geometry types from JSON
-        const cachedData = await runtime.fileManager.readFile(cachePath, 'utf8');
+        const cachedData = await filesystem.readFile(cachePath, 'utf8');
         const geometries = deserializeGeometries(cachedData);
 
         // Short-circuit: return cached result
@@ -273,35 +273,35 @@ export const geometryCacheMiddleware = createKernelMiddleware({
       }
     } catch (error) {
       // Cache read error - treat as cache miss
-      runtime.logger.debug(`Cache read error for ${cacheKey}: ${String(error)}`);
+      logger.debug(`Cache read error for ${cacheKey}: ${String(error)}`);
     }
 
     // 2. Cache miss - execute downstream
-    runtime.logger.debug(`Cache miss for ${cacheKey}`);
-    const result = await handler(request);
+    logger.debug(`Cache miss for ${cacheKey}`);
+    const result = await handler(input);
 
     // 4. Write to cache on the way back up (skip if webrtc geometries present)
     if (result.success && result.data.length > 0) {
       // Skip caching if any geometry is a webrtc - these cannot be cached
       // and would result in incomplete data on cache hit
       if (hasVideoStreamGeometry(result.data)) {
-        runtime.logger.debug(`Skipping cache for ${cacheKey}: contains webrtc geometry`);
+        logger.debug(`Skipping cache for ${cacheKey}: contains webrtc geometry`);
       } else {
         try {
           // Ensure cache directory exists
-          const cacheDir = getCacheDir(input.basePath);
-          await runtime.fileManager.ensureDirectoryExists(cacheDir);
+          const cacheDir = getCacheDir(basePath);
+          await filesystem.ensureDirectoryExists(cacheDir);
 
           // Serialize all geometries to JSON (handles GLTF, SVG)
           const serialized = serializeGeometries(result.data);
-          await runtime.fileManager.writeFile(cachePath, serialized);
-          runtime.logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
+          await filesystem.writeFile(cachePath, serialized);
+          logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
 
           // Cleanup old cache entries to prevent unbounded growth
-          await cleanupOldCacheEntries(runtime.fileManager, cacheDir, maxCacheAgeMs, maxCacheEntries);
+          await cleanupOldCacheEntries(filesystem, cacheDir, maxCacheAgeMs, maxCacheEntries);
         } catch (error) {
           // Cache write error - log and continue
-          runtime.logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);
+          logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);
         }
       }
     }

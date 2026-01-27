@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import type { FileStat } from '@taucad/types';
 import { fs, ensureFilesystemConfigured } from '#filesystem/zenfs-config.js';
 
 // Use ZenFS promise-based API
@@ -10,14 +11,6 @@ const fsp = fs.promises;
  * the ZenFS backend is initialized before any filesystem operations.
  */
 const ensureReady = async (): Promise<void> => ensureFilesystemConfigured('indexeddb');
-
-export type FileStat = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-  mtimeMs: number;
-};
 
 export type MkdirOptions = {
   mode?: number;

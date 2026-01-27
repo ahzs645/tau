@@ -4,15 +4,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import type { Dependency } from '@taucad/types';
+import type { Dependency, OnWorkerLog } from '@taucad/types';
 import {
   createKernelMiddleware,
   createMiddlewareLogger,
   createMiddlewareState,
   createMiddlewareRuntime,
 } from '#components/geometry/kernel/utils/kernel-middleware.js';
-import { createMockFileManager } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
-import type { OnWorkerLog } from '#types/console.types.js';
+import { createMockFilesystem } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 // Mock dependencies for testing
 const mockDependencies: readonly Dependency[] = [
@@ -31,20 +30,20 @@ describe('createKernelMiddleware', () => {
   });
 
   it('should create a middleware with wrap hooks', () => {
-    const wrapComputeGeometry = vi.fn();
+    const wrapCreateGeometry = vi.fn();
     const wrapExportGeometry = vi.fn();
-    const wrapExtractParameters = vi.fn();
+    const wrapGetParameters = vi.fn();
 
     const middleware = createKernelMiddleware({
       name: 'TestMiddleware',
-      wrapComputeGeometry,
+      wrapCreateGeometry,
       wrapExportGeometry,
-      wrapExtractParameters,
+      wrapGetParameters,
     });
 
-    expect(middleware.wrapComputeGeometry).toBe(wrapComputeGeometry);
+    expect(middleware.wrapCreateGeometry).toBe(wrapCreateGeometry);
     expect(middleware.wrapExportGeometry).toBe(wrapExportGeometry);
-    expect(middleware.wrapExtractParameters).toBe(wrapExtractParameters);
+    expect(middleware.wrapGetParameters).toBe(wrapGetParameters);
   });
 
   it('should create a middleware with a state schema', () => {
@@ -238,20 +237,20 @@ describe('createMiddlewareState', () => {
 describe('createMiddlewareRuntime', () => {
   const mockDependencyHash = 'a'.repeat(64);
 
-  it('should create a runtime with logger, file manager, state, dependencies, and hash', () => {
+  it('should create a runtime with logger, filesystem, state, dependencies, and hash', () => {
     const onLog = vi.fn();
-    const fileManager = createMockFileManager();
+    const filesystem = createMockFilesystem();
 
     const runtime = createMiddlewareRuntime({
       onLog: onLog as OnWorkerLog,
       middlewareName: 'TestMiddleware',
-      fileManager,
+      filesystem,
       dependencies: mockDependencies,
       dependencyHash: mockDependencyHash,
     });
 
     expect(runtime.logger).toBeDefined();
-    expect(runtime.fileManager).toBe(fileManager);
+    expect(runtime.filesystem).toBe(filesystem);
     expect(runtime.state).toBeDefined();
     expect(runtime.state.value).toEqual({});
     expect(runtime.dependencies).toBe(mockDependencies);
@@ -260,7 +259,7 @@ describe('createMiddlewareRuntime', () => {
 
   it('should create a runtime with state schema validation', () => {
     const onLog = vi.fn();
-    const fileManager = createMockFileManager();
+    const filesystem = createMockFilesystem();
     const stateSchema = z.object({
       count: z.number(),
     });
@@ -268,7 +267,7 @@ describe('createMiddlewareRuntime', () => {
     const runtime = createMiddlewareRuntime<z.infer<typeof stateSchema>>({
       onLog: onLog as OnWorkerLog,
       middlewareName: 'TestMiddleware',
-      fileManager,
+      filesystem,
       dependencies: mockDependencies,
       dependencyHash: mockDependencyHash,
       stateSchema,
@@ -283,12 +282,12 @@ describe('createMiddlewareRuntime', () => {
 
   it('should configure logger with middleware name', () => {
     const onLog = vi.fn();
-    const fileManager = createMockFileManager();
+    const filesystem = createMockFilesystem();
 
     const runtime = createMiddlewareRuntime({
       onLog: onLog as OnWorkerLog,
       middlewareName: 'MyMiddleware',
-      fileManager,
+      filesystem,
       dependencies: mockDependencies,
       dependencyHash: mockDependencyHash,
     });
@@ -307,8 +306,8 @@ describe('wrap hook behavior', () => {
   it('should allow wrap hooks to call handler and transform result', async () => {
     const middleware = createKernelMiddleware({
       name: 'TransformMiddleware',
-      async wrapComputeGeometry(request, handler) {
-        const result = await handler(request);
+      async wrapCreateGeometry(input, handler, _runtime) {
+        const result = await handler(input);
 
         // Transform the result
         if (result.success) {
@@ -328,19 +327,19 @@ describe('wrap hook behavior', () => {
       issues: [],
     });
 
-    const result = await middleware.wrapComputeGeometry!(
-      {
-        input: { filename: 'test.kcl', parameters: {}, basePath: 'builds/test' },
-        runtime: createMiddlewareRuntime({
-          onLog: vi.fn() as OnWorkerLog,
-          middlewareName: 'Test',
-          fileManager: createMockFileManager(),
-          dependencies: mockDependencies,
-          dependencyHash: 'a'.repeat(64),
-        }),
-      },
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- Mock handler for testing
+    const runtime = createMiddlewareRuntime({
+      onLog: vi.fn() as OnWorkerLog,
+      middlewareName: 'Test',
+      filesystem: createMockFilesystem(),
+      dependencies: mockDependencies,
+      dependencyHash: 'a'.repeat(64),
+    });
+
+    const result = await middleware.wrapCreateGeometry!(
+      { filePath: '/builds/test/test.kcl', basePath: '/builds/test', parameters: {} },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
+      runtime,
     );
 
     expect(mockHandler).toHaveBeenCalled();
@@ -362,7 +361,7 @@ describe('wrap hook behavior', () => {
     const middleware = createKernelMiddleware({
       name: 'CacheMiddleware',
       // Intentionally not calling handler to test short-circuit
-      async wrapComputeGeometry(_request, _handler) {
+      async wrapCreateGeometry(_input, _handler, _runtime) {
         // Short-circuit - don't call handler
         return cachedResult;
       },
@@ -370,19 +369,20 @@ describe('wrap hook behavior', () => {
 
     const mockHandler = vi.fn();
 
-    const result = await middleware.wrapComputeGeometry!(
-      {
-        input: { filename: 'test.kcl', parameters: {}, basePath: 'builds/test' },
-        runtime: createMiddlewareRuntime({
-          onLog: vi.fn() as OnWorkerLog,
-          middlewareName: 'Test',
-          fileManager: createMockFileManager(),
-          dependencies: mockDependencies,
-          dependencyHash: 'a'.repeat(64),
-        }),
-      },
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- Mock handler for testing
+    const input = { filePath: '/builds/test/test.kcl', basePath: '/builds/test', parameters: {} };
+    const runtime = createMiddlewareRuntime({
+      onLog: vi.fn() as OnWorkerLog,
+      middlewareName: 'Test',
+      filesystem: createMockFilesystem(),
+      dependencies: mockDependencies,
+      dependencyHash: 'a'.repeat(64),
+    });
+
+    const result = await middleware.wrapCreateGeometry!(
+      input,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
+      runtime,
     );
 
     // Handler should not have been called
@@ -400,15 +400,15 @@ describe('wrap hook behavior', () => {
     const middleware = createKernelMiddleware({
       name: 'StatefulMiddleware',
       stateSchema,
-      async wrapComputeGeometry(request, handler) {
+      async wrapCreateGeometry(input, handler, { state }) {
         // Update state before calling handler
-        request.runtime.state.update({ callCount: 1 });
+        state.update({ callCount: 1 });
 
-        const result = await handler(request);
+        const result = await handler(input);
 
         // Read state after handler
-        const count = request.runtime.state.value.callCount ?? 0;
-        request.runtime.state.update({ callCount: count + 1 });
+        const count = state.value.callCount ?? 0;
+        state.update({ callCount: count + 1 });
 
         return result;
       },
@@ -423,19 +423,17 @@ describe('wrap hook behavior', () => {
     const runtime = createMiddlewareRuntime<TestState>({
       onLog: vi.fn() as OnWorkerLog,
       middlewareName: 'Test',
-      fileManager: createMockFileManager(),
+      filesystem: createMockFilesystem(),
       dependencies: mockDependencies,
       dependencyHash: 'a'.repeat(64),
       stateSchema,
     });
 
-    await middleware.wrapComputeGeometry!(
-      {
-        input: { filename: 'test.kcl', parameters: {}, basePath: 'builds/test' },
-        runtime,
-      },
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- Mock handler for testing
+    await middleware.wrapCreateGeometry!(
+      { filePath: '/builds/test/test.kcl', basePath: '/builds/test', parameters: {} },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
+      runtime,
     );
 
     expect(runtime.state.value.callCount).toBe(2);

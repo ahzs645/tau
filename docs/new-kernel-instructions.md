@@ -20,8 +20,8 @@ How to add a new kernel (repeatable recipe)
    - Location: `apps/ui/app/components/geometry/kernel/<kernel>/<kernel>.worker.ts`
    - Extend `KernelWorker` and implement:
      - `canHandle(file)` → quick gate to detect supported files
-     - `extractParameters(file)` → return `{ defaultParameters, jsonSchema }`
-     - `computeGeometry(file, parameters)` → return `Geometry[]` (e.g. GLTF blob)
+     - `getParameters(file)` → return `{ defaultParameters, jsonSchema }`
+     - `createGeometry(file, parameters)` → return `Geometry[]` (e.g. GLTF blob)
      - `exportGeometry(format, geometryId?)` → return blobs for requested format(s)
    - Expose the worker via `comlink`:
      ```
@@ -70,10 +70,10 @@ How to add a new kernel (repeatable recipe)
 About the JSCAD worker (fully implemented)
 -------------------------------------------
 - `canHandle` detects TS/JS code importing or requiring `@jscad/modeling`.
-- `extractParameters` supports both:
+- `getParameters` supports both:
   - **ES Modules**: `export const defaultParams = { ... }` → Converts to JSON Schema
   - **CommonJS**: `getParameterDefinitions()` → Converts parameter definitions to JSON Schema with proper type mapping
-- `computeGeometry` executes user code in a sandboxed VM and converts JSCAD geometry to GLTF for rendering.
+- `createGeometry` executes user code in a sandboxed VM and converts JSCAD geometry to GLTF for rendering.
 - `exportGeometry` supports STL export format.
 
 Key implementation details:

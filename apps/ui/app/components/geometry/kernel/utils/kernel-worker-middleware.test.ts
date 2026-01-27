@@ -11,14 +11,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import type { ComputeGeometryResult, GeometryGltf } from '@taucad/types';
+import type { CreateGeometryResult, GeometryGltf, OnWorkerLog } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { MockKernelWorker } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
-import type { OnWorkerLog } from '#types/console.types.js';
 
 describe('kernel-worker middleware onion chain', () => {
   const mockGltfContent = new Uint8Array([1, 2, 3, 4]);
-  const successResult: ComputeGeometryResult = {
+  const successResult: CreateGeometryResult = {
     success: true,
     data: [{ format: 'gltf', content: mockGltfContent }],
     issues: [],
@@ -36,7 +35,7 @@ describe('kernel-worker middleware onion chain', () => {
   function createTrackingMiddleware(name: string, executionOrder: string[]) {
     return createKernelMiddleware({
       name,
-      async wrapComputeGeometry(request, handler) {
+      async wrapCreateGeometry(request, handler) {
         executionOrder.push(`${name}-before`);
         const result = await handler(request);
         executionOrder.push(`${name}-after`);
@@ -60,13 +59,13 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      // Spy on the internal computeGeometry to track when main is called
-      const computeGeometrySpy = vi.spyOn(worker as never, 'computeGeometry').mockImplementation(async () => {
+      // Spy on the internal createGeometry to track when main is called
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
         executionOrder.push('main');
         return successResult;
       });
 
-      await worker.runComputeGeometry();
+      await worker.runCreateGeometry();
 
       // Onion model: M1 wraps M2 wraps M3 wraps main
       // Before: outside-in (M1 -> M2 -> M3 -> main)
@@ -81,7 +80,7 @@ describe('kernel-worker middleware onion chain', () => {
         'M1-after',
       ]);
 
-      computeGeometrySpy.mockRestore();
+      createGeometrySpy.mockRestore();
     });
 
     it('should skip middleware without wrap hooks', async () => {
@@ -102,23 +101,23 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const computeGeometrySpy = vi.spyOn(worker as never, 'computeGeometry').mockImplementation(async () => {
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
         executionOrder.push('main');
         return successResult;
       });
 
-      await worker.runComputeGeometry();
+      await worker.runCreateGeometry();
 
       // NoHookMiddleware is skipped
       expect(executionOrder).toEqual(['M1-before', 'M3-before', 'main', 'M3-after', 'M1-after']);
 
-      computeGeometrySpy.mockRestore();
+      createGeometrySpy.mockRestore();
     });
   });
 
   describe('short-circuiting', () => {
     it('should allow middleware to short-circuit by not calling handler', async () => {
-      const cachedResult: ComputeGeometryResult = {
+      const cachedResult: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([9, 9, 9]) }],
         issues: [],
@@ -129,7 +128,7 @@ describe('kernel-worker middleware onion chain', () => {
       // Cache middleware that short-circuits
       const cacheMiddleware = createKernelMiddleware({
         name: 'CacheMiddleware',
-        async wrapComputeGeometry(_request, _handler) {
+        async wrapCreateGeometry(_request, _handler) {
           executionOrder.push('cache-check');
           // Short-circuit - don't call handler
           return cachedResult;
@@ -142,15 +141,15 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const computeGeometrySpy = vi.spyOn(worker as never, 'computeGeometry').mockImplementation(async () => {
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
         executionOrder.push('main');
         return successResult;
       });
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
 
       expect(executionOrder).toEqual(['cache-check']);
-      expect(computeGeometrySpy).not.toHaveBeenCalled();
+      expect(createGeometrySpy).not.toHaveBeenCalled();
       // Result contains geometry with hash added by kernel-worker
       expect(result.success).toBe(true);
       if (result.success) {
@@ -162,11 +161,11 @@ describe('kernel-worker middleware onion chain', () => {
         }
       }
 
-      computeGeometrySpy.mockRestore();
+      createGeometrySpy.mockRestore();
     });
 
     it('should allow upstream middleware to process short-circuited results', async () => {
-      const cachedResult: ComputeGeometryResult = {
+      const cachedResult: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([5, 6, 7]) }],
         issues: [],
@@ -178,7 +177,7 @@ describe('kernel-worker middleware onion chain', () => {
       // Outer middleware (transform) - wraps everything
       const transformMiddleware = createKernelMiddleware({
         name: 'TransformMiddleware',
-        async wrapComputeGeometry(request, handler) {
+        async wrapCreateGeometry(request, handler) {
           executionOrder.push('transform-before');
           const result = await handler(request);
           executionOrder.push('transform-after');
@@ -203,7 +202,7 @@ describe('kernel-worker middleware onion chain', () => {
       // Inner middleware (cache) - short-circuits
       const cacheMiddleware = createKernelMiddleware({
         name: 'CacheMiddleware',
-        async wrapComputeGeometry(_request, _handler) {
+        async wrapCreateGeometry(_request, _handler) {
           executionOrder.push('cache-hit');
           // Short-circuit with cached result
           return cachedResult;
@@ -217,16 +216,16 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const computeGeometrySpy = vi.spyOn(worker as never, 'computeGeometry').mockImplementation(async () => {
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
         executionOrder.push('main');
         return successResult;
       });
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
 
       // Cache short-circuits, but transform still runs on return journey
       expect(executionOrder).toEqual(['transform-before', 'cache-hit', 'transform-after']);
-      expect(computeGeometrySpy).not.toHaveBeenCalled();
+      expect(createGeometrySpy).not.toHaveBeenCalled();
 
       // Result should be transformed
       expect(result.success).toBe(true);
@@ -241,7 +240,7 @@ describe('kernel-worker middleware onion chain', () => {
         }
       }
 
-      computeGeometrySpy.mockRestore();
+      createGeometrySpy.mockRestore();
     });
   });
 
@@ -259,19 +258,19 @@ describe('kernel-worker middleware onion chain', () => {
       const statefulMiddleware = createKernelMiddleware({
         name: 'StatefulMiddleware',
         stateSchema,
-        async wrapComputeGeometry(request, handler) {
+        async wrapCreateGeometry(input, handler, { state }) {
           // Update state before handler
-          request.runtime.state.update({ beforeValue: 'set-before' });
+          state.update({ beforeValue: 'set-before' });
 
-          const result = await handler(request);
+          const result = await handler(input);
 
           // Update state after handler
-          request.runtime.state.update({ afterValue: 'set-after' });
+          state.update({ afterValue: 'set-after' });
 
           // Capture final state for verification
           capturedState = {
-            beforeValue: request.runtime.state.value.beforeValue,
-            afterValue: request.runtime.state.value.afterValue,
+            beforeValue: state.value.beforeValue,
+            afterValue: state.value.afterValue,
           };
 
           return result;
@@ -284,7 +283,7 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      await worker.runComputeGeometry();
+      await worker.runCreateGeometry();
 
       expect(capturedState.beforeValue).toBe('set-before');
       expect(capturedState.afterValue).toBe('set-after');
@@ -300,10 +299,10 @@ describe('kernel-worker middleware onion chain', () => {
       const middleware1 = createKernelMiddleware({
         name: 'Middleware1',
         stateSchema,
-        async wrapComputeGeometry(request, handler) {
-          request.runtime.state.update({ value: 'M1-value' });
-          const result = await handler(request);
-          capturedStates['m1'] = request.runtime.state.value.value;
+        async wrapCreateGeometry(input, handler, { state }) {
+          state.update({ value: 'M1-value' });
+          const result = await handler(input);
+          capturedStates['m1'] = state.value.value;
           return result;
         },
       });
@@ -311,10 +310,10 @@ describe('kernel-worker middleware onion chain', () => {
       const middleware2 = createKernelMiddleware({
         name: 'Middleware2',
         stateSchema,
-        async wrapComputeGeometry(request, handler) {
-          request.runtime.state.update({ value: 'M2-value' });
-          const result = await handler(request);
-          capturedStates['m2'] = request.runtime.state.value.value;
+        async wrapCreateGeometry(input, handler, { state }) {
+          state.update({ value: 'M2-value' });
+          const result = await handler(input);
+          capturedStates['m2'] = state.value.value;
           return result;
         },
       });
@@ -325,7 +324,7 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      await worker.runComputeGeometry();
+      await worker.runCreateGeometry();
 
       // Each middleware has its own state
       expect(capturedStates['m1']).toBe('M1-value');
@@ -337,7 +336,7 @@ describe('kernel-worker middleware onion chain', () => {
     it('should allow multiple middleware to transform results', async () => {
       const middleware1 = createKernelMiddleware({
         name: 'AddSuffix1',
-        async wrapComputeGeometry(request, handler) {
+        async wrapCreateGeometry(request, handler) {
           const result = await handler(request);
 
           if (result.success) {
@@ -354,7 +353,7 @@ describe('kernel-worker middleware onion chain', () => {
 
       const middleware2 = createKernelMiddleware({
         name: 'AddSuffix2',
-        async wrapComputeGeometry(request, handler) {
+        async wrapCreateGeometry(request, handler) {
           const result = await handler(request);
 
           if (result.success) {
@@ -368,7 +367,7 @@ describe('kernel-worker middleware onion chain', () => {
         },
       });
 
-      const mainResult: ComputeGeometryResult = {
+      const mainResult: CreateGeometryResult = {
         success: true,
         data: [],
         issues: [{ message: 'main-issue', severity: 'warning' as const }],
@@ -380,7 +379,7 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
 
       expect(result.success).toBe(true);
 
@@ -397,7 +396,7 @@ describe('kernel-worker middleware onion chain', () => {
     it('should propagate errors from main operation', async () => {
       const middleware = createKernelMiddleware({
         name: 'PassthroughMiddleware',
-        async wrapComputeGeometry(request, handler) {
+        async wrapCreateGeometry(request, handler) {
           return handler(request);
         },
       });
@@ -408,9 +407,9 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      vi.spyOn(worker as never, 'computeGeometry').mockRejectedValue(new Error('Main operation failed'));
+      vi.spyOn(worker as never, 'createGeometry').mockRejectedValue(new Error('Main operation failed'));
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
       expect(result.success).toBe(false);
       if (!result.success && result.issues[0]) {
         expect(result.issues[0].message).toContain('Main operation failed');
@@ -421,7 +420,7 @@ describe('kernel-worker middleware onion chain', () => {
     it('should catch errors from middleware and return error result', async () => {
       const middleware = createKernelMiddleware({
         name: 'ErrorMiddleware',
-        async wrapComputeGeometry(_request, _handler) {
+        async wrapCreateGeometry(_request, _handler) {
           throw new Error('Middleware error');
         },
       });
@@ -432,7 +431,7 @@ describe('kernel-worker middleware onion chain', () => {
         onLog: onLog as OnWorkerLog,
       });
 
-      const result = await worker.runComputeGeometry();
+      const result = await worker.runCreateGeometry();
       expect(result.success).toBe(false);
       if (!result.success && result.issues[0]) {
         expect(result.issues[0].message).toContain('Middleware error in ErrorMiddleware');

@@ -130,9 +130,9 @@ async function transformGltfGeometry(geometry: GeometryGltf): Promise<GeometryGl
 export const gltfCoordinateTransformMiddleware = createKernelMiddleware({
   name: 'GltfCoordinateTransform',
 
-  async wrapComputeGeometry(request, handler) {
+  async wrapCreateGeometry(input, handler, { logger }) {
     // Execute downstream (no pre-processing needed)
-    const result = await handler(request);
+    const result = await handler(input);
 
     // Transform on the way back up (onion model "return journey")
     // This runs for both computed and cached results
@@ -140,7 +140,7 @@ export const gltfCoordinateTransformMiddleware = createKernelMiddleware({
       return result;
     }
 
-    request.runtime.logger.trace('Transforming GLTF geometries to Z-up/mm');
+    logger.trace('Transforming GLTF geometries to Z-up/mm');
 
     // Transform all GLTF geometries
     const transformedGeometries = await Promise.all(

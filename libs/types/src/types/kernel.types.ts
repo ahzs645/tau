@@ -1,7 +1,8 @@
 import type { PartialDeep } from 'type-fest';
 import type { backendProviders, kernelProviders } from '#constants/kernel.constants.js';
 import type { Geometry, GeometryResponse } from '#types/cad.types.js';
-import type { ExportFormat } from '#types/file.types.js';
+import type { ExportFormat, FileStat } from '#types/file.types.js';
+import type { LogLevel } from '#types/logger.types.js';
 
 export type KernelStackFrame = {
   fileName?: string;
@@ -50,29 +51,25 @@ export type BackendProvider = (typeof backendProviders)[number];
 
 export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 
-// Specific result types for different kernel operations
-
 /**
- * Result type for computeGeometry.
+ * Result type for createGeometry.
  * Used by kernel workers and middleware - geometries don't have hash yet.
  * The hash is added by kernel-worker.ts after the middleware chain.
  */
-export type ComputeGeometryResult = KernelResult<GeometryResponse[]>;
+export type CreateGeometryResult = KernelResult<GeometryResponse[]>;
 
 /**
- * Completed result type for computeGeometry.
+ * Completed result type for createGeometry.
  * Returned to consumers - geometries have hash for React keys and caching.
  */
-export type ComputeGeometryResultCompleted = KernelResult<Geometry[]>;
+export type CreateGeometryResultCompleted = KernelResult<Geometry[]>;
 
-export type ExtractParametersResult = KernelResult<{
+export type GetParametersResult = KernelResult<{
   defaultParameters: Record<string, unknown>;
   jsonSchema: unknown;
 }>;
 
 export type ExtractNameResult = KernelResult<string | undefined>;
-
-export type ExtractSchemaResult = KernelResult<unknown>;
 
 export type ExportGeometryResult = KernelResult<Array<{ blob: Blob; name: string }>>;
 
@@ -165,83 +162,116 @@ export type Dependency =
   | AssetDependency;
 
 // =============================================================================
-// Middleware Types
+// Kernel Method Types
 // =============================================================================
 
 /**
- * Input passed to beforeComputeGeometry middleware hooks.
+ * Logger options for kernel and middleware logging methods.
  */
-export type ComputeGeometryInput = {
-  /** The filename being processed */
-  filename: string;
-  /** Parameters passed to computeGeometry */
-  parameters: Record<string, unknown>;
-  /** Optional geometry ID */
-  geometryId?: string;
-  /** Base path for the build (e.g., "builds/abc123") */
-  basePath: string;
-};
-
-/**
- * Input passed to beforeExportGeometry middleware hooks.
- */
-export type ExportGeometryInput = {
-  /** The export format requested */
-  fileType: ExportFormat;
-  /** Optional geometry ID being exported */
-  geometryId?: string;
-};
-
-/**
- * Context passed to exportGeometry middleware hooks.
- */
-export type ExportGeometryContext = ExportGeometryInput;
-
-/**
- * Input passed to beforeExtractParameters middleware hooks.
- */
-export type ExtractParametersInput = {
-  /** The filename being processed */
-  filename: string;
-  /** Base path for the build (e.g., "builds/abc123") */
-  basePath: string;
-};
-
-/**
- * Context passed to extractParameters middleware hooks.
- */
-export type ExtractParametersContext = ExtractParametersInput;
-
-/**
- * Logger options for middleware logging methods.
- */
-export type MiddlewareLogOptions = {
+export type KernelLogOptions = {
   /** Additional data to include in the log */
   data?: unknown;
 };
 
 /**
- * Logger interface provided to middleware hooks.
- * Provides convenience methods that automatically inject the middleware name as the component.
+ * Logger interface for kernel methods and middleware.
+ * Provides convenience methods that automatically inject the component name.
  */
-export type KernelMiddlewareLogger = {
+export type KernelLogger = {
   /** Log an info-level message */
-  log: (message: string, options?: MiddlewareLogOptions) => void;
+  log: (message: string, options?: KernelLogOptions) => void;
   /** Log a debug-level message */
-  debug: (message: string, options?: MiddlewareLogOptions) => void;
+  debug: (message: string, options?: KernelLogOptions) => void;
   /** Log a trace-level message */
-  trace: (message: string, options?: MiddlewareLogOptions) => void;
+  trace: (message: string, options?: KernelLogOptions) => void;
   /** Log a warning-level message */
-  warn: (message: string, options?: MiddlewareLogOptions) => void;
+  warn: (message: string, options?: KernelLogOptions) => void;
   /** Log an error-level message */
-  error: (message: string, options?: MiddlewareLogOptions) => void;
+  error: (message: string, options?: KernelLogOptions) => void;
+  /**
+   * Log a message with a dynamic log level.
+   * Useful for kernels like OpenSCAD that determine log level at runtime.
+   */
+  custom: (level: LogLevel, message: string, options?: KernelLogOptions) => void;
+};
+
+/**
+ * Runtime services provided to kernel methods.
+ */
+export type KernelRuntime = {
+  /** Filesystem interface (all paths are absolute) */
+  filesystem: KernelFilesystem;
+  /** Logger with kernel name pre-configured */
+  logger: KernelLogger;
+};
+
+/**
+ * Input for kernel getParameters method.
+ */
+export type GetParametersInput = {
+  /** Absolute path to the active file */
+  filePath: string;
+  /** Absolute path to the project root directory */
+  basePath: string;
+};
+
+/**
+ * Input for kernel createGeometry method.
+ */
+export type CreateGeometryInput = {
+  /** Absolute path to the active file */
+  filePath: string;
+  /** Absolute path to the project root directory */
+  basePath: string;
+  /** User-provided parameters */
+  parameters: Record<string, unknown>;
+};
+
+/**
+ * Input for kernel getDependencies method.
+ */
+export type GetDependenciesInput = {
+  /** Absolute path to the active file */
+  filePath: string;
+  /** Absolute path to the project root directory */
+  basePath: string;
+};
+
+/**
+ * Input for kernel canHandle method.
+ */
+export type CanHandleInput = {
+  /** Absolute path to the active file */
+  filePath: string;
+  /** Absolute path to the project root directory */
+  basePath: string;
+  /** File extension (without dot) */
+  extension: string;
+};
+
+/**
+ * Input for kernel initialize method.
+ */
+export type InitializeInput<Options = Record<string, unknown>> = {
+  /** Worker options */
+  options: Options;
+};
+
+/**
+ * Input for kernel exportGeometry method.
+ */
+export type ExportGeometryInput = {
+  /** Export file format */
+  fileType: ExportFormat;
+  /** Optional mesh configuration for tessellation */
+  meshConfig?: { linearTolerance: number; angularTolerance: number };
 };
 
 /**
  * Type-safe state for middleware to persist data during an operation.
  *
  * The state is scoped to a single middleware and persists for the duration of
- * one operation (e.g., one computeGeometry call). In wrap-style hooks, state
+ * one operation (e.g., one createGeometry call). In wrap-style hooks, state
  * can be updated before calling handler() and read after it returns.
  *
  * @template T - The state schema type inferred from Zod. Must be an object type.
@@ -264,36 +294,35 @@ export type MiddlewareState<T extends Record<string, unknown>> = {
 };
 
 /**
- * File stat information returned by getDirectoryStat.
+ * Unified filesystem interface for kernel workers.
+ * All paths are absolute - callers use helper methods to construct paths.
  */
-export type MiddlewareFileStat = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-  mtimeMs: number;
-};
-
-/**
- * File manager interface for middleware filesystem operations.
- * This is a subset of the full FileManager interface available to middleware.
- */
-export type MiddlewareFileManager = {
-  /** Read a file as string (utf8) or binary */
-  readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
-  readFile(filepath: string): Promise<Uint8Array>;
-  /** Write content to a file */
-  writeFile(filepath: string, data: Uint8Array | string): Promise<void>;
-  /** Create a directory */
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
-  /** Check if a path exists */
+export type KernelFilesystem = {
+  // ---- Read operations (all absolute paths) ----
+  /** Read file as text */
+  readFile(path: string, encoding: 'utf8'): Promise<string>;
+  /** Read file as binary */
+  readFile(path: string): Promise<Uint8Array>;
+  /** Check if path exists */
   exists(path: string): Promise<boolean>;
-  /** Ensure a directory exists, creating parent directories as needed */
-  ensureDirectoryExists(path: string): Promise<void>;
-  /** Get file stats for all files in a directory recursively */
-  getDirectoryStat(path: string): Promise<MiddlewareFileStat[]>;
-  /** Delete a file */
+  /** List directory entries */
+  readdir(path: string): Promise<string[]>;
+
+  // ---- Write operations (all absolute paths) ----
+  /** Write file */
+  writeFile(path: string, data: Uint8Array | string): Promise<void>;
+  /** Create directory */
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  /** Delete file */
   unlink(path: string): Promise<void>;
+  /** Ensure directory exists, creating parents as needed */
+  ensureDirectoryExists(path: string): Promise<void>;
+
+  // ---- Directory operations (all absolute paths) ----
+  /** Get directory contents as map of relative paths to content */
+  getDirectoryContents(path: string): Promise<Record<string, Uint8Array>>;
+  /** Get file stats for directory recursively */
+  getDirectoryStat(path: string): Promise<FileStat[]>;
 };
 
 /**
@@ -305,9 +334,9 @@ export type MiddlewareFileManager = {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
 export type KernelMiddlewareRuntime<State extends Record<string, unknown> = {}> = {
   /** Logger with middleware name pre-configured as the component */
-  logger: KernelMiddlewareLogger;
-  /** File manager for filesystem operations */
-  fileManager: MiddlewareFileManager;
+  logger: KernelLogger;
+  /** Filesystem for all file operations (uses absolute path methods for middleware) */
+  filesystem: KernelFilesystem;
   /** Type-safe state for persisting data during the wrap hook execution */
   state: MiddlewareState<State>;
   /**
@@ -325,108 +354,57 @@ export type KernelMiddlewareRuntime<State extends Record<string, unknown> = {}> 
 };
 
 // =============================================================================
-// Middleware Request Types (Wrap-Style Hooks)
-// =============================================================================
-
-/**
- * Request object passed to computeGeometry wrap hooks.
- * Bundles input and runtime together for easy handling and modification.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type ComputeGeometryRequest<State extends Record<string, unknown> = {}> = {
-  /** The input to computeGeometry */
-  input: ComputeGeometryInput;
-  /** Runtime services (logger, fileManager, state) */
-  runtime: KernelMiddlewareRuntime<State>;
-};
-
-/**
- * Request object passed to exportGeometry wrap hooks.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type ExportGeometryRequest<State extends Record<string, unknown> = {}> = {
-  /** The input to exportGeometry */
-  input: ExportGeometryInput;
-  /** Runtime services (logger, fileManager, state) */
-  runtime: KernelMiddlewareRuntime<State>;
-};
-
-/**
- * Request object passed to extractParameters wrap hooks.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type ExtractParametersRequest<State extends Record<string, unknown> = {}> = {
-  /** The input to extractParameters */
-  input: ExtractParametersInput;
-  /** Runtime services (logger, fileManager, state) */
-  runtime: KernelMiddlewareRuntime<State>;
-};
-
-// =============================================================================
 // Middleware Handler Types (Wrap-Style Hooks)
 // =============================================================================
 
 /**
- * Handler function for computeGeometry.
+ * Handler function for createGeometry.
  * Called by wrap hooks to continue the middleware chain or execute the main operation.
+ * Runtime is captured in the handler's closure, so middleware only passes input.
  * Uses internal geometry types (without hash) - hash is added by kernel-worker.ts.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type ComputeGeometryHandler<State extends Record<string, unknown> = {}> = (
-  request: ComputeGeometryRequest<State>,
-) => Promise<ComputeGeometryResult>;
+export type CreateGeometryHandler = (input: CreateGeometryInput) => Promise<CreateGeometryResult>;
 
 /**
  * Handler function for exportGeometry.
  * Called by wrap hooks to continue the middleware chain or execute the main operation.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
+ * Runtime is captured in the handler's closure, so middleware only passes input.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type ExportGeometryHandler<State extends Record<string, unknown> = {}> = (
-  request: ExportGeometryRequest<State>,
-) => Promise<ExportGeometryResult>;
+export type ExportGeometryHandler = (input: ExportGeometryInput) => Promise<ExportGeometryResult>;
 
 /**
- * Handler function for extractParameters.
+ * Handler function for getParameters.
  * Called by wrap hooks to continue the middleware chain or execute the main operation.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
+ * Runtime is captured in the handler's closure, so middleware only passes input.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type ExtractParametersHandler<State extends Record<string, unknown> = {}> = (
-  request: ExtractParametersRequest<State>,
-) => Promise<ExtractParametersResult>;
+export type GetParametersHandler = (input: GetParametersInput) => Promise<GetParametersResult>;
 
 // =============================================================================
 // Middleware Wrap Hook Types
 // =============================================================================
 
 /**
- * Wrap-style hook for computeGeometry.
+ * Wrap-style hook for createGeometry.
  * Provides full control over execution: can short-circuit, transform input/output,
  * or add pre/post processing. Code after handler() runs on the "return journey"
  * (onion model), so short-circuited results still flow through upstream middleware.
+ *
+ * Arguments: (input, handler, runtime)
+ * - input: what to process (destructure what you need)
+ * - handler: call to continue the chain (always used)
+ * - runtime: services like logger/filesystem (only destructure if needed)
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  *
  * @example
  * ```typescript
- * async wrapComputeGeometry(request, handler) {
+ * async wrapCreateGeometry({ basePath }, handler, { logger, filesystem, dependencyHash }) {
  *   // PRE: Check cache
- *   const cached = await checkCache(request.input);
+ *   const cached = await checkCache(basePath, dependencyHash);
  *   if (cached) return cached;  // Short-circuit
  *
- *   // EXECUTE: Call downstream
- *   const result = await handler(request);
+ *   // EXECUTE: Call downstream (just pass input)
+ *   const result = await handler(input);
  *
  *   // POST: Transform result (runs even if upstream short-circuited)
  *   return transform(result);
@@ -434,10 +412,11 @@ export type ExtractParametersHandler<State extends Record<string, unknown> = {}>
  * ```
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapComputeGeometryHook<State extends Record<string, unknown> = {}> = (
-  request: ComputeGeometryRequest<State>,
-  handler: ComputeGeometryHandler<State>,
-) => Promise<ComputeGeometryResult>;
+export type WrapCreateGeometryHook<State extends Record<string, unknown> = {}> = (
+  input: CreateGeometryInput,
+  handler: CreateGeometryHandler,
+  runtime: KernelMiddlewareRuntime<State>,
+) => Promise<CreateGeometryResult>;
 
 /**
  * Wrap-style hook for exportGeometry.
@@ -447,18 +426,20 @@ export type WrapComputeGeometryHook<State extends Record<string, unknown> = {}> 
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
 export type WrapExportGeometryHook<State extends Record<string, unknown> = {}> = (
-  request: ExportGeometryRequest<State>,
-  handler: ExportGeometryHandler<State>,
+  input: ExportGeometryInput,
+  handler: ExportGeometryHandler,
+  runtime: KernelMiddlewareRuntime<State>,
 ) => Promise<ExportGeometryResult>;
 
 /**
- * Wrap-style hook for extractParameters.
+ * Wrap-style hook for getParameters.
  * Provides full control over execution with onion model semantics.
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapExtractParametersHook<State extends Record<string, unknown> = {}> = (
-  request: ExtractParametersRequest<State>,
-  handler: ExtractParametersHandler<State>,
-) => Promise<ExtractParametersResult>;
+export type WrapGetParametersHook<State extends Record<string, unknown> = {}> = (
+  input: GetParametersInput,
+  handler: GetParametersHandler,
+  runtime: KernelMiddlewareRuntime<State>,
+) => Promise<GetParametersResult>;

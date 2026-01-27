@@ -81,7 +81,7 @@ export const cadMachine = setup({
     emitted: {} as CadEmitted,
   },
   actions: {
-    computeGeometry: sendTo(
+    createGeometry: sendTo(
       ({ context }) => context.kernelRef,
       ({ context }) => {
         if (!context.file) {
@@ -89,7 +89,7 @@ export const cadMachine = setup({
         }
 
         return {
-          type: 'computeGeometry',
+          type: 'createGeometry',
           file: context.file,
           parameters: context.parameters,
         };
@@ -409,7 +409,7 @@ export const cadMachine = setup({
 
     // The initialization state is used when a new model is loaded.
     initializing: {
-      entry: 'computeGeometry',
+      entry: 'createGeometry',
       after: {
         renderTimeout: {
           target: 'error',
@@ -583,7 +583,7 @@ export const cadMachine = setup({
       },
     },
     rendering: {
-      entry: 'computeGeometry',
+      entry: 'createGeometry',
       after: {
         renderTimeout: {
           target: 'error',

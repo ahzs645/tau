@@ -1,117 +1,16 @@
 import type { GeometryFile } from '@taucad/types';
-import { describe, it, expect, vi } from 'vitest';
-import type { FileManager } from '#machines/file-manager.js';
+import { describe, it, expect } from 'vitest';
 import { OpenScadWorker } from '#components/geometry/kernel/openscad/openscad.worker.js';
+import {
+  seedTestFilesystem,
+  initializeWorkerForTesting,
+} from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- OpenSCAD uses snake_case for parameter names */
 
 // =============================================================================
 // Test Utilities
 // =============================================================================
-
-/**
- * Helper to encode text as Uint8Array for the mock file manager.
- */
-function encodeText(text: string): Uint8Array {
-  return new TextEncoder().encode(text);
-}
-
-/**
- * Create a mock FileManager that returns files from an in-memory record.
- * Handles path normalization to strip basePath prefixes.
- */
-function createMockFileManager(files: Record<string, string>): FileManager {
-  const encodedFiles: Record<string, Uint8Array> = {};
-
-  for (const [path, content] of Object.entries(files)) {
-    encodedFiles[path] = encodeText(content);
-  }
-
-  // Normalize path by removing leading slashes and basePath prefixes
-  const normalizePath = (filepath: string): string => {
-    return filepath.replace(/^\/+/, '').replace(/^builds\/test\//, '');
-  };
-
-  return {
-    readFile: vi.fn(async (filepath: string, encoding?: string) => {
-      const normalizedPath = normalizePath(filepath);
-      const content = encodedFiles[normalizedPath];
-
-      if (!content) {
-        throw new Error(`File not found: ${filepath}`);
-      }
-
-      if (encoding === 'utf8') {
-        return new TextDecoder().decode(content);
-      }
-
-      return content;
-    }),
-    exists: vi.fn(async (filepath: string) => normalizePath(filepath) in encodedFiles),
-    readdir: vi.fn(async () => Object.keys(encodedFiles)),
-    getDirectoryContents: vi.fn(async () => encodedFiles),
-    copyDirectory: vi.fn(),
-    getZippedDirectory: vi.fn(),
-    writeFile: vi.fn(),
-    writeFiles: vi.fn(),
-    mkdir: vi.fn(),
-    stat: vi.fn(),
-    rename: vi.fn(),
-    unlink: vi.fn(),
-    rmdir: vi.fn(),
-    batchExists: vi.fn(),
-    ensureDirectoryExists: vi.fn(),
-    getDirectoryStat: vi.fn(),
-  } as unknown as FileManager;
-}
-
-/**
- * Create a mock FileManager for geometry computation that handles path normalization.
- */
-function createGeometryMockFileManager(files: Record<string, string>): FileManager {
-  const encodedFiles: Record<string, Uint8Array> = {};
-
-  for (const [path, content] of Object.entries(files)) {
-    encodedFiles[path] = encodeText(content);
-  }
-
-  // Normalize path by removing leading slashes and basePath prefixes
-  const normalizePath = (filepath: string): string => {
-    return filepath.replace(/^\/+/, '').replace(/^builds\/test\//, '');
-  };
-
-  return {
-    readFile: vi.fn(async (filepath: string, encoding?: string) => {
-      const normalizedPath = normalizePath(filepath);
-      const content = encodedFiles[normalizedPath];
-
-      if (!content) {
-        throw new Error(`File not found: ${filepath}`);
-      }
-
-      if (encoding === 'utf8') {
-        return new TextDecoder().decode(content);
-      }
-
-      return content;
-    }),
-    exists: vi.fn(async (filepath: string) => normalizePath(filepath) in encodedFiles),
-    readdir: vi.fn(async () => Object.keys(encodedFiles)),
-    getDirectoryContents: vi.fn(async () => encodedFiles),
-    copyDirectory: vi.fn(),
-    getZippedDirectory: vi.fn(),
-    writeFile: vi.fn(),
-    writeFiles: vi.fn(),
-    mkdir: vi.fn(),
-    stat: vi.fn(),
-    rename: vi.fn(),
-    unlink: vi.fn(),
-    rmdir: vi.fn(),
-    batchExists: vi.fn(),
-    ensureDirectoryExists: vi.fn(),
-    getDirectoryStat: vi.fn(),
-  } as unknown as FileManager;
-}
 
 /**
  * Create a GeometryFile for testing.
@@ -126,50 +25,25 @@ function createGeometryFile(filename: string, basePath = '/builds/test'): Geomet
 }
 
 /**
- * Initialize an OpenScadWorker with a mock file manager for parameter extraction.
+ * Initialize an OpenScadWorker for parameter extraction or geometry computation.
+ * Seeds the filesystem with provided files before creating the worker.
+ * Uses the real production code path via initializeWorkerForTesting.
  */
-async function createParameterWorker(files: Record<string, string>): Promise<OpenScadWorker> {
+async function createWorker(files: Record<string, string>): Promise<OpenScadWorker> {
+  const basePath = '/builds/test';
+
+  // Convert files to have full paths and seed the filesystem
+  const absoluteFiles: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    absoluteFiles[`${basePath}/${path}`] = content;
+  }
+
+  // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request
+  await seedTestFilesystem(absoluteFiles);
+
+  // Create worker and initialize using production code path
   const worker = new OpenScadWorker();
-  const mockFileManager = createMockFileManager(files);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).fileManager = mockFileManager;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).basePath = '/builds/test';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).onLog = () => {
-    // Suppress logs
-  };
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).fileReader = {
-    async readFile(path: string) {
-      const content = await mockFileManager.readFile(path);
-
-      return new TextDecoder().decode(content);
-    },
-    exists: async (path: string) => mockFileManager.exists(path),
-    readdir: async (path: string) => mockFileManager.readdir(path),
-  };
-
-  return worker;
-}
-
-/**
- * Initialize an OpenScadWorker for geometry computation.
- */
-function createGeometryWorker(files: Record<string, string>): OpenScadWorker {
-  const worker = new OpenScadWorker();
-  const mockFileManager = createGeometryMockFileManager(files);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).fileManager = mockFileManager;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).basePath = '';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing protected property for testing
-  (worker as any).onLog = () => {
-    // Suppress logs
-  };
+  await initializeWorkerForTesting(worker);
 
   return worker;
 }
@@ -177,12 +51,12 @@ function createGeometryWorker(files: Record<string, string>): OpenScadWorker {
 /**
  * Helper to extract parameters and assert success.
  */
-async function extractParameters(
+async function getParameters(
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
-  const worker = await createParameterWorker(files);
-  const result = await worker.extractParametersEntry(createGeometryFile(mainFile));
+  const worker = await createWorker(files);
+  const result = await worker.getParametersEntry(createGeometryFile(mainFile));
 
   expect(result.success).toBe(true);
 
@@ -196,13 +70,13 @@ async function extractParameters(
 /**
  * Helper to compute geometry and get OFF data for analysis.
  */
-async function computeGeometryAndGetOffData(
+async function createGeometryAndGetOffData(
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{ offData: string | undefined; success: boolean }> {
-  const worker = createGeometryWorker(files);
-  const geometryFile = { filename: mainFile, path: '' };
-  const result = await worker.computeGeometryEntry(geometryFile, {});
+  const worker = await createWorker(files);
+  const geometryFile = createGeometryFile(mainFile);
+  const result = await worker.createGeometryEntry(geometryFile, {});
 
   return {
     offData: worker.getOffData(),
@@ -244,10 +118,10 @@ function analyzeOffColorComponents(offData: string): { rgbFaceCount: number; rgb
 // =============================================================================
 
 describe('OpenScadWorker', () => {
-  describe('extractParametersEntry', () => {
+  describe('getParametersEntry', () => {
     describe('Single file projects', () => {
       it('should extract parameters from a simple file', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'cube.scad': `
               width = 10; // [1:100]
@@ -273,7 +147,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract parameters with group annotations', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'grouped.scad': `
               /* [Main Dimensions] */
@@ -322,7 +196,7 @@ describe('OpenScadWorker', () => {
 
     describe('Multi-file projects', () => {
       it('should extract parameters from included files', async () => {
-        const { jsonSchema } = await extractParameters(
+        const { jsonSchema } = await getParameters(
           {
             'main.scad': `
               include <lib/parameters.scad>
@@ -357,7 +231,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should group parameters from non-main files by filename', async () => {
-        const { jsonSchema } = await extractParameters(
+        const { jsonSchema } = await getParameters(
           {
             'main.scad': `
               include <lib/config.scad>
@@ -389,7 +263,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should preserve explicit groups from included files', async () => {
-        const { jsonSchema } = await extractParameters(
+        const { jsonSchema } = await getParameters(
           {
             'main.scad': `
               include <lib/dimensions.scad>
@@ -428,7 +302,7 @@ describe('OpenScadWorker', () => {
       it('should NOT extract parameters from files not referenced via use or include', async () => {
         // This test verifies the bug fix: parameters should only come from files
         // that are actually referenced via use/include, not all .scad files in project
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'main.scad': `
               // No use or include statements - should only have main_param
@@ -460,7 +334,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract parameters from files referenced via include', async () => {
-        const { defaultParameters } = await extractParameters(
+        const { defaultParameters } = await getParameters(
           {
             'main.scad': `
               include <lib/config.scad>
@@ -495,7 +369,7 @@ describe('OpenScadWorker', () => {
        * @see https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/Include_Statement
        */
       it('should extract parameters from files referenced via use', async () => {
-        const { defaultParameters } = await extractParameters(
+        const { defaultParameters } = await getParameters(
           {
             'main.scad': `
               use <helpers.scad>
@@ -526,7 +400,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should recursively extract parameters from nested includes', async () => {
-        const { defaultParameters } = await extractParameters(
+        const { defaultParameters } = await getParameters(
           {
             'main.scad': `
               include <level1.scad>
@@ -565,7 +439,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should handle mixed use and include statements', async () => {
-        const { defaultParameters } = await extractParameters(
+        const { defaultParameters } = await getParameters(
           {
             'main.scad': `
               include <config.scad>
@@ -593,7 +467,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should handle circular includes without infinite loop', async () => {
-        const { defaultParameters } = await extractParameters(
+        const { defaultParameters } = await getParameters(
           {
             'a.scad': `
               include <b.scad>
@@ -614,7 +488,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should handle relative paths with ../', async () => {
-        const { defaultParameters } = await extractParameters(
+        const { defaultParameters } = await getParameters(
           {
             'project/main.scad': `
               include <../lib/shared.scad>
@@ -649,7 +523,7 @@ describe('OpenScadWorker', () => {
           files[`level${i}.scad`] = `${nextFile}param${i} = ${i};`;
         }
 
-        const { defaultParameters } = await extractParameters(files, 'level0.scad');
+        const { defaultParameters } = await getParameters(files, 'level0.scad');
 
         // Should have params from first 50 levels (0-49), but not beyond
         expect(defaultParameters).toHaveProperty('param0', 0);
@@ -666,14 +540,14 @@ describe('OpenScadWorker', () => {
 
     describe('Edge cases', () => {
       it('should handle empty files', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters({ 'empty.scad': '' }, 'empty.scad');
+        const { jsonSchema, defaultParameters } = await getParameters({ 'empty.scad': '' }, 'empty.scad');
 
         expect(jsonSchema).toEqual({ type: 'object', properties: {}, additionalProperties: false });
         expect(defaultParameters).toEqual({});
       });
 
       it('should skip internal OpenSCAD parameters starting with $', async () => {
-        const { jsonSchema } = await extractParameters(
+        const { jsonSchema } = await getParameters(
           {
             'internal.scad': `
               $fn = 100;
@@ -698,7 +572,7 @@ describe('OpenScadWorker', () => {
 
     describe('Parameter types', () => {
       it('should extract integer number parameters', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'integers.scad': `
               count = 5;
@@ -723,7 +597,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract floating point number parameters', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'floats.scad': `
               radius = 2.5;
@@ -748,7 +622,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract number parameters with range annotations', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'ranges.scad': `
               width = 50; // [10:100]
@@ -771,7 +645,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract boolean parameters', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'booleans.scad': `
               show_base = true;
@@ -796,7 +670,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract string parameters', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'strings.scad': `
               label = "Hello World";
@@ -819,7 +693,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract vector parameters (arrays)', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'vectors.scad': `
               position = [10, 20, 30];
@@ -856,7 +730,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract 2D vector parameters', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'vectors_2d.scad': `
               point = [50, 75];
@@ -893,7 +767,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract negative number parameters', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'negative.scad': `
               offset_x = -10;
@@ -916,7 +790,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract string parameters with dropdown options', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'string_options.scad': `
               material = "PLA"; // [PLA, ABS, PETG]
@@ -946,7 +820,7 @@ describe('OpenScadWorker', () => {
       });
 
       it('should extract labeled value options (key-value dropdowns)', async () => {
-        const { jsonSchema, defaultParameters } = await extractParameters(
+        const { jsonSchema, defaultParameters } = await getParameters(
           {
             'labeled_options.scad': `
               resolution = 32; // [16:Low, 32:Medium, 64:High]
@@ -992,10 +866,10 @@ describe('OpenScadWorker', () => {
   // Tests: Geometry Computation
   // ===========================================================================
 
-  describe('computeGeometryEntry', () => {
+  describe('createGeometryEntry', () => {
     describe('Basic geometry', () => {
       it('should compute geometry for a simple cube', async () => {
-        const { success, offData } = await computeGeometryAndGetOffData(
+        const { success, offData } = await createGeometryAndGetOffData(
           { 'cube.scad': 'cube([10, 10, 10]);' },
           'cube.scad',
         );
@@ -1010,7 +884,7 @@ describe('OpenScadWorker', () => {
           cube([10, 10, 10]);
           translate([20, 0, 0]) sphere(r=5);
         `;
-        const { success, offData } = await computeGeometryAndGetOffData({ 'multi.scad': scadCode }, 'multi.scad');
+        const { success, offData } = await createGeometryAndGetOffData({ 'multi.scad': scadCode }, 'multi.scad');
 
         expect(success).toBe(true);
         expect(offData).toBeDefined();
@@ -1020,7 +894,7 @@ describe('OpenScadWorker', () => {
     describe('Color handling', () => {
       it('should output OFF data with RGB colors for opaque geometry', async () => {
         const scadCode = `color([1, 0, 0]) cube([10, 10, 10]);`;
-        const { success, offData } = await computeGeometryAndGetOffData({ 'red_cube.scad': scadCode }, 'red_cube.scad');
+        const { success, offData } = await createGeometryAndGetOffData({ 'red_cube.scad': scadCode }, 'red_cube.scad');
 
         expect(success).toBe(true);
         expect(offData).toBeDefined();
@@ -1034,7 +908,7 @@ describe('OpenScadWorker', () => {
       it('should output OFF data with RGBA colors for transparent geometry', async () => {
         const scadCode = `color([0, 0, 1, 0.5]) cube([10, 10, 10]);`;
         const files = { 'transparent_cube.scad': scadCode };
-        const { success, offData } = await computeGeometryAndGetOffData(files, 'transparent_cube.scad');
+        const { success, offData } = await createGeometryAndGetOffData(files, 'transparent_cube.scad');
 
         expect(success).toBe(true);
         expect(offData).toBeDefined();
@@ -1050,7 +924,7 @@ describe('OpenScadWorker', () => {
           color([1, 0, 0]) cube([10, 10, 10]);
           translate([15, 0, 0]) color([0, 0, 1, 0.5]) cube([10, 10, 10]);
         `;
-        const { success, offData } = await computeGeometryAndGetOffData({ 'mixed.scad': scadCode }, 'mixed.scad');
+        const { success, offData } = await createGeometryAndGetOffData({ 'mixed.scad': scadCode }, 'mixed.scad');
 
         expect(success).toBe(true);
         expect(offData).toBeDefined();
@@ -1065,14 +939,14 @@ describe('OpenScadWorker', () => {
 
     describe('Error handling', () => {
       it('should return compilation error with line number for syntax errors', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'syntax_error.scad': `
             x = 10;
             x += 5;
             cube([x, x, x]);
           `,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'syntax_error.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('syntax_error.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1083,11 +957,11 @@ describe('OpenScadWorker', () => {
       });
 
       it('should return error with file name for included file errors', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'main.scad': 'include <lib.scad>\ncube([10, 10, 10]);',
           'lib.scad': 'x += 5;',
         });
-        const result = await worker.computeGeometryEntry({ filename: 'main.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('main.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1096,17 +970,17 @@ describe('OpenScadWorker', () => {
       });
 
       it('should return fallback error when OpenSCAD fails without parseable message', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'empty_module.scad': 'module test() {}  test();',
         });
-        const result = await worker.computeGeometryEntry({ filename: 'empty_module.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('empty_module.scad'), {});
 
         // This may succeed with empty geometry or fail - just verify we get a proper result
         expect(typeof result.success).toBe('boolean');
       });
 
       it('should return warning when file only defines modules without rendering', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'module_only.scad': `// This file only defines a module but never calls it
 module my_cube(size = 10) {
   cube([size, size, size]);
@@ -1115,7 +989,7 @@ module my_cube(size = 10) {
 // No call to my_cube() - nothing to render
 `,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'module_only.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('module_only.scad'), {});
 
         // Should succeed (not an error) but with a warning
         expect(result.success).toBe(true);
@@ -1128,14 +1002,14 @@ module my_cube(size = 10) {
       });
 
       it('should parse error message correctly for += operator', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'compound_assign.scad': `
             x = 90;
             x += 2*5;
             cube([x, 10, 10]);
           `,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'compound_assign.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('compound_assign.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1147,12 +1021,12 @@ module my_cube(size = 10) {
       it('should return correct error location with start and end columns for indented code', async () => {
         // The error line "    x += 90 + tray_clearance;" has 4 leading spaces
         const errorLine = '    x += 90 + tray_clearance;';
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'indented_error.scad': `module test() {
 ${errorLine}
 }`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'indented_error.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('indented_error.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1169,10 +1043,10 @@ ${errorLine}
       });
 
       it('should return severity "error" for syntax errors', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'severity_error.scad': 'x += 5;',
         });
-        const result = await worker.computeGeometryEntry({ filename: 'severity_error.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('severity_error.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1184,10 +1058,10 @@ ${errorLine}
 
     describe('Warning handling', () => {
       it('should return warnings with successful geometry for undefined variable', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'undefined_var.scad': `cube([undefined_var, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'undefined_var.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('undefined_var.scad'), {});
 
         // OpenSCAD still produces geometry with undef values
         expect(result.success).toBe(true);
@@ -1199,11 +1073,11 @@ ${errorLine}
       });
 
       it('should return warnings with successful geometry for undefined module', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'undefined_module.scad': `my_undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'undefined_module.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('undefined_module.scad'), {});
 
         // OpenSCAD still produces geometry (the cube)
         expect(result.success).toBe(true);
@@ -1215,12 +1089,12 @@ cube([10, 10, 10]);`,
       });
 
       it('should return multiple warnings for multiple issues', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'multiple_warnings.scad': `// Multiple issues test
 my_undefined_module();
 cube([undefined_var, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'multiple_warnings.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('multiple_warnings.scad'), {});
 
         // OpenSCAD still produces geometry
         expect(result.success).toBe(true);
@@ -1240,12 +1114,12 @@ cube([undefined_var, 10, 10]);`,
       });
 
       it('should return correct line numbers for multiple issues', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'multi_line_warnings.scad': `first_undefined_module();
 second_undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'multi_line_warnings.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('multi_line_warnings.scad'), {});
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1263,12 +1137,12 @@ cube([10, 10, 10]);`,
     describe('File path handling for subdirectory files', () => {
       it('should use full relative path in error location when main file is in subdirectory', async () => {
         // Simulate a file at site/backyard.scad that has an error
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'site/backyard.scad': `x += 5;
 cube([10, 10, 10]);`,
         });
         // Note: filename includes the subdirectory path
-        const result = await worker.computeGeometryEntry({ filename: 'site/backyard.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('site/backyard.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1280,11 +1154,11 @@ cube([10, 10, 10]);`,
 
       it('should use full relative path in warning location when main file is in subdirectory', async () => {
         // Simulate a file at site/main.scad that has a warning (undefined module)
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'site/main.scad': `undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'site/main.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('site/main.scad'), {});
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1296,12 +1170,12 @@ cube([10, 10, 10]);`,
 
       it('should preserve correct paths for errors in included files from subdirectory main file', async () => {
         // Main file in site/ includes a file from lib/
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'site/main.scad': `include <../lib/broken.scad>
 cube([10, 10, 10]);`,
           'lib/broken.scad': `x += 5;`, // Syntax error in included file
         });
-        const result = await worker.computeGeometryEntry({ filename: 'site/main.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('site/main.scad'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1315,11 +1189,11 @@ cube([10, 10, 10]);`,
       });
 
       it('should preserve correct paths for warnings about missing includes', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'site/main.scad': `include <../furniture/missing.scad>
 cube([10, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'site/main.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('site/main.scad'), {});
 
         // Should still produce geometry (the cube)
         expect(result.success).toBe(true);
@@ -1332,11 +1206,11 @@ cube([10, 10, 10]);`,
 
     describe('OpenSCAD error format coverage', () => {
       it('should parse undefined function error', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'undefined_func.scad': `x = my_undefined_function();
 cube([x, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'undefined_func.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('undefined_func.scad'), {});
 
         // Undefined function results in undef, geometry may still be produced
         expect(result.issues.length).toBeGreaterThan(0);
@@ -1344,22 +1218,22 @@ cube([x, 10, 10]);`,
       });
 
       it('should parse too many parameters warning', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'too_many_params.scad': `module mymod(a) { cube(a); }
 mymod(10, 20, 30);`, // Too many parameters
         });
-        const result = await worker.computeGeometryEntry({ filename: 'too_many_params.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('too_many_params.scad'), {});
 
         // Should produce geometry - extra parameters are silently ignored in OpenSCAD
         expect(result.success).toBe(true);
       });
 
       it('should parse recursion error', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'recursion.scad': `module infinite() { infinite(); }
 infinite();`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'recursion.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('recursion.scad'), {});
 
         // Recursion detection - OpenSCAD WASM may handle this differently
         // Just verify we get a result without crashing
@@ -1370,11 +1244,11 @@ infinite();`,
       });
 
       it('should parse file not found warning for include', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'missing_include.scad': `include <nonexistent_file.scad>
 cube([10, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'missing_include.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('missing_include.scad'), {});
 
         // Should still produce geometry (the cube)
         expect(result.success).toBe(true);
@@ -1385,11 +1259,11 @@ cube([10, 10, 10]);`,
       });
 
       it('should parse assertion failure error', async () => {
-        const worker = createGeometryWorker({
+        const worker = await createWorker({
           'assertion.scad': `assert(false, "Custom assertion message");
 cube([10, 10, 10]);`,
         });
-        const result = await worker.computeGeometryEntry({ filename: 'assertion.scad', path: '' }, {});
+        const result = await worker.createGeometryEntry(createGeometryFile('assertion.scad'), {});
 
         // Assertion failure should fail
         expect(result.success).toBe(false);

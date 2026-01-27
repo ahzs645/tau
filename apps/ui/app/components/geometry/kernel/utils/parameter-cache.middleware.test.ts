@@ -5,10 +5,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type {
-  ExtractParametersResult,
-  ExtractParametersRequest,
-  ExtractParametersHandler,
+  GetParametersResult,
+  GetParametersInput,
+  GetParametersHandler,
   Dependency,
+  KernelMiddlewareRuntime,
 } from '@taucad/types';
 import { parameterCacheMiddleware } from '#components/geometry/kernel/utils/parameter-cache.middleware.js';
 import { createMockRuntime, createMockInput } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
@@ -30,8 +31,8 @@ function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonl
   return defaults;
 }
 
-/** The data type for a successful ExtractParametersResult */
-type ExtractParametersData = {
+/** The data type for a successful GetParametersResult */
+type GetParametersData = {
   defaultParameters: Record<string, unknown>;
   jsonSchema: unknown;
 };
@@ -39,7 +40,7 @@ type ExtractParametersData = {
 /**
  * Create a successful extract parameters result for testing.
  */
-function createSuccessResult(overrides?: Partial<ExtractParametersData>): ExtractParametersResult {
+function createSuccessResult(overrides?: Partial<GetParametersData>): GetParametersResult {
   return {
     success: true,
     data: {
@@ -60,7 +61,7 @@ function createSuccessResult(overrides?: Partial<ExtractParametersData>): Extrac
 /**
  * Create an error result for testing.
  */
-function createErrorResult(): ExtractParametersResult {
+function createErrorResult(): GetParametersResult {
   return {
     success: false,
     issues: [{ severity: 'error', message: 'Test error' }],
@@ -70,26 +71,29 @@ function createErrorResult(): ExtractParametersResult {
 /**
  * Create serialized cache content (JSON format).
  */
-function createSerializedCacheContent(result: ExtractParametersResult): string {
+function createSerializedCacheContent(result: GetParametersResult): string {
   return JSON.stringify(result);
 }
 
 /**
- * Create a request with runtime configured for cache testing.
+ * Create input and runtime configured for cache testing.
  */
-function createCacheRequest(options?: {
+
+function createCacheContext(options?: {
   cacheExists?: boolean;
-  cachedResult?: ExtractParametersResult;
+  cachedResult?: GetParametersResult;
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-}): ExtractParametersRequest & {
-  runtime: ReturnType<typeof createMockRuntime>;
+}): {
+  input: GetParametersInput;
+
+  runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
 } {
   const serializedContent = options?.cachedResult ? createSerializedCacheContent(options.cachedResult) : '';
 
   const runtime = createMockRuntime({
-    fileManagerOptions: {
+    filesystemOverrides: {
       existsResult: options?.cacheExists ?? false,
       readFileResult: serializedContent,
     },
@@ -99,33 +103,34 @@ function createCacheRequest(options?: {
 
   return {
     input: createMockInput(options?.input),
-    runtime,
+
+    runtime: runtime as KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>,
   };
 }
 
 /**
  * Create a mock handler for testing.
  */
-function createMockHandler(result?: ExtractParametersResult): ExtractParametersHandler {
+function createMockHandler(result?: GetParametersResult): GetParametersHandler {
   return vi.fn().mockResolvedValue(result ?? createSuccessResult());
 }
 
 describe('parameterCacheMiddleware', () => {
-  describe('wrapExtractParameters', () => {
+  describe('wrapGetParameters', () => {
     describe('cache hit', () => {
       it('should return cached result and not call handler', async () => {
         const cachedResult = createSuccessResult({ defaultParameters: { cached: true } });
 
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: true,
           cachedResult,
         });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        expect(wrapExtractParameters).toBeDefined();
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        expect(wrapGetParameters).toBeDefined();
 
-        const result = await wrapExtractParameters!(request, handler);
+        const result = await wrapGetParameters!(input, handler, runtime);
 
         // Handler should not be called on cache hit
         expect(handler).not.toHaveBeenCalled();
@@ -139,16 +144,16 @@ describe('parameterCacheMiddleware', () => {
 
       it('should log cache hit message', async () => {
         const cachedResult = createSuccessResult();
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: true,
           cachedResult,
         });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache hit'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache hit'));
       });
 
       it('should preserve jsonSchema from cached result', async () => {
@@ -161,14 +166,14 @@ describe('parameterCacheMiddleware', () => {
           },
         });
 
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: true,
           cachedResult,
         });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        const result = await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        const result = await wrapGetParameters!(input, handler, runtime);
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -181,56 +186,56 @@ describe('parameterCacheMiddleware', () => {
     describe('cache miss', () => {
       it('should call handler and return its result', async () => {
         const handlerResult = createSuccessResult({ defaultParameters: { fresh: true } });
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        const result = await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        const result = await wrapGetParameters!(input, handler, runtime);
 
         expect(handler).toHaveBeenCalled();
         expect(result).toBe(handlerResult);
       });
 
       it('should log cache miss message', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache miss'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache miss'));
       });
 
       it('should write result to cache after handler returns', async () => {
         const handlerResult = createSuccessResult();
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.writeFile).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const writePath = request.runtime.fileManager.writeFile.mock.calls[0]?.[0];
+        const writePath = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[0];
         expect(writePath).toContain('.tau/cache/parameters');
         expect(writePath).toContain('.json');
       });
 
       it('should write valid JSON to cache', async () => {
         const handlerResult = createSuccessResult({ defaultParameters: { a: 1, b: 2 } });
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const writeContent = request.runtime.fileManager.writeFile.mock.calls[0]?.[1];
+        const writeContent = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[1];
         expect(writeContent).toBeDefined();
         expect(typeof writeContent).toBe('string');
 
         // Should be valid JSON
-        const parsed = JSON.parse(writeContent as string) as ExtractParametersResult;
+        const parsed = JSON.parse(writeContent as string) as GetParametersResult;
         expect(parsed.success).toBe(true);
         if (parsed.success) {
           expect(parsed.data.defaultParameters).toEqual({ a: 1, b: 2 });
@@ -239,55 +244,55 @@ describe('parameterCacheMiddleware', () => {
 
       it('should ensure cache directory exists before writing', async () => {
         const handlerResult = createSuccessResult();
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.ensureDirectoryExists).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.ensureDirectoryExists).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = request.runtime.fileManager.ensureDirectoryExists.mock.calls[0]?.[0];
+        const dirPath = runtime.filesystem.mocks.ensureDirectoryExists.mock.calls[0]?.[0];
         expect(dirPath).toContain('.tau/cache/parameters');
       });
 
       it('should log cache write message', async () => {
         const handlerResult = createSuccessResult();
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cached parameters'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Cached parameters'));
       });
 
       it('should not cache failed results', async () => {
         const errorResult = createErrorResult();
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(errorResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.writeFile).not.toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).not.toHaveBeenCalled();
       });
     });
 
     describe('dependency hash usage', () => {
       it('should use runtime.dependencyHash for cache path', async () => {
         const dependencyHash = 'b'.repeat(64);
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: false,
           dependencyHash,
         });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
         // Verify that writeFile was called with a path containing the dependency hash
-        expect(request.runtime.fileManager.writeFile).toHaveBeenCalledWith(
+        expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalledWith(
           expect.stringContaining(dependencyHash),
           expect.any(String),
         );
@@ -296,23 +301,23 @@ describe('parameterCacheMiddleware', () => {
       it('should use runtime.dependencyHash for cache lookup', async () => {
         const dependencyHash = 'c'.repeat(64);
         const cachedResult = createSuccessResult();
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: true,
           cachedResult,
           dependencyHash,
         });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
         // Verify that exists was called with a path containing the dependency hash
-        expect(request.runtime.fileManager.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
+        expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
       });
 
       it('should result in cache miss when dependencyHash differs', async () => {
         const dependencyHash = 'different'.repeat(8);
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: false,
           dependencyHash,
         });
@@ -320,8 +325,8 @@ describe('parameterCacheMiddleware', () => {
         const handlerResult = createSuccessResult();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
         // Handler should be called because cache missed
         expect(handler).toHaveBeenCalled();
@@ -330,15 +335,15 @@ describe('parameterCacheMiddleware', () => {
 
     describe('error handling', () => {
       it('should handle file read errors gracefully', async () => {
-        const request = createCacheRequest({ cacheExists: true });
+        const { input, runtime } = createCacheContext({ cacheExists: true });
         // Make readFile throw an error
-        request.runtime.fileManager.readFile.mockRejectedValue(new Error('Read error'));
+        runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
         const handlerResult = createSuccessResult();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        const result = await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        const result = await wrapGetParameters!(input, handler, runtime);
 
         // Should treat as cache miss and call handler
         expect(handler).toHaveBeenCalled();
@@ -346,43 +351,43 @@ describe('parameterCacheMiddleware', () => {
       });
 
       it('should log cache read error', async () => {
-        const request = createCacheRequest({ cacheExists: true });
-        request.runtime.fileManager.readFile.mockRejectedValue(new Error('Read error'));
+        const { input, runtime } = createCacheContext({ cacheExists: true });
+        runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache read error'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache read error'));
       });
 
       it('should handle file write errors gracefully', async () => {
-        const request = createCacheRequest({ cacheExists: false });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
         // Make writeFile throw an error
-        request.runtime.fileManager.writeFile.mockRejectedValue(new Error('Write error'));
+        runtime.filesystem.mocks.writeFile.mockRejectedValue(new Error('Write error'));
 
         const handlerResult = createSuccessResult();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
+        const { wrapGetParameters } = parameterCacheMiddleware;
         // Should not throw, just log warning
-        const result = await wrapExtractParameters!(request, handler);
+        const result = await wrapGetParameters!(input, handler, runtime);
 
         expect(result).toBe(handlerResult);
-        expect(request.runtime.logger.warn).toHaveBeenCalledWith(expect.stringContaining('cache write error'));
+        expect(runtime.logger.warn).toHaveBeenCalledWith(expect.stringContaining('cache write error'));
       });
 
       it('should handle JSON parse errors gracefully', async () => {
-        const request = createCacheRequest({ cacheExists: true });
+        const { input, runtime } = createCacheContext({ cacheExists: true });
         // Return invalid JSON
-        request.runtime.fileManager.readFile.mockResolvedValue('not valid json {{{');
+        runtime.filesystem.mocks.readFile.mockResolvedValue('not valid json {{{');
 
         const handlerResult = createSuccessResult();
         const handler = createMockHandler(handlerResult);
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        const result = await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        const result = await wrapGetParameters!(input, handler, runtime);
 
         // Should treat as cache miss and call handler
         expect(handler).toHaveBeenCalled();
@@ -393,17 +398,17 @@ describe('parameterCacheMiddleware', () => {
     describe('cache path structure', () => {
       it('should use correct cache path format', async () => {
         const dependencyHash = 'd'.repeat(64);
-        const request = createCacheRequest({
+        const { input, runtime } = createCacheContext({
           cacheExists: false,
           dependencyHash,
           input: { basePath: '/test/project' },
         });
         const handler = createMockHandler();
 
-        const { wrapExtractParameters } = parameterCacheMiddleware;
-        await wrapExtractParameters!(request, handler);
+        const { wrapGetParameters } = parameterCacheMiddleware;
+        await wrapGetParameters!(input, handler, runtime);
 
-        expect(request.runtime.fileManager.exists).toHaveBeenCalledWith(
+        expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(
           `/test/project/.tau/cache/parameters/${dependencyHash}.json`,
         );
       });
