@@ -203,6 +203,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@gltf-transform/functions": "^4.2.1",
     "@nestjs/schematics": "^11.0.5",
     "@nestjs/testing": "^11.1.5",
     "@netlify/vite-plugin-react-router": "^2.1.2",
