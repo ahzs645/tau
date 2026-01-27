@@ -228,6 +228,9 @@ const config = [
       'n/no-extraneous-import': 'off', // Disabled as it has no monorepo support.
 
       'react/no-unknown-property': 'off', // Disabled as Typescript will check unknown properties. It can cause false positives for custom-elements.
+
+      // Allow up to 5 nested callbacks. This is useful for test files with nested describe/it blocks.
+      'max-nested-callbacks': ['error', { max: 5 }],
     },
   },
   {
