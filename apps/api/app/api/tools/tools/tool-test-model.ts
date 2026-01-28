@@ -106,9 +106,38 @@ export const testModelTool: ChatTool<
     (request): request is VisualTestRequirement => request.type === 'visual',
   );
 
+  // Count non-visual requirements that are not yet supported
+  const nonVisualRequirements = testFile.requirements.filter((request) => request.type !== 'visual');
+
   if (visualRequirements.length === 0) {
+    // If there are non-visual requirements, report them as unsupported errors
+    if (nonVisualRequirements.length > 0) {
+      const result: TestModelOutput = {
+        failures: nonVisualRequirements.map((request) => ({
+          id: request.id,
+          requirement: request.description,
+          reason: `Requirement type '${request.type}' is not yet supported`,
+          suggestion:
+            'Currently only visual requirements are supported. Consider converting this to a visual requirement or wait for measurement test support.',
+        })),
+        passes: [],
+        passed: 0,
+        total: nonVisualRequirements.length,
+      };
+
+      return result;
+    }
+
+    // No requirements at all
     const result: TestModelOutput = {
-      failures: [],
+      failures: [
+        {
+          id: 'no_requirements',
+          requirement: 'test.json must contain at least one requirement',
+          reason: 'No requirements found in test.json',
+          suggestion: 'Use edit_tests to add visual requirements to test.json',
+        },
+      ],
       passes: [],
       passed: 0,
       total: 0,
