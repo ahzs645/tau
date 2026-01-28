@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { OnModuleDestroy } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { idPrefix } from '@taucad/types/constants';
@@ -39,7 +40,7 @@ type PendingRequest = {
  * - RPC requests are emitted directly to the socket in the room
  */
 @Injectable()
-export class ChatRpcService {
+export class ChatRpcService implements OnModuleDestroy {
   private readonly logger = new Logger(ChatRpcService.name);
 
   /** Active Socket.IO connections by chatId (supports multiple tabs per chat) */
@@ -96,6 +97,9 @@ export class ChatRpcService {
    * Handle socket disconnection - clean up all rooms the socket was in.
    */
   public handleSocketDisconnect(socket: Socket): void {
+    // Collect chat IDs to delete after iteration to avoid modifying map during iteration
+    const chatIdsToDelete: string[] = [];
+
     // Find and remove this socket from all chat registrations
     for (const [chatId, socketSet] of this.connections) {
       if (socketSet.has(socket)) {
@@ -104,14 +108,46 @@ export class ChatRpcService {
           `Cleaned up socket ${socket.id} from chat ${chatId} on disconnect (remaining sockets: ${socketSet.size})`,
         );
 
-        // Only reject pending requests when no sockets remain for this chat
+        // Mark for deletion if no sockets remain for this chat
         if (socketSet.size === 0) {
-          this.connections.delete(chatId);
-          this.logger.debug(`All connections removed for chat ${chatId} on socket disconnect`);
-          this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
+          chatIdsToDelete.push(chatId);
         }
       }
     }
+
+    // Clean up empty chat registrations after iteration completes
+    for (const chatId of chatIdsToDelete) {
+      this.connections.delete(chatId);
+      this.logger.debug(`All connections removed for chat ${chatId} on socket disconnect`);
+      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
+    }
+  }
+
+  /**
+   * Clean up all pending requests and timeouts on module destroy.
+   * Called during graceful shutdown to prevent timeouts from running
+   * and potentially accessing destroyed resources.
+   */
+  public onModuleDestroy(): void {
+    this.logger.log('Cleaning up pending RPC requests on shutdown...');
+
+    for (const [requestId, pending] of this.pendingRequests) {
+      clearTimeout(pending.timeoutId);
+
+      const shutdownError: RpcExecutionError = {
+        errorCode: 'CLIENT_DISCONNECTED',
+        message: 'Server is shutting down. RPC request cancelled.',
+        rpcName: pending.rpcName,
+      };
+
+      pending.resolve(shutdownError);
+      this.logger.debug(`Cancelled pending request ${requestId} on shutdown`);
+    }
+
+    this.pendingRequests.clear();
+    this.connections.clear();
+
+    this.logger.log('RPC service cleanup complete');
   }
 
   /**
