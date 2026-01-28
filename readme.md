@@ -1,5 +1,5 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](license)
-[![Discord](https://img.shields.io/badge/Discord-Join%20us-7289da?logo=discord&logoColor=white)](https://discord.gg/KnB7rxK3)
+[![Discord](https://img.shields.io/badge/Discord-Join%20us-7289da?logo=discord&logoColor=white)](https://discord.gg/6pfSAN3t7A)
 [![XO code style](https://shields.io/badge/code_style-5ed9c7?logo=xo&labelColor=gray&logoSize=auto)](https://github.com/xojs/xo)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D24-brightgreen?logo=node.js&logoColor=white)](https://nodejs.org)
 
@@ -93,7 +93,7 @@ Tau is built on a foundation of excellent open-source projects:
 
 ## Community
 
-- **Discord** — [Join our community](https://discord.gg/KnB7rxK3)
+- **Discord** — [Join our community](https://discord.gg/6pfSAN3t7A)
 - **Documentation** — [tau.new/docs](https://tau.new/docs)
 - **GitHub Discussions** — Ask questions and share ideas
 
