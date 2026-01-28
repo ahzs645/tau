@@ -10,6 +10,7 @@
 
 import type { MessagePort } from 'node:worker_threads';
 import type { Endpoint } from 'comlink';
+import { expose } from 'comlink';
 import nodeEndpoint from '#components/geometry/kernel/utils/comlink-node-endpoint.js';
 
 /**
@@ -89,4 +90,37 @@ export function getWorkerEndpoint(): Endpoint {
   throw new Error(
     'getWorkerEndpoint() must be called from a worker context (browser Web Worker or Node.js worker_threads)',
   );
+}
+
+/**
+ * Exposes a service via comlink if running in a worker context.
+ * This is a convenience wrapper that combines isWorkerContext() and expose().
+ *
+ * In a worker context (browser or Node.js), it exposes the service via comlink.
+ * In a non-worker context (tests, direct imports), it does nothing.
+ *
+ * @param service - The service object to expose via comlink
+ * @returns true if the service was exposed, false otherwise
+ *
+ * @example
+ * ```typescript
+ * import { exposeWorker } from '#components/geometry/kernel/utils/comlink-worker.utils.js';
+ *
+ * class MyWorker {
+ *   doWork() { return 42; }
+ * }
+ *
+ * const service = new MyWorker();
+ * exposeWorker(service);
+ *
+ * export type MyWorkerInterface = typeof service;
+ * ```
+ */
+export function exposeWorker<T>(service: T): boolean {
+  if (!isWorkerContext()) {
+    return false;
+  }
+
+  expose(service, getWorkerEndpoint());
+  return true;
 }
