@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import type { FastifyInstance } from 'fastify';
-import { WebSocket } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import { KernelsService } from '#api/kernels/kernels.service.js';
 import { DevWebSocketService } from '#api/websocket/dev-websocket.service.js';
 
@@ -14,8 +14,9 @@ const zooWebSocketPath = '/v1/kernels/zoo';
  * In development: Uses the shared DevWebSocketService on port+1 because
  * vite-plugin-node doesn't support WebSocket connections.
  *
- * In production: Uses @fastify/websocket on the main Fastify server
- * for simpler deployment (single port).
+ * In production: Uses the ws library with manual upgrade handling on the
+ * main HTTP server. This approach avoids conflicts with Socket.IO which
+ * also needs to handle WebSocket upgrades for other paths.
  */
 @Injectable()
 export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
@@ -64,16 +65,27 @@ export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Initialize WebSocket routes on Fastify for production.
-   * Uses @fastify/websocket which works when NestJS runs directly (not through vite-plugin-node).
+   * Initialize WebSocket routes for production.
+   * Uses the ws library directly with manual upgrade handling.
+   * This avoids conflicts with Socket.IO which also needs to handle upgrade events.
    */
   private initFastifyWebSocket(): void {
     const fastify = this.httpAdapterHost.httpAdapter.getInstance<FastifyInstance>();
+    const httpServer = fastify.server;
+    const wss = new WebSocketServer({ noServer: true });
 
-    // Register the Zoo WebSocket proxy route
-    fastify.get(zooWebSocketPath, { websocket: true }, (socket: WebSocket, request) => {
-      const url = new URL(request.url, `http://${request.headers.host}`);
-      this.handleZooProxy(socket, url.searchParams);
+    // Handle WebSocket upgrades manually for the Zoo proxy path
+    // Socket.IO will handle other paths (like /v1/chat/rpc)
+    httpServer.on('upgrade', (request, socket, head) => {
+      const { pathname } = new URL(request.url ?? '/', `http://${request.headers.host}`);
+
+      if (pathname === zooWebSocketPath) {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          const url = new URL(request.url ?? '/', `http://${request.headers.host}`);
+          this.handleZooProxy(ws, url.searchParams);
+        });
+      }
+      // Don't call socket.destroy() for other paths - let Socket.IO handle them
     });
 
     this.logger.log(`Zoo WebSocket proxy registered at ${zooWebSocketPath} (production mode)`);

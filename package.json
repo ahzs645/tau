@@ -39,7 +39,6 @@
     "@daveyplate/better-auth-ui": "^3.2.6",
     "@fastify/cors": "^11.0.1",
     "@fastify/helmet": "^13.0.1",
-    "@fastify/websocket": "^11.2.0",
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/extensions": "^4.3.0",
     "@gltf-transform/functions": "^4.3.0",
