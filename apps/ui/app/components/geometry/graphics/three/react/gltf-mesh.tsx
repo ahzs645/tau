@@ -8,7 +8,7 @@ type GltfMeshDisplayProperties = {
   /**
    * The GLTF file to load.
    */
-  readonly gltfFile: Uint8Array;
+  readonly gltfFile: Uint8Array<ArrayBuffer>;
   /**
    * Whether to enable matcap material.
    */
@@ -66,7 +66,7 @@ export function GltfMesh({
         }
 
         const gltf = await loader.parseAsync(
-          gltfFile.buffer as ArrayBuffer,
+          gltfFile.buffer,
           '', // Path (not needed for ArrayBuffer)
         );
 

@@ -14,12 +14,12 @@ declare module 'assimpjs' {
   };
 
   export type AssimpFile = {
-    GetContent(): Uint8Array;
+    GetContent(): Uint8Array<ArrayBuffer>;
     GetPath(): string;
   };
 
   export type FileList = {
-    AddFile(name: string, content: Uint8Array): void;
+    AddFile(name: string, content: Uint8Array<ArrayBuffer>): void;
   };
 
   export type AssimpJS = {

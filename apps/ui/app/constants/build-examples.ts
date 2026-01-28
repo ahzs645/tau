@@ -11,7 +11,7 @@ type Model = {
   language: KernelProvider;
 };
 
-type Files = Record<string, { content: Uint8Array }>;
+type Files = Record<string, { content: Uint8Array<ArrayBuffer> }>;
 
 export type BuildWithFiles = Build & { files: Files };
 
@@ -33,8 +33,6 @@ const createBuild = (model: Omit<Model, 'language'>, mainFile: string, kernel: K
     createdAt: 1_740_702_000_000,
     updatedAt: 1_740_702_000_000,
     tags: ['3d-printing', 'parametric', kernel],
-    stars: 0,
-    forks: 0,
     thumbnail: model.thumbnail,
     files: { [mainFile]: { content: encodeTextFile(model.code) } },
   };

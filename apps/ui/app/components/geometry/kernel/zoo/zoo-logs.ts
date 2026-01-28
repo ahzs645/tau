@@ -44,12 +44,16 @@ export function createZooLogger(component: string): {
       }
     },
     error(message: string, ...arguments_: unknown[]): void {
-      // Errors are always logged regardless of debug flag
-      console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset} ${message}`, ...arguments_);
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      if (isDebugEnabled) {
+        console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset} ${message}`, ...arguments_);
+      }
     },
     warn(message: string, ...arguments_: unknown[]): void {
-      // Warnings are always logged regardless of debug flag
-      console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset} ${message}`, ...arguments_);
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      if (isDebugEnabled) {
+        console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset} ${message}`, ...arguments_);
+      }
     },
     debug(message: string, ...arguments_: unknown[]): void {
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled

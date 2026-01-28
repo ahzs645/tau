@@ -207,17 +207,14 @@ export const ChatTextareaDesktop = memo(function ({
             {(_properties) => (
               <TooltipTrigger asChild>
                 <Button
-                  asChild
                   variant="outline"
                   size="sm"
-                  className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @[22rem]:pr-2"
+                  className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2"
                 >
-                  <span className="flex max-w-24 shrink-0 flex-row items-center gap-1 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
-                    <span className="hidden truncate text-xs @[22rem]:block">{selectedModel?.name ?? 'Offline'}</span>
-                    <span className="relative flex size-4 items-center justify-center">
-                      <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
-                      <CircuitBoard className="absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0" />
-                    </span>
+                  <span className="hidden truncate text-xs @[22rem]:block">{selectedModel?.name ?? 'Offline'}</span>
+                  <span className="relative flex size-4 items-center justify-center">
+                    <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
+                    <CircuitBoard className="absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0" />
                   </span>
                 </Button>
               </TooltipTrigger>
@@ -242,22 +239,17 @@ export const ChatTextareaDesktop = memo(function ({
               {({ selectedKernel }) => (
                 <TooltipTrigger asChild>
                   <Button
-                    asChild
                     variant="outline"
                     size="sm"
-                    className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @[22rem]:pr-2"
+                    className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2"
                   >
-                    <span className="flex max-w-24 shrink-0 flex-row items-center gap-1 rounded-full @max-[22rem]:w-7 @xs:max-w-fit">
-                      <span className="hidden truncate text-xs @[22rem]:block">
-                        {selectedKernel?.name ?? 'OpenSCAD'}
-                      </span>
-                      <span className="relative flex size-4 items-center justify-center">
-                        <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
-                        <SvgIcon
-                          id={selectedKernel?.id ?? 'openscad'}
-                          className="absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0"
-                        />
-                      </span>
+                    <span className="hidden truncate text-xs @[22rem]:block">{selectedKernel?.name ?? 'OpenSCAD'}</span>
+                    <span className="relative flex size-4 items-center justify-center">
+                      <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
+                      <SvgIcon
+                        id={selectedKernel?.id ?? 'openscad'}
+                        className="absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0"
+                      />
                     </span>
                   </Button>
                 </TooltipTrigger>

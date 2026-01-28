@@ -7,6 +7,82 @@ export const formatNumber = (value: number): string => {
   return value.toLocaleString();
 };
 
+type FormatNumberAbbreviationOptions = {
+  /**
+   * Number of significant figures to display (default: 2)
+   */
+  significantFigures?: number;
+  /**
+   * Minimum value to trigger compact notation (default: 1000)
+   * Values below this will be formatted with locale string
+   */
+  compactThreshold?: number;
+};
+
+/**
+ * Format a number in compact notation with K, M, B, T suffixes.
+ * Examples: 11000 -> "11K", 2423525 -> "2.4M", 999 -> "999"
+ *
+ * @param value - The number to format
+ * @param options - Formatting options
+ * @returns A compact formatted number string
+ */
+export function formatNumberAbbreviation(value: number, options: FormatNumberAbbreviationOptions = {}): string {
+  const { significantFigures = 2, compactThreshold = 1000 } = options;
+
+  // Handle edge cases
+  if (value === 0) {
+    return '0';
+  }
+
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+
+  const absValue = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+
+  // For values below threshold, format with locale string
+  if (absValue < compactThreshold) {
+    return sign + absValue.toLocaleString();
+  }
+
+  // Define suffixes and their thresholds
+  const suffixes = [
+    { threshold: 1e12, suffix: 'T' },
+    { threshold: 1e9, suffix: 'B' },
+    { threshold: 1e6, suffix: 'M' },
+    { threshold: 1e3, suffix: 'K' },
+  ];
+
+  // Find the appropriate suffix
+  for (const { threshold, suffix } of suffixes) {
+    if (absValue >= threshold) {
+      const scaled = absValue / threshold;
+      const rounded = roundToSignificantFigures(scaled, significantFigures);
+
+      // Format without unnecessary trailing zeros
+      let formatted: string;
+      if (rounded >= 100) {
+        // For values like 100K, 999K - no decimals needed
+        formatted = Math.round(rounded).toString();
+      } else if (rounded >= 10) {
+        // For values like 10K, 99.9K - one decimal at most
+        formatted = rounded.toFixed(1).replace(/\.0$/, '');
+      } else {
+        // For values like 1K, 9.99K - use significant figures
+        const decimalPlaces = Math.max(0, significantFigures - 1);
+        formatted = rounded.toFixed(decimalPlaces).replace(/\.?0+$/, '');
+      }
+
+      return sign + formatted + suffix;
+    }
+  }
+
+  // Fallback (shouldn't reach here)
+  return sign + absValue.toLocaleString();
+}
+
 /**
  * Format a number value with a specified number of maximum digits
  * Uses engineering notation (multiples of 3) for values >= 1000

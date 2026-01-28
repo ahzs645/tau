@@ -29,6 +29,7 @@ import {
   Pre,
 } from '#components/code/code-block.js';
 import { CopyButton } from '#components/copy-button.js';
+import { ExternalLink } from '#components/external-link.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '#components/ui/card.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import {
@@ -42,7 +43,7 @@ import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { SectionViewControl } from '#components/geometry/cad/section-view-control.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
 import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
-import { SettingsControl } from '#components/geometry/cad/settings-control.js';
+import { ViewerSettings } from '#components/geometry/cad/viewer-settings.js';
 import { ChatInterfaceGraphics } from '#routes/builds_.$id/chat-interface-graphics.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -71,7 +72,7 @@ type UploadedFileInfo = {
 function ConverterContent(): React.JSX.Element {
   const { graphicsRef: graphicsActor } = useBuild();
   const [uploadedFile, setUploadedFile] = useState<UploadedFileInfo | undefined>(undefined);
-  const [glbData, setGlbData] = useState<Uint8Array | undefined>(undefined);
+  const [glbData, setGlbData] = useState<Uint8Array<ArrayBuffer> | undefined>(undefined);
   const [selectedFormats, setSelectedFormats] = useCookie<OutputFormat[]>(cookieName.converterOutputFormats, []);
   const [useZipForMultiple, setUseZipForMultiple] = useCookie<boolean>(cookieName.converterMultifileZip, true);
   const [isConverting, setIsConverting] = useState(false);
@@ -173,7 +174,8 @@ function ConverterContent(): React.JSX.Element {
   );
 
   // Construct geometries array for CadViewer
-  const geometries: Geometry[] = glbData ? [{ format: 'gltf', content: glbData }] : [];
+  // Use a static hash for the converter (not using kernel worker infrastructure)
+  const geometries: Geometry[] = glbData ? [{ format: 'gltf', content: glbData, hash: 'converter' }] : [];
 
   const hasModel = glbData !== undefined;
 
@@ -229,7 +231,7 @@ function ConverterContent(): React.JSX.Element {
                   <SectionViewControl />
                   <MeasureControl />
                   <ResetCameraControl />
-                  <SettingsControl />
+                  <ViewerSettings />
                 </div>
               </div>
             </SidebarOffset>
@@ -299,9 +301,9 @@ function ConverterContent(): React.JSX.Element {
                     Your data never leaves your browser{' '}
                   </div>
                   <Button asChild variant="link" className="text-sm underline">
-                    <a href={metaConfig.githubUrl} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink href={metaConfig.githubUrl} arrowSize="xs">
                       View source code
-                    </a>
+                    </ExternalLink>
                   </Button>
                 </div>
               </div>
@@ -433,8 +435,6 @@ export default function ConverterRoute(): React.JSX.Element {
     id: 'converter',
     name: 'Converter',
     description: 'Transient build context for the converter page',
-    stars: 0,
-    forks: 0,
     author: {
       name: 'Tau',
       avatar: '',

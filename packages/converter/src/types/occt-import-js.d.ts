@@ -169,7 +169,7 @@ declare module 'occt-import-js' {
      * @returns Import result object
      */
     // eslint-disable-next-line @typescript-eslint/naming-convention -- External library uses PascalCase
-    ReadBrepFile(content: Uint8Array, parameters: TriangulationParameters | undefined): ImportResult;
+    ReadBrepFile(content: Uint8Array<ArrayBuffer>, parameters: TriangulationParameters | undefined): ImportResult;
 
     /**
      * Import step file
@@ -178,7 +178,7 @@ declare module 'occt-import-js' {
      * @returns Import result object
      */
     // eslint-disable-next-line @typescript-eslint/naming-convention -- External library uses PascalCase
-    ReadStepFile(content: Uint8Array, parameters: TriangulationParameters | undefined): ImportResult;
+    ReadStepFile(content: Uint8Array<ArrayBuffer>, parameters: TriangulationParameters | undefined): ImportResult;
 
     /**
      * Import iges file
@@ -187,16 +187,15 @@ declare module 'occt-import-js' {
      * @returns Import result object
      */
     // eslint-disable-next-line @typescript-eslint/naming-convention -- External library uses PascalCase
-    ReadIgesFile(content: Uint8Array, parameters: TriangulationParameters | undefined): ImportResult;
+    ReadIgesFile(content: Uint8Array<ArrayBuffer>, parameters: TriangulationParameters | undefined): ImportResult;
   };
 
   // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Required to keep module as ambient type definition
   type EmscriptenModuleConfig = import('#types/emscripten.d.ts').EmscriptenModuleConfig;
+
   /**
    * Factory function that returns a Promise resolving to the OCCT Import JS interface
    * @param config - Optional Emscripten module configuration
    */
-  function occtimportjs(config?: EmscriptenModuleConfig): Promise<OcctImportJs>;
-
-  export = occtimportjs;
+  export default function occtimportjs(config?: EmscriptenModuleConfig): Promise<OcctImportJs>;
 }

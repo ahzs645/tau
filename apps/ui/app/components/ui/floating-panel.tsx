@@ -18,7 +18,7 @@ type Side = 'left' | 'right';
 type TooltipSide = 'left' | 'right' | 'top' | 'bottom';
 type Align = 'start' | 'end';
 
-const floatingPanelTriggerButtonVariants = cva(cn('text-muted-foreground hover:text-foreground'), {
+const floatingPanelTriggerButtonVariants = cva(cn('text-muted-foreground'), {
   variants: {
     variant: {
       absolute: cn(

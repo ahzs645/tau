@@ -83,17 +83,22 @@ export function parseOff(offContent: string): IndexedPolyhedron {
     const numberVerts = parts[0] ?? 0;
     const faceVertices = parts.slice(1, numberVerts + 1);
 
-    // Check for color data (R G B values after vertex indices)
-    let color: Color = [1, 1, 1]; // Default to white
+    // Check for color data (RGBA values after vertex indices)
+    // OFF format stores colors as 0-255 integer values
+    let color: Color = [1, 1, 1, 1]; // Default to opaque white
 
     if (parts.length >= numberVerts + 4) {
-      // Has RGB color data
+      // Has at least RGB color data
       const r = parts[numberVerts + 1];
       const g = parts[numberVerts + 2];
       const b = parts[numberVerts + 3];
 
-      if (r !== undefined && g !== undefined && b !== undefined) {
-        color = [r / 255, g / 255, b / 255] as Color;
+      // Check for alpha channel (4th color component)
+      const hasAlpha = parts.length >= numberVerts + 5;
+      const a = hasAlpha ? parts[numberVerts + 4] : 255;
+
+      if (r !== undefined && g !== undefined && b !== undefined && a !== undefined) {
+        color = [r / 255, g / 255, b / 255, a / 255];
       }
     }
 

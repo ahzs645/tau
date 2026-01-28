@@ -34,7 +34,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param options - Optional runtime options that may override initialization options.
    * @returns A promise that resolves to GLB data as Uint8Array.
    */
-  public async loadAsync(files: File[], options?: Partial<Options>): Promise<Uint8Array> {
+  public async loadAsync(files: File[], options?: Partial<Options>): Promise<Uint8Array<ArrayBuffer>> {
     const mergedOptions = this.mergeOptions(options);
     const parseResult = await this.parseAsync(files, mergedOptions);
     return this.mapToGlb(parseResult, mergedOptions);
@@ -46,8 +46,8 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param data - The Uint8Array to convert.
    * @returns The ArrayBuffer representation.
    */
-  protected uint8ArrayToArrayBuffer(data: Uint8Array): ArrayBuffer {
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  protected uint8ArrayToArrayBuffer(data: Uint8Array<ArrayBuffer>): ArrayBuffer {
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   }
 
   /**
@@ -56,7 +56,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param data - The Uint8Array to convert.
    * @returns The text representation.
    */
-  protected uint8ArrayToText(data: Uint8Array): string {
+  protected uint8ArrayToText(data: Uint8Array<ArrayBuffer>): string {
     return new TextDecoder().decode(data);
   }
 
@@ -140,8 +140,8 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param files - The input files to map.
    * @returns A map with filename as key and file data as value.
    */
-  protected createFileMap(files: File[]): Map<string, Uint8Array> {
-    const fileMap = new Map<string, Uint8Array>();
+  protected createFileMap(files: File[]): Map<string, Uint8Array<ArrayBuffer>> {
+    const fileMap = new Map<string, Uint8Array<ArrayBuffer>>();
     for (const file of files) {
       fileMap.set(file.name, file.data);
     }
@@ -166,5 +166,8 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param options - The merged options for mapping.
    * @returns GLB data as Uint8Array.
    */
-  protected abstract mapToGlb(parseResult: ParseResult, options: Options): Uint8Array | Promise<Uint8Array>;
+  protected abstract mapToGlb(
+    parseResult: ParseResult,
+    options: Options,
+  ): Uint8Array<ArrayBuffer> | Promise<Uint8Array<ArrayBuffer>>;
 }

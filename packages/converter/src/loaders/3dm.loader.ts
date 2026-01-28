@@ -79,7 +79,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     return document;
   }
 
-  protected async mapToGlb(document: Document, options: ThreeDmLoaderOptions): Promise<Uint8Array> {
+  protected async mapToGlb(document: Document, options: ThreeDmLoaderOptions): Promise<Uint8Array<ArrayBuffer>> {
     const io = await createNodeIo();
 
     // Apply transformations
@@ -89,8 +89,8 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     );
 
     // Export to GLB
-    const glb = await io.writeBinary(document);
-    return new Uint8Array(glb);
+    const glb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    return glb;
   }
 
   /**

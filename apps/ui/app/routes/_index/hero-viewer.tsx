@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useSelector } from '@xstate/react';
 import { fromPromise } from 'xstate';
-import { Loader2, Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
+import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { exportFromGlb } from '@taucad/converter';
 import type { OutputFormat } from '@taucad/converter';
 import type { Build } from '@taucad/types';
@@ -14,20 +14,20 @@ import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useChatManager } from '#hooks/use-chat-manager.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
-import { HammerAnimation } from '#components/hammer-animation.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { toast } from '#components/ui/sonner.js';
-import { downloadBlob } from '#utils/file.utils.js';
+import { asBuffer, downloadBlob } from '#utils/file.utils.js';
 import qrcodeScad from '#routes/_index/qrcode.scad?raw';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
+import { Loader } from '#components/ui/loader.js';
 
 const heroBuildId = 'hero-qrcode-v2';
 
-type Files = Record<string, { content: Uint8Array }>;
+type Files = Record<string, { content: Uint8Array<ArrayBuffer> }>;
 type HeroBuild = Build & { files: Files };
 
-function createHeroBuild(fileContent: Uint8Array): HeroBuild {
+function createHeroBuild(fileContent: Uint8Array<ArrayBuffer>): HeroBuild {
   const mainFile = 'main.scad';
   return {
     id: heroBuildId,
@@ -46,8 +46,6 @@ function createHeroBuild(fileContent: Uint8Array): HeroBuild {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     tags: ['openscad', 'parametric', 'qr-code'],
-    stars: 0,
-    forks: 0,
     thumbnail: '/tau-desktop.jpg',
     files: { [mainFile]: { content: fileContent } },
   };
@@ -66,7 +64,7 @@ function ViewerStatus({ className, ...properties }: React.HTMLAttributes<HTMLDiv
       )}
     >
       <span className="font-mono text-sm text-muted-foreground capitalize">{state}...</span>
-      <Loader2 className="size-4 animate-spin text-primary" />
+      <Loader className="size-4" />
     </div>
   ) : null;
 }
@@ -113,7 +111,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
   const cadStatus = useSelector(cadRef, (snapshot) => snapshot.value);
 
   // Get GLB data from geometries (same pattern as chat-converter.tsx)
-  const getGlbData = useCallback((): Uint8Array => {
+  const getGlbData = useCallback((): Uint8Array<ArrayBuffer> => {
     const gltfGeometry = geometries.find((g) => g.format === 'gltf');
     if (!gltfGeometry) {
       throw new Error('No GLB geometry available. Model must be rendered first.');
@@ -127,7 +125,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
     async function initializeAndLoadModel(): Promise<void> {
       // Write files to filesystem on first load (matching project-grid.tsx path format)
       if (!hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array }> = {};
+        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
         for (const [path, file] of Object.entries(files)) {
           buildFiles[`/builds/${heroBuildId}/${path}`] = file;
         }
@@ -166,7 +164,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
           throw new Error('No file returned from export');
         }
 
-        const blob = new Blob([file.data]);
+        const blob = new Blob([asBuffer(file.data.buffer)]);
         downloadBlob(blob, filename);
         return blob;
       })(),
@@ -208,8 +206,6 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
         name: 'QR Code Generator',
         description: 'A parametric QR code generator built with OpenSCAD',
         thumbnail: '/tau-desktop.jpg',
-        stars: 0,
-        forks: 0,
         author: {
           name: 'Community',
           avatar: '/avatar-sample.png',
@@ -273,12 +269,12 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
             onClick={handleContinueInEditor}
           >
             <span>Continue in Editor</span>
-            {isCreatingBuild ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
+            {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
           </Button>
 
           {isLoading ? (
             <div className="flex size-full items-center justify-center">
-              <HammerAnimation className="size-16" />
+              <Loader className="size-16" />
             </div>
           ) : geometries.length > 0 ? (
             <CadViewer
@@ -292,7 +288,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
             />
           ) : (
             <div className="flex size-full items-center justify-center">
-              <HammerAnimation className="size-16" />
+              <Loader className="size-16" />
             </div>
           )}
         </div>

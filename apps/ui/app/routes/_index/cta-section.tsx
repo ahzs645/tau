@@ -84,7 +84,7 @@ export function CtaSection(): React.JSX.Element {
           </div>
 
           {/* Chat Input */}
-          <ChatProvider value={{}}>
+          <ChatProvider>
             <div className="space-y-4">
               <div className="flex justify-center">
                 <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />

@@ -6,8 +6,8 @@ import { useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
-import { useTheme } from 'remix-themes';
 import { useColor } from '#hooks/use-color.js';
+import { useTheme } from '#hooks/use-theme.js';
 
 type ViewportGizmoAxesProps = {
   readonly size?: number;
@@ -23,7 +23,7 @@ export function ViewportGizmoAxes({ size = 128 }: ViewportGizmoAxesProps): React
   }));
 
   const { serialized } = useColor();
-  const [theme] = useTheme();
+  const { theme } = useTheme();
 
   const handleChange = useCallback((): void => {
     invalidate();

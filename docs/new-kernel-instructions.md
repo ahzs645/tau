@@ -20,8 +20,12 @@ How to add a new kernel (repeatable recipe)
    - Location: `apps/ui/app/components/geometry/kernel/<kernel>/<kernel>.worker.ts`
    - Extend `KernelWorker` and implement:
      - `canHandle(file)` → quick gate to detect supported files
-     - `extractParameters(file)` → return `{ defaultParameters, jsonSchema }`
-     - `computeGeometry(file, parameters)` → return `Geometry[]` (e.g. GLTF blob)
+     - `async getParameters({ filePath, basePath }, { filesystem, logger })` → return `Promise<KernelResult<{ defaultParameters, jsonSchema }>>`
+       - `basePath` is required for multi-file projects to resolve relative imports
+       - Second parameter is `KernelRuntime` which provides `filesystem` and `logger` for implementations
+     - `async createGeometry({ filePath, basePath, parameters }, { filesystem, logger })` → return `Promise<KernelResult<GeometryResponse[]>>`
+       - `basePath` is required for multi-file projects to resolve relative imports
+       - Second parameter is `KernelRuntime` which provides `filesystem` and `logger` for implementations
      - `exportGeometry(format, geometryId?)` → return blobs for requested format(s)
    - Expose the worker via `comlink`:
      ```
@@ -70,10 +74,10 @@ How to add a new kernel (repeatable recipe)
 About the JSCAD worker (fully implemented)
 -------------------------------------------
 - `canHandle` detects TS/JS code importing or requiring `@jscad/modeling`.
-- `extractParameters` supports both:
+- `getParameters` supports both:
   - **ES Modules**: `export const defaultParams = { ... }` → Converts to JSON Schema
   - **CommonJS**: `getParameterDefinitions()` → Converts parameter definitions to JSON Schema with proper type mapping
-- `computeGeometry` executes user code in a sandboxed VM and converts JSCAD geometry to GLTF for rendering.
+- `createGeometry` executes user code in a sandboxed VM and converts JSCAD geometry to GLTF for rendering.
 - `exportGeometry` supports STL export format.
 
 Key implementation details:
@@ -100,8 +104,8 @@ Key implementation details:
      - `codeStandards`: Code output requirements, syntax examples, and formatting rules
      - `modelingStrategy`: Design philosophy and modeling approach
      - `technicalResources`: Available APIs, modules, and example code
-     - `codeErrorDescription`: Description of compilation/syntax errors
-     - `kernelErrorDescription`: Description of runtime/geometric errors
+     - `codeIssueDescription`: Description of compilation/syntax errors
+     - `kernelIssueDescription`: Description of runtime/geometric errors
      - `commonErrorPatterns`: List of common issues and solutions
      - `parameterNamingConvention`: Naming style (camelCase, snake_case, etc.)
      - `parameterNamingExample`: Example of good parameter naming

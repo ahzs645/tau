@@ -6,12 +6,12 @@ import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { ChatMessage } from '#routes/builds_.$id/chat-message.js';
 import { ScrollDownButton } from '#routes/builds_.$id/scroll-down-button.js';
 import { ChatError } from '#routes/builds_.$id/chat-error.js';
-import { ChatStatus } from '#routes/builds_.$id/chat-status.js';
 import type { ChatTextareaProperties, ChatTextareaHandle } from '#components/chat/chat-textarea-types.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { ChatHistorySelector } from '#routes/builds_.$id/chat-history-selector.js';
+import { ChatHistoryStatus } from '#routes/builds_.$id/chat-history-status.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
   FloatingPanel,
@@ -27,6 +27,7 @@ import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatHistoryEmpty } from '#routes/builds_.$id/chat-history-empty.js';
 import { useKernel } from '#hooks/use-kernel.js';
+import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
 const toggleChatHistoryKeyCombination = {
   key: 'c',
@@ -75,6 +76,7 @@ export const ChatHistory = memo(function (props: {
   const messageIds = useChatSelector((state) => state.messageOrder);
   const { sendMessage } = useChatActions();
   const { kernel } = useKernel();
+  const snapshot = useChatSnapshot();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const chatTextareaRef = useRef<ChatTextareaHandle>(null);
   const toggleChatHistory = useCallback(() => {
@@ -105,12 +107,18 @@ export const ChatHistory = memo(function (props: {
       const userMessage = createMessage({
         content,
         role: messageRole.user,
-        metadata: { ...metadata, kernel, model, status: messageStatus.pending },
+        metadata: {
+          ...metadata,
+          kernel,
+          model,
+          status: messageStatus.pending,
+          snapshot,
+        },
         imageUrls,
       });
       sendMessage(userMessage);
     },
-    [sendMessage, kernel],
+    [sendMessage, kernel, snapshot],
   );
 
   // Memoize the item renderer for Virtuoso with stable references
@@ -162,10 +170,13 @@ export const ChatHistory = memo(function (props: {
           />
         )}
       >
-        {/* Header with search */}
+        {/* Header with chat selector */}
         <FloatingPanelContentHeader>
           <ChatHistorySelector onNewChat={handleNewChat} />
         </FloatingPanelContentHeader>
+
+        {/* Sticky status bar - last activity, model, cost */}
+        <ChatHistoryStatus />
 
         {/* Main chat content area */}
         <Virtuoso
@@ -195,7 +206,6 @@ export const ChatHistory = memo(function (props: {
 
         {/* Chat input area */}
         <div className="relative mx-2 mb-2">
-          <ChatStatus className="absolute inset-x-0 -top-7" />
           <ChatTextarea
             ref={chatTextareaRef}
             mode="main"

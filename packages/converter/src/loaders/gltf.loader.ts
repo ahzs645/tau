@@ -13,8 +13,8 @@ type GltfLoaderOptions = {
   scaleMetersToMillimeters?: boolean;
 } & BaseLoaderOptions;
 
-export class GltfLoader extends BaseLoader<Uint8Array, GltfLoaderOptions> {
-  protected async parseAsync(files: File[]): Promise<Uint8Array> {
+export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOptions> {
+  protected async parseAsync(files: File[]): Promise<Uint8Array<ArrayBuffer>> {
     const io = new NodeIO().registerExtensions(allExtensions).registerDependencies({
       // eslint-disable-next-line @typescript-eslint/naming-convention -- External library property names
       'draco3d.decoder': await draco3d.createDecoderModule(),
@@ -36,7 +36,7 @@ export class GltfLoader extends BaseLoader<Uint8Array, GltfLoaderOptions> {
       const referencedUris = this.extractReferencedUris(json);
 
       // Build resources map by matching referenced URIs to provided files
-      const resources: Record<string, Uint8Array> = {};
+      const resources: Record<string, Uint8Array<ArrayBuffer>> = {};
       for (const uri of referencedUris) {
         const matchedFile = this.findFileByUri(uri, files, name);
         if (matchedFile) {
@@ -58,11 +58,11 @@ export class GltfLoader extends BaseLoader<Uint8Array, GltfLoaderOptions> {
     );
 
     // Export the transformed document back to GLB
-    const transformedGlb = await io.writeBinary(document);
-    return new Uint8Array(transformedGlb);
+    const transformedGlb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    return transformedGlb;
   }
 
-  protected mapToGlb(parseResult: Uint8Array): Uint8Array {
+  protected mapToGlb(parseResult: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
     return parseResult;
   }
 

@@ -1,4 +1,4 @@
-import type { ErrorLocation, KernelError, KernelErrorResult, KernelErrorType, KernelStackFrame } from '@taucad/types';
+import type { ErrorLocation, KernelIssue, KernelErrorResult, KernelIssueType, KernelStackFrame } from '@taucad/types';
 import { KclError, KclWasmError, extractWasmKclError } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { createKernelError } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { sourceRangeToLineColumn } from '#components/geometry/kernel/zoo/source-range-utils.js';
@@ -24,9 +24,9 @@ export function mapErrorToKclError(error: unknown): KclError {
 }
 
 /**
- * Convert KCL errors to KernelError format
+ * Convert KCL errors to KernelIssue format
  */
-export function convertKclErrorToKernelError(kclError: KclError, code?: string, fileName?: string): KernelErrorResult {
+export function convertKclErrorToKernelIssue(kclError: KclError, code?: string, fileName?: string): KernelErrorResult {
   // Extract source range information if available
   const { sourceRange } = kclError;
 
@@ -68,7 +68,7 @@ export function convertKclErrorToKernelError(kclError: KclError, code?: string, 
   }
 
   // Determine error type based on KCL error kind
-  let errorType: KernelErrorType = 'unknown';
+  let errorType: KernelIssueType = 'unknown';
   switch (kclError.kind) {
     case 'lexical':
     case 'syntax':
@@ -107,13 +107,14 @@ export function convertKclErrorToKernelError(kclError: KclError, code?: string, 
   const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
   const location: ErrorLocation | undefined = hasLocation ? { fileName, startLineNumber, startColumn } : undefined;
 
-  const kernelError: KernelError = {
+  const kernelIssue: KernelIssue = {
     message: kclError.msg,
     location,
     type: errorType,
     stack,
     stackFrames,
+    severity: 'error',
   };
 
-  return createKernelError(kernelError);
+  return createKernelError([kernelIssue]);
 }

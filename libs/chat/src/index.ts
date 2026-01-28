@@ -1,17 +1,33 @@
 /* eslint-disable no-barrel-files/no-barrel-files -- package entry point. */
+export * from '#schemas/tools/diff.schema.js';
 export * from '#schemas/tools/web-search.tool.schema.js';
 export * from '#schemas/tools/web-browser.tool.schema.js';
-export * from '#schemas/tools/file-edit.tool.schema.js';
-export * from '#schemas/tools/image-analysis.tool.schema.js';
+export * from '#schemas/tools/edit-file.tool.schema.js';
+export * from '#schemas/tools/test-model.tool.schema.js';
+export * from '#schemas/tools/read-file.tool.schema.js';
+export * from '#schemas/tools/list-directory.tool.schema.js';
+export * from '#schemas/tools/create-file.tool.schema.js';
+export * from '#schemas/tools/delete-file.tool.schema.js';
+export * from '#schemas/tools/grep.tool.schema.js';
+export * from '#schemas/tools/glob-search.tool.schema.js';
+export * from '#schemas/tools/get-kernel-result.tool.schema.js';
+export * from '#schemas/tools/reasoning.tool.schema.js';
 export * from '#schemas/tools/transfer-tool.schema.js';
 export * from '#schemas/tools/transfer-to-cad-expert.tool.schema.js';
 export * from '#schemas/tools/transfer-to-research-expert.tool.schema.js';
 export * from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
 export * from '#schemas/metadata.schema.js';
 export * from '#schemas/message.schema.js';
+export * from '#schemas/message-data.schema.js';
+export type * from '#schemas/tool-schemas-registry.js';
+export * from '#schemas/rpc.schema.js';
+export * from '#types/rpc.types.js';
+export * from '#utils/tool-error.utils.js';
+export * from '#utils/chat-error.utils.js';
 
 export type * from '#types/message.types.js';
 export type * from '#types/tool.types.js';
 export type * from '#types/chat.types.js';
 export type * from '#types/model.types.js';
 export type * from '#types/message-metadata.types.js';
+export type * from '#types/websocket.types.js';

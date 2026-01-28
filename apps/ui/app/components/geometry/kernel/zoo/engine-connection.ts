@@ -49,7 +49,7 @@ const getWebSocket = async (): Promise<typeof WebSocket> => {
 
 // Mock engine connection for local operations that don't need websocket
 export class MockEngineConnection {
-  public async sendModelingCommandFromWasm(): Promise<Uint8Array> {
+  public async sendModelingCommandFromWasm(): Promise<Uint8Array<ArrayBuffer>> {
     throw KclError.simple('engine', 'Mock execution should not require websocket commands');
   }
 
@@ -142,7 +142,7 @@ export class EngineConnection {
     _id: string,
     cmd: string,
     _pathString: string,
-  ): Promise<Uint8Array> {
+  ): Promise<Uint8Array<ArrayBuffer>> {
     if (!this.isConnected) {
       // If the connection is not connected, we need to cleanup and re-initialize.
       // This lazy initialization ensures we only create and use a connection when it's required.
@@ -155,7 +155,7 @@ export class EngineConnection {
 
       const response = (await this.sendCommand(modelingCommand)) as WebSocketResponse;
 
-      return msgpackEncode(response);
+      return msgpackEncode(response) as Uint8Array<ArrayBuffer>;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

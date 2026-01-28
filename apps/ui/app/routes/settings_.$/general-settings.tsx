@@ -1,9 +1,9 @@
 import { Link } from 'react-router';
-import { Check, ChevronDown, Laptop, Loader2, Moon, ShieldCheck, Sun } from 'lucide-react';
-import { Theme } from 'remix-themes';
+import { Check, ChevronDown, Laptop, Moon, ShieldCheck, Sun } from 'lucide-react';
+import { Loader } from '#components/ui/loader.js';
 import { usePrivacyPreferences } from '#hooks/use-privacy-preferences.js';
-import { useThemeToggle, themeOptions } from '#hooks/use-theme-toggle.js';
-import type { ThemeWithSystem } from '#hooks/use-theme-toggle.js';
+import { Theme, useTheme, themeOptions } from '#hooks/use-theme.js';
+import type { ThemeWithSystem } from '#hooks/use-theme.js';
 import { useColor } from '#hooks/use-color.js';
 import { Card, CardContent, CardHeader, CardTitle } from '#components/ui/card.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -50,7 +50,7 @@ function getThemeIcon(themeId: ThemeWithSystem): React.JSX.Element {
  */
 export function GeneralSettings(): React.JSX.Element {
   const { preferences, isLoading, updatePreferences, isUpdating } = usePrivacyPreferences();
-  const { theme, setTheme, currentOption } = useThemeToggle();
+  const { themeWithSystem, setTheme, currentOption } = useTheme();
   const { hue, setHue, resetHue } = useColor();
 
   const currentModeId = preferences?.allowsAiTraining ? 'share' : 'private';
@@ -69,7 +69,7 @@ export function GeneralSettings(): React.JSX.Element {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        <Loader className="size-6 text-muted-foreground" />
       </div>
     );
   }
@@ -111,7 +111,7 @@ export function GeneralSettings(): React.JSX.Element {
             >
               <Button variant="outline" className="w-[160px] justify-between">
                 <span className="flex items-center gap-2">
-                  {getThemeIcon(theme)}
+                  {getThemeIcon(themeWithSystem)}
                   <span className="truncate">{currentOption.name}</span>
                 </span>
                 <ChevronDown className="size-4 shrink-0 opacity-50" />

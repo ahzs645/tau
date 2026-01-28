@@ -37,7 +37,7 @@ export function decodeString(encodedString: string): string {
   return cachedDecoder.decode(decodeBytes(encodedString));
 }
 
-export function encodeBytes(bytes: Uint8Array): string {
+export function encodeBytes(bytes: Uint8Array<ArrayBuffer>): string {
   if (!(bytes instanceof Uint8Array)) {
     throw new TypeError('The `bytes` parameter must be an instance of Uint8Array.');
   }
@@ -58,7 +58,7 @@ export function encodeBytes(bytes: Uint8Array): string {
   return encodeBigInt(value);
 }
 
-export function decodeBytes(encodedString: string): Uint8Array {
+export function decodeBytes(encodedString: string): Uint8Array<ArrayBuffer> {
   assertString(encodedString, 'encodedString');
 
   if (encodedString.length === 0) {

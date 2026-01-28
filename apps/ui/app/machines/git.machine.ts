@@ -2,15 +2,18 @@ import { assign, assertEvent, setup, fromPromise, emit, fromCallback } from 'xst
 import type { OutputFrom, DoneActorEvent, AnyActorRef } from 'xstate';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/web';
-import { lightningFs } from '#db/storage.js';
+import { gitFs, ensureGitFsConfigured } from '#db/storage.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import { gitAttributesTemplate } from '#constants/gitattributes-template.js';
+import { gitMountPoint } from '#filesystem/zenfs-config.js';
+import { joinPath } from '#utils/path.utils.js';
 
 /**
- * Get the directory path for a build in the virtual filesystem
+ * Get the directory path for a build in the git virtual filesystem.
+ * Uses the /git mount point for isolated git storage.
  */
 export function getBuildDirectory(buildId: string): string {
-  return `/builds/${buildId}`;
+  return joinPath(gitMountPoint, 'builds', buildId);
 }
 
 /**
@@ -61,11 +64,12 @@ type GitInput = {
 // Define the actors that the machine can invoke
 const initGitActor = fromPromise<{ buildId: string }, { buildId: string; repository: GitRepository }>(
   async ({ input }) => {
-    if (!lightningFs) {
-      throw new Error('LightningFS not initialized');
+    await ensureGitFsConfigured();
+    if (!gitFs) {
+      throw new Error('ZenFS not initialized');
     }
 
-    const fs = lightningFs;
+    const fs = gitFs;
     const dir = getBuildDirectory(input.buildId);
 
     // Initialize git repository
@@ -80,7 +84,7 @@ const initGitActor = fromPromise<{ buildId: string }, { buildId: string; reposit
     });
 
     // Create .gitattributes file for binary file handling
-    const gitAttributesPath = `${dir}/.gitattributes`;
+    const gitAttributesPath = joinPath(dir, '.gitattributes');
     try {
       // Check if .gitattributes already exists
       await fs.promises.stat(gitAttributesPath);
@@ -97,11 +101,12 @@ const cloneRepositoryActor = fromPromise<
   { buildId: string },
   { buildId: string; repository: GitRepository; accessToken: string; username: string }
 >(async ({ input }) => {
-  if (!lightningFs) {
-    throw new Error('LightningFS not initialized');
+  await ensureGitFsConfigured();
+  if (!gitFs) {
+    throw new Error('ZenFS not initialized');
   }
 
-  const fs = lightningFs;
+  const fs = gitFs;
   const dir = getBuildDirectory(input.buildId);
 
   await git.clone({
@@ -122,11 +127,12 @@ const cloneRepositoryActor = fromPromise<
 });
 
 const stageFileActor = fromPromise<string, { buildId: string; path: string }>(async ({ input }) => {
-  if (!lightningFs) {
-    throw new Error('LightningFS not initialized');
+  await ensureGitFsConfigured();
+  if (!gitFs) {
+    throw new Error('ZenFS not initialized');
   }
 
-  const fs = lightningFs;
+  const fs = gitFs;
   const dir = getBuildDirectory(input.buildId);
 
   await git.add({
@@ -139,11 +145,12 @@ const stageFileActor = fromPromise<string, { buildId: string; path: string }>(as
 });
 
 const unstageFileActor = fromPromise<string, { buildId: string; path: string }>(async ({ input }) => {
-  if (!lightningFs) {
-    throw new Error('LightningFS not initialized');
+  await ensureGitFsConfigured();
+  if (!gitFs) {
+    throw new Error('ZenFS not initialized');
   }
 
-  const fs = lightningFs;
+  const fs = gitFs;
   const dir = getBuildDirectory(input.buildId);
 
   await git.remove({
@@ -157,11 +164,12 @@ const unstageFileActor = fromPromise<string, { buildId: string; path: string }>(
 
 const commitChangesActor = fromPromise<string, { buildId: string; message: string; username: string; email: string }>(
   async ({ input }) => {
-    if (!lightningFs) {
-      throw new Error('LightningFS not initialized');
+    await ensureGitFsConfigured();
+    if (!gitFs) {
+      throw new Error('ZenFS not initialized');
     }
 
-    const fs = lightningFs;
+    const fs = gitFs;
     const dir = getBuildDirectory(input.buildId);
 
     const sha = await git.commit({
@@ -182,11 +190,12 @@ const pushChangesActor = fromPromise<
   boolean,
   { buildId: string; repository: GitRepository; accessToken: string; username: string }
 >(async ({ input }) => {
-  if (!lightningFs) {
-    throw new Error('LightningFS not initialized');
+  await ensureGitFsConfigured();
+  if (!gitFs) {
+    throw new Error('ZenFS not initialized');
   }
 
-  const fs = lightningFs;
+  const fs = gitFs;
   const dir = getBuildDirectory(input.buildId);
 
   await git.push({
@@ -208,11 +217,12 @@ const pullChangesActor = fromPromise<
   boolean,
   { buildId: string; repository: GitRepository; accessToken: string; username: string }
 >(async ({ input }) => {
-  if (!lightningFs) {
-    throw new Error('LightningFS not initialized');
+  await ensureGitFsConfigured();
+  if (!gitFs) {
+    throw new Error('ZenFS not initialized');
   }
 
-  const fs = lightningFs;
+  const fs = gitFs;
   const dir = getBuildDirectory(input.buildId);
 
   await git.pull({
@@ -235,11 +245,12 @@ const pullChangesActor = fromPromise<
 
 // eslint-disable-next-line complexity -- TODO: address
 const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, { buildId: string }>(async ({ input }) => {
-  if (!lightningFs) {
-    throw new Error('LightningFS not initialized');
+  await ensureGitFsConfigured();
+  if (!gitFs) {
+    throw new Error('ZenFS not initialized');
   }
 
-  const fs = lightningFs;
+  const fs = gitFs;
   const dir = getBuildDirectory(input.buildId);
 
   try {

@@ -1,4 +1,4 @@
-import { Copy, Ellipsis, Pencil, Star, Trash, ArrowUpRightSquare } from 'lucide-react';
+import { Copy, Ellipsis, Pencil, Trash, ArrowUpRightSquare } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import type { Build } from '@taucad/types';
@@ -92,10 +92,6 @@ export function BuildActionDropdown({
               >
                 <Pencil className="mr-2 size-4" />
                 <span>Rename</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <Star className="mr-2 size-4" />
-                <span>Favorite</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 variant="destructive"

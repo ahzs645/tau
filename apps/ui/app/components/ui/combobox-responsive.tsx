@@ -14,7 +14,7 @@ import {
 } from '#components/ui/drawer.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
 import { cn } from '#utils/ui.utils.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 type GroupedItems<T> = {
   name: string;
@@ -331,7 +331,7 @@ function ItemList<T>({
                 Footer: isLoadingMore
                   ? () => (
                       <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
-                        <LoadingSpinner />
+                        <Loader />
                         <span>Loading more...</span>
                       </div>
                     )

@@ -5,9 +5,8 @@
     "types": ["node"],
     "target": "ESNext",
     "outDir": "./out-tsc/lib",
-    "baseUrl": ".",
     "paths": {
-      "#*": ["app/*"]
+      "#*": ["./app/*"]
     },
     "erasableSyntaxOnly": false // Incompatible with NestJS dependency injection.
   },

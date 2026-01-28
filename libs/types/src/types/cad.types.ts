@@ -2,7 +2,7 @@ import type { LengthSymbol } from '@taucad/units';
 import type { StandardSchemaV1 } from '#types/schema.types.js';
 import type { engineeringDisciplines } from '#constants/cad.constants.js';
 
-export type CodeError = {
+export type CodeIssue = {
   message: string;
   startLineNumber: number;
   endLineNumber: number;
@@ -38,7 +38,7 @@ export type GeometrySvg = {
  */
 export type GeometryGltf = {
   format: 'gltf';
-  content: Uint8Array;
+  content: Uint8Array<ArrayBuffer>;
 };
 
 /**
@@ -47,12 +47,35 @@ export type GeometryGltf = {
  * A placeholder for a video stream geometry from a remote server
  * for server-rendered 3D geometries.
  */
-export type GeometryVideoStream = {
-  format: 'video-stream';
+export type GeometryWebRtc = {
+  format: 'webrtc';
   stream: ReadableStream | MediaStream;
 };
 
-export type Geometry = GeometrySvg | GeometryGltf | GeometryVideoStream;
+/**
+ * The type of geometry that is returned by the kernel worker.
+ *
+ * One of:
+ * - `GeometrySvg`
+ * - `GeometryGltf`
+ * - `GeometryWebRtc`
+ */
+export type GeometryResponse = GeometrySvg | GeometryGltf | GeometryWebRtc;
+
+/**
+ * Geometry with unique hash identifier.
+ * The hash is computed from all dependencies, including:
+ * - File content hashes
+ * - Middleware signatures
+ * - Framework version
+ * - Kernel options
+ * - Parameters
+ * - Bundled assets
+ */
+export type Geometry = GeometryResponse & {
+  /** Unique hash identifier for this geometry (based on dependencies) */
+  hash: string;
+};
 
 export type EngineeringDiscipline = keyof typeof engineeringDisciplines;
 

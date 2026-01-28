@@ -115,7 +115,10 @@ export type GlbTransformOptions = {
  * @param options - Transformation options
  * @returns Promise<Uint8Array> - The transformed GLB data
  */
-export async function applyGlbTransforms(glbData: Uint8Array, options: GlbTransformOptions = {}): Promise<Uint8Array> {
+export async function applyGlbTransforms(
+  glbData: Uint8Array<ArrayBuffer>,
+  options: GlbTransformOptions = {},
+): Promise<Uint8Array<ArrayBuffer>> {
   const { transformYtoZup = true, scaleMetersToMillimeters = true } = options;
 
   // Skip transformation if neither is enabled
@@ -137,8 +140,8 @@ export async function applyGlbTransforms(glbData: Uint8Array, options: GlbTransf
     );
 
     // Export the transformed document back to GLB
-    const transformedGlb = await io.writeBinary(document);
-    return new Uint8Array(transformedGlb);
+    const transformedGlb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    return transformedGlb;
   } catch (error) {
     console.warn('[GLB Transforms] Failed to apply transformations:', error);
     // Return original data if transformation fails

@@ -80,7 +80,7 @@ type BuildEventInternal =
   | { type: 'setLastChatId'; chatId: string }
   | {
       type: 'updateCodeParameters';
-      files: Record<string, { content: Uint8Array }>;
+      files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
       parameters: Record<string, unknown>;
     }
   | { type: 'setParameters'; parameters: Record<string, unknown> }

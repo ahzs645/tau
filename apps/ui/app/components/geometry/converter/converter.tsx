@@ -7,10 +7,10 @@ import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
-import { downloadBlob } from '#utils/file.utils.js';
+import { asBuffer, downloadBlob } from '#utils/file.utils.js';
 import { FormatSelector } from '#components/geometry/converter/format-selector.js';
 import { ConverterFileTree } from '#components/geometry/converter/converter-file-tree.js';
-import { formatDisplayName, getFileExtension } from '#components/geometry/converter/converter-utils.js';
+import { formatDisplayName, getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';
 import { zipMachine } from '#machines/zip.machine.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -22,12 +22,12 @@ type UploadedFileInfo = {
 
 export type ExportedFile = {
   readonly filename: string;
-  readonly content: Uint8Array;
+  readonly content: Uint8Array<ArrayBuffer>;
   readonly format: OutputFormat;
 };
 
 type ConverterProperties = {
-  readonly getGlbData: () => Promise<Uint8Array>;
+  readonly getGlbData: () => Promise<Uint8Array<ArrayBuffer>>;
   readonly selectedFormats: OutputFormat[];
   readonly shouldUseZipForMultiple: boolean;
   readonly uploadedFile?: UploadedFileInfo;
@@ -94,7 +94,7 @@ export function Converter({
       return;
     }
 
-    let data: Uint8Array;
+    let data: Uint8Array<ArrayBuffer>;
 
     try {
       // Lazily fetch GLB data when download is triggered
@@ -124,12 +124,12 @@ export function Converter({
               throw new Error('No file returned from export');
             }
 
-            const extension = getFileExtension(format);
+            const extension = getExtensionForFormat(format);
             const filename = uploadedFile
               ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
               : `model.${extension}`;
 
-            const blob = new Blob([file.data]);
+            const blob = new Blob([asBuffer(file.data.buffer)]);
 
             if (shouldChooseLocation) {
               await saveFileWithPicker(blob, filename);
@@ -178,11 +178,11 @@ export function Converter({
             );
 
             // Add all files to zip machine
-            const filesToZip: Array<{ filename: string; content: Uint8Array }> = [];
+            const filesToZip: Array<{ filename: string; content: Uint8Array<ArrayBuffer> }> = [];
             const exportedFiles: ExportedFile[] = [];
             for (const { format, files } of results) {
               for (const file of files) {
-                const extension = getFileExtension(format);
+                const extension = getExtensionForFormat(format);
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;
@@ -265,11 +265,11 @@ export function Converter({
             const exportedFiles: ExportedFile[] = [];
             for (const { format, files } of results) {
               for (const file of files) {
-                const extension = getFileExtension(format);
+                const extension = getExtensionForFormat(format);
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;
-                const blob = new Blob([file.data]);
+                const blob = new Blob([asBuffer(file.data.buffer)]);
 
                 if (shouldChooseLocation) {
                   // eslint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional

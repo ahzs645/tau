@@ -14,9 +14,9 @@
    pnpm install
    ```
 
-2. Start the PostgreSQL database:
+2. Start the infrastructure (PostgreSQL + Redis):
    ```bash
-   pnpm db:up
+   pnpm infra:up
    ```
 
 3. Create your environment file in UI and API:
@@ -33,34 +33,38 @@
 
    That's it! You can now start developing.
 
-### Database Commands
+### Infrastructure Commands
 
 #### Docker Compose Commands
 ```bash
-# Start database
-pnpm db:up
+# Start all infrastructure (PostgreSQL + Redis)
+pnpm infra:up
 
-# Stop database
-pnpm db:down
+# Stop all infrastructure
+pnpm infra:down
 
-# Reset database (destroys all data)
-pnpm db:reset
+# Reset all infrastructure (destroys all data)
+pnpm infra:reset
 
-# View database logs
-pnpm db:logs
+# View all logs
+pnpm infra:logs
+
+# View specific service logs
+pnpm infra:logs:postgres
+pnpm infra:logs:redis
 ```
 
 Or, if you prefer to use Docker CLI directly:
 
 ```bash
-# Start database
-docker compose -f infra/docker-compose.db.yml up -d
+# Start infrastructure
+docker-compose -f infra/docker-compose.yml up -d
 
-# Stop database
-docker compose -f infra/docker-compose.db.yml down
+# Stop infrastructure
+docker-compose -f infra/docker-compose.yml down
 
 # View logs
-docker compose -f infra/docker-compose.db.yml logs -f postgres
+docker-compose -f infra/docker-compose.yml logs -f
 ```
 
 

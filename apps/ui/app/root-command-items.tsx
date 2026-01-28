@@ -1,4 +1,4 @@
-import { Cog, History, List, LogIn, LogOut, Plus } from 'lucide-react';
+import { Code2, Cog, History, List, LogIn, LogOut, MessageCircle } from 'lucide-react';
 import { useMemo } from 'react';
 import { useAuthenticate } from '@daveyplate/better-auth-ui';
 import { useLocation } from 'react-router';
@@ -32,9 +32,9 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
     (): CommandPaletteItem[] => [
       {
         id: 'new-build-from-prompt',
-        label: 'New build (from prompt)',
+        label: 'New build (from chat)',
         group: 'Builds',
-        icon: <Plus />,
+        icon: <MessageCircle />,
         link: '/',
         shortcut: '⌃N',
       },
@@ -42,7 +42,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         id: 'new-build-from-code',
         label: 'New build (from code)',
         group: 'Builds',
-        icon: <Plus />,
+        icon: <Code2 />,
         link: '/builds/new',
       },
       {

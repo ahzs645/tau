@@ -16,7 +16,7 @@ import {
 import { sampleBuilds } from '#constants/build-examples.js';
 import { CommunityBuildGrid } from '#components/project-grid.js';
 import type { Handle } from '#types/matches.types.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -30,7 +30,7 @@ export const handle: Handle = {
 };
 
 const itemsPerPage = 9;
-type SortOption = 'newest' | 'oldest' | 'stars' | 'forks';
+type SortOption = 'newest' | 'oldest';
 
 export default function CadCommunity(): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
@@ -67,14 +67,6 @@ export default function CadCommunity(): React.JSX.Element {
         return a.createdAt - b.createdAt;
       }
 
-      case 'stars': {
-        return b.stars - a.stars;
-      }
-
-      case 'forks': {
-        return b.forks - a.forks;
-      }
-
       default: {
         const exhaustiveCheck: never = sortOption;
         throw new Error(`Invalid sort option: ${String(exhaustiveCheck)}`);
@@ -98,7 +90,7 @@ export default function CadCommunity(): React.JSX.Element {
           <span className="text-muted-foreground">({sortedProjects.length})</span>
         </div>
         <Button asChild>
-          <NavLink to="/">{({ isPending }) => (isPending ? <LoadingSpinner /> : 'New Build')}</NavLink>
+          <NavLink to="/">{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
         </Button>
       </div>
 
@@ -165,20 +157,6 @@ export default function CadCommunity(): React.JSX.Element {
                     }}
                   >
                     Oldest
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      setSortOption('stars');
-                    }}
-                  >
-                    Most Stars
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      setSortOption('forks');
-                    }}
-                  >
-                    Most Forks
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
               </DropdownMenuContent>

@@ -11,7 +11,6 @@ import type { Configuration } from '@taucad/kcl-wasm-lib/bindings/Configuration'
 import type { System } from '@taucad/kcl-wasm-lib/bindings/ModelingCmd';
 import type { Context } from '@taucad/kcl-wasm-lib';
 import type { Models } from '@kittycad/lib';
-import wasmPath from '@taucad/kcl-wasm-lib/kcl.wasm?url';
 import { EngineConnection, MockEngineConnection } from '#components/geometry/kernel/zoo/engine-connection.js';
 import type { WasmModule } from '#components/geometry/kernel/zoo/engine-connection.js';
 import type { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
@@ -22,6 +21,12 @@ import {
   extractWasmKclError,
 } from '#components/geometry/kernel/zoo/kcl-errors.js';
 import { createZooLogger } from '#components/geometry/kernel/zoo/zoo-logs.js';
+import { asBuffer } from '#utils/file.utils.js';
+
+// WASM URL using universal pattern for browsers and bundlers
+// WASM file is copied from node_modules via copy-files-from-to
+// @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
+export const kclWasmUrl = new URL('wasm/kcl_wasm_lib_bg.wasm', import.meta.url).href;
 
 const log = createZooLogger('KclUtils');
 
@@ -49,7 +54,7 @@ export type ExportOptions = SetRequired<Partial<OutputFormat3d>, 'type'> & {
 
 export type ExportedFile = {
   name: string;
-  contents: Uint8Array;
+  contents: Uint8Array<ArrayBuffer>;
 };
 
 export type KclExportResult = {
@@ -86,12 +91,49 @@ const splitErrors = (input: CompilationError[]): { errors: CompilationError[]; w
   return { errors, warnings };
 };
 
+/**
+ * Load WASM binary using feature detection (try/catch) rather than environment checks.
+ * Tries fetch first (works in browsers), falls back to fs.readFile for file:// URLs (Node.js).
+ * @see https://www.zachleat.com/web/dynamic-import/ - similar pattern to import-module-string
+ */
+async function loadWasmBinary(url: string): Promise<ArrayBuffer> {
+  try {
+    // Try fetch first - works in browsers and some Node.js versions
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch WASM binary from ${url}: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.arrayBuffer();
+  } catch (error) {
+    // Only attempt Node.js fs fallback for file:// URLs
+    if (!url.startsWith('file:')) {
+      throw error;
+    }
+
+    // Fallback: use Node.js fs for file:// URLs
+    // Dynamic imports avoid bundler issues in browser builds
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Node.js API
+    const { fileURLToPath } = await import('node:url');
+    const { readFile } = await import('node:fs/promises');
+    const filePath = fileURLToPath(url);
+    const buffer = await readFile(filePath);
+    return asBuffer(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  }
+}
+
 // Dynamic import function to load WASM module
 async function loadWasmModule(): Promise<WasmModule> {
   try {
     const wasmModule = await import('@taucad/kcl-wasm-lib');
 
-    await wasmModule.default(wasmPath);
+    // Load WASM binary using fetch with fallback to Node.js fs
+    const wasmBinary = await loadWasmBinary(kclWasmUrl);
+
+    // Initialize WASM module with the binary data
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- WASM Bindgen API
+    await wasmModule.default({ module_or_path: wasmBinary });
 
     return wasmModule;
   } catch (error) {

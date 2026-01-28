@@ -5,9 +5,8 @@
     "module": "NodeNext",
     "types": ["node"],
     "target": "ESNext",
-    "baseUrl": ".",
     "paths": {
-      "#*": ["src/*"]
+      "#*": ["./src/*"]
     }
   },
   "include": ["src/**/*.ts"],

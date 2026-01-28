@@ -8,7 +8,7 @@ import JSZip from 'jszip';
 export type UnzipContext = {
   parentRef: AnyActorRef | undefined;
   zipBlob: Blob | undefined;
-  files: Map<string, { filename: string; content: Uint8Array }>;
+  files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
   error: Error | undefined;
   totalBytes: number;
   processedBytes: number;
@@ -47,7 +47,7 @@ type UnzipEmitted =
     }
   | {
       type: 'complete';
-      files: Map<string, { filename: string; content: Uint8Array }>;
+      files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
     }
   | {
       type: 'error';
@@ -58,11 +58,11 @@ type UnzipEvent = UnzipEventInternal;
 
 // Define the actors that the machine can invoke
 const extractZipActor = fromPromise<
-  Map<string, { filename: string; content: Uint8Array }>,
+  Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>,
   { zipBlob: Blob; onProgress: (processed: number, total: number) => void }
 >(async ({ input }) => {
   const zip = await JSZip.loadAsync(input.zipBlob);
-  const files = new Map<string, { filename: string; content: Uint8Array }>();
+  const files = new Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>();
 
   // Get all file entries (excluding directories)
   const fileEntries = Object.entries(zip.files).filter(([, file]) => !file.dir);
@@ -79,7 +79,7 @@ const extractZipActor = fromPromise<
       const content = await file.async('uint8array');
       files.set(normalizedPath, {
         filename: normalizedPath,
-        content,
+        content: content as Uint8Array<ArrayBuffer>,
       });
     }
 

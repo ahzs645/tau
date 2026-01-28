@@ -1,6 +1,7 @@
 import { geometries, maths } from '@jscad/modeling';
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
+import { transformNormalArray, transformVertexArray } from '#components/geometry/kernel/utils/common.js';
 
 /**
  * Type guard to check if a shape has a color property
@@ -166,10 +167,12 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
 }
 
 /**
- * Create a glTF primitive from JSCAD mesh data
+ * Create a glTF primitive from JSCAD mesh data.
  *
  * Constructs a complete glTF primitive (mesh component) from pre-processed vertex data.
  * This includes geometry attributes (positions, normals), indices, and material properties.
+ *
+ * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  *
  * Material setup:
  * - Double-sided rendering enabled for robustness (handles reversed normals)
@@ -197,9 +200,9 @@ function createPrimitiveFromJscadMesh(
 ): Primitive {
   const { vertices, normals, indices, color } = meshData;
 
-  // Convert to typed arrays
-  const positions = new Float32Array(vertices);
-  const normalsArray = new Float32Array(normals);
+  // Convert to typed arrays and transform coordinates from Z-up/mm to Y-up/meters
+  const positions = transformVertexArray(vertices);
+  const normalsArray = transformNormalArray(normals);
   const indicesArray = new Uint32Array(indices);
 
   // Use provided color or default to light gray
@@ -241,14 +244,17 @@ function createPrimitiveFromJscadMesh(
 }
 
 /**
- * Create a GLTF document from JSCAD shapes with color support
+ * Create a GLTF document from JSCAD shapes with color support.
+ *
+ * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
  *
  * Orchestrates the complete conversion pipeline from JSCAD geometries to a glTF document.
  * This function:
  * 1. Creates a new glTF Document with a buffer
  * 2. Creates a separate mesh/node for each shape to preserve individual geometry
- * 3. Applies color from each shape to its material
- * 4. Adds all meshes to the scene
+ * 3. Applies coordinate transformation (Z-up/mm to Y-up/meters)
+ * 4. Applies color from each shape to its material
+ * 5. Adds all meshes to the scene
  *
  * Color handling:
  * - Each shape gets its own mesh with its own material
@@ -295,7 +301,11 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
 }
 
 /**
- * Convert JSCAD geometry to GLTF Blob for rendering with full color support
+ * Convert JSCAD geometry to GLTF Blob for rendering with full color support.
+ *
+ * Always produces spec-compliant GLTF with:
+ * - Y-up coordinate system (per glTF specification)
+ * - Meter units (per glTF specification)
  *
  * Public API for converting JSCAD geometries into renderable glTF format (GLB binary).
  * This is the primary integration point between the JSCAD CAD engine and the 3D viewer.
@@ -303,8 +313,9 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  * Conversion pipeline:
  * 1. Normalizes input to array format (single shape -> [shape])
  * 2. Creates separate mesh/node for each shape to preserve individual geometry
- * 3. Creates glTF document with mesh data extraction, triangulation, normals, and colors
- * 4. Serializes to GLB (binary glTF) format for efficient transmission and storage
+ * 3. Applies coordinate transformation (Z-up/mm to Y-up/meters)
+ * 4. Creates glTF document with mesh data extraction, triangulation, normals, and colors
+ * 5. Serializes to GLB (binary glTF) format for efficient transmission and storage
  *
  * Color support:
  * - Automatically detects and preserves colors applied via colorize() from @jscad/modeling
@@ -347,7 +358,7 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  * const coloredGltf = await jscadToGltf([redSphere, blueCube]);
  * ```
  */
-export async function jscadToGltf(shape: unknown): Promise<Uint8Array> {
+export async function jscadToGltf(shape: unknown): Promise<Uint8Array<ArrayBuffer>> {
   // Handle array of geometries
   const shapes = Array.isArray(shape) ? shape : [shape];
 

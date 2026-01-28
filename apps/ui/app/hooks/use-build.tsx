@@ -26,7 +26,10 @@ type BuildContextType = {
   screenshotRef: ActorRefFrom<typeof screenshotCapabilityMachine>;
   cameraRef: ActorRefFrom<typeof cameraCapabilityMachine>;
   logRef: ActorRefFrom<typeof logMachine>;
-  setCodeParameters: (files: Record<string, { content: Uint8Array }>, parameters: Record<string, unknown>) => void;
+  setCodeParameters: (
+    files: Record<string, { content: Uint8Array<ArrayBuffer> }>,
+    parameters: Record<string, unknown>,
+  ) => void;
   setParameters: (parameters: Record<string, unknown>) => void;
   updateName: (name: string) => void;
   updateDescription: (description: string) => void;
@@ -94,16 +97,34 @@ export function BuildProvider({
   useEffect(() => {
     // FileManager → CAD coordination
     const fileWrittenSub = fileManager.fileManagerRef.on('fileWritten', (event) => {
-      cadRef.send({
-        type: 'setFile',
-        file: { path: `/builds/${buildId}`, filename: event.path },
-      });
+      // For machine sources (LLM/chat tools streaming to multiple files),
+      // always render the active file to avoid switching context, but ensure
+      // downstream file changes are incorporated into the active file's render
+      const isMachine = event.source === 'machine';
+      const { activeFilePath } = fileExplorerRef.getSnapshot().context;
+
+      if (isMachine) {
+        // Machine writes: always re-render the active file to pick up any
+        // downstream changes (e.g., imported files that were modified)
+        if (activeFilePath) {
+          cadRef.send({
+            type: 'setFile',
+            file: { path: `/builds/${buildId}`, filename: activeFilePath },
+          });
+        }
+      } else {
+        // Non-machine writes: render the written file directly
+        cadRef.send({
+          type: 'setFile',
+          file: { path: `/builds/${buildId}`, filename: event.path },
+        });
+      }
     });
 
     return () => {
       fileWrittenSub.unsubscribe();
     };
-  }, [fileManager.fileManagerRef, cadRef, buildId]);
+  }, [fileManager.fileManagerRef, cadRef, buildId, fileExplorerRef]);
 
   useEffect(() => {
     // Close all open files from previous build
@@ -126,7 +147,7 @@ export function BuildProvider({
 
   // Memoize callbacks
   const setCodeParameters = useCallback(
-    (files: Record<string, { content: Uint8Array }>, parameters: Record<string, unknown>) => {
+    (files: Record<string, { content: Uint8Array<ArrayBuffer> }>, parameters: Record<string, unknown>) => {
       actorRef.send({ type: 'updateCodeParameters', files, parameters });
     },
     [actorRef],

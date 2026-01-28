@@ -1,10 +1,10 @@
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { messageRole } from '@taucad/chat/constants';
-import type { MyUIMessage } from '@taucad/chat';
+import type { MyUIMessage, UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { ChatMessageReasoning } from '#routes/builds_.$id/chat-message-reasoning.js';
-import { ChatMessageMetadata } from '#routes/builds_.$id/chat-message-metadata.js';
+import { ChatMessageDataUsage } from '#routes/builds_.$id/chat-message-data-usage.js';
 import { ChatMessageText } from '#routes/builds_.$id/chat-message-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
 import { CopyButton } from '#components/copy-button.js';
@@ -23,11 +23,21 @@ import {
 import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatMessageToolWebSearch } from '#routes/builds_.$id/chat-message-tool-web-search.js';
 import { ChatMessageToolWebBrowser } from '#routes/builds_.$id/chat-message-tool-web-browser.js';
-import { ChatMessageToolFileEdit } from '#routes/builds_.$id/chat-message-tool-file-edit.js';
-import { ChatMessageToolImageAnalysis } from '#routes/builds_.$id/chat-message-tool-image-analysis.js';
+import { ChatMessageToolFileEdit } from '#routes/builds_.$id/chat-message-tool-edit-file.js';
+import { ChatMessageToolTestModel } from '#routes/builds_.$id/chat-message-tool-test-model.js';
+import { ChatMessageToolEditTests } from '#routes/builds_.$id/chat-message-tool-edit-tests.js';
+import { ChatMessageToolReadFile } from '#routes/builds_.$id/chat-message-tool-read-file.js';
+import { ChatMessageToolListDirectory } from '#routes/builds_.$id/chat-message-tool-list-directory.js';
+import { ChatMessageToolCreateFile } from '#routes/builds_.$id/chat-message-tool-create-file.js';
+import { ChatMessageToolDeleteFile } from '#routes/builds_.$id/chat-message-tool-delete-file.js';
+import { ChatMessageToolGrep } from '#routes/builds_.$id/chat-message-tool-grep.js';
+import { ChatMessageToolGlobSearch } from '#routes/builds_.$id/chat-message-tool-glob-search.js';
+import { ChatMessageToolGetKernelResult } from '#routes/builds_.$id/chat-message-tool-get-kernel-result.js';
+import { ChatMessageToolReasoning } from '#routes/builds_.$id/chat-message-tool-reasoning.js';
 import { ChatMessagePartUnknown } from '#routes/builds_.$id/chat-message-tool-unknown.js';
 import { ChatMessageToolTransfer } from '#routes/builds_.$id/chat-message-tool-transfer.js';
 import { ChatMessageFile } from '#routes/builds_.$id/chat-message-file.js';
+import { ChatMessagePlanning } from '#routes/builds_.$id/chat-message-planning.js';
 
 type ChatMessageProperties = {
   readonly messageId: string;
@@ -50,6 +60,21 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
   const fileParts = useChatSelector(
     (state) => state.messagesById.get(messageId)?.parts.filter((part) => part.type === 'file') ?? [],
   );
+  const usageParts = useChatSelector((state) => {
+    const message_ = state.messageEdits[messageId] ?? state.messagesById.get(messageId);
+    if (!message_) {
+      return [];
+    }
+
+    const usageDataParts: UsageData[] = [];
+    for (const part of message_.parts) {
+      if (part.type === 'data-usage') {
+        usageDataParts.push(part.data);
+      }
+    }
+
+    return usageDataParts;
+  });
   const { editMessage, retryMessage, startEditingMessage, exitEditMode } = useChatActions();
   const [isEditing, setIsEditing] = useState(false);
 
@@ -106,9 +131,10 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
         <When shouldRender={!isEditing}>
           <div
             className={cn(
-              'flex flex-col gap-2',
+              'flex flex-col gap-1',
               isUser &&
-                'max-h-58.5 cursor-pointer overflow-hidden rounded-sm border bg-background px-3 py-2 hover:border-primary',
+                'max-h-58.5 cursor-pointer overflow-hidden rounded-sm border bg-background px-3 py-1 hover:border-primary',
+              fileParts.length > 0 && 'pt-3',
             )}
             onClick={handleEditClick}
           >
@@ -119,6 +145,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 ))}
               </div>
             ) : null}
+            {/* eslint-disable-next-line complexity -- This is a complex switch statement, we want to keep it simple. */}
             {displayMessage.parts.map((part, index) => {
               switch (part.type) {
                 case 'text': {
@@ -132,17 +159,14 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'reasoning': {
-                  /* TODO: remove trim when backend is fixed to trim thinking tags */
                   const hasPartsAfter = index < displayMessage.parts.length - 1;
                   return (
-                    part.text.trim().length > 0 && (
-                      <ChatMessageReasoning
-                        // eslint-disable-next-line react/no-array-index-key -- Index is stable
-                        key={`${displayMessage.id}-message-part-${index}`}
-                        part={part}
-                        hasContent={hasPartsAfter}
-                      />
-                    )
+                    <ChatMessageReasoning
+                      // eslint-disable-next-line react/no-array-index-key -- Index is stable
+                      key={`${displayMessage.id}-message-part-${index}`}
+                      part={part}
+                      hasContent={hasPartsAfter}
+                    />
                   );
                 }
 
@@ -171,7 +195,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
 
                 // TOOLS
                 case 'tool-web_search': {
-                  return <ChatMessageToolWebSearch key={part.toolCallId} part={part} />;
+                  const hasPartsAfter = index < displayMessage.parts.length - 1;
+                  return <ChatMessageToolWebSearch key={part.toolCallId} part={part} hasContent={hasPartsAfter} />;
                 }
 
                 case 'tool-web_browser': {
@@ -182,8 +207,12 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   return <ChatMessageToolFileEdit key={part.toolCallId} part={part} />;
                 }
 
-                case 'tool-analyze_image': {
-                  return <ChatMessageToolImageAnalysis key={part.toolCallId} part={part} />;
+                case 'tool-test_model': {
+                  return <ChatMessageToolTestModel key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-edit_tests': {
+                  return <ChatMessageToolEditTests key={part.toolCallId} part={part} />;
                 }
 
                 case 'tool-transfer_to_cad_expert': {
@@ -198,10 +227,42 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   return <ChatMessageToolTransfer key={part.toolCallId} part={part} />;
                 }
 
-                case 'data-test': {
-                  // A data part is required to be present to exhaustively match all parts.
-                  // This should replace with an actual data part when it becomes available.
-                  return <div>Data test</div>;
+                // FILESYSTEM TOOLS
+                case 'tool-read_file': {
+                  return <ChatMessageToolReadFile key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-list_directory': {
+                  return <ChatMessageToolListDirectory key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-create_file': {
+                  return <ChatMessageToolCreateFile key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-delete_file': {
+                  return <ChatMessageToolDeleteFile key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-grep': {
+                  return <ChatMessageToolGrep key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-glob_search': {
+                  return <ChatMessageToolGlobSearch key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-get_kernel_result': {
+                  return <ChatMessageToolGetKernelResult key={part.toolCallId} part={part} />;
+                }
+
+                case 'tool-reasoning': {
+                  return <ChatMessageToolReasoning key={part.toolCallId} part={part} />;
+                }
+
+                case 'data-usage': {
+                  // Usage data parts are rendered separately in the footer
+                  return null;
                 }
 
                 default: {
@@ -212,6 +273,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             })}
           </div>
         </When>
+        <ChatMessagePlanning messageId={messageId} />
         <When shouldRender={!isUser}>
           <div className="mt-1 flex flex-row items-start justify-start text-muted-foreground">
             <CopyButton
@@ -263,8 +325,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               </DropdownMenu>
               <TooltipContent side="bottom">Switch model</TooltipContent>
             </Tooltip>
-            <div className="mx-1 flex flex-row items-center justify-end gap-1">
-              {displayMessage.metadata ? <ChatMessageMetadata metadata={displayMessage.metadata} /> : null}
+            <div className="flex flex-row items-center justify-end gap-1">
+              {usageParts.length > 0 ? <ChatMessageDataUsage usageParts={usageParts} /> : null}
             </div>
           </div>
         </When>

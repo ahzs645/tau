@@ -24,8 +24,8 @@ const mockModels: Model[] = [
       cost: {
         inputTokens: 3,
         outputTokens: 15,
-        cachedReadTokens: 3.75,
-        cachedWriteTokens: 0.3,
+        cacheReadTokens: 3.75,
+        cacheWriteTokens: 0.3,
       },
     },
     configuration: {
@@ -51,8 +51,8 @@ const mockModels: Model[] = [
       cost: {
         inputTokens: 2.5,
         outputTokens: 10,
-        cachedReadTokens: 1.25,
-        cachedWriteTokens: 0,
+        cacheReadTokens: 1.25,
+        cacheWriteTokens: 0,
       },
     },
     configuration: {

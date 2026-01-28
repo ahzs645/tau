@@ -1,40 +1,46 @@
 /* eslint-disable @typescript-eslint/parameter-properties -- parameter properties are non-erasable TypeScript */
-import type { FileReader } from '#components/geometry/kernel/utils/file-reader.js';
+import type { KernelFilesystem } from '@taucad/types';
+import { joinPath } from '#utils/path.utils.js';
 
 /// FileSystemManager is a stateless adapter that provides filesystem operations
-/// to the WASM context. It delegates to a FileReader implementation which handles
-/// path resolution and logging.
+/// to the WASM context. It resolves relative paths to absolute using the provided basePath.
 export class FileSystemManager {
-  private readonly reader: FileReader;
+  private readonly filesystem: KernelFilesystem;
+  private readonly basePath: string;
 
-  public constructor(reader: FileReader) {
-    this.reader = reader;
+  public constructor(filesystem: KernelFilesystem, basePath: string) {
+    this.filesystem = filesystem;
+    this.basePath = basePath;
   }
 
   /**
    * Called from WASM.
-   * Reads a file using a path relative to the current working directory.
-   * Path resolution and logging are handled by the FileReader implementation.
+   * Reads a file using a path relative to basePath.
    */
-  public async readFile(path: string): Promise<Uint8Array> {
-    return this.reader.readFile(path);
+  public async readFile(path: string): Promise<Uint8Array<ArrayBuffer>> {
+    return this.filesystem.readFile(this.resolvePath(path));
   }
 
   /**
    * Called from WASM.
-   * Checks if a file exists using a path relative to the current working directory.
-   * Path resolution and logging are handled by the FileReader implementation.
+   * Checks if a file exists using a path relative to basePath.
    */
   public async exists(path: string): Promise<boolean> {
-    return this.reader.exists(path);
+    return this.filesystem.exists(this.resolvePath(path));
   }
 
   /**
    * Called from WASM.
-   * Lists all files in a directory using a path relative to the current working directory.
-   * Path resolution and logging are handled by the FileReader implementation.
+   * Lists all files in a directory using a path relative to basePath.
    */
   public async getAllFiles(path: string): Promise<string[]> {
-    return this.reader.readdir(path);
+    return this.filesystem.readdir(this.resolvePath(path));
+  }
+
+  /**
+   * Resolve a relative path to an absolute path using basePath.
+   */
+  private resolvePath(relativePath: string): string {
+    return joinPath(this.basePath, relativePath);
   }
 }

@@ -9,7 +9,7 @@ import type * as rhino from 'rhino3dm';
  * - A 2x2x2mm cube as an instance definition
  * - Multiple instances of the cube at different positions and rotations
  */
-export async function createCubeInstanceFixture(): Promise<Uint8Array> {
+export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffer>> {
   const rhino = await rhino3dm();
 
   // Load an existing cube mesh from our fixtures
@@ -86,7 +86,7 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array> {
   }
 
   // Convert to byte array
-  const bytes = doc.toByteArray();
+  const bytes = doc.toByteArray() as Uint8Array<ArrayBuffer>;
 
   return bytes;
 }

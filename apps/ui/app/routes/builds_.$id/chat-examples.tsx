@@ -8,12 +8,14 @@ import { useChatActions } from '#hooks/use-chat.js';
 import { useModels } from '#hooks/use-models.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
+import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
 export const ChatExamples = memo(function () {
   // Use lazy initialization to ensure consistent examples across renders
   const [examples, setExamples] = useState(() => getRandomExamples(3));
   const { sendMessage } = useChatActions();
   const { selectedModel } = useModels();
+  const snapshot = useChatSnapshot();
 
   const handleExampleClick = (example: ChatExample) => {
     const userMessage = createMessage({
@@ -22,6 +24,7 @@ export const ChatExamples = memo(function () {
       metadata: {
         model: selectedModel?.id ?? '',
         status: messageStatus.pending,
+        snapshot,
       },
     });
     sendMessage(userMessage);

@@ -12,7 +12,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from '#components/ui/sidebar.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 export function NavMain({
   items,
@@ -46,11 +46,7 @@ export function NavMain({
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton asChild isActive={isActive}>
                         <span>
-                          {isPending ? (
-                            <LoadingSpinner />
-                          ) : item.icon ? (
-                            <item.icon className="size-4 shrink-0" />
-                          ) : null}
+                          {isPending ? <Loader /> : item.icon ? <item.icon className="size-4 shrink-0" /> : null}
                           <span className="flex-1 truncate">{item.title}</span>
                           {hasItems ? (
                             <ChevronRight className="ml-2 shrink-0 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
@@ -70,7 +66,7 @@ export function NavMain({
                               <SidebarMenuSubButton asChild isActive={isActive}>
                                 <span>
                                   <span className="flex-1">{subItem.title}</span>
-                                  {isPending ? <LoadingSpinner /> : null}
+                                  {isPending ? <Loader /> : null}
                                 </span>
                               </SidebarMenuSubButton>
                             )}

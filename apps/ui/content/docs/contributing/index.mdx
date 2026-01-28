@@ -16,9 +16,9 @@ See our [Contributing Guide](https://github.com/taucad/tau/blob/main/contributin
 
 - Prerequisites (Node.js 24+, pnpm, Docker)
 - Installing dependencies
-- Setting up the database
+- Setting up infrastructure (database + Redis)
 - Running development servers
-- Database commands
+- Infrastructure and database commands
 - Linting rules and conventions
 
 ### Quick Start
@@ -31,8 +31,8 @@ cd tau
 # Install dependencies
 pnpm install
 
-# Start the database
-pnpm db:up
+# Start infrastructure (database + Redis)
+pnpm infra:up
 
 # Copy environment files
 cp apps/ui/.env.example apps/ui/.env.local

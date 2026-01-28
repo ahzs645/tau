@@ -96,4 +96,12 @@ export const idPrefix = {
    * A measurement ID.
    */
   measurement: 'meas',
+  /**
+   * An observation ID.
+   */
+  observation: 'obs',
+  /**
+   * A data part ID.
+   */
+  data: 'data',
 } as const satisfies Record<string, string>;

@@ -42,7 +42,7 @@ const cube = startSketchOn('XY')
 
 KCL uses a functional, pipe-based syntax:
 
-```javascript
+```kcl
 const part = startSketchOn('XY')
   |> startProfileAt([0, 0], %)
   |> line([10, 0], %)
@@ -65,6 +65,21 @@ console.log('hewwo'); // [!code --]
 console.log('hello'); // [!code ++]
 // focus
 return new ResizeObserver(() => {})
+```
+
+```kcl
+const width = 10
+const height = 10 // [!code --]
+const height = 20 // [!code ++]
+const depth = 5
+
+const box = startSketchOn('XY')
+  |> startProfileAt([0, 0], %)
+  |> line([width, 0], %)
+  |> line([0, height], %)
+  |> line([-width, 0], %)
+  |> close(%)
+  |> extrude(depth, %) // [!code highlight]
 ```
 
 <Callout title="Title">Hello World</Callout>

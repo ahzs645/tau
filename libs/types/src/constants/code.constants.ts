@@ -12,7 +12,6 @@ export const codeLanguages = {
 export const languageFromExtension = {
   kcl: 'kcl',
   scad: 'openscad',
-  openscad: 'scad',
   js: 'javascript',
   jsx: 'jsx',
   ts: 'typescript',

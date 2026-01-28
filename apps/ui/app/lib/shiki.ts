@@ -1,5 +1,6 @@
 import { createHighlighterCore } from 'shiki/core';
 import { createJavaScriptRawEngine } from 'shiki/engine/javascript';
+import { transformerNotationDiff } from '@shikijs/transformers';
 
 export const highlighter = await createHighlighterCore({
   themes: [import('@shikijs/themes/github-light'), import('@shikijs/themes/github-dark')],
@@ -17,3 +18,7 @@ export const highlighter = await createHighlighterCore({
   ],
   engine: createJavaScriptRawEngine(),
 });
+
+// Export the diff transformer for use in diff viewer
+// Uses the Shiki notation syntax: // [!code ++] and // [!code --]
+export const diffTransformer = transformerNotationDiff();

@@ -77,28 +77,7 @@ jobs:
           echo "$affected_apps" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  # Production deployments (tau.new) - deploy only after tests pass
-  deploy-api-production:
-    name: Deploy API (Production)
-    needs: [main, changes]
-    if: contains(fromJSON(needs.changes.outputs.affected_apps), 'api')
-    uses: ./.github/workflows/deploy.yml
-    with:
-      environment: production
-      app: api
-    secrets: inherit
-
-  deploy-ui-production:
-    name: Deploy UI (Production)
-    needs: [main, changes]
-    if: contains(fromJSON(needs.changes.outputs.affected_apps), 'ui')
-    uses: ./.github/workflows/deploy.yml
-    with:
-      environment: production
-      app: ui
-    secrets: inherit
-
-  # Staging deployments (taucad.dev) - deploy after tests pass to ensure Nx Cloud cache is populated
+  # Staging deployments (taucad.dev) - deploy after builds pass to ensure Nx Cloud cache is populated
   # This prevents OOM errors during Docker/Depot builds for memory-intensive UI builds
   deploy-api-staging:
     name: Deploy API (Staging)

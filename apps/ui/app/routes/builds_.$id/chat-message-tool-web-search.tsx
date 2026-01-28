@@ -1,150 +1,193 @@
-import { ChevronRight } from 'lucide-react';
-import type { UIToolInvocation } from 'ai';
-import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
-import { Sheet, SheetDescription, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '#components/ui/sheet.js';
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
+import { useState } from 'react';
+import { ChevronRight, Globe, HelpCircle } from 'lucide-react';
+import type { ToolInvocation } from '@taucad/chat';
+import { toolName } from '@taucad/chat/constants';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardContent,
+} from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ExternalLink } from '#components/external-link.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { Button } from '#components/ui/button.js';
 import { extractDomainFromUrl, createFaviconUrl } from '#utils/url.utils.js';
+import { cn } from '#utils/ui.utils.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
+
+const maxVisibleSources = 5;
+
+type WebSource = {
+  url: string;
+  title: string;
+  content: string;
+};
+
+function SourceItem({ source }: { readonly source: WebSource }): React.JSX.Element {
+  const domain = extractDomainFromUrl(source.url);
+  const faviconUrl = createFaviconUrl(source.url);
+
+  return (
+    <ExternalLink
+      href={source.url}
+      arrowSize="xs"
+      className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline"
+    >
+      <img src={faviconUrl} alt={domain} className="size-3.5 shrink-0 rounded-sm" />
+      <span className="shrink-0 font-medium">{domain}</span>
+      <span className="text-muted-foreground/50">-</span>
+      <span className="min-w-0 truncate">{source.title}</span>
+    </ExternalLink>
+  );
+}
+
+function QueryItem({ query }: { readonly query: string }): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground">
+      <HelpCircle className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate italic">&quot;{query}&quot;</span>
+    </div>
+  );
+}
+
+function SourcesList({ sources, query }: { readonly sources: WebSource[]; readonly query: string }): React.JSX.Element {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const visibleSources = sources.slice(0, maxVisibleSources);
+  const hiddenSources = sources.slice(maxVisibleSources);
+  const hasMoreSources = hiddenSources.length > 0;
+
+  return (
+    <div className="flex flex-col">
+      {/* Query at the top */}
+      <QueryItem query={query} />
+
+      {/* Always visible sources */}
+      {visibleSources.map((source) => (
+        <SourceItem key={source.url} source={source} />
+      ))}
+
+      {/* Expandable section for additional sources */}
+      {hasMoreSources ? (
+        <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
+          <CollapsibleTrigger className="group flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground">
+            <ChevronRight
+              className={cn('size-3 shrink-0 transition-transform duration-200', isExpanded && 'rotate-90')}
+            />
+            <span>...and {hiddenSources.length} more</span>
+            <div className="flex items-center gap-0.5">
+              {hiddenSources.slice(0, 6).map((source) => {
+                const domain = extractDomainFromUrl(source.url);
+                const faviconUrl = createFaviconUrl(source.url);
+
+                return (
+                  <img key={source.url} src={faviconUrl} alt={domain} className="size-3.5 rounded-sm opacity-60" />
+                );
+              })}
+              {hiddenSources.length > 6 ? (
+                <span className="ml-0.5 text-[10px] text-muted-foreground/50">+{hiddenSources.length - 6}</span>
+              ) : undefined}
+            </div>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="flex flex-col pl-4">
+              {hiddenSources.map((source) => (
+                <SourceItem key={source.url} source={source} />
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : undefined}
+    </div>
+  );
+}
 
 export function ChatMessageToolWebSearch({
   part,
+  hasContent,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.webSearch]>;
+  readonly part: ToolInvocation<typeof toolName.webSearch>;
+  /**
+   * Whether there is subsequent content in the message after this tool.
+   * When true, the sources list will collapse. When false, it stays open.
+   */
+  readonly hasContent: boolean;
 }): React.JSX.Element | undefined {
+  const [isOpen, setIsOpen] = useState(false);
+
   switch (part.state) {
     case 'input-available':
     case 'input-streaming': {
-      const { input } = part;
+      const query = part.input?.query ?? '';
+
       return (
-        <div className="flex flex-col gap-2">
-          <p className="text-lg">Sources</p>
-          <p className="border-l pl-2 text-sm text-foreground/50 italic">{input?.query ?? ''}</p>
-        </div>
+        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Globe} />
+            <ChatToolCardTitle>
+              {query ? (
+                <>
+                  <ChatToolAction>Searching web:</ChatToolAction>{' '}
+                  <ChatToolDescription>
+                    &quot;<span className="italic">{query}</span>&quot;
+                  </ChatToolDescription>
+                </>
+              ) : (
+                'Searching the web...'
+              )}
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 
     case 'output-error': {
-      return <div>Web search failed</div>;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle="Web search failed" />;
     }
 
     case 'output-available': {
-      const { input } = part;
-      const relevantSources = part.output;
+      const sources = part.output;
+      const { query } = part.input;
+
+      if (sources.length === 0) {
+        return (
+          <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
+            <ChatToolCardHeader>
+              <ChatToolCardIcon icon={Globe} />
+              <ChatToolCardTitle>No sources found</ChatToolCardTitle>
+            </ChatToolCardHeader>
+          </ChatToolCard>
+        );
+      }
+
+      // Show sources while there's no subsequent content, collapse when content arrives
+      const shouldBeOpen = !hasContent || isOpen;
+
       return (
-        <>
-          <div className="flex flex-col">
-            <Collapsible>
-              <div className="flex flex-row items-baseline gap-2">
-                <p className="text-lg">Sources</p>
-                <CollapsibleTrigger asChild>
-                  <Button variant="link" className="p-0 text-xs">
-                    Show query
-                  </Button>
-                </CollapsibleTrigger>
-              </div>
-              <CollapsibleContent>
-                <p className="border-l pl-2 text-sm text-foreground/50 italic">{JSON.stringify(input.query)}</p>
-              </CollapsibleContent>
-            </Collapsible>
-          </div>
-          <div className="grid grid-cols-4 gap-2">
-            {relevantSources.slice(0, 3).map((source, index) => {
-              const sourceDomain = extractDomainFromUrl(source.url);
-              const sourceFaviconUrl = createFaviconUrl(source.url);
-
-              return (
-                // eslint-disable-next-line react/no-array-index-key -- the array order is stable so using the index is safe
-                <HoverCard key={`${source.title}-${index}`} openDelay={100} closeDelay={100}>
-                  <HoverCardTrigger asChild>
-                    <a href={source.url} target="_blank" rel="noreferrer">
-                      <div
-                        key={source.title}
-                        className="flex h-24 flex-col justify-between rounded-md bg-neutral/5 p-2 hover:bg-neutral/10"
-                      >
-                        <p className="line-clamp-3 text-xs font-medium">{source.title}</p>
-                        <div className="flex flex-row items-center gap-2">
-                          <img src={sourceFaviconUrl} alt={sourceDomain} className="size-4 rounded-full" />
-                          <p className="truncate text-xs font-medium text-foreground/50">{sourceDomain}</p>
-                        </div>
-                      </div>
-                    </a>
-                  </HoverCardTrigger>
-                  <HoverCardContent className="flex max-h-40 flex-col space-y-2 overflow-y-auto">
-                    <div className="flex flex-row items-center gap-2">
-                      <img src={sourceFaviconUrl} alt={sourceDomain} className="size-4 rounded-full" />
-                      <p className="text-sm text-foreground/50">{sourceDomain}</p>
-                    </div>
-                    <p className="text-sm font-medium">{source.title}</p>
-                    <p className="text-sm">{source.content}</p>
-                  </HoverCardContent>
-                </HoverCard>
-              );
-            })}
-            {relevantSources.length > 3 && (
-              <Sheet>
-                <SheetTrigger className="flex h-24 flex-col justify-between rounded-md bg-neutral/5 p-2 hover:bg-neutral/10">
-                  <div className="flex flex-row flex-wrap items-center gap-px">
-                    {relevantSources.slice(3, 9).map((source) => {
-                      const sourceDomain = extractDomainFromUrl(source.url);
-                      const sourceFaviconUrl = createFaviconUrl(source.url);
-
-                      return (
-                        <img
-                          key={source.title}
-                          src={sourceFaviconUrl}
-                          alt={sourceDomain}
-                          className="size-4 rounded-full sm:h-5 sm:w-5"
-                        />
-                      );
-                    })}
-                    {relevantSources.length > 9 && (
-                      <div className="flex size-4 items-center justify-center rounded-full bg-neutral/20 text-[8px] font-medium text-foreground/50 sm:h-5 sm:w-5 sm:text-[8px]">
-                        +{relevantSources.length - 9}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-row items-center font-medium text-foreground/50">
-                    <p className="text-xs">Show all</p>
-                    <ChevronRight className="size-4" />
-                  </div>
-                </SheetTrigger>
-                <SheetContent>
-                  <SheetHeader>
-                    <SheetTitle>{relevantSources.length} Sources</SheetTitle>
-                  </SheetHeader>
-                  <SheetDescription asChild>
-                    <div className="grid grid-cols-1 flex-wrap items-center gap-2 overflow-y-scroll p-4 pt-0">
-                      {relevantSources.map((source) => {
-                        const sourceDomain = extractDomainFromUrl(source.url);
-                        const sourceFaviconUrl = createFaviconUrl(source.url);
-
-                        return (
-                          <a key={source.url} href={source.url} target="_blank" className="w-full" rel="noreferrer">
-                            <div
-                              key={source.title}
-                              className="flex w-full flex-col space-y-2 rounded-md bg-neutral/5 p-2 hover:bg-neutral/10"
-                            >
-                              <p className="text-sm font-medium text-foreground">{source.title}</p>
-                              <div className="flex flex-row items-center gap-2">
-                                <img src={sourceFaviconUrl} alt={sourceDomain} className="size-4 rounded-full" />
-                                <p className="text-xs font-medium text-foreground/50">{sourceDomain}</p>
-                              </div>
-                              <p className="text-xs text-foreground">{source.content}</p>
-                            </div>
-                          </a>
-                        );
-                      })}
-                    </div>
-                  </SheetDescription>
-                </SheetContent>
-              </Sheet>
-            )}
-          </div>
-          <p className="text-lg">Answer</p>
-        </>
+        <ChatToolCard variant="minimal" status="ready" isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Globe} />
+            <ChatToolCardTitle>
+              <ChatToolAction>Found</ChatToolAction>{' '}
+              <ChatToolDescription>
+                {sources.length} source{sources.length === 1 ? '' : 's'}
+              </ChatToolDescription>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+          <ChatToolCardContent className="border-l-0">
+            <div className="border-l border-foreground/20 pl-4">
+              <SourcesList sources={sources} query={query} />
+            </div>
+          </ChatToolCardContent>
+        </ChatToolCard>
       );
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.webSearch} state: ${part.state}`);
     }
   }
 }

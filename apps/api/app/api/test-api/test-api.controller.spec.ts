@@ -6,12 +6,41 @@ import type { TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '#app.module.js';
 import { DatabaseService } from '#database/database.service.js';
+import { RedisService } from '#redis/redis.service.js';
+import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 
 // Mock DatabaseService for tests that don't need database access
 const mockDatabaseService = {
   database: {},
   onModuleInit: () => undefined,
   onModuleDestroy: () => undefined,
+};
+
+// Mock RedisService for tests that don't need Redis access
+const mockRedisService = {
+  client: {
+    get: async () => null,
+    set: async () => 'OK',
+    del: async () => 1,
+  },
+  async onModuleInit() {
+    // No-op
+  },
+  async onModuleDestroy() {
+    // No-op
+  },
+  createDuplicateClient: () => mockRedisService.client,
+};
+
+// Mock CheckpointerService for tests that don't need LangGraph checkpointing
+const mockCheckpointerService = {
+  async onModuleInit() {
+    // No-op
+  },
+  async onModuleDestroy() {
+    // No-op
+  },
+  getCheckpointer: () => ({}),
 };
 
 describe('TestApiController (e2e)', () => {
@@ -24,6 +53,10 @@ describe('TestApiController (e2e)', () => {
     })
       .overrideProvider(DatabaseService)
       .useValue(mockDatabaseService)
+      .overrideProvider(RedisService)
+      .useValue(mockRedisService)
+      .overrideProvider(CheckpointerService)
+      .useValue(mockCheckpointerService)
       .compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

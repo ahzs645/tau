@@ -16,7 +16,7 @@ export type ExtendedWasmKclError = WasmKclError & {
   filenames?: Record<string | number, WasmFileInfo>;
 };
 
-// Simplified error kinds that map to KernelError types
+// Simplified error kinds that map to KernelIssue types
 export type KclErrorKind =
   | 'lexical'
   | 'syntax'

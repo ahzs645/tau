@@ -1,0 +1,34 @@
+import safeRegex from 'safe-regex';
+import { z } from 'zod';
+
+export const grepInputSchema = z.object({
+  pattern: z
+    .string()
+    .refine((pattern) => safeRegex(pattern), {
+      message:
+        'The regex pattern is potentially unsafe (may cause catastrophic backtracking). Please simplify the pattern by reducing nested quantifiers or alternations.',
+    })
+    .describe('The regular expression pattern to search for in file contents.'),
+  path: z.string().optional().describe('The file or directory path to search in. Defaults to project root.'),
+  glob: z
+    .string()
+    .optional()
+    .describe('Glob pattern to filter files (e.g., "*.ts", "*.scad"). Searches all files if not provided.'),
+  caseSensitive: z.boolean().optional().describe('Whether the search should be case-sensitive. Defaults to true.'),
+});
+
+const grepMatchSchema = z.object({
+  file: z.string().describe('The file path where the match was found.'),
+  line: z.number().describe('The line number of the match (1-based).'),
+  content: z.string().describe('The content of the matching line.'),
+});
+
+export const grepOutputSchema = z.object({
+  matches: z.array(grepMatchSchema).describe('The list of matches found.'),
+  totalMatches: z.number().describe('The total number of matches found.'),
+  truncated: z.boolean().optional().describe('Whether results were truncated due to too many matches.'),
+});
+
+export type GrepInput = z.infer<typeof grepInputSchema>;
+export type GrepOutput = z.infer<typeof grepOutputSchema>;
+export type GrepMatch = z.infer<typeof grepMatchSchema>;

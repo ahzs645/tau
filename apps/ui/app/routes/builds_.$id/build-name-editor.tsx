@@ -7,7 +7,7 @@ import { useBuild } from '#hooks/use-build.js';
 import { useChatManager } from '#hooks/use-chat-manager.js';
 import { useChatConstants } from '#utils/chat.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { InlineTextEditor } from '#components/inline-text-editor.js';
 
 const animationDuration = 2000;
@@ -16,6 +16,7 @@ export function BuildNameEditor(): React.JSX.Element {
   const { buildRef, updateName } = useBuild();
   const buildName = useSelector(buildRef, (state) => state.context.build?.name) ?? '';
   const isLoading = useSelector(buildRef, (state) => state.context.isLoading);
+  const isBuildError = useSelector(buildRef, (state) => state.matches('error'));
   const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId);
   const { getChat } = useChatManager();
 
@@ -75,15 +76,29 @@ export function BuildNameEditor(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only run after loading completes
   }, [buildName, isLoading, activeChatFirstMessage]);
 
+  // Render display content based on state
+  const renderDisplayContent = (value: string): React.ReactNode => {
+    if (isBuildError) {
+      return 'Build not found';
+    }
+
+    if (value === '') {
+      return <Loader />;
+    }
+
+    return value;
+  };
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <InlineTextEditor
           value={displayName}
+          isDisabled={isBuildError}
           className="h-7 [&_[data-slot=button]]:w-auto [&_[data-slot=button]]:max-w-48"
           renderDisplay={(value) => (
             <span data-animate={isNameAnimating} className="truncate data-[animate=true]:animate-typewriter-20">
-              {value === '' ? <LoadingSpinner /> : value}
+              {renderDisplayContent(value)}
             </span>
           )}
           onSave={(value) => {
@@ -92,7 +107,7 @@ export function BuildNameEditor(): React.JSX.Element {
           }}
         />
       </TooltipTrigger>
-      <TooltipContent>Edit name</TooltipContent>
+      <TooltipContent>{isBuildError ? 'Build not found' : 'Edit name'}</TooltipContent>
     </Tooltip>
   );
 }

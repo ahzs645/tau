@@ -77,9 +77,8 @@ import { Checkbox } from '#components/ui/checkbox.js';
 import { formatRelativeTime } from '#utils/date.utils.js';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#components/ui/table.js';
 import { toTitleCase } from '#utils/string.utils.js';
-import { HammerAnimation } from '#components/hammer-animation.js';
+import { Loader } from '#components/ui/loader.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
 import { InlineTextEditor } from '#components/inline-text-editor.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
@@ -248,7 +247,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-3xl font-bold">Builds</h1>
         <Button asChild>
-          <NavLink to="/">{({ isPending }) => (isPending ? <LoadingSpinner /> : 'New Build')}</NavLink>
+          <NavLink to="/">{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
         </Button>
       </div>
 
@@ -382,6 +381,16 @@ export default function PersonalCadProjects(): React.JSX.Element {
             onSubmit={onSubmit}
           />
         </TabsContent>
+        <TabsContent enableAnimation={false} value="software">
+          <UnifiedBuildList
+            projects={filteredBuilds.filter((p) => Object.keys(p.assets).includes('software'))}
+            viewMode={viewMode}
+            actions={actions}
+            selectedKernel={kernel}
+            onKernelChange={setKernel}
+            onSubmit={onSubmit}
+          />
+        </TabsContent>
       </Tabs>
     </div>
   );
@@ -469,7 +478,7 @@ function UnifiedBuildList({
   if (projects.length === 0) {
     return (
       <EmptyItems className="min-h-[60vh]">
-        <ChatProvider value={{}}>
+        <ChatProvider>
           <div className="mx-auto max-w-2xl space-y-6">
             <div className="flex flex-col items-center space-y-4 text-center">
               <PackageX className="size-16 text-muted-foreground" strokeWidth={1} />
@@ -498,7 +507,7 @@ function UnifiedBuildList({
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
                   <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
-                    {isPending ? <LoadingSpinner /> : 'Build from code'}
+                    {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}
               </NavLink>
@@ -820,7 +829,7 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
           >
             {['initializing', 'booting'].includes(status) ? (
               <div className="flex size-full items-center justify-center">
-                <HammerAnimation className="size-10" />
+                <Loader className="size-10" />
               </div>
             ) : null}
             <CadViewer
@@ -872,7 +881,7 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
           <NavLink to={`/builds/${build.id}`} tabIndex={-1}>
             {({ isPending }) => (
               <>
-                {isPending ? <LoadingSpinner /> : <ArrowRight className="size-4" />}
+                {isPending ? <Loader /> : <ArrowRight className="size-4" />}
                 <span>Open</span>
               </>
             )}

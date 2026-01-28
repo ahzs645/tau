@@ -72,7 +72,7 @@ export type LoaderTestCase = {
   /**
    * Programmatic data source instead of file fixture
    */
-  dataSource?: () => Promise<Uint8Array>;
+  dataSource?: () => Promise<Uint8Array<ArrayBuffer>>;
   description?: string;
   geometry?: GeometryExpectation;
   structure?: GltfSceneStructure;
@@ -80,7 +80,7 @@ export type LoaderTestCase = {
   skipReason?: string;
 };
 
-export const loadFixture = (fixtureName: string): Uint8Array => {
+export const loadFixture = (fixtureName: string): Uint8Array<ArrayBuffer> => {
   const fixturePath = join(import.meta.dirname, 'fixtures', fixtureName);
   const fileData = readFileSync(fixturePath);
   return new Uint8Array(fileData);
@@ -126,7 +126,7 @@ export const loadTestData = async (testCase: LoaderTestCase): Promise<File[]> =>
 
 // GLTF test utilities factory using gltf-transform inspect reports
 export const createInspectTestUtils = (): {
-  getInspectReport: (glbData: Uint8Array) => Promise<InspectReport>;
+  getInspectReport: (glbData: Uint8Array<ArrayBuffer>) => Promise<InspectReport>;
   createInspectSignature: (report: InspectReport) => GeometryExpectation;
   createGeometryTestHelpers: () => {
     expectVertexCount: (report: InspectReport, expectedCount: number) => void;
@@ -145,8 +145,8 @@ export const createInspectTestUtils = (): {
     expectHasNormalAttribute: (report: InspectReport, shouldHave: boolean) => void;
     expectHasUvAttribute: (report: InspectReport, shouldHave: boolean) => void;
     // GLTF scene structure methods
-    expectRootNodeCount: (glbData: Uint8Array, expectedCount: number) => Promise<void>;
-    expectFullStructure: (glbData: Uint8Array, expectedStructure: GltfSceneStructure) => Promise<void>;
+    expectRootNodeCount: (glbData: Uint8Array<ArrayBuffer>, expectedCount: number) => Promise<void>;
+    expectFullStructure: (glbData: Uint8Array<ArrayBuffer>, expectedStructure: GltfSceneStructure) => Promise<void>;
   };
   epsilon: number;
 } => {
@@ -263,12 +263,12 @@ export const createInspectTestUtils = (): {
 
     // GLTF scene structure validation methods
 
-    async expectRootNodeCount(glbData: Uint8Array, expectedCount: number): Promise<void> {
+    async expectRootNodeCount(glbData: Uint8Array<ArrayBuffer>, expectedCount: number): Promise<void> {
       const structure = await getDocumentStructure(glbData);
       expect(structure.rootNodes.length).toBe(expectedCount);
     },
 
-    async expectFullStructure(glbData: Uint8Array, expectedStructure: GltfSceneStructure): Promise<void> {
+    async expectFullStructure(glbData: Uint8Array<ArrayBuffer>, expectedStructure: GltfSceneStructure): Promise<void> {
       const actualStructure = await getDocumentStructure(glbData);
       validateGltfScene(actualStructure, expectedStructure);
     },

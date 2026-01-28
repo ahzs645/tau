@@ -10,7 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.
 import { Button } from '#components/ui/button.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { cn } from '#utils/ui.utils.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 type FileItem = {
   path: string;
@@ -457,7 +457,7 @@ export function FileSelector({
     <Button variant="outline" className={cn('w-full justify-between', className)} disabled={isDisabled || isLoading}>
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {isLoading ? (
-          <LoadingSpinner className="size-4" />
+          <Loader className="size-4" />
         ) : selectedFile ? (
           <FileExtensionIcon filename={selectedFile} className="size-4 shrink-0" />
         ) : undefined}

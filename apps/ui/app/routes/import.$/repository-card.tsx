@@ -1,5 +1,6 @@
 import { Star, GitFork, Eye, Scale, Lock, Globe, Clock } from 'lucide-react';
 import { Badge } from '#components/ui/badge.js';
+import { ExternalLink } from '#components/external-link.js';
 import { Skeleton } from '#components/ui/skeleton.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -90,9 +91,9 @@ export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.
           </div>
         )}
         <div className="flex-1 space-y-1">
-          <h3 className="font-mono text-lg font-semibold">
+          <ExternalLink href={`https://github.com/${owner}/${repo}`} className="font-mono text-lg font-semibold">
             {owner}/{repo}
-          </h3>
+          </ExternalLink>
           {metadata?.description ? (
             <p className="line-clamp-2 text-sm text-muted-foreground">{metadata.description}</p>
           ) : undefined}

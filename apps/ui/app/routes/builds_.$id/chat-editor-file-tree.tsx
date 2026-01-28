@@ -36,7 +36,7 @@ import type { KernelConfiguration } from '@taucad/types/constants';
 import type { FileItem } from '#machines/file-explorer.machine.js';
 import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
-import { Input } from '#components/ui/input.js';
+import { SearchInput } from '#components/search-input.js';
 import { toast } from '#components/ui/sonner.js';
 import {
   FloatingPanelContent,
@@ -45,6 +45,14 @@ import {
   FloatingPanelContentHeaderActions,
   FloatingPanelContentTitle,
 } from '#components/ui/floating-panel.js';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '#components/ui/dialog.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,7 +80,7 @@ type TreeItemData = {
   path: string;
   name: string;
   isFolder: boolean;
-  content?: Uint8Array;
+  content?: Uint8Array<ArrayBuffer>;
   gitStatus?: FileItem['gitStatus'];
 };
 
@@ -96,29 +104,46 @@ function isHiddenFile(path: string, patterns: string[]): boolean {
   return patterns.some((pattern) => minimatch(path, pattern));
 }
 
-export const ChatEditorFileTree = memo(function (): React.JSX.Element {
+type ChatEditorFileTreeProps = {
+  readonly enableSearch?: boolean;
+  readonly onSearchChange?: (isOpen: boolean) => void;
+};
+
+export const ChatEditorFileTree = memo(function ({
+  enableSearch = false,
+  onSearchChange,
+}: ChatEditorFileTreeProps): React.JSX.Element {
   // It's necessary to opt out of React Compiler auto-memoization for this component due to:
   // https://headless-tree.lukasbach.com/guides/react-compiler/
   'use no memo'; // Opt out of React Compiler memoization
   const { buildRef, fileExplorerRef, gitRef, cadRef } = useBuild();
   const buildId = useSelector(buildRef, (state) => state.context.buildId);
-  const { fileManagerRef } = useFileManager();
+  const fileManager = useFileManager();
+  const { fileManagerRef, readFile, writeFile, renameFile, deleteFile } = fileManager;
 
   useEffect(() => {
     // FileExplorer → FileManager → CAD coordination
     const fileOpenedSub = fileExplorerRef.on('fileOpened', (event) => {
-      fileManagerRef.send({ type: 'readFile', path: event.path });
-      cadRef.send({
-        type: 'setFile',
-        file: { path: `/builds/${buildId}`, filename: event.path },
-      });
+      // Read file directly - this properly awaits the worker call
+      void readFile(event.path);
+
+      // Only send setFile when switching to a different file
+      // This prevents unnecessary re-renders when clicking on an already open file
+      // Content changes from editor/chat tools trigger setFile separately
+      const currentFile = cadRef.getSnapshot().context.file;
+      if (currentFile?.filename !== event.path) {
+        cadRef.send({
+          type: 'setFile',
+          file: { path: `/builds/${buildId}`, filename: event.path },
+        });
+      }
     });
 
     // Build loaded → Open initial file
     const buildLoadedSub = buildRef.on('buildLoaded', (event) => {
       const mainFile = event.build.assets.mechanical?.main;
       if (mainFile) {
-        fileExplorerRef.send({ type: 'openFile', path: mainFile });
+        fileExplorerRef.send({ type: 'openFile', path: mainFile, source: 'machine' });
       }
     });
 
@@ -134,13 +159,16 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
     });
 
     const fileDeletedSub = fileManagerRef.on('fileDeleted', (event) => {
-      const fileName = event.path.split('/').pop() ?? event.path;
-      toast.success(`Deleted: ${fileName}`);
+      // Only show toast for user operations (user-initiated deletes)
+      if (event.source === 'user') {
+        const fileName = event.path.split('/').pop() ?? event.path;
+        toast.success(`Deleted: ${fileName}`);
+      }
     });
 
     const fileWrittenSub = fileManagerRef.on('fileWritten', (event) => {
-      // Only show toast for file-tree operations (user-initiated creates/uploads)
-      if (event.source === 'file-tree') {
+      // Only show toast for user operations (user-initiated creates/uploads)
+      if (event.source === 'user') {
         const fileName = event.path.split('/').pop() ?? event.path;
         // Check if it's a .gitkeep (folder creation marker)
         if (fileName === '.gitkeep') {
@@ -160,7 +188,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
       fileDeletedSub.unsubscribe();
       fileWrittenSub.unsubscribe();
     };
-  }, [buildRef, fileExplorerRef, fileManagerRef, cadRef, buildId]);
+  }, [buildRef, fileExplorerRef, fileManagerRef, cadRef, buildId, readFile]);
 
   // Derive file tree from file-manager (reactive selector)
   // Use custom equality to prevent unnecessary re-renders
@@ -227,6 +255,8 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
   const [pendingFolder, setPendingFolder] = useState<PendingFolder | undefined>(undefined);
   const [pendingFile, setPendingFile] = useState<PendingFile | undefined>(undefined);
   const pendingFileInputRef = useRef<HTMLInputElement>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [itemsToDelete, setItemsToDelete] = useState<Array<ItemInstance<TreeItemData>>>([]);
 
   // Build virtual folder structure from flat file paths
   const allPaths = useMemo(() => {
@@ -372,8 +402,9 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
           continue;
         }
 
-        // Move file/folder in fileManager
-        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
+        // Move file/folder in fileManager - awaits worker call
+        // eslint-disable-next-line no-await-in-loop -- Sequential rename required for consistency
+        await renameFile(oldPath, newPath);
 
         // Update file explorer paths atomically (no close/open to avoid fallback behavior)
         fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
@@ -394,7 +425,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
         const wasExpanded = item.isExpanded();
 
         // Rename the folder directly - LightningFS supports directory rename natively
-        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
+        void renameFile(oldPath, newPath);
 
         // Update file explorer paths atomically (no close/open to avoid fallback behavior)
         fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
@@ -407,8 +438,8 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
           });
         }
       } else {
-        // Rename file in fileManager
-        fileManagerRef.send({ type: 'renameFile', oldPath, newPath });
+        // Rename file in fileManager - calls worker directly
+        void renameFile(oldPath, newPath);
 
         // Update file explorer path atomically (no close/open to avoid fallback behavior)
         fileExplorerRef.send({ type: 'renameFile', oldPath, newPath });
@@ -419,6 +450,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
         fileExplorerRef.send({
           type: 'openFile',
           path: item.getId(),
+          source: 'user',
         });
       }
     },
@@ -444,6 +476,13 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
           // Don't close search - user must press Escape or click X
         },
       },
+      // Override closeSearch to use external callback
+      closeSearch: {
+        hotkey: 'Escape',
+        handler() {
+          onSearchChange?.(false);
+        },
+      },
     },
     features: [
       syncDataLoaderFeature,
@@ -464,6 +503,16 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree or showHiddenFiles changes
   }, [fileTree, showHiddenFiles]);
 
+  // Sync tree search state with external enableSearch prop
+  useEffect(() => {
+    if (enableSearch && !tree.isSearchOpen()) {
+      tree.openSearch();
+    } else if (!enableSearch && tree.isSearchOpen()) {
+      tree.closeSearch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only sync when enableSearch changes
+  }, [enableSearch]);
+
   // Sync active file with tree focus
   useEffect(() => {
     if (activeFilePath && activeFilePath !== focusedItem) {
@@ -474,7 +523,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
   const handleCreateFile = useCallback(
     (template: KernelConfiguration | undefined) => {
       const content = template?.emptyCode ?? '';
-      const extension = template?.mainFile.split('.').pop() ?? 'txt';
+      const extension = template ? getFileExtension(template.mainFile) : 'txt';
 
       // Determine parent path based on focused item
       let parentPath = '';
@@ -523,39 +572,38 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
     setPendingFolder({ parentPath, error: undefined });
   }, [focusedItem, tree]);
 
-  const handleDelete = useCallback(
-    (items: Array<ItemInstance<TreeItemData>>) => {
-      const count = items.length;
-      const itemWord = count === 1 ? 'item' : 'items';
+  const handleDelete = useCallback((items: Array<ItemInstance<TreeItemData>>) => {
+    setItemsToDelete(items);
+    setDeleteDialogOpen(true);
+  }, []);
 
-      // eslint-disable-next-line no-alert -- Confirmation for destructive action
-      if (globalThis.confirm(`Delete ${count} ${itemWord}?`)) {
-        for (const currentItem of items) {
-          const path = currentItem.getId();
-          if (path === rootId) {
-            continue;
-          }
-
-          if (currentItem.isFolder()) {
-            // Delete all files in folder
-            const nested = fileTree.filter((f) => f.path.startsWith(`${path}/`));
-            for (const file of nested) {
-              // Delete file from fileManager
-              fileManagerRef.send({ type: 'deleteFile', path: file.path });
-              // Close file in fileExplorer if it's open
-              fileExplorerRef.send({ type: 'closeFile', path: file.path });
-            }
-          } else {
-            // Delete file from fileManager
-            fileManagerRef.send({ type: 'deleteFile', path });
-            // Close file in fileExplorer if it's open
-            fileExplorerRef.send({ type: 'closeFile', path });
-          }
-        }
+  const confirmDelete = useCallback(() => {
+    for (const currentItem of itemsToDelete) {
+      const path = currentItem.getId();
+      if (path === rootId) {
+        continue;
       }
-    },
-    [fileExplorerRef, fileManagerRef, fileTree],
-  );
+
+      if (currentItem.isFolder()) {
+        // Delete all files in folder
+        const nested = fileTree.filter((f) => f.path.startsWith(`${path}/`));
+        for (const file of nested) {
+          // Delete file from fileManager - calls worker directly
+          void deleteFile(file.path, { source: 'user' });
+          // Close file in fileExplorer if it's open
+          fileExplorerRef.send({ type: 'closeFile', path: file.path });
+        }
+      } else {
+        // Delete file from fileManager - calls worker directly
+        void deleteFile(path, { source: 'user' });
+        // Close file in fileExplorer if it's open
+        fileExplorerRef.send({ type: 'closeFile', path });
+      }
+    }
+
+    setDeleteDialogOpen(false);
+    setItemsToDelete([]);
+  }, [fileExplorerRef, deleteFile, fileTree, itemsToDelete]);
 
   const handleDuplicate = useCallback((_items: Array<ItemInstance<TreeItemData>>) => {
     // Duplication requires file-manager content, which isn't exposed yet
@@ -584,16 +632,12 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
           const uint8Array = new Uint8Array(arrayBuffer);
           const filePath = directory ? `${directory}/${file.name}` : file.name;
 
-          // Write file to fileManager
-          fileManagerRef.send({
-            type: 'writeFile',
-            path: filePath,
-            data: uint8Array,
-            source: 'file-tree',
-          });
+          // Write file to fileManager - calls worker directly
+          // eslint-disable-next-line no-await-in-loop -- Files need to be written sequentially
+          await writeFile(filePath, uint8Array, { source: 'user' });
 
           // Open file in fileExplorer
-          fileExplorerRef.send({ type: 'openFile', path: filePath });
+          fileExplorerRef.send({ type: 'openFile', path: filePath, source: 'user' });
         } catch (error) {
           console.error(`Error uploading file ${file.name}:`, error);
         }
@@ -605,8 +649,21 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
 
       setUploadTargetPath(undefined);
     },
-    [uploadTargetPath, tree, fileManagerRef, fileExplorerRef],
+    [uploadTargetPath, tree, writeFile, fileExplorerRef],
   );
+
+  // Get display name for delete dialog
+  const deleteItemName = useMemo(() => {
+    if (itemsToDelete.length === 0) {
+      return '';
+    }
+
+    if (itemsToDelete.length === 1) {
+      return itemsToDelete[0]?.getItemName() ?? '';
+    }
+
+    return `${itemsToDelete.length} items`;
+  }, [itemsToDelete]);
 
   return (
     <>
@@ -618,6 +675,28 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
         aria-label="Upload files"
         onChange={handleFileUpload}
       />
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Are you sure you want to delete &apos;{deleteItemName}&apos;?</DialogTitle>
+            <DialogDescription>This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
@@ -642,18 +721,18 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  aria-label="Search files"
-                  className="size-6 rounded-sm"
+                  aria-label={enableSearch ? 'Hide search' : 'Search files'}
+                  className={cn('size-6 rounded-sm', enableSearch && 'text-primary')}
                   size="icon"
                   variant="ghost"
                   onClick={() => {
-                    tree.openSearch();
+                    onSearchChange?.(!enableSearch);
                   }}
                 >
                   <Search className="size-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Search files</TooltipContent>
+              <TooltipContent>{enableSearch ? 'Hide search' : 'Search files'}</TooltipContent>
             </Tooltip>
             <DropdownMenu>
               <Tooltip>
@@ -737,37 +816,32 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
             </Tooltip>
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <FloatingPanelContentBody className="flex min-h-0 flex-col p-1">
-          {tree.isSearchOpen() && (
-            <div className="mb-1 flex shrink-0 items-center gap-2 px-1">
-              <Input
+        <FloatingPanelContentBody className="flex min-h-0 flex-col">
+          {enableSearch ? (
+            <div className="flex w-full shrink-0 flex-row gap-2 border-b bg-sidebar p-2">
+              <SearchInput
                 {...tree.getSearchInputElementProps()}
                 placeholder="Search files..."
-                className="h-7 flex-1 text-sm"
-              />
-              <span className="text-xs text-muted-foreground">{tree.getSearchMatchingItems().length}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-6 rounded-sm"
-                aria-label="Close search"
-                onClick={() => {
-                  tree.closeSearch();
+                className="h-7 w-full bg-background"
+                // Override onBlur to prevent clearing search when clicking on tree items
+                onBlur={undefined}
+                onClear={() => {
+                  // Only clear the search text, don't close the search panel
+                  // Closing is handled by the search toggle button in the header
+                  tree.setSearch('');
                 }}
-              >
-                <span className="text-sm">×</span>
-              </Button>
+              />
             </div>
-          )}
+          ) : null}
 
           {selectedItems.length > 1 && (
-            <div className="mb-1 shrink-0 px-1 text-xs text-muted-foreground">
+            <div className="shrink-0 px-2 pt-1 text-xs text-muted-foreground">
               {selectedItems.length} items selected
             </div>
           )}
 
           {tree.getItems().length > 0 || pendingFolder !== undefined || pendingFile !== undefined ? (
-            <div {...tree.getContainerProps()} className="flex min-h-0 flex-col gap-0.5 outline-none">
+            <div {...tree.getContainerProps()} className="flex min-h-0 flex-col gap-0.5 p-1 outline-none">
               <AssistiveTreeDescription tree={tree} />
               {/* Pending folder at root level */}
               {pendingFolder?.parentPath === '' ? (
@@ -778,12 +852,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
                   level={0}
                   onSubmit={(name) => {
                     const gitkeepPath = `${name}/.gitkeep`;
-                    fileManagerRef.send({
-                      type: 'writeFile',
-                      path: gitkeepPath,
-                      data: encodeTextFile(''),
-                      source: 'file-tree',
-                    });
+                    void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
                     setPendingFolder(undefined);
                     setExpandedItems((previous) => [...previous, name]);
                   }}
@@ -806,13 +875,8 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
                   allPaths={allPaths}
                   level={0}
                   onSubmit={(filename) => {
-                    fileManagerRef.send({
-                      type: 'writeFile',
-                      path: filename,
-                      data: encodeTextFile(pendingFile.content),
-                      source: 'file-tree',
-                    });
-                    fileExplorerRef.send({ type: 'openFile', path: filename });
+                    void writeFile(filename, encodeTextFile(pendingFile.content), { source: 'user' });
+                    fileExplorerRef.send({ type: 'openFile', path: filename, source: 'user' });
                     setPendingFile(undefined);
                   }}
                   onCancel={() => {
@@ -852,12 +916,7 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
                         onSubmit={(name) => {
                           const folderPath = `${pendingFolder.parentPath}/${name}`;
                           const gitkeepPath = `${folderPath}/.gitkeep`;
-                          fileManagerRef.send({
-                            type: 'writeFile',
-                            path: gitkeepPath,
-                            data: encodeTextFile(''),
-                            source: 'file-tree',
-                          });
+                          void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
                           setPendingFolder(undefined);
                           setExpandedItems((previous) => [...previous, folderPath]);
                         }}
@@ -881,13 +940,8 @@ export const ChatEditorFileTree = memo(function (): React.JSX.Element {
                         level={itemLevel + 1}
                         onSubmit={(filename) => {
                           const filePath = `${pendingFile.parentPath}/${filename}`;
-                          fileManagerRef.send({
-                            type: 'writeFile',
-                            path: filePath,
-                            data: encodeTextFile(pendingFile.content),
-                            source: 'file-tree',
-                          });
-                          fileExplorerRef.send({ type: 'openFile', path: filePath });
+                          void writeFile(filePath, encodeTextFile(pendingFile.content), { source: 'user' });
+                          fileExplorerRef.send({ type: 'openFile', path: filePath, source: 'user' });
                           setPendingFile(undefined);
                         }}
                         onCancel={() => {
@@ -1303,7 +1357,6 @@ function PendingFileInput({
   );
 
   const handleBlur = useCallback(() => {
-    // Cancel on blur (user clicked elsewhere)
     onCancel();
   }, [onCancel]);
 

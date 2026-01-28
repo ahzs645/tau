@@ -6,7 +6,7 @@ on:
   pull_request_review_comment:
     types: [created]
   issues:
-    types: [opened, assigned]
+    types: [opened, assigned, labeled]
   pull_request_review:
     types: [submitted]
 
@@ -18,12 +18,13 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write
+      pull-requests: write
+      issues: write
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -36,28 +37,30 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-          # This is an optional setting that allows Claude to read CI results on PRs
+          # Additional permissions for Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Custom instructions tailored to Tau project
-          custom_instructions: |
-            You are working on Tau, an AI-powered CAD platform built as an Nx monorepo.
+          # Claude CLI arguments - model and tools configuration
+          claude_args: |
+            --model opus
+            --allowedTools "Bash(pnpm *),Bash(nx *),Bash(npm *),Bash(git *),Bash(gh *)"
+            --system-prompt "You are working on Tau, an AI-powered CAD platform built as an Nx monorepo.
             Please read CLAUDE.md for full project context and coding standards.
 
             ## 1. Code Style & Linting (CRITICAL)
             This project uses extremely strict linting via XO + ESLint. Follow these rules:
-            - ✓ Use `import type` for type-only imports
-            - ✓ All exported functions have explicit return types (including React components)
-            - ✓ `type` instead of `interface`
-            - ✓ `undefined` instead of `null`
-            - ✓ No `any` type - use `unknown` instead
-            - ✓ `.js` extensions for local imports with `#` prefix
-            - ✓ Curly braces for all control flow statements
-            - ✓ Explicit class member accessibility (`public`, `private`)
-            - ✓ Absolute imports with `#` prefix (e.g., `#utils/helper.js`)
-            - ✓ Descriptive variable names (`properties` not `props`, `event` not `e`)
-            - ✓ Functional programming patterns preferred
+            - Use import type for type-only imports
+            - All exported functions have explicit return types (including React components)
+            - type instead of interface
+            - undefined instead of null
+            - No any type - use unknown instead
+            - .js extensions for local imports with # prefix
+            - Curly braces for all control flow statements
+            - Explicit class member accessibility (public, private)
+            - Absolute imports with # prefix (e.g., #utils/helper.js)
+            - Descriptive variable names (properties not props, event not e)
+            - Functional programming patterns preferred
 
             ## 2. Architecture & Best Practices
             - Verify changes align with monorepo structure (apps/ui, apps/api, libs/)
@@ -68,7 +71,7 @@ jobs:
             ## 3. Testing
             - Verify adequate test coverage (Vitest)
             - Check tests use correct environment (jsdom for UI, node for API)
-            - Ensure test files follow naming conventions (`*.test.ts`)
+            - Ensure test files follow naming conventions (*.test.ts)
 
             ## 4. Security
             - Review authentication/authorization logic (Better Auth)
@@ -90,8 +93,5 @@ jobs:
             ## 7. Dependencies & Build
             - Verify changes work with pnpm workspace structure
             - Check Nx cache and build configurations aren't broken
-            - Ensure changes don't introduce circular dependencies
-
-          # Allow Claude to run common development commands
-          allowed_tools: "Bash(pnpm *),Bash(nx *),Bash(npm *),Bash(git *),Bash(gh *)"
+            - Ensure changes don't introduce circular dependencies"
 

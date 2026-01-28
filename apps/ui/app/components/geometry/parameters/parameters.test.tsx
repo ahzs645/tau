@@ -492,73 +492,8 @@ describe('Parameters - Reset Button Visibility', () => {
     mockOnParametersChange = vi.fn();
   });
 
-  describe('Top-level reset button', () => {
-    it('should not show reset button when no parameters have been edited', () => {
-      const defaultParameters = {
-        name: 'test',
-        count: 5,
-      };
-
-      const schema: RJSFSchema = {
-        type: 'object',
-        properties: {
-          name: { type: 'string', default: 'test' },
-          count: { type: 'number', default: 5 },
-        },
-      };
-
-      render(
-        <TestWrapper>
-          <Parameters
-            parameters={{}}
-            defaultParameters={defaultParameters}
-            jsonSchema={schema}
-            units={defaultUnits}
-            onParametersChange={mockOnParametersChange}
-          />
-        </TestWrapper>,
-      );
-
-      // Should not show reset all button
-      expect(screen.queryByLabelText('Reset all parameters')).toBeNull();
-    });
-
-    it('should show reset button when parameters have been edited', () => {
-      const defaultParameters = {
-        name: 'test',
-        count: 5,
-      };
-
-      const schema: RJSFSchema = {
-        type: 'object',
-        properties: {
-          name: { type: 'string', default: 'test' },
-          count: { type: 'number', default: 5 },
-        },
-      };
-
-      // Parameters have been edited
-      const editedParameters = {
-        name: 'changed',
-      };
-
-      render(
-        <TestWrapper>
-          <Parameters
-            parameters={editedParameters}
-            defaultParameters={defaultParameters}
-            jsonSchema={schema}
-            units={defaultUnits}
-            onParametersChange={mockOnParametersChange}
-          />
-        </TestWrapper>,
-      );
-
-      // Should show reset all button
-      const resetButton = screen.getByLabelText('Reset all parameters');
-      expect(resetButton).toBeTruthy();
-    });
-  });
+  // Note: Top-level "Reset all parameters" button is now rendered in ChatParameters header,
+  // not within the Parameters component. Tests for that button should be in chat-parameters.test.tsx.
 
   describe('Individual field reset button', () => {
     it('should not show reset button for primitive field when value matches default', () => {
@@ -805,46 +740,14 @@ describe('Parameters - Reset Button Visibility', () => {
   });
 });
 
-describe('Parameters - Collapse All Button Visibility', () => {
+describe('Parameters - Expand/Collapse State via isAllExpanded prop', () => {
   let mockOnParametersChange: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     mockOnParametersChange = vi.fn();
   });
 
-  it('should not show collapse-all button when object has only primitive properties', () => {
-    const defaultParameters = {
-      name: 'test',
-      count: 5,
-      enabled: true,
-    };
-
-    const schema: RJSFSchema = {
-      type: 'object',
-      properties: {
-        name: { type: 'string', default: 'test' },
-        count: { type: 'number', default: 5 },
-        enabled: { type: 'boolean', default: true },
-      },
-    };
-
-    render(
-      <TestWrapper>
-        <Parameters
-          parameters={{}}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          units={defaultUnits}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Should not show collapse-all button when only primitives exist
-    expect(screen.queryByLabelText('Expand all')).toBeNull();
-  });
-
-  it('should show collapse-all button when object has nested object properties', () => {
+  it('should expand all groups when isAllExpanded is true', () => {
     const defaultParameters = {
       config: {
         host: 'localhost',
@@ -857,6 +760,47 @@ describe('Parameters - Collapse All Button Visibility', () => {
       properties: {
         config: {
           type: 'object',
+          title: 'Config',
+          properties: {
+            host: { type: 'string', default: 'localhost' },
+            port: { type: 'number', default: 8080 },
+          },
+        },
+      },
+    };
+
+    render(
+      <TestWrapper>
+        <Parameters
+          isAllExpanded
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          units={defaultUnits}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Group should be expanded
+    const group = screen.getByLabelText('Group: Config');
+    expect(group).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('should collapse all groups when isAllExpanded is false', () => {
+    const defaultParameters = {
+      config: {
+        host: 'localhost',
+        port: 8080,
+      },
+    };
+
+    const schema: RJSFSchema = {
+      type: 'object',
+      properties: {
+        config: {
+          type: 'object',
+          title: 'Config',
           properties: {
             host: { type: 'string', default: 'localhost' },
             port: { type: 'number', default: 8080 },
@@ -872,81 +816,34 @@ describe('Parameters - Collapse All Button Visibility', () => {
           defaultParameters={defaultParameters}
           jsonSchema={schema}
           units={defaultUnits}
+          isAllExpanded={false}
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
     );
 
-    // Should show collapse-all button when nested objects exist
-    // Button starts expanded, so label is "Collapse all"
-    const collapseButton = screen.getByLabelText('Collapse all');
-    expect(collapseButton).toBeTruthy();
-    expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
+    // Group should be collapsed
+    const group = screen.getByLabelText('Group: Config');
+    expect(group).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('should show collapse-all button when object has array properties', () => {
+  it('should default to expanded when isAllExpanded is not provided', () => {
     const defaultParameters = {
-      strings: ['foo', 'bar', 'baz'],
-    };
-
-    const schema: RJSFSchema = {
-      type: 'object',
-      properties: {
-        strings: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          default: ['foo', 'bar', 'baz'],
-        },
-      },
-    };
-
-    render(
-      <TestWrapper>
-        <Parameters
-          parameters={{}}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          units={defaultUnits}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Should show collapse-all button when arrays exist
-    // Button starts expanded, so label is "Collapse all"
-    const collapseButton = screen.getByLabelText('Collapse all');
-    expect(collapseButton).toBeTruthy();
-    expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('should show collapse-all button when object has both primitives and nested items', () => {
-    const defaultParameters = {
-      name: 'test',
       config: {
         host: 'localhost',
       },
-      tags: ['tag1', 'tag2'],
     };
 
     const schema: RJSFSchema = {
       type: 'object',
       properties: {
-        name: { type: 'string', default: 'test' },
         config: {
           type: 'object',
+          title: 'Config',
           properties: {
             host: { type: 'string', default: 'localhost' },
           },
         },
-        tags: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          default: ['tag1', 'tag2'],
-        },
       },
     };
 
@@ -962,10 +859,47 @@ describe('Parameters - Collapse All Button Visibility', () => {
       </TestWrapper>,
     );
 
-    // Should show collapse-all button when nested items exist (even with primitives)
-    // Button starts expanded, so label is "Collapse all"
-    const collapseButton = screen.getByLabelText('Collapse all');
-    expect(collapseButton).toBeTruthy();
+    // Group should be expanded by default (isInitialExpanded defaults to true)
+    const group = screen.getByLabelText('Group: Config');
+    expect(group).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('should respect isInitialExpanded when isAllExpanded is not provided', () => {
+    const defaultParameters = {
+      config: {
+        host: 'localhost',
+      },
+    };
+
+    const schema: RJSFSchema = {
+      type: 'object',
+      properties: {
+        config: {
+          type: 'object',
+          title: 'Config',
+          properties: {
+            host: { type: 'string', default: 'localhost' },
+          },
+        },
+      },
+    };
+
+    render(
+      <TestWrapper>
+        <Parameters
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          units={defaultUnits}
+          isInitialExpanded={false}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Group should be collapsed based on isInitialExpanded
+    const group = screen.getByLabelText('Group: Config');
+    expect(group).toHaveAttribute('aria-expanded', 'false');
   });
 });
 
@@ -1292,7 +1226,7 @@ describe('Parameters - Search Highlighting', () => {
     // Search term "config" matches "Config" in "Configuration" (case-insensitive)
     const highlight = within(group).getByLabelText('Highlighted: Config');
     expect(highlight).toBeTruthy();
-    expect(highlight.textContent?.toLowerCase()).toBe('config');
+    expect(highlight.textContent.toLowerCase()).toBe('config');
   });
 });
 
@@ -1792,47 +1726,8 @@ describe('Parameters - Reset Functionality', () => {
     expect(mockOnParametersChange).toHaveBeenCalledWith({});
   });
 
-  it('should reset all parameters when reset all button is clicked', async () => {
-    const defaultParameters = {
-      name: 'test',
-      count: 5,
-    };
-
-    const editedParameters = {
-      name: 'changed',
-      count: 10,
-    };
-
-    const schema: RJSFSchema = {
-      type: 'object',
-      properties: {
-        name: { type: 'string', default: 'test' },
-        count: { type: 'number', default: 5 },
-      },
-    };
-
-    render(
-      <TestWrapper>
-        <Parameters
-          parameters={editedParameters}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          units={defaultUnits}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Should show reset all button
-    const resetAllButton = screen.getByLabelText('Reset all parameters');
-    expect(resetAllButton).toBeTruthy();
-
-    // Click the reset all button
-    await user.click(resetAllButton);
-
-    // Should call onParametersChange with empty object
-    expect(mockOnParametersChange).toHaveBeenCalledWith({});
-  });
+  // Note: "Reset all parameters" button is now rendered in ChatParameters header,
+  // not within the Parameters component. Tests for that button should be in chat-parameters.test.tsx.
 });
 
 describe('Parameters - Reactive Configuration Changes', () => {
@@ -2675,44 +2570,7 @@ describe('Parameters - Feature Flags', () => {
     expect(screen.queryByPlaceholderText('Search parameters...')).toBeNull();
   });
 
-  it('should hide collapse-all button when enableExpandAll is false', () => {
-    const defaultParameters = {
-      config: {
-        host: 'localhost',
-      },
-    };
-
-    const schema: RJSFSchema = {
-      type: 'object',
-      properties: {
-        config: {
-          type: 'object',
-          properties: {
-            host: { type: 'string', default: 'localhost' },
-          },
-        },
-      },
-    };
-
-    render(
-      <TestWrapper>
-        <Parameters
-          units={defaultUnits}
-          parameters={{}}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          enableExpandAll={false}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Should not show collapse-all button
-    expect(screen.queryByLabelText('Collapse all')).toBeNull();
-    expect(screen.queryByLabelText('Expand all')).toBeNull();
-  });
-
-  it('should hide controls bar when both enableSearch and enableExpandAll are false', () => {
+  it('should hide controls bar when enableSearch is false and no parameters are modified', () => {
     const defaultParameters = {
       name: 'test',
     };
@@ -2732,88 +2590,103 @@ describe('Parameters - Feature Flags', () => {
           defaultParameters={defaultParameters}
           jsonSchema={schema}
           enableSearch={false}
-          enableExpandAll={false}
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
     );
 
-    // Controls bar should not be rendered (no search input, no collapse button)
+    // Controls bar should not be rendered when search is off and no modified parameters
     expect(screen.queryByPlaceholderText('Search parameters...')).toBeNull();
-    expect(screen.queryByLabelText('Collapse all')).toBeNull();
-  });
-});
-
-describe('Parameters - Collapse/Expand Functionality', () => {
-  let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
   });
 
-  it('should toggle collapse-all button when clicked', async () => {
+  it('should NOT focus search input on initial render when enableSearch is true', () => {
     const defaultParameters = {
-      config: {
-        host: 'localhost',
-        port: 8080,
-      },
-      tags: ['tag1', 'tag2'],
+      name: 'test',
     };
 
     const schema: RJSFSchema = {
       type: 'object',
       properties: {
-        config: {
-          type: 'object',
-          properties: {
-            host: { type: 'string', default: 'localhost' },
-            port: { type: 'number', default: 8080 },
-          },
-        },
-        tags: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          default: ['tag1', 'tag2'],
-        },
+        name: { type: 'string', default: 'test' },
       },
     };
 
     render(
       <TestWrapper>
         <Parameters
+          enableSearch
+          units={defaultUnits}
           parameters={{}}
           defaultParameters={defaultParameters}
           jsonSchema={schema}
-          units={defaultUnits}
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
     );
 
-    // Initially should be expanded
-    const collapseButton = screen.getByLabelText('Collapse all');
-    expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
-
-    // Click to collapse
-    await user.click(collapseButton);
-
-    // Should now be collapsed
-    const expandButton = screen.getByLabelText('Expand all');
-    expect(expandButton).toHaveAttribute('aria-expanded', 'false');
-
-    // Click to expand again
-    await user.click(expandButton);
-
-    // Should be expanded again
-    const collapseButtonAgain = screen.getByLabelText('Collapse all');
-    expect(collapseButtonAgain).toHaveAttribute('aria-expanded', 'true');
+    // Search input should exist but should NOT be focused on initial render
+    const searchInput = screen.getByPlaceholderText('Search parameters...');
+    expect(searchInput).toBeTruthy();
+    expect(document.activeElement).not.toBe(searchInput);
   });
 
-  it('should collapse and expand groups when collapse-all button is clicked', async () => {
+  it('should focus search input when enableSearch changes from false to true', () => {
+    const defaultParameters = {
+      name: 'test',
+    };
+
+    const schema: RJSFSchema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string', default: 'test' },
+      },
+    };
+
+    const { rerender } = render(
+      <TestWrapper>
+        <Parameters
+          units={defaultUnits}
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          enableSearch={false}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Search input should not exist when disabled
+    expect(screen.queryByPlaceholderText('Search parameters...')).toBeNull();
+
+    // Re-render with enableSearch = true
+    rerender(
+      <TestWrapper>
+        <Parameters
+          enableSearch
+          units={defaultUnits}
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Search input should now be focused
+    const searchInput = screen.getByPlaceholderText('Search parameters...');
+    expect(searchInput).toBeTruthy();
+    expect(document.activeElement).toBe(searchInput);
+  });
+});
+
+describe('Parameters - Collapse/Expand Functionality via isAllExpanded prop', () => {
+  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockOnParametersChange = vi.fn();
+  });
+
+  it('should expand all groups when isAllExpanded changes from false to true', () => {
     const defaultParameters = {
       config1: {
         host: 'localhost',
@@ -2843,9 +2716,78 @@ describe('Parameters - Collapse/Expand Functionality', () => {
       },
     };
 
-    render(
+    const { rerender } = render(
       <TestWrapper>
         <Parameters
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          units={defaultUnits}
+          isAllExpanded={false}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Initially groups should be collapsed
+    const group1 = screen.getByLabelText('Group: Config 1');
+    const group2 = screen.getByLabelText('Group: Config 2');
+    expect(group1).toHaveAttribute('aria-expanded', 'false');
+    expect(group2).toHaveAttribute('aria-expanded', 'false');
+
+    // Re-render with isAllExpanded = true
+    rerender(
+      <TestWrapper>
+        <Parameters
+          isAllExpanded
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          units={defaultUnits}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Groups should now be expanded
+    expect(group1).toHaveAttribute('aria-expanded', 'true');
+    expect(group2).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('should collapse all groups when isAllExpanded changes from true to false', () => {
+    const defaultParameters = {
+      config1: {
+        host: 'localhost',
+      },
+      config2: {
+        port: 8080,
+      },
+    };
+
+    const schema: RJSFSchema = {
+      type: 'object',
+      properties: {
+        config1: {
+          type: 'object',
+          title: 'Config 1',
+          properties: {
+            host: { type: 'string', default: 'localhost' },
+          },
+        },
+        config2: {
+          type: 'object',
+          title: 'Config 2',
+          properties: {
+            port: { type: 'number', default: 8080 },
+          },
+        },
+      },
+    };
+
+    const { rerender } = render(
+      <TestWrapper>
+        <Parameters
+          isAllExpanded
           parameters={{}}
           defaultParameters={defaultParameters}
           jsonSchema={schema}
@@ -2861,21 +2803,60 @@ describe('Parameters - Collapse/Expand Functionality', () => {
     expect(group1).toHaveAttribute('aria-expanded', 'true');
     expect(group2).toHaveAttribute('aria-expanded', 'true');
 
-    // Click collapse-all
-    const collapseButton = screen.getByLabelText('Collapse all');
-    await user.click(collapseButton);
+    // Re-render with isAllExpanded = false
+    rerender(
+      <TestWrapper>
+        <Parameters
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          units={defaultUnits}
+          isAllExpanded={false}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
 
     // Groups should now be collapsed
     expect(group1).toHaveAttribute('aria-expanded', 'false');
     expect(group2).toHaveAttribute('aria-expanded', 'false');
+  });
 
-    // Click expand-all
-    const expandButton = screen.getByLabelText('Expand all');
-    await user.click(expandButton);
+  it('should collapse arrays when isAllExpanded is false', () => {
+    const defaultParameters = {
+      tags: ['tag1', 'tag2'],
+    };
 
-    // Groups should be expanded again
-    expect(group1).toHaveAttribute('aria-expanded', 'true');
-    expect(group2).toHaveAttribute('aria-expanded', 'true');
+    const schema: RJSFSchema = {
+      type: 'object',
+      properties: {
+        tags: {
+          type: 'array',
+          title: 'Tags',
+          items: {
+            type: 'string',
+          },
+          default: ['tag1', 'tag2'],
+        },
+      },
+    };
+
+    render(
+      <TestWrapper>
+        <Parameters
+          parameters={{}}
+          defaultParameters={defaultParameters}
+          jsonSchema={schema}
+          units={defaultUnits}
+          isAllExpanded={false}
+          onParametersChange={mockOnParametersChange}
+        />
+      </TestWrapper>,
+    );
+
+    // Array group should be collapsed
+    const arrayGroup = screen.getByLabelText('Group: Tags');
+    expect(arrayGroup).toHaveAttribute('aria-expanded', 'false');
   });
 });
 
@@ -3486,98 +3467,6 @@ describe('Parameters - onChange Only Modified Values', () => {
     });
   });
 
-  it('should hide reset all button when parameter is changed back to default', async () => {
-    const defaultParameters = {
-      name: 'default',
-      count: 5,
-    };
-
-    const schema: RJSFSchema = {
-      type: 'object',
-      properties: {
-        name: { type: 'string', default: 'default' },
-        count: { type: 'number', default: 5 },
-      },
-    };
-
-    let currentParameters: Record<string, unknown> = {};
-    const mockOnParametersChange = vi.fn((newParameters: Record<string, unknown>) => {
-      currentParameters = newParameters;
-    });
-
-    const { rerender } = render(
-      <TestWrapper>
-        <Parameters
-          parameters={currentParameters}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          units={defaultUnits}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Initially, no reset button should be present
-    expect(screen.queryByLabelText('Reset all parameters')).toBeNull();
-
-    // Step 1: Change name from default to modified
-    const nameInput = screen.getByLabelText('Input for Name');
-    await user.clear(nameInput);
-    await user.type(nameInput, 'modified');
-
-    // Wait for onChange to fire
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-
-    // Verify parameter was updated
-    expect(currentParameters).toHaveProperty('name');
-    expect(currentParameters['name']).toBe('modified');
-
-    // Re-render with updated parameters
-    rerender(
-      <TestWrapper>
-        <Parameters
-          parameters={currentParameters}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          units={defaultUnits}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Reset all button should now be present
-    expect(screen.getByLabelText('Reset all parameters')).toBeTruthy();
-
-    // Step 2: Change name back to default
-    mockOnParametersChange.mockClear();
-    const nameInputAfter = screen.getByLabelText('Input for Name');
-    await user.clear(nameInputAfter);
-    await user.type(nameInputAfter, 'default');
-
-    // Wait for onChange to fire
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-
-    // Verify parameter was removed (back to default)
-    expect(currentParameters).not.toHaveProperty('name');
-
-    // Re-render with updated parameters
-    rerender(
-      <TestWrapper>
-        <Parameters
-          parameters={currentParameters}
-          defaultParameters={defaultParameters}
-          jsonSchema={schema}
-          units={defaultUnits}
-          onParametersChange={mockOnParametersChange}
-        />
-      </TestWrapper>,
-    );
-
-    // Reset all button should no longer be present since no parameters are modified
-    expect(screen.queryByLabelText('Reset all parameters')).toBeNull();
-  });
+  // Note: "Reset all parameters" button visibility test is now in ChatParameters header,
+  // not within the Parameters component.
 });

@@ -22,7 +22,7 @@ import { encodeMessage } from '#lib/kcl-language/lsp/codec/utils.js';
  * Interface for file manager used to read files.
  */
 export type LspFileManager = {
-  readFile: (path: string) => Promise<Uint8Array>;
+  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
   exists?: (path: string) => Promise<boolean>;
   readdir?: (path: string) => Promise<string[]>;
 };
@@ -296,7 +296,7 @@ export class KclLspClient {
       }
 
       log.debug('Received LSP message from worker:', event.data);
-      this.fromServer?.add(event.data as Uint8Array);
+      this.fromServer?.add(event.data as Uint8Array<ArrayBuffer>);
     };
 
     this.worker.addEventListener('message', handleWorkerMessage);

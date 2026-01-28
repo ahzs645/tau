@@ -1,27 +1,31 @@
-import LightningFS from '@isomorphic-git/lightning-fs';
-import type { MKDirOptions } from '@isomorphic-git/lightning-fs';
 import JSZip from 'jszip';
-import { metaConfig } from '#constants/meta.constants.js';
+import type { FileStat } from '@taucad/types';
+import { fs, ensureFilesystemConfigured } from '#filesystem/zenfs-config.js';
+import { asBuffer } from '#utils/file.utils.js';
+import { joinPath } from '#utils/path.utils.js';
 
-// Set up LightningFS in the worker (persistent IndexedDB-backed filesystem)
-const fs = new LightningFS(`${metaConfig.databasePrefix}fs`); // Opens an IndexedDB named "myfs"
-const { promises: fsp } = fs; // Use promise-based API for convenience
+// Use ZenFS promise-based API
+const fsp = fs.promises;
 
-export type FileStat = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-  mtimeMs: number;
+/**
+ * Ensure filesystem is configured before performing operations.
+ * This is awaited at the start of every fileManager method to guarantee
+ * the ZenFS backend is initialized before any filesystem operations.
+ */
+const ensureReady = async (): Promise<void> => ensureFilesystemConfigured('indexeddb');
+
+export type MkdirOptions = {
+  mode?: number;
+  recursive?: boolean;
 };
 
 export type FileManager = {
   readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API
-  readFile(filepath: string, options?: {}): Promise<Uint8Array>;
-  writeFile(filepath: string, data: Uint8Array | string): Promise<void>;
-  writeFiles(files: Record<string, { content: Uint8Array }>): Promise<void>;
-  mkdir(path: string, options?: MKDirOptions): Promise<void>;
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
+  readFile(filepath: string, options?: {}): Promise<Uint8Array<ArrayBuffer>>;
+  writeFile(filepath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
+  writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void>;
+  mkdir(path: string, options?: MkdirOptions): Promise<void>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<{
     type: 'file' | 'dir';
@@ -35,16 +39,39 @@ export type FileManager = {
   batchExists(paths: string[]): Promise<Record<string, boolean>>;
   ensureDirectoryExists(path: string): Promise<void>;
   getDirectoryStat(path: string): Promise<FileStat[]>;
-  getDirectoryContents(path: string): Promise<Record<string, Uint8Array>>;
+  getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
   getZippedDirectory(path: string): Promise<Blob>;
 };
 
+// Internal implementation for readFile with proper overload handling
+async function readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
+async function readFile(filepath: string, options?: {}): Promise<Uint8Array<ArrayBuffer>>;
+async function readFile(
+  filepath: string,
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
+  options?: 'utf8' | { encoding: 'utf8' } | {},
+): Promise<string | Uint8Array<ArrayBuffer>> {
+  await ensureReady();
+
+  const encoding = options === 'utf8' || (typeof options === 'object' && 'encoding' in options) ? 'utf8' : undefined;
+
+  if (encoding === 'utf8') {
+    return fsp.readFile(filepath, 'utf8');
+  }
+
+  // Return as Uint8Array
+  const buffer = await fsp.readFile(filepath);
+  return new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
+}
+
 export const fileManager: FileManager = {
-  readFile: fsp.readFile.bind(fsp),
+  readFile,
 
   // Check if a path exists (file or directory)
   async exists(path: string): Promise<boolean> {
+    await ensureReady();
     try {
       await fsp.stat(path);
       return true;
@@ -55,6 +82,7 @@ export const fileManager: FileManager = {
 
   // Batch check if multiple paths exist - optimized for checking many paths at once
   async batchExists(paths: string[]): Promise<Record<string, boolean>> {
+    await ensureReady();
     const results = await Promise.all(
       paths.map(async (path) => ({
         path,
@@ -72,6 +100,7 @@ export const fileManager: FileManager = {
 
   // Ensure a directory path exists, creating all parent directories as needed
   async ensureDirectoryExists(targetPath: string): Promise<void> {
+    await ensureReady();
     const normalizedPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
     const segments = normalizedPath.split('/').filter((segment) => segment.length > 0);
 
@@ -104,7 +133,8 @@ export const fileManager: FileManager = {
   },
 
   // Write a file from provided binary data
-  async writeFile(path: string, content: Uint8Array): Promise<void> {
+  async writeFile(path: string, content: Uint8Array<ArrayBuffer> | string): Promise<void> {
+    await ensureReady();
     // Ensure parent directory exists before writing
     const lastSlashIndex = path.lastIndexOf('/');
     if (lastSlashIndex > 0) {
@@ -115,7 +145,8 @@ export const fileManager: FileManager = {
     await fsp.writeFile(path, content);
   },
 
-  async writeFiles(files: Record<string, { content: Uint8Array }>): Promise<void> {
+  async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void> {
+    await ensureReady();
     await Promise.all(
       Object.entries(files).map(async ([path, file]) => {
         await this.writeFile(path, file.content);
@@ -124,12 +155,14 @@ export const fileManager: FileManager = {
   },
 
   // Create a directory (recursive: true creates parent directories if needed)
-  async mkdir(path: string, options?: MKDirOptions): Promise<void> {
+  async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    await ensureReady();
     await fsp.mkdir(path, options);
   },
 
   // List directory contents
   async readdir(path: string): Promise<string[]> {
+    await ensureReady();
     return fsp.readdir(path);
   },
 
@@ -139,31 +172,37 @@ export const fileManager: FileManager = {
     size: number;
     mtimeMs: number;
   }> {
+    await ensureReady();
     const stats = await fsp.stat(path);
     return {
-      type: stats.type,
+      // ZenFS uses Node.js-style isFile()/isDirectory() methods
+      type: stats.isFile() ? 'file' : 'dir',
       size: stats.size,
-      mtimeMs: stats.mtimeMs as number,
+      mtimeMs: stats.mtimeMs,
     };
   },
 
   // Rename a file or directory
   async rename(oldPath: string, newPath: string): Promise<void> {
+    await ensureReady();
     await fsp.rename(oldPath, newPath);
   },
 
   // Delete a file
   async unlink(path: string): Promise<void> {
+    await ensureReady();
     await fsp.unlink(path);
   },
 
   // Delete a directory (must be empty)
   async rmdir(path: string): Promise<void> {
+    await ensureReady();
     await fsp.rmdir(path);
   },
 
   // Get all file stats in a directory recursively as an array of file stat objects
   async getDirectoryStat(path: string): Promise<FileStat[]> {
+    await ensureReady();
     // Check if directory exists first - return empty array if it doesn't
     const directoryExists = await this.exists(path);
     if (!directoryExists) {
@@ -172,15 +211,15 @@ export const fileManager: FileManager = {
 
     const fileStats: FileStat[] = [];
 
-    async function collectStatsRecursive(currentPath: string, basePath: string): Promise<void> {
+    const collectStatsRecursive = async (currentPath: string, basePath: string): Promise<void> => {
       const entries = await fsp.readdir(currentPath);
 
       for (const entry of entries) {
-        const fullPath = `${currentPath}/${entry}`;
+        const fullPath = joinPath(currentPath, entry);
         // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
         const stats = await fsp.stat(fullPath);
 
-        if (stats.type === 'file') {
+        if (stats.isFile()) {
           // Store relative path from the base directory
           const relativePath = fullPath.slice(basePath.length + 1);
           // Extract filename from relative path (get the last segment)
@@ -190,34 +229,36 @@ export const fileManager: FileManager = {
           fileStats.push({
             path: relativePath,
             name: filename,
-            type: stats.type,
+            type: 'file',
             size: stats.size,
-            mtimeMs: stats.mtimeMs as number,
+            mtimeMs: stats.mtimeMs,
           });
         } else {
           // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
           await collectStatsRecursive(fullPath, basePath);
         }
       }
-    }
+    };
 
     await collectStatsRecursive(path, path);
     return fileStats;
   },
 
   // Get all files in a directory recursively as a map of relative paths to file contents
-  async getDirectoryContents(path: string): Promise<Record<string, Uint8Array>> {
+  async getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
+    await ensureReady();
     const fileStats = await this.getDirectoryStat(path);
 
     const fileContents = await Promise.all(
       fileStats.map(async (fileStat) => {
-        const fullPath = `${path}/${fileStat.path}`;
-        const content = await fsp.readFile(fullPath);
+        const fullPath = joinPath(path, fileStat.path);
+        const buffer = await fsp.readFile(fullPath);
+        const content = new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
         return { path: fileStat.path, content };
       }),
     );
 
-    const files: Record<string, Uint8Array> = {};
+    const files: Record<string, Uint8Array<ArrayBuffer>> = {};
     for (const { path: filePath, content } of fileContents) {
       files[filePath] = content;
     }
@@ -226,17 +267,19 @@ export const fileManager: FileManager = {
   },
 
   async copyDirectory(sourcePath: string, destinationPath: string): Promise<void> {
+    await ensureReady();
     const files = await this.getDirectoryContents(sourcePath);
-    const destinationFiles: Record<string, { content: Uint8Array }> = {};
+    const destinationFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
 
     for (const [relativePath, content] of Object.entries(files)) {
-      destinationFiles[`${destinationPath}/${relativePath}`] = { content };
+      destinationFiles[joinPath(destinationPath, relativePath)] = { content };
     }
 
     await this.writeFiles(destinationFiles);
   },
 
   async getZippedDirectory(path: string): Promise<Blob> {
+    await ensureReady();
     const zip = new JSZip();
     const files = await this.getDirectoryContents(path);
 

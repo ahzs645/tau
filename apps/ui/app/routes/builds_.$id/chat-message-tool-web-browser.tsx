@@ -1,50 +1,80 @@
-import type { UIToolInvocation } from 'ai';
-import { LoaderCircle } from 'lucide-react';
+import { Globe } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { MyTools } from '@taucad/chat';
-import type { toolName } from '@taucad/chat/constants';
-import { Badge } from '#components/ui/badge.js';
-import { createFaviconUrl, extractDomainFromUrl } from '#utils/url.utils.js';
-import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
+import type { ToolInvocation } from '@taucad/chat';
+import { toolName } from '@taucad/chat/constants';
+import { createFaviconUrl, extractDomainFromUrl, safeExtractDomainFromUrl } from '#utils/url.utils.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+} from '#components/chat/chat-tool-card.js';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { ExternalLink } from '#components/external-link.js';
 
 export function ChatMessageToolWebBrowser({
   part,
 }: {
-  readonly part: UIToolInvocation<MyTools[typeof toolName.webBrowser]>;
+  readonly part: ToolInvocation<typeof toolName.webBrowser>;
 }): ReactNode | undefined {
   switch (part.state) {
     case 'input-available':
+    case 'input-streaming': {
+      const url = part.input?.url ?? '';
+      const domain = url ? safeExtractDomainFromUrl(url, { includeTld: true }) : undefined;
+
+      return (
+        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Globe} />
+            <ChatToolCardTitle>
+              {domain ? (
+                <>
+                  <ChatToolAction>Visiting</ChatToolAction> <ChatToolDescription>{domain}...</ChatToolDescription>
+                </>
+              ) : (
+                'Visiting page...'
+              )}
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
+      );
+    }
+
     case 'output-available': {
       const { input } = part;
       const { url } = input;
       const faviconUrl = createFaviconUrl(url);
       const domain = extractDomainFromUrl(url, { includeTld: true });
 
-      if (part.state === 'input-available') {
-        return (
-          <Badge variant="outline">
-            <AnimatedShinyText className="flex max-w-full flex-row items-center gap-2">
-              <LoaderCircle className="size-3 animate-spin text-inherit" />
-              <span className="truncate">Visiting {domain}...</span>
-            </AnimatedShinyText>
-          </Badge>
-        );
-      }
-
       return (
-        <Badge variant="outline" className="flex max-w-full flex-row items-center gap-2 text-neutral">
-          <img src={faviconUrl} alt={domain} className="size-3 rounded-full" />
-          <span className="truncate">Visited {domain}</span>
-        </Badge>
+        <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
+          <ChatToolCardHeader>
+            <img src={faviconUrl} alt={domain} className="size-3 shrink-0 rounded-sm" />
+            <ChatToolCardTitle>
+              <ChatToolAction>Visited</ChatToolAction>{' '}
+              <ExternalLink
+                href={url}
+                arrowSize="xs"
+                className="text-muted-foreground no-underline hover:text-foreground hover:underline"
+              >
+                {domain}
+              </ExternalLink>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 
-    case 'input-streaming': {
-      return null;
+    case 'output-error': {
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle="Web browser failed" />;
     }
 
-    case 'output-error': {
-      return <div>Web browser failed</div>;
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.webBrowser} state: ${part.state}`);
     }
   }
 }

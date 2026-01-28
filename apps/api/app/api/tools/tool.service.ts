@@ -1,15 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { StructuredTool } from '@langchain/core/tools';
-import type { TavilySearch } from '@langchain/tavily';
 import { OpenAI, OpenAIEmbeddings } from '@langchain/openai';
 import type { ToolName, ToolMode, ToolSelection } from '@taucad/chat';
 import { toolName, toolMode } from '@taucad/chat/constants';
 import type { Environment } from '#config/environment.config.js';
 import { createWebBrowserTool } from '#api/tools/tools/tool-web-browser.js';
-import { fileEditTool } from '#api/tools/tools/tool-file-edit.js';
-import { imageAnalysisTool } from '#api/tools/tools/tool-image-analysis.js';
-import { createWebSearchTool, parseWebSearchResults } from '#api/tools/tools/tool-web-search.js';
+import { editFileTool } from '#api/tools/tools/tool-edit-file.js';
+import { testModelTool } from '#api/tools/tools/tool-test-model.js';
+import { editTestsTool } from '#api/tools/tools/tool-edit-tests.js';
+import { createWebSearchTool } from '#api/tools/tools/tool-web-search.js';
+import { readFileTool } from '#api/tools/tools/tool-read-file.js';
+import { listDirectoryTool } from '#api/tools/tools/tool-list-directory.js';
+import { createFileTool } from '#api/tools/tools/tool-create-file.js';
+import { deleteFileTool } from '#api/tools/tools/tool-delete-file.js';
+import { grepTool } from '#api/tools/tools/tool-grep.js';
+import { globSearchTool } from '#api/tools/tools/tool-glob-search.js';
+import { getKernelResultTool } from '#api/tools/tools/tool-get-kernel-result.js';
+import { reasoningTool } from '#api/tools/tools/tool-reasoning.js';
 
 export const toolChoiceFromToolName = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- Tavily search tool name
@@ -18,7 +26,7 @@ export const toolChoiceFromToolName = {
 
 @Injectable()
 export class ToolService {
-  private webSearchTool: TavilySearch | undefined;
+  private webSearchTool: StructuredTool | undefined;
 
   public constructor(private readonly configService: ConfigService<Environment, true>) {}
 
@@ -40,15 +48,33 @@ export class ToolService {
         maxResults: 4,
         forceSummary: false,
       }),
-      [toolName.fileEdit]: fileEditTool,
-      [toolName.imageAnalysis]: imageAnalysisTool,
+      [toolName.editFile]: editFileTool,
+      [toolName.testModel]: testModelTool,
+      [toolName.editTests]: editTestsTool,
+      [toolName.readFile]: readFileTool,
+      [toolName.listDirectory]: listDirectoryTool,
+      [toolName.createFile]: createFileTool,
+      [toolName.deleteFile]: deleteFileTool,
+      [toolName.grep]: grepTool,
+      [toolName.globSearch]: globSearchTool,
+      [toolName.getKernelResult]: getKernelResultTool,
+      [toolName.reasoning]: reasoningTool,
     } as const satisfies Partial<Record<ToolName, StructuredTool>>;
 
     const toolNameFromToolCategory = {
       [toolName.webSearch]: toolCategoryToTool[toolName.webSearch].name,
       [toolName.webBrowser]: toolCategoryToTool[toolName.webBrowser].name,
-      [toolName.fileEdit]: toolCategoryToTool[toolName.fileEdit].name,
-      [toolName.imageAnalysis]: toolCategoryToTool[toolName.imageAnalysis].name,
+      [toolName.editFile]: toolCategoryToTool[toolName.editFile].name,
+      [toolName.testModel]: toolCategoryToTool[toolName.testModel].name,
+      [toolName.editTests]: toolCategoryToTool[toolName.editTests].name,
+      [toolName.readFile]: toolCategoryToTool[toolName.readFile].name,
+      [toolName.listDirectory]: toolCategoryToTool[toolName.listDirectory].name,
+      [toolName.createFile]: toolCategoryToTool[toolName.createFile].name,
+      [toolName.deleteFile]: toolCategoryToTool[toolName.deleteFile].name,
+      [toolName.grep]: toolCategoryToTool[toolName.grep].name,
+      [toolName.globSearch]: toolCategoryToTool[toolName.globSearch].name,
+      [toolName.getKernelResult]: toolCategoryToTool[toolName.getKernelResult].name,
+      [toolName.reasoning]: toolCategoryToTool[toolName.reasoning].name,
     } as const satisfies Partial<Record<ToolName, string>>;
 
     const toolNameFromToolChoice = {
@@ -73,13 +99,7 @@ export class ToolService {
     return { tools: toolCategoryToTool, resolvedToolChoice };
   }
 
-  public getToolParsers(): Partial<Record<ToolName, (content: string) => unknown[]>> {
-    return {
-      [toolName.webSearch]: parseWebSearchResults,
-    };
-  }
-
-  private getWebSearchTool(): TavilySearch {
+  private getWebSearchTool(): StructuredTool {
     if (!this.webSearchTool) {
       const tavilyApiKey = this.configService.get('TAVILY_API_KEY', { infer: true });
       if (!tavilyApiKey) {

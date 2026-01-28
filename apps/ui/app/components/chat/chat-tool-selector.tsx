@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { Globe, Code, Image, Eye, Check, Wand2, Ban, Zap } from 'lucide-react';
+import { Globe, Image, Eye, Check, Wand2, Ban, Zap } from 'lucide-react';
 import type { ToolSelection, ToolName } from '@taucad/chat';
 import { toolName, toolMode } from '@taucad/chat/constants';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -37,14 +37,14 @@ const toolMetadata: Partial<Record<ToolName, ToolMetadata>> = {
     description: 'Browse and analyze web pages',
     icon: Eye,
   },
-  [toolName.fileEdit]: {
-    label: 'File Edit',
-    description: 'Edit and create files',
-    icon: Code,
+  [toolName.testModel]: {
+    label: 'Test Model',
+    description: 'Run visual tests on the 3D model',
+    icon: Image,
   },
-  [toolName.imageAnalysis]: {
-    label: 'Image Analysis',
-    description: 'Analyze images',
+  [toolName.editTests]: {
+    label: 'Edit Tests',
+    description: 'Edit test requirements in test.json',
     icon: Image,
   },
 };
@@ -168,7 +168,7 @@ export const ChatToolSelector = memo(function ({
 
           case 'custom': {
             // When selecting custom mode directly, default to common tools
-            onValueChange?.([toolName.webSearch, toolName.fileEdit]);
+            onValueChange?.([toolName.webSearch]);
             break;
           }
         }
@@ -254,7 +254,7 @@ export const ChatToolSelector = memo(function ({
   return (
     <ComboBoxResponsive<ToolSelectorItem>
       {...properties}
-      className="[&[data-slot='popover-content']]:w-[280px]"
+      className="data-[slot='popover-content']:w-[280px]"
       popoverProperties={popoverProperties}
       emptyListMessage="No options found."
       searchPlaceHolder="Search tools..."

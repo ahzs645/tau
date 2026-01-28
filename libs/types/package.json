@@ -19,6 +19,11 @@
       "types": "./src/guards/index.ts",
       "import": "./src/guards/index.ts",
       "default": "./src/guards/index.ts"
+    },
+    "./symbols": {
+      "types": "./src/symbols/index.ts",
+      "import": "./src/symbols/index.ts",
+      "default": "./src/symbols/index.ts"
     }
   },
   "imports": {

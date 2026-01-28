@@ -1,4 +1,5 @@
 import * as CollapsiblePrimitive from '@radix-ui/react-collapsible';
+import { cn } from '#utils/ui.utils.js';
 
 function Collapsible({ ...properties }: React.ComponentProps<typeof CollapsiblePrimitive.Root>): React.JSX.Element {
   return <CollapsiblePrimitive.Root data-slot="collapsible" {...properties} />;
@@ -11,9 +12,22 @@ function CollapsibleTrigger({
 }
 
 function CollapsibleContent({
+  className,
+  forceMount,
   ...properties
 }: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>): React.JSX.Element {
-  return <CollapsiblePrimitive.CollapsibleContent data-slot="collapsible-content" {...properties} />;
+  return (
+    <CollapsiblePrimitive.CollapsibleContent
+      className={cn(
+        // When forceMount is true, use CSS to hide instead of unmounting
+        forceMount && 'data-[state=closed]:hidden',
+        className,
+      )}
+      data-slot="collapsible-content"
+      forceMount={forceMount ? true : undefined}
+      {...properties}
+    />
+  );
 }
 
 export { Collapsible, CollapsibleTrigger, CollapsibleContent };

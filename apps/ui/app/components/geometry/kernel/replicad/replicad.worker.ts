@@ -1,34 +1,46 @@
-import { expose } from 'comlink';
 import * as replicad from 'replicad';
 import ErrorStackParser from 'error-stack-parser';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type {
-  ComputeGeometryResult,
+  CreateGeometryResult,
   KernelStackFrame,
   ExportGeometryResult,
-  ExtractParametersResult,
-  KernelError,
+  GetParametersResult,
+  KernelIssue,
   ExtractNameResult,
   ExportFormat,
   GeometryGltf,
   GeometrySvg,
+  KernelRuntime,
+  KernelLogger,
+  InitializeInput,
+  CanHandleInput,
+  GetDependenciesInput,
+  GetParametersInput,
+  CreateGeometryInput,
+  ExportGeometryInput,
 } from '@taucad/types';
 import { isKernelError } from '@taucad/types/guards';
+import { exposeWorker } from '#components/geometry/kernel/utils/comlink-worker.utils.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import {
   initOpenCascade,
   initOpenCascadeWithExceptions,
+  opencascadeWasmUrl,
+  opencascadeWithExceptionsWasmUrl,
 } from '#components/geometry/kernel/replicad/init-open-cascade.js';
 import { runInCjsContext, buildEsModule, registerKernelModules } from '#components/geometry/kernel/replicad/vm.js';
 import { renderOutput } from '#components/geometry/kernel/replicad/utils/render-output.js';
 import { convertReplicadGeometriesToGltf } from '#components/geometry/kernel/replicad/utils/replicad-to-gltf.js';
 import { jsonSchemaFromJson } from '#utils/schema.utils.js';
+import { asBuffer } from '#utils/file.utils.js';
 import type { InputShape, MainResultShapes } from '#components/geometry/kernel/replicad/utils/render-output.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import type { GeometryReplicad } from '#components/geometry/kernel/replicad/replicad.types.js';
 // Font file for Replicad textBlueprints() rendering (Vite ?url import)
 import geistRegularUrl from '#components/geometry/kernel/replicad/fonts/Geist-Regular.ttf?url';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 type ReplicadOptions = {
   /**
@@ -45,9 +57,19 @@ type ReplicadOptions = {
    * @default false
    */
   withExceptions: boolean;
+  /**
+   * Mesh configuration for geometry tessellation.
+   * Controls the quality of the mesh output.
+   */
+  meshConfiguration?: {
+    /** The mesh tolerance in millimeters for linear distances. */
+    linearTolerance: number;
+    /** The mesh tolerance in degrees for angular distances. */
+    angularTolerance: number;
+  };
 };
 
-class ReplicadWorker extends KernelWorker<ReplicadOptions> {
+export class ReplicadWorker extends KernelWorker<ReplicadOptions> {
   protected static override readonly supportedExportFormats: ExportFormat[] = [
     'stl',
     'stl-binary',
@@ -99,22 +121,28 @@ try {
       return createKernelSuccess((result ?? {}) as string | undefined);
     } catch {
       // System error - no location needed
-      return createKernelError({
-        message: 'Failed to extract default name from code',
-        type: 'runtime',
-      });
+      return createKernelError([
+        {
+          message: 'Failed to extract default name from code',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
     }
   }
 
-  protected override async initialize(): Promise<void> {
-    const { withExceptions } = this.options;
+  protected override async initialize(
+    { options }: InitializeInput<ReplicadOptions>,
+    { logger }: KernelRuntime,
+  ): Promise<void> {
+    const { withExceptions } = options;
     const startTime = performance.now();
-    const oc = await this.initializeOpenCascadeInstance(withExceptions);
+    const oc = await this.initializeOpenCascadeInstance(withExceptions, logger);
     const ocEndTime = performance.now();
-    this.debug(`OpenCascade initialization took ${ocEndTime - startTime}ms`);
+    logger.debug(`OpenCascade initialization took ${ocEndTime - startTime}ms`);
 
     if (!this.replicadHasOc) {
-      this.debug('Setting OC in replicad');
+      logger.debug('Setting OC in replicad');
       replicad.setOC(oc);
       this.replicadHasOc = true;
     }
@@ -123,24 +151,27 @@ try {
     // Font loading is non-critical - text functions will warn if font is unavailable
     // replicad.loadFont() is idempotent and skips if font already loaded
     try {
-      this.debug('Loading default font for text rendering');
+      logger.debug('Loading default font for text rendering');
       await replicad.loadFont(geistRegularUrl, 'default');
     } catch (error) {
-      this.warn('Failed to load default font for text rendering - text functions may not work', {
+      logger.warn('Failed to load default font for text rendering - text functions may not work', {
         data: error,
-        operation: 'initialize',
       });
     }
   }
 
-  protected override async canHandle(filename: string, extension: string): Promise<boolean> {
+  protected override async canHandle(
+    { filePath, extension }: CanHandleInput,
+    { filesystem }: KernelRuntime,
+  ): Promise<boolean> {
     // Check if the file format is a JavaScript/TypeScript file
-    if (!['ts', 'js', 'tsx', 'jsx'].includes(extension)) {
+    // JSX/TSX files are not supported as they require React transpilation
+    if (!['ts', 'js'].includes(extension)) {
       return false;
     }
 
     // Extract code and check for replicad imports/usage
-    const code = await this.readFile(filename, 'utf8');
+    const code = await filesystem.readFile(filePath, 'utf8');
 
     // Check for direct replicad imports
     // Use 's' flag to make '.' match newlines for multiline imports
@@ -163,9 +194,23 @@ try {
     );
   }
 
-  protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
+  protected override async getDependencies({ filePath }: GetDependenciesInput): Promise<string[]> {
+    // Replicad currently only supports single-file operations
+    // Return absolute path
+    return [filePath];
+  }
+
+  protected override getAssetUrls(): string[] {
+    return [geistRegularUrl, opencascadeWasmUrl, opencascadeWithExceptionsWasmUrl];
+  }
+
+  protected override async getParameters(
+    { filePath, basePath }: GetParametersInput,
+    { filesystem, logger }: KernelRuntime,
+  ): Promise<GetParametersResult> {
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
     try {
-      const code = await this.readFile(filename, 'utf8');
+      const code = await filesystem.readFile(filePath, 'utf8');
       let defaultParameters: Record<string, unknown> = {};
 
       if (/^\s*export\s+/m.test(code)) {
@@ -196,54 +241,52 @@ try {
         jsonSchema,
       });
     } catch (error) {
-      const kernelError = await this.formatKernelError(error, filename);
-      return createKernelError(kernelError);
+      const kernelIssue = await this.formatKernelIssue(error, logger, relativeFilePath);
+      return createKernelError([kernelIssue]);
     }
   }
 
-  protected override async computeGeometry(
-    filename: string,
-    parameters: Record<string, unknown>,
-  ): Promise<ComputeGeometryResult> {
+  protected override async createGeometry(
+    { filePath, basePath, parameters }: CreateGeometryInput,
+    { filesystem, logger }: KernelRuntime,
+  ): Promise<CreateGeometryResult> {
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
     const startTime = performance.now();
-    this.log('Computing geometry from code', { operation: 'computeGeometry' });
+    logger.log('Computing geometry from code');
 
     try {
       // Read code from file
-      const code = await this.readFile(filename, 'utf8');
+      const code = await filesystem.readFile(filePath, 'utf8');
 
       let shapes: MainResultShapes;
       let defaultName: string | undefined;
 
       try {
         const runCodeStartTime = performance.now();
-        shapes = ((await this.runCode(code, parameters)) ?? []) as MainResultShapes;
+        shapes = ((await this.runCode(code, parameters, logger)) ?? []) as MainResultShapes;
         const runCodeEndTime = performance.now();
-        this.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`, { operation: 'computeGeometry' });
+        logger.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`);
 
         const defaultNameResult = await this.extractDefaultNameFromCode(code);
         defaultName = isKernelError(defaultNameResult) ? undefined : defaultNameResult.data;
       } catch (error) {
         const endTime = performance.now();
-        this.error(`Error occurred after ${endTime - startTime}ms`, {
-          data: error,
-          operation: 'computeGeometry',
-        });
-        const kernelError = await this.formatKernelError(error, filename);
-        return createKernelError(kernelError);
+        logger.error(`Error occurred after ${endTime - startTime}ms`, { data: error });
+        const kernelIssue = await this.formatKernelIssue(error, logger, relativeFilePath);
+        return createKernelError([kernelIssue]);
       }
 
       const renderStartTime = performance.now();
       const renderedShapes = renderOutput(
         shapes,
         (shapesArray) => {
-          this.shapesMemory['defaultGeometry'] = shapesArray;
+          this.shapesMemory['default'] = shapesArray;
           return shapesArray;
         },
         defaultName,
       );
       const renderEndTime = performance.now();
-      this.log(`Tessellation took ${renderEndTime - renderStartTime}ms`, { operation: 'computeGeometry' });
+      logger.log(`Tessellation took ${renderEndTime - renderStartTime}ms`);
 
       const gltfStartTime = performance.now();
       const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');
@@ -255,11 +298,9 @@ try {
 
       const gltfShapes = [];
       if (shapes3d.length > 0) {
-        const gltfBlob = await convertReplicadGeometriesToGltf(shapes3d, 'glb', false);
+        const gltfBlob = await convertReplicadGeometriesToGltf(shapes3d, 'glb');
         const gltfEndTime = performance.now();
-        this.log(`GLTF conversion took ${gltfEndTime - gltfStartTime}ms`, {
-          operation: 'computeGeometry',
-        });
+        logger.log(`GLTF conversion took ${gltfEndTime - gltfStartTime}ms`);
 
         const shapeGltf: GeometryGltf = {
           format: 'gltf',
@@ -269,37 +310,32 @@ try {
       }
 
       const totalTime = performance.now() - startTime;
-      this.log(`Total computeGeometry time: ${totalTime}ms`, { operation: 'computeGeometry' });
+      logger.log(`Total createGeometry time: ${totalTime}ms`);
 
-      return {
-        success: true,
-        data: [...gltfShapes, ...shapes2d],
-      };
+      return createKernelSuccess([...gltfShapes, ...shapes2d]);
     } catch (error) {
-      this.error('Error in computeGeometry', { data: error, operation: 'computeGeometry' });
-      const kernelError = await this.formatKernelError(error, filename);
-      return createKernelError(kernelError);
+      logger.error('Error in createGeometry', { data: error });
+      const kernelIssue = await this.formatKernelIssue(error, logger, relativeFilePath);
+      return createKernelError([kernelIssue]);
     }
   }
 
   protected override async exportGeometry(
-    fileType: ExportFormat,
-    geometryId = 'defaultGeometry',
-    meshConfig?: {
-      /** The mesh tolerance in millimeters for linear distances. */
-      linearTolerance: number;
-      /** The mesh tolerance in degrees for angular distances. */
-      angularTolerance: number;
-    },
+    { fileType, meshConfig }: ExportGeometryInput,
+    { logger }: KernelRuntime,
   ): Promise<ExportGeometryResult> {
+    const geometryId = 'default';
     const config = meshConfig ?? { linearTolerance: 0.01, angularTolerance: 30 };
     try {
       if (!this.shapesMemory[geometryId]) {
         // System error - no location needed
-        return createKernelError({
-          message: `Geometry ${geometryId} not computed yet`,
-          type: 'runtime',
-        });
+        return createKernelError([
+          {
+            message: `Geometry ${geometryId} not computed yet`,
+            type: 'runtime',
+            severity: 'error',
+          },
+        ]);
       }
 
       if (fileType === 'glb' || fileType === 'gltf') {
@@ -326,7 +362,7 @@ try {
         const gltfBlob = await convertReplicadGeometriesToGltf(temporaryShapes, fileType);
         return createKernelSuccess([
           {
-            blob: new Blob([gltfBlob]),
+            blob: new Blob([asBuffer(gltfBlob.buffer)]),
             name: fileType === 'glb' ? 'model.glb' : 'model.gltf',
           },
         ]);
@@ -352,13 +388,16 @@ try {
       return createKernelSuccess(result);
     } catch (error) {
       // Export errors don't have file context, so omit location
-      const kernelError = await this.formatKernelError(error);
-      return createKernelError({
-        message: kernelError.message,
-        stack: kernelError.stack,
-        stackFrames: kernelError.stackFrames,
-        type: kernelError.type,
-      });
+      const kernelIssue = await this.formatKernelIssue(error, logger);
+      return createKernelError([
+        {
+          message: kernelIssue.message,
+          stack: kernelIssue.stack,
+          stackFrames: kernelIssue.stackFrames,
+          type: kernelIssue.type,
+          severity: 'error',
+        },
+      ]);
     }
   }
 
@@ -384,43 +423,44 @@ return main(replicad, __inputParams || dp)
     return this.runInContextAsOc(contextCode, { __inputParams: parameters });
   }
 
-  private async runAsModule(code: string, parameters: Record<string, unknown>): Promise<unknown> {
+  private async runAsModule(code: string, parameters: Record<string, unknown>, logger: KernelLogger): Promise<unknown> {
     const startTime = performance.now();
     const module = await buildEsModule(code);
     const buildTime = performance.now();
-    this.log(`Module building took ${buildTime - startTime}ms`, { operation: 'runAsModule' });
+    logger.log(`Module building took ${buildTime - startTime}ms`);
 
     const execStartTime = performance.now();
     const result = module.default ? module.default(parameters) : module.main?.(replicad, parameters);
     const execEndTime = performance.now();
-    this.log(`Module execution took ${execEndTime - execStartTime}ms`, { operation: 'runAsModule' });
+    logger.log(`Module execution took ${execEndTime - execStartTime}ms`);
 
     return result;
   }
 
-  private async runCode(code: string, parameters: Record<string, unknown>): Promise<unknown> {
-    this.log('Starting runCode evaluation', { operation: 'runCode' });
+  private async runCode(code: string, parameters: Record<string, unknown>, logger: KernelLogger): Promise<unknown> {
+    logger.log('Starting runCode evaluation');
     const startTime = performance.now();
 
     let result;
     if (/^\s*export\s+/m.test(code)) {
-      this.log('Starting runAsModule', { operation: 'runCode' });
-      result = await this.runAsModule(code, parameters);
+      logger.log('Starting runAsModule');
+      result = await this.runAsModule(code, parameters, logger);
     } else {
-      this.log('Starting runAsFunction', { operation: 'runCode' });
+      logger.log('Starting runAsFunction');
       result = await this.runAsFunction(code, parameters);
     }
 
     const endTime = performance.now();
-    this.log(`Total runCode execution took ${endTime - startTime}ms`, { operation: 'runCode' });
+    logger.log(`Total runCode execution took ${endTime - startTime}ms`);
     return result;
   }
 
-  private async initializeOpenCascadeInstance(withExceptions: boolean): Promise<OpenCascadeInstance> {
+  private async initializeOpenCascadeInstance(
+    withExceptions: boolean,
+    logger: KernelLogger,
+  ): Promise<OpenCascadeInstance> {
     if (this.isInitializing) {
-      this.debug('Already initializing OpenCascade, returning existing promise', {
-        operation: 'initializeOpenCascadeInstance',
-      });
+      logger.debug('Already initializing OpenCascade, returning existing promise');
       if (!this.oc) {
         throw new Error('OpenCascade initialization in progress but oc is undefined');
       }
@@ -436,14 +476,14 @@ return main(replicad, __inputParams || dp)
 
       if (withExceptions) {
         if (!this.ocVersions.withExceptions) {
-          this.debug('Initializing OpenCascade with exceptions', { operation: 'initializeOpenCascadeInstance' });
+          logger.debug('Initializing OpenCascade with exceptions');
           this.ocVersions.withExceptions = initOpenCascadeWithExceptions();
         }
 
         this.oc = this.ocVersions.withExceptions;
       } else {
         if (!this.ocVersions.single) {
-          this.debug('Initializing OpenCascade without exceptions', { operation: 'initializeOpenCascadeInstance' });
+          logger.debug('Initializing OpenCascade without exceptions');
           this.ocVersions.single = initOpenCascade();
         }
 
@@ -452,12 +492,10 @@ return main(replicad, __inputParams || dp)
 
       const result = await this.oc;
       const endTime = performance.now();
-      this.debug(`OpenCascade initialized successfully in ${endTime - startTime}ms`, {
-        operation: 'initializeOpenCascadeInstance',
-      });
+      logger.debug(`OpenCascade initialized successfully in ${endTime - startTime}ms`);
       return result;
     } catch (error) {
-      this.error('Failed to initialize OpenCascade', { data: error, operation: 'initializeOpenCascadeInstance' });
+      logger.error('Failed to initialize OpenCascade', { data: error });
       throw error;
     } finally {
       this.isInitializing = false;
@@ -467,6 +505,7 @@ return main(replicad, __inputParams || dp)
   private formatException(
     oc: OpenCascadeInstanceWithExceptions,
     error: unknown,
+    logger: KernelLogger,
   ): { error: boolean; message: string; stack?: string } {
     let message = 'error';
 
@@ -476,7 +515,7 @@ return main(replicad, __inputParams || dp)
       message = errorData.GetMessageString();
     } else {
       message = error instanceof Error ? error.message : 'Unknown error';
-      this.error('Error in formatException', { data: error, operation: 'formatException' });
+      logger.error('Error in formatException', { data: error });
     }
 
     return {
@@ -486,8 +525,8 @@ return main(replicad, __inputParams || dp)
     };
   }
 
-  private async formatKernelError(error: unknown, fileName?: string): Promise<KernelError> {
-    this.debug('Formatting kernel error', { data: error, operation: 'formatKernelError' });
+  private async formatKernelIssue(error: unknown, logger: KernelLogger, fileName?: string): Promise<KernelIssue> {
+    logger.debug('Formatting kernel error', { data: error });
     let message = 'Unknown error occurred';
     let stack: string | undefined;
     let kernelStackFrames: KernelStackFrame[] = [];
@@ -499,7 +538,7 @@ return main(replicad, __inputParams || dp)
       try {
         const ocInstance = await this.oc;
         if (ocInstance) {
-          const exceptionResult = this.formatException(ocInstance as OpenCascadeInstanceWithExceptions, error);
+          const exceptionResult = this.formatException(ocInstance as OpenCascadeInstanceWithExceptions, error, logger);
           message = exceptionResult.message;
           type = 'kernel';
         } else {
@@ -507,7 +546,7 @@ return main(replicad, __inputParams || dp)
           type = 'kernel';
         }
       } catch (ocError) {
-        this.warn('Failed to format OpenCascade exception', { data: ocError, operation: 'formatKernelError' });
+        logger.warn('Failed to format OpenCascade exception', { data: ocError });
         message = `Kernel error ${error}`;
         type = 'kernel';
       }
@@ -532,7 +571,7 @@ return main(replicad, __inputParams || dp)
         startLineNumber = userFrame?.lineNumber ?? 0;
         startColumn = userFrame?.columnNumber ?? 0;
       } catch (parseError) {
-        this.warn('Failed to parse error stack', { data: parseError, operation: 'formatKernelError' });
+        logger.warn('Failed to parse error stack', { data: parseError });
       }
     } else if (typeof error === 'string') {
       message = error;
@@ -548,6 +587,7 @@ return main(replicad, __inputParams || dp)
       stack,
       stackFrames: kernelStackFrames.length > 0 ? kernelStackFrames : undefined,
       type,
+      severity: 'error' as const,
     };
   }
 
@@ -572,7 +612,8 @@ return main(replicad, __inputParams || dp)
   }
 }
 
-const service = new ReplicadWorker();
-expose(service);
+const worker = new ReplicadWorker();
+const service = wrapForComlink(worker);
+exposeWorker(service);
 
 export type ReplicadWorkerInterface = typeof service;

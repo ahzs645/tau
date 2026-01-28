@@ -1,6 +1,6 @@
 import { assign, assertEvent, setup, sendTo, enqueueActions } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { CodeError, Geometry, ExportFormat, KernelError, GeometryFile } from '@taucad/types';
+import type { CodeIssue, Geometry, ExportFormat, KernelIssue, GeometryFile } from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { kernelMachine } from '#machines/kernel.machine.js';
@@ -8,6 +8,9 @@ import type { KernelEventExternal } from '#machines/kernel.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
+
+// Default render timeout in milliseconds (30 seconds)
+const defaultRenderTimeout = 30_000;
 
 // Context type for CAD machine
 export type CadContext = {
@@ -19,8 +22,8 @@ export type CadContext = {
   };
   defaultParameters: Record<string, unknown>;
   geometries: Geometry[];
-  kernelErrors: Map<string, KernelError[]>;
-  codeErrors: CodeError[];
+  kernelIssues: Map<string, KernelIssue[]>;
+  codeIssues: CodeIssue[];
   kernelRef: ActorRefFrom<typeof kernelMachine>;
   exportedBlob: Blob | undefined;
   shouldInitializeKernelOnStart: boolean;
@@ -30,6 +33,7 @@ export type CadContext = {
   logActorRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   jsonSchema?: JSONSchema7;
+  renderTimeout: number; // Timeout in milliseconds for render operations (0 = disabled)
 };
 
 // Define the types of events the machine can receive
@@ -38,14 +42,15 @@ type CadEvent =
   | { type: 'initializeModel'; file: GeometryFile; parameters: Record<string, unknown> }
   | { type: 'setFile'; file: GeometryFile }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
-  | { type: 'setCodeErrors'; errors: CadContext['codeErrors'] }
+  | { type: 'setCodeIssues'; errors: CadContext['codeIssues'] }
   | { type: 'exportGeometry'; format: ExportFormat }
+  | { type: 'setRenderTimeout'; timeout: number }
   | KernelEventExternal;
 
 type CadEmitted =
   | { type: 'geometryEvaluated'; geometries: Geometry[] }
   | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
-  | { type: 'exportFailed'; errors: KernelError[] };
+  | { type: 'exportFailed'; errors: KernelIssue[] };
 
 type CadInput = {
   shouldInitializeKernelOnStart: boolean;
@@ -76,7 +81,7 @@ export const cadMachine = setup({
     emitted: {} as CadEmitted,
   },
   actions: {
-    computeGeometry: sendTo(
+    createGeometry: sendTo(
       ({ context }) => context.kernelRef,
       ({ context }) => {
         if (!context.file) {
@@ -84,7 +89,7 @@ export const cadMachine = setup({
         }
 
         return {
-          type: 'computeGeometry',
+          type: 'createGeometry',
           file: context.file,
           parameters: context.parameters,
         };
@@ -119,6 +124,16 @@ export const cadMachine = setup({
         assertEvent(event, 'setFile');
         return event.file;
       },
+      // Clear stale errors atomically when file changes.
+      // Old errors become invalid when content changes, and new errors
+      // will be set by kernel processing or Monaco validation.
+      codeIssues: () => [],
+      kernelIssues({ context, event }) {
+        assertEvent(event, 'setFile');
+        const newErrorsMap = new Map(context.kernelIssues);
+        newErrorsMap.delete(event.file.filename);
+        return newErrorsMap;
+      },
     }),
     setParameters: assign({
       parameters({ event }) {
@@ -129,20 +144,25 @@ export const cadMachine = setup({
     setGeometries: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryComputed');
 
-      // Clear error for the current file when geometry is successfully computed
+      // Handle warnings from successful computation
       const currentFileName = context.file?.filename;
 
       enqueue.assign({
         geometries: event.geometries,
-        kernelErrors({ context }) {
-          if (currentFileName && context.kernelErrors.has(currentFileName)) {
-            const newErrors = new Map(context.kernelErrors);
-            newErrors.delete(currentFileName);
-
-            return newErrors;
+        kernelIssues({ context }) {
+          if (!currentFileName) {
+            return context.kernelIssues;
           }
 
-          return context.kernelErrors;
+          const newIssues = new Map(context.kernelIssues);
+          // Set warnings if there are any, otherwise clear the entry for this file
+          if (event.issues.length > 0) {
+            newIssues.set(currentFileName, event.issues);
+          } else {
+            newIssues.delete(currentFileName);
+          }
+
+          return newIssues;
         },
       });
       enqueue.emit({
@@ -160,9 +180,9 @@ export const cadMachine = setup({
         });
       }
     }),
-    setKernelError: assign({
-      kernelErrors({ context, event }) {
-        assertEvent(event, 'kernelError');
+    setKernelIssue: assign({
+      kernelIssues({ context, event }) {
+        assertEvent(event, 'kernelIssue');
 
         const { errors } = event;
 
@@ -171,21 +191,46 @@ export const cadMachine = setup({
         // (e.g., "New Folder/garbage-3.kcl" not just "garbage-3.kcl")
         const currentFilePath = context.file?.filename;
         if (!currentFilePath) {
-          return context.kernelErrors;
+          return context.kernelIssues;
         }
 
         // Replace all errors for the current file with the new errors
         // This ensures old errors are cleared when new compilation happens
-        const newErrorsMap = new Map(context.kernelErrors);
+        const newErrorsMap = new Map(context.kernelIssues);
         newErrorsMap.set(currentFilePath, errors);
 
         return newErrorsMap;
       },
     }),
-    setCodeErrors: assign({
-      codeErrors({ event }) {
-        assertEvent(event, 'setCodeErrors');
+    setCodeIssues: assign({
+      codeIssues({ event }) {
+        assertEvent(event, 'setCodeIssues');
         return event.errors;
+      },
+    }),
+    setRenderTimeout: assign({
+      renderTimeout({ event }) {
+        assertEvent(event, 'setRenderTimeout');
+        return event.timeout;
+      },
+    }),
+    setTimeoutError: assign({
+      kernelIssues({ context }) {
+        const currentFilePath = context.file?.filename;
+        if (!currentFilePath) {
+          return context.kernelIssues;
+        }
+
+        const newErrorsMap = new Map(context.kernelIssues);
+        newErrorsMap.set(currentFilePath, [
+          {
+            message: 'Render timed out. The model may be too complex or contain an infinite loop.',
+            location: undefined,
+            severity: 'error',
+          },
+        ]);
+
+        return newErrorsMap;
       },
     }),
     setDefaultParameters: assign({
@@ -206,15 +251,15 @@ export const cadMachine = setup({
 
       enqueue.assign({
         exportedBlob: event.blob,
-        kernelErrors({ context }) {
-          if (currentFileName && context.kernelErrors.has(currentFileName)) {
-            const newErrors = new Map(context.kernelErrors);
+        kernelIssues({ context }) {
+          if (currentFileName && context.kernelIssues.has(currentFileName)) {
+            const newErrors = new Map(context.kernelIssues);
             newErrors.delete(currentFileName);
 
             return newErrors;
           }
 
-          return context.kernelErrors;
+          return context.kernelIssues;
         },
       });
       enqueue.emit({
@@ -250,11 +295,11 @@ export const cadMachine = setup({
       enqueue.assign({
         file: event.file,
         parameters: event.parameters,
-        codeErrors: [],
+        codeIssues: [],
         geometries: [],
         exportedBlob: undefined,
         jsonSchema: undefined,
-        // Note: We don't clear kernelErrors here - they persist per-file
+        // Note: We don't clear kernelIssues here - they persist per-file
         // so when switching back to a file with an error, it will still show
       });
     }),
@@ -273,6 +318,8 @@ export const cadMachine = setup({
   delays: {
     fileDebounce: 500,
     parameterDebounce: 50,
+    // Dynamic render timeout based on context (0 = disabled)
+    renderTimeout: ({ context }) => (context.renderTimeout > 0 ? context.renderTimeout : Infinity),
   },
 }).createMachine({
   id: 'cad',
@@ -290,8 +337,8 @@ export const cadMachine = setup({
     parameters: {},
     defaultParameters: {},
     geometries: [],
-    kernelErrors: new Map(),
-    codeErrors: [],
+    kernelIssues: new Map(),
+    codeIssues: [],
     kernelRef: spawn(kernelMachine, {
       input: { fileManagerRef: input.fileManagerRef },
     }),
@@ -303,6 +350,7 @@ export const cadMachine = setup({
     logActorRef: input.logRef,
     fileManagerRef: input.fileManagerRef,
     jsonSchema: undefined,
+    renderTimeout: defaultRenderTimeout,
   }),
   initial: 'booting',
   states: {
@@ -342,28 +390,41 @@ export const cadMachine = setup({
             actions: assign({ isKernelInitialized: true, isKernelInitializing: false }),
           },
         ],
-        kernelError: {
+        kernelIssue: {
           target: 'error',
-          actions: 'setKernelError',
+          actions: 'setKernelIssue',
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        // Allow file edits during booting - store them for when kernel is ready
+        setFile: {
+          actions: 'setFile',
+        },
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
         },
       },
     },
 
     // The initialization state is used when a new model is loaded.
     initializing: {
-      entry: 'computeGeometry',
+      entry: 'createGeometry',
+      after: {
+        renderTimeout: {
+          target: 'error',
+          actions: 'setTimeoutError',
+        },
+      },
       on: {
         initializeModel: {
           target: 'initializing',
           actions: 'initializeModel',
           reenter: true, // When another model is loaded whilst another is being initialized, reenter the state to begin computing the new model
         },
-        kernelError: {
+        kernelIssue: {
           target: 'error',
-          actions: 'setKernelError',
+          actions: 'setKernelIssue',
         },
         geometryComputed: {
           target: 'ready',
@@ -374,6 +435,23 @@ export const cadMachine = setup({
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        // Allow file edits during initialization - cancels current computation
+        setFile: [
+          {
+            // File switch - render immediately without debounce
+            guard: 'isDifferentFile',
+            target: 'rendering',
+            actions: 'setFile',
+          },
+          {
+            // Same file content change - debounce
+            target: 'bufferingFile',
+            actions: 'setFile',
+          },
+        ],
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
         },
       },
     },
@@ -400,8 +478,8 @@ export const cadMachine = setup({
           target: 'bufferingParameters',
           actions: 'setParameters',
         },
-        setCodeErrors: {
-          actions: 'setCodeErrors',
+        setCodeIssues: {
+          actions: 'setCodeIssues',
         },
         exportGeometry: {
           actions: 'exportGeometry',
@@ -414,6 +492,9 @@ export const cadMachine = setup({
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
         },
       },
     },
@@ -458,6 +539,9 @@ export const cadMachine = setup({
         kernelLog: {
           actions: 'sendKernelLogs',
         },
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
+        },
       },
     },
     // The bufferingParameters state debounces rapid parameter changes (50ms)
@@ -493,10 +577,19 @@ export const cadMachine = setup({
         kernelLog: {
           actions: 'sendKernelLogs',
         },
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
+        },
       },
     },
     rendering: {
-      entry: 'computeGeometry',
+      entry: 'createGeometry',
+      after: {
+        renderTimeout: {
+          target: 'error',
+          actions: 'setTimeoutError',
+        },
+      },
       on: {
         initializeModel: {
           target: 'initializing',
@@ -509,9 +602,9 @@ export const cadMachine = setup({
         parametersParsed: {
           actions: 'setDefaultParameters',
         },
-        kernelError: {
+        kernelIssue: {
           target: 'error',
-          actions: 'setKernelError',
+          actions: 'setKernelIssue',
         },
         setFile: [
           {
@@ -531,8 +624,8 @@ export const cadMachine = setup({
           actions: 'setParameters',
           target: 'bufferingParameters',
         },
-        setCodeErrors: {
-          actions: 'setCodeErrors',
+        setCodeIssues: {
+          actions: 'setCodeIssues',
         },
         exportGeometry: {
           actions: 'exportGeometry',
@@ -542,6 +635,9 @@ export const cadMachine = setup({
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
         },
       },
     },
@@ -568,8 +664,8 @@ export const cadMachine = setup({
           target: 'bufferingParameters',
           actions: 'setParameters',
         },
-        setCodeErrors: {
-          actions: 'setCodeErrors',
+        setCodeIssues: {
+          actions: 'setCodeIssues',
         },
         exportGeometry: {
           actions: 'exportGeometry',
@@ -582,6 +678,9 @@ export const cadMachine = setup({
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        setRenderTimeout: {
+          actions: 'setRenderTimeout',
         },
       },
     },

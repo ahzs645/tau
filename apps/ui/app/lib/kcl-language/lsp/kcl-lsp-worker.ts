@@ -30,7 +30,7 @@ const log = createKclLogger('LSP Worker');
  * FileSystemBridge provides filesystem access to the WASM LSP by
  * forwarding requests to the main thread where the fileManager lives.
  */
-type PendingReadRequest = { resolve: (data: Uint8Array) => void; reject: (error: Error) => void };
+type PendingReadRequest = { resolve: (data: Uint8Array<ArrayBuffer>) => void; reject: (error: Error) => void };
 type PendingExistsRequest = { resolve: (exists: boolean) => void; reject: (error: Error) => void };
 // The inner resolve is called with files[], but it's wrapped in getAllFiles to JSON.stringify
 type PendingListRequest = { resolve: (files: string[]) => void; reject: (error: Error) => void };
@@ -44,7 +44,7 @@ class FileSystemBridge {
   /**
    * Called from WASM to read a file.
    */
-  public async readFile(path: string): Promise<Uint8Array> {
+  public async readFile(path: string): Promise<Uint8Array<ArrayBuffer>> {
     log.debug('FileSystem.readFile called:', path);
     const requestId = this.nextRequestId++;
 
@@ -170,7 +170,7 @@ class FileSystemBridge {
   }
 }
 
-const intoServer = new Queue<Uint8Array>();
+const intoServer = new Queue<Uint8Array<ArrayBuffer>>();
 const fromServer = new StreamDemuxer();
 const fileSystemBridge = new FileSystemBridge();
 let isWasmReady = false;
@@ -254,7 +254,7 @@ async function handleInitEvent(eventData: KclLspWorkerOptions): Promise<void> {
   }
 }
 
-async function handleCallEvent(data: Uint8Array): Promise<void> {
+async function handleCallEvent(data: Uint8Array<ArrayBuffer>): Promise<void> {
   const json = decodeMessage<JSONRPCRequest>(data);
   log.debug('Call event received:', json.method, 'id:', json.id);
 
@@ -306,7 +306,7 @@ function handleMessage(event: MessageEvent): void {
     }
 
     case lspWorkerEventType.call: {
-      void handleCallEvent(eventData as Uint8Array);
+      void handleCallEvent(eventData as Uint8Array<ArrayBuffer>);
       break;
     }
 

@@ -47,6 +47,7 @@ export function ChatEditorLayoutTrigger({
           <KeyShortcut variant="tooltip">{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
         </div>
       }
+      tooltipSide="left"
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />

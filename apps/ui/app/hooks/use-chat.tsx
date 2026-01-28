@@ -5,6 +5,7 @@
  * - useChat from AI SDK is the source of truth for messages
  * - chatPersistenceMachine handles message persistence with debouncing
  * - draftMachine handles drafts/edits with direct persistence
+ * - useChatRpcConnection handles RPC execution via Socket.IO
  */
 
 import { useChat } from '@ai-sdk/react';
@@ -12,19 +13,18 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { fromPromise } from 'xstate';
 import { createContext, useContext, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { MyUIMessage } from '@taucad/chat';
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
+import { DefaultChatTransport } from 'ai';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { idPrefix } from '@taucad/types/constants';
+import type { ChatError } from '@taucad/types';
 import { draftMachine } from '#hooks/draft.machine.js';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
 import { useChats } from '#hooks/use-chats.js';
 import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
-import type { CreateOnToolCallFn } from '#hooks/use-chat-tools.js';
+import { parseErrorForPersistence } from '#utils/error.utils.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
-type UseChatArgs = NonNullable<Parameters<typeof useChat<MyUIMessage>>[0]>;
-type ChatProviderValue = Omit<UseChatArgs, 'onFinish' | 'onError' | 'onResponse' | 'id' | 'onToolCall'> & {
-  createOnToolCall?: CreateOnToolCallFn;
-};
 
 // Single context for all chat state
 type ChatContextValue = {
@@ -34,6 +34,7 @@ type ChatContextValue = {
   isLoadingChat: boolean;
   queuePersist: (messages: MyUIMessage[]) => void;
   draftActorRef: ReturnType<typeof useActorRef<typeof draftMachine>>;
+  persistenceActorRef: ReturnType<typeof useActorRef<typeof chatPersistenceMachine>>;
 };
 
 const ChatContext = createContext<ChatContextValue | undefined>(undefined);
@@ -43,19 +44,16 @@ export function ChatProvider({
   children,
   resourceId,
   chatId: activeChatId,
-  value,
 }: {
   readonly children: React.ReactNode;
   readonly resourceId?: string;
   readonly chatId?: string;
-  readonly value?: ChatProviderValue;
 }): React.JSX.Element {
   const { getChat, updateChat } = useChats(resourceId ?? '');
 
   // Refs for functions that actors need access to (set after useChat is created)
   const setMessagesRef = useRef<UseChatReturn['setMessages'] | undefined>(undefined);
   const regenerateRef = useRef<UseChatReturn['regenerate'] | undefined>(undefined);
-  const addToolOutputRef = useRef<UseChatReturn['addToolOutput'] | undefined>(undefined);
   const initializeDraftRef = useRef<((chat: NonNullable<Awaited<ReturnType<typeof getChat>>>) => void) | undefined>(
     undefined,
   );
@@ -95,6 +93,7 @@ export function ChatProvider({
 
   // Create persistence machine with provided actors
   // Actors handle the complete load flow: fetch → setMessages → initialize draft
+  // The machine's onDone action sets persistedError from the returned chat
   const persistenceActorRef = useActorRef(
     chatPersistenceMachine.provide({
       actors: {
@@ -118,10 +117,17 @@ export function ChatProvider({
             setMessagesRef.current?.([]);
           }
 
+          // Return the chat - the machine's onDone action will extract persistedError
           return loadedChat;
         }),
         persistMessagesActor: fromPromise(async ({ input }) => {
           await updateChat(input.chatId, { messages: input.messages }, { ignoreKeys: ['messages'] });
+        }),
+        persistErrorActor: fromPromise(async ({ input }) => {
+          await updateChat(input.chatId, { error: input.error }, { ignoreKeys: ['error'] });
+        }),
+        clearErrorActor: fromPromise(async ({ input }) => {
+          await updateChat(input.chatId, { error: undefined }, { ignoreKeys: ['error'] });
         }),
       },
     }),
@@ -137,45 +143,26 @@ export function ChatProvider({
   // Track loading state from persistence machine
   const isLoadingChat = useSelector(persistenceActorRef, (state) => state.context.isLoadingChat);
 
-  // Create wrapped onToolCall that injects addToolOutput via ref
-  // This allows the tool handler to access addToolOutput without circular dependency
-  const wrappedOnToolCall = useMemo(() => {
-    if (!value?.createOnToolCall) {
-      return undefined;
-    }
-
-    // Create the onToolCall callback with a proxy that uses the ref
-    return value.createOnToolCall({
-      async addToolOutput(parameters) {
-        if (addToolOutputRef.current) {
-          return addToolOutputRef.current(parameters);
-        }
-      },
-    });
-  }, [value]);
-
   // Initialize useChat with callbacks for event-driven persistence
+  // Tool execution is handled via WebSocket, not onToolCall/sendAutomaticallyWhen
   const chat = useChat<MyUIMessage>({
-    ...value,
     id: activeChatId,
     transport: new DefaultChatTransport({
       api: `${ENV.TAU_API_URL}/v1/chat`,
       credentials: 'include',
     }),
-    // Automatically submit tool outputs when assistant message is complete with tool calls
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-    onToolCall: wrappedOnToolCall,
+    generateId: () => generatePrefixedId(idPrefix.message),
     onFinish({ messages }) {
       // Persist when AI finishes - machine guards against persisting during load
       persistenceActorRef.send({ type: 'queuePersist', messages });
     },
     onError(error) {
       persistenceActorRef.send({ type: 'handleError', error });
+      // Parse and persist the error for display after page reload
+      const normalizedError = parseErrorForPersistence(error);
+      persistenceActorRef.send({ type: 'setPersistedError', error: normalizedError });
     },
   });
-
-  // Update addToolOutput ref so tool handlers can access it
-  addToolOutputRef.current = chat.addToolOutput;
 
   // Update refs so actors can access current functions
   setMessagesRef.current = chat.setMessages;
@@ -215,15 +202,19 @@ export function ChatProvider({
       isLoadingChat,
       queuePersist,
       draftActorRef,
+      persistenceActorRef,
     }),
-    [chat, activeChatId, resourceId, isLoadingChat, queuePersist, draftActorRef],
+    [chat, activeChatId, resourceId, isLoadingChat, queuePersist, draftActorRef, persistenceActorRef],
   );
 
   return <ChatContext.Provider value={contextValue}>{children}</ChatContext.Provider>;
 }
 
-// Internal hook to get chat context
-function useChatContext(): ChatContextValue {
+/**
+ * Hook to get the chat context values.
+ * Returns activeChatId, isLoadingChat, and other context values.
+ */
+export function useChatContext(): ChatContextValue {
   const context = useContext(ChatContext);
   if (!context) {
     throw new Error('useChatContext must be used within a ChatProvider');
@@ -239,6 +230,8 @@ type CombinedChatState = {
   messageOrder: string[];
   status: UseChatReturn['status'];
   error: Error | undefined;
+  // Persisted error - survives page reload (from chat entity)
+  persistedError: ChatError | undefined;
   isLoading: boolean;
   // Draft state from machine
   draftText: string;
@@ -269,17 +262,18 @@ function getMessagesById(messages: MyUIMessage[]): Map<string, MyUIMessage> {
 
 /**
  * Primary hook for reading chat state.
- * Combines AI SDK useChat state with draft machine state.
+ * Combines AI SDK useChat state with draft machine state and persistence state.
  */
 export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T {
-  const { chat, draftActorRef } = useChatContext();
+  const { chat, draftActorRef, persistenceActorRef } = useChatContext();
   const draftContext = useSelector(draftActorRef, (state) => state.context);
+  const persistedError = useSelector(persistenceActorRef, (state) => state.context.persistedError);
 
   // Use cached messagesById based on messages array identity
   const messagesById = getMessagesById(chat.messages);
   const messageOrder = useMemo(() => chat.messages.map((m) => m.id), [chat.messages]);
 
-  // Combine chat state with draft state
+  // Combine chat state with draft state and persistence state
   const combinedState = useMemo<CombinedChatState>(
     () => ({
       messages: chat.messages,
@@ -287,6 +281,7 @@ export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T
       messageOrder,
       status: chat.status,
       error: chat.error,
+      persistedError,
       isLoading: chat.status === 'streaming',
       // Draft state
       draftText: draftContext.draftText,
@@ -297,7 +292,7 @@ export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T
       editDraftText: draftContext.editDraftText,
       editDraftImages: draftContext.editDraftImages,
     }),
-    [chat.messages, messagesById, messageOrder, chat.status, chat.error, draftContext],
+    [chat.messages, messagesById, messageOrder, chat.status, chat.error, persistedError, draftContext],
   );
 
   return selector(combinedState);
@@ -323,7 +318,7 @@ export function useChatActions(): {
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
 } {
-  const { chat, queuePersist, draftActorRef } = useChatContext();
+  const { chat, queuePersist, draftActorRef, persistenceActorRef } = useChatContext();
 
   return useMemo(
     () => ({
@@ -332,12 +327,17 @@ export function useChatActions(): {
         // Clear draft when sending
         draftActorRef.send({ type: 'clearDraft' });
 
+        // Clear any persisted error when starting a new request
+        persistenceActorRef.send({ type: 'clearPersistedError' });
+
         // Persist immediately with user message included
         queuePersist([...chat.messages, message as MyUIMessage]);
 
         void chat.sendMessage(message);
       },
       regenerate() {
+        // Clear any persisted error when retrying
+        persistenceActorRef.send({ type: 'clearPersistedError' });
         void chat.regenerate();
       },
       stop() {
@@ -442,6 +442,6 @@ export function useChatActions(): {
         void chat.regenerate();
       },
     }),
-    [chat, draftActorRef, queuePersist],
+    [chat, draftActorRef, persistenceActorRef, queuePersist],
   );
 }

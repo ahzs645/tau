@@ -6,7 +6,10 @@ import type * as Monaco from 'monaco-editor';
 import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import type * as LSP from 'vscode-languageserver-protocol';
 import type { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
+import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 import { monacoToLspRange, lspToMonacoRange } from '#lib/kcl-language/lsp/utils/position-utils.js';
+
+const log = createKclLogger('Code Action Provider');
 
 /**
  * Create a Monaco code action provider that uses the LSP client.
@@ -22,82 +25,88 @@ export function createCodeActionProvider(
       context: Monaco.languages.CodeActionContext,
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.CodeActionList | undefined> {
-      const diagnostics: LSP.Diagnostic[] = context.markers.map((marker) => ({
-        range: {
-          start: { line: marker.startLineNumber - 1, character: marker.startColumn - 1 },
-          end: { line: marker.endLineNumber - 1, character: marker.endColumn - 1 },
-        },
-        message: marker.message,
-        severity: markerSeverityToLsp(monaco, marker.severity),
-        source: marker.source ?? undefined,
-        code:
-          typeof marker.code === 'string'
-            ? marker.code
-            : typeof marker.code === 'number'
-              ? String(marker.code)
-              : undefined,
-      }));
+      // Error Resilience: LSP errors should not break the editor
+      try {
+        const diagnostics: LSP.Diagnostic[] = context.markers.map((marker) => ({
+          range: {
+            start: { line: marker.startLineNumber - 1, character: marker.startColumn - 1 },
+            end: { line: marker.endLineNumber - 1, character: marker.endColumn - 1 },
+          },
+          message: marker.message,
+          severity: markerSeverityToLsp(monaco, marker.severity),
+          source: marker.source ?? undefined,
+          code:
+            typeof marker.code === 'string'
+              ? marker.code
+              : typeof marker.code === 'number'
+                ? String(marker.code)
+                : undefined,
+        }));
 
-      const result = await client.textDocumentCodeAction({
-        textDocument: { uri: model.uri.toString() },
-        range: monacoToLspRange(range),
-        context: {
-          diagnostics,
-          only: context.only ? [context.only] : undefined,
-        },
-      });
+        const result = await client.textDocumentCodeAction({
+          textDocument: { uri: model.uri.toString() },
+          range: monacoToLspRange(range),
+          context: {
+            diagnostics,
+            only: context.only ? [context.only] : undefined,
+          },
+        });
 
-      if (!result) {
-        return undefined;
-      }
-
-      const actions: Monaco.languages.CodeAction[] = result.map((item) => {
-        if ('command' in item && !('edit' in item)) {
-          // Command
-          const command = item as LSP.Command;
-
-          return {
-            title: command.title,
-            command: {
-              id: command.command,
-              title: command.title,
-              arguments: command.arguments,
-            },
-          };
+        if (!result) {
+          return undefined;
         }
 
-        // CodeAction
-        const codeAction = item;
+        const actions: Monaco.languages.CodeAction[] = result.map((item) => {
+          if ('command' in item && !('edit' in item)) {
+            // Command
+            const command = item as LSP.Command;
+
+            return {
+              title: command.title,
+              command: {
+                id: command.command,
+                title: command.title,
+                arguments: command.arguments,
+              },
+            };
+          }
+
+          // CodeAction
+          const codeAction = item;
+
+          return {
+            title: codeAction.title,
+            kind: codeAction.kind,
+            diagnostics: codeAction.diagnostics?.map((diagnostic) => ({
+              severity: lspSeverityToMarker(monaco, diagnostic.severity),
+              startLineNumber: diagnostic.range.start.line + 1,
+              startColumn: diagnostic.range.start.character + 1,
+              endLineNumber: diagnostic.range.end.line + 1,
+              endColumn: diagnostic.range.end.character + 1,
+              message: diagnostic.message,
+            })),
+            isPreferred: codeAction.isPreferred,
+            edit: codeAction.edit ? convertWorkspaceEdit(monaco, codeAction.edit) : undefined,
+            command: codeAction.command
+              ? {
+                  id: codeAction.command.command,
+                  title: codeAction.command.title,
+                  arguments: codeAction.command.arguments,
+                }
+              : undefined,
+          };
+        });
 
         return {
-          title: codeAction.title,
-          kind: codeAction.kind,
-          diagnostics: codeAction.diagnostics?.map((diagnostic) => ({
-            severity: lspSeverityToMarker(monaco, diagnostic.severity),
-            startLineNumber: diagnostic.range.start.line + 1,
-            startColumn: diagnostic.range.start.character + 1,
-            endLineNumber: diagnostic.range.end.line + 1,
-            endColumn: diagnostic.range.end.character + 1,
-            message: diagnostic.message,
-          })),
-          isPreferred: codeAction.isPreferred,
-          edit: codeAction.edit ? convertWorkspaceEdit(monaco, codeAction.edit) : undefined,
-          command: codeAction.command
-            ? {
-                id: codeAction.command.command,
-                title: codeAction.command.title,
-                arguments: codeAction.command.arguments,
-              }
-            : undefined,
+          actions,
+          dispose() {
+            // Empty dispose
+          },
         };
-      });
-
-      return {
-        actions,
-        dispose() {
-          // Empty dispose
-        },
-      };
+      } catch (error) {
+        log.debug('Code action error (non-fatal):', error);
+        return undefined;
+      }
     },
   };
 }

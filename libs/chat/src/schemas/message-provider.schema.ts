@@ -1,4 +1,4 @@
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import type { JSONValue } from '@taucad/types';
 
 export const jsonValueSchema: z.ZodType<JSONValue> = z.lazy(() =>

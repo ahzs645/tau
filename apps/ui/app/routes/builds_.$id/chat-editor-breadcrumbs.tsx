@@ -56,7 +56,7 @@ export function ChatEditorBreadcrumbs(): ReactNode {
   // Handle file selection - opens file in editor
   const handleFileSelect = useCallback(
     (path: string) => {
-      fileExplorerRef.send({ type: 'openFile', path });
+      fileExplorerRef.send({ type: 'openFile', path, source: 'user' });
     },
     [fileExplorerRef],
   );

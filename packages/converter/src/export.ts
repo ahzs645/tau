@@ -38,7 +38,7 @@ export const supportedExportFormats = Object.keys(exportConfigs) as SupportedExp
  * @param format - The target export format.
  * @returns A promise that resolves to an array of exported files.
  */
-export const exportFiles = async (glbData: Uint8Array, format: SupportedExportFormat): Promise<File[]> => {
+export const exportFiles = async (glbData: Uint8Array<ArrayBuffer>, format: SupportedExportFormat): Promise<File[]> => {
   const config = exportConfigs[format];
 
   try {

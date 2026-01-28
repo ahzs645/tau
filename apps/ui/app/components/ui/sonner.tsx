@@ -1,10 +1,10 @@
-import { useTheme } from 'remix-themes';
 import { Toaster as Sonner } from 'sonner';
+import { useTheme } from '#hooks/use-theme.js';
 
 type ToasterProperties = React.ComponentProps<typeof Sonner>;
 
 function Toaster({ ...properties }: ToasterProperties): React.JSX.Element {
-  const [theme] = useTheme();
+  const { theme } = useTheme();
 
   return (
     <Sonner

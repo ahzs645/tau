@@ -24,7 +24,7 @@ export const createNodeIo = async (): Promise<NodeIO> => {
 /**
  * Convert GLB data to gltf-transform Document
  */
-export const glbToDocument = async (glbData: Uint8Array): Promise<Document> => {
+export const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<Document> => {
   const io = await createNodeIo();
   return io.readBinary(glbData);
 };
@@ -32,7 +32,7 @@ export const glbToDocument = async (glbData: Uint8Array): Promise<Document> => {
 /**
  * Get inspect report from GLB data
  */
-export const getInspectReport = async (glbData: Uint8Array): Promise<InspectReport> => {
+export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promise<InspectReport> => {
   const document = await glbToDocument(glbData);
   return inspect(document);
 };
@@ -40,7 +40,7 @@ export const getInspectReport = async (glbData: Uint8Array): Promise<InspectRepo
 /**
  * Validate that GLB data is properly formatted.
  */
-export const validateGlbData = (glb: Uint8Array): void => {
+export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
   if (glb.length === 0) {
     throw new Error('GLB data cannot be empty');
   }
@@ -180,7 +180,7 @@ export type GltfNodeInfo = {
 /**
  * Analyze GLTF Document structure and return scene hierarchy
  */
-export const getDocumentStructure = async (glbData: Uint8Array): Promise<GltfSceneStructure> => {
+export const getDocumentStructure = async (glbData: Uint8Array<ArrayBuffer>): Promise<GltfSceneStructure> => {
   const document = await glbToDocument(glbData);
   const root = document.getRoot();
   const scene = root.listScenes()[0];

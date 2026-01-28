@@ -1,30 +1,30 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { openai } from '@ai-sdk/openai';
-import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { createSupervisor } from '@langchain/langgraph-supervisor';
+import { createAgent } from 'langchain';
+import type { ReactAgent } from 'langchain';
 import { streamText } from 'ai';
 import type { ModelMessage } from 'ai';
-import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
-import { ConfigService } from '@nestjs/config';
 import type { KernelProvider } from '@taucad/types';
 import type { ToolSelection } from '@taucad/chat';
-import { toolName } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';
+import { usageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
+import { messageLoggingMiddleware } from '#api/chat/middleware/message-logging.middleware.js';
+import { toolErrorHandlerMiddleware } from '#api/chat/middleware/tool-error-handler.middleware.js';
+import { createCachedSystemMessage } from '#api/chat/utils/create-cached-system-message.js';
 import { ToolService } from '#api/tools/tool.service.js';
-import { buildNameGenerationSystemPrompt } from '#api/chat/prompts/chat-prompt-name.js';
-import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/commit-message-prompt.js';
-import type { LangGraphAdapterCallbacks } from '#api/chat/utils/langgraph-adapter.js';
-import { getCadSystemPrompt } from '#api/chat/prompts/chat-prompt-cad.js';
-import type { Environment } from '#config/environment.config.js';
+import { buildNameGenerationSystemPrompt } from '#api/chat/prompts/cad-name.prompt.js';
+import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/git-commit.prompt.js';
+import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
+import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
+import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
+import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 
 @Injectable()
 export class ChatService {
-  private readonly logger = new Logger(ChatService.name);
-
   public constructor(
     private readonly modelService: ModelService,
     private readonly toolService: ToolService,
-    private readonly configService: ConfigService<Environment, true>,
+    private readonly checkpointerService: CheckpointerService,
   ) {}
 
   public getBuildNameGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
@@ -43,119 +43,79 @@ export class ChatService {
     });
   }
 
-  // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- This is a complex generic that can be left inferred.
-  public async createGraph(modelId: string, selectedToolChoice: ToolSelection, selectedKernel: KernelProvider) {
+  public async createAgent(
+    modelId: string,
+    selectedToolChoice: ToolSelection,
+    selectedKernel: KernelProvider,
+  ): Promise<ReactAgent> {
     const { tools } = this.toolService.getTools(selectedToolChoice);
 
-    const databaseUrl = this.configService.get('DATABASE_URL', { infer: true });
-    const checkpointer = PostgresSaver.fromConnString(databaseUrl, {
-      schema: 'langgraph',
+    const checkpointer = this.checkpointerService.getCheckpointer();
+
+    const { model } = this.modelService.buildModel(modelId);
+
+    // Combine all tools into a single array for the unified agent
+    const allTools = [
+      // CAD tools
+      tools.reasoning,
+      tools.test_model,
+      tools.edit_tests,
+      tools.get_kernel_result,
+      // Filesystem tools
+      tools.edit_file,
+      tools.read_file,
+      tools.list_directory,
+      tools.create_file,
+      tools.delete_file,
+      tools.grep,
+      tools.glob_search,
+      // Research tools
+      tools.web_search,
+      tools.web_browser,
+    ].filter((tool) => tool !== undefined);
+
+    // ==========================================================================
+    // Prompt Caching Strategy (2 breakpoints)
+    // ==========================================================================
+    // We use TWO cache breakpoints for optimal caching:
+    //
+    // 1. SYSTEM MESSAGE (here): Large (~15K+ tokens), stable content.
+    //    - Cached via createCachedSystemMessage
+    //    - Written once, read on every subsequent model call
+    //    - Cannot be moved to middleware because systemPrompt is passed
+    //      separately to createAgent, not in the messages array
+    //
+    // 2. LAST MESSAGE (middleware): Dynamic, growing conversation.
+    //    - Cached via promptCachingMiddleware on every model call
+    //    - Incrementally caches as conversation grows
+    //    - Handles HumanMessage, AIMessage, and ToolMessage
+    //
+    // Anthropic allows up to 4 breakpoints per request. This 2-breakpoint
+    // strategy ensures the stable system prompt is cached separately from
+    // the dynamic conversation, maximizing cache hits.
+    // ==========================================================================
+    const systemPromptText = await getCadSystemPrompt(selectedKernel);
+    const systemPrompt = createCachedSystemMessage(systemPromptText);
+
+    const agent = createAgent({
+      model,
+      tools: allTools,
+      systemPrompt,
+      checkpointer,
+      middleware: [
+        // Handle tool errors and convert to structured JSON (must wrap tool calls)
+        toolErrorHandlerMiddleware,
+        // Trim tool results (e.g., remove base64 images) before sending to the LLM
+        toolResultTrimmerMiddleware,
+        // Add cache_control to last message for incremental caching (breakpoint 2)
+        promptCachingMiddleware,
+        // Log messages before each model call (for debugging)
+        messageLoggingMiddleware,
+        // Track token usage and costs after each model call
+        usageTrackingMiddleware,
+      ],
     });
-    await checkpointer.setup();
 
-    const researchTools = [tools.web_search, tools.web_browser].filter((tool) => tool !== undefined);
-    const { model: supervisorModel } = this.modelService.buildModel(modelId);
-    const { model: cadModel, support: cadSupport } = this.modelService.buildModel(modelId);
-    const { model: researchModel, support: researchSupport } = this.modelService.buildModel(modelId);
-
-    // Create specialized agents for tool usage
-    const researchAgent = createReactAgent({
-      llm:
-        researchSupport?.tools === false ? researchModel : (researchModel.bindTools?.(researchTools) ?? researchModel),
-      tools: researchTools,
-      name: 'research_expert',
-      prompt: `You are a research expert that can use specialized tools to accomplish tasks. 
-        Always use the \`${toolName.webSearch}\` tool, and only the \`${toolName.webBrowser}\` tool if the \`${toolName.webSearch}\` tool does not supply enough information.`,
-    });
-
-    // Create a general agent for handling direct responses
-    const cadTools = [tools.edit_file, tools.analyze_image].filter((tool) => tool !== undefined);
-    const cadSystemPrompt = await getCadSystemPrompt(selectedKernel);
-    const cadAgent = createReactAgent({
-      llm: cadSupport?.tools === false ? cadModel : (cadModel.bindTools?.(cadTools) ?? cadModel),
-      tools: cadTools,
-      name: 'cad_expert',
-      prompt: cadSystemPrompt,
-    });
-
-    // Create a supervisor to orchestrate these agents
-    const supervisor = createSupervisor({
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- TODO: fix types
-      agents: [researchAgent, cadAgent],
-      llm: supervisorModel,
-      prompt: `You are an intelligent supervisor coordinating a specialized team consisting of a research expert and a CAD expert. Your primary role is to understand user requests and delegate them to the most appropriate team member based on their expertise and available tools.
-
-# Core Delegation Philosophy
-Your strength lies in thoughtful delegation rather than direct tool usage. You serve as an intelligent router, ensuring that each request reaches the team member best equipped to handle it effectively. You do not use tools directly; instead, you leverage your team's specialized capabilities through the transfer system.
-
-# Task Routing Guidelines
-When users ask questions or make requests, you should:
-
-**For 3D modeling, CAD work, or file editing requests**: Immediately transfer to the CAD expert using the transfer_to_cad_expert tool. This includes any requests involving changes to 3D models, geometric modifications, design alterations, or file manipulation tasks. The CAD expert has specialized tools and knowledge for these technical operations and works with ${selectedKernel} as the selected CAD kernel.
-
-**For research, information gathering, or web-based queries**: Use the transfer_to_research_expert tool when the request requires external information, current data, or specialized research capabilities. The research expert can access web resources and gather comprehensive information to answer complex queries.
-
-**For error handling and iterative fixes**: When the conversation contains code errors, kernel errors, or any error feedback from previous CAD modeling attempts, ALWAYS route back to the CAD expert using transfer_to_cad_expert. The CAD expert is specifically trained to handle iterative error correction and can automatically fix compilation errors, geometric failures, and runtime issues. This ensures a seamless modeling experience where errors are resolved without user intervention.
-
-# Error Detection and Routing
-Pay special attention to messages that contain:
-- Code compilation errors or JavaScript errors
-- Kernel errors from the ${selectedKernel} system
-- Geometric operation failures
-- Runtime exceptions from 3D modeling operations
-- Screenshots or visual feedback from rendered CAD models
-- Design iteration requests based on visual inspection of the model
-
-When any of these error conditions are present, immediately route to the CAD expert for resolution, even if the original request might seem like a research question. The CAD expert has the specialized knowledge and tools to diagnose and fix these technical issues.
-
-Additionally, when screenshots of rendered models are provided in the conversation, always route to the CAD expert as they can use this visual feedback to iteratively refine the design to better match the user's intended requirements.
-
-# Communication Style
-When receiving responses back from your team members, maintain efficiency by being concise and focused. Once a team member has provided their response, you should synthesize their findings briefly and conclude the interaction rather than extending the conversation unnecessarily.
-
-Your goal is to ensure users receive expert-level assistance by connecting them with the right specialist for their specific needs, while maintaining a smooth and efficient workflow that automatically handles technical errors through iterative refinement.`,
-      outputMode: 'full_history', // Include full agent message history
-    }).compile({ checkpointer });
-
-    return supervisor;
-  }
-
-  public getCallbacks(): LangGraphAdapterCallbacks {
-    const { logger } = this;
-    return {
-      onMessageComplete: ({ dataStream, modelId: id, usageTokens }) => {
-        const normalizedUsageTokens = this.modelService.normalizeUsageTokens(id, usageTokens);
-        const usageCost = this.modelService.getModelCost(id, normalizedUsageTokens);
-
-        dataStream.write({
-          type: 'message-metadata',
-          messageMetadata: {
-            usageCost: {
-              inputTokens: normalizedUsageTokens.inputTokens,
-              outputTokens: normalizedUsageTokens.outputTokens,
-              cachedReadTokens: normalizedUsageTokens.cachedReadTokens,
-              cachedWriteTokens: normalizedUsageTokens.cachedWriteTokens,
-              usageCost: usageCost.totalCost,
-            },
-            model: id,
-          },
-        });
-      },
-      onEvent(parameters) {
-        logger.verbose(`onEvent: ${JSON.stringify(parameters.event)}`);
-      },
-      onError(error) {
-        if (error instanceof Error && error.message === 'Aborted') {
-          logger.warn('Request aborted');
-          return 'The request was aborted';
-        }
-
-        logger.error('Error in chat stream follows:');
-        logger.error(error);
-        const errorMessage = error instanceof Error ? error.message : 'An error occurred while processing the request';
-
-        return errorMessage;
-      },
-    };
+    return agent;
   }
 }

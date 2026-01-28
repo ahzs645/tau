@@ -10,6 +10,7 @@
 
 import { setup, assign, fromPromise } from 'xstate';
 import type { Chat, MyUIMessage } from '@taucad/chat';
+import type { ChatError } from '@taucad/types';
 
 // Input types
 export type ChatPersistenceMachineInput = {
@@ -26,13 +27,17 @@ export type ChatPersistenceMachineContext = {
   loadError?: Error;
   // Pending messages to persist (set by queuePersist, consumed by debounced persist)
   pendingMessages?: MyUIMessage[];
+  // Persisted error - survives page reload
+  persistedError?: ChatError;
 };
 
 // Events
 type ChatPersistenceMachineEvents =
   | { type: 'setActiveChatId'; chatId: string }
   | { type: 'queuePersist'; messages: MyUIMessage[] }
-  | { type: 'handleError'; error: Error };
+  | { type: 'handleError'; error: Error }
+  | { type: 'setPersistedError'; error: ChatError }
+  | { type: 'clearPersistedError' };
 
 // Placeholder actors - actual implementations provided via machine.provide()
 const loadChatActor = fromPromise<Chat | undefined, { chatId: string }>(async () => {
@@ -41,6 +46,14 @@ const loadChatActor = fromPromise<Chat | undefined, { chatId: string }>(async ()
 
 const persistMessagesActor = fromPromise<void, { chatId: string; messages: MyUIMessage[] }>(async () => {
   throw new Error('persistMessagesActor not provided');
+});
+
+const persistErrorActor = fromPromise<void, { chatId: string; error: ChatError }>(async () => {
+  throw new Error('persistErrorActor not provided');
+});
+
+const clearErrorActor = fromPromise<void, { chatId: string }>(async () => {
+  throw new Error('clearErrorActor not provided');
 });
 
 export const chatPersistenceMachine = setup({
@@ -55,6 +68,8 @@ export const chatPersistenceMachine = setup({
   actors: {
     loadChatActor,
     persistMessagesActor,
+    persistErrorActor,
+    clearErrorActor,
   },
   guards: {
     hasValidChatId({ context, event }) {
@@ -83,6 +98,7 @@ export const chatPersistenceMachine = setup({
       isLoadingChat: false,
       loadError: undefined,
       pendingMessages: undefined,
+      persistedError: undefined,
     };
   },
   type: 'parallel',
@@ -114,6 +130,8 @@ export const chatPersistenceMachine = setup({
               target: 'idle',
               actions: assign({
                 isLoadingChat: false,
+                // Set persisted error from loaded chat (for display after page reload)
+                persistedError: ({ event }) => event.output?.error,
               }),
             },
             onError: {
@@ -196,6 +214,88 @@ export const chatPersistenceMachine = setup({
             queuePersist: {
               actions: assign({
                 pendingMessages: ({ event }) => event.messages,
+              }),
+            },
+          },
+        },
+      },
+    },
+    // Error persistence - persists errors to storage for display after page reload
+    errorPersistence: {
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            setPersistedError: {
+              target: 'persisting',
+              guard: 'canPersist',
+              actions: assign({
+                persistedError: ({ event }) => event.error,
+              }),
+            },
+            clearPersistedError: {
+              target: 'clearing',
+              guard: 'canPersist',
+            },
+          },
+        },
+        persisting: {
+          invoke: {
+            src: 'persistErrorActor',
+            input: ({ context }) => ({
+              chatId: context.activeChatId!,
+              error: context.persistedError!,
+            }),
+            onDone: {
+              target: 'idle',
+            },
+            onError: {
+              target: 'idle',
+            },
+          },
+          on: {
+            // If a new error comes in while persisting, update context and restart
+            setPersistedError: {
+              target: 'persisting',
+              reenter: true,
+              actions: assign({
+                persistedError: ({ event }) => event.error,
+              }),
+            },
+            // If clearing is requested while persisting, switch to clearing
+            clearPersistedError: {
+              target: 'clearing',
+              actions: assign({
+                persistedError: undefined,
+              }),
+            },
+          },
+        },
+        clearing: {
+          invoke: {
+            src: 'clearErrorActor',
+            input: ({ context }) => ({
+              chatId: context.activeChatId!,
+            }),
+            onDone: {
+              target: 'idle',
+              actions: assign({
+                persistedError: undefined,
+              }),
+            },
+            onError: {
+              target: 'idle',
+              actions: assign({
+                persistedError: undefined,
+              }),
+            },
+          },
+          on: {
+            // If a new error comes in while clearing, switch to persisting
+            setPersistedError: {
+              target: 'persisting',
+              actions: assign({
+                persistedError: ({ event }) => event.error,
               }),
             },
           },

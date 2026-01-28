@@ -32,8 +32,8 @@ export const modelDetailsSchema = z.object({
   cost: z.object({
     inputTokens: z.number().describe('The cost of the input tokens of the model'),
     outputTokens: z.number().describe('The cost of the output tokens of the model'),
-    cachedReadTokens: z.number().describe('The cost of the cached input tokens of the model'),
-    cachedWriteTokens: z.number().describe('The cost of the cached output tokens of the model'),
+    cacheReadTokens: z.number().describe('The cost of the cached input tokens of the model'),
+    cacheWriteTokens: z.number().describe('The cost of the cached output tokens of the model'),
   }),
 });
 

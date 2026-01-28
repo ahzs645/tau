@@ -7,7 +7,7 @@ import JSZip from 'jszip';
  */
 export type ZipContext = {
   parentRef: AnyActorRef | undefined;
-  files: Map<string, { content: Uint8Array; filename: string }>;
+  files: Map<string, { content: Uint8Array<ArrayBuffer>; filename: string }>;
   zipBlob: Blob | undefined;
   error: Error | undefined;
   zipFilename: string;
@@ -28,11 +28,11 @@ type ZipEventInternal =
   | {
       type: 'addFile';
       filename: string;
-      content: Uint8Array;
+      content: Uint8Array<ArrayBuffer>;
     }
   | {
       type: 'addFiles';
-      files: Array<{ filename: string; content: Uint8Array }>;
+      files: Array<{ filename: string; content: Uint8Array<ArrayBuffer> }>;
     }
   | { type: 'generate' }
   | { type: 'clear' }
@@ -41,20 +41,21 @@ type ZipEventInternal =
 type ZipEvent = ZipEventInternal;
 
 // Define the actors that the machine can invoke
-const generateZipActor = fromPromise<Blob, { files: Map<string, { content: Uint8Array; filename: string }> }>(
-  async ({ input }) => {
-    const zip = new JSZip();
+const generateZipActor = fromPromise<
+  Blob,
+  { files: Map<string, { content: Uint8Array<ArrayBuffer>; filename: string }> }
+>(async ({ input }) => {
+  const zip = new JSZip();
 
-    // Add all files to the zip
-    for (const [, file] of input.files) {
-      zip.file(file.filename, file.content);
-    }
+  // Add all files to the zip
+  for (const [, file] of input.files) {
+    zip.file(file.filename, file.content);
+  }
 
-    // Generate the zip file
-    const blob = await zip.generateAsync({ type: 'blob' });
-    return blob;
-  },
-);
+  // Generate the zip file
+  const blob = await zip.generateAsync({ type: 'blob' });
+  return blob;
+});
 
 const zipActors = {
   generateZipActor,

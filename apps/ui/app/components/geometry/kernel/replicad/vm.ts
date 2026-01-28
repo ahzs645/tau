@@ -266,36 +266,28 @@ async function rewriteImports(code: string): Promise<string> {
  * @returns The module
  */
 export async function buildEsModule(code: string): Promise<CadModuleExports> {
-  try {
-    // First rewrite imports to use global modules
-    const rewrittenCode = await rewriteImports(code);
+  // First rewrite imports to use global modules
+  const rewrittenCode = await rewriteImports(code);
 
-    // Include active kernel in cache key to prevent cross-kernel contamination
-    const kernelId = getActiveKernelIdentifier();
-    const cacheKey = `${kernelId}:${hashCode(rewrittenCode)}`;
+  // Include active kernel in cache key to prevent cross-kernel contamination
+  const kernelId = getActiveKernelIdentifier();
+  const cacheKey = `${kernelId}:${hashCode(rewrittenCode)}`;
 
-    if (moduleCache.has(cacheKey)) {
-      return moduleCache.get(cacheKey)!;
-    }
-
-    // Create blob and import the module
-    const blob = new Blob([rewrittenCode], { type: 'application/javascript' });
-    const url = URL.createObjectURL(blob);
-
-    const module = (await import(/* @vite-ignore */ url)) as CadModuleExports;
-
-    // Clean up blob URL
-    URL.revokeObjectURL(url);
-
-    // Cache the module with kernel-specific key
-    moduleCache.set(cacheKey, module);
-
-    return module;
-  } catch (error) {
-    console.error('Failed to build module evaluator:', error);
-    console.error('Original code:', code);
-    throw error;
+  if (moduleCache.has(cacheKey)) {
+    return moduleCache.get(cacheKey)!;
   }
+
+  // Create data URL and import the module
+  // Using data URLs instead of Blob URLs for universal Node.js + browser compatibility
+  // @see https://www.zachleat.com/web/dynamic-import/
+  const url = `data:text/javascript;charset=utf-8,${encodeURIComponent(rewrittenCode)}`;
+
+  const module = (await import(/* @vite-ignore */ url)) as CadModuleExports;
+
+  // Cache the module with kernel-specific key
+  moduleCache.set(cacheKey, module);
+
+  return module;
 }
 
 // Optional: clear module cache (e.g. for hot-reloading)
@@ -342,17 +334,12 @@ export function runInCjsContext<Context extends Record<string, unknown>, Result>
   const contextKeys = Object.keys(enhancedContext);
   const contextValues = contextKeys.map((key) => enhancedContext[key]);
 
-  try {
-    // Use Function constructor for faster execution (like original replicad)
-    // This approach avoids using eval which is slower and has security implications
-    // eslint-disable-next-line no-new-func -- TODO: review this
-    const runFunction = new Function(...contextKeys, code) as (...args: unknown[]) => unknown;
-    const functionResult = runFunction(...contextValues) as Result;
+  // Use Function constructor for faster execution (like original replicad)
+  // This approach avoids using eval which is slower and has security implications
+  // eslint-disable-next-line no-new-func -- TODO: review this
+  const runFunction = new Function(...contextKeys, code) as (...args: unknown[]) => unknown;
+  const functionResult = runFunction(...contextValues) as Result;
 
-    // Return the function result if present, otherwise return module.exports
-    return (functionResult ?? module.exports) as Result;
-  } catch (error) {
-    console.error('Error running code in context:', error);
-    throw error;
-  }
+  // Return the function result if present, otherwise return module.exports
+  return (functionResult ?? module.exports) as Result;
 }

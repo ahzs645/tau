@@ -99,7 +99,9 @@ export function export3mf(data: IndexedPolyhedron, extruderColors?: Array<[numbe
   }
 
   // Ensure we have at least one color (default to white)
-  const colors = data.colors.length > 0 ? data.colors : [[1, 1, 1] as [number, number, number]];
+  // 3MF format only supports RGB (no alpha), so we extract just the RGB components
+  const colors: Array<[number, number, number]> =
+    data.colors.length > 0 ? data.colors.map((color) => [color[0], color[1], color[2]]) : [[1, 1, 1]];
 
   // Convert face indices to triangulated faces with color information
   const triangulatedFaces: Array<{ vertices: [number, number, number]; colorIndex: number }> = [];
@@ -200,7 +202,7 @@ export function export3mf(data: IndexedPolyhedron, extruderColors?: Array<[numbe
   ].join('\n');
 
   // Create the ZIP archive using UZIP
-  const archive: Record<string, Uint8Array> = {
+  const archive: Record<string, Uint8Array<ArrayBuffer>> = {
     // eslint-disable-next-line @typescript-eslint/naming-convention -- 3MF file format requires this naming convention
     '3D/3dmodel.model': new TextEncoder().encode(modelXml),
     // eslint-disable-next-line @typescript-eslint/naming-convention -- 3MF file format requires this naming convention

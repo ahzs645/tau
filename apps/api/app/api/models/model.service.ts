@@ -51,6 +51,22 @@ export class ModelService implements OnModuleInit {
     };
   }
 
+  /**
+   * Check if streaming doubles cache token counts for a given model.
+   * Some providers (like Anthropic) report cache values in both message_start
+   * and message_delta events, causing them to be summed during chunk aggregation.
+   */
+  public streamingDoublesCacheTokens(modelId: string): boolean {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    if (!modelConfig) {
+      return false;
+    }
+
+    const provider = this.providerService.getProvider(modelConfig.provider.id);
+
+    return Boolean(provider.streamingDoublesCacheTokens);
+  }
+
   public normalizeUsageTokens(modelId: string, usage: ChatUsageTokens): ChatUsageTokens {
     const modelConfig = this.models.find((model) => model.id === modelId);
     if (!modelConfig) {
@@ -60,12 +76,15 @@ export class ModelService implements OnModuleInit {
     const provider = this.providerService.getProvider(modelConfig.provider.id);
 
     return {
-      // Some providers include cached read tokens in the input tokens,
+      // Some providers include cached tokens in the input tokens,
       // so we need to subtract them if necessary.
-      inputTokens: usage.inputTokens - (provider.inputTokensIncludesCachedReadTokens ? usage.cachedReadTokens : 0),
+      inputTokens:
+        usage.inputTokens -
+        (provider.inputTokensIncludesCacheReadTokens ? usage.cacheReadTokens : 0) -
+        (provider.inputTokensIncludesCacheWriteTokens ? usage.cacheWriteTokens : 0),
       outputTokens: usage.outputTokens,
-      cachedReadTokens: usage.cachedReadTokens,
-      cachedWriteTokens: usage.cachedWriteTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
     };
   }
 
@@ -78,23 +97,23 @@ export class ModelService implements OnModuleInit {
     // Convert cost per million tokens to cost per token
     const inputCostPerToken = modelConfig.details.cost.inputTokens / 1_000_000;
     const outputCostPerToken = modelConfig.details.cost.outputTokens / 1_000_000;
-    const cachedReadCostPerToken = modelConfig.details.cost.cachedReadTokens / 1_000_000;
-    const cachedWriteCostPerToken = modelConfig.details.cost.cachedWriteTokens / 1_000_000;
+    const cacheReadCostPerToken = modelConfig.details.cost.cacheReadTokens / 1_000_000;
+    const cacheWriteCostPerToken = modelConfig.details.cost.cacheWriteTokens / 1_000_000;
 
     // Calculate individual costs
     const inputTokensCost = usage.inputTokens * inputCostPerToken;
     const outputTokensCost = usage.outputTokens * outputCostPerToken;
-    const cachedReadTokensCost = usage.cachedReadTokens * cachedReadCostPerToken;
-    const cachedWriteTokensCost = usage.cachedWriteTokens * cachedWriteCostPerToken;
+    const cacheReadTokensCost = usage.cacheReadTokens * cacheReadCostPerToken;
+    const cacheWriteTokensCost = usage.cacheWriteTokens * cacheWriteCostPerToken;
 
     // Calculate total cost
-    const totalCost = inputTokensCost + outputTokensCost + cachedReadTokensCost + cachedWriteTokensCost;
+    const totalCost = inputTokensCost + outputTokensCost + cacheReadTokensCost + cacheWriteTokensCost;
 
     return {
       inputTokensCost,
       outputTokensCost,
-      cachedReadTokensCost,
-      cachedWriteTokensCost,
+      cacheReadTokensCost,
+      cacheWriteTokensCost,
       totalCost,
     };
   }
@@ -125,8 +144,8 @@ export class ModelService implements OnModuleInit {
               cost: {
                 inputTokens: 0,
                 outputTokens: 0,
-                cachedReadTokens: 0,
-                cachedWriteTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
               },
             },
             configuration: {

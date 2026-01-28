@@ -34,7 +34,7 @@ type AttributeTypeConstructor =
   | Int32ArrayConstructor;
 
 // Gltf-transform doesn't support Int32Array
-type TypedArray = Float32Array | Uint32Array | Uint16Array | Uint8Array | Int16Array | Int8Array;
+type TypedArray = Float32Array | Uint32Array | Uint16Array | Uint8Array<ArrayBuffer> | Int16Array | Int8Array;
 
 type AccessorType = 'SCALAR' | 'VEC2' | 'VEC3' | 'VEC4' | 'MAT2' | 'MAT3' | 'MAT4';
 

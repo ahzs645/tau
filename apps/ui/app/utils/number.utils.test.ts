@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clamp,
+  formatNumberAbbreviation,
   formatNumberEngineeringNotation,
   formatUnitDisplay,
   roundToSignificantFigures,
@@ -435,6 +436,141 @@ describe('formatUnitDisplay', () => {
 
     it('should format with 6 significant figures', () => {
       expect(formatUnitDisplay(1.234_567_89, { significantFigures: 6 })).toBe('1.23457');
+    });
+  });
+});
+
+describe('formatNumberAbbreviation', () => {
+  describe('edge cases', () => {
+    it('should return "0" for zero value', () => {
+      expect(formatNumberAbbreviation(0)).toBe('0');
+    });
+
+    it('should return "0" for infinity', () => {
+      expect(formatNumberAbbreviation(Number.POSITIVE_INFINITY)).toBe('0');
+    });
+
+    it('should return "0" for negative infinity', () => {
+      expect(formatNumberAbbreviation(Number.NEGATIVE_INFINITY)).toBe('0');
+    });
+
+    it('should return "0" for NaN', () => {
+      expect(formatNumberAbbreviation(Number.NaN)).toBe('0');
+    });
+  });
+
+  describe('values below threshold', () => {
+    it('should format small numbers with locale string', () => {
+      expect(formatNumberAbbreviation(999)).toBe('999');
+      expect(formatNumberAbbreviation(100)).toBe('100');
+      expect(formatNumberAbbreviation(1)).toBe('1');
+    });
+
+    it('should format negative small numbers', () => {
+      expect(formatNumberAbbreviation(-999)).toBe('-999');
+      expect(formatNumberAbbreviation(-100)).toBe('-100');
+    });
+  });
+
+  describe('thousands (K)', () => {
+    it('should format 1000 as 1K', () => {
+      expect(formatNumberAbbreviation(1000)).toBe('1K');
+    });
+
+    it('should format 1500 as 1.5K', () => {
+      expect(formatNumberAbbreviation(1500)).toBe('1.5K');
+    });
+
+    it('should format 11000 as 11K', () => {
+      expect(formatNumberAbbreviation(11_000)).toBe('11K');
+    });
+
+    it('should format 15500 as 16K with default 2 significant figures', () => {
+      expect(formatNumberAbbreviation(15_500)).toBe('16K');
+    });
+
+    it('should format 100000 as 100K', () => {
+      expect(formatNumberAbbreviation(100_000)).toBe('100K');
+    });
+
+    it('should format 374218 as 370K', () => {
+      expect(formatNumberAbbreviation(374_218)).toBe('370K');
+    });
+
+    it('should format 607490 as 610K', () => {
+      expect(formatNumberAbbreviation(607_490)).toBe('610K');
+    });
+
+    it('should format 991792 as 990K', () => {
+      expect(formatNumberAbbreviation(991_792)).toBe('990K');
+    });
+  });
+
+  describe('millions (M)', () => {
+    it('should format 1000000 as 1M', () => {
+      expect(formatNumberAbbreviation(1_000_000)).toBe('1M');
+    });
+
+    it('should format 2423525 as 2.4M', () => {
+      expect(formatNumberAbbreviation(2_423_525)).toBe('2.4M');
+    });
+
+    it('should format 10000000 as 10M', () => {
+      expect(formatNumberAbbreviation(10_000_000)).toBe('10M');
+    });
+
+    it('should format 100000000 as 100M', () => {
+      expect(formatNumberAbbreviation(100_000_000)).toBe('100M');
+    });
+  });
+
+  describe('billions (B)', () => {
+    it('should format 1000000000 as 1B', () => {
+      expect(formatNumberAbbreviation(1_000_000_000)).toBe('1B');
+    });
+
+    it('should format 2500000000 as 2.5B', () => {
+      expect(formatNumberAbbreviation(2_500_000_000)).toBe('2.5B');
+    });
+  });
+
+  describe('trillions (T)', () => {
+    it('should format 1000000000000 as 1T', () => {
+      expect(formatNumberAbbreviation(1_000_000_000_000)).toBe('1T');
+    });
+
+    it('should format 2500000000000 as 2.5T', () => {
+      expect(formatNumberAbbreviation(2_500_000_000_000)).toBe('2.5T');
+    });
+  });
+
+  describe('negative values', () => {
+    it('should format negative thousands', () => {
+      expect(formatNumberAbbreviation(-1000)).toBe('-1K');
+      expect(formatNumberAbbreviation(-11_000)).toBe('-11K');
+    });
+
+    it('should format negative millions', () => {
+      expect(formatNumberAbbreviation(-2_423_525)).toBe('-2.4M');
+    });
+  });
+
+  describe('custom significant figures', () => {
+    it('should format with 3 significant figures', () => {
+      expect(formatNumberAbbreviation(2_423_525, { significantFigures: 3 })).toBe('2.42M');
+      expect(formatNumberAbbreviation(374_218, { significantFigures: 3 })).toBe('374K');
+    });
+
+    it('should format with 1 significant figure', () => {
+      expect(formatNumberAbbreviation(2_423_525, { significantFigures: 1 })).toBe('2M');
+      expect(formatNumberAbbreviation(7_500_000, { significantFigures: 1 })).toBe('8M');
+    });
+  });
+
+  describe('custom compact threshold', () => {
+    it('should use custom threshold for compact notation', () => {
+      expect(formatNumberAbbreviation(500, { compactThreshold: 100 })).toBe('500');
+      expect(formatNumberAbbreviation(500, { compactThreshold: 1000 })).toBe('500');
     });
   });
 });

@@ -4,16 +4,8 @@ import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ZodSerializationException, ZodValidationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
+import type { HttpErrorResponse } from '@taucad/types';
 import { httpHeader } from '#constants/http-header.constant.js';
-
-export type ErrorResponse = {
-  error: string;
-  code?: string;
-  statusCode: number;
-  message?: string | string[];
-  path?: string;
-  requestId?: string;
-};
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -29,7 +21,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const requestId = headerRequestId ?? (request.id as string | undefined);
 
     let statusCode: number;
-    let errorResponse: ErrorResponse;
+    let errorResponse: HttpErrorResponse;
 
     if (exception instanceof ZodValidationException || exception instanceof ZodSerializationException) {
       const zodError = exception.getZodError();
@@ -71,7 +63,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       } else if (typeof exceptionResponse === 'object') {
         // Handle structured error responses (e.g., { code: 'UNAUTHORIZED', message: '...' })
         const { message, code } = exceptionResponse as Record<string, unknown>;
-        const baseResponse: ErrorResponse = {
+        const baseResponse: HttpErrorResponse = {
           error: typeof message === 'string' ? message : exception.message || 'An error occurred',
           code: typeof code === 'string' ? code : this.getErrorCode(exception),
           statusCode,

@@ -1,9 +1,10 @@
-import { Plus, Pencil, Trash, History } from 'lucide-react';
+import { Plus, Pencil, Trash, History, AlertCircle } from 'lucide-react';
 import { useState, useRef, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useChat } from '@ai-sdk/react';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import { useSelector } from '@xstate/react';
+import { ChatHistorySettings } from '#routes/builds_.$id/chat-history-settings.js';
 import { Button } from '#components/ui/button.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useChats } from '#hooks/use-chats.js';
@@ -19,6 +20,7 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { FloatingPanelContentHeaderActions } from '#components/ui/floating-panel.js';
+import { useChatRpcStatus } from '#hooks/use-chat-rpc-socket.js';
 
 const newChatKeyCombination = {
   key: 'c',
@@ -29,6 +31,10 @@ const newChatKeyCombination = {
 export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => void }): ReactNode {
   const { buildRef, buildId, setLastChatId } = useBuild();
   const { chats, createChat, updateChatName, deleteChat, isLoading: isChatsLoading } = useChats(buildId);
+
+  // Connection status for visual indicator
+  const { status: connectionStatus, error: connectionError } = useChatRpcStatus();
+  const isDisconnected = connectionStatus === 'disconnected' || connectionStatus === 'error';
 
   const isBuildLoading = useSelector(buildRef, (state) => state.context.isLoading);
   const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId) ?? '';
@@ -152,9 +158,13 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
       const chatName = chat.name;
       const isActive = chat.id === selectedChat?.id;
 
+      // Extract draft text if present
+      const draftTextPart = chat.draft?.parts.find((part) => part.type === 'text');
+      const draftText = draftTextPart?.type === 'text' ? draftTextPart.text : undefined;
+
       return (
         <div className="group flex w-full items-start justify-between">
-          <div className="flex flex-col">
+          <div className="flex min-w-0 flex-col">
             <div
               className={cn(
                 'font-medium',
@@ -164,6 +174,17 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
             >
               {chatName}
             </div>
+            {draftText ? (
+              <div className="truncate text-xs text-muted-foreground italic">
+                <span className="font-medium">Draft</span>: {draftText}
+              </div>
+            ) : null}
+            {chat.error ? (
+              <div className="flex items-center gap-1 text-xs text-destructive">
+                <AlertCircle className="size-3 shrink-0 text-destructive" />
+                <span className="truncate">{chat.error.title}</span>
+              </div>
+            ) : null}
             <div className="text-xs text-muted-foreground">
               {chat.messages.length} {chat.messages.length === 1 ? 'message' : 'messages'} ·{' '}
               {formatRelativeTime(chat.updatedAt)}
@@ -204,8 +225,24 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
 
   return (
     <>
-      <div className={cn('wrap ml-0.5 w-full flex-1 truncate', isGeneratingName && 'animate-pulse')}>
-        {activeChat?.name}
+      <div className={cn('wrap ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
+        <span className="truncate">{activeChat?.name}</span>
+        {isDisconnected ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="relative flex size-2 shrink-0">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-destructive" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <div className="text-xs">
+                <div className="font-medium">Connection {connectionStatus}</div>
+                {connectionError ? <div className="text-muted-foreground">{connectionError}</div> : null}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
       </div>
       <FloatingPanelContentHeaderActions className="h-7.75">
         <Tooltip>
@@ -246,6 +283,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
             </KeyShortcut>
           </TooltipContent>
         </Tooltip>
+        <ChatHistorySettings />
       </FloatingPanelContentHeaderActions>
 
       {/* Rename Dialog */}

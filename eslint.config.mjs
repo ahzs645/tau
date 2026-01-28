@@ -2,6 +2,7 @@ import xo from 'xo';
 import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import nxEslintPlugin from '@nx/eslint-plugin';
 import noBarrelFilesPlugin from 'eslint-plugin-no-barrel-files';
+import pluginEnforceUint8ArrayArrayBuffer from '@protontech/eslint-plugin-enforce-uint8array-arraybuffer';
 
 /**
  * Boolean property prefixes.
@@ -54,12 +55,21 @@ const config = [
       '**/assets',
       '**/.source/**/*', // Fumadocs source files.
       '**/.netlify',
+      '**/*.prompt.example.*', // Kernel prompt examples (OpenSCAD, KCL, etc.)
     ],
   },
   // First, apply XO's base configuration
   ...xo.xoToEslintConfig([{ space: true, react: true, prettier: 'compat' }]),
   noBarrelFilesPlugin.flat,
   eslintPluginPrettierRecommended,
+  {
+    plugins: {
+      '@protontech/enforce-uint8array-arraybuffer': pluginEnforceUint8ArrayArrayBuffer,
+    },
+    rules: {
+      '@protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer': 'error',
+    },
+  },
   {
     // Ensure TypeScript support is properly configured
     languageOptions: {
@@ -227,6 +237,9 @@ const config = [
       'n/no-extraneous-import': 'off', // Disabled as it has no monorepo support.
 
       'react/no-unknown-property': 'off', // Disabled as Typescript will check unknown properties. It can cause false positives for custom-elements.
+
+      // Allow up to 5 nested callbacks. This is useful for test files with nested describe/it blocks.
+      'max-nested-callbacks': ['error', { max: 5 }],
     },
   },
   {

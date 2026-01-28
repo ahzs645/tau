@@ -1,19 +1,14 @@
-import type { KernelSuccessResult, KernelError, KernelErrorResult } from '@taucad/types';
+import type { KernelSuccessResult, KernelIssue, KernelErrorResult } from '@taucad/types';
 
 // Helper functions for creating results
-export const createKernelSuccess = <T>(data: T): KernelSuccessResult<T> => ({
+export const createKernelSuccess = <T>(data: T, issues: KernelIssue[] = []): KernelSuccessResult<T> => ({
   success: true,
   data,
+  issues,
 });
 
-// Create a single kernel error result
-export const createKernelError = (error: KernelError): KernelErrorResult => ({
+// Create multiple kernel issues result
+export const createKernelError = (issues: KernelIssue[]): KernelErrorResult => ({
   success: false,
-  errors: [error],
-});
-
-// Create multiple kernel errors result
-export const createKernelErrors = (errors: KernelError[]): KernelErrorResult => ({
-  success: false,
-  errors,
+  issues,
 });

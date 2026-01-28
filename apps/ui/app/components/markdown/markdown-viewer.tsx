@@ -12,6 +12,10 @@ type MarkdownViewerProps = {
    * When true, uses streaming-optimized parsing.
    */
   readonly isStreaming?: boolean;
+  /**
+   * Additional className for the container.
+   */
+  readonly className?: string;
 } & StreamdownProps;
 
 export const defaultMarkdownComponents = {
@@ -30,6 +34,7 @@ export const MarkdownViewer = memo(function ({
   isStreaming = false,
   controls = defaultMarkdownControls,
   components,
+  className,
 }: MarkdownViewerProps): React.JSX.Element {
   // Memoize components object to prevent unnecessary re-renders
   const memoizedComponents = useMemo(
@@ -46,6 +51,7 @@ export const MarkdownViewer = memo(function ({
         //
         'w-full max-w-full text-sm text-foreground',
         'overflow-wrap-anywhere wrap-break-word hyphens-auto',
+        className,
       )}
     >
       <Streamdown

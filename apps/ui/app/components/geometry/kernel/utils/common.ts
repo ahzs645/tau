@@ -17,12 +17,13 @@ export type Vertex = [number, number, number];
 export type Face = number[];
 
 /**
- * RGB color components in normalized range [0.0, 1.0].
+ * RGBA color components in normalized range [0.0, 1.0].
  *
- * @example [1.0, 0.0, 0.0] represents pure red
- * @example [0.5, 0.5, 0.5] represents 50% gray
+ * @example [1.0, 0.0, 0.0, 1.0] represents opaque red
+ * @example [0.0, 0.0, 1.0, 0.5] represents semi-transparent blue
+ * @example [0.5, 0.5, 0.5, 1.0] represents opaque 50% gray
  */
-export type Color = [number, number, number]; // RGB values 0-1
+export type Color = [number, number, number, number]; // RGBA values 0-1
 
 /**
  * A complete 3D mesh representation using indexed geometry.
@@ -144,12 +145,12 @@ export type IndexedPolyhedron = {
 };
 
 /**
- * Transform vertex coordinates from z-up to y-up coordinate system and convert units
+ * Transform vertex coordinates from z-up to y-up coordinate system and convert units.
  * Z-up to Y-up transformation: x' = x, y' = z, z' = -y
  * Unit conversion: millimeters to meters (divide by 1000)
  *
- * This is used when exporting geometry to glTF format, which uses y-up coordinates
- * and meter units, and source geometry uses z-up coordinates and millimeter units.
+ * This is used when creating glTF format, which uses y-up coordinates
+ * and meter units, from source geometry that uses z-up coordinates and millimeter units.
  */
 export function transformVerticesGltf(vertex: readonly [number, number, number]): [number, number, number] {
   const x = vertex[0] / 1000;
@@ -158,4 +159,65 @@ export function transformVerticesGltf(vertex: readonly [number, number, number])
 
   // Normalize -0 to 0 to avoid JavaScript signed zero quirks
   return [x === 0 ? 0 : x, y === 0 ? 0 : y, z === 0 ? 0 : z];
+}
+
+/**
+ * Transform a flat array of vertex positions from z-up to y-up coordinate system and convert units.
+ *
+ * Processes a flat array of vertex coordinates in groups of 3, applying both coordinate
+ * system transformation (z-up to y-up) and unit conversion (mm to meters).
+ *
+ * This is a convenience wrapper around transformVerticesGltf for processing multiple vertices
+ * in a flat array format commonly used in mesh data.
+ *
+ * @param vertices - Flat array of vertex positions [x1, y1, z1, x2, y2, z2, ...]
+ * @returns Float32Array with transformed positions
+ */
+export function transformVertexArray(vertices: number[]): Float32Array<ArrayBuffer> {
+  const transformedVertices = new Float32Array(vertices.length);
+
+  for (let i = 0; i < vertices.length; i += 3) {
+    const x = vertices[i];
+    const y = vertices[i + 1];
+    const z = vertices[i + 2];
+
+    if (x === undefined || y === undefined || z === undefined) {
+      continue;
+    }
+
+    const vertex: [number, number, number] = [x, y, z];
+    const transformed = transformVerticesGltf(vertex);
+
+    transformedVertices[i] = transformed[0];
+    transformedVertices[i + 1] = transformed[1];
+    transformedVertices[i + 2] = transformed[2];
+  }
+
+  return transformedVertices;
+}
+
+/**
+ * Transform normal vectors from z-up to y-up coordinate system.
+ * Unlike vertices, normals are direction vectors so no unit conversion is needed.
+ * Z-up to Y-up transformation: x' = x, y' = z, z' = -y
+ *
+ * @param normals - Flat array of normal components [x1, y1, z1, x2, y2, z2, ...]
+ * @returns Float32Array with transformed normals
+ */
+export function transformNormalArray(normals: number[]): Float32Array<ArrayBuffer> {
+  const transformedNormals = new Float32Array(normals.length);
+
+  for (let i = 0; i < normals.length; i += 3) {
+    const x = normals[i] ?? 0;
+    const y = normals[i + 1] ?? 0;
+    const z = normals[i + 2] ?? 0;
+
+    // Apply rotation only (no scaling for direction vectors)
+    // Z-up to Y-up: x' = x, y' = z, z' = -y
+    transformedNormals[i] = x;
+    transformedNormals[i + 1] = z;
+    transformedNormals[i + 2] = -y;
+  }
+
+  return transformedNormals;
 }

@@ -25,6 +25,24 @@
     {
       "from": "../../node_modules/geist/dist/fonts/geist-sans/Geist-Regular.ttf",
       "to": "app/components/geometry/kernel/replicad/fonts/Geist-Regular.ttf"
+    },
+    // OpenCascade WASM files for Replicad kernel
+    // Using universal pattern for Node.js and browser compatibility
+    // @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
+    {
+      "from": "../../node_modules/replicad-opencascadejs/src/replicad_single.wasm",
+      "to": "app/components/geometry/kernel/replicad/wasm/replicad_single.wasm"
+    },
+    {
+      "from": "../../node_modules/replicad-opencascadejs/src/replicad_with_exceptions.wasm",
+      "to": "app/components/geometry/kernel/replicad/wasm/replicad_with_exceptions.wasm"
+    },
+    // KCL WASM file for Zoo kernel
+    // Using universal pattern for Node.js and browser compatibility
+    // @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
+    {
+      "from": "../../node_modules/@taucad/kcl-wasm-lib/kcl_wasm_lib_bg.wasm",
+      "to": "app/components/geometry/kernel/zoo/wasm/kcl_wasm_lib_bg.wasm"
     }
   ],
   // Always overwrite files

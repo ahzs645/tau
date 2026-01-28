@@ -1,4 +1,4 @@
-import type { ConstantRecord } from '@taucad/types';
+import type { ConstantRecord, ChatError } from '@taucad/types';
 import type { messageRole, messageStatus } from '#constants/message.constants.js';
 import type { MyUIMessage } from '#types/message.types.js';
 
@@ -18,15 +18,15 @@ export type MessageAnnotation = {
 export type ChatUsageTokens = {
   inputTokens: number;
   outputTokens: number;
-  cachedReadTokens: number;
-  cachedWriteTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type ChatUsageCost = {
   inputTokensCost: number;
   outputTokensCost: number;
-  cachedReadTokensCost: number;
-  cachedWriteTokensCost: number;
+  cacheReadTokensCost: number;
+  cacheWriteTokensCost: number;
   totalCost: number;
 };
 
@@ -37,6 +37,7 @@ export type Chat = {
   messages: MyUIMessage[];
   draft?: MyUIMessage; // Main draft
   messageEdits?: Record<string, MyUIMessage>; // Edit drafts by messageId
+  error?: ChatError; // Persisted error for display after page reload
   createdAt: number;
   updatedAt: number;
   deletedAt?: number; // Soft delete support

@@ -8,23 +8,24 @@
 export const formatCurrency = (value: number, options?: { significantFigures?: number }): string => {
   if (options?.significantFigures) {
     if (value === 0) {
-      return '$0.00';
+      return '0.00 USD';
     }
 
     const formatted = value.toPrecision(options.significantFigures);
     const numericValue = Number.parseFloat(formatted);
 
-    return numericValue.toLocaleString('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 6,
-    });
+    return numericValue
+      .toLocaleString('en-US', {
+        style: 'decimal',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 6,
+      })
+      .replace('$', '');
   }
 
   return value.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
+    style: 'decimal',
     minimumFractionDigits: 6,
+    maximumFractionDigits: 6,
   });
 };

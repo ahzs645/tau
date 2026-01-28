@@ -29,7 +29,7 @@ import {
   SidebarMenuButton,
   SidebarGroupLabel,
 } from '#components/ui/sidebar.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { DocsIcon } from '#components/icons/docs-icon.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { Button } from '#components/ui/button.js';
@@ -315,7 +315,7 @@ function DocsSidebarItem({
           {({ isActive, isPending }) => (
             <SidebarMenuButton asChild isActive={isActive} className={linkVariants({ active: isActive })}>
               <span>
-                {isPending ? <LoadingSpinner /> : renderIcon(item.icon)}
+                {isPending ? <Loader /> : renderIcon(item.icon)}
                 <span>{item.name}</span>
               </span>
             </SidebarMenuButton>
@@ -339,7 +339,7 @@ function DocsSidebarItem({
             {({ isActive, isPending }) => (
               <SidebarMenuButton asChild isActive={isActive} className={linkVariants({ active: isActive })}>
                 <span>
-                  {isPending ? <LoadingSpinner /> : renderIcon(folderIndex.icon)}
+                  {isPending ? <Loader /> : renderIcon(folderIndex.icon)}
                   <span>{folderIndex.name}</span>
                 </span>
               </SidebarMenuButton>

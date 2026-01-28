@@ -130,7 +130,7 @@ const validateOutputFiles = (files: File[], _expectedFormat: OutputFormat) => {
 /**
  * Validate GLB data format.
  */
-const validateGlbData = (glb: Uint8Array) => {
+const validateGlbData = (glb: Uint8Array<ArrayBuffer>) => {
   expect(glb).toBeInstanceOf(Uint8Array);
   expect(glb.length).toBeGreaterThan(0);
 
@@ -244,7 +244,7 @@ describe('File Conversion Integration', () => {
   // ========================================================================
 
   describe('export from GLB', () => {
-    let testGlb: Uint8Array;
+    let testGlb: Uint8Array<ArrayBuffer>;
 
     beforeAll(async () => {
       // Create test GLB data from a simple format

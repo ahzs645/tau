@@ -4,11 +4,11 @@ import type * as cheerio from 'cheerio';
 import { CheerioWebBaseLoader } from '@langchain/community/document_loaders/web/cheerio';
 import { RunnableSequence } from '@langchain/core/runnables';
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import type { TextSplitter } from 'langchain/text_splitter';
-import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-import { MemoryVectorStore } from 'langchain/vectorstores/memory';
-import { formatDocumentsAsString } from 'langchain/util/document';
-import type { DynamicStructuredTool } from '@langchain/core/tools';
+import type { TextSplitter } from '@langchain/classic/text_splitter';
+import { RecursiveCharacterTextSplitter } from '@langchain/classic/text_splitter';
+import { MemoryVectorStore } from '@langchain/classic/vectorstores/memory';
+import { formatDocumentsAsString } from '@langchain/classic/util/document';
+import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { webBrowserInputSchema } from '@taucad/chat';
 import type { WebBrowserInput } from '@taucad/chat';
@@ -100,21 +100,16 @@ const webBrowserImpl = async (input: WebBrowserInput, options: WebBrowserOptions
   }
 };
 
+const webBrowserToolDefinition = {
+  name: toolName.webBrowser,
+  description: 'Useful for when you need to find something on or summarize a webpage.',
+  schema: webBrowserInputSchema,
+} as const;
+
 /**
  * Creates a web browser tool that fetches and processes web content.
  * This version uses the functional API from LangChain.
  */
-export const createWebBrowserTool = (options: WebBrowserOptions): DynamicStructuredTool => {
-  // @ts-expect-error -- TODO: fix during AI-framework upgrade.
-  return tool(
-    // @ts-expect-error -- TODO: fix during AI-framework upgrade.
-    async (input: WebBrowserInput) => {
-      return webBrowserImpl(input, options);
-    },
-    {
-      name: toolName.webBrowser,
-      description: 'Useful for when you need to find something on or summarize a webpage.',
-      schema: webBrowserInputSchema,
-    },
-  );
+export const createWebBrowserTool = (options: WebBrowserOptions): StructuredTool => {
+  return tool(async (input: WebBrowserInput) => webBrowserImpl(input, options), webBrowserToolDefinition);
 };

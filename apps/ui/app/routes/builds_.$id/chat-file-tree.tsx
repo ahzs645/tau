@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { XIcon, Files } from 'lucide-react';
 import {
   FloatingPanel,
@@ -48,6 +48,9 @@ export const ChatFileTree = memo(function (props: {
 }) {
   const { className, isExpanded = true, setIsExpanded } = props;
 
+  // State to toggle search visibility (blur-resistant)
+  const [isSearchVisible, setIsSearchVisible] = useState(false);
+
   const toggleFileTree = useCallback(() => {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
@@ -66,7 +69,7 @@ export const ChatFileTree = memo(function (props: {
         )}
       />
       <FloatingPanelContent>
-        <ChatEditorFileTree />
+        <ChatEditorFileTree enableSearch={isSearchVisible} onSearchChange={setIsSearchVisible} />
       </FloatingPanelContent>
     </FloatingPanel>
   );

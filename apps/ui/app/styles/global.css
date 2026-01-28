@@ -356,22 +356,6 @@
   white-space: nowrap;
 }
 
-@layer utilities {
-  @keyframes hammer-animated-effect {
-    0% { transform: rotate(0deg) translateY(0px); }
-    15% { transform: rotate(35deg) translateY(-2.5px); } /* Hit overshoot */
-    30% { transform: rotate(28deg) translateY(-1.8px); } /* Recoil */
-    40% { transform: rotate(30deg) translateY(-2px); }    /* Settled hit / Start of return phase */
-    70% { transform: rotate(-8deg) translateY(1px); }   /* Return overshoot */
-    100% { transform: rotate(0deg) translateY(0px); }
-  }
-
-  .hammer-animated-effect-class {
-    animation: hammer-animated-effect 1s infinite ease-in-out;
-    /* transform-origin will be set by inline style in the component */
-  }
-}
-
 /* END ANIMATION UTILITIES */
 
 /*
@@ -470,29 +454,89 @@
 /* 
  * Pure CSS scrolling shadows using gradients and background-attachment.
  * Inspired by: https://lea.verou.me/2012/04/background-attachment-local/
+ * 
+ * Usage: scroll-shadows-x, scroll-shadows-y, or scroll-shadows (both)
+ * Override --scroll-shadows-bg to match your container's background color.
  */
-@utility scroll-shadows-x {
-  --scroll-shadows-gradient-color: rgba(0, 0, 0, 0.15);
-  
-  &:is(.dark *) {
-    --scroll-shadows-gradient-color: rgba(0, 0, 0, 0.6);
-  }
 
+/* Shared scroll shadow variables */
+:root {
+  --scroll-shadows-color: rgba(0, 0, 0, 0.06);
+  --scroll-shadows-bg: var(--popover);
+  --scroll-shadows-cover-size: 40px;
+  --scroll-shadows-size: 14px;
+}
+
+.dark,
+:root[class~="dark"] {
+  --scroll-shadows-color: rgba(255, 255, 255, 0.06);
+}
+
+@utility scroll-shadows-x {
   overflow: auto;
   background:
-    /* Shadow covers - these stay fixed and hide shadows at edges */
-    linear-gradient(90deg, var(--muted) 30%, transparent),
-    linear-gradient(90deg, transparent, var(--muted) 70%) 0 100%,
-    
-    /* Shadows - these scroll with content (using linear for cleaner, more gradual effect) */
-    linear-gradient(90deg, var(--scroll-shadows-gradient-color), transparent),
-    linear-gradient(270deg, var(--scroll-shadows-gradient-color), transparent) 0 100%;
-  
+    /* Covers (scroll with content) */
+    linear-gradient(90deg, var(--scroll-shadows-bg) 30%, transparent) left,
+    linear-gradient(270deg, var(--scroll-shadows-bg) 30%, transparent) right,
+    /* Shadows (stay fixed) */
+    linear-gradient(90deg, var(--scroll-shadows-color), transparent) left,
+    linear-gradient(270deg, var(--scroll-shadows-color), transparent) right;
   background-repeat: no-repeat;
-  background-color: var(--sidebar-background);
-  background-position: top left, top right, top left, top right;
-  background-size: 40px 100%, 40px 100%, 20px 100%, 20px 100%;
-  /* Covers scroll with content, shadows stay fixed */
+  background-color: var(--scroll-shadows-bg);
+  background-size:
+    var(--scroll-shadows-cover-size) 100%,
+    var(--scroll-shadows-cover-size) 100%,
+    var(--scroll-shadows-size) 100%,
+    var(--scroll-shadows-size) 100%;
   background-attachment: local, local, scroll, scroll;
 }
+
+@utility scroll-shadows-y {
+  overflow: auto;
+  background:
+    /* Covers (scroll with content) */
+    linear-gradient(180deg, var(--scroll-shadows-bg) 30%, transparent) top,
+    linear-gradient(0deg, var(--scroll-shadows-bg) 30%, transparent) bottom,
+    /* Shadows (stay fixed) */
+    linear-gradient(180deg, var(--scroll-shadows-color), transparent) top,
+    linear-gradient(0deg, var(--scroll-shadows-color), transparent) bottom;
+  background-repeat: no-repeat;
+  background-color: var(--scroll-shadows-bg);
+  background-size:
+    100% var(--scroll-shadows-cover-size),
+    100% var(--scroll-shadows-cover-size),
+    100% var(--scroll-shadows-size),
+    100% var(--scroll-shadows-size);
+  background-attachment: local, local, scroll, scroll;
+}
+
+@utility scroll-shadows {
+  overflow: auto;
+  background:
+    /* Y covers (scroll with content) */
+    linear-gradient(180deg, var(--scroll-shadows-bg) 30%, transparent) top,
+    linear-gradient(0deg, var(--scroll-shadows-bg) 30%, transparent) bottom,
+    /* X covers (scroll with content) */
+    linear-gradient(90deg, var(--scroll-shadows-bg) 30%, transparent) left,
+    linear-gradient(270deg, var(--scroll-shadows-bg) 30%, transparent) right,
+    /* Y shadows (stay fixed) */
+    linear-gradient(180deg, var(--scroll-shadows-color), transparent) top,
+    linear-gradient(0deg, var(--scroll-shadows-color), transparent) bottom,
+    /* X shadows (stay fixed) */
+    linear-gradient(90deg, var(--scroll-shadows-color), transparent) left,
+    linear-gradient(270deg, var(--scroll-shadows-color), transparent) right;
+  background-repeat: no-repeat;
+  background-color: var(--scroll-shadows-bg);
+  background-size:
+    100% var(--scroll-shadows-cover-size),
+    100% var(--scroll-shadows-cover-size),
+    var(--scroll-shadows-cover-size) 100%,
+    var(--scroll-shadows-cover-size) 100%,
+    100% var(--scroll-shadows-size),
+    100% var(--scroll-shadows-size),
+    var(--scroll-shadows-size) 100%,
+    var(--scroll-shadows-size) 100%;
+  background-attachment: local, local, local, local, scroll, scroll, scroll, scroll;
+}
+
 /* END SCROLL SHADOWS */

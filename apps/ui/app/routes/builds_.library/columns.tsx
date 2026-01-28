@@ -10,7 +10,7 @@ import { Checkbox } from '#components/ui/checkbox.js';
 import { formatRelativeTime } from '#utils/date.utils.js';
 import type { BuildActions } from '#routes/builds_.library/route.js';
 import { BuildActionDropdown } from '#routes/builds_.library/build-action-dropdown.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { InlineTextEditor } from '#components/inline-text-editor.js';
 
 // Rename component for table cells
@@ -125,7 +125,7 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
               <NavLink to={`/builds/${build.id}`}>
                 {({ isPending }) =>
                   isPending ? (
-                    <LoadingSpinner />
+                    <Loader />
                   ) : (
                     <>
                       Open

@@ -1,4 +1,4 @@
-import { Star, Eye, ArrowRight } from 'lucide-react';
+import { Eye, ArrowRight } from 'lucide-react';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useSelector } from '@xstate/react';
@@ -11,8 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '#components/ui/avatar.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardFooter } from '#components/ui/card.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
-import { HammerAnimation } from '#components/hammer-animation.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useChatManager } from '#hooks/use-chat-manager.js';
@@ -70,17 +69,7 @@ export function CommunityBuildGrid({
   );
 }
 
-function ProjectCard({
-  id,
-  name,
-  description,
-  thumbnail,
-  stars,
-  author,
-  tags,
-  assets,
-  files,
-}: CommunityBuildCardProperties) {
+function ProjectCard({ id, name, description, thumbnail, author, tags, assets, files }: CommunityBuildCardProperties) {
   const [showPreview, setShowPreview] = useState(false);
   const [isForking, setIsForking] = useState(false);
   const [hasLoadedModel, setHasLoadedModel] = useState(false);
@@ -111,11 +100,6 @@ function ProjectCard({
     }
   }, [showPreview, hasLoadedModel, buildRef]);
 
-  const handleStar = useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    // TODO: Implement star functionality
-  }, []);
-
   const handleFork = useCallback(
     async (event: React.MouseEvent) => {
       event.stopPropagation();
@@ -132,8 +116,6 @@ function ProjectCard({
           name: `${name} (Remixed)`,
           description,
           thumbnail,
-          stars: 0,
-          forks: 0,
           author, // TODO: This should be the current user in a real implementation
           tags,
           assets,
@@ -169,7 +151,7 @@ function ProjectCard({
 
       // Write files to filesystem on first preview toggle (temporary until in-memory fs)
       if (!showPreview && !hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array }> = {};
+        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
         for (const [path, file] of Object.entries(files)) {
           buildFiles[`/builds/${id}/${path}`] = file;
         }
@@ -205,7 +187,7 @@ function ProjectCard({
             <div className="size-full object-cover">
               {['initializing', 'booting'].includes(status) ? (
                 <div className="flex size-full items-center justify-center">
-                  <HammerAnimation className="size-10" />
+                  <Loader className="size-10" />
                 </div>
               ) : null}
               <div
@@ -279,27 +261,13 @@ function ProjectCard({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="group flex h-7 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-yellow sm:h-8 sm:px-3 sm:text-sm"
-                    onClick={handleStar}
-                  >
-                    {stars}
-                    <Star className="size-3.5 sm:size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Star this project</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
                     className="flex h-7 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-primary sm:h-8 sm:px-3 sm:text-sm"
                     disabled={isForking}
                     onClick={handleFork}
                   >
                     <span className="text-xs sm:text-sm">Remix</span>
                     {isForking ? (
-                      <LoadingSpinner className="size-3.5 sm:size-4" />
+                      <Loader className="size-3.5 sm:size-4" />
                     ) : (
                       <ArrowRight className="size-3.5 sm:size-4" />
                     )}

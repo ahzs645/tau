@@ -1,4 +1,7 @@
 /* eslint-disable no-barrel-files/no-barrel-files -- package entry point. */
+
+// Types
+export type * from '#types/api.types.js';
 export type * from '#types/build.types.js';
 export type * from '#types/cad.types.js';
 export type * from '#types/code.types.js';
@@ -9,6 +12,8 @@ export type * from '#types/git.types.js';
 export type * from '#types/graphics.types.js';
 export type * from '#types/id.types.js';
 export type * from '#types/kernel.types.js';
+export type * from '#types/kernel-worker.types.js';
+export type * from '#types/logger.types.js';
 export type * from '#types/manufacturing.types.js';
 export type * from '#types/schema.types.js';
 export type * from '#types/json-value.types.js';

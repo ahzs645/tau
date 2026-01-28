@@ -26,7 +26,7 @@ import { InteractiveHoverButton } from '#components/magicui/interactive-hover-bu
 import { toast } from '#components/ui/sonner.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useChatManager } from '#hooks/use-chat-manager.js';
@@ -104,7 +104,7 @@ export default function ChatStart(): React.JSX.Element {
             </h1>
           </div>
 
-          <ChatProvider value={{}}>
+          <ChatProvider>
             <div className="space-y-4">
               <div className="flex justify-center">
                 <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />
@@ -125,7 +125,7 @@ export default function ChatStart(): React.JSX.Element {
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
                   <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
-                    {isPending ? <LoadingSpinner /> : 'Build from code'}
+                    {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}
               </NavLink>

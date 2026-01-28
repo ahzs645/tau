@@ -1,10 +1,12 @@
 import type { LinksFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 import { Links, Meta, Scripts, ScrollRestoration, useRouteLoaderData } from 'react-router';
-import { PreventFlashOnWrongTheme, Theme, ThemeProvider, useTheme } from 'remix-themes';
+import { PreventFlashOnWrongTheme, ThemeProvider } from 'remix-themes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Model } from '@taucad/chat';
+import { useTheme } from '#hooks/use-theme.js';
+import type { ThemeWithSystem } from '#hooks/use-theme.js';
 import { getEnvironment } from '#environment.config.js';
 import { metaConfig } from '#constants/meta.constants.js';
 import { Page } from '#components/layout/page.js';
@@ -25,6 +27,7 @@ import { BuildManagerProvider } from '#hooks/use-build-manager.js';
 import { ChatManagerProvider } from '#hooks/use-chat-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { AnalyticsProvider } from '#hooks/use-analytics.js';
+import { ChatRpcSocketProvider } from '#hooks/use-chat-rpc-socket.js';
 
 export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
 
@@ -70,7 +73,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export function Layout({ children }: { readonly children: ReactNode }): React.JSX.Element {
   const data = useRouteLoaderData<typeof loader>('root');
-  const ssrTheme = data?.theme ?? Theme.LIGHT;
+  // Preserve null for system theme - remix-themes needs null to detect system preference
+  const ssrTheme = data?.theme ?? null;
   const queryClient = useMemo(
     () =>
       new QueryClient({
@@ -89,15 +93,17 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
           <FileManagerProvider rootDirectory="/">
             <BuildManagerProvider>
               <ChatManagerProvider>
-                <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
-                  <ColorProvider>
-                    <TooltipProvider>
-                      <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
-                        {children}
-                      </LayoutDocument>
-                    </TooltipProvider>
-                  </ColorProvider>
-                </ThemeProvider>
+                <ChatRpcSocketProvider>
+                  <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
+                    <ColorProvider>
+                      <TooltipProvider>
+                        <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
+                          {children}
+                        </LayoutDocument>
+                      </TooltipProvider>
+                    </ColorProvider>
+                  </ThemeProvider>
+                </ChatRpcSocketProvider>
               </ChatManagerProvider>
             </BuildManagerProvider>
           </FileManagerProvider>
@@ -114,9 +120,9 @@ function LayoutDocument({
 }: {
   readonly children: ReactNode;
   readonly env: Record<string, string>;
-  readonly ssrTheme: Theme;
+  readonly ssrTheme: ThemeWithSystem;
 }): React.JSX.Element {
-  const [theme] = useTheme();
+  const { theme } = useTheme();
   const color = useColor();
   const { setFaviconColor } = useFavicon();
 
@@ -130,7 +136,7 @@ function LayoutDocument({
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
-        <PreventFlashOnWrongTheme ssrTheme={Boolean(ssrTheme)} />
+        <PreventFlashOnWrongTheme ssrTheme={ssrTheme !== null} />
         <Links />
       </head>
       <body>

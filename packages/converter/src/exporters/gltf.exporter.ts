@@ -20,7 +20,7 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
     this.io = new NodeIO().registerExtensions(allExtensions);
   }
 
-  public async parseAsync(glbData: Uint8Array, options?: Partial<GltfExporterOptions>): Promise<File[]> {
+  public async parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<GltfExporterOptions>): Promise<File[]> {
     if (glbData.length === 0) {
       throw new Error('GLB data cannot be empty');
     }
@@ -41,8 +41,8 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
 
       if (binary) {
         // GLB format - write transformed document as GLB
-        const transformedGlb = await this.io.writeBinary(document);
-        return [this.createOutputFile('model', 'glb', new Uint8Array(transformedGlb))];
+        const transformedGlb = (await this.io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+        return [this.createOutputFile('model', 'glb', transformedGlb)];
       }
 
       // GLTF format - write as GLTF JSON
@@ -61,7 +61,7 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
           // Use the URI directly as the filename to ensure consistency
           outputFiles.push({
             name: uri,
-            data: data instanceof Uint8Array ? data : new Uint8Array(data),
+            data: data as Uint8Array<ArrayBuffer>,
           });
         }
       }

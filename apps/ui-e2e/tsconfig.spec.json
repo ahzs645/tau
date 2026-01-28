@@ -2,9 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "./out-tsc/spec",
-    "baseUrl": ".",
     "paths": {
-      "#*": ["src/*"]
+      "#*": ["./src/*"]
     }
   },
   "include": [

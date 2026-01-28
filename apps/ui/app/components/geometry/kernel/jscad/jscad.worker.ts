@@ -1,25 +1,35 @@
-import { expose } from 'comlink';
 import ErrorStackParser from 'error-stack-parser';
 import type {
-  ComputeGeometryResult,
+  CreateGeometryResult,
   ExportFormat,
   ExportGeometryResult,
-  ExtractParametersResult,
-  Geometry,
-  KernelError,
+  GetParametersResult,
+  GeometryResponse,
+  KernelIssue,
   KernelErrorResult,
   KernelStackFrame,
+  KernelRuntime,
+  KernelLogger,
+  InitializeInput,
+  CanHandleInput,
+  GetDependenciesInput,
+  GetParametersInput,
+  CreateGeometryInput,
+  ExportGeometryInput,
 } from '@taucad/types';
+import { exposeWorker } from '#components/geometry/kernel/utils/comlink-worker.utils.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { buildEsModule, runInCjsContext, registerKernelModules } from '#components/geometry/kernel/replicad/vm.js';
 import { jscadToGltf } from '#components/geometry/kernel/jscad/jscad-to-gltf.js';
 import { jsonSchemaFromJson } from '#utils/schema.utils.js';
+import { asBuffer } from '#utils/file.utils.js';
 import type { JscadParameterDefinition } from '#components/geometry/kernel/jscad/jscad.schema.js';
 import {
   convertParameterDefinitionsToDefaults,
   convertParameterDefinitionsToJsonSchema,
 } from '#components/geometry/kernel/jscad/jscad.schema.js';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 type JscadModuleExports = {
   getParameterDefinitions?: () => JscadParameterDefinition[];
@@ -65,7 +75,7 @@ function isModuleWithEntryPoint(module: unknown): module is {
 }
 
 /**
- * Helper function to create standardized kernel errors with stack trace information
+ * Helper function to create standardized kernel issues with stack trace information
  *
  * Extracts detailed error information from various error types:
  * - Error objects: Parses stack traces to extract file, line, and column information
@@ -79,7 +89,7 @@ function isModuleWithEntryPoint(module: unknown): module is {
  * @param fileName - Optional filename for location context
  * @returns KernelErrorResult with formatted error information
  */
-function createJscadKernelError(error: unknown, fallbackMessage: string, fileName?: string): KernelErrorResult {
+function createJscadKernelIssue(error: unknown, fallbackMessage: string, fileName?: string): KernelErrorResult {
   let message = fallbackMessage;
   let stack: string | undefined;
   let kernelStackFrames: KernelStackFrame[] = [];
@@ -117,15 +127,16 @@ function createJscadKernelError(error: unknown, fallbackMessage: string, fileNam
   // Only include location if we have a fileName and meaningful position data
   const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
 
-  const kernelError: KernelError = {
+  const kernelIssue: KernelIssue = {
     message,
     location: hasLocation ? { fileName, startLineNumber, startColumn } : undefined,
     stack,
     stackFrames: kernelStackFrames.length > 0 ? kernelStackFrames : undefined,
     type,
+    severity: 'error',
   };
 
-  return createKernelError(kernelError);
+  return createKernelError([kernelIssue]);
 }
 
 /**
@@ -137,7 +148,7 @@ function createJscadKernelError(error: unknown, fallbackMessage: string, fileNam
  * - Converts JSCAD geometries to GLTF for rendering
  * - Supports parameter extraction from getParameterDefinitions()
  */
-class JscadWorker extends KernelWorker {
+export class JscadWorker extends KernelWorker {
   protected static override readonly supportedExportFormats: ExportFormat[] = ['glb', 'gltf'];
   protected override readonly name: string = 'JscadWorker';
 
@@ -153,8 +164,8 @@ class JscadWorker extends KernelWorker {
     registerKernelModules();
   }
 
-  protected override async initialize(): Promise<void> {
-    this.debug('Initialized JSCAD worker with @jscad/modeling', { operation: 'initialize' });
+  protected override async initialize(_input: InitializeInput, { logger }: KernelRuntime): Promise<void> {
+    logger.debug('Initialized JSCAD worker with @jscad/modeling');
   }
 
   protected override async cleanup(): Promise<void> {
@@ -163,16 +174,26 @@ class JscadWorker extends KernelWorker {
     this.geometryAccessOrder = [];
   }
 
-  protected override async canHandle(filename: string, extension: string): Promise<boolean> {
-    if (!['ts', 'js', 'tsx', 'jsx'].includes(extension)) {
+  protected override async canHandle(
+    { filePath, extension }: CanHandleInput,
+    { filesystem }: KernelRuntime,
+  ): Promise<boolean> {
+    // JSX/TSX files are not supported as they require React transpilation
+    if (!['ts', 'js'].includes(extension)) {
       return false;
     }
 
-    const code = await this.readFile(filename, 'utf8');
+    const code = await filesystem.readFile(filePath, 'utf8');
     const hasEsmImport = /import\s+.*from\s+['"]@jscad\/modeling['"]/.test(code);
     const hasRequire = /require\s*\(\s*['"]@jscad\/modeling['"]\s*\)/.test(code);
     const hasNamespaceUsage = /\b@jscad\/modeling\b/.test(code);
     return hasEsmImport || hasRequire || hasNamespaceUsage;
+  }
+
+  protected override async getDependencies({ filePath }: GetDependenciesInput): Promise<string[]> {
+    // JSCAD currently only supports single-file operations
+    // Return absolute path
+    return [filePath];
   }
 
   /**
@@ -191,10 +212,10 @@ class JscadWorker extends KernelWorker {
    * 5. Returns both for UI generation and validation
    *
    * If no parameters are found, returns empty defaults with generated schema.
-   * Errors during extraction are caught and returned as kernel errors.
+   * Errors during extraction are caught and returned as kernel issues.
    *
    * @param file - Geometry file containing JSCAD source code
-   * @returns ExtractParametersResult containing:
+   * @returns GetParametersResult containing:
    *          - defaultParameters: Object mapping parameter names to initial values
    *          - jsonSchema: JSON Schema object for validation and UI generation
    *          - Or kernel error if extraction fails
@@ -212,9 +233,13 @@ class JscadWorker extends KernelWorker {
    * module.exports.defaultParams = { width: 10 };
    * ```
    */
-  protected override async extractParameters(filename: string): Promise<ExtractParametersResult> {
+  protected override async getParameters(
+    { filePath, basePath }: GetParametersInput,
+    { filesystem }: KernelRuntime,
+  ): Promise<GetParametersResult> {
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
     try {
-      const code = await this.readFile(filename, 'utf8');
+      const code = await filesystem.readFile(filePath, 'utf8');
       let defaultParameters: Record<string, unknown> = {};
       let jsonSchema;
 
@@ -263,7 +288,7 @@ class JscadWorker extends KernelWorker {
         jsonSchema,
       });
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to extract parameters', filename);
+      return createJscadKernelIssue(error, 'Failed to extract parameters', relativeFilePath);
     }
   }
 
@@ -290,29 +315,30 @@ class JscadWorker extends KernelWorker {
    *
    * @param file - Geometry file containing JSCAD source code
    * @param parameters - Object mapping parameter names to values for parametric designs
-   * @param geometryId - Unique identifier to store computed shapes in memory (default: 'defaultGeometry')
-   * @returns ComputeGeometryResult containing:
+   * @param geometryId - Unique identifier to store computed shapes in memory (default: 'default')
+   * @returns CreateGeometryResult containing:
    *          - Array of Geometry objects with glTF blobs ready for rendering
    *          - Or kernel error if code execution fails
    *
    * @example
    * ```typescript
-   * const file = { filename: 'box.js', content: '...' };
+   * const file = { filePath: 'box.js', content: '...' };
    * const params = { width: 10, height: 20 };
-   * const result = await worker.computeGeometry(file, params);
+   * const result = await worker.createGeometry(file, params);
    * // result is array of { format: 'gltf', gltfData: Blob }
    * ```
    */
-  protected override async computeGeometry(
-    filename: string,
-    parameters: Record<string, unknown> = {},
-    geometryId = 'defaultGeometry',
-  ): Promise<ComputeGeometryResult> {
+  protected override async createGeometry(
+    { filePath, basePath, parameters }: CreateGeometryInput,
+    { filesystem, logger }: KernelRuntime,
+  ): Promise<CreateGeometryResult> {
+    const geometryId = 'default';
+    const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
     const startTime = performance.now();
-    this.log('Computing JSCAD geometry from code', { operation: 'computeGeometry' });
+    logger.log('Computing JSCAD geometry from code');
 
     try {
-      const code = await this.readFile(filename, 'utf8');
+      const code = await filesystem.readFile(filePath, 'utf8');
 
       // Execute the user code with parameters
       let shapes: unknown;
@@ -321,19 +347,16 @@ class JscadWorker extends KernelWorker {
         const runCodeStartTime = performance.now();
         shapes = await this.runCode(code, parameters);
         const runCodeEndTime = performance.now();
-        this.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`, { operation: 'computeGeometry' });
+        logger.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`);
       } catch (error) {
         const endTime = performance.now();
-        this.error(`Error occurred after ${endTime - startTime}ms`, {
-          data: error,
-          operation: 'computeGeometry',
-        });
-        return createJscadKernelError(error, 'Failed to execute JSCAD code', filename);
+        logger.error(`Error occurred after ${endTime - startTime}ms`, { data: error });
+        return createJscadKernelIssue(error, 'Failed to execute JSCAD code', relativeFilePath);
       }
 
       // Store shapes in memory for export with LRU cleanup
       const shapesArray = Array.isArray(shapes) ? shapes : [shapes];
-      this.storeShapesWithLruCleanup(geometryId, shapesArray.filter(Boolean));
+      this.storeShapesWithLruCleanup(geometryId, shapesArray.filter(Boolean), logger);
 
       // Convert JSCAD geometry to GLTF for rendering
       if (shapesArray.length === 0) {
@@ -341,7 +364,7 @@ class JscadWorker extends KernelWorker {
       }
 
       const gltfStartTime = performance.now();
-      const geometries: Geometry[] = [];
+      const geometries: GeometryResponse[] = [];
 
       // Convert shapes sequentially
       const results = await Promise.allSettled(shapesArray.filter(Boolean).map(async (shape) => jscadToGltf(shape)));
@@ -353,35 +376,36 @@ class JscadWorker extends KernelWorker {
             content: result.value,
           });
         } else {
-          this.warn('Failed to convert shape to GLTF', { data: result.reason, operation: 'computeGeometry' });
+          logger.warn('Failed to convert shape to GLTF', { data: result.reason });
         }
       }
 
       const gltfEndTime = performance.now();
-      this.log(`GLTF conversion took ${gltfEndTime - gltfStartTime}ms`, { operation: 'computeGeometry' });
+      logger.log(`GLTF conversion took ${gltfEndTime - gltfStartTime}ms`);
 
       const endTime = performance.now();
-      this.log(`Total computeGeometry took ${endTime - startTime}ms`, { operation: 'computeGeometry' });
+      logger.log(`Total createGeometry took ${endTime - startTime}ms`);
 
       return createKernelSuccess(geometries);
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to compute JSCAD geometry', filename);
+      return createJscadKernelIssue(error, 'Failed to compute JSCAD geometry', relativeFilePath);
     }
   }
 
-  protected override async exportGeometry(
-    fileType: ExportFormat,
-    geometryId = 'defaultGeometry',
-  ): Promise<ExportGeometryResult> {
+  protected override async exportGeometry({ fileType }: ExportGeometryInput): Promise<ExportGeometryResult> {
+    const geometryId = 'default';
     try {
       // Check if geometry exists in memory
       const shapes = this.shapesMemory[geometryId];
       if (!shapes || shapes.length === 0) {
         // System error - no location needed
-        return createKernelError({
-          message: `Geometry ${geometryId} not computed yet. Please compute geometry before exporting.`,
-          type: 'runtime',
-        });
+        return createKernelError([
+          {
+            message: `Geometry ${geometryId} not computed yet. Please compute geometry before exporting.`,
+            type: 'runtime',
+            severity: 'error',
+          },
+        ]);
       }
 
       // Handle GLTF/GLB export by converting shapes to GLTF
@@ -393,15 +417,18 @@ class JscadWorker extends KernelWorker {
         const blob = gltfBlobs[0];
         if (!blob) {
           // System error - no location needed
-          return createKernelError({
-            message: 'Failed to generate GLTF from computed geometry',
-            type: 'runtime',
-          });
+          return createKernelError([
+            {
+              message: 'Failed to generate GLTF from computed geometry',
+              type: 'runtime',
+              severity: 'error',
+            },
+          ]);
         }
 
         return createKernelSuccess([
           {
-            blob: new Blob([blob]),
+            blob: new Blob([asBuffer(blob.buffer)]),
             name: fileType === 'glb' ? 'model.glb' : 'model.gltf',
           },
         ]);
@@ -410,12 +437,15 @@ class JscadWorker extends KernelWorker {
       // STL and STL-binary formats are not yet implemented for JSCAD
       // This would require installing and using @jscad/stl-serializer
       // System error - no location needed
-      return createKernelError({
-        message: `Export format '${fileType}' is not yet implemented for JSCAD. Only 'glb' and 'gltf' formats are currently supported.`,
-        type: 'runtime',
-      });
+      return createKernelError([
+        {
+          message: `Export format '${fileType}' is not yet implemented for JSCAD. Only 'glb' and 'gltf' formats are currently supported.`,
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
     } catch (error) {
-      return createJscadKernelError(error, 'Failed to export JSCAD geometry');
+      return createJscadKernelIssue(error, 'Failed to export JSCAD geometry');
     }
   }
 
@@ -442,9 +472,9 @@ class JscadWorker extends KernelWorker {
    *          May also be undefined if code has no explicit return
    *
    * @throws Throws error if code execution fails (syntax errors, runtime errors)
-   *         Errors are caught by callers and converted to kernel errors
+   *         Errors are caught by callers and converted to kernel issues
    *
-   * @internal This is a private method used internally by computeGeometry().
+   * @internal This is a private method used internally by createGeometry().
    */
   private async runCode(code: string, parameters: Record<string, unknown>): Promise<unknown> {
     if (/^\s*export\s+/m.test(code)) {
@@ -496,10 +526,11 @@ class JscadWorker extends KernelWorker {
    *
    * @param geometryId - The unique identifier for this geometry
    * @param shapes - Array of JSCAD geometry objects to store
+   * @param logger - Logger interface for debug output
    *
-   * @internal This is a private method used internally by computeGeometry().
+   * @internal This is a private method used internally by createGeometry().
    */
-  private storeShapesWithLruCleanup(geometryId: string, shapes: unknown[]): void {
+  private storeShapesWithLruCleanup(geometryId: string, shapes: unknown[], logger: KernelLogger): void {
     // Update access order - remove if exists and add to end (most recent)
     const existingIndex = this.geometryAccessOrder.indexOf(geometryId);
     if (existingIndex !== -1) {
@@ -517,14 +548,14 @@ class JscadWorker extends KernelWorker {
       if (oldestGeometryId) {
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- LRU cache cleanup
         delete this.shapesMemory[oldestGeometryId];
-        this.debug(`Cleaned up old geometry from memory: ${oldestGeometryId}`, {
-          operation: 'storeShapesWithLruCleanup',
-        });
+        logger.debug(`Cleaned up old geometry from memory: ${oldestGeometryId}`);
       }
     }
   }
 }
 
-const service = new JscadWorker();
-expose(service);
+const worker = new JscadWorker();
+const service = wrapForComlink(worker);
+exposeWorker(service);
+
 export type JscadWorkerInterface = typeof service;

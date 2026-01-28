@@ -17,7 +17,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '#components/ui/sidebar.js';
-import { LoadingSpinner } from '#components/ui/loading-spinner.js';
+import { Loader } from '#components/ui/loader.js';
 
 export function NavProjects({
   projects,
@@ -40,7 +40,7 @@ export function NavProjects({
               {({ isPending, isActive }) => (
                 <SidebarMenuButton asChild isActive={isActive}>
                   <span>
-                    {isPending ? <LoadingSpinner /> : <item.icon />}
+                    {isPending ? <Loader /> : <item.icon />}
                     <span>{item.name}</span>
                   </span>
                 </SidebarMenuButton>

@@ -1,6 +1,6 @@
 import { FileArchive, FileIcon } from 'lucide-react';
 import type { OutputFormat } from '@taucad/converter';
-import { getFileExtension } from '#components/geometry/converter/converter-utils.js';
+import { getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';
 
 type ConverterFileTreeProps = {
   readonly selectedFormats: OutputFormat[];
@@ -26,7 +26,7 @@ export function ConverterFileTree({
       return null;
     }
 
-    const extension = getFileExtension(format);
+    const extension = getExtensionForFormat(format);
     const outputFileName = `${baseFileName}.${extension}`;
 
     return (
@@ -41,7 +41,7 @@ export function ConverterFileTree({
 
   // Multiple files
   const files = selectedFormats.map((format) => {
-    const extension = getFileExtension(format);
+    const extension = getExtensionForFormat(format);
     return `${baseFileName}.${extension}`;
   });
 

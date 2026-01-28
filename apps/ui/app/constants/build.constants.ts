@@ -6,7 +6,7 @@ export type CreateInitialBuildOptions = {
   chatId: string;
   initialMessage: MyUIMessage;
   mainFileName: string;
-  emptyCodeContent: Uint8Array;
+  emptyCodeContent: Uint8Array<ArrayBuffer>;
 };
 
 export type CreateInitialBuildResult = {
@@ -20,8 +20,6 @@ export function createInitialBuild(options: CreateInitialBuildOptions): CreateIn
   const buildData: Omit<Build, 'id' | 'createdAt' | 'updatedAt'> = {
     name: buildName,
     description: '',
-    stars: 0,
-    forks: 0,
     author: {
       name: 'You',
       avatar: '/avatar-sample.png',

@@ -78,7 +78,7 @@ export function getFileExtension(filename: string): string {
  * isBinaryFile('image.png') // true
  * isBinaryFile('main.ts') // false
  */
-export function isBinaryFile(filename: string, data?: Uint8Array): boolean {
+export function isBinaryFile(filename: string, data?: Uint8Array<ArrayBuffer>): boolean {
   // Fast path: check extension
   const ext = getFileExtension(filename).toLowerCase();
   if (binaryExtensions.has(ext)) {
@@ -107,7 +107,7 @@ export function isBinaryFile(filename: string, data?: Uint8Array): boolean {
  * @example
  * decodeTextFile(new Uint8Array([72, 101, 108, 108, 111])) // 'Hello'
  */
-export function decodeTextFile(data: Uint8Array): string {
+export function decodeTextFile(data: Uint8Array<ArrayBuffer>): string {
   const decoder = new TextDecoder('utf8');
   return decoder.decode(data);
 }
@@ -121,7 +121,7 @@ export function decodeTextFile(data: Uint8Array): string {
  * @example
  * encodeTextFile('Hello') // Uint8Array([72, 101, 108, 108, 111])
  */
-export function encodeTextFile(text: string): Uint8Array {
+export function encodeTextFile(text: string): Uint8Array<ArrayBuffer> {
   const encoder = new TextEncoder();
   return encoder.encode(text);
 }

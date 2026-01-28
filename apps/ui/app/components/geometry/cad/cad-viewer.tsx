@@ -29,13 +29,12 @@ export function CadViewer({
 
   return (
     <ThreeProvider {...properties}>
-      {geometries.map((geometry, index) => {
+      {geometries.map((geometry) => {
         switch (geometry.format) {
           case 'gltf': {
             return (
               <GltfMesh
-                // eslint-disable-next-line react/no-array-index-key -- TODO: add a unique key to the geometry (likely a hash key)
-                key={index}
+                key={geometry.hash}
                 gltfFile={geometry.content}
                 enableMatcap={enableMatcap}
                 enableSurfaces={enableSurfaces}
@@ -48,8 +47,8 @@ export function CadViewer({
             throw new Error('2D geometries are not supported');
           }
 
-          case 'video-stream': {
-            throw new Error('Video stream geometries are not supported');
+          case 'webrtc': {
+            throw new Error('WebRTC geometries are not supported');
           }
 
           default: {

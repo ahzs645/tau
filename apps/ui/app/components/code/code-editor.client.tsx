@@ -1,6 +1,5 @@
 import { Editor, useMonaco } from '@monaco-editor/react';
 import type { EditorProps } from '@monaco-editor/react';
-import { Theme, useTheme } from 'remix-themes';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { shikiToMonaco } from '@shikijs/monaco';
 import type { AnyActorRef } from 'xstate';
@@ -12,9 +11,10 @@ import { configureMonaco, registerCompletions } from '#lib/monaco.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { registerKclNavigation } from '#lib/kcl-language/lsp/kcl-navigation-service.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
 
 type FileManagerApi = {
-  readFile: (path: string) => Promise<Uint8Array>;
+  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
 };
 
 type CodeEditorProperties = EditorProps & {
@@ -23,6 +23,8 @@ type CodeEditorProperties = EditorProps & {
   readonly fileExplorerRef?: AnyActorRef;
   /** Optional file manager for KCL navigation */
   readonly fileManager?: FileManagerApi;
+  /** Build ID for namespacing Monaco URIs - required for KCL navigation */
+  readonly buildId?: string;
 };
 
 await configureMonaco();
@@ -31,9 +33,10 @@ export function CodeEditor({
   className,
   fileExplorerRef,
   fileManager,
+  buildId,
   ...rest
 }: CodeEditorProperties): React.JSX.Element {
-  const [theme] = useTheme();
+  const { theme } = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
@@ -45,15 +48,16 @@ export function CodeEditor({
       editorRef.current = editor;
 
       // Register KCL navigation if file explorer and file manager are provided
-      if (fileExplorerRef && fileManager) {
+      if (fileExplorerRef && fileManager && buildId) {
         navigationDisposableRef.current = registerKclNavigation(monaco, editor, {
           fileExplorerRef,
           fileManager,
+          buildId,
           decodeTextFile,
         });
       }
     },
-    [fileExplorerRef, fileManager],
+    [fileExplorerRef, fileManager, buildId],
   );
 
   useEffect(() => {

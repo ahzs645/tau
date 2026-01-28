@@ -1,4 +1,5 @@
 import { memo, useRef, useState, useEffect } from 'react';
+import { useSelector } from '@xstate/react';
 import { Allotment } from 'allotment';
 import { ChatHistory, ChatHistoryTrigger } from '#routes/builds_.$id/chat-history.js';
 import { ChatFileTree, ChatFileTreeTrigger } from '#routes/builds_.$id/chat-file-tree.js';
@@ -11,6 +12,7 @@ import { ChatStackTrace } from '#routes/builds_.$id/chat-stack-trace.js';
 import { ChatExplorerTree, ChatExplorerTrigger } from '#routes/builds_.$id/chat-explorer.js';
 import { ChatDetails, ChatDetailsTrigger } from '#routes/builds_.$id/chat-details.js';
 import { ChatConverter, ChatConverterTrigger } from '#routes/builds_.$id/chat-converter.js';
+import { BuildNotFound } from '#routes/builds_.$id/build-not-found.js';
 import { cn } from '#utils/ui.utils.js';
 import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 import {
@@ -22,6 +24,7 @@ import {
 } from '#routes/builds_.$id/use-chat-interface-state.js';
 import { ChatInterfaceStatus } from '#routes/builds_.$id/chat-interface-status.js';
 import { ChatInterfaceGraphics } from '#routes/builds_.$id/chat-interface-graphics.js';
+import { useBuild } from '#hooks/use-build.js';
 
 export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   const {
@@ -43,6 +46,9 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     chatResize,
     setChatResize,
   } = useChatInterfaceState();
+
+  const { buildRef } = useBuild();
+  const isBuildError = useSelector(buildRef, (state) => state.matches('error'));
 
   const allotmentRef = useRef<HTMLDivElement>(null);
   const [isClient, setIsClient] = useState(false);
@@ -198,10 +204,13 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
               <ChatViewer />
             </div>
 
+            {/* Build Not Found Overlay */}
+            {isBuildError ? <BuildNotFound /> : null}
+
             {/* Bottom-left Content */}
             <div className="absolute bottom-0 left-2 z-10 flex w-100 shrink-0 flex-col gap-2">
               <ChatInterfaceGraphics />
-              <ChatStackTrace />
+              <ChatStackTrace side="bottom" />
               <ChatViewerControls />
             </div>
           </Allotment.Pane>

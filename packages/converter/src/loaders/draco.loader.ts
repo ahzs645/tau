@@ -27,11 +27,11 @@ export class DracoLoader extends BaseLoader<Document> {
     }
   }
 
-  protected async mapToGlb(document: Document): Promise<Uint8Array> {
+  protected async mapToGlb(document: Document): Promise<Uint8Array<ArrayBuffer>> {
     const io = await createNodeIo();
 
     // Export to GLB
-    const glb = await io.writeBinary(document);
-    return new Uint8Array(glb);
+    const glb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    return glb;
   }
 }

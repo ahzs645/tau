@@ -1,8 +1,9 @@
 import { useCallback, useContext, useEffect, useState, useMemo, useRef } from 'react';
 import type { ActorRefFrom } from 'xstate';
 import { AuthUIContext } from '@daveyplate/better-auth-ui';
-import { Loader2, GitBranch, User, MoreHorizontal } from 'lucide-react';
+import { GitBranch, User, MoreHorizontal } from 'lucide-react';
 import type { GitRepository } from '@taucad/types';
+import { Loader } from '#components/ui/loader.js';
 import type { gitMachine } from '#machines/git.machine.js';
 import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
@@ -191,7 +192,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-12">
-        <Loader2 className="size-8 animate-spin text-muted-foreground" />
+        <Loader className="size-8 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">Loading repositories...</p>
       </div>
     );
@@ -267,7 +268,7 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
           <div className="flex justify-center py-2">
             {isLoadingMore ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
+                <Loader className="size-4" />
                 <span>Loading more...</span>
               </div>
             ) : (

@@ -7,11 +7,26 @@ import { z } from 'zod';
 import { messageMetadataSchema } from '#schemas/metadata.schema.js';
 import { providerMetadataSchema } from '#schemas/message-provider.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
-import { dataPartSchema } from '#schemas/message-data.schema.js';
-import { fileEditInputSchema, fileEditOutputSchema } from '#schemas/tools/file-edit.tool.schema.js';
-import { imageAnalysisInputSchema, imageAnalysisOutputSchema } from '#schemas/tools/image-analysis.tool.schema.js';
+import { usageDataSchema } from '#schemas/message-data.schema.js';
+import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
+import {
+  testModelOutputSchema,
+  editTestsInputSchema,
+  editTestsOutputSchema,
+} from '#schemas/tools/test-model.tool.schema.js';
 import { webBrowserInputSchema, webBrowserOutputSchema } from '#schemas/tools/web-browser.tool.schema.js';
 import { webSearchInputSchema, webSearchOutputSchema } from '#schemas/tools/web-search.tool.schema.js';
+import { readFileInputSchema, readFileOutputSchema } from '#schemas/tools/read-file.tool.schema.js';
+import { listDirectoryInputSchema, listDirectoryOutputSchema } from '#schemas/tools/list-directory.tool.schema.js';
+import { createFileInputSchema, createFileOutputSchema } from '#schemas/tools/create-file.tool.schema.js';
+import { deleteFileInputSchema, deleteFileOutputSchema } from '#schemas/tools/delete-file.tool.schema.js';
+import { grepInputSchema, grepOutputSchema } from '#schemas/tools/grep.tool.schema.js';
+import { globSearchInputSchema, globSearchOutputSchema } from '#schemas/tools/glob-search.tool.schema.js';
+import {
+  getKernelResultInputSchema,
+  getKernelResultOutputSchema,
+} from '#schemas/tools/get-kernel-result.tool.schema.js';
+import { reasoningInputSchema, reasoningOutputSchema } from '#schemas/tools/reasoning.tool.schema.js';
 import { toolName } from '#constants/tool.constants.js';
 import type { ToolName } from '#types/tool.types.js';
 
@@ -83,9 +98,12 @@ const createToolSchemas = <
   ] as const;
 };
 
-// Specialized helper for transfer tools with empty input schemas
+// Specialized helper for tools with empty input schemas
 // Uses z.record(z.never()) for input which correctly types to Record<string, never>
-const createTransferToolSchemas = <Name extends ToolName>(toolName: Name) => {
+const createEmptyInputToolSchemas = <Name extends ToolName, Output extends z.ZodObject<z.ZodRawShape> | z.ZodString>(
+  toolName: Name,
+  outputSchema: Output,
+) => {
   const toolType = `tool-${toolName}` as const;
   // Empty input schema that correctly resolves to Record<string, never>
   const emptyInput = z.record(z.string(), z.never());
@@ -118,7 +136,7 @@ const createTransferToolSchemas = <Name extends ToolName>(toolName: Name) => {
       state: z.literal('output-available'),
       providerExecuted: z.boolean().optional(),
       input: emptyInput,
-      output: z.string(),
+      output: outputSchema,
       errorText: z.never().optional(),
       callProviderMetadata: providerMetadataSchema.optional(),
       preliminary: z.boolean().optional(),
@@ -141,12 +159,24 @@ const createTransferToolSchemas = <Name extends ToolName>(toolName: Name) => {
 const toolPartSchemas = [
   ...createToolSchemas(toolName.webSearch, webSearchInputSchema, webSearchOutputSchema),
   ...createToolSchemas(toolName.webBrowser, webBrowserInputSchema, webBrowserOutputSchema),
-  ...createToolSchemas(toolName.fileEdit, fileEditInputSchema, fileEditOutputSchema),
-  ...createToolSchemas(toolName.imageAnalysis, imageAnalysisInputSchema, imageAnalysisOutputSchema),
-  // Transfer tools use specialized schemas (empty input, string output)
-  ...createTransferToolSchemas(toolName.transferToCadExpert),
-  ...createTransferToolSchemas(toolName.transferToResearchExpert),
-  ...createTransferToolSchemas(toolName.transferBackToSupervisor),
+  // Testing tools - test_model uses empty input schema (Record<string, never>)
+  ...createEmptyInputToolSchemas(toolName.testModel, testModelOutputSchema),
+  ...createToolSchemas(toolName.editTests, editTestsInputSchema, editTestsOutputSchema),
+  // Filesystem tools
+  ...createToolSchemas(toolName.readFile, readFileInputSchema, readFileOutputSchema),
+  ...createToolSchemas(toolName.listDirectory, listDirectoryInputSchema, listDirectoryOutputSchema),
+  ...createToolSchemas(toolName.createFile, createFileInputSchema, createFileOutputSchema),
+  ...createToolSchemas(toolName.editFile, editFileInputSchema, editFileOutputSchema),
+  ...createToolSchemas(toolName.deleteFile, deleteFileInputSchema, deleteFileOutputSchema),
+  ...createToolSchemas(toolName.grep, grepInputSchema, grepOutputSchema),
+  ...createToolSchemas(toolName.globSearch, globSearchInputSchema, globSearchOutputSchema),
+  // Kernel and reasoning tools
+  ...createToolSchemas(toolName.getKernelResult, getKernelResultInputSchema, getKernelResultOutputSchema),
+  ...createToolSchemas(toolName.reasoning, reasoningInputSchema, reasoningOutputSchema),
+  // Transfer tools use empty input schemas with string output
+  ...createEmptyInputToolSchemas(toolName.transferToCadExpert, z.string()),
+  ...createEmptyInputToolSchemas(toolName.transferToResearchExpert, z.string()),
+  ...createEmptyInputToolSchemas(toolName.transferBackToSupervisor, z.string()),
 ];
 
 export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
@@ -196,9 +226,9 @@ export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
               type: z.literal('step-start'),
             }),
             z.object({
-              type: z.enum(Object.values(dataPartSchema)),
+              type: z.literal('data-usage'),
               id: z.string().optional(),
-              data: z.unknown(),
+              data: usageDataSchema,
             }),
             z.object({
               type: z.literal('dynamic-tool'),

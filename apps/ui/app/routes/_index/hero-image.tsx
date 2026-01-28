@@ -1,5 +1,7 @@
 import { MessageSquare, Code2, Lock, SlidersHorizontal, Ruler } from 'lucide-react';
 import { BorderBeam } from '#components/magicui/border-beam.js';
+import { Safari } from '#components/magicui/safari.js';
+import { metaConfig } from '#constants/meta.constants.js';
 import tauDesktopDark from '#routes/_index/tau-desktop-dark.jpg';
 import tauDesktopLight from '#routes/_index/tau-desktop-light.jpg';
 
@@ -39,7 +41,7 @@ export function HeroImage(): React.JSX.Element {
         <div className="mb-8 text-center">
           <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">Design Faster. Build Smarter.</h2>
           <p className="mx-auto mt-3 max-w-2xl text-muted-foreground">
-            From idea to 3D model in minutes — chat, code, or both. Your choice.
+            From idea to 3D model in seconds — chat, code, or both. Your choice.
           </p>
         </div>
 
@@ -57,21 +59,11 @@ export function HeroImage(): React.JSX.Element {
           ))}
         </div>
 
-        {/* Hero Image with BorderBeam */}
-        <div className="shadow-2xl relative overflow-hidden rounded-xl border bg-background">
+        {/* Hero Image with Safari Frame */}
+        <div className="relative">
           <BorderBeam size={200} duration={12} colorFrom="hsl(var(--primary))" colorTo="hsl(var(--accent))" />
-          <img
-            src={tauDesktopLight}
-            alt="Tau CAD - AI-powered parametric design"
-            className="block w-full dark:hidden"
-            loading="lazy"
-          />
-          <img
-            src={tauDesktopDark}
-            alt="Tau CAD - AI-powered parametric design"
-            className="hidden w-full dark:block"
-            loading="lazy"
-          />
+          <Safari mode="simple" imageSrc={tauDesktopLight} url={metaConfig.appDomain} className="dark:hidden" />
+          <Safari mode="simple" imageSrc={tauDesktopDark} url={metaConfig.appDomain} className="hidden dark:block" />
         </div>
       </div>
     </div>

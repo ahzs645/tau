@@ -1,22 +1,23 @@
-import { Body, Controller, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
-import { convertToModelMessages, JsonToSseTransformStream } from 'ai';
+import { Body, Controller, Logger, Post, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
+import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
+import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { Command } from '@langchain/langgraph';
-import type { StateSnapshot } from '@langchain/langgraph';
-import type { IterableReadableStream } from '@langchain/core/utils/stream';
-import type { StreamEvent } from '@langchain/core/tracers/log_stream';
 import type { ToolSelection } from '@taucad/chat';
-import { tryExtractLastToolResult } from '#api/chat/utils/extract-tool-result.js';
-import { ToolService, toolChoiceFromToolName } from '#api/tools/tool.service.js';
 import { ChatService } from '#api/chat/chat.service.js';
-import { LangGraphAdapter } from '#api/chat/utils/langgraph-adapter.js';
-import {
-  convertAiSdkMessagesToLangchainMessages,
-  sanitizeMessagesForConversion,
-} from '#api/chat/utils/convert-messages.js';
+import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
+import { ModelService } from '#api/models/model.service.js';
+import { FileEditService } from '#api/file-edit/file-edit.service.js';
+import { AnalysisService } from '#api/analysis/analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
 import { CreateChatDto } from '#api/chat/chat.dto.js';
+import { sendSimpleModelStream } from '#api/chat/utils/simple-model-stream.js';
+import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.js';
+import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform.js';
+import { createErrorTransform } from '#api/chat/utils/error-transform.js';
+import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
+import { ChatExceptionFilter } from '#api/chat/chat-exception.filter.js';
 
+@UseFilters(ChatExceptionFilter)
 @UseGuards(AuthGuard)
 @Controller({ path: 'chat', version: '1' })
 export class ChatController {
@@ -24,7 +25,10 @@ export class ChatController {
 
   public constructor(
     private readonly chatService: ChatService,
-    private readonly toolService: ToolService,
+    private readonly chatRpcService: ChatRpcService,
+    private readonly modelService: ModelService,
+    private readonly fileEditService: FileEditService,
+    private readonly analysisService: AnalysisService,
   ) {}
 
   @Post()
@@ -34,12 +38,8 @@ export class ChatController {
     @Req() request: FastifyRequest,
   ): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
-    // Sanitize messages to handle partial tool calls before conversion
-    const sanitizedMessages = sanitizeMessagesForConversion(body.messages, this.logger);
-    const coreMessages = convertToModelMessages(sanitizedMessages);
-    const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
 
-    this.logger.debug(lastHumanMessage, `Last human message:`);
+    const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
     let modelId: string;
     let selectedToolChoice: ToolSelection = 'auto';
 
@@ -61,110 +61,119 @@ export class ChatController {
       throw new Error('Last message is not a user message');
     }
 
+    // Handle simple model streams (name generator, commit generator)
+    // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages
     if (modelId === 'name-generator') {
-      const result = this.chatService.getBuildNameGenerator(coreMessages);
-
-      // Mark the response as a v1 data stream:
-      void response.header('content-type', 'text/event-stream');
-      void response.header('x-vercel-ai-ui-message-stream', 'v1');
-      void response.header('x-accel-buffering', 'no');
-
-      const sseStream = result.toUIMessageStream().pipeThrough(new JsonToSseTransformStream());
-
-      return response.send(sseStream.pipeThrough(new TextEncoderStream()));
+      const modelMessages = await convertToModelMessages(body.messages);
+      const result = this.chatService.getBuildNameGenerator(modelMessages);
+      return sendSimpleModelStream(response, result);
     }
 
     if (modelId === 'commit-name-generator') {
-      const result = this.chatService.getCommitMessageGenerator(coreMessages);
-
-      // Mark the response as a v1 data stream:
-      void response.header('content-type', 'text/event-stream');
-      void response.header('x-vercel-ai-ui-message-stream', 'v1');
-      void response.header('x-accel-buffering', 'no');
-
-      const sseStream = result.toUIMessageStream().pipeThrough(new JsonToSseTransformStream());
-
-      return response.send(sseStream.pipeThrough(new TextEncoderStream()));
+      const modelMessages = await convertToModelMessages(body.messages);
+      const result = this.chatService.getCommitMessageGenerator(modelMessages);
+      return sendSimpleModelStream(response, result);
     }
 
     // Extract kernel from request body (default to openscad if not provided)
     const selectedKernel = lastHumanMessage.metadata?.kernel ?? 'openscad';
 
-    const langchainMessages = convertAiSdkMessagesToLangchainMessages(sanitizedMessages, coreMessages);
-    const graph = await this.chatService.createGraph(modelId, selectedToolChoice, selectedKernel);
+    // Extract snapshot from metadata and inject into last message content
+    const snapshot = lastHumanMessage.metadata?.snapshot;
 
-    // Configuration for the graph execution
-    const config = {
-      streamMode: 'values',
-      version: 'v2',
-      configurable: {
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
-        thread_id: body.id, // Enable persistence using conversation ID as thread ID
-      },
-    } as const;
+    // Inject snapshot context into messages if available
+    const messagesWithContext = snapshot ? injectSnapshotContext(body.messages, snapshot) : body.messages;
 
-    // Check if this thread is in an interrupted state
-    let currentState: StateSnapshot | undefined;
-    try {
-      currentState = await graph.getState(config);
-    } catch {
-      // If we can't get state, assume it's a new conversation
-      // and no-op
+    if (snapshot) {
+      const contextTypes = [
+        snapshot.fileTree ? 'fileTree' : undefined,
+        snapshot.activeFile ? 'activeFile' : undefined,
+        snapshot.openFiles ? 'openFiles' : undefined,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      this.logger.debug(`Injecting snapshot context into last message: ${contextTypes}`);
     }
+
+    // Convert UI messages to LangChain messages using the built-in adapter
+    const langchainMessages = await toBaseMessages(messagesWithContext);
+
+    // Get the agent from the service
+    const agent = await this.chatService.createAgent(modelId, selectedToolChoice, selectedKernel);
 
     // Abort the request if the client disconnects
     const abortController = new AbortController();
-    request.raw.socket.on('close', () => {
+    const { socket } = request.raw;
+
+    const handleSocketClose = (): void => {
       if (request.raw.destroyed) {
         abortController.abort();
       }
-    });
+    };
 
-    let eventStream: IterableReadableStream<StreamEvent>;
+    socket.on('close', handleSocketClose);
 
-    // Check if we're resuming from an interrupt
-    if (currentState?.next && currentState.next.length > 0) {
-      // Thread is interrupted, resume with the provided input
-      this.logger.debug(`Resuming interrupted thread: ${body.id}`);
+    // Clean up the listener when the response finishes to prevent memory leaks
+    // With HTTP keep-alive, the same socket is reused across multiple requests,
+    // so we must remove the listener to avoid accumulation
+    const cleanupSocketListener = (): void => {
+      socket.off('close', handleSocketClose);
+    };
 
-      // Extract the result from the last tool call to use as resume value
-      const toolResult = tryExtractLastToolResult(langchainMessages);
+    response.raw.on('finish', cleanupSocketListener);
+    response.raw.on('error', cleanupSocketListener);
 
-      this.logger.debug(`Resuming with tool result: ${JSON.stringify(toolResult, null, 2)}`);
-
-      // Resume the graph execution with the tool result
-      eventStream = graph.streamEvents(new Command({ resume: toolResult }), {
-        ...config,
+    this.logger.debug(`Starting execution for thread: ${body.id}`);
+    const stream = await agent.graph.stream(
+      { messages: langchainMessages },
+      {
+        configurable: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
+          thread_id: body.id,
+          // Pass services for tools to use
+          chatRpcService: this.chatRpcService,
+          fileEditService: this.fileEditService,
+          analysisService: this.analysisService,
+        },
         signal: abortController.signal,
-      });
-    } else {
-      // Normal execution - start new conversation or continue existing one
-      this.logger.debug(`Starting normal execution for thread: ${body.id}`);
-      eventStream = graph.streamEvents(
-        {
-          messages: langchainMessages,
+        // Include 'custom' to receive usage data from usageTrackingMiddleware
+        streamMode: ['values', 'messages', 'custom'],
+        // Pass context for middleware (usage tracking, tool error handling)
+        context: {
+          modelId,
+          modelService: this.modelService,
+          logger: this.logger,
         },
-        {
-          ...config,
-          signal: abortController.signal,
-        },
-      );
-    }
+        recursionLimit: 200,
+      },
+    );
 
-    // Use the LangGraphAdapter to handle the response
-    const result = LangGraphAdapter.toDataStream(eventStream, {
-      modelId,
-      toolTypeMap: toolChoiceFromToolName,
-      parseToolResults: this.toolService.getToolParsers(),
-      callbacks: this.chatService.getCallbacks(),
-    });
-
-    const sseStream = result.pipeThrough(new JsonToSseTransformStream());
-
+    // Set SSE headers
     void response.header('content-type', 'text/event-stream');
     void response.header('x-vercel-ai-ui-message-stream', 'v1');
     void response.header('x-accel-buffering', 'no');
 
-    return response.send(sseStream.pipeThrough(new TextEncoderStream()));
+    // Convert the LangGraph stream to UI message stream
+    // The toUIMessageStream adapter marks all tools as dynamic and stringifies tool outputs,
+    // so we pipe through transforms to:
+    // 1) mark known tools as static
+    // 2) parse tool output JSON strings into objects
+    // 3) normalize error chunks
+    const uiMessageStream = toUIMessageStream(stream)
+      .pipeThrough(createStaticToolTransform())
+      .pipeThrough(createToolOutputTransform())
+      .pipeThrough(createErrorTransform());
+
+    const uiMessageStreamResponse = createUIMessageStreamResponse({
+      stream: uiMessageStream,
+    });
+
+    // Get the body from the response and pipe it
+    const responseBody = uiMessageStreamResponse.body;
+    if (responseBody) {
+      return response.send(responseBody);
+    }
+
+    throw new Error('Failed to create UI message stream response');
   }
 }
