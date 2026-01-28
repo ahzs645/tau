@@ -374,6 +374,102 @@ export function createGeometryFile(filename: string, basePath = '/builds/test'):
   };
 }
 
+// =============================================================================
+// Worker Test Helpers
+// =============================================================================
+
+/**
+ * Constructor type for kernel workers.
+ * Used to allow generic worker creation in test utilities.
+ */
+export type KernelWorkerConstructor<T extends KernelWorker> = new () => T;
+
+/**
+ * Create and initialize a kernel worker for testing.
+ * Seeds the filesystem with provided files before creating the worker.
+ * Uses the real production code path via initializeWorkerForTesting.
+ *
+ * @param WorkerClass - The worker class to instantiate (e.g., JscadWorker, OpenScadWorker)
+ * @param files - Record of relative paths to file contents
+ * @returns Promise resolving to the initialized worker
+ *
+ * @example
+ * ```typescript
+ * const worker = await createTestWorker(JscadWorker, {
+ *   'cube.ts': `import { primitives } from '@jscad/modeling'; ...`
+ * });
+ * ```
+ */
+export async function createTestWorker<T extends KernelWorker>(
+  WorkerClass: KernelWorkerConstructor<T>,
+  files: Record<string, string>,
+): Promise<T> {
+  const basePath = '/builds/test';
+
+  // Convert files to have full paths and seed the filesystem
+  const absoluteFiles: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    absoluteFiles[`${basePath}/${path}`] = content;
+  }
+
+  // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request
+  await seedTestFilesystem(absoluteFiles);
+
+  // Create worker and initialize using production code path
+  const worker = new WorkerClass();
+  await initializeWorkerForTesting(worker);
+
+  return worker;
+}
+
+/**
+ * Helper to extract parameters from a kernel worker and assert success.
+ *
+ * @param WorkerClass - The worker class to use
+ * @param files - Record of relative paths to file contents
+ * @param mainFile - The main file to extract parameters from
+ * @returns Promise resolving to the extracted parameters and JSON schema
+ */
+export async function getTestParameters<T extends KernelWorker>(
+  WorkerClass: KernelWorkerConstructor<T>,
+  files: Record<string, string>,
+  mainFile: string,
+): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
+  // Import expect dynamically to avoid coupling this utility to vitest at the module level
+  const { expect } = await import('vitest');
+
+  const worker = await createTestWorker(WorkerClass, files);
+  const result = await worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
+
+  expect(result.success).toBe(true);
+
+  if (!result.success) {
+    throw new Error('Extraction failed');
+  }
+
+  return result.data;
+}
+
+/**
+ * Helper to create geometry using a kernel worker and return the result.
+ *
+ * @param WorkerClass - The worker class to use
+ * @param files - Record of relative paths to file contents
+ * @param mainFile - The main file to create geometry from
+ * @param parameters - Optional parameters to pass to the geometry creation
+ * @returns Promise resolving to the geometry creation result
+ */
+export async function createTestGeometry<T extends KernelWorker>(
+  WorkerClass: KernelWorkerConstructor<T>,
+  files: Record<string, string>,
+  mainFile: string,
+  parameters: Record<string, unknown> = {},
+): Promise<CreateGeometryResult> {
+  const worker = await createTestWorker(WorkerClass, files);
+  const geometryFile = createGeometryFile(mainFile);
+  return worker[kernelSymbols.createGeometryEntry](geometryFile, parameters);
+}
+
 /**
  * Create a mock KernelRuntime for kernel method testing.
  * Uses the same filesystem and logger patterns as middleware runtime.

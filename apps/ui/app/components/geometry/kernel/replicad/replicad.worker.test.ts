@@ -1,13 +1,13 @@
 // @vitest-environment node
-import type { CreateGeometryResult } from '@taucad/types';
 import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
 import { ReplicadWorker } from '#components/geometry/kernel/replicad/replicad.worker.js';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
 import {
-  seedTestFilesystem,
-  initializeWorkerForTesting,
   createGeometryFile,
+  createTestWorker,
+  createTestGeometry,
+  getTestParameters,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
@@ -16,61 +16,23 @@ import {
 // Test Utilities
 // =============================================================================
 
-/**
- * Initialize a ReplicadWorker for parameter extraction or geometry computation.
- * Seeds the filesystem with provided files before creating the worker.
- * Uses the real production code path via initializeWorkerForTesting.
- */
-async function createWorker(files: Record<string, string>): Promise<ReplicadWorker> {
-  const basePath = '/builds/test';
+/** Create a ReplicadWorker for testing with the provided files. */
+const createWorker = async (files: Record<string, string>): Promise<ReplicadWorker> =>
+  createTestWorker(ReplicadWorker, files);
 
-  // Convert files to have full paths and seed the filesystem
-  const absoluteFiles: Record<string, string> = {};
-  for (const [path, content] of Object.entries(files)) {
-    absoluteFiles[`${basePath}/${path}`] = content;
-  }
-
-  // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request
-  await seedTestFilesystem(absoluteFiles);
-
-  // Create worker and initialize using production code path
-  const worker = new ReplicadWorker();
-  await initializeWorkerForTesting(worker);
-
-  return worker;
-}
-
-/**
- * Helper to extract parameters and assert success.
- */
-async function getParameters(
+/** Helper to extract parameters and assert success. */
+const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
-): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
-  const worker = await createWorker(files);
-  const result = await worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
+): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
+  getTestParameters(ReplicadWorker, files, mainFile);
 
-  expect(result.success).toBe(true);
-
-  if (!result.success) {
-    throw new Error('Extraction failed');
-  }
-
-  return result.data;
-}
-
-/**
- * Helper to create geometry and return the result.
- */
-async function createGeometry(
+/** Helper to create geometry and return the result. */
+const createGeometry = async (
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
-): Promise<CreateGeometryResult> {
-  const worker = await createWorker(files);
-  const geometryFile = createGeometryFile(mainFile);
-  return worker[kernelSymbols.createGeometryEntry](geometryFile, parameters);
-}
+): ReturnType<typeof createTestGeometry> => createTestGeometry(ReplicadWorker, files, mainFile, parameters);
 
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
