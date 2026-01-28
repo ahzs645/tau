@@ -32,7 +32,8 @@ export type RpcRequestHandler = (request: RpcRequest) => Promise<RpcResponse>;
 export type StatusListener = (status: ConnectionStatus, error?: string) => void;
 
 /** Socket.IO URL for chat RPC */
-const socketUrl = `${ENV.TAU_WEBSOCKET_URL}/v1/chat/rpc`;
+const socketUrl = ENV.TAU_WEBSOCKET_URL;
+const socketPath = '/v1/chat/rpc';
 
 /**
  * Singleton service for managing Socket.IO chat RPC connection.
@@ -104,6 +105,7 @@ export class ChatRpcSocketService {
     this.setStatus('connecting');
 
     this.socket = io(socketUrl, {
+      path: socketPath,
       transports: ['websocket'],
       reconnection: true,
       reconnectionAttempts: Infinity,

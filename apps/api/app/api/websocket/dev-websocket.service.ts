@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as SocketIoServer } from 'socket.io';
 import type { Environment } from '#config/environment.config.js';
+import { chatRpcPath } from '#api/chat/chat-rpc.gateway.js';
 
 export type WebSocketConnectionHandler = (socket: WebSocket, request: IncomingMessage) => void | Promise<void>;
 
@@ -19,10 +20,10 @@ export type WebSocketConnectionHandler = (socket: WebSocket, request: IncomingMe
  *
  * This service provides a single HTTP server on port+1 that handles:
  * - Raw WebSocket connections (for Zoo proxy) via path handlers
- * - Socket.IO connections (for chat tools) via Socket.IO namespaces
+ * - Socket.IO connections (for chat RPC) via the configured Socket.IO path
  *
  * The upgrade event is intercepted to route connections based on path:
- * - Paths starting with Socket.IO's path go to Socket.IO
+ * - Paths starting with chatRpcPath (/v1/chat/rpc) go to Socket.IO
  * - Other registered paths go to raw WebSocket handlers
  */
 @Injectable()
@@ -124,15 +125,14 @@ export class DevWebSocketService implements OnModuleDestroy {
     this.wss = new WebSocketServer({ noServer: true });
 
     // Create Socket.IO server attached to HTTP server
-    // Socket.IO will handle its own upgrade requests for its path
+    // Uses chatRpcPath to match production configuration
     this.io = new SocketIoServer(this.httpServer, {
+      path: chatRpcPath,
       cors: {
         origin: true, // Allow all origins in dev
         credentials: true,
       },
       transports: ['websocket'],
-      // Don't destroy upgrades that Socket.IO doesn't handle
-      // This allows raw WebSocket to handle other paths
     });
 
     // Handle upgrade requests manually to route between Socket.IO and raw WebSocket
@@ -140,10 +140,9 @@ export class DevWebSocketService implements OnModuleDestroy {
     this.httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       const { pathname } = new URL(request.url ?? '/', `http://localhost:${this.wsPort}`);
 
-      // Check if this is a Socket.IO path (Socket.IO uses /socket.io/ by default,
-      // but namespaces like /v1/chat/tools are accessed via /socket.io/?nsp=/v1/chat/tools)
-      // Socket.IO's engine handles paths starting with /socket.io/
-      if (pathname.startsWith('/socket.io')) {
+      // Check if this is the Socket.IO path (configured to chatRpcPath to match production)
+      // Socket.IO's engine handles paths starting with the configured path
+      if (pathname.startsWith(chatRpcPath)) {
         // Socket.IO handles this via its attachment to httpServer
         // The upgrade event is already being listened to by Socket.IO
         return;
@@ -167,7 +166,7 @@ export class DevWebSocketService implements OnModuleDestroy {
     this.httpServer.listen(this.wsPort, () => {
       this.logger.log(`Dev WebSocket server started on port ${this.wsPort}`);
       this.logger.log(`  - Raw WebSocket: ws://localhost:${this.wsPort}/v1/kernels/zoo`);
-      this.logger.log(`  - Socket.IO: http://localhost:${this.wsPort} (namespaces for paths)`);
+      this.logger.log(`  - Socket.IO: ws://localhost:${this.wsPort}${chatRpcPath}`);
     });
   }
 

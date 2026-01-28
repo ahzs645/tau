@@ -4,7 +4,7 @@ import { Inject, Logger } from '@nestjs/common';
 import type { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import type { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit } from '@nestjs/websockets';
 import { WebSocketGateway, WebSocketServer, SubscribeMessage, ConnectedSocket, MessageBody } from '@nestjs/websockets';
-import type { Server, Socket, Namespace } from 'socket.io';
+import type { Server, Socket } from 'socket.io';
 import type { Auth } from 'better-auth';
 import { fromNodeHeaders } from 'better-auth/node';
 import type { RpcResponse } from '@taucad/chat';
@@ -12,7 +12,7 @@ import { authInstanceKey } from '#constants/auth.constant.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 import { DevWebSocketService } from '#api/websocket/dev-websocket.service.js';
 
-const chatRpcPath = '/v1/chat/rpc';
+export const chatRpcPath = '/v1/chat/rpc';
 
 /**
  * WebSocket Gateway for chat RPC execution using Socket.IO.
@@ -40,7 +40,6 @@ export class ChatRpcGateway
   private readonly server!: Server;
 
   private readonly logger = new Logger(ChatRpcGateway.name);
-  private devServer: Namespace | undefined;
 
   public constructor(
     private readonly chatRpcService: ChatRpcService,
@@ -67,15 +66,13 @@ export class ChatRpcGateway
   /**
    * Initialize Socket.IO handlers for development mode.
    * Uses the shared DevWebSocketService's Socket.IO server.
+   * The server is already configured with path: chatRpcPath to match production.
    */
   private initDevSocketIo(): void {
     const io = this.devWebSocketService.getSocketIoServer();
 
-    // Create a namespace for chat RPC
-    this.devServer = io.of(chatRpcPath);
-
-    // Set up connection handling
-    this.devServer.on('connection', (socket: Socket) => {
+    // Use default namespace - path isolation is handled by Socket.IO server config
+    io.on('connection', (socket: Socket) => {
       void this.handleDevConnection(socket);
     });
 
