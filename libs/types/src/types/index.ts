@@ -12,6 +12,7 @@ export type * from '#types/git.types.js';
 export type * from '#types/graphics.types.js';
 export type * from '#types/id.types.js';
 export type * from '#types/kernel.types.js';
+export type * from '#types/kernel-worker.types.js';
 export type * from '#types/logger.types.js';
 export type * from '#types/manufacturing.types.js';
 export type * from '#types/schema.types.js';
