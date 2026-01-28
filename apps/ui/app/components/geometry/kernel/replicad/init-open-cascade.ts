@@ -1,10 +1,6 @@
 // eslint-disable-next-line @typescript-eslint/triple-slash-reference -- emscripten types are not available as a module
 /// <reference types="emscripten" />
 
-// Import polyfills BEFORE replicad-opencascadejs to set up __dirname and require
-// Uses feature detection (try/catch) rather than explicit environment checks
-// eslint-disable-next-line import-x/no-unassigned-import, import-x/order -- Side-effect import for polyfills
-import '#components/geometry/kernel/replicad/node-polyfills.js';
 import opencascade from 'replicad-opencascadejs/src/replicad_single.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
 import opencascadeWithExceptions from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
