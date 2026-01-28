@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { uint8ArrayToBase64 } from 'uint8array-extras';
+import { encode as msgpackEncode } from '@msgpack/msgpack';
 import type {
   CreateGeometryResult,
   CreateGeometryHandler,
@@ -38,13 +38,14 @@ function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonl
 }
 
 /**
- * Create serialized cache content (JSON format with base64 for GLTF).
+ * Create serialized cache content (MessagePack binary format).
  */
-function createSerializedCacheContent(content: Uint8Array<ArrayBuffer>, hash = 'a'.repeat(64)): string {
-  // Convert Uint8Array to base64 (same as the middleware does)
-  const base64 = uint8ArrayToBase64(content);
-
-  return JSON.stringify([{ format: 'gltf', hash, content: base64 }]);
+function createSerializedCacheContent(content: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
+  // Serialize using MessagePack (same as the middleware does)
+  return msgpackEncode({
+    version: 1,
+    geometries: [{ format: 'gltf', content }],
+  }) as Uint8Array<ArrayBuffer>;
 }
 
 /**
@@ -62,10 +63,10 @@ function createCacheTestContext(options?: {
 
   runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
 } {
-  // Create serialized content if cachedContent is provided
+  // Create serialized content if cachedContent is provided (MessagePack binary format)
   const serializedContent = options?.cachedContent
-    ? createSerializedCacheContent(options.cachedContent, options.dependencyHash ?? 'a'.repeat(64))
-    : '';
+    ? createSerializedCacheContent(options.cachedContent)
+    : new Uint8Array();
 
   const runtime = createMockRuntime({
     filesystemOverrides: {
@@ -176,7 +177,7 @@ describe('geometryCacheMiddleware', () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
         const writePath = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[0];
         expect(writePath).toContain('.tau/cache/geometry');
-        expect(writePath).toContain('.json');
+        expect(writePath).toContain('.bin');
       });
 
       it('should ensure cache directory exists before writing', async () => {
@@ -231,7 +232,7 @@ describe('geometryCacheMiddleware', () => {
         // Verify that writeFile was called with a path containing the dependency hash
         expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalledWith(
           expect.stringContaining(dependencyHash),
-          expect.any(String),
+          expect.any(Uint8Array),
         );
       });
 
@@ -367,7 +368,7 @@ describe('geometryCacheMiddleware', () => {
 
         // Mock getDirectoryStat to return old cache files
         runtime.filesystem.mocks.getDirectoryStat.mockResolvedValue([
-          { path: 'old-cache.json', name: 'old-cache.json', type: 'file', size: 100, mtimeMs: oldMtimeMs },
+          { path: 'old-cache.bin', name: 'old-cache.bin', type: 'file', size: 100, mtimeMs: oldMtimeMs },
         ]);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
@@ -387,8 +388,8 @@ describe('geometryCacheMiddleware', () => {
         // Create 102 files (2 over the 100 max)
 
         const manyFiles = Array.from({ length: 102 }, (_, index) => ({
-          path: `cache-${index}.json`,
-          name: `cache-${index}.json`,
+          path: `cache-${index}.bin`,
+          name: `cache-${index}.bin`,
           type: 'file' as const,
           size: 100,
           // Stagger mtimeMs so we can predict which get deleted (oldest first)
@@ -431,7 +432,7 @@ describe('geometryCacheMiddleware', () => {
     it('should use dependencyHash for cache key lookup', async () => {
       const dependencyHash = 'abc123'.repeat(11).slice(0, 64);
       const cachedContent = new Uint8Array([1, 2, 3]);
-      const serializedContent = createSerializedCacheContent(cachedContent, dependencyHash);
+      const serializedContent = createSerializedCacheContent(cachedContent);
 
       const runtime = createMockRuntime({
         filesystemOverrides: {
@@ -482,7 +483,7 @@ describe('geometryCacheMiddleware', () => {
     it('should result in cache hit when dependencyHash is identical', async () => {
       const dependencyHash = 'same'.repeat(16);
       const cachedContent = new Uint8Array([1, 2, 3]);
-      const serializedContent = createSerializedCacheContent(cachedContent, dependencyHash);
+      const serializedContent = createSerializedCacheContent(cachedContent);
 
       const runtime = createMockRuntime({
         filesystemOverrides: {
