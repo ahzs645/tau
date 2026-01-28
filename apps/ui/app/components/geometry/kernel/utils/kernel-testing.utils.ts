@@ -36,6 +36,7 @@ import type { KernelMiddleware } from '#components/geometry/kernel/utils/kernel-
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { configureFilesystem, resetFilesystem, fs } from '#filesystem/zenfs-config.js';
 import { fileManager } from '#machines/file-manager.js';
+import { joinPath } from '#utils/path.utils.js';
 
 // =============================================================================
 // Test Filesystem Utilities
@@ -409,7 +410,7 @@ export async function createTestWorker<T extends KernelWorker>(
   // Convert files to have full paths and seed the filesystem
   const absoluteFiles: Record<string, string> = {};
   for (const [path, content] of Object.entries(files)) {
-    absoluteFiles[`${basePath}/${path}`] = content;
+    absoluteFiles[joinPath(basePath, path)] = content;
   }
 
   // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request

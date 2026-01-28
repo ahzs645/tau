@@ -33,6 +33,7 @@ import type { Remote } from 'comlink';
 import { version as TAU_VERSION } from 'package.json';
 import { logLevels } from '@taucad/types/constants';
 import type { FileManager } from '#machines/file-manager.js';
+import { joinPath } from '#utils/path.utils.js';
 import type { KernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { createMiddlewareRuntime } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
@@ -116,7 +117,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @returns Absolute path
    */
   protected static resolveFromRoot(relativePath: string, basePath: string): string {
-    return `${basePath}/${relativePath}`;
+    return joinPath(basePath, relativePath);
   }
 
   /**
@@ -978,7 +979,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const directory = lastSlashIndex === -1 ? '' : file.filename.slice(0, lastSlashIndex);
 
     // Combine path with directory to get the full base path
-    this.basePath = directory ? `${file.path}/${directory}` : file.path;
+    this.basePath = directory ? joinPath(file.path, directory) : file.path;
 
     // Log with just the relative part (strip builds/id prefix for readability)
     const displayPath = directory || file.filename;

@@ -7,6 +7,7 @@ import {
   initializeWorkerForTesting,
   createGeometryFile,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
+import { joinPath } from '#utils/path.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'main.kcl' */
 
@@ -28,7 +29,7 @@ async function createWorker(files: Record<string, string>): Promise<ZooWorker> {
   // Convert files to have full paths and seed the filesystem
   const absoluteFiles: Record<string, string> = {};
   for (const [path, content] of Object.entries(files)) {
-    absoluteFiles[`${basePath}/${path}`] = content;
+    absoluteFiles[joinPath(basePath, path)] = content;
   }
 
   // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request

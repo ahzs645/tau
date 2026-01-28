@@ -6,13 +6,14 @@ import { gitFs, ensureGitFsConfigured } from '#db/storage.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import { gitAttributesTemplate } from '#constants/gitattributes-template.js';
 import { gitMountPoint } from '#filesystem/zenfs-config.js';
+import { joinPath } from '#utils/path.utils.js';
 
 /**
  * Get the directory path for a build in the git virtual filesystem.
  * Uses the /git mount point for isolated git storage.
  */
 export function getBuildDirectory(buildId: string): string {
-  return `${gitMountPoint}/builds/${buildId}`;
+  return joinPath(gitMountPoint, 'builds', buildId);
 }
 
 /**
@@ -83,7 +84,7 @@ const initGitActor = fromPromise<{ buildId: string }, { buildId: string; reposit
     });
 
     // Create .gitattributes file for binary file handling
-    const gitAttributesPath = `${dir}/.gitattributes`;
+    const gitAttributesPath = joinPath(dir, '.gitattributes');
     try {
       // Check if .gitattributes already exists
       await fs.promises.stat(gitAttributesPath);

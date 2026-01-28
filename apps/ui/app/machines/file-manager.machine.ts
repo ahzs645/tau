@@ -6,7 +6,7 @@ import type { FileEntry } from '@taucad/types';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import type { FileManager as FileWorker } from '#machines/file-manager.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
-import { normalizePath } from '#utils/path.utils.js';
+import { normalizePath, joinPath } from '#utils/path.utils.js';
 
 /**
  * The source of the file write operation.
@@ -76,13 +76,13 @@ const readDirectoryActor = fromPromise<
 
   try {
     // Empty path means root directory
-    const absolutePath = path === '' ? normalizePath(context.rootDirectory) : `${context.rootDirectory}/${path}`;
+    const absolutePath = path === '' ? normalizePath(context.rootDirectory) : joinPath(context.rootDirectory, path);
     const fileStats = await context.wrappedWorker.getDirectoryStat(absolutePath);
     const entries: FileEntry[] = [];
 
     for (const fileStat of fileStats) {
       // FileStat.path is relative to the directory we scanned
-      const relativeFilePath = path === '' ? fileStat.path : `${path}/${fileStat.path}`;
+      const relativeFilePath = path === '' ? fileStat.path : joinPath(path, fileStat.path);
 
       entries.push({
         path: relativeFilePath,

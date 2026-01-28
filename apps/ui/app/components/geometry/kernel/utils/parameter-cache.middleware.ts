@@ -12,6 +12,7 @@
 
 import type { GetParametersResult } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
+import { joinPath } from '#utils/path.utils.js';
 
 /**
  * Get the cache file path for a given cache key.
@@ -21,7 +22,7 @@ import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel
  * @returns The full path to the cache file
  */
 function getCachePath(basePath: string, cacheKey: string): string {
-  return `${basePath}/.tau/cache/parameters/${cacheKey}.json`;
+  return joinPath(basePath, '.tau/cache/parameters', `${cacheKey}.json`);
 }
 
 /**
@@ -31,7 +32,7 @@ function getCachePath(basePath: string, cacheKey: string): string {
  * @returns The full path to the cache directory
  */
 function getCacheDir(basePath: string): string {
-  return `${basePath}/.tau/cache/parameters`;
+  return joinPath(basePath, '.tau/cache/parameters');
 }
 
 /**

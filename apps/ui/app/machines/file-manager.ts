@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import type { FileStat } from '@taucad/types';
 import { fs, ensureFilesystemConfigured } from '#filesystem/zenfs-config.js';
 import { asBuffer } from '#utils/file.utils.js';
+import { joinPath } from '#utils/path.utils.js';
 
 // Use ZenFS promise-based API
 const fsp = fs.promises;
@@ -214,7 +215,7 @@ export const fileManager: FileManager = {
       const entries = await fsp.readdir(currentPath);
 
       for (const entry of entries) {
-        const fullPath = `${currentPath}/${entry}`;
+        const fullPath = joinPath(currentPath, entry);
         // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
         const stats = await fsp.stat(fullPath);
 
@@ -250,7 +251,7 @@ export const fileManager: FileManager = {
 
     const fileContents = await Promise.all(
       fileStats.map(async (fileStat) => {
-        const fullPath = `${path}/${fileStat.path}`;
+        const fullPath = joinPath(path, fileStat.path);
         const buffer = await fsp.readFile(fullPath);
         const content = new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
         return { path: fileStat.path, content };
@@ -271,7 +272,7 @@ export const fileManager: FileManager = {
     const destinationFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
 
     for (const [relativePath, content] of Object.entries(files)) {
-      destinationFiles[`${destinationPath}/${relativePath}`] = { content };
+      destinationFiles[joinPath(destinationPath, relativePath)] = { content };
     }
 
     await this.writeFiles(destinationFiles);

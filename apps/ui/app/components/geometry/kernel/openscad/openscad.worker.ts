@@ -30,6 +30,7 @@ import { convertOffToGltf } from '#components/geometry/kernel/utils/off-to-gltf.
 import { convertOffToStl } from '#components/geometry/kernel/utils/off-to-stl.js';
 import { convertOffTo3mf } from '#components/geometry/kernel/utils/off-to-3mf.js';
 import { asBuffer } from '#utils/file.utils.js';
+import { joinPath } from '#utils/path.utils.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import type { AddErrorFn, GetFileContentsFn } from '#components/geometry/kernel/openscad/parse-output.js';
@@ -474,7 +475,7 @@ export class OpenScadWorker extends KernelWorker {
     const baseDir = lastSlash === -1 ? '' : basePath.slice(0, lastSlash);
 
     // Combine base directory with relative path
-    const combinedPath = baseDir ? `${baseDir}/${relativePath}` : relativePath;
+    const combinedPath = baseDir ? joinPath(baseDir, relativePath) : relativePath;
 
     // Normalize the path by resolving . and .. segments
     const segments = combinedPath.split('/');
@@ -705,7 +706,7 @@ export class OpenScadWorker extends KernelWorker {
 
     let currentPath = '';
     for (const segment of dirSegments) {
-      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      currentPath = currentPath ? joinPath(currentPath, segment) : segment;
       try {
         instance.FS.mkdir(currentPath);
       } catch {

@@ -18,6 +18,7 @@ import { uint8ArrayToBase64, base64ToUint8Array } from 'uint8array-extras';
 import type { GeometryResponse, KernelFilesystem } from '@taucad/types';
 import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
+import { joinPath } from '#utils/path.utils.js';
 
 /**
  * Serialized geometry format for cache storage.
@@ -133,7 +134,7 @@ function deserializeGeometries(data: string): GeometryResponse[] {
  * @returns The full path to the cache file
  */
 function getCachePath(basePath: string, cacheKey: string): string {
-  return `${basePath}/.tau/cache/geometry/${cacheKey}.json`;
+  return joinPath(basePath, '.tau/cache/geometry', `${cacheKey}.json`);
 }
 
 /**
@@ -143,7 +144,7 @@ function getCachePath(basePath: string, cacheKey: string): string {
  * @returns The full path to the cache directory
  */
 function getCacheDir(basePath: string): string {
-  return `${basePath}/.tau/cache/geometry`;
+  return joinPath(basePath, '.tau/cache/geometry');
 }
 
 /**
@@ -201,13 +202,13 @@ async function cleanupOldCacheEntries(
     for (const file of cacheFiles) {
       const age = now - file.mtimeMs;
       if (age > maxAgeMs) {
-        filesToDelete.push(`${cacheDir}/${file.path}`);
+        filesToDelete.push(joinPath(cacheDir, file.path));
       }
     }
 
     // Second pass: if still over maxEntries, delete oldest files
     const remainingFiles = cacheFiles.filter((file) => {
-      const fullPath = `${cacheDir}/${file.path}`;
+      const fullPath = joinPath(cacheDir, file.path);
       return !filesToDelete.includes(fullPath);
     });
 
@@ -220,7 +221,7 @@ async function cleanupOldCacheEntries(
       for (let index = 0; index < excessCount; index++) {
         const file = remainingFiles[index];
         if (file) {
-          filesToDelete.push(`${cacheDir}/${file.path}`);
+          filesToDelete.push(joinPath(cacheDir, file.path));
         }
       }
     }

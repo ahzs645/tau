@@ -3,6 +3,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import type { Geometry, GeometryFile } from '@taucad/types';
 import { cadMachine } from '#machines/cad.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
+import { joinPath } from '#utils/path.utils.js';
 
 /**
  * Options for the useCadFiles hook.
@@ -129,7 +130,7 @@ export function useCadFiles(options: UseCadFilesOptions): UseCadFilesResult {
     // Write files to virtual filesystem
     const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
     for (const [path, file] of Object.entries(files)) {
-      buildFiles[`/builds/${buildId}/${path}`] = file;
+      buildFiles[joinPath('/builds', buildId, path)] = file;
     }
 
     await writeFiles(buildFiles);

@@ -3,6 +3,8 @@
  * from the browser File API and FileSystem API.
  */
 
+import { joinPath } from '#utils/path.utils.js';
+
 export type FileData = {
   filename: string;
   content: Uint8Array<ArrayBuffer>;
@@ -57,7 +59,7 @@ async function readEntry(
   if (entry.isFile) {
     const fileEntry = entry as FileSystemFileEntry;
     const file = await getFileFromEntry(fileEntry);
-    const path = basePath ? `${basePath}/${entry.name}` : entry.name;
+    const path = basePath ? joinPath(basePath, entry.name) : entry.name;
     const arrayBuffer = await file.arrayBuffer();
     files.set(path, {
       filename: path,
@@ -72,7 +74,7 @@ async function readEntry(
     const dirEntry = entry as FileSystemDirectoryEntry;
     const reader = dirEntry.createReader();
     const entries = await readAllEntries(reader);
-    const newBase = basePath ? `${basePath}/${entry.name}` : entry.name;
+    const newBase = basePath ? joinPath(basePath, entry.name) : entry.name;
 
     // Update total count
     if (progressInfo?.stats) {
