@@ -27,6 +27,7 @@ import { asBuffer } from '#utils/file.utils.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { FileSystemManager } from '#components/geometry/kernel/zoo/filesystem-manager.js';
 import { discoverKclDependencies } from '#components/geometry/kernel/zoo/kcl-import-resolver.js';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 type ZooOptions = {
   /** Base URL for the Zoo API proxy (e.g., wss://api.tau.new/v1/kernels/zoo) */
@@ -467,7 +468,8 @@ export class ZooWorker extends KernelWorker<ZooOptions> {
   }
 }
 
-const service = new ZooWorker();
+const worker = new ZooWorker();
+const service = wrapForComlink(worker);
 exposeWorker(service);
 
 export type ZooBuilderInterface = typeof service;

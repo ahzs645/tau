@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import * as kernelSymbols from '@taucad/types/symbols';
 import { ZooWorker } from '#components/geometry/kernel/zoo/zoo.worker.js';
 import {
   seedTestFilesystem,
@@ -48,7 +49,7 @@ async function getParameters(
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
   const worker = await createWorker(files);
-  const result = await worker.getParametersEntry(createGeometryFile(mainFile));
+  const result = await worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
 
   if (!result.success) {
     console.error('getParameters failed:', JSON.stringify(result.issues, null, 2));
@@ -71,7 +72,7 @@ async function getParametersWithError(
   mainFile: string,
 ): Promise<{ success: boolean; issues?: unknown[] }> {
   const worker = await createWorker(files);
-  return worker.getParametersEntry(createGeometryFile(mainFile));
+  return worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
 }
 
 // =============================================================================
@@ -93,7 +94,7 @@ describe('ZooWorker', () => {
             |> extrude(length = 5)
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.kcl'));
+      const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('main.kcl'));
       expect(result).toBe(true);
     });
 
@@ -103,7 +104,7 @@ describe('ZooWorker', () => {
           console.log('hello');
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.js'));
+      const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('main.js'));
       expect(result).toBe(false);
     });
 
@@ -113,7 +114,7 @@ describe('ZooWorker', () => {
           const x: number = 10;
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+      const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('main.ts'));
       expect(result).toBe(false);
     });
 
@@ -123,7 +124,7 @@ describe('ZooWorker', () => {
           cube([10, 10, 10]);
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.scad'));
+      const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('main.scad'));
       expect(result).toBe(false);
     });
   });

@@ -29,6 +29,7 @@ import {
   convertParameterDefinitionsToDefaults,
   convertParameterDefinitionsToJsonSchema,
 } from '#components/geometry/kernel/jscad/jscad.schema.js';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 type JscadModuleExports = {
   getParameterDefinitions?: () => JscadParameterDefinition[];
@@ -553,7 +554,8 @@ export class JscadWorker extends KernelWorker {
   }
 }
 
-const service = new JscadWorker();
+const worker = new JscadWorker();
+const service = wrapForComlink(worker);
 exposeWorker(service);
 
 export type JscadWorkerInterface = typeof service;

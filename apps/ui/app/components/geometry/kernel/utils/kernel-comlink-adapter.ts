@@ -69,7 +69,9 @@ export function wrapForComlink<T extends KernelWorker>(worker: T): ComlinkKernel
         if (symbolKey !== undefined) {
           const method = Reflect.get(target, symbolKey);
           // Bind the method to preserve `this` context
-          return typeof method === 'function' ? method.bind(target) : method;
+          return typeof method === 'function'
+            ? (method.bind(target) as T[keyof T & symbol])
+            : (method as T[keyof T & symbol]);
         }
       }
 

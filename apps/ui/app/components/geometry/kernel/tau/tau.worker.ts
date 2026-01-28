@@ -1,4 +1,3 @@
-import { exposeWorker } from '#components/geometry/kernel/utils/comlink-worker.utils.js';
 import type {
   CreateGeometryResult,
   ExportFormat,
@@ -13,9 +12,11 @@ import type {
 } from '@taucad/types';
 import { importToGlb, exportFromGlb, supportedExportFormats, supportedImportFormats } from '@taucad/converter';
 import type { InputFormat, OutputFormat } from '@taucad/converter';
+import { exposeWorker } from '#components/geometry/kernel/utils/comlink-worker.utils.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { asBuffer } from '#utils/file.utils.js';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 class TauWorker extends KernelWorker {
   protected static override readonly supportedExportFormats: ExportFormat[] = supportedExportFormats as ExportFormat[];
@@ -141,7 +142,8 @@ class TauWorker extends KernelWorker {
   }
 }
 
-const service = new TauWorker();
+const worker = new TauWorker();
+const service = wrapForComlink(worker);
 exposeWorker(service);
 
 export type TauWorkerInterface = typeof service;

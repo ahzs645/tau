@@ -40,6 +40,7 @@ import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js
 import type { GeometryReplicad } from '#components/geometry/kernel/replicad/replicad.types.js';
 // Font file for Replicad textBlueprints() rendering (Vite ?url import)
 import geistRegularUrl from '#components/geometry/kernel/replicad/fonts/Geist-Regular.ttf?url';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 type ReplicadOptions = {
   /**
@@ -611,7 +612,8 @@ return main(replicad, __inputParams || dp)
   }
 }
 
-const service = new ReplicadWorker();
+const worker = new ReplicadWorker();
+const service = wrapForComlink(worker);
 exposeWorker(service);
 
 export type ReplicadWorkerInterface = typeof service;

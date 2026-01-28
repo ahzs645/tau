@@ -37,6 +37,7 @@ import { parseStderrLine } from '#components/geometry/kernel/openscad/parse-outp
 // Font files for OpenSCAD text() rendering (Vite ?url imports)
 import geistRegularUrl from '#components/geometry/kernel/openscad/fonts/Geist-Regular.ttf?url';
 import geistBoldUrl from '#components/geometry/kernel/openscad/fonts/Geist-Bold.ttf?url';
+import { wrapForComlink } from '#components/geometry/kernel/utils/kernel-comlink-adapter.js';
 
 /**
  * Options for creating an OpenSCAD WASM instance.
@@ -777,7 +778,8 @@ export class OpenScadWorker extends KernelWorker {
   }
 }
 
-const service = new OpenScadWorker();
+const worker = new OpenScadWorker();
+const service = wrapForComlink(worker);
 exposeWorker(service);
 
 export type OpenScadBuilderInterface = typeof service;

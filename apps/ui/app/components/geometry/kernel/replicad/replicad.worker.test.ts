@@ -1,5 +1,6 @@
 // @vitest-environment node
 import type { CreateGeometryResult } from '@taucad/types';
+import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
 import { ReplicadWorker } from '#components/geometry/kernel/replicad/replicad.worker.js';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
@@ -47,7 +48,7 @@ async function getParameters(
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
   const worker = await createWorker(files);
-  const result = await worker.getParametersEntry(createGeometryFile(mainFile));
+  const result = await worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
 
   expect(result.success).toBe(true);
 
@@ -68,7 +69,7 @@ async function createGeometry(
 ): Promise<CreateGeometryResult> {
   const worker = await createWorker(files);
   const geometryFile = createGeometryFile(mainFile);
-  return worker.createGeometryEntry(geometryFile, parameters);
+  return worker[kernelSymbols.createGeometryEntry](geometryFile, parameters);
 }
 
 // Create geometry test helpers instance for geometry assertions
@@ -90,7 +91,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -103,7 +104,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -116,7 +117,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -129,7 +130,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -142,7 +143,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -156,7 +157,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -170,7 +171,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
     });
@@ -185,7 +186,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('component.tsx'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('component.tsx'));
         expect(result).toBe(false);
       });
 
@@ -198,7 +199,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('component.jsx'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('component.jsx'));
         expect(result).toBe(false);
       });
 
@@ -210,7 +211,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('utils.ts'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('utils.ts'));
         expect(result).toBe(false);
       });
 
@@ -218,7 +219,7 @@ describe('ReplicadWorker', () => {
         const worker = await createWorker({
           'model.scad': `cube([10, 10, 10]);`,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('model.scad'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('model.scad'));
         expect(result).toBe(false);
       });
 
@@ -226,7 +227,7 @@ describe('ReplicadWorker', () => {
         const worker = await createWorker({
           'model.kcl': `box([10, 10, 10], center = [0, 0, 0])`,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('model.kcl'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('model.kcl'));
         expect(result).toBe(false);
       });
 
@@ -239,7 +240,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('jscad-model.ts'));
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('jscad-model.ts'));
         expect(result).toBe(false);
       });
     });
@@ -1000,7 +1001,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('project/main.ts'), {});
+        const result = await worker[kernelSymbols.createGeometryEntry](createGeometryFile('project/main.ts'), {});
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1030,11 +1031,11 @@ describe('ReplicadWorker', () => {
 
       // First create geometry
       const geometryFile = createGeometryFile('box.ts');
-      const createResult = await worker.createGeometryEntry(geometryFile, {});
+      const createResult = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
       expect(createResult.success).toBe(true);
 
       // Then export
-      const exportResult = await worker.exportGeometryEntry('step');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('step');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data).toBeDefined();
@@ -1055,9 +1056,9 @@ describe('ReplicadWorker', () => {
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
-      const exportResult = await worker.exportGeometryEntry('stl');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('stl');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data.length).toBeGreaterThan(0);
@@ -1076,9 +1077,9 @@ describe('ReplicadWorker', () => {
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
-      const exportResult = await worker.exportGeometryEntry('stl-binary');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('stl-binary');
       expect(exportResult.success).toBe(true);
     });
 
@@ -1094,9 +1095,9 @@ describe('ReplicadWorker', () => {
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
-      const exportResult = await worker.exportGeometryEntry('gltf');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('gltf');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data[0]?.name).toContain('gltf');
@@ -1115,9 +1116,9 @@ describe('ReplicadWorker', () => {
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
-      const exportResult = await worker.exportGeometryEntry('glb');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('glb');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data[0]?.name).toContain('glb');
@@ -1139,9 +1140,9 @@ describe('ReplicadWorker', () => {
       });
 
       const geometryFile = createGeometryFile('assembly.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
-      const exportResult = await worker.exportGeometryEntry('step-assembly');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('step-assembly');
       expect(exportResult.success).toBe(true);
     });
 
@@ -1154,7 +1155,7 @@ describe('ReplicadWorker', () => {
       });
 
       // Don't compute geometry first
-      const exportResult = await worker.exportGeometryEntry('step');
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('step');
       expect(exportResult.success).toBe(false);
       if (!exportResult.success) {
         expect(exportResult.issues[0]?.message).toContain('not computed');
@@ -1174,10 +1175,10 @@ describe('ReplicadWorker', () => {
       });
 
       const geometryFile = createGeometryFile('sphere.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
       // Export with custom mesh configuration
-      const exportResult = await worker.exportGeometryEntry('stl', {
+      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('stl', {
         linearTolerance: 0.001,
         angularTolerance: 5,
       });

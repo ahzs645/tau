@@ -465,7 +465,7 @@ const exportGeometryActor = fromPromise<
   }
 
   try {
-    const supportedFormats = await wrappedWorker.getSupportedExportFormats();
+    const supportedFormats = await wrappedWorker.getExportFormats();
     if (!supportedFormats.includes(format)) {
       return {
         type: 'geometryExportFailed',
