@@ -103,11 +103,25 @@ export class ChatController {
 
     // Abort the request if the client disconnects
     const abortController = new AbortController();
-    request.raw.socket.on('close', () => {
+    const { socket } = request.raw;
+
+    const handleSocketClose = (): void => {
       if (request.raw.destroyed) {
         abortController.abort();
       }
-    });
+    };
+
+    socket.on('close', handleSocketClose);
+
+    // Clean up the listener when the response finishes to prevent memory leaks
+    // With HTTP keep-alive, the same socket is reused across multiple requests,
+    // so we must remove the listener to avoid accumulation
+    const cleanupSocketListener = (): void => {
+      socket.off('close', handleSocketClose);
+    };
+
+    response.raw.on('finish', cleanupSocketListener);
+    response.raw.on('error', cleanupSocketListener);
 
     this.logger.debug(`Starting execution for thread: ${body.id}`);
     const stream = await agent.graph.stream(
