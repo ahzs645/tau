@@ -14,30 +14,21 @@ import type { KernelWorker } from '#components/geometry/kernel/utils/kernel-work
 
 /**
  * Map of string method names to their corresponding symbol keys.
- * Used by the Proxy to translate Comlink's string-based calls to symbol-based implementations.
+ * Automatically derived from @taucad/types/symbols.
  */
-const methodMapping: Record<string, symbol> = {
-  initializeEntry: kernelSymbols.initializeEntry,
-  cleanupEntry: kernelSymbols.cleanupEntry,
-  canHandleEntry: kernelSymbols.canHandleEntry,
-  getParametersEntry: kernelSymbols.getParametersEntry,
-  createGeometryEntry: kernelSymbols.createGeometryEntry,
-  exportGeometryEntry: kernelSymbols.exportGeometryEntry,
-  getExportFormats: kernelSymbols.getExportFormats,
-};
+const methodMapping: Record<string, symbol> = { ...kernelSymbols };
+
+/**
+ * Keys of symbols exposed via Comlink.
+ */
+type SymbolKeys = keyof typeof kernelSymbols;
 
 /**
  * Type that exposes string-named methods for Comlink usage.
  * Maps each symbol-keyed method to a string-named equivalent.
  */
 export type ComlinkKernelWorker<T extends KernelWorker> = T & {
-  initializeEntry: T[typeof kernelSymbols.initializeEntry];
-  cleanupEntry: T[typeof kernelSymbols.cleanupEntry];
-  canHandleEntry: T[typeof kernelSymbols.canHandleEntry];
-  getParametersEntry: T[typeof kernelSymbols.getParametersEntry];
-  createGeometryEntry: T[typeof kernelSymbols.createGeometryEntry];
-  exportGeometryEntry: T[typeof kernelSymbols.exportGeometryEntry];
-  getExportFormats: T[typeof kernelSymbols.getExportFormats];
+  [K in SymbolKeys]: T[(typeof kernelSymbols)[K]];
 };
 
 /**
