@@ -169,9 +169,9 @@ export function ChatMessageToolWebSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
-              <ChatToolAction>Found</ChatToolAction>{' '}
+              <ChatToolAction>Searched web</ChatToolAction>{' '}
               <ChatToolDescription>
-                {sources.length} source{sources.length === 1 ? '' : 's'}
+                <span className="italic">{query}</span>
               </ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
