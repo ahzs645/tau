@@ -668,6 +668,11 @@ export class OpenScadWorker extends KernelWorker {
 
       // Create directories and write files into Emscripten FS
       for (const [relativePath, content] of Object.entries(files)) {
+        // Skip internal .tau directory files (e.g., .tau/chat-history.json)
+        if (relativePath.startsWith('.tau/')) {
+          continue;
+        }
+
         this.ensureDirectoryForFile(instance, relativePath);
 
         // Write the file
