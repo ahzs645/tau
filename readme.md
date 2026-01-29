@@ -5,7 +5,7 @@
 
 # Tau
 
-Your AI-powered workshop companion — a free, open-source CAD platform that works offline. Design anything from 3D prints to woodworking projects with intelligent assistance, right in your browser.
+The AI-native CAD platform — open-source, browser-based, and kernel-agnostic. Design anything from 3D prints, game assets, and more.
 
 **[Try it now at tau.new](https://tau.new)**
 
@@ -15,9 +15,11 @@ Your AI-powered workshop companion — a free, open-source CAD platform that wor
   <img alt="Tau Desktop View" src="docs/assets/tau-desktop-light.jpg">
 </picture>
 
+> 🚧 **Tau is currently under heavy development.** APIs and interfaces may change as we add new features and improvements.
+
 ## Features
 
-- **Open Source** — MIT licensed, free forever
+- **Open Source** — MIT licensed
 - **Browser-Based** — Run CAD on mobile or desktop, no **installation** required
 - **Code-Based CAD** — Precise, version-controlled designs through code
 - **AI-Powered** — Natural language interface for design creation and modification
@@ -27,14 +29,11 @@ Your AI-powered workshop companion — a free, open-source CAD platform that wor
 
 ## Use Cases
 
-### 3D Printing
-Design and export models optimized for additive manufacturing. Export directly to STL, 3MF, or other slicer-compatible formats.
-
-### CAD Prototyping
-Rapid iteration with parametric code. Change dimensions, test variations, and version control your designs like software.
-
-### Academic Research
-Use kernel APIs for computational geometry research. Integrate CAD capabilities into research tools and educational platforms.
+- **3D Printing** — Design and export to STL, 3MF, and slicer-compatible formats
+- **Game Development** — Create 3D models for games and simulations
+- **Industrial Design** — Create 3D models for industrial design and manufacturing
+- **CAD Prototyping** — Parametric code with version control and instant iteration
+- **Academic Research** — Kernel APIs for computational geometry and educational tools
 
 ## Supported Kernels
 
@@ -62,34 +61,27 @@ Tau's multi-kernel architecture lets you choose the best CAD engine for your nee
 
 - [ ] **[Arduino](https://www.arduino.cc/)** — Electronics platform
 
+## Supported Simulators
+
+Tau will integrate browser-compatible simulation environments for validating designs.
+
+### Mechanical
+
+- [ ] **[FEAScript](https://feascript.com/)** — JavaScript finite element analysis library
+
+### Electrical
+
+- [ ] **[ngspice](https://ngspice.sourceforge.io/)** — SPICE circuit simulator (WASM)
+- [ ] **[CircuitJS](https://www.falstad.com/circuit/)** — JavaScript circuit simulator
+
+### Firmware
+
+- [ ] **[QEMU](https://www.qemu.org/)** — Machine emulator and virtualizer (WASM)
+- [ ] **[Wokwi](https://wokwi.com/)** — Browser-based Arduino and ESP32 simulator
+
 ## File Converter
 
-Tau includes a powerful file converter supporting **41 input formats** and **11 output formats**.
-
-### Supported Input Formats (41)
-
-3dm, 3ds, 3mf, ac, amf, ase, brep, bvh, cob, dae, drc, dxf, fbx, glb, gltf, ifc, iges, igs, lwo, md2, md5mesh, mesh.xml, nff, obj, off, ogex, ply, smd, step, stl, stp, usda, usdc, usdz, wrl, x, x3d, x3db, x3dv, xgl
-
-### Supported Output Formats (11)
-
-3ds, dae, fbx, glb, gltf, obj, ply, stl, step, x, x3d
-
-## Built With
-
-Tau is built on a foundation of excellent open-source projects:
-
-| Category | Technologies |
-|----------|-------------|
-| **State Management** | [XState V5](https://xstate.js.org/) |
-| **Code Editor** | [Monaco Editor](https://microsoft.github.io/monaco-editor/) |
-| **3D Rendering** | [Three.js](https://threejs.org/), [React Three Fiber](https://docs.pmnd.rs/react-three-fiber) |
-| **UI Framework** | [React 19](https://react.dev/), [Radix UI](https://www.radix-ui.com/) |
-| **File Tree** | [Headless Tree](https://headless-tree.lukasbach.com/) |
-| **AI Orchestration** | [LangChain](https://js.langchain.com/) |
-| **3D Processing** | [glTF-Transform](https://gltf-transform.dev/), [Assimp](https://assimp.org/) |
-| **Documentation** | [Fumadocs](https://fumadocs.dev/) |
-| **Database** | [Drizzle ORM](https://orm.drizzle.team/) |
-| **Git Operations** | [Isomorphic Git](https://isomorphic-git.org/) |
+Convert between **41 input formats** and **11 output formats** including STL, STEP, GLTF, FBX, 3MF, OBJ, and more.
 
 ## Community
 
@@ -109,22 +101,25 @@ For security concerns, please review our [Security Policy](security.md).
 
 Please read our [Code of Conduct](code_of_conduct.md) before participating.
 
-## Acknowledgements
+## Built With
 
-Tau wouldn't be possible without these amazing open-source projects:
+Tau is built on a foundation of excellent open-source projects:
 
-- [OpenSCAD Playground](https://github.com/openscad/openscad-playground) — Inspiration for browser-based code-CAD architecture
-- [Three.js](https://threejs.org/) & [React Three Fiber](https://docs.pmnd.rs/react-three-fiber) — 3D rendering engine
-- [XState](https://xstate.js.org/) — State machine orchestration
-- [Monaco Editor](https://microsoft.github.io/monaco-editor/) — The editor powering VS Code
-- [Radix UI](https://www.radix-ui.com/) — Accessible UI primitives
-- [OpenCascade.js](https://ocjs.org/) — CAD kernel (via Replicad)
-- [Assimp](https://assimp.org/) — Multi-format 3D model importer
-- [glTF-Transform](https://gltf-transform.dev/) — 3D file processing
-- [LangChain](https://js.langchain.com/) — AI orchestration
-- [Headless Tree](https://headless-tree.lukasbach.com/) — File tree component
-- [Fumadocs](https://fumadocs.dev/) — Documentation framework
+| Category             | Technologies                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **State Management** | [XState V5](https://xstate.js.org/)                                                                        |
+| **Code Editor**      | [Monaco Editor](https://microsoft.github.io/monaco-editor/)                                                |
+| **3D Rendering**     | [Three.js](https://threejs.org/), [React Three Fiber](https://docs.pmnd.rs/react-three-fiber)              |
+| **UI Framework**     | [React 19](https://react.dev/), [Radix UI](https://www.radix-ui.com/), [shadcn/ui](https://ui.shadcn.com/) |
+| **File Tree**        | [Headless Tree](https://headless-tree.lukasbach.com/)                                                      |
+| **AI Orchestration** | [LangChain](https://js.langchain.com/)                                                                     |
+| **3D Processing**    | [glTF-Transform](https://gltf-transform.dev/), [Assimp](https://assimp.org/)                               |
+| **CAD Kernels**      | [OpenCascade.js](https://ocjs.org/) (via Replicad)                                                         |
+| **Documentation**    | [Fumadocs](https://fumadocs.dev/)                                                                          |
+| **Database**         | [Drizzle ORM](https://orm.drizzle.team/)                                                                   |
+| **Git Operations**   | [Isomorphic Git](https://isomorphic-git.org/)                                                              |
 
+Special thanks to [OpenSCAD Playground](https://github.com/openscad/openscad-playground) for inspiring the browser-based code-CAD architecture.
 ## License
 
 Tau is dual-licensed:
