@@ -33,7 +33,7 @@ export const metaConfig = {
   /**
    * The description of the app. Used for SEO and other metadata such as PWA and app store descriptions.
    */
-  description: 'Tau: The multi-kernel CAD framework for the web.',
+  description: 'Tau: The AI-native CAD platform for the web.',
   /**
    * The directory of the docs relative to the root of the repository.
    */
