@@ -16,18 +16,28 @@ const defaultLineWidth = 0.75;
 const defaultEdgeColor = 0x00_00_00;
 
 /**
- * Depth bias factor for edge lines with logarithmic depth buffer.
+ * Base depth bias factor for edge lines with logarithmic depth buffer.
  *
  * This multiplicative factor is applied to vFragDepth BEFORE taking log2.
  * Due to logarithm properties (log(a*b) = log(a) + log(b)), this produces
  * a constant additive offset in log space, which scales correctly with
  * scene size and depth precision.
  *
- * Common values and their log2 offsets:
- * - 0.999 → ~0.00144 offset (subtle, correct occlusion, some edge roughness)
- * - 0.995 → ~0.0072 offset (balanced)
- * - 0.99  → ~0.0145 offset (smooth edges, may show through thin geometry)
- * - 0.9   → ~0.152 offset (very aggressive, incorrect occlusion)
+ * FOV-ADAPTIVE SCALING:
+ *
+ * The shader dynamically adjusts this bias based on camera FOV to maintain
+ * correct occlusion at all FOV values. At low FOV (near-orthographic), the
+ * camera is far away, and the depth buffer range for geometry becomes
+ * compressed. A fixed bias would be too aggressive, causing lines to
+ * incorrectly show through occluding geometry.
+ *
+ * The adjustment formula uses: adjustedBias = pow(baseBias, fovScale)
+ * where fovScale = tan(fov/2) / tan(30°)
+ *
+ * Effective values at different FOV:
+ * - At 60° FOV: adjustedBias = 0.9999 (unchanged, this is the reference)
+ * - At 6° FOV:  adjustedBias ≈ 0.99999 (10x less bias)
+ * - At 0.6° FOV: adjustedBias ≈ 0.999999 (100x less bias)
  *
  * IMPORTANT TRADE-OFF (MSAA vs Occlusion):
  *
@@ -151,16 +161,16 @@ function extractPositions(lineSegments: LineSegments): number[] | undefined {
 }
 
 /**
- * Create a LineMaterial with logarithmic depth bias for edge rendering.
+ * Create a LineMaterial with FOV-adaptive logarithmic depth bias for edge rendering.
  *
  * Uses onBeforeCompile to modify the fragment shader's logarithmic depth
  * calculation, applying a multiplicative bias to vFragDepth before the log2
- * operation. This produces a constant offset in logarithmic depth space,
- * which scales correctly with scene size and prevents z-fighting with
- * co-planar mesh surfaces while maintaining proper occlusion.
+ * operation. The bias is dynamically scaled based on camera FOV (derived from
+ * the projection matrix) to maintain correct occlusion at all FOV values,
+ * from wide-angle perspective to near-orthographic views.
  *
  * @param resolution - The viewport resolution for line width calculation
- * @returns A configured LineMaterial with depth bias for logarithmic depth buffer
+ * @returns A configured LineMaterial with FOV-adaptive depth bias
  */
 function createEdgeLineMaterial(resolution: Vector2): LineMaterial {
   const material = new LineMaterial({
@@ -202,19 +212,44 @@ function createEdgeLineMaterial(resolution: Vector2): LineMaterial {
     // Add depthBias uniform for runtime adjustment (shared reference)
     shader.uniforms['depthBias'] = depthBiasUniform;
 
-    // Declare the uniform and use it in the depth calculation
+    // Add varying to pass FOV scale from vertex to fragment shader.
+    // projectionMatrix is only available in vertex shader for LineMaterial.
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <logdepthbuf_pars_vertex>',
+      `#include <logdepthbuf_pars_vertex>
+      varying float vFovScale;`,
+    );
+
+    // Calculate FOV scale in vertex shader and pass to fragment
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <logdepthbuf_vertex>',
+      `#include <logdepthbuf_vertex>
+      // FOV scale for adaptive depth bias
+      // projectionMatrix[1][1] = 1 / tan(fov/2) for perspective cameras
+      float tanHalfFov = 1.0 / projectionMatrix[1][1];
+      float tanHalfRefFov = 0.57735; // tan(30°) for 60° reference FOV
+      vFovScale = tanHalfFov / tanHalfRefFov;`,
+    );
+
+    // Declare the varying and uniform in fragment shader
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <logdepthbuf_pars_fragment>',
       `#include <logdepthbuf_pars_fragment>
-      uniform float depthBias;`,
+      uniform float depthBias;
+      varying float vFovScale;`,
     );
 
+    // Use the varying in the depth calculation
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <logdepthbuf_fragment>',
       `#if defined( USE_LOGDEPTHBUF )
-        // Apply depth bias to push lines closer to camera than co-planar surfaces
-        // depthBias < 1.0 moves closer to camera; see depthBiasFactor for explanation
-        float biasedFragDepth = vFragDepth * depthBias;
+        // FOV-adaptive depth bias for correct occlusion at all FOV values.
+        // At low FOV (near-orthographic), camera distance is large and a fixed bias
+        // becomes too aggressive relative to geometry depth separation.
+        // vFovScale is calculated in vertex shader from projectionMatrix.
+        float adjustedBias = pow(depthBias, vFovScale);
+
+        float biasedFragDepth = vFragDepth * adjustedBias;
         #if defined( USE_LOGDEPTHBUF_EXT )
           gl_FragDepth = log2( biasedFragDepth ) * logDepthBufFC * 0.5;
         #else
