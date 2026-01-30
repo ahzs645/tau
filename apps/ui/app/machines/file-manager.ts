@@ -102,32 +102,15 @@ export const fileManager: FileManager = {
   async ensureDirectoryExists(targetPath: string): Promise<void> {
     await ensureReady();
     const normalizedPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
-    const segments = normalizedPath.split('/').filter((segment) => segment.length > 0);
 
-    // Build all directory paths that need to be created
-    const directoryPaths: string[] = [];
-    let currentPath = '';
-
-    for (const segment of segments) {
-      currentPath += `/${segment}`;
-      directoryPaths.push(currentPath);
-    }
-
-    // Batch check which directories already exist
-    const existsMap = await this.batchExists(directoryPaths);
-
-    // Create only the directories that don't exist (in order)
-    for (const directoryPath of directoryPaths) {
-      if (!existsMap[directoryPath]) {
-        try {
-          // eslint-disable-next-line no-await-in-loop -- Need to create directories sequentially
-          await fsp.mkdir(directoryPath);
-        } catch (error: unknown) {
-          // Ignore error if directory was created by another concurrent operation
-          if (error instanceof Error && !error.message.includes('EEXIST')) {
-            throw error;
-          }
-        }
+    try {
+      // Use recursive mkdir to create all parent directories atomically
+      // This avoids race conditions from separate exists checks + mkdir calls
+      await fsp.mkdir(normalizedPath, { recursive: true });
+    } catch (error: unknown) {
+      // Ignore EEXIST errors (directory already exists or was created concurrently)
+      if (error instanceof Error && !error.message.includes('EEXIST')) {
+        throw error;
       }
     }
   },
