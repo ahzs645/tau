@@ -38,6 +38,7 @@ import type { KernelMiddleware } from '#components/geometry/kernel/utils/kernel-
 import { createMiddlewareRuntime } from '#components/geometry/kernel/utils/kernel-middleware.js';
 import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
 import { gltfCoordinateTransformMiddleware } from '#components/geometry/kernel/utils/gltf-coordinate-transform.middleware.js';
+import { gltfEdgeDetectionMiddleware } from '#components/geometry/kernel/utils/gltf-edge-detection.middleware.js';
 import { createKernelError } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { parameterCacheMiddleware } from '#components/geometry/kernel/utils/parameter-cache.middleware.js';
 
@@ -50,11 +51,16 @@ import { parameterCacheMiddleware } from '#components/geometry/kernel/utils/para
  * 1. parameterCacheMiddleware - Caches getParameters results.
  * 2. geometryCacheMiddleware - Checks/writes geometry cache, handles export.
  * 3. gltfCoordinateTransformMiddleware - Transforms GLTF output for UI rendering.
+ * 4. gltfEdgeDetectionMiddleware - Adds edge primitives for sharp edge rendering.
+ *
+ * Note: Edge detection must be innermost (runs first on return) so that
+ * the coordinate transform can then transform BOTH mesh and edge primitives.
  */
 const kernelMiddleware: KernelMiddleware[] = [
   parameterCacheMiddleware,
   geometryCacheMiddleware,
   gltfCoordinateTransformMiddleware,
+  gltfEdgeDetectionMiddleware,
 ];
 
 export abstract class KernelWorker<Options extends Record<string, unknown> = Record<string, unknown>> {
