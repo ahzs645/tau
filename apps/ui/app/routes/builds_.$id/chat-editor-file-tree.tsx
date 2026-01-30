@@ -609,9 +609,20 @@ export const ChatEditorFileTree = memo(function ({
         return;
       }
 
-      // Determine target folder - for root or folders, use the path directly
+      // Determine target folder based on drop type (same logic as onDrop)
       const targetPath = target.item.getId();
-      const directory = targetPath === rootId ? '' : targetPath;
+      let directory = '';
+      if (targetPath === rootId) {
+        // Dropping on root folder
+        directory = '';
+      } else if (target.item.isFolder()) {
+        directory = targetPath;
+      } else {
+        // Dropped on a file, use its parent folder
+        const parts = targetPath.split('/');
+        parts.pop();
+        directory = parts.join('/');
+      }
 
       await processDroppedFiles(filesWithPaths, directory);
     },
@@ -1077,80 +1088,82 @@ export const ChatEditorFileTree = memo(function ({
 
                 return (
                   <>
-                    {items.map((item) => {
-                      const itemId = item.getId();
-                      const itemLevel = item.getItemMeta().level;
+                    {items
+                      .filter((item) => item.getId() !== rootId)
+                      .map((item) => {
+                        const itemId = item.getId();
+                        const itemLevel = item.getItemMeta().level;
 
-                      // Item is highlighted if:
-                      // 1. highlightAllItems is true (dropping at root - ALL items highlighted), OR
-                      // 2. It IS the drag target folder, OR
-                      // 3. It's inside the drag target folder
-                      const isInsideDragTarget =
-                        highlightAllItems ||
-                        (dragTargetFolderPath !== undefined &&
-                          (itemId === dragTargetFolderPath || itemId.startsWith(`${dragTargetFolderPath}/`)));
+                        // Item is highlighted if:
+                        // 1. highlightAllItems is true (dropping at root - ALL items highlighted), OR
+                        // 2. It IS the drag target folder, OR
+                        // 3. It's inside the drag target folder
+                        const isInsideDragTarget =
+                          highlightAllItems ||
+                          (dragTargetFolderPath !== undefined &&
+                            (itemId === dragTargetFolderPath || itemId.startsWith(`${dragTargetFolderPath}/`)));
 
-                      return (
-                        <div key={itemId}>
-                          <TreeItem
-                            item={item}
-                            isActive={activeFilePath === itemId}
-                            isOpen={openFiles.some((f) => f.path === itemId)}
-                            searchQuery={tree.getState().search ?? ''}
-                            isInsideDragTarget={isInsideDragTarget}
-                            onDelete={handleDelete}
-                            onDuplicate={handleDuplicate}
-                            onUpload={handleUploadClick}
-                          />
-                          {/* Pending folder inside this folder */}
-                          {pendingFolder && pendingFolder.parentPath === itemId && item.isFolder() ? (
-                            <PendingFolderInput
-                              parentPath={pendingFolder.parentPath}
-                              error={pendingFolder.error}
-                              allPaths={allPaths}
-                              level={itemLevel + 1}
-                              onSubmit={(name) => {
-                                const folderPath = `${pendingFolder.parentPath}/${name}`;
-                                const gitkeepPath = `${folderPath}/.gitkeep`;
-                                void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
-                                setPendingFolder(undefined);
-                                setExpandedItems((previous) => [...previous, folderPath]);
-                              }}
-                              onCancel={() => {
-                                setPendingFolder(undefined);
-                              }}
-                              onError={(error) => {
-                                setPendingFolder((previous) => (previous ? { ...previous, error } : undefined));
-                              }}
+                        return (
+                          <div key={itemId}>
+                            <TreeItem
+                              item={item}
+                              isActive={activeFilePath === itemId}
+                              isOpen={openFiles.some((f) => f.path === itemId)}
+                              searchQuery={tree.getState().search ?? ''}
+                              isInsideDragTarget={isInsideDragTarget}
+                              onDelete={handleDelete}
+                              onDuplicate={handleDuplicate}
+                              onUpload={handleUploadClick}
                             />
-                          ) : null}
-                          {/* Pending file inside this folder */}
-                          {pendingFile && pendingFile.parentPath === itemId && item.isFolder() ? (
-                            <PendingFileInput
-                              inputRef={pendingFileInputRef}
-                              parentPath={pendingFile.parentPath}
-                              extension={pendingFile.extension}
-                              defaultName={pendingFile.defaultName}
-                              error={pendingFile.error}
-                              allPaths={allPaths}
-                              level={itemLevel + 1}
-                              onSubmit={(filename) => {
-                                const filePath = `${pendingFile.parentPath}/${filename}`;
-                                void writeFile(filePath, encodeTextFile(pendingFile.content), { source: 'user' });
-                                fileExplorerRef.send({ type: 'openFile', path: filePath, source: 'user' });
-                                setPendingFile(undefined);
-                              }}
-                              onCancel={() => {
-                                setPendingFile(undefined);
-                              }}
-                              onError={(error) => {
-                                setPendingFile((previous) => (previous ? { ...previous, error } : undefined));
-                              }}
-                            />
-                          ) : null}
-                        </div>
-                      );
-                    })}
+                            {/* Pending folder inside this folder */}
+                            {pendingFolder && pendingFolder.parentPath === itemId && item.isFolder() ? (
+                              <PendingFolderInput
+                                parentPath={pendingFolder.parentPath}
+                                error={pendingFolder.error}
+                                allPaths={allPaths}
+                                level={itemLevel + 1}
+                                onSubmit={(name) => {
+                                  const folderPath = `${pendingFolder.parentPath}/${name}`;
+                                  const gitkeepPath = `${folderPath}/.gitkeep`;
+                                  void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
+                                  setPendingFolder(undefined);
+                                  setExpandedItems((previous) => [...previous, folderPath]);
+                                }}
+                                onCancel={() => {
+                                  setPendingFolder(undefined);
+                                }}
+                                onError={(error) => {
+                                  setPendingFolder((previous) => (previous ? { ...previous, error } : undefined));
+                                }}
+                              />
+                            ) : null}
+                            {/* Pending file inside this folder */}
+                            {pendingFile && pendingFile.parentPath === itemId && item.isFolder() ? (
+                              <PendingFileInput
+                                inputRef={pendingFileInputRef}
+                                parentPath={pendingFile.parentPath}
+                                extension={pendingFile.extension}
+                                defaultName={pendingFile.defaultName}
+                                error={pendingFile.error}
+                                allPaths={allPaths}
+                                level={itemLevel + 1}
+                                onSubmit={(filename) => {
+                                  const filePath = `${pendingFile.parentPath}/${filename}`;
+                                  void writeFile(filePath, encodeTextFile(pendingFile.content), { source: 'user' });
+                                  fileExplorerRef.send({ type: 'openFile', path: filePath, source: 'user' });
+                                  setPendingFile(undefined);
+                                }}
+                                onCancel={() => {
+                                  setPendingFile(undefined);
+                                }}
+                                onError={(error) => {
+                                  setPendingFile((previous) => (previous ? { ...previous, error } : undefined));
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        );
+                      })}
 
                     {/* Root item as spacer to capture empty space drops */}
                     <div
