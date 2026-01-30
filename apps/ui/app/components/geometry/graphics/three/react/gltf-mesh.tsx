@@ -32,7 +32,7 @@ type GltfMeshDisplayProperties = {
  * Update visibility of surfaces and lines based on object type.
  *
  * Uses Three.js object type for identification:
- * - Mesh objects are surfaces
+ * - Mesh objects (including subclasses like SkinnedMesh, InstancedMesh) are surfaces
  * - LineSegments and LineSegments2 objects are edges
  *
  * @param scene - The GLTF scene
@@ -41,10 +41,12 @@ type GltfMeshDisplayProperties = {
  */
 function updateVisibility(scene: Group, enableSurfaces: boolean, enableLines: boolean): void {
   scene.traverse((object) => {
-    if (object.type === 'Mesh') {
-      object.visible = enableSurfaces;
-    } else if (object.type === 'LineSegments' || object instanceof LineSegments2) {
+    // Check line types first (LineSegments2 has custom type)
+    if (object.type === 'LineSegments' || object instanceof LineSegments2) {
       object.visible = enableLines;
+    } else if ('isMesh' in object && object.isMesh) {
+      // `isMesh` is true for Mesh, SkinnedMesh, InstancedMesh, etc.
+      object.visible = enableSurfaces;
     }
   });
 }
