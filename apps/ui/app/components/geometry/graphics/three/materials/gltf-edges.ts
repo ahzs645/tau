@@ -354,3 +354,21 @@ export function applyFatLineSegments(gltf: GLTF, resolution: Vector2): void {
     }
   }
 }
+
+/**
+ * Update the resolution of all LineMaterial instances in a scene.
+ * Call this when the viewport size changes to maintain correct line widths.
+ *
+ * @param scene - The scene to update
+ * @param resolution - The new viewport resolution
+ */
+export function updateLineMaterialResolution(scene: Group, resolution: Vector2): void {
+  scene.traverse((object) => {
+    if (object instanceof LineSegments2) {
+      const { material } = object;
+      if ('resolution' in material) {
+        (material as { resolution: Vector2 }).resolution.copy(resolution);
+      }
+    }
+  });
+}

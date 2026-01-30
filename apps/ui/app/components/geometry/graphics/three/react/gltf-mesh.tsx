@@ -1,10 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GLTFLoader, LineSegments2 } from 'three/addons';
 import type { Group } from 'three';
 import { Vector2 } from 'three';
 import { useThree } from '@react-three/fiber';
 import { applyMatcap } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
-import { applyFatLineSegments } from '#components/geometry/graphics/three/materials/gltf-edges.js';
+import {
+  applyFatLineSegments,
+  updateLineMaterialResolution,
+} from '#components/geometry/graphics/three/materials/gltf-edges.js';
 
 type GltfMeshDisplayProperties = {
   /**
@@ -76,6 +79,20 @@ export function GltfMesh({
   const [scene, setScene] = useState<Group | undefined>(undefined);
   const { size, invalidate } = useThree();
 
+  // Memoize resolution vector to avoid creating new objects on each render
+  const resolutionRef = useRef(new Vector2(size.width, size.height));
+
+  // Update resolution when size changes
+  useEffect(() => {
+    resolutionRef.current.set(size.width, size.height);
+
+    // Update LineMaterial resolution for all LineSegments2
+    if (scene) {
+      updateLineMaterialResolution(scene, resolutionRef.current);
+      invalidate();
+    }
+  }, [size, scene, invalidate]);
+
   // Load GLTF and process scene
   useEffect(() => {
     let cancelled = false;
@@ -98,8 +115,7 @@ export function GltfMesh({
         }
 
         // Convert LineSegments to LineSegments2 for fat line rendering
-        const resolution = new Vector2(size.width, size.height);
-        applyFatLineSegments(gltf, resolution);
+        applyFatLineSegments(gltf, resolutionRef.current);
 
         // Apply matcap material if enabled
         if (enableMatcap) {
