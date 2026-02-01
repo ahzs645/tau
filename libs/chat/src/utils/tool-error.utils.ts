@@ -78,7 +78,7 @@ export function rpcErrorToToolError(
     case 'NO_CONNECTION': {
       return {
         errorCode: 'NO_CLIENT_CONNECTION',
-        message: "No connection to the user's browser.",
+        message: 'Unable to connect to the client.',
         toolName,
         toolCallId,
       };
