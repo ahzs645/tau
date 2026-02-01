@@ -78,9 +78,7 @@ export function rpcErrorToToolError(
     case 'NO_CONNECTION': {
       return {
         errorCode: 'NO_CLIENT_CONNECTION',
-        message:
-          'No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
-          'DO NOT RETRY this or any other tool - inform the user that you cannot proceed because they are no longer connected.',
+        message: "No connection to the user's browser.",
         toolName,
         toolCallId,
       };
