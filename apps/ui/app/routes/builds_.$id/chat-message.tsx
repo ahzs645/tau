@@ -182,7 +182,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'dynamic-tool': {
-                  throw new Error('Dynamic tool rendering is not implemented');
+                  return <ChatMessagePartUnknown key={part.toolCallId} part={part} />;
                 }
 
                 case 'source-url': {
