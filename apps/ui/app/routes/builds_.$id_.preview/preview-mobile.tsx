@@ -163,6 +163,7 @@ export const PreviewMobile = memo(function ({
     } catch (error: unknown) {
       console.error('Failed to remix build:', error);
       toast.error('Failed to remix build');
+    } finally {
       setIsCloning(false);
     }
   }, [isStaticBuild, staticBuildFiles, build, isCloning, buildManager, navigate]);
