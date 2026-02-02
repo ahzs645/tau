@@ -25,7 +25,7 @@ import pluginEnforceUint8ArrayArrayBuffer from '@protontech/eslint-plugin-enforc
  * `should`: shouldRender, shouldUpdate, shouldAnimate
  * `enable`: enableEditing, enableDragging, enableZoom
  * `make`: makeDefault, makeHandler, makeValidator
- * `with`: withTheme, withContext, withRouter
+ * `with`: withTheme, withContext, withRouter, withLabel
  */
 const booleanPropertyPrefixes = ['is', 'has', 'as', 'should', 'enable', 'make', 'with'];
 
