@@ -4,7 +4,7 @@ export const providerIdSchema = z
   .enum(['openai', 'anthropic', 'sambanova', 'ollama', 'vertexai', 'cerebras'])
   .describe('The provider of the model');
 
-export const modelFamilySchema = z.enum(['gpt', 'claude', 'gemini']);
+export const modelFamilySchema = z.enum(['GPT', 'Claude', 'Gemini']);
 
 export const providerSchema = z.object({
   provider: providerIdSchema,
