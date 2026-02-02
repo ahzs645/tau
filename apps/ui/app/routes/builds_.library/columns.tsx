@@ -4,7 +4,7 @@ import { NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 import type { Build, EngineeringDiscipline } from '@taucad/types';
 import { CategoryBadge } from '#components/category-badge.js';
-import { DataTableColumnHeader } from '#routes/builds_.library/data-table-column-header.js';
+import { DataTableColumnHeader } from '#components/ui/data-table.js';
 import { Button } from '#components/ui/button.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { formatRelativeTime } from '#utils/date.utils.js';

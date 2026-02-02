@@ -7,10 +7,6 @@ import {
   Table as TableIcon,
   Cog,
   List,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   Trash,
   AlertCircle,
   ArrowUpDown,
@@ -25,7 +21,6 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { Link, NavLink, useNavigate } from 'react-router';
 import {
-  flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
@@ -39,9 +34,8 @@ import { engineeringDisciplines } from '@taucad/types/constants';
 import { createColumns } from '#routes/builds_.library/columns.js';
 import { CategoryBadge } from '#components/category-badge.js';
 import { Button, buttonVariants } from '#components/ui/button.js';
-import { SearchInput } from '#components/search-input.js';
 import { Card, CardContent, CardHeader, CardDescription, CardFooter } from '#components/ui/card.js';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
+import { DataTable, DataTableSearch, DataTablePagination } from '#components/ui/data-table.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,7 +66,6 @@ import { useCookie } from '#hooks/use-cookie.js';
 import { BuildActionDropdown } from '#routes/builds_.library/build-action-dropdown.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { formatRelativeTime } from '#utils/date.utils.js';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#components/ui/table.js';
 import { toTitleCase } from '#utils/string.utils.js';
 import { Loader } from '#components/ui/loader.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -481,22 +474,12 @@ function UnifiedBuildList({
     );
   }
 
+  const columns = createColumns(actions);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <SearchInput
-          autoComplete="off"
-          className="h-8"
-          placeholder="Search builds..."
-          value={globalFilter}
-          containerClassName="grow"
-          onChange={(event) => {
-            setGlobalFilter(event.target.value);
-          }}
-          onClear={() => {
-            setGlobalFilter('');
-          }}
-        />
+        <DataTableSearch table={table} placeholder="Search builds..." containerClassName="grow" />
         <div className="flex items-center gap-2">
           {/* Add bulk actions when rows are selected */}
           {table.getFilteredSelectedRowModel().rows.length > 0 && (
@@ -509,36 +492,7 @@ function UnifiedBuildList({
 
       {viewMode === 'table' ? (
         // Table View
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows.length > 0 ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} className={row.getIsSelected() ? 'bg-muted/50' : undefined}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={table.getAllColumns().length} className="h-24 text-center">
-                  No results.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+        <DataTable table={table} columns={columns} />
       ) : (
         // Grid View
         <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
@@ -557,89 +511,11 @@ function UnifiedBuildList({
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <div className="flex-1 text-sm text-muted-foreground">
-          {table.getFilteredSelectedRowModel().rows.length} of {table.getFilteredRowModel().rows.length} build(s)
-          selected.
-        </div>
-        <div className="flex items-center space-x-6 lg:space-x-8">
-          <div className="flex items-center space-x-2">
-            <p className="text-sm font-medium">Items per page</p>
-            <Select
-              value={`${table.getState().pagination.pageSize}`}
-              onValueChange={(value) => {
-                table.setPageSize(Number(value));
-              }}
-            >
-              <SelectTrigger className="h-7 w-[70px]">
-                <SelectValue placeholder={table.getState().pagination.pageSize} />
-              </SelectTrigger>
-              <SelectContent side="top">
-                {viewMode === 'grid'
-                  ? [12, 24, 36, 48, 60].map((pageSize) => (
-                      <SelectItem key={pageSize} value={`${pageSize}`}>
-                        {pageSize}
-                      </SelectItem>
-                    ))
-                  : [10, 20, 30, 40, 50].map((pageSize) => (
-                      <SelectItem key={pageSize} value={`${pageSize}`}>
-                        {pageSize}
-                      </SelectItem>
-                    ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex w-[100px] items-center justify-center text-sm font-medium">
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-          </div>
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              className="hidden h-7 w-8 p-0 lg:flex"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => {
-                table.setPageIndex(0);
-              }}
-            >
-              <span className="sr-only">Go to first page</span>
-              <ChevronsLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="h-7 w-8 p-0"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => {
-                table.previousPage();
-              }}
-            >
-              <span className="sr-only">Go to previous page</span>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="h-7 w-8 p-0"
-              disabled={!table.getCanNextPage()}
-              onClick={() => {
-                table.nextPage();
-              }}
-            >
-              <span className="sr-only">Go to next page</span>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="hidden h-7 w-8 p-0 lg:flex"
-              disabled={!table.getCanNextPage()}
-              onClick={() => {
-                table.setPageIndex(table.getPageCount() - 1);
-              }}
-            >
-              <span className="sr-only">Go to last page</span>
-              <ChevronsRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
+      <DataTablePagination
+        table={table}
+        pageSizeOptions={viewMode === 'grid' ? gridPageSizes : tablePageSizes}
+        itemName="build"
+      />
     </div>
   );
 }
