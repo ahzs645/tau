@@ -2,21 +2,20 @@
  * ZenFS Configuration Module
  *
  * Provides filesystem configuration for different backends:
- * - IndexedDB: Used in production for persistent browser storage
+ * - IndexedDB: Default production backend using IndexedDB for persistent storage
+ * - OPFS: Alternative production backend using Origin Private File System
  * - InMemory: Used in tests for fast, isolated filesystem operations
  *
  * Mount points:
  * - '/': Main application filesystem
- * - '/git': Isolated filesystem for git operations (separate IndexedDB store)
+ * - '/git': Isolated filesystem for git operations (separate store)
  */
 import { configure, InMemory, fs as zenfs } from '@zenfs/core';
-import { IndexedDB } from '@zenfs/dom';
+import { IndexedDB, WebAccess } from '@zenfs/dom';
+import type { FilesystemBackend, FilesystemBackendConfig } from '@taucad/types';
+import { filesystemBackendMeta } from '@taucad/types/constants';
+import { isOpfsSupported } from '#constants/browser.constants.js';
 import { metaConfig } from '#constants/meta.constants.js';
-
-/**
- * Available filesystem backend types.
- */
-export type FilesystemBackend = 'indexeddb' | 'memory';
 
 /**
  * Git filesystem mount point.
@@ -32,10 +31,73 @@ let configurationPromise: Promise<void> | undefined;
 let gitMountConfigured = false;
 
 /**
+ * Backend registry - defines configuration for each backend type.
+ */
+const indexedDbBackend = {
+  name: 'indexeddb',
+  ...filesystemBackendMeta.indexeddb,
+  canHandle: () => true,
+  async create() {
+    await configure({
+      mounts: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
+        '/': {
+          backend: IndexedDB,
+          storeName: `${metaConfig.databasePrefix}fs`,
+        },
+      },
+    });
+  },
+} as const satisfies FilesystemBackendConfig;
+
+const opfsBackend = {
+  name: 'opfs',
+  ...filesystemBackendMeta.opfs,
+  canHandle: () => isOpfsSupported,
+  async create() {
+    const rootHandle = await navigator.storage.getDirectory();
+    await configure({
+      mounts: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
+        '/': { backend: WebAccess, handle: rootHandle },
+      },
+    });
+  },
+} as const satisfies FilesystemBackendConfig;
+
+const memoryBackend = {
+  name: 'memory',
+  ...filesystemBackendMeta.memory,
+  canHandle: () => true,
+  async create() {
+    await configure({
+      mounts: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
+        '/': InMemory,
+      },
+    });
+  },
+} as const satisfies FilesystemBackendConfig;
+
+/** Registry of all available backends */
+export const filesystemBackends = [indexedDbBackend, opfsBackend, memoryBackend] as const;
+
+/** Get backend config by name */
+export function getBackendConfig(name: FilesystemBackend): FilesystemBackendConfig {
+  const backend = filesystemBackends.find((b) => b.name === name);
+  if (!backend) {
+    throw new Error(`Unknown backend: ${name}`);
+  }
+
+  return backend;
+}
+
+/**
  * Configure ZenFS with the specified backend.
  * Safe to call multiple times - will only configure once unless reset.
  *
- * @param backend - The backend type to use ('indexeddb' for production, 'memory' for tests)
+ * @param backend - The backend type to use ('indexeddb' or 'opfs' for production, 'memory' for tests)
+ * @throws Error if the backend is not supported by the browser
  */
 export async function configureFilesystem(backend: FilesystemBackend = 'indexeddb'): Promise<void> {
   // If already configured with the same backend, return the existing promise
@@ -58,27 +120,15 @@ export async function configureFilesystem(backend: FilesystemBackend = 'indexedd
     }
   }
 
+  const config = getBackendConfig(backend);
+  if (!config.canHandle()) {
+    throw new Error(`Backend "${backend}" is not supported in this browser.`);
+  }
+
   // Create a new configuration promise with error handling to allow retries
   configurationPromise = (async (): Promise<void> => {
     try {
-      if (backend === 'memory') {
-        await configure({
-          mounts: {
-            // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
-            '/': InMemory,
-            [gitMountPoint]: InMemory,
-          },
-        });
-      } else {
-        await configure({
-          mounts: {
-            // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
-            '/': { backend: IndexedDB, storeName: `${metaConfig.databasePrefix}fs` },
-            [gitMountPoint]: { backend: IndexedDB, storeName: `${metaConfig.databasePrefix}fs-git` },
-          },
-        });
-      }
-
+      await config.create();
       // Only set currentBackend after successful configure() completes
       currentBackend = backend;
       gitMountConfigured = true;
@@ -90,6 +140,27 @@ export async function configureFilesystem(backend: FilesystemBackend = 'indexedd
   })();
 
   return configurationPromise;
+}
+
+/**
+ * Reconfigure the filesystem with a different backend.
+ * Clears the current configuration state and configures with the new backend.
+ *
+ * @param backend - The new backend type to use
+ * @throws Error if the backend is not supported by the browser
+ */
+export async function reconfigureFilesystem(backend: FilesystemBackend): Promise<void> {
+  const config = getBackendConfig(backend);
+  if (!config.canHandle()) {
+    throw new Error(`Backend "${backend}" is not supported in this browser.`);
+  }
+
+  // Clear state to allow reconfiguration
+  currentBackend = undefined;
+  configurationPromise = undefined;
+  gitMountConfigured = false;
+
+  await configureFilesystem(backend);
 }
 
 /**
@@ -122,7 +193,6 @@ export async function resetFilesystem(): Promise<void> {
     mounts: {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
       '/': InMemory,
-      [gitMountPoint]: InMemory,
     },
   });
   currentBackend = 'memory';
