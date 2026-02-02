@@ -21,19 +21,52 @@ const objectStoreWorker = {
   /**
    * Atomic method to create a build with its associated chat and Editor state in one call.
    * This reduces roundtrips between main thread and worker.
+   * Implements rollback on partial failure to maintain atomicity.
    */
   async createBuildWithResources(options: {
     build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>;
     chat: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'>;
   }): Promise<{ build: Build; chat: Chat }> {
     const build = await storage.createBuild(options.build);
-    const chat = await storage.createChat(build.id, options.chat);
-    await storage.updateEditorState({
-      buildId: build.id,
-      openFiles: [],
-      activeFilePath: undefined,
-      lastChatId: chat.id,
-    });
+
+    let chat: Chat;
+    try {
+      chat = await storage.createChat(build.id, options.chat);
+    } catch (chatError) {
+      // Rollback: delete the build since chat creation failed
+      try {
+        await storage.deleteBuild(build.id);
+      } catch (cleanupError) {
+        console.error('Failed to cleanup build after chat creation failure:', cleanupError);
+      }
+
+      throw chatError;
+    }
+
+    try {
+      await storage.updateEditorState({
+        buildId: build.id,
+        openFiles: [],
+        activeFilePath: undefined,
+        lastChatId: chat.id,
+      });
+    } catch (editorStateError) {
+      // Rollback: delete chat and build since editor state update failed
+      try {
+        await storage.deleteChat(chat.id);
+      } catch (cleanupError) {
+        console.error('Failed to cleanup chat after editor state update failure:', cleanupError);
+      }
+
+      try {
+        await storage.deleteBuild(build.id);
+      } catch (cleanupError) {
+        console.error('Failed to cleanup build after editor state update failure:', cleanupError);
+      }
+
+      throw editorStateError;
+    }
+
     return { build, chat };
   },
 
