@@ -122,9 +122,9 @@ export const fileManager: FileManager = {
         try {
           // eslint-disable-next-line no-await-in-loop -- Need to create directories sequentially
           await fsp.mkdir(directoryPath);
-        } catch (error: unknown) {
+        } catch (error) {
           // Ignore error if directory was created by another concurrent operation
-          if (error instanceof Error && !error.message.includes('EEXIST')) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
             throw error;
           }
         }
