@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
-import type { FileStat } from '@taucad/types';
-import { fs, ensureFilesystemConfigured } from '#filesystem/zenfs-config.js';
+import type { FileStat, FilesystemBackend } from '@taucad/types';
+import { fs, ensureFilesystemConfigured, reconfigureFilesystem } from '#filesystem/zenfs-config.js';
 import { asBuffer } from '#utils/file.utils.js';
 import { joinPath } from '#utils/path.utils.js';
 
@@ -12,7 +12,7 @@ const fsp = fs.promises;
  * This is awaited at the start of every fileManager method to guarantee
  * the ZenFS backend is initialized before any filesystem operations.
  */
-const ensureReady = async (): Promise<void> => ensureFilesystemConfigured('indexeddb');
+const ensureReady = async (): Promise<void> => ensureFilesystemConfigured('opfs');
 
 export type MkdirOptions = {
   mode?: number;
@@ -42,6 +42,7 @@ export type FileManager = {
   getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
   getZippedDirectory(path: string): Promise<Blob>;
+  reconfigure(backend: FilesystemBackend): Promise<void>;
 };
 
 // Internal implementation for readFile with proper overload handling
@@ -288,5 +289,13 @@ export const fileManager: FileManager = {
     }
 
     return zip.generateAsync({ type: 'blob' });
+  },
+
+  /**
+   * Reconfigure the filesystem with a different backend.
+   * This is called from the main thread via Comlink.
+   */
+  async reconfigure(backend: FilesystemBackend): Promise<void> {
+    await reconfigureFilesystem(backend);
   },
 };

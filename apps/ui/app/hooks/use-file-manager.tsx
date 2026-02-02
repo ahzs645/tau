@@ -4,7 +4,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom, SnapshotFrom } from 'xstate';
 import type { Remote } from 'comlink';
-import type { FileTreeEntry } from '@taucad/types';
+import type { FileTreeEntry, FilesystemBackend } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource } from '#machines/file-manager.machine.js';
 import type { FileManager as FileWorker } from '#machines/file-manager.js';
@@ -57,6 +57,7 @@ type FileManagerContextType = {
   readdir: (path: string) => Promise<string[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
+  reconfigureBackend: (backend: FilesystemBackend) => Promise<void>;
 };
 
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
@@ -265,6 +266,21 @@ export function FileManagerProvider({
     [actorRef, getReadiedWorker],
   );
 
+  /**
+   * Reconfigure the filesystem with a different backend.
+   * Calls the worker to reconfigure and triggers a file tree refresh.
+   */
+  const reconfigureBackend = useCallback(
+    async (backend: FilesystemBackend): Promise<void> => {
+      const worker = await getReadiedWorker();
+      await worker.reconfigure(backend);
+
+      // Trigger file tree refresh after reconfiguration
+      actorRef.send({ type: 'filesWritten', paths: [] });
+    },
+    [actorRef, getReadiedWorker],
+  );
+
   const value = useMemo<FileManagerContextType>(
     () => ({
       fileManagerRef: actorRef,
@@ -277,6 +293,7 @@ export function FileManagerProvider({
       readdir,
       getZippedDirectory,
       copyDirectory,
+      reconfigureBackend,
     }),
     [
       actorRef,
@@ -289,6 +306,7 @@ export function FileManagerProvider({
       readdir,
       getZippedDirectory,
       copyDirectory,
+      reconfigureBackend,
     ],
   );
 
