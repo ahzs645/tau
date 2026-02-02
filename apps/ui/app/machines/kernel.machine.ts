@@ -344,13 +344,17 @@ const parseParametersActor = fromPromise<
     const errorMessage = error instanceof Error ? error.message : 'Error extracting parameters';
     console.error('Error extracting parameters:', errorMessage);
 
-    // If there's an unexpected error, use empty parameters as fallback
+    // Return the error as a kernel issue so it's displayed in the UI
     return {
-      type: 'parametersParsed',
-      defaultParameters: {},
-      file,
-      parameters: event.parameters,
-      jsonSchema: { type: 'object', properties: {} },
+      type: 'kernelIssue',
+      errors: [
+        {
+          message: errorMessage,
+          location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
+          type: 'runtime',
+          severity: 'error' as const,
+        },
+      ],
     };
   }
 });
@@ -412,18 +416,34 @@ const evaluateCodeActor = fromPromise<
   // Merge default parameters with provided parameters
   const mergedParameters = deepmerge(defaultParameters, parameters);
 
-  const result = await wrappedWorker.createGeometryEntry(file, mergedParameters);
+  try {
+    const result = await wrappedWorker.createGeometryEntry(file, mergedParameters);
 
-  // Handle the result pattern
-  if (isKernelSuccess(result)) {
-    // Return geometries with any warnings from the success result
-    return { type: 'geometryComputed', geometries: result.data, issues: result.issues };
+    // Handle the result pattern
+    if (isKernelSuccess(result)) {
+      // Return geometries with any warnings from the success result
+      return { type: 'geometryComputed', geometries: result.data, issues: result.issues };
+    }
+
+    return {
+      type: 'kernelIssue',
+      errors: result.issues,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Error evaluating code';
+
+    return {
+      type: 'kernelIssue',
+      errors: [
+        {
+          message: errorMessage,
+          location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
+          type: 'runtime',
+          severity: 'error' as const,
+        },
+      ],
+    };
   }
-
-  return {
-    type: 'kernelIssue',
-    errors: result.issues,
-  };
 });
 
 const exportGeometryActor = fromPromise<
@@ -700,6 +720,22 @@ export const kernelMachine = setup({
             ({ event }) => event.output,
           ),
         },
+        onError: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => ({
+              type: 'kernelIssue' as const,
+              errors: [
+                {
+                  message: event.error instanceof Error ? event.error.message : 'Failed to create workers',
+                  type: 'kernel' as const,
+                  severity: 'error' as const,
+                },
+              ],
+            }),
+          ),
+        },
       },
     },
 
@@ -748,6 +784,22 @@ export const kernelMachine = setup({
             actions: 'setSelectedWorker',
           },
         ],
+        onError: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => ({
+              type: 'kernelIssue' as const,
+              errors: [
+                {
+                  message: event.error instanceof Error ? event.error.message : 'Failed to determine worker',
+                  type: 'runtime' as const,
+                  severity: 'error' as const,
+                },
+              ],
+            }),
+          ),
+        },
       },
     },
 
@@ -792,6 +844,22 @@ export const kernelMachine = setup({
             ),
           },
         ],
+        onError: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => ({
+              type: 'kernelIssue' as const,
+              errors: [
+                {
+                  message: event.error instanceof Error ? event.error.message : 'Failed to parse parameters',
+                  type: 'runtime' as const,
+                  severity: 'error' as const,
+                },
+              ],
+            }),
+          ),
+        },
       },
     },
 
@@ -823,6 +891,22 @@ export const kernelMachine = setup({
             ({ event }) => event.output,
           ),
         },
+        onError: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => ({
+              type: 'kernelIssue' as const,
+              errors: [
+                {
+                  message: event.error instanceof Error ? event.error.message : 'Failed to evaluate code',
+                  type: 'runtime' as const,
+                  severity: 'error' as const,
+                },
+              ],
+            }),
+          ),
+        },
       },
     },
 
@@ -851,6 +935,22 @@ export const kernelMachine = setup({
           actions: sendTo(
             ({ context }) => context.parentRef!,
             ({ event }) => event.output,
+          ),
+        },
+        onError: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => ({
+              type: 'geometryExportFailed' as const,
+              errors: [
+                {
+                  message: event.error instanceof Error ? event.error.message : 'Failed to export geometry',
+                  type: 'runtime' as const,
+                  severity: 'error' as const,
+                },
+              ],
+            }),
           ),
         },
       },
