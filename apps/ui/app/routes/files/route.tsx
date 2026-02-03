@@ -189,7 +189,12 @@ function FileActions({
       defaultValue={undefined}
       getValue={(item) => item.value}
       renderLabel={(item) => (
-        <div className={cn('flex items-center gap-2', item.variant === 'destructive' && 'text-destructive')}>
+        <div
+          className={cn(
+            'flex items-center gap-2',
+            item.variant === 'destructive' && 'text-destructive [&>svg]:text-destructive!',
+          )}
+        >
           <item.icon className="size-4" />
           <span>{item.label}</span>
         </div>
