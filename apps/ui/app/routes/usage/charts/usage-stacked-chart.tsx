@@ -1,18 +1,32 @@
 import React, { useMemo } from 'react';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
-import { format, startOfDay } from 'date-fns';
-import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent, type ChartConfig } from '#components/ui/chart.js';
+import type { ChartConfig } from '#components/ui/chart.js';
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '#components/ui/chart.js';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#components/ui/card.js';
 import { formatNumberAbbreviation } from '#utils/number.utils.js';
 import type { UsageRecord } from '#hooks/use-all-usage.js';
+import type { TimeBucket } from '#routes/usage/time-bucket.utils.js';
+import {
+  formatBucketLabel,
+  getBucketIntervalMs,
+  getBucketKey,
+  roundToBucket,
+} from '#routes/usage/time-bucket.utils.js';
 
 type UsageStackedChartProps = {
   readonly records: UsageRecord[];
   readonly title?: string;
   readonly description?: string;
+  readonly timeBucket?: TimeBucket;
 };
 
-type DailyTokenData = {
+type BucketedTokenData = {
   date: string;
   dateLabel: string;
   input: number;
@@ -36,38 +50,69 @@ const chartConfig: ChartConfig = {
 };
 
 /**
- * Aggregate token types by day (UTC).
+ * Aggregate token types by time bucket, filling in empty buckets.
  */
-function aggregateTokensByDay(records: UsageRecord[]): DailyTokenData[] {
-  const dailyMap = new Map<string, { input: number; output: number; cache: number }>();
+function aggregateTokensByBucket(records: UsageRecord[], bucket: TimeBucket): BucketedTokenData[] {
+  if (records.length === 0) {
+    return [];
+  }
+
+  const bucketMap = new Map<string, { input: number; output: number; cache: number }>();
+
+  // Find the min and max dates
+  let minDate = records[0]?.date ?? new Date();
+  let maxDate = records[0]?.date ?? new Date();
 
   for (const record of records) {
-    // Use UTC date string for bucketing
-    const dateKey = record.date.toISOString().split('T')[0] ?? '';
-    const current = dailyMap.get(dateKey) ?? { input: 0, output: 0, cache: 0 };
-    dailyMap.set(dateKey, {
+    const bucketKey = getBucketKey(record.date, bucket);
+    const current = bucketMap.get(bucketKey) ?? { input: 0, output: 0, cache: 0 };
+    bucketMap.set(bucketKey, {
       input: current.input + record.inputTokens,
       output: current.output + record.outputTokens,
       cache: current.cache + record.cacheReadTokens + record.cacheWriteTokens,
     });
+
+    if (record.date < minDate) {
+      minDate = record.date;
+    }
+
+    if (record.date > maxDate) {
+      maxDate = record.date;
+    }
   }
 
-  // Sort by date and convert to array
-  const sortedEntries = [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  // Round to bucket boundaries
+  const startDate = roundToBucket(minDate, bucket);
+  const endDate = roundToBucket(maxDate, bucket);
 
-  return sortedEntries.map(([dateKey, tokens]) => ({
-    date: dateKey,
-    dateLabel: dateKey ? format(startOfDay(new Date(dateKey)), 'MMM d') : '',
-    ...tokens,
-  }));
+  // Generate all bucket keys between start and end
+  const intervalMs = getBucketIntervalMs(bucket);
+  const result: BucketedTokenData[] = [];
+  let currentDate = new Date(startDate);
+
+  while (currentDate <= endDate) {
+    const bucketKey = getBucketKey(currentDate, bucket);
+    const tokens = bucketMap.get(bucketKey) ?? { input: 0, output: 0, cache: 0 };
+
+    result.push({
+      date: bucketKey,
+      dateLabel: formatBucketLabel(bucketKey, bucket),
+      ...tokens,
+    });
+
+    currentDate = new Date(currentDate.getTime() + intervalMs);
+  }
+
+  return result;
 }
 
 function UsageStackedChartComponent({
   records,
   title = 'Token Usage Over Time',
   description,
+  timeBucket = '1d',
 }: UsageStackedChartProps): React.JSX.Element {
-  const chartData = useMemo(() => aggregateTokensByDay(records), [records]);
+  const chartData = useMemo(() => aggregateTokensByBucket(records, timeBucket), [records, timeBucket]);
 
   if (chartData.length === 0) {
     return (

@@ -1,9 +1,9 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Filter, RefreshCw, X } from 'lucide-react';
+import { Clock, Filter, RefreshCw, X } from 'lucide-react';
+import { Badge } from '#components/ui/badge.js';
 import { Button } from '#components/ui/button.js';
 import { DateRangePicker } from '#components/ui/date-range-picker.js';
-import { Loader } from '#components/ui/loader.js';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -12,16 +12,25 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
-import { Badge } from '#components/ui/badge.js';
+import { Loader } from '#components/ui/loader.js';
+import { ToggleGroup, ToggleGroupItem } from '#components/ui/toggle-group.js';
 import { useAllUsage } from '#hooks/use-all-usage.js';
-import { useUsageFilters } from '#routes/usage/use-usage-filters.js';
-import { UsageSummaryCards } from '#routes/usage/usage-summary-cards.js';
-import { UsageLineChart } from '#routes/usage/charts/usage-line-chart.js';
 import { UsageBarChart } from '#routes/usage/charts/usage-bar-chart.js';
-import { UsageStackedChart } from '#routes/usage/charts/usage-stacked-chart.js';
+import { UsageLineChart } from '#routes/usage/charts/usage-line-chart.js';
 import { UsagePieChart } from '#routes/usage/charts/usage-pie-chart.js';
+import { UsageStackedChart } from '#routes/usage/charts/usage-stacked-chart.js';
+import type { TimeBucket } from '#routes/usage/time-bucket.utils.js';
+import { UsageSummaryCards } from '#routes/usage/usage-summary-cards.js';
 import { UsageTable } from '#routes/usage/usage-table.js';
+import { useUsageFilters } from '#routes/usage/use-usage-filters.js';
 import type { Handle } from '#types/matches.types.js';
+
+const timeBucketOptions: Array<{ value: TimeBucket; label: string }> = [
+  { value: '5m', label: '5M' },
+  { value: '1h', label: '1H' },
+  { value: '6h', label: '6H' },
+  { value: '1d', label: '1D' },
+];
 
 export const handle: Handle = {
   breadcrumb() {
@@ -36,6 +45,7 @@ export const handle: Handle = {
 
 export default function UsageDashboard(): React.JSX.Element {
   const { records: allRecords, isLoading, error, refetch } = useAllUsage();
+  const [timeBucket, setTimeBucket] = useState<TimeBucket>('1d');
   const {
     filters,
     setDateRange,
@@ -223,11 +233,32 @@ export default function UsageDashboard(): React.JSX.Element {
           </Button>
         ) : undefined}
 
-        {/* Refresh Button */}
-        <Button variant="outline" size="sm" className="ml-auto gap-2" onClick={refetch}>
-          <RefreshCw className="size-4" />
-          Refresh
-        </Button>
+        {/* Time Bucket Toggle */}
+        <div className="ml-auto flex items-center gap-2">
+          <Clock className="size-4 text-muted-foreground" />
+          <ToggleGroup
+            type="single"
+            value={timeBucket}
+            size="sm"
+            onValueChange={(value) => {
+              if (value) {
+                setTimeBucket(value as TimeBucket);
+              }
+            }}
+          >
+            {timeBucketOptions.map((option) => (
+              <ToggleGroupItem key={option.value} value={option.value} aria-label={`${option.value} bucket`}>
+                {option.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+
+          {/* Refresh Button */}
+          <Button variant="outline" size="sm" className="gap-2" onClick={refetch}>
+            <RefreshCw className="size-4" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -235,9 +266,9 @@ export default function UsageDashboard(): React.JSX.Element {
 
       {/* Charts Grid */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <UsageLineChart records={filteredRecords} description="Daily cost trend" />
+        <UsageLineChart records={filteredRecords} timeBucket={timeBucket} description="Cost trend" />
         <UsageBarChart records={filteredRecords} description="Top models by cost" />
-        <UsageStackedChart records={filteredRecords} description="Token composition by day" />
+        <UsageStackedChart records={filteredRecords} timeBucket={timeBucket} description="Token composition" />
         <UsagePieChart records={filteredRecords} description="Cost distribution by provider" />
       </div>
 

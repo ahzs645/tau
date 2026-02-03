@@ -1,19 +1,26 @@
 import React, { useMemo } from 'react';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
-import { format, startOfDay } from 'date-fns';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '#components/ui/chart.js';
 import type { ChartConfig } from '#components/ui/chart.js';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#components/ui/card.js';
 import { formatCurrency } from '#utils/currency.utils.js';
 import type { UsageRecord } from '#hooks/use-all-usage.js';
+import type { TimeBucket } from '#routes/usage/time-bucket.utils.js';
+import {
+  formatBucketLabel,
+  getBucketIntervalMs,
+  getBucketKey,
+  roundToBucket,
+} from '#routes/usage/time-bucket.utils.js';
 
 type UsageLineChartProps = {
   readonly records: UsageRecord[];
   readonly title?: string;
   readonly description?: string;
+  readonly timeBucket?: TimeBucket;
 };
 
-type DailyData = {
+type BucketedData = {
   date: string;
   dateLabel: string;
   cost: number;
@@ -27,34 +34,65 @@ const chartConfig: ChartConfig = {
 };
 
 /**
- * Aggregate records by day (UTC).
+ * Aggregate records by time bucket, filling in empty buckets.
  */
-function aggregateByDay(records: UsageRecord[]): DailyData[] {
-  const dailyMap = new Map<string, number>();
-
-  for (const record of records) {
-    // Use UTC date string for bucketing
-    const dateKey = record.date.toISOString().split('T')[0] ?? '';
-    const currentCost = dailyMap.get(dateKey) ?? 0;
-    dailyMap.set(dateKey, currentCost + record.totalCost);
+function aggregateByBucket(records: UsageRecord[], bucket: TimeBucket): BucketedData[] {
+  if (records.length === 0) {
+    return [];
   }
 
-  // Sort by date and convert to array
-  const sortedEntries = [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const bucketMap = new Map<string, number>();
 
-  return sortedEntries.map(([dateKey, cost]) => ({
-    date: dateKey,
-    dateLabel: dateKey ? format(startOfDay(new Date(dateKey)), 'MMM d') : '',
-    cost,
-  }));
+  // Find the min and max dates
+  let minDate = records[0]?.date ?? new Date();
+  let maxDate = records[0]?.date ?? new Date();
+
+  for (const record of records) {
+    const bucketKey = getBucketKey(record.date, bucket);
+    const currentCost = bucketMap.get(bucketKey) ?? 0;
+    bucketMap.set(bucketKey, currentCost + record.totalCost);
+
+    if (record.date < minDate) {
+      minDate = record.date;
+    }
+
+    if (record.date > maxDate) {
+      maxDate = record.date;
+    }
+  }
+
+  // Round to bucket boundaries
+  const startDate = roundToBucket(minDate, bucket);
+  const endDate = roundToBucket(maxDate, bucket);
+
+  // Generate all bucket keys between start and end
+  const intervalMs = getBucketIntervalMs(bucket);
+  const result: BucketedData[] = [];
+  let currentDate = new Date(startDate);
+
+  while (currentDate <= endDate) {
+    const bucketKey = getBucketKey(currentDate, bucket);
+    const cost = bucketMap.get(bucketKey) ?? 0;
+
+    result.push({
+      date: bucketKey,
+      dateLabel: formatBucketLabel(bucketKey, bucket),
+      cost,
+    });
+
+    currentDate = new Date(currentDate.getTime() + intervalMs);
+  }
+
+  return result;
 }
 
 function UsageLineChartComponent({
   records,
   title = 'Cost Over Time',
   description,
+  timeBucket = '1d',
 }: UsageLineChartProps): React.JSX.Element {
-  const chartData = useMemo(() => aggregateByDay(records), [records]);
+  const chartData = useMemo(() => aggregateByBucket(records, timeBucket), [records, timeBucket]);
 
   if (chartData.length === 0) {
     return (
