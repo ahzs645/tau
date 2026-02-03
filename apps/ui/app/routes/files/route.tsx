@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Link } from 'react-router';
 import {
   Database,
@@ -11,8 +11,9 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { FilesystemBackend } from '@taucad/types';
+import type { FilesystemBackend, Build } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
+import { ExternalLink } from '#components/external-link.js';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { Tree, Folder, File } from '#components/magicui/file-tree.js';
@@ -20,6 +21,7 @@ import type { TreeViewElement } from '#components/magicui/file-tree.js';
 import { Loader } from '#components/ui/loader.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
+import { useBuilds } from '#hooks/use-builds.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { isOpfsSupported } from '#constants/browser.constants.js';
 import type { Handle } from '#types/matches.types.js';
@@ -91,6 +93,44 @@ const folderActions: ItemAction[] = [
   { value: 'download-zip', label: 'Download as ZIP', icon: FolderArchive },
   { value: 'delete', label: 'Delete Directory', icon: Trash2, variant: 'destructive' },
 ];
+
+/**
+ * Extract build ID from a path that is exactly "/builds/bld_xxx" (not subfolders)
+ */
+function extractBuildId(path: string): string | undefined {
+  const match = /^\/builds\/([^/]+)$/.exec(path);
+  return match?.[1];
+}
+
+/**
+ * Link to a build page that opens in a new tab
+ */
+function BuildLink({
+  buildId,
+  buildName,
+}: {
+  readonly buildId: string;
+  readonly buildName: string;
+}): React.JSX.Element {
+  return (
+    <span
+      role="presentation"
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <ExternalLink
+        withArrow
+        isArrowOnHoverOnly
+        href={`/builds/${buildId}`}
+        className="text-xs text-muted-foreground max-md:hidden"
+        arrowSize="xs"
+      >
+        {buildName}
+      </ExternalLink>
+    </span>
+  );
+}
 
 /**
  * Build tree structure from filesystem
@@ -284,7 +324,20 @@ type TreeActionHandlers = {
   onDownloadFile: (path: string) => Promise<void>;
   onDeleteFolder: (path: string) => Promise<void>;
   onDownloadFolderZip: (path: string) => Promise<void>;
+  buildsMap: Map<string, Build>;
 };
+
+/**
+ * Compose folder label with optional build link
+ */
+function FolderLabel({ name, build }: { readonly name: string; readonly build?: Build }): React.JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span>{name}</span>
+      {build ? <BuildLink buildId={build.id} buildName={build.name} /> : undefined}
+    </span>
+  );
+}
 
 /**
  * Render tree elements recursively
@@ -292,10 +345,14 @@ type TreeActionHandlers = {
 function renderTree(elements: TreeViewElement[], handlers: TreeActionHandlers): React.ReactNode {
   return elements.map((element) => {
     if (element.children) {
+      // Check if this folder corresponds to a build
+      const buildId = extractBuildId(element.id);
+      const build = buildId ? handlers.buildsMap.get(buildId) : undefined;
+
       return (
         <Folder
           key={element.id}
-          element={element.name}
+          element={<FolderLabel name={element.name} build={build} />}
           value={element.id}
           actions={
             <FolderActions
@@ -327,9 +384,13 @@ function renderTree(elements: TreeViewElement[], handlers: TreeActionHandlers): 
 export default function FilesRoute(): React.JSX.Element {
   const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
   const { fileManagerRef, reconfigureBackend, readdir, readFile, deleteFile, getZippedDirectory } = useFileManager();
+  const { builds } = useBuilds();
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [fileTree, setFileTree] = useState<TreeViewElement[]>([]);
+
+  // Create a lookup map for builds by ID
+  const buildsMap = useMemo(() => new Map(builds.map((build) => [build.id, build])), [builds]);
 
   // Get stat function from the worker
   const getStat = useCallback(
@@ -452,6 +513,7 @@ export default function FilesRoute(): React.JSX.Element {
     onDownloadFile: handleDownloadFile,
     onDeleteFolder: handleDeleteFolder,
     onDownloadFolderZip: handleDownloadFolderZip,
+    buildsMap,
   };
 
   // Get current backend option

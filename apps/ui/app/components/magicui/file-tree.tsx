@@ -172,7 +172,7 @@ type FolderComponentProps = {} & React.ComponentPropsWithoutRef<typeof Accordion
 
 type FolderProps = {
   readonly expandedItems?: string[];
-  readonly element: string;
+  readonly element: React.ReactNode;
   readonly isSelectable?: boolean;
   readonly isSelect?: boolean;
   readonly actions?: React.ReactNode;
