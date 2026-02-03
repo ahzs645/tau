@@ -4,6 +4,7 @@ import { SearchIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '#components/ui/dialog.js';
 import { emptyItemVariants } from '#components/ui/empty-items.js';
+import { menuItemVariants, menuSeparatorVariants } from '#components/ui/menu.variants.js';
 
 function Command({ className, ...properties }: React.ComponentProps<typeof CommandPrimitive>): React.JSX.Element {
   return (
@@ -30,8 +31,8 @@ function CommandDialog({
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>
       </DialogHeader>
-      <DialogContent className="overflow-hidden p-0">
-        <Command className="**:data-[slot=command-input-wrapper]:h-11 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:size-4 [&_[cmdk-input]]:h-11 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-0 [&_[cmdk-item]_svg]:size-4">
+      <DialogContent className="overflow-hidden p-0 *:data-[slot=dialog-close]:top-2.5 *:data-[slot=dialog-close]:right-2.5">
+        <Command className="**:data-[slot=command-input-wrapper]:h-9 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:size-4 [&_[cmdk-input]]:h-9">
           {children}
         </Command>
       </DialogContent>
@@ -44,12 +45,12 @@ function CommandInput({
   ...properties
 }: React.ComponentProps<typeof CommandPrimitive.Input>): React.JSX.Element {
   return (
-    <div data-slot="command-input-wrapper" className="relative flex h-9 items-center gap-2 border-b">
+    <div data-slot="command-input-wrapper" className="relative flex h-7 items-center gap-2 border-b">
       <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 shrink-0 -translate-y-1/2 opacity-50" />
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(
-          'flex h-10 w-full rounded-md bg-transparent py-3 pr-3 pl-9 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+          'flex h-7 w-full rounded-md bg-transparent py-3 pr-3 pl-9 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
           className,
         )}
         {...properties}
@@ -65,7 +66,7 @@ function CommandList({
   return (
     <CommandPrimitive.List
       data-slot="command-list"
-      className={cn('max-h-[400px] scroll-py-1 overflow-x-hidden overflow-y-auto', className)}
+      className={cn('max-h-[400px] overflow-x-hidden overflow-y-auto', className)}
       {...properties}
     />
   );
@@ -107,7 +108,7 @@ function CommandSeparator({
   return (
     <CommandPrimitive.Separator
       data-slot="command-separator"
-      className={cn('-mx-1 h-px bg-border', className)}
+      className={cn(menuSeparatorVariants(), className)}
       {...properties}
     />
   );
@@ -121,7 +122,9 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "data-[selected=true]:text-accent-foreground relative flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        menuItemVariants({ focusable: false }),
+        // Cmdk uses data-[disabled=true] not data-disabled:, override base with same specificity then re-apply for truly disabled
+        'hover:text-accent-foreground data-[selected=true]:text-accent-foreground cursor-pointer hover:bg-accent data-disabled:pointer-events-auto data-disabled:opacity-100 data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent',
         className,
       )}
       {...properties}

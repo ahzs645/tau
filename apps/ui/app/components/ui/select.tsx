@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemVariants, menuLabelVariants, menuSeparatorVariants } from '#components/ui/menu.variants.js';
 
 function Select({ ...properties }: React.ComponentProps<typeof SelectPrimitive.Root>): React.JSX.Element {
   return <SelectPrimitive.Root data-slot="select" {...properties} />;
@@ -81,11 +82,7 @@ function SelectLabel({
   ...properties
 }: React.ComponentProps<typeof SelectPrimitive.Label>): React.JSX.Element {
   return (
-    <SelectPrimitive.Label
-      data-slot="select-label"
-      className={cn('px-2 py-1.5 text-xs text-muted-foreground', className)}
-      {...properties}
-    />
+    <SelectPrimitive.Label data-slot="select-label" className={cn(menuLabelVariants(), className)} {...properties} />
   );
 }
 
@@ -98,7 +95,8 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "focus:text-accent-foreground relative flex w-full cursor-pointer items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        menuItemVariants(),
+        'w-full cursor-pointer pr-8 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2',
         className,
       )}
       {...properties}
@@ -120,7 +118,7 @@ function SelectSeparator({
   return (
     <SelectPrimitive.Separator
       data-slot="select-separator"
-      className={cn('pointer-events-none -mx-1 my-1 h-px bg-border', className)}
+      className={cn(menuSeparatorVariants(), 'pointer-events-none', className)}
       {...properties}
     />
   );

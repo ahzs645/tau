@@ -101,7 +101,7 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
   return (
     <CommandDialog open={isOpen} onOpenChange={onOpenChange}>
       <CommandInput placeholder="Search for actions..." />
-      <CommandList className="pb-1">
+      <CommandList className="py-0">
         <CommandEmpty>No results found.</CommandEmpty>
         {Object.entries(groupedItems).map(([groupName, groupItems]) => (
           <CommandGroup key={groupName} heading={groupName}>
@@ -110,7 +110,6 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
                 key={item.id}
                 value={item.id}
                 disabled={item.disabled}
-                className="h-8"
                 onSelect={() => {
                   onOpenChange(false);
                   if (item.link) {
@@ -121,7 +120,7 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
                 }}
               >
                 <div className="flex items-center gap-2">
-                  {item.icon}
+                  <span className="shrink-0 [&>svg]:size-4!">{item.icon}</span>
                   <span>{item.label}</span>
                 </div>
                 {item.shortcut ? <KeyShortcut className="ml-auto">{item.shortcut}</KeyShortcut> : null}
@@ -196,7 +195,7 @@ function CommandPaletteMobile({ items }: CommandPaletteMobileProperties): React.
 
   const renderItemLabel = useCallback(
     (item: CommandPaletteItem, _selectedItem: CommandPaletteItem | undefined) => (
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 [&>svg]:size-4!">
         {item.icon}
         {item.label}
       </div>
