@@ -20,7 +20,6 @@ import { useNetworkConnectivity } from '#hooks/use-network-connectivity.js';
 import { useTypedMatches } from '#hooks/use-typed-matches.js';
 import { NavUser } from '#components/nav/nav-user.js';
 import { cn } from '#utils/ui.utils.js';
-import { Tau } from '#components/icons/tau.js';
 import { Compose } from '#components/ui/utils/compose.js';
 import { Commands } from '#components/layout/command-palette.js';
 import { PageFooter } from '#components/layout/page-footer.js';
