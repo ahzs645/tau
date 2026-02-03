@@ -11,12 +11,89 @@ on:
     types: [submitted]
 
 jobs:
+  # Job 1: Notify external contributors that approval is needed
+  # This runs immediately when an untrusted user requests Claude
+  notify-approval-needed:
+    if: |
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@claude') &&
+      !contains(github.event.comment.body, '/approve-claude') &&
+      !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Post approval needed comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const requester = context.payload.comment.user.login;
+            const originalComment = context.payload.comment.body;
+            const issueNumber = context.issue.number;
+
+            const body = `### 🤖 Claude Assistance Requested
+
+            @${requester} has requested Claude assistance on this PR.
+
+            > ${originalComment.split('\n').join('\n> ')}
+
+            ---
+
+            **⏳ Waiting for maintainer approval**
+
+            This request is from an external contributor and requires approval before Claude can run.
+
+            **Maintainers:** To approve this request, comment:
+            \`\`\`
+            /approve-claude
+            \`\`\``;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body
+            });
+
+  # Job 2: Run Claude when a maintainer approves an external request
+  # Triggered by a trusted user commenting /approve-claude
+  claude-approved:
+    if: |
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '/approve-claude') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Additional permissions for Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+
+          # Claude CLI arguments - model and tools configuration
+          claude_args: |
+            --model opus
+            --allowedTools "Bash(pnpm *),Bash(nx *),Bash(npm *),Bash(git *),Bash(gh *)"
+
+  # Job 3: Run Claude directly for trusted users (OWNER, MEMBER, COLLABORATOR)
+  # No approval needed - runs immediately
   claude:
-    # Only allow trusted repository members (OWNER, MEMBER, COLLABORATOR) to trigger Claude
-    # This prevents unauthorized users from accessing secrets or making repository modifications
     if: |
       (github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@claude') &&
+        !contains(github.event.comment.body, '/approve-claude') &&
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
       (github.event_name == 'pull_request_review_comment' &&
         contains(github.event.comment.body, '@claude') &&
@@ -52,4 +129,3 @@ jobs:
           claude_args: |
             --model opus
             --allowedTools "Bash(pnpm *),Bash(nx *),Bash(npm *),Bash(git *),Bash(gh *)"
-
