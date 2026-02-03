@@ -172,9 +172,10 @@ function FieldError({
 }: React.ComponentProps<'div'> & {
   readonly errors?: Array<{ message?: string } | undefined>;
 }): React.JSX.Element {
-  const content = useMemo(async () => {
+  const content = useMemo(() => {
     if (children) {
-      return children;
+      // eslint-disable-next-line react/jsx-no-useless-fragment -- Fragment wrapper satisfies the React.JSX.Element return type (children can be a Promise)
+      return <>{children}</>;
     }
 
     if (!errors) {
