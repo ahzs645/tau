@@ -33,7 +33,7 @@ export const supportedKernelExtensions = [
 /**
  * All file extensions accepted for import (kernel files + common project files).
  */
-export const importAcceptedExtensions = [...supportedKernelExtensions, '.json', '.txt', '.md'];
+export const importAcceptedExtensions = [...supportedKernelExtensions, '.json', '.txt', '.md', '.js', '.jsx'];
 
 /**
  * File accept string for HTML file input elements.
