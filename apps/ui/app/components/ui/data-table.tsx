@@ -6,23 +6,28 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   ChevronsUpDown,
   EyeOff,
+  List,
 } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '#components/ui/table.js';
 import { Button } from '#components/ui/button.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
+import { toTitleCase } from '#utils/string.utils.js';
 import { SearchInput } from '#components/search-input.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -408,5 +413,118 @@ export function DataTableColumnHeader<Data, Value>({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  );
+}
+
+// =============================================================================
+// DataTableSortingDropdown
+// =============================================================================
+
+type DataTableSortingDropdownProps<Data> = {
+  readonly table: TanstackTable<Data>;
+};
+
+export function DataTableSortingDropdown<Data>({ table }: DataTableSortingDropdownProps<Data>): ReactNode {
+  const sortingState = table.getState().sorting[0];
+
+  // Dynamically get sortable columns from the table
+  const sortFields = table
+    .getAllColumns()
+    .filter((column) => column.getCanSort())
+    .map((column) => ({
+      id: column.id,
+      label: toTitleCase(column.id),
+    }));
+
+  const toggleSorting = (id: string): void => {
+    if (sortingState?.id === id) {
+      // Toggle direction if already sorting by this column
+      table.setSorting([{ id, desc: !sortingState.desc }]);
+    } else {
+      // Set to descending order by default on first click
+      table.setSorting([{ id, desc: true }]);
+    }
+  };
+
+  const renderSortIndicator = (fieldId: string): ReactNode => {
+    if (sortingState?.id !== fieldId) {
+      return undefined;
+    }
+
+    return sortingState.desc ? <ArrowDown className="ml-auto size-4" /> : <ArrowUp className="ml-auto size-4" />;
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon">
+          <ArrowUpDown className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {sortFields.map((field) => (
+          <DropdownMenuItem
+            key={field.id}
+            className="flex w-full items-center"
+            onClick={() => {
+              toggleSorting(field.id);
+            }}
+            onSelect={(event) => {
+              event.preventDefault();
+            }}
+          >
+            {field.label}
+            {renderSortIndicator(field.id)}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// =============================================================================
+// DataTableColumnVisibilityDropdown
+// =============================================================================
+
+type DataTableColumnVisibilityDropdownProps<Data> = {
+  readonly table: TanstackTable<Data>;
+};
+
+export function DataTableColumnVisibilityDropdown<Data>({
+  table,
+}: DataTableColumnVisibilityDropdownProps<Data>): ReactNode {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon">
+          <List className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {table
+          .getAllColumns()
+          .filter((column) => column.getCanHide())
+          .map((column) => {
+            return (
+              <DropdownMenuCheckboxItem
+                key={column.id}
+                checked={column.getIsVisible()}
+                onCheckedChange={(value) => {
+                  column.toggleVisibility(Boolean(value));
+                }}
+                onSelect={(event) => {
+                  event.preventDefault();
+                }}
+              >
+                {toTitleCase(column.id)}
+              </DropdownMenuCheckboxItem>
+            );
+          })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
