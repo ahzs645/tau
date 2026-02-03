@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
+import { useRef } from 'react';
 import type { Column, ColumnDef, Table as TanstackTable } from '@tanstack/react-table';
 import { flexRender } from '@tanstack/react-table';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowDown,
   ArrowUp,
@@ -82,6 +84,118 @@ export function DataTable<Data>({
         )}
       </TableBody>
     </Table>
+  );
+}
+
+// =============================================================================
+// DataTableVirtualized
+// =============================================================================
+
+type DataTableVirtualizedProps<Data> = {
+  readonly table: TanstackTable<Data>;
+  readonly columns: Array<ColumnDef<Data>>;
+  readonly emptyMessage?: string;
+  readonly height?: number;
+  readonly estimatedRowHeight?: number;
+  readonly overscan?: number;
+  readonly onRowClick?: (row: Data) => void;
+};
+
+/**
+ * Virtualized data table for large datasets.
+ * Only renders visible rows for better performance.
+ */
+export function DataTableVirtualized<Data>({
+  table,
+  columns,
+  emptyMessage = 'No results.',
+  height = 400,
+  estimatedRowHeight = 48,
+  overscan = 10,
+  onRowClick,
+}: DataTableVirtualizedProps<Data>): ReactNode {
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const { rows } = table.getRowModel();
+
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => estimatedRowHeight,
+    overscan,
+  });
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalSize = rowVirtualizer.getTotalSize();
+
+  // Calculate padding for virtual scrolling
+  const firstVirtualRow = virtualRows[0];
+  const lastVirtualRow = virtualRows.at(-1);
+  const paddingTop = firstVirtualRow ? firstVirtualRow.start : 0;
+  const paddingBottom = lastVirtualRow ? totalSize - lastVirtualRow.end : 0;
+
+  return (
+    <div ref={tableContainerRef} className="overflow-auto" style={{ height }}>
+      <Table>
+        <TableHeader className="sticky top-0 z-10 bg-background">
+          {table.getHeaderGroups().map((headerGroup) => (
+            <TableRow key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <TableHead key={header.id}>
+                  {header.isPlaceholder ? undefined : flexRender(header.column.columnDef.header, header.getContext())}
+                </TableHead>
+              ))}
+            </TableRow>
+          ))}
+        </TableHeader>
+        <TableBody>
+          {rows.length > 0 ? (
+            <>
+              {paddingTop > 0 && (
+                <tr>
+                  <td style={{ height: paddingTop }} />
+                </tr>
+              )}
+              {virtualRows.map((virtualRow) => {
+                const row = rows[virtualRow.index];
+                if (!row) {
+                  return undefined;
+                }
+
+                return (
+                  <TableRow
+                    key={row.id}
+                    data-index={virtualRow.index}
+                    className={cn(row.getIsSelected() ? 'bg-muted/50' : undefined, onRowClick && 'cursor-pointer')}
+                    onClick={
+                      onRowClick
+                        ? () => {
+                            onRowClick(row.original);
+                          }
+                        : undefined
+                    }
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })}
+              {paddingBottom > 0 && (
+                <tr>
+                  <td style={{ height: paddingBottom }} />
+                </tr>
+              )}
+            </>
+          ) : (
+            <TableRow>
+              <TableCell colSpan={columns.length} className="h-24 text-center">
+                {emptyMessage}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
 

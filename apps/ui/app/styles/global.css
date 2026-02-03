@@ -125,6 +125,13 @@
   /* Highlighter specific */
   --highlighter: oklch(var(--l-highlighter) var(--c-highlighter) var(--hue-highlighter) / 0.5);
   --highlighter-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral) / 0.7);
+
+  /* Chart colors */
+  --chart-1: oklch(0.55 0.18 250deg); /* Blue - Input */
+  --chart-2: oklch(0.55 0.18 290deg); /* Purple - Output */
+  --chart-3: oklch(0.55 0.15 180deg); /* Teal - Cache */
+  --chart-4: oklch(0.55 0.18 150deg); /* Green */
+  --chart-5: oklch(0.55 0.20 30deg); /* Orange */
 }
 
 .dark,
@@ -157,6 +164,13 @@
 
   --highlighter: oklch(var(--l-highlighter) var(--c-highlighter) var(--hue-highlighter) / 0.5);
   --highlighter-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral) / 0.85);
+
+  /* Chart colors - lighter for dark mode */
+  --chart-1: oklch(0.70 0.16 250deg); /* Blue - Input */
+  --chart-2: oklch(0.70 0.16 290deg); /* Purple - Output */
+  --chart-3: oklch(0.70 0.14 180deg); /* Teal - Cache */
+  --chart-4: oklch(0.70 0.16 150deg); /* Green */
+  --chart-5: oklch(0.70 0.18 30deg); /* Orange */
 }
 
 @custom-variant dark (&:is(.dark *));

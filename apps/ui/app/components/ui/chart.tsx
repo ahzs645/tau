@@ -191,7 +191,7 @@ function TooltipItemContent({
   readonly tooltipLabel: React.ReactNode;
 }): React.ReactElement {
   return (
-    <div className={cn('flex flex-1 justify-between leading-none', isNestedLabel ? 'items-end' : 'items-center')}>
+    <div className={cn('flex flex-1 justify-between gap-4 leading-none', isNestedLabel ? 'items-end' : 'items-center')}>
       <div className="grid gap-1.5">
         {isNestedLabel ? tooltipLabel : undefined}
         <span className="text-muted-foreground">{itemConfig?.label ?? item.name}</span>

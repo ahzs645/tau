@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bot,
+  ChartColumn,
   FileAxis3D,
   Frame,
   Hammer,
@@ -9,7 +10,6 @@ import {
   PieChart,
   Settings,
   UsersRound,
-  Workflow,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -74,6 +74,11 @@ export const navRoutes: {
       title: 'Models',
       url: '/models',
       icon: Bot,
+    },
+    {
+      title: 'Usage',
+      url: '/usage',
+      icon: ChartColumn,
     },
   ],
   navSecondary: [
