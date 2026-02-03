@@ -71,13 +71,13 @@ function UsageLineChartComponent({
   }
 
   return (
-    <Card>
+    <Card className="min-w-0 overflow-hidden">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : undefined}
       </CardHeader>
-      <CardContent>
-        <ChartContainer config={chartConfig} className="h-[300px] w-full">
+      <CardContent className="min-w-0">
+        <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-0">
           <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="fillCost" x1="0" y1="0" x2="0" y2="1">
