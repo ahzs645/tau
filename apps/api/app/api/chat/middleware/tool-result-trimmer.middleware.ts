@@ -51,6 +51,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Checks if an object has a defined (non-undefined) property at runtime.
+ * Useful for defensive checks when TypeScript types don't match runtime data
+ * (e.g., error responses, malformed data from external sources).
+ */
+function hasDefined<K extends string>(object: unknown, key: K): boolean {
+  return isObject(object) && object[key] !== undefined;
+}
+
+/**
  * Checks if content has the shape of TestModelOutput.
  * Unique: has failures array + total count (no other tool has this combination).
  */
@@ -203,59 +212,90 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
    * Trims the test model result by removing the 'passed' count.
    * The LLM can infer it from total - failures.length if needed.
    */
-  [toolName.testModel]: createTrimmer(toolName.testModel, (result) => ({
-    failures: result.failures,
-    total: result.total,
-    // REMOVED: passed, passes - LLM can infer from total - failures.length
-  })),
+  [toolName.testModel]: createTrimmer(toolName.testModel, (result) => {
+    // Guard: return unchanged if expected structure is missing (error/malformed response)
+    if (!Array.isArray(result.failures) || typeof result.total !== 'number') {
+      return result;
+    }
+
+    return {
+      failures: result.failures,
+      total: result.total,
+      // REMOVED: passed, passes - LLM can infer from total - failures.length
+    };
+  }),
 
   /**
    * Trims create_file result by removing full file content from diffStats.
    * The LLM just wrote this content, so it doesn't need to see it again.
    * Keeps only line change counts.
    */
-  [toolName.createFile]: createTrimmer(toolName.createFile, (result) => ({
-    ...(result.message ? { message: result.message } : {}),
-    diffStats: {
-      linesAdded: result.diffStats.linesAdded,
-      linesRemoved: result.diffStats.linesRemoved,
-      // REMOVED: originalContent, modifiedContent - LLM just wrote this
-    },
-  })),
+  [toolName.createFile]: createTrimmer(toolName.createFile, (result) => {
+    // Guard: return unchanged if diffStats is missing (error/malformed response)
+    // Uses hasDefined to bypass TypeScript's type narrowing for runtime safety
+    if (!hasDefined(result, 'diffStats')) {
+      return result;
+    }
+
+    return {
+      ...(result.message ? { message: result.message } : {}),
+      diffStats: {
+        linesAdded: result.diffStats.linesAdded,
+        linesRemoved: result.diffStats.linesRemoved,
+        // REMOVED: originalContent, modifiedContent - LLM just wrote this
+      },
+    };
+  }),
 
   /**
    * Trims edit_file result by removing full file content from diffStats.
    * The LLM just wrote this content, so it doesn't need to see it again.
    * Keeps only line change counts.
    */
-  [toolName.editFile]: createTrimmer(toolName.editFile, (result) => ({
-    diffStats: {
-      linesAdded: result.diffStats.linesAdded,
-      linesRemoved: result.diffStats.linesRemoved,
-      // REMOVED: originalContent, modifiedContent - LLM just wrote this
-    },
-  })),
+  [toolName.editFile]: createTrimmer(toolName.editFile, (result) => {
+    // Guard: return unchanged if diffStats is missing (error/malformed response)
+    // Uses hasDefined to bypass TypeScript's type narrowing for runtime safety
+    if (!hasDefined(result, 'diffStats')) {
+      return result;
+    }
+
+    return {
+      diffStats: {
+        linesAdded: result.diffStats.linesAdded,
+        linesRemoved: result.diffStats.linesRemoved,
+        // REMOVED: originalContent, modifiedContent - LLM just wrote this
+      },
+    };
+  }),
 
   /**
    * Trims get_kernel_result by removing verbose stack traces.
    * The message and location are sufficient for debugging.
    */
-  [toolName.getKernelResult]: createTrimmer(toolName.getKernelResult, (result) => ({
-    status: result.status,
-    ...(result.kernelIssues
-      ? {
-          kernelIssues: result.kernelIssues.map((issue) => ({
-            message: issue.message,
-            ...(issue.location ? { location: issue.location } : {}),
-            severity: issue.severity,
-            ...(issue.type ? { type: issue.type } : {}),
-            // Keep stack and stackFrames - important for LLM to debug error origins
-            ...(issue.stack ? { stack: issue.stack } : {}),
-            ...(issue.stackFrames ? { stackFrames: issue.stackFrames } : {}),
-          })),
-        }
-      : {}),
-  })),
+  [toolName.getKernelResult]: createTrimmer(toolName.getKernelResult, (result) => {
+    // Guard: return unchanged if status is missing (error/malformed response)
+    // Uses hasDefined to bypass TypeScript's type narrowing for runtime safety
+    if (!hasDefined(result, 'status')) {
+      return result;
+    }
+
+    return {
+      status: result.status,
+      ...(result.kernelIssues
+        ? {
+            kernelIssues: result.kernelIssues.map((issue) => ({
+              message: issue.message,
+              ...(issue.location ? { location: issue.location } : {}),
+              severity: issue.severity,
+              ...(issue.type ? { type: issue.type } : {}),
+              // Keep stack and stackFrames - important for LLM to debug error origins
+              ...(issue.stack ? { stack: issue.stack } : {}),
+              ...(issue.stackFrames ? { stackFrames: issue.stackFrames } : {}),
+            })),
+          }
+        : {}),
+    };
+  }),
 };
 
 /**
