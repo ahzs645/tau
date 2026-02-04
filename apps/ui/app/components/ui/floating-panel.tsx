@@ -86,7 +86,7 @@ const floatingPanelContentHeaderVariants = cva(
     variants: {
       side: {
         left: 'pr-0.75 md:pl-8 pl-12',
-        right: 'pr-7 pl-2 max-md:pr-12',
+        right: 'pr-7 pl-2 max-md:pr-10',
       },
     },
     defaultVariants: {
