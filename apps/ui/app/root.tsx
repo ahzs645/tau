@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Model } from '@taucad/chat';
+import { throwRedirectIfSubdomain } from '#lib/react-router.lib.js';
 import { useTheme } from '#hooks/use-theme.js';
 import type { ThemeWithSystem } from '#hooks/use-theme.js';
 import { getEnvironment } from '#environment.config.js';
@@ -51,6 +52,9 @@ export const handle: Handle = {
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders require type inference
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Redirect www to apex domain (e.g., www.example.new -> example.new)
+  throwRedirectIfSubdomain(request, 'www');
+
   const { getTheme } = await themeSessionResolver(request);
   const cookie = request.headers.get('Cookie') ?? '';
 
