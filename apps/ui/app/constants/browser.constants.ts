@@ -10,5 +10,4 @@ export const isBrowser = typeof globalThis.window !== 'undefined';
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/getDirectory
  */
-export const isOpfsSupported =
-  import.meta.env.DEV || (isBrowser && typeof globalThis.navigator.storage.getDirectory === 'function');
+export const isOpfsSupported = 'storage' in navigator && 'getDirectory' in navigator.storage;
