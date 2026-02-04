@@ -106,7 +106,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
           'flex flex-col space-y-2 overflow-y-auto',
           'w-full',
           // Vary width for user and assistant messages to achieve visual differentiation
-          isUser ? 'mx-2' : 'mx-6',
+          isUser ? 'mx-2' : 'mx-4',
         )}
       >
         <When shouldRender={isUser ? isEditing : false}>
