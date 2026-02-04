@@ -442,7 +442,7 @@ function FloatingPanelContentHeader({ children, className }: FloatingPanelConten
       data-slot="floating-panel-content-header"
     >
       {/* Mobile drawer handle area */}
-      <DrawerHandle className="absolute! inset-0! m-auto! size-full! opacity-0!" />
+      <DrawerHandle className="absolute! inset-0! -z-10 m-auto! size-full! opacity-0!" />
       {children}
     </div>
   );
@@ -462,8 +462,6 @@ function FloatingPanelContentHeaderActions({
       className={cn(
         'flex items-center pl-1 max-md:gap-0.5',
         'group-hover/floating-panel:opacity-100 md:opacity-0',
-        // Position header actions above the DrawerHandle to keep them interactive
-        'z-60',
         className,
       )}
       data-slot="floating-panel-content-header-actions"
