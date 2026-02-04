@@ -95,6 +95,14 @@ export class ProviderService {
         createClass: (options) =>
           new ChatAnthropic({
             ...options,
+            betas: [
+              // Stream tool use parameters without buffering / JSON validation, reducing the latency to begin receiving large parameters.
+              // @see https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming
+              'fine-grained-tool-streaming-2025-05-14',
+              // Improve model performance by allowing it to think between tool calls
+              // @see https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking
+              'interleaved-thinking-2025-05-14',
+            ],
             maxRetries: 2,
           }),
       },
