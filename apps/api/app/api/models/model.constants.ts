@@ -222,15 +222,54 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
           outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
-          cacheReadTokens: 0,
+          cacheReadTokens: 0.2, // $0.2 / 1M cached input tokens
           cacheWriteTokens: 0,
         },
       },
       configuration: {
         streaming: true,
-        temperature: 0,
-        // Note: This is the non-thinking config. For extended thinking, create a
-        // separate model entry with thinkingLevel: 'high' (requires temperature: 1).
+        // Thinking requires temperature: 1 for Gemini 3 models
+        temperature: 1,
+        // Gemini 3 Pro thinking config - HIGH is default, supports: LOW, HIGH
+        // Thinking cannot be turned off for Gemini 3 Pro
+        // @ts-expect-error: thinkingConfig not in typed schema yet
+        thinkingConfig: {
+          thinkingLevel: 'HIGH',
+          includeThoughts: true,
+        },
+      },
+    },
+    'gemini-3-flash': {
+      id: 'google-gemini-3-flash',
+      name: 'Gemini 3 Flash',
+      slug: 'gemini-3-flash',
+      provider: {
+        id: 'vertexai',
+        name: 'Google',
+      },
+      model: 'gemini-3-flash-preview',
+      details: {
+        family: 'gemini',
+        families: ['gemini'],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        cost: {
+          inputTokens: 0.5, // $0.5 / 1M input tokens (Vertex AI pricing)
+          outputTokens: 3, // $3 / 1M output tokens (Vertex AI pricing)
+          cacheReadTokens: 0.05, // $0.05 / 1M cached input tokens
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+        // Thinking requires temperature: 1 for Gemini 3 models
+        temperature: 1,
+        // Gemini 3 Flash thinking config - HIGH is default, supports: MINIMAL, LOW, MEDIUM, HIGH
+        // @ts-expect-error: thinkingConfig not in typed schema yet
+        thinkingConfig: {
+          thinkingLevel: 'HIGH',
+          includeThoughts: true,
+        },
       },
     },
   },

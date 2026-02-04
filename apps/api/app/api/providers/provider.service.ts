@@ -117,8 +117,14 @@ export class ProviderService {
         streamingDoublesCacheTokens: false,
         createClass(options) {
           const credentials = configService.get('GOOGLE_VERTEX_AI_CREDENTIALS', { infer: true });
+
           return new ChatVertexAI({
             ...options,
+            location: 'global',
+            // Stream for best UX with instant feedback.
+            streaming: true,
+            // Stream usage data for Langchain to consume.
+            streamUsage: true,
             authOptions: {
               credentials,
               projectId: credentials.project_id,
