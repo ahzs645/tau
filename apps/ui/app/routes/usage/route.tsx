@@ -238,6 +238,7 @@ export default function UsageDashboard(): React.JSX.Element {
           <Clock className="size-4 text-muted-foreground" />
           <ToggleGroup
             type="single"
+            variant="outline"
             value={timeBucket}
             size="sm"
             onValueChange={(value) => {
