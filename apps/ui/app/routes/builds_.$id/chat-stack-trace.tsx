@@ -13,9 +13,7 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useChatActions } from '#hooks/use-chat.js';
 import { useChats } from '#hooks/use-chats.js';
 import { useKeydown } from '#hooks/use-keydown.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { useBuild } from '#hooks/use-build.js';
-import { useCookie } from '#hooks/use-cookie.js';
 import { cn } from '#utils/ui.utils.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
@@ -428,7 +426,6 @@ export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProp
 
   const { sendMessage } = useChatActions();
   const { selectedModel } = useModels();
-  const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const { kernel } = useKernel();
   const snapshot = useChatSnapshot();
 
@@ -456,8 +453,8 @@ export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProp
         kernel,
       });
 
-      // Open the chat panel
-      setIsChatOpen(true);
+      // Open the chat panel via editorMachine
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { chat: true } } });
 
       // Create the error fixing message
       const message = createMessage({
@@ -491,7 +488,7 @@ export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProp
       getMainFilename,
       fileManager,
       kernel,
-      setIsChatOpen,
+      editorRef,
       createChat,
       setLastChatId,
       selectedModel?.id,

@@ -3,7 +3,15 @@ import type { PartialDeep } from 'type-fest';
 import type { Build } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import { IndexedDbStorageProvider } from '#db/indexeddb-storage.js';
-import type { EditorState, EditorStateInput } from '#types/editor.types.js';
+import type { EditorState, EditorStateInput, PanelState } from '#types/editor.types.js';
+import { defaultPanelState } from '#constants/editor.constants.js';
+
+/**
+ * Type for initial editor state overrides during build creation.
+ * Uses PartialDeep to allow partial nested objects (e.g., openPanels: { chat: true }).
+ * Excludes buildId and lastChatId as those are set automatically.
+ */
+export type InitialEditorState = PartialDeep<Omit<EditorStateInput, 'buildId' | 'lastChatId'>>;
 
 // Create a singleton instance of the storage provider
 const storage = new IndexedDbStorageProvider();
@@ -22,10 +30,14 @@ const objectStoreWorker = {
    * Atomic method to create a build with its associated chat and Editor state in one call.
    * This reduces roundtrips between main thread and worker.
    * Implements rollback on partial failure to maintain atomicity.
+   *
+   * @param options.editorState - Optional initial editor state overrides (e.g., panelState for initial panel layout)
    */
+  // eslint-disable-next-line complexity -- TODO: Refactor this function to make it more readable.
   async createBuildWithResources(options: {
     build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>;
     chat: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'>;
+    editorState?: InitialEditorState;
   }): Promise<{ build: Build; chat: Chat }> {
     const build = await storage.createBuild(options.build);
 
@@ -44,11 +56,37 @@ const objectStoreWorker = {
     }
 
     try {
+      // Derive main file from build assets for auto-populating editor state
+      const mainFile = options.build.assets.mechanical?.main;
+
+      // Auto-populate activeFilePath and openFiles from main file if not provided
+      const activeFilePath = options.editorState?.activeFilePath ?? mainFile;
+      const openFiles =
+        options.editorState?.openFiles && options.editorState.openFiles.length > 0
+          ? options.editorState.openFiles
+          : mainFile
+            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile }]
+            : [];
+
+      // Merge provided panelState with defaults
+      const mergedPanelState: PanelState = {
+        openPanels: {
+          ...defaultPanelState.openPanels,
+          ...options.editorState?.panelState?.openPanels,
+        },
+        panelSizes: {
+          ...defaultPanelState.panelSizes,
+          ...options.editorState?.panelState?.panelSizes,
+        },
+        mobileActiveTab: options.editorState?.panelState?.mobileActiveTab ?? defaultPanelState.mobileActiveTab,
+      };
+
       await storage.updateEditorState({
         buildId: build.id,
-        openFiles: [],
-        activeFilePath: undefined,
+        openFiles,
+        activeFilePath,
         lastChatId: chat.id,
+        panelState: mergedPanelState,
       });
     } catch (editorStateError) {
       // Rollback: delete chat and build since editor state update failed
@@ -94,6 +132,7 @@ const objectStoreWorker = {
         openFiles: sourceEditorState.openFiles,
         activeFilePath: sourceEditorState.activeFilePath,
         lastChatId: newLastChatId,
+        panelState: sourceEditorState.panelState,
       });
     }
 

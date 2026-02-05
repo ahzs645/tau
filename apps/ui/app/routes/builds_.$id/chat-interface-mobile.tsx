@@ -26,7 +26,7 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
   const { buildRef } = useBuild();
   const isBuildError = useSelector(buildRef, (state) => state.matches('error'));
 
-  const isModelTab = activeTab === 'model';
+  const isViewerTab = activeTab === 'viewer';
 
   return (
     <div className={cn('absolute inset-0 size-full', '[--nav-height:calc(var(--spacing)*10)]', 'md:hidden')}>
@@ -34,7 +34,7 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
       <div
         className="relative h-full transition-all duration-200 ease-linear"
         style={{
-          paddingBottom: isModelTab ? '0' : `calc(${Number(activeSnapPoint) - 0.07} * 100dvh)`,
+          paddingBottom: isViewerTab ? '0' : `calc(${Number(activeSnapPoint) - 0.07} * 100dvh)`,
         }}
       >
         <ChatViewer />
@@ -45,14 +45,14 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
         {/* Gizmo Container - Static container for the gizmo to ensure it shares the same containing block as the anchor */}
         <div
           id="viewport-gizmo-container"
-          className={cn('absolute right-0 bottom-18', isModelTab ? 'bottom-18' : 'hidden')}
+          className={cn('absolute right-0 bottom-18', isViewerTab ? 'bottom-18' : 'hidden')}
         />
 
         {/* Top Content - Stack trace */}
         <div
           className={cn(
             'absolute top-(--header-height) right-2 left-2',
-            isModelTab || !drawerOpen ? 'block' : 'hidden',
+            isViewerTab || !drawerOpen ? 'block' : 'hidden',
           )}
         >
           <ChatStackTrace side="top" />
@@ -76,7 +76,7 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
         <div
           className={cn(
             'pointer-events-auto absolute bottom-[calc(var(--nav-height)+var(--spacing)*2)] left-0 z-10 flex w-full flex-row justify-between gap-2 px-2',
-            isModelTab ? 'flex' : 'hidden',
+            isViewerTab ? 'flex' : 'hidden',
           )}
         >
           <ChatViewerControls />
@@ -120,7 +120,7 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
             value={activeTab}
             className="flex h-full flex-col p-0"
             style={{
-              height: isModelTab ? '100dvh' : `calc(${Number(activeSnapPoint)} * 100dvh - var(--spacing)*12)`,
+              height: isViewerTab ? '100dvh' : `calc(${Number(activeSnapPoint)} * 100dvh - var(--spacing)*12)`,
             }}
             onValueChange={handleTabChange}
           >
@@ -133,7 +133,7 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
             <TabsContent enableAnimation={false} value="parameters" className="flex h-full flex-col">
               <ChatParameters />
             </TabsContent>
-            <TabsContent enableAnimation={false} value="model" className="flex h-full flex-col" />
+            <TabsContent enableAnimation={false} value="viewer" className="flex h-full flex-col" />
             <TabsContent enableAnimation={false} value="editor" className="flex h-full flex-col">
               <ChatEditorLayout />
             </TabsContent>

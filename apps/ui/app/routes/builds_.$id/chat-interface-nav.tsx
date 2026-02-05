@@ -1,6 +1,7 @@
 import { Box, Code2, Info, MessageCircleIcon, SlidersHorizontal, Download, Files } from 'lucide-react';
 import { TabsList, TabsTrigger } from '#components/ui/tabs.js';
 import { cn } from '#utils/ui.utils.js';
+import type { PanelId } from '#constants/editor.constants.js';
 
 export const chatTabs = [
   {
@@ -19,7 +20,7 @@ export const chatTabs = [
     icon: <SlidersHorizontal />,
   },
   {
-    id: 'model',
+    id: 'viewer',
     label: 'Model',
     icon: <Box />,
   },
@@ -38,7 +39,7 @@ export const chatTabs = [
     label: 'Export',
     icon: <Download />,
   },
-] as const;
+] as const satisfies Array<{ id: PanelId; label: string; icon: React.ReactNode }>;
 
 export function ChatInterfaceNav({ className }: { readonly className?: string }): React.ReactNode {
   return (
@@ -62,7 +63,7 @@ export function ChatInterfaceNav({ className }: { readonly className?: string })
             'data-[state=active]:bg-primary/20',
             'data-[state=active]:border-primary/50',
             'data-[state=active]:[&_svg]:text-primary',
-            tab.id === 'model' && 'border-sidebar-primary/20 data-[state=inactive]:bg-neutral/20',
+            tab.id === 'viewer' && 'border-sidebar-primary/20 data-[state=inactive]:bg-neutral/20',
           )}
         >
           {tab.icon}

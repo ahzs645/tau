@@ -19,28 +19,8 @@ export const cookieName = {
   /* Layout */
   // Whether the sidebar is open.
   sidebarOp: 'sidebar-op',
-  // Whether the files panel is open.
-  chatOpFileExplorer: 'chat-op-file-explorer',
-  // Whether the chat is open.
-  chatOpHistory: 'chat-op-history',
-  // Whether the chat parameters are open.
-  chatOpParameters: 'chat-op-parameters',
-  // Whether the chat editor is open.
-  chatOpEditor: 'chat-op-editor',
-  // Whether the chat model explorer is open.
-  chatOpModelExplorer: 'chat-op-model-explorer',
-  // Whether the chat editor details are open.
-  chatOpDetails: 'chat-op-details',
-  // Whether the chat converter is open.
-  chatOpConverter: 'chat-op-converter',
-  // Whether the chat git panel is open.
-  chatOpGit: 'chat-op-git',
   // The last selected chat console size.
   chatRsEditor: 'chat-rs-editor',
-  // The last selected chat console size.
-  chatRsInterface: 'chat-rs-interface',
-  // The last selected chat interface tab.
-  chatInterfaceTab: 'chat-interface-tab',
   // Whether the chat interface is full height.
   chatInterfaceFullHeight: 'chat-interface-full-height',
   // Whether the chat interface is transparent.

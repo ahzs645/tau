@@ -1,47 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+import { useSelector } from '@xstate/react';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import type { chatTabs } from '#routes/builds_.$id/chat-interface-nav.js';
 import { useViewContext } from '#routes/builds_.$id/chat-interface-view-context.js';
-/**
- * Minimum panel size constants for the chat interface layout (in pixels)
- * Used for both default sizes and minimum constraints on panes
- */
-
-/** Minimum width for standard side panels (Chat History, Explorer, Parameters, Converter, Git, Details) */
-export const panelMinSizeStandard = 200;
-
-/** Minimum width for the Editor panel (larger due to KCL code editing requirements) */
-export const panelMinSizeEditor = 400;
-
-/** Minimum width for the Viewer/center panel (main 3D CAD visualization area) */
-export const panelMinSizeViewer = 416;
-
-/** Default width for the Viewer/center panel (main 3D CAD visualization area) */
-export const panelSizeViewer = 420;
-
-/**
- * Default panel sizes for the chat interface layout (in pixels)
- * Maps to the pane order: [ChatHistory, FileTree, Explorer, Viewer, Parameters, Editor, Converter, Git, Details]
- */
-const defaultChatInterfaceSizes = [
-  // Left-side panels
-  panelMinSizeStandard, // Chat History panel: displays conversation history and file navigation
-  panelMinSizeStandard, // File Tree panel: shows project file structure and file management
-  panelMinSizeStandard, // Explorer panel: shows 3D model structure and navigation tree
-  // Center panel
-  panelSizeViewer, // Viewer panel: main 3D CAD visualization and content area
-  // Right-side panels
-  panelMinSizeStandard, // Parameters panel: LLM and generation parameters configuration
-  panelMinSizeStandard, // Editor panel: KCL code editor for design modifications
-  panelMinSizeStandard, // Converter panel: file format conversion utilities
-  // panelMinSizeStandard, // Git panel: version control and git operations
-  panelMinSizeStandard, // Details panel: additional object details and metadata
-];
-
-export const mobileDrawerSnapPoints: Array<number | string> = [0.7, 1];
+import { useBuild } from '#hooks/use-build.js';
+import type { PanelId } from '#constants/editor.constants.js';
+import { allotmentPanelOrder, mobileDrawerSnapPoints } from '#constants/editor.constants.js';
 
 export type ChatInterfaceState = {
+  // Loading state
+  /** Whether the editor state has been loaded from storage (ready for rendering) */
+  isEditorReady: boolean;
+
   // View context state
   isChatOpen: boolean;
   setIsChatOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
@@ -60,8 +31,10 @@ export type ChatInterfaceState = {
   isDetailsOpen: boolean;
   setIsDetailsOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
 
-  // Cookie state
-  chatResize: number[];
+  // Panel sizes state
+  /** Individual panel sizes for preferredSize props (keyed by panel ID) */
+  panelSizes: Record<PanelId, number>;
+  /** Set panel sizes from Allotment's onDragEnd callback (array format) */
   setChatResize: (value: readonly number[]) => void;
   activeTab: (typeof chatTabs)[number]['id'];
   setActiveTab: (value: (typeof chatTabs)[number]['id']) => void;
@@ -87,48 +60,94 @@ export type ChatInterfaceState = {
  */
 export function useChatInterfaceState(): ChatInterfaceState {
   const viewContext = useViewContext();
-  const [chatResize, setChatResize] = useCookie(cookieName.chatRsInterface, defaultChatInterfaceSizes);
-  const [activeTab, setActiveTab] = useCookie<(typeof chatTabs)[number]['id']>(cookieName.chatInterfaceTab, 'chat');
+  const { editorRef } = useBuild();
+
+  // Check if editor state has been loaded from IndexedDB
+  // This is used to defer Allotment rendering until saved panel sizes are available
+  const isEditorReady = useSelector(editorRef, (state) => state.matches('ready'));
+
+  // Read panel sizes and mobile tab from machine
+  // (panelState is always initialized with defaultPanelState in the machine context)
+  const panelSizes = useSelector(editorRef, (state) => state.context.panelState.panelSizes);
+  const mobileActiveTab = useSelector(editorRef, (state) => state.context.panelState.mobileActiveTab);
+
+  const setChatResize = useCallback(
+    (sizes: readonly number[]) => {
+      // When onDragEnd fires, invisible panes have size 0 in the sizes array.
+      // We must NOT overwrite our saved sizes with these 0 values, otherwise
+      // when the pane becomes visible again, it would start with size 0.
+      // Only update sizes for panes that are currently visible (size > 0).
+      const mergedSizes = { ...panelSizes };
+      for (const [index, panelId] of allotmentPanelOrder.entries()) {
+        const newSize = sizes[index];
+        // Only update if the pane was visible (size > 0)
+        if (newSize !== undefined && newSize > 0) {
+          mergedSizes[panelId] = newSize;
+        }
+      }
+
+      editorRef.send({ type: 'setPanelState', panelState: { panelSizes: mergedSizes } });
+    },
+    [editorRef, panelSizes],
+  );
+
+  // Cast to the expected tab type
+  const activeTab = mobileActiveTab as (typeof chatTabs)[number]['id'];
+
+  const setActiveTab = useCallback(
+    (value: (typeof chatTabs)[number]['id']) => {
+      editorRef.send({ type: 'setPanelState', panelState: { mobileActiveTab: value } });
+    },
+    [editorRef],
+  );
+
+  // Keep isFullHeightPanel in cookies (user preference, not per-build)
   const [isFullHeightPanel, setIsFullHeightPanel] = useCookie(cookieName.chatInterfaceFullHeight, false);
-  const [drawerOpen, setDrawerOpen] = useState<boolean>(activeTab !== 'model');
+
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(activeTab !== 'viewer');
   // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   const [snapPoint, setSnapPoint] = useState<number | string | null>(mobileDrawerSnapPoints[0]!);
 
-  const handleDrawerChange = (value: boolean): void => {
-    if (!value && activeTab !== 'model') {
-      setActiveTab('model');
-    }
+  const handleDrawerChange = useCallback(
+    (value: boolean): void => {
+      if (!value && activeTab !== 'viewer') {
+        setActiveTab('viewer');
+      }
 
-    setDrawerOpen(value);
-  };
+      setDrawerOpen(value);
+    },
+    [activeTab, setActiveTab],
+  );
 
-  const handleTabChange = (value: string): void => {
-    setActiveTab(value as (typeof chatTabs)[number]['id']);
+  const handleTabChange = useCallback(
+    (value: string): void => {
+      setActiveTab(value as (typeof chatTabs)[number]['id']);
 
-    if (!drawerOpen && value !== 'model') {
-      // When the drawer is closed and the new tab is not the model tab, open the drawer
-      setDrawerOpen(true);
-    } else if (drawerOpen && value === 'model') {
-      // When the drawer is open and the new tab is the model tab, close the drawer
-      setDrawerOpen(false);
-    }
-  };
+      if (!drawerOpen && value !== 'viewer') {
+        // When the drawer is closed and the new tab is not the model tab, open the drawer
+        setDrawerOpen(true);
+      } else if (drawerOpen && value === 'viewer') {
+        // When the drawer is open and the new tab is the model tab, close the drawer
+        setDrawerOpen(false);
+      }
+    },
+    [drawerOpen, setActiveTab],
+  );
 
   // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
-  const handleSnapChange = (value: number | string | null): void => {
+  const handleSnapChange = useCallback((value: number | string | null): void => {
     setSnapPoint(value);
-  };
+  }, []);
 
-  const toggleFullHeightPanel = (): void => {
+  const toggleFullHeightPanel = useCallback((): void => {
     setIsFullHeightPanel((previous) => !previous);
-  };
+  }, [setIsFullHeightPanel]);
 
   return {
+    isEditorReady,
     ...viewContext,
-    chatResize,
-    setChatResize(value) {
-      setChatResize(value as number[]);
-    },
+    panelSizes,
+    setChatResize,
     activeTab,
     setActiveTab,
     isFullHeightPanel,

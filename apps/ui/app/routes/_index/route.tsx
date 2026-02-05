@@ -16,8 +16,6 @@ import { ChatProvider } from '#hooks/use-chat.js';
 import { Separator } from '#components/ui/separator.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';
 import { toast } from '#components/ui/sonner.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
@@ -31,7 +29,6 @@ export const handle: Handle = {
 export default function ChatStart(): React.JSX.Element {
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
-  const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const buildManager = useBuildManager();
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
@@ -40,10 +37,9 @@ export default function ChatStart(): React.JSX.Element {
         const createdBuild = await buildManager.createBuild({
           kernel,
           initialMessage: { content, model, metadata, imageUrls },
+          // Set initial panel state: chat open
+          editorState: { panelState: { openPanels: { chat: true } } },
         });
-
-        // Ensure chat is open when navigating to the build page
-        setIsChatOpen(true);
 
         // Navigate immediately - the build page will handle the streaming
         await navigate(`/builds/${createdBuild.id}`);
@@ -52,7 +48,7 @@ export default function ChatStart(): React.JSX.Element {
         toast.error('Failed to create build');
       }
     },
-    [kernel, buildManager, setIsChatOpen, navigate],
+    [kernel, buildManager, navigate],
   );
 
   return (

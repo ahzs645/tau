@@ -1,4 +1,6 @@
 import type { FileStatus } from '@taucad/types';
+import type { PanelId, DesktopPanelId } from '#constants/editor.constants.js';
+import { allotmentPanelOrder } from '#constants/editor.constants.js';
 
 // ============================================================================
 // File Types (moved from file-explorer.machine.ts)
@@ -33,6 +35,37 @@ export type FileItem = {
   gitStatus?: FileStatus;
 };
 
+/**
+ * Panel layout state - stored per-build for persistence across page refreshes.
+ */
+export type PanelState = {
+  /** Which panels are open (keyed by panel ID, order-independent) */
+  openPanels: Record<DesktopPanelId, boolean>;
+  /** Panel sizes in pixels (keyed by panel ID, order-independent) */
+  panelSizes: Record<PanelId, number>;
+  /** Mobile active tab ID */
+  mobileActiveTab: PanelId;
+};
+
+/**
+ * Convert named panel sizes object to Allotment array format.
+ * Uses allotmentPanelOrder for consistent ordering.
+ */
+export function toAllotmentSizes(panelSizes: Record<PanelId, number>): number[] {
+  return allotmentPanelOrder.map((id) => panelSizes[id]);
+}
+
+/**
+ * Convert Allotment array back to named panel sizes object.
+ * Uses allotmentPanelOrder for consistent mapping.
+ */
+export function fromAllotmentSizes(sizes: readonly number[]): Record<PanelId, number> {
+  return Object.fromEntries(allotmentPanelOrder.map((id, index) => [id, sizes[index] ?? 200])) as Record<
+    PanelId,
+    number
+  >;
+}
+
 // ============================================================================
 // Editor State Types
 // ============================================================================
@@ -53,6 +86,8 @@ export type EditorState = {
   activeFilePath: string | undefined;
   /** Last active chat ID */
   lastChatId: string | undefined;
+  /** Panel layout state (open/close, sizes, mobile tab) */
+  panelState: PanelState;
   /** Timestamp of last update */
   updatedAt: number;
 };

@@ -1,6 +1,26 @@
 import { assign, assertEvent, setup, fromPromise, enqueueActions, emit } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { EditorState, EditorStateInput, OpenFile, FileOpenSource } from '#types/editor.types.js';
+import type { PartialDeep } from 'type-fest';
+import type { EditorState, EditorStateInput, OpenFile, FileOpenSource, PanelState } from '#types/editor.types.js';
+import { defaultPanelState } from '#constants/editor.constants.js';
+
+/**
+ * Deep merge utility for panel state.
+ * Merges partial updates into the current state while preserving unspecified values.
+ */
+function deepMergePanelState(current: PanelState, update: PartialDeep<PanelState>): PanelState {
+  return {
+    openPanels: {
+      ...current.openPanels,
+      ...update.openPanels,
+    },
+    panelSizes: {
+      ...current.panelSizes,
+      ...update.panelSizes,
+    },
+    mobileActiveTab: update.mobileActiveTab ?? current.mobileActiveTab,
+  };
+}
 
 /**
  * Editor state Machine Context
@@ -10,6 +30,8 @@ export type EditorStateContext = {
   openFiles: OpenFile[];
   activeFilePath: string | undefined;
   lastChatId: string | undefined;
+  /** Panel layout state (open/close, sizes, mobile tab) */
+  panelState: PanelState;
   isLoading: boolean;
   error: Error | undefined;
   /** Flag indicating changes occurred during a write operation that need persisting */
@@ -36,7 +58,9 @@ type EditorStateEvent =
   | { type: 'renameFile'; oldPath: string; newPath: string }
   | { type: 'closeAll' }
   // Chat operations
-  | { type: 'setLastChatId'; chatId: string };
+  | { type: 'setLastChatId'; chatId: string }
+  // Panel operations
+  | { type: 'setPanelState'; panelState: PartialDeep<PanelState> };
 
 /**
  * Editor state Machine Emitted Events
@@ -102,10 +126,16 @@ export const editorMachine = setup({
       // Extract loaded state from actor done event
       const loadedState = (event as unknown as { output: EditorState | undefined }).output;
 
+      // Merge loaded panelState with defaults to handle missing fields from old data
+      const mergedPanelState = loadedState?.panelState
+        ? deepMergePanelState(defaultPanelState, loadedState.panelState)
+        : defaultPanelState;
+
       enqueue.assign({
         openFiles: loadedState?.openFiles ?? [],
         activeFilePath: loadedState?.activeFilePath,
         lastChatId: loadedState?.lastChatId,
+        panelState: mergedPanelState,
         isLoading: false,
       });
 
@@ -132,6 +162,7 @@ export const editorMachine = setup({
         openFiles: [],
         activeFilePath: undefined,
         lastChatId: undefined,
+        panelState: defaultPanelState,
       };
     }),
 
@@ -309,6 +340,16 @@ export const editorMachine = setup({
     }),
 
     // ============================================================================
+    // Panel operations
+    // ============================================================================
+    setPanelStateInContext: assign(({ event, context }) => {
+      assertEvent(event, 'setPanelState');
+      return {
+        panelState: deepMergePanelState(context.panelState, event.panelState),
+      };
+    }),
+
+    // ============================================================================
     // Persistence tracking
     // ============================================================================
     setPendingChanges: assign({ hasPendingChanges: true }),
@@ -334,6 +375,7 @@ export const editorMachine = setup({
       openFiles: [],
       activeFilePath: undefined,
       lastChatId: undefined,
+      panelState: defaultPanelState,
       isLoading: false,
       error: undefined,
       hasPendingChanges: false,
@@ -404,6 +446,10 @@ export const editorMachine = setup({
             setLastChatId: {
               actions: 'setLastChatIdInContext',
             },
+            // Panel operations
+            setPanelState: {
+              actions: 'setPanelStateInContext',
+            },
             // Reload
             reload: {
               target: '#editor.loading',
@@ -421,6 +467,7 @@ export const editorMachine = setup({
                 setActiveFile: { target: 'pending' },
                 renameFile: { target: 'pending' },
                 setLastChatId: { target: 'pending' },
+                setPanelState: { target: 'pending' },
               },
             },
             pending: {
@@ -433,6 +480,7 @@ export const editorMachine = setup({
                 setActiveFile: { target: 'pending', reenter: true },
                 renameFile: { target: 'pending', reenter: true },
                 setLastChatId: { target: 'pending', reenter: true },
+                setPanelState: { target: 'pending', reenter: true },
               },
             },
             writing: {
@@ -445,6 +493,7 @@ export const editorMachine = setup({
                       openFiles: context.openFiles,
                       activeFilePath: context.activeFilePath,
                       lastChatId: context.lastChatId,
+                      panelState: context.panelState,
                     },
                   };
                 },
@@ -465,6 +514,7 @@ export const editorMachine = setup({
                 setActiveFile: { actions: 'setPendingChanges' },
                 renameFile: { actions: 'setPendingChanges' },
                 setLastChatId: { actions: 'setPendingChanges' },
+                setPanelState: { actions: 'setPendingChanges' },
               },
             },
           },

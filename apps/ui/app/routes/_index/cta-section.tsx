@@ -7,15 +7,12 @@ import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { Button } from '#components/ui/button.js';
 import { ChatProvider } from '#hooks/use-chat.js';
 import { toast } from '#components/ui/sonner.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
 export function CtaSection(): React.JSX.Element {
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
-  const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const buildManager = useBuildManager();
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
@@ -24,16 +21,17 @@ export function CtaSection(): React.JSX.Element {
         const createdBuild = await buildManager.createBuild({
           kernel,
           initialMessage: { content, model, metadata, imageUrls },
+          // Set initial panel state: chat open
+          editorState: { panelState: { openPanels: { chat: true } } },
         });
 
-        setIsChatOpen(true);
         await navigate(`/builds/${createdBuild.id}`);
       } catch (error) {
         console.error('Failed to create build:', error);
         toast.error('Failed to create build');
       }
     },
-    [kernel, buildManager, setIsChatOpen, navigate],
+    [kernel, buildManager, navigate],
   );
 
   return (

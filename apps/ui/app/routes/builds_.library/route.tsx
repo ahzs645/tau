@@ -79,6 +79,8 @@ import { InteractiveHoverButton } from '#components/magicui/interactive-hover-bu
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
+// Note: useCookie is still used for buildViewMode (user preference, not per-build state)
+
 const categoryIconsFromEngineeringDiscipline = {
   mechanical: Wrench,
   electrical: Zap,
@@ -111,7 +113,6 @@ export default function PersonalCadProjects(): React.JSX.Element {
   const { builds, deleteBuild, duplicateBuild, restoreBuild, updateName } = useBuilds({ includeDeleted: showDeleted });
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
-  const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const buildManager = useBuildManager();
 
   const handleToggleDeleted = useCallback((value: boolean) => {
@@ -173,10 +174,9 @@ export default function PersonalCadProjects(): React.JSX.Element {
         const createdBuild = await buildManager.createBuild({
           kernel,
           initialMessage: { content, model, metadata, imageUrls },
+          // Set initial panel state: chat open
+          editorState: { panelState: { openPanels: { chat: true } } },
         });
-
-        // Ensure chat is open when navigating to the build page
-        setIsChatOpen(true);
 
         // Navigate immediately - the build page will handle the streaming
         await navigate(`/builds/${createdBuild.id}`);
@@ -184,7 +184,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
         toast.error('Failed to create build');
       }
     },
-    [kernel, buildManager, setIsChatOpen, navigate],
+    [kernel, buildManager, navigate],
   );
 
   const actions: BuildActions = {

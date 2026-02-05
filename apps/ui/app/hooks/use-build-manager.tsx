@@ -9,7 +9,7 @@ import type { Chat } from '@taucad/chat';
 import type { Remote } from 'comlink';
 import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { buildManagerMachine } from '#hooks/build-manager.machine.js';
-import type { ObjectStoreWorker } from '#hooks/object-store.worker.js';
+import type { ObjectStoreWorker, InitialEditorState } from '#hooks/object-store.worker.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { createInitialBuild } from '#constants/build.constants.js';
 import { createMessage } from '#utils/chat.utils.js';
@@ -30,6 +30,8 @@ type CreateBuildChatOptions = {
   };
   /** Chat name (defaults to 'Initial design' with message, 'Initial chat' without) */
   chatName?: string;
+  /** Initial editor state overrides (e.g., panelState for initial panel layout) */
+  editorState?: InitialEditorState;
 };
 
 /**
@@ -179,6 +181,7 @@ export function BuildManagerProvider({ children }: { readonly children: ReactNod
           name: chatName,
           messages: chatMessages,
         },
+        editorState: options.editorState,
       });
 
       // Write files to filesystem (separate worker, can't consolidate)

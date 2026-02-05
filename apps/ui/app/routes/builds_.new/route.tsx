@@ -18,8 +18,6 @@ import { encodeTextFile } from '#utils/filesystem.utils.js';
 import type { Handle } from '#types/matches.types.js';
 import { cn } from '#utils/ui.utils.js';
 import { useKeydown } from '#hooks/use-keydown.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
@@ -78,7 +76,6 @@ function useBuildCreation() {
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
   const { user } = useAuthenticate({ enabled: false });
-  const [, setIsEditorOpen] = useCookie(cookieName.chatOpEditor, false);
   const buildManager = useBuildManager();
 
   const createBuild = useCallback(
@@ -110,10 +107,9 @@ function useBuildCreation() {
             },
           },
           chatName: 'Initial design',
+          // Set initial panel state: editor open
+          editorState: { panelState: { openPanels: { editor: true, files: true } } },
         });
-
-        // Ensure editor is open when navigating to the build page
-        setIsEditorOpen(true);
 
         void navigate(`/builds/${createdBuild.id}`);
       } catch (error) {
@@ -123,7 +119,7 @@ function useBuildCreation() {
         setIsCreating(false);
       }
     },
-    [user?.name, user?.image, buildManager, setIsEditorOpen, navigate],
+    [user?.name, user?.image, buildManager, navigate],
   );
 
   return { createBuild, isCreating };
