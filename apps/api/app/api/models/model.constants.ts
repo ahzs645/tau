@@ -7,6 +7,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-opus-4.6',
       name: 'Opus 4.6',
       slug: 'claude-opus-4.6',
+      description: "Anthropic's most powerful model, great for designing complex multi-part assemblies.",
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
@@ -45,6 +46,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-opus-4.5',
       name: 'Opus 4.5',
       slug: 'claude-opus-4.5',
+      description: 'Previous Anthropic flagship with extended thinking capabilities.',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
@@ -82,6 +84,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-sonnet-4.5',
       name: 'Sonnet 4.5',
       slug: 'claude-sonnet-4.5',
+      description: 'Fast and intelligent, great for most design tasks.',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
@@ -120,6 +123,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-haiku-4.5',
       name: 'Haiku 4.5',
       slug: 'claude-haiku-4.5',
+      description: 'Fastest Claude model, ideal for quick design tasks or small changes.',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
@@ -159,6 +163,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-5.2',
       name: 'GPT-5.2',
       slug: 'gpt-5.2',
+      description:
+        "OpenAI's most capable model with advanced reasoning, great for design tasks that require complex reasoning.",
       provider: {
         id: 'openai',
         name: 'OpenAI',
@@ -189,6 +195,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-5.2-codex',
       name: 'GPT-5.2 Codex',
       slug: 'gpt-5.2-codex',
+      description: 'Specialized for code generation and programming tasks.',
       provider: {
         id: 'openai',
         name: 'OpenAI',
@@ -219,6 +226,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-4.1',
       name: 'GPT-4.1',
       slug: 'gpt-4.1',
+      description: 'Reliable and cost-effective for general-purpose design tasks.',
       provider: {
         id: 'openai',
         name: 'OpenAI',
@@ -247,6 +255,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'google-gemini-3-pro',
       name: 'Gemini 3 Pro',
       slug: 'gemini-3-pro',
+      description: "Google's most capable model with a large context window, great for complex design tasks.",
       provider: {
         id: 'vertexai',
         name: 'Google',
@@ -281,6 +290,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'google-gemini-3-flash',
       name: 'Gemini 3 Flash',
       slug: 'gemini-3-flash',
+      description: 'Fast and efficient, great for quick design tasks or small changes.',
       provider: {
         id: 'vertexai',
         name: 'Google',
