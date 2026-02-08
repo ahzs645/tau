@@ -37,7 +37,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
           type: 'adaptive',
         },
         outputConfig: {
-          effort: 'high',
+          effort: 'medium',
         },
       },
     },
