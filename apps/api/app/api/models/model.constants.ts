@@ -7,7 +7,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-opus-4.6',
       name: 'Opus 4.6',
       slug: 'claude-opus-4.6',
-      description: "Anthropic's most powerful model, great for designing complex multi-part assemblies.",
+      description:
+        "Anthropic's most powerful model with adaptive reasoning, great for designing complex multi-part assemblies.",
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
