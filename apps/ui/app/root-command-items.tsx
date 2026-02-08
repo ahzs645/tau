@@ -61,7 +61,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
       })),
       {
         id: 'open-settings',
-        label: 'Open settings',
+        label: 'Go to settings',
         group: 'Settings',
         icon: <Cog />,
         link: '/settings',
