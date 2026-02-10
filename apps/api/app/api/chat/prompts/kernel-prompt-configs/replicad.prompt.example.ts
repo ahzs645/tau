@@ -45,6 +45,7 @@ export default function main(p = defaultParams) {
   const bottomPlane = makePlane().pivot(p.fillerAngle, "Y").translateZ(80);
   const bottomCircle = drawCircle(9).sketchOnPlane(bottomPlane);
 
+  // @ts-expect-error - Replicad types are incorrect for loftWith.
   const filler = topCircle.loftWith([middleCircle, bottomCircle], {
     ruled: false,
   });
@@ -64,7 +65,7 @@ export default function main(p = defaultParams) {
     Math.cos((p.spoutAngle * Math.PI) / 180) * p.spoutLength,
     0,
     p.bodyHeight + Math.sin((p.spoutAngle * Math.PI) / 180) * p.spoutLength,
-  ];
+  ] as [number, number, number];
 
   wateringCan = wateringCan.shell(-p.wallThickness, (face) =>
     face.either([
@@ -79,7 +80,7 @@ export default function main(p = defaultParams) {
   );
 
   // Add fillet to the filler opening  
-  const fillerOpeningCenter = [-35, 0, 135];
+  const fillerOpeningCenter = [-35, 0, 135] as [number, number, number];
   wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (e) =>
     e.withinDistance(p.topFillerRadius + p.wallThickness + 1, fillerOpeningCenter)
       .not((f) => f.ofCurveType("LINE"))
