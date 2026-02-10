@@ -190,7 +190,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'tool-web_browser': {
-                  return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} />;
+                  const hasPartsAfter = index < displayMessage.parts.length - 1;
+                  return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} hasContent={hasPartsAfter} />;
                 }
 
                 case 'tool-edit_file': {
