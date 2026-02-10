@@ -17,6 +17,7 @@ import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/git-commi
 import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
+import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 
 @Injectable()
@@ -107,6 +108,8 @@ export class ChatService {
         toolErrorHandlerMiddleware,
         // Trim tool results (e.g., remove base64 images) before sending to the LLM
         toolResultTrimmerMiddleware,
+        // Ensure all AIMessages have text content (fixes interrupted thinking blocks)
+        messageContentSanitizerMiddleware,
         // Add cache_control to last message for incremental caching (breakpoint 2)
         promptCachingMiddleware,
         // Log messages before each model call (for debugging)
