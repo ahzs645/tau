@@ -123,7 +123,7 @@ describe('import position detection', () => {
     expect(onSpecifier(28)).toBe(true); // 'd' of replicad
 
     // Position outside specifier
-    expect(onSpecifier(0)).toBe(false); // start of line
+    expect(onSpecifier(0)).toBe(false); // Start of line
     expect(onSpecifier(10)).toBe(false); // 'draw'
   });
 });
