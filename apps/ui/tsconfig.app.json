@@ -9,7 +9,6 @@
     ".react-router/types/**/*",
     ".source/**/*", // Fumadocs collections
     "package.json",
-    "../../libs/utils/src/id.utils.ts"
   ],
   "compilerOptions": {
     "outDir": "./out-tsc/lib",
