@@ -5,12 +5,9 @@ import { useSelector } from '@xstate/react';
 import { FileCode } from 'lucide-react';
 import type * as Monaco from 'monaco-editor';
 import { languageFromExtension } from '@taucad/types/constants';
-import type { IssueSeverity } from '@taucad/types';
 import { CodeEditor } from '#components/code/code-editor.client.js';
 import { cn } from '#utils/ui.utils.js';
 import { Loader } from '#components/ui/loader.js';
-import { registerMonaco } from '#lib/monaco.js';
-import { setKclLspFileManager } from '#lib/kcl-language/kcl-register-language.js';
 import { ChatEditorBreadcrumbs } from '#routes/builds_.$id/chat-editor-breadcrumbs.js';
 import { useBuild } from '#hooks/use-build.js';
 import { ChatEditorTabs } from '#routes/builds_.$id/chat-editor-tabs.js';
@@ -21,48 +18,22 @@ import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '
 import { ChatEditorBinaryWarning } from '#routes/builds_.$id/chat-editor-binary-warning.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useViewContext } from '#routes/builds_.$id/chat-interface-view-context.js';
+import { useMonacoServices } from '#hooks/use-monaco-model-service.js';
+import { useKernelDiagnostics } from '#hooks/use-kernel-diagnostics.js';
 
 /**
- * Build prefix for Monaco URIs, matching the file manager's root directory structure.
+ * Create a root-level Monaco URI for a file path.
+ * Uses root-level URIs (e.g., file:///main.ts) for consistent module resolution.
  */
-const buildsPrefix = '/builds';
-
-/**
- * Map IssueSeverity to Monaco MarkerSeverity.
- */
-function getMarkerSeverity(monaco: typeof Monaco, severity: IssueSeverity | undefined): Monaco.MarkerSeverity {
-  switch (severity) {
-    case 'warning': {
-      return monaco.MarkerSeverity.Warning;
-    }
-
-    case 'info': {
-      return monaco.MarkerSeverity.Info;
-    }
-
-    case 'error': {
-      return monaco.MarkerSeverity.Error;
-    }
-
-    default: {
-      return monaco.MarkerSeverity.Error;
-    }
-  }
+function createMonacoUri(monaco: typeof Monaco, relativePath: string): Monaco.Uri {
+  return monaco.Uri.file(`/${relativePath}`);
 }
 
 /**
- * Create a Monaco URI with build namespace to ensure file isolation between builds.
- * This prevents stale file content from appearing when switching builds.
+ * Create a root-level path string for the Monaco Editor path prop.
  */
-function createBuildNamespacedUri(monaco: typeof Monaco, buildId: string, relativePath: string): Monaco.Uri {
-  return monaco.Uri.file(`${buildsPrefix}/${buildId}/${relativePath}`);
-}
-
-/**
- * Create a path string with build namespace for the Monaco Editor path prop.
- */
-function createBuildNamespacedPath(buildId: string, relativePath: string): string {
-  return `${buildsPrefix}/${buildId}/${relativePath}`;
+function createMonacoPath(relativePath: string): string {
+  return `/${relativePath}`;
 }
 
 export const ChatEditor = memo(function ({ className }: { readonly className?: string }): React.JSX.Element {
@@ -72,6 +43,10 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
   const { fileManagerRef } = useFileManager();
   const [forceOpenBinary, setForceOpenBinary] = useState(false);
   const { setIsEditorOpen } = useViewContext();
+  const { modelService, markerService } = useMonacoServices();
+
+  // Kernel diagnostics (replaces manual marker management)
+  const { handleValidate } = useKernelDiagnostics({ monaco: monaco ?? undefined, cadActor, markerService });
 
   // Get active file path from editor
   const activeFilePath = useSelector(editorRef, (state) => {
@@ -123,147 +98,32 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
         return;
       }
 
-      // Encode string → Uint8Array and write directly to fileManager
-      void fileManager.writeFile(activeFile.path, encodeTextFile(value ?? ''), { source: 'editor' });
+      const encoded = encodeTextFile(value ?? '');
+      // Encode string -> Uint8Array and write directly to fileManager
+      void fileManager.writeFile(activeFile.path, encoded, { source: 'editor' });
     },
     [activeFile, fileManager],
   );
 
-  // Decode Uint8Array → string for editor
+  // Decode Uint8Array -> string for editor
   const editorContent = activeFile ? decodeTextFile(activeFile.content) : '';
 
   const handleForceOpenBinary = useCallback(() => {
     setForceOpenBinary(true);
   }, []);
 
+  // Register/unregister editor model with the model service
+  const activeFilePathForModel = activeFile?.path;
   useEffect(() => {
-    if (monaco) {
-      void registerMonaco(monaco);
-    }
-  }, [monaco]);
-
-  // Set file manager on the KCL LSP client for import resolution
-  useEffect(() => {
-    setKclLspFileManager({
-      readFile: async (path: string) => fileManager.readFile(path),
-      exists: async (path: string) => fileManager.exists(path),
-      readdir: async (path: string) => fileManager.readdir(path),
-    });
-  }, [fileManager]);
-
-  const handleValidate = useCallback(() => {
-    const errors = monaco?.editor.getModelMarkers({});
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- monaco has import issues. This is safe.
-    const filteredErrors = errors?.filter((error) => error.severity === 8);
-    if (filteredErrors?.length) {
-      // Send errors to the CAD actor
-      cadActor.send({
-        type: 'setCodeIssues',
-        errors: filteredErrors.map((error) => ({
-          startLineNumber: error.startLineNumber,
-          startColumn: error.startColumn,
-          message: error.message,
-          severity: error.severity,
-          endLineNumber: error.endLineNumber,
-          endColumn: error.endColumn,
-        })),
-      });
-    } else {
-      // Clear errors when there are none
-      cadActor.send({ type: 'setCodeIssues', errors: [] });
-    }
-  }, [monaco, cadActor]);
-
-  // Get kernel issues for active file from CAD machine (errors stored per-file as an array)
-  const kernelIssues = useSelector(cadActor, (state) => {
-    if (!activeFile) {
-      return undefined;
-    }
-
-    return state.context.kernelIssues.get(activeFile.path);
-  });
-
-  // Show kernel issues as Monaco markers - only for the active file
-  useEffect(() => {
-    if (!monaco || !activeFile) {
+    if (!modelService || !activeFilePathForModel) {
       return;
     }
 
-    const uri = createBuildNamespacedUri(monaco, buildId, activeFile.path);
-    const model = monaco.editor.getModel(uri);
-
-    if (!model) {
-      return;
-    }
-
-    // Map kernel issues to Monaco markers (only for issues with location info)
-    const markers = (kernelIssues ?? [])
-      .filter((kernelIssue) => kernelIssue.location)
-      .map((kernelIssue) => ({
-        startLineNumber: kernelIssue.location!.startLineNumber,
-        startColumn: kernelIssue.location!.startColumn,
-        endLineNumber: kernelIssue.location!.endLineNumber ?? kernelIssue.location!.startLineNumber,
-        endColumn: kernelIssue.location!.endColumn ?? kernelIssue.location!.startColumn + 1,
-        message: kernelIssue.message,
-        severity: getMarkerSeverity(monaco, kernelIssue.severity),
-      }));
-
-    monaco.editor.setModelMarkers(model, 'kernel', markers);
-  }, [monaco, kernelIssues, activeFile, buildId]);
-
-  // Subscribe to file writes and update Monaco model for non-editor sources
-  useEffect(() => {
-    if (!monaco) {
-      return;
-    }
-
-    const subscription = fileManagerRef.on('fileWritten', (emittedEvent) => {
-      // Skip Monaco updates for editor typing to avoid recursion
-      if (emittedEvent.source === 'editor') {
-        return;
-      }
-
-      const { path, data, source } = emittedEvent;
-      const newContent = decodeTextFile(data);
-      const uri = createBuildNamespacedUri(monaco, buildId, path);
-
-      // Find existing Monaco model for this file
-      const existingModel = monaco.editor.getModel(uri);
-
-      if (existingModel) {
-        // Update existing model if content is different
-        if (existingModel.getValue() !== newContent) {
-          // Push a stack element to create a new undo stop point
-          existingModel.pushStackElement();
-
-          // Apply the edit as a proper undo-able operation
-          existingModel.pushEditOperations(
-            [], // No cursor state to preserve
-            [
-              {
-                range: existingModel.getFullModelRange(),
-                text: newContent,
-              },
-            ],
-            () => null, // No cursor computation needed
-          );
-
-          // Push another stack element to close this undo group
-          existingModel.pushStackElement();
-        }
-      } else if (source === 'user') {
-        // For user operations (user created/uploaded), create a new model
-        // Machine sources (chat AI) should not auto-open files that weren't already open
-        const extension = getFileExtension(path);
-        const language = languageFromExtension[extension as keyof typeof languageFromExtension];
-        monaco.editor.createModel(newContent, language, uri);
-      }
-    });
-
+    modelService.registerEditorModel(activeFilePathForModel);
     return () => {
-      subscription.unsubscribe();
+      modelService.unregisterEditorModel(activeFilePathForModel);
     };
-  }, [monaco, fileManagerRef, buildId]);
+  }, [modelService, activeFilePathForModel]);
 
   // Subscribe to fileOpened events to open the editor panel and jump to specific line numbers
   useEffect(() => {
@@ -289,7 +149,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
       // This prevents layout shifts when the editor panel is opening
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          const uri = createBuildNamespacedUri(monaco, buildId, event.path);
+          const uri = createMonacoUri(monaco, event.path);
           const model = monaco.editor.getModel(uri);
 
           if (model) {
@@ -325,10 +185,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
             className="h-full bg-background"
             defaultLanguage={activeFile.language}
             defaultValue={editorContent}
-            editorActorRef={editorRef}
-            fileManager={fileManager}
-            buildId={buildId}
-            path={createBuildNamespacedPath(buildId, activeFile.path)}
+            path={createMonacoPath(activeFile.path)}
             onChange={handleCodeChange}
             onValidate={handleValidate}
           />

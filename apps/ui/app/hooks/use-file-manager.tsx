@@ -2,11 +2,11 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
-import type { ActorRefFrom, SnapshotFrom } from 'xstate';
+import type { SnapshotFrom } from 'xstate';
 import type { Remote } from 'comlink';
-import type { FileTreeEntry, FilesystemBackend } from '@taucad/types';
+import type { FileTreeEntry, FilesystemBackend, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
-import type { FileWriteSource } from '#machines/file-manager.machine.js';
+import type { FileWriteSource, FileManagerRef } from '#machines/file-manager.machine.types.js';
 import type { FileManager as FileWorker } from '#machines/file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
 
@@ -47,7 +47,7 @@ type DeleteFileOptions = {
 };
 
 type FileManagerContextType = {
-  fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
+  fileManagerRef: FileManagerRef;
   writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
   writeFiles: (files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>;
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
@@ -55,6 +55,7 @@ type FileManagerContextType = {
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
+  getDirectoryStat: (path: string) => Promise<FileStat[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
   reconfigureBackend: (backend: FilesystemBackend) => Promise<void>;
@@ -241,6 +242,18 @@ export function FileManagerProvider({
   );
 
   /**
+   * Get all file stats in a directory recursively.
+   */
+  const getDirectoryStat = useCallback(
+    async (path: string): Promise<FileStat[]> => {
+      const worker = await getReadiedWorker();
+      const absolutePath = joinPath(rootDirectoryRef.current, path);
+      return worker.getDirectoryStat(absolutePath);
+    },
+    [getReadiedWorker],
+  );
+
+  /**
    * Get a zipped archive of a directory.
    */
   const getZippedDirectory = useCallback(
@@ -291,6 +304,7 @@ export function FileManagerProvider({
       deleteFile,
       exists,
       readdir,
+      getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
       reconfigureBackend,
@@ -304,6 +318,7 @@ export function FileManagerProvider({
       deleteFile,
       exists,
       readdir,
+      getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
       reconfigureBackend,

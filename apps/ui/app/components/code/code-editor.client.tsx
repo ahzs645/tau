@@ -2,68 +2,32 @@ import { Editor, useMonaco } from '@monaco-editor/react';
 import type { EditorProps } from '@monaco-editor/react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { shikiToMonaco } from '@shikijs/monaco';
-import type { AnyActorRef } from 'xstate';
 import type { CompletionRegistration } from 'monacopilot';
 import type * as Monaco from 'monaco-editor';
 import { cn } from '#utils/ui.utils.js';
 import { highlighter } from '#lib/shiki.js';
 import { configureMonaco, registerCompletions } from '#lib/monaco.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
-import { registerKclNavigation } from '#lib/kcl-language/lsp/kcl-navigation-service.js';
-import { decodeTextFile } from '#utils/filesystem.utils.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
-
-type FileManagerApi = {
-  readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
-};
 
 type CodeEditorProperties = EditorProps & {
   readonly onChange: (value: string) => void;
-  /** Optional editor actor for KCL navigation */
-  readonly editorActorRef?: AnyActorRef;
-  /** Optional file manager for KCL navigation */
-  readonly fileManager?: FileManagerApi;
-  /** Build ID for namespacing Monaco URIs - required for KCL navigation */
-  readonly buildId?: string;
 };
 
 await configureMonaco();
 
-export function CodeEditor({
-  className,
-  editorActorRef,
-  fileManager,
-  buildId,
-  ...rest
-}: CodeEditorProperties): React.JSX.Element {
+export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.JSX.Element {
   const { theme } = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
-  const monacoEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
-  const navigationDisposableRef = useRef<{ dispose: () => void } | undefined>(undefined);
 
-  const handleMount = useCallback(
-    (editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
-      completionRef.current = registerCompletions(editor, monaco);
-      monacoEditorRef.current = editor;
-
-      // Register KCL navigation if editor actor and file manager are provided
-      if (editorActorRef && fileManager && buildId) {
-        navigationDisposableRef.current = registerKclNavigation(monaco, editor, {
-          editorRef: editorActorRef,
-          fileManager,
-          buildId,
-          decodeTextFile,
-        });
-      }
-    },
-    [editorActorRef, fileManager, buildId],
-  );
+  const handleMount = useCallback((editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
+    completionRef.current = registerCompletions(editor, monaco);
+  }, []);
 
   useEffect(() => {
     return () => {
       completionRef.current?.deregister();
-      navigationDisposableRef.current?.dispose();
     };
   }, []);
 
