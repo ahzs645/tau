@@ -34,26 +34,37 @@ type MeshableConfiguration = {
 export type MainResultShapes = AnyShape | AnyShape[] | InputShape | InputShape[];
 
 const isSvgable = (shape: unknown): shape is Svgable => {
-  return Boolean((shape as Svgable).toSVGPaths) && Boolean((shape as Svgable).toSVGViewBox);
+  return (
+    typeof shape === 'object' &&
+    shape !== null &&
+    Boolean((shape as Svgable).toSVGPaths) &&
+    Boolean((shape as Svgable).toSVGViewBox)
+  );
 };
 
 const isMeshable = (shape: unknown): shape is Meshable => {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- type casting
-  return Boolean((shape as Meshable).mesh && (shape as Meshable).meshEdges);
+  return (
+    typeof shape === 'object' &&
+    shape !== null &&
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime defensive guard against nullish values
+    Boolean((shape as Meshable).mesh && (shape as Meshable).meshEdges)
+  );
 };
 
 const isInputShape = (shape: unknown): shape is InputShape => {
-  return Boolean((shape as InputShape).shape);
+  return typeof shape === 'object' && shape !== null && Boolean((shape as InputShape).shape);
 };
 
 function createBasicShapeConfig(
   inputShapes: MainResultShapes,
   baseName = 'AnyShape',
 ): Array<InputShape & { name: string }> {
-  let shapes: Array<AnyShape | InputShape> = [];
-
   // We accept a single shape or an array of shapes
-  shapes = Array.isArray(inputShapes) ? inputShapes : [inputShapes];
+  const raw: Array<AnyShape | InputShape> = Array.isArray(inputShapes) ? inputShapes : [inputShapes];
+
+  // Filter out nullish entries (e.g., from main() returning undefined)
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime values can be nullish despite types
+  const shapes = raw.filter((shape): shape is AnyShape | InputShape => shape !== null && shape !== undefined);
 
   return shapes
     .map((inputShape) => {

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
 import { JscadWorker } from '#components/geometry/kernel/jscad/jscad.worker.js';
@@ -405,6 +406,37 @@ describe('JscadWorker', () => {
         await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 30], 0.5);
       });
 
+      it('should handle JSCAD minimal starter pattern with destructured primitives', async () => {
+        // This is the JSCAD minimal starter pattern that uses destructured primitives
+        // Note: In production, kernel.machine.ts merges defaultParams with passed parameters.
+        // In tests, we pass the default parameters explicitly.
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              // JSCAD minimal starter
+              // This code requires the @jscad/modeling API at runtime.
+              import { primitives } from '@jscad/modeling';
+              const { cube } = primitives;
+
+              export const defaultParams = { size: 20 };
+
+              export default function main(p = defaultParams) {
+                return cube({ size: p.size });
+              }
+            `,
+          },
+          'main.ts',
+          { size: 20 }, // Pass default parameters explicitly for tests
+        );
+
+        expect(result.success).toBe(true);
+
+        // Geometry should use default parameter value (20x20x20 cube)
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+      });
+
       it('should compute geometry for a cylinder', async () => {
         const result = await createGeometry(
           {
@@ -498,6 +530,49 @@ describe('JscadWorker', () => {
         await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
       });
 
+      it('should handle CommonJS with "use strict" and multiple destructured requires', async () => {
+        const result = await createGeometry(
+          {
+            'gear.js': `
+"use strict"
+
+const jscad = require('@jscad/modeling')
+const { cylinder, polygon } = jscad.primitives
+const { rotateZ } = jscad.transforms
+const { extrudeLinear } = jscad.extrusions
+const { union, subtract } = jscad.booleans
+const { vec2 } = jscad.maths
+const { degToRad } = jscad.utils
+
+const getParameterDefinitions = () => [
+  { name: 'numTeeth', caption: 'Number of teeth:', type: 'int', initial: 10, min: 5, max: 20 },
+  { name: 'circularPitch', caption: 'Circular pitch:', type: 'float', initial: 5 },
+  { name: 'thickness', caption: 'Thickness:', type: 'float', initial: 5, min: 0 },
+]
+
+const main = (params) => {
+  // Simplified gear for test - just a cylinder
+  const gear = cylinder({
+    height: params.thickness,
+    radius: params.numTeeth * params.circularPitch / (2 * Math.PI),
+    center: [0, 0, params.thickness / 2],
+    segments: 32
+  })
+  return gear
+}
+
+module.exports = { main, getParameterDefinitions }
+            `,
+          },
+          'gear.js',
+          { numTeeth: 10, circularPitch: 5, thickness: 5 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
       it('should compute geometry with params in CommonJS style', async () => {
         const result = await createGeometry(
           {
@@ -526,6 +601,93 @@ describe('JscadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+      });
+    });
+
+    describe('Submodule imports', () => {
+      it('should support ESM import from @jscad/modeling/primitives', async () => {
+        const result = await createGeometry(
+          {
+            'cube.ts': `
+              import { cuboid } from '@jscad/modeling/primitives';
+
+              export default function main() {
+                return cuboid({ size: [10, 10, 10] });
+              }
+            `,
+          },
+          'cube.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+
+      it('should support CJS require of @jscad/modeling/primitives submodule', async () => {
+        const result = await createGeometry(
+          {
+            'cube.js': `
+              const { cuboid } = require('@jscad/modeling/primitives');
+
+              function main() {
+                return cuboid({ size: [10, 10, 10] });
+              }
+
+              module.exports = { main };
+            `,
+          },
+          'cube.js',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+
+      it('should support mixed root and submodule imports', async () => {
+        const result = await createGeometry(
+          {
+            'mixed.ts': `
+              import { primitives } from '@jscad/modeling';
+              import { union } from '@jscad/modeling/booleans';
+
+              export default function main() {
+                const cube1 = primitives.cube({ size: 10 });
+                const cube2 = primitives.cube({ size: 8 });
+                return union(cube1, cube2);
+              }
+            `,
+          },
+          'mixed.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should support multiple submodule imports', async () => {
+        const result = await createGeometry(
+          {
+            'multi-sub.ts': `
+              import { cuboid } from '@jscad/modeling/primitives';
+              import { translate } from '@jscad/modeling/transforms';
+
+              export default function main() {
+                const cube1 = cuboid({ size: [10, 10, 10] });
+                const cube2 = translate([20, 0, 0], cuboid({ size: [10, 10, 10] }));
+                return [cube1, cube2];
+              }
+            `,
+          },
+          'multi-sub.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
       });
     });
 

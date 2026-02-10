@@ -1,10 +1,8 @@
 import * as replicad from 'replicad';
-import ErrorStackParser from 'error-stack-parser';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type {
   CreateGeometryResult,
-  KernelStackFrame,
   ExportGeometryResult,
   GetParametersResult,
   KernelIssue,
@@ -30,12 +28,13 @@ import {
   opencascadeWasmUrl,
   opencascadeWithExceptionsWasmUrl,
 } from '#components/geometry/kernel/replicad/init-open-cascade.js';
-import { runInCjsContext, buildEsModule, registerKernelModules } from '#components/geometry/kernel/replicad/vm.js';
 import { renderOutput } from '#components/geometry/kernel/replicad/utils/render-output.js';
 import { convertReplicadGeometriesToGltf } from '#components/geometry/kernel/replicad/utils/replicad-to-gltf.js';
 import { jsonSchemaFromJson } from '#utils/schema.utils.js';
 import { asBuffer } from '#utils/file.utils.js';
 import type { InputShape, MainResultShapes } from '#components/geometry/kernel/replicad/utils/render-output.js';
+import type { RuntimeModuleExports } from '#components/geometry/kernel/utils/javascript-worker.js';
+import { JavaScriptWorker } from '#components/geometry/kernel/utils/javascript-worker.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import type { GeometryReplicad } from '#components/geometry/kernel/replicad/replicad.types.js';
 // Font file for Replicad textBlueprints() rendering (Vite ?url import)
@@ -69,7 +68,7 @@ type ReplicadOptions = {
   };
 };
 
-export class ReplicadWorker extends KernelWorker<ReplicadOptions> {
+export class ReplicadWorker extends JavaScriptWorker<ReplicadOptions> {
   protected static override readonly supportedExportFormats: ExportFormat[] = [
     'stl',
     'stl-binary',
@@ -98,43 +97,29 @@ export class ReplicadWorker extends KernelWorker<ReplicadOptions> {
 
   public constructor() {
     super();
-    registerKernelModules();
   }
 
-  public async extractDefaultNameFromCode(code: string): Promise<ExtractNameResult> {
-    if (/^\s*export\s+/m.test(code)) {
-      const module = await buildEsModule(code);
-      return createKernelSuccess(module.defaultName ?? undefined);
-    }
-
-    const editedText = `
-${code}
-try {
-  return defaultName;
-} catch (e) {
-  return;
-}
-  `;
-
-    try {
-      const result = await runInCjsContext(editedText, {});
-      return createKernelSuccess((result ?? {}) as string | undefined);
-    } catch {
-      // System error - no location needed
-      return createKernelError([
-        {
-          message: 'Failed to extract default name from code',
-          type: 'runtime',
-          severity: 'error',
-        },
-      ]);
-    }
+  /**
+   * Extract default name from a CAD module.
+   */
+  public async extractDefaultNameFromCode(module: RuntimeModuleExports): Promise<ExtractNameResult> {
+    return createKernelSuccess(this.extractDefaultName(module));
   }
 
-  protected override async initialize(
-    { options }: InitializeInput<ReplicadOptions>,
-    { logger }: KernelRuntime,
-  ): Promise<void> {
+  /**
+   * Register replicad as a runtime module.
+   * This is called during initialization after WASM is loaded.
+   */
+  protected override async registerKernelModules(): Promise<void> {
+    // Register replicad with its loaded exports
+    this.registerRuntimeModule('replicad', '0.19.1', replicad as unknown as Record<string, unknown>, {
+      globalName: 'replicad',
+    });
+  }
+
+  protected override async initialize(input: InitializeInput<ReplicadOptions>, runtime: KernelRuntime): Promise<void> {
+    const { options } = input;
+    const { logger } = runtime;
     const { withExceptions } = options;
     const startTime = performance.now();
     const oc = await this.initializeOpenCascadeInstance(withExceptions, logger);
@@ -158,6 +143,9 @@ try {
         data: error,
       });
     }
+
+    // Call super to register built-in modules
+    await super.initialize(input, runtime);
   }
 
   protected override async canHandle(
@@ -206,34 +194,28 @@ try {
 
   protected override async getParameters(
     { filePath, basePath }: GetParametersInput,
-    { filesystem, logger }: KernelRuntime,
+    runtime: KernelRuntime,
   ): Promise<GetParametersResult> {
+    const { logger } = runtime;
     const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
+
     try {
-      const code = await filesystem.readFile(filePath, 'utf8');
-      let defaultParameters: Record<string, unknown> = {};
+      // Bundle the entry file
+      const bundleResult = await this.bundle(filePath, runtime, basePath);
 
-      if (/^\s*export\s+/m.test(code)) {
-        const module = await buildEsModule(code);
-        defaultParameters = module.defaultParams ?? {};
-      } else {
-        const editedText = `
-${code}
-try {
-  return defaultParams;
-} catch (e) {
-  return undefined;
-}
-      `;
-
-        try {
-          const result = await runInCjsContext(editedText, {});
-          defaultParameters = (result ?? {}) as Record<string, unknown>;
-        } catch {
-          defaultParameters = {};
-        }
+      if (!bundleResult.success) {
+        return createKernelError(bundleResult.issues);
       }
 
+      // Execute the bundled code
+      const executeResult = await this.execute(bundleResult.code);
+
+      if (!executeResult.success) {
+        return createKernelError(executeResult.issues);
+      }
+
+      // Extract default parameters from the module
+      const defaultParameters = this.extractDefaultParams(executeResult.value);
       const jsonSchema = await jsonSchemaFromJson(defaultParameters);
 
       return createKernelSuccess({
@@ -248,26 +230,49 @@ try {
 
   protected override async createGeometry(
     { filePath, basePath, parameters }: CreateGeometryInput,
-    { filesystem, logger }: KernelRuntime,
+    runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
+    const { logger } = runtime;
     const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
     const startTime = performance.now();
     logger.log('Computing geometry from code');
 
     try {
-      // Read code from file
-      const code = await filesystem.readFile(filePath, 'utf8');
+      // Bundle the entry file
+      const bundleStartTime = performance.now();
+      const bundleResult = await this.bundle(filePath, runtime, basePath);
+      const bundleEndTime = performance.now();
+      logger.log(`Bundling took ${bundleEndTime - bundleStartTime}ms`);
+
+      if (!bundleResult.success) {
+        return createKernelError(bundleResult.issues);
+      }
+
+      // Execute the bundled code
+      const executeResult = await this.execute(bundleResult.code);
+
+      if (!executeResult.success) {
+        return createKernelError(executeResult.issues);
+      }
+
+      const module = executeResult.value;
 
       let shapes: MainResultShapes;
       let defaultName: string | undefined;
 
       try {
         const runCodeStartTime = performance.now();
-        shapes = ((await this.runCode(code, parameters, logger)) ?? []) as MainResultShapes;
+        const mainResult = await this.runMain<MainResultShapes>(module, parameters);
+
+        if (!mainResult.success) {
+          return createKernelError(mainResult.issues);
+        }
+
+        shapes = mainResult.value;
         const runCodeEndTime = performance.now();
         logger.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`);
 
-        const defaultNameResult = await this.extractDefaultNameFromCode(code);
+        const defaultNameResult = await this.extractDefaultNameFromCode(module);
         defaultName = isKernelError(defaultNameResult) ? undefined : defaultNameResult.data;
       } catch (error) {
         const endTime = performance.now();
@@ -401,60 +406,6 @@ try {
     }
   }
 
-  private runInContextAsOc(code: string, context: Record<string, unknown> = {}): unknown {
-    const editedText = `
-${code}
-let dp = {}
-try {
-  dp = defaultParams;
-} catch (e) {}
-return main(replicad, __inputParams || dp)
-  `;
-
-    return runInCjsContext(editedText, context);
-  }
-
-  private async runAsFunction(code: string, parameters: Record<string, unknown>): Promise<unknown> {
-    const contextCode = `
-    ${code}
-    return main(replicad, __inputParams || {});
-  `;
-
-    return this.runInContextAsOc(contextCode, { __inputParams: parameters });
-  }
-
-  private async runAsModule(code: string, parameters: Record<string, unknown>, logger: KernelLogger): Promise<unknown> {
-    const startTime = performance.now();
-    const module = await buildEsModule(code);
-    const buildTime = performance.now();
-    logger.log(`Module building took ${buildTime - startTime}ms`);
-
-    const execStartTime = performance.now();
-    const result = module.default ? module.default(parameters) : module.main?.(replicad, parameters);
-    const execEndTime = performance.now();
-    logger.log(`Module execution took ${execEndTime - execStartTime}ms`);
-
-    return result;
-  }
-
-  private async runCode(code: string, parameters: Record<string, unknown>, logger: KernelLogger): Promise<unknown> {
-    logger.log('Starting runCode evaluation');
-    const startTime = performance.now();
-
-    let result;
-    if (/^\s*export\s+/m.test(code)) {
-      logger.log('Starting runAsModule');
-      result = await this.runAsModule(code, parameters, logger);
-    } else {
-      logger.log('Starting runAsFunction');
-      result = await this.runAsFunction(code, parameters);
-    }
-
-    const endTime = performance.now();
-    logger.log(`Total runCode execution took ${endTime - startTime}ms`);
-    return result;
-  }
-
   private async initializeOpenCascadeInstance(
     withExceptions: boolean,
     logger: KernelLogger,
@@ -527,68 +478,26 @@ return main(replicad, __inputParams || dp)
 
   private async formatKernelIssue(error: unknown, logger: KernelLogger, fileName?: string): Promise<KernelIssue> {
     logger.debug('Formatting kernel error', { data: error });
-    let message = 'Unknown error occurred';
-    let stack: string | undefined;
-    let kernelStackFrames: KernelStackFrame[] = [];
-    let startLineNumber = 0;
-    let startColumn = 0;
-    let type: 'compilation' | 'runtime' | 'kernel' | 'unknown' = 'unknown';
 
+    // OpenCascade throws numeric error codes -- handle them specially
     if (typeof error === 'number') {
+      let message = `Kernel error ${error}`;
       try {
         const ocInstance = await this.oc;
         if (ocInstance) {
           const exceptionResult = this.formatException(ocInstance as OpenCascadeInstanceWithExceptions, error, logger);
           message = exceptionResult.message;
-          type = 'kernel';
-        } else {
-          message = `Kernel error ${error}`;
-          type = 'kernel';
         }
       } catch (ocError) {
         logger.warn('Failed to format OpenCascade exception', { data: ocError });
-        message = `Kernel error ${error}`;
-        type = 'kernel';
       }
-    } else if (error instanceof Error) {
-      message = error.message;
-      stack = error.stack;
-      type = 'runtime';
 
-      try {
-        const stackFrames = ErrorStackParser.parse(error);
-
-        kernelStackFrames = stackFrames.map((frame) => ({
-          fileName: frame.fileName,
-          functionName: frame.functionName,
-          lineNumber: frame.lineNumber,
-          columnNumber: frame.columnNumber,
-          source: frame.source,
-        }));
-
-        const userFrame = stackFrames.find((frame) => frame.functionName === 'Module.main') ?? stackFrames[0];
-
-        startLineNumber = userFrame?.lineNumber ?? 0;
-        startColumn = userFrame?.columnNumber ?? 0;
-      } catch (parseError) {
-        logger.warn('Failed to parse error stack', { data: parseError });
-      }
-    } else if (typeof error === 'string') {
-      message = error;
-      type = 'runtime';
+      return { message, type: 'kernel', severity: 'error' };
     }
 
-    // Only include location if we have a fileName and meaningful position data
-    const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
-
-    return {
-      message,
-      location: hasLocation ? { fileName, startLineNumber, startColumn } : undefined,
-      stack,
-      stackFrames: kernelStackFrames.length > 0 ? kernelStackFrames : undefined,
-      type,
-      severity: 'error' as const,
-    };
+    // For Error instances and strings, delegate to the base class method
+    const result = this.createKernelIssueFromError(error, 'Unknown error occurred', fileName);
+    return result.issues[0]!;
   }
 
   private buildBlob(

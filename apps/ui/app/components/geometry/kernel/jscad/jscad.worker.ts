@@ -1,13 +1,10 @@
-import ErrorStackParser from 'error-stack-parser';
+import * as jscadModeling from '@jscad/modeling';
 import type {
   CreateGeometryResult,
   ExportFormat,
   ExportGeometryResult,
   GetParametersResult,
   GeometryResponse,
-  KernelIssue,
-  KernelErrorResult,
-  KernelStackFrame,
   KernelRuntime,
   KernelLogger,
   InitializeInput,
@@ -19,8 +16,8 @@ import type {
 } from '@taucad/types';
 import { exposeWorker } from '#components/geometry/kernel/utils/comlink-worker.utils.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
+import { JavaScriptWorker } from '#components/geometry/kernel/utils/javascript-worker.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
-import { buildEsModule, runInCjsContext, registerKernelModules } from '#components/geometry/kernel/replicad/vm.js';
 import { jscadToGltf } from '#components/geometry/kernel/jscad/jscad-to-gltf.js';
 import { jsonSchemaFromJson } from '#utils/schema.utils.js';
 import { asBuffer } from '#utils/file.utils.js';
@@ -60,86 +57,6 @@ function isModuleWithParameters(module: unknown): module is JscadModuleExports {
 }
 
 /**
- * Type guard to check if a module has entry point exports
- * (main function or default export)
- */
-function isModuleWithEntryPoint(module: unknown): module is {
-  main?: (parameters: unknown) => unknown;
-  default?: (parameters: unknown) => unknown;
-} {
-  if (!isRecordObject(module)) {
-    return false;
-  }
-
-  return 'main' in module || 'default' in module;
-}
-
-/**
- * Helper function to create standardized kernel issues with stack trace information
- *
- * Extracts detailed error information from various error types:
- * - Error objects: Parses stack traces to extract file, line, and column information
- * - Strings: Treats as error messages
- * - Unknown types: Provides generic error message
- *
- * Always attempts to capture stack traces when available for better debugging.
- *
- * @param error - The error to format (Error, string, or unknown)
- * @param fallbackMessage - Message to use if error cannot be parsed
- * @param fileName - Optional filename for location context
- * @returns KernelErrorResult with formatted error information
- */
-function createJscadKernelIssue(error: unknown, fallbackMessage: string, fileName?: string): KernelErrorResult {
-  let message = fallbackMessage;
-  let stack: string | undefined;
-  let kernelStackFrames: KernelStackFrame[] = [];
-  let startLineNumber = 0;
-  let startColumn = 0;
-  const type: 'compilation' | 'runtime' | 'kernel' | 'unknown' = 'runtime';
-
-  if (error instanceof Error) {
-    message = error.message;
-    stack = error.stack;
-
-    try {
-      const stackFrames = ErrorStackParser.parse(error);
-
-      kernelStackFrames = stackFrames.map((frame) => ({
-        fileName: frame.fileName,
-        functionName: frame.functionName,
-        lineNumber: frame.lineNumber,
-        columnNumber: frame.columnNumber,
-        source: frame.source,
-      }));
-
-      // Find the most relevant frame (prefer 'Module.main' or fall back to first frame)
-      const userFrame = stackFrames.find((frame) => frame.functionName === 'Module.main') ?? stackFrames[0];
-
-      startLineNumber = userFrame?.lineNumber ?? 0;
-      startColumn = userFrame?.columnNumber ?? 0;
-    } catch {
-      // If stack parsing fails, use defaults but keep the stack string
-    }
-  } else if (typeof error === 'string') {
-    message = error;
-  }
-
-  // Only include location if we have a fileName and meaningful position data
-  const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
-
-  const kernelIssue: KernelIssue = {
-    message,
-    location: hasLocation ? { fileName, startLineNumber, startColumn } : undefined,
-    stack,
-    stackFrames: kernelStackFrames.length > 0 ? kernelStackFrames : undefined,
-    type,
-    severity: 'error',
-  };
-
-  return createKernelError([kernelIssue]);
-}
-
-/**
  * JSCAD worker for executing @jscad/modeling scripts
  *
  * Features:
@@ -148,7 +65,7 @@ function createJscadKernelIssue(error: unknown, fallbackMessage: string, fileNam
  * - Converts JSCAD geometries to GLTF for rendering
  * - Supports parameter extraction from getParameterDefinitions()
  */
-export class JscadWorker extends KernelWorker {
+export class JscadWorker extends JavaScriptWorker {
   protected static override readonly supportedExportFormats: ExportFormat[] = ['glb', 'gltf'];
   protected override readonly name: string = 'JscadWorker';
 
@@ -161,11 +78,43 @@ export class JscadWorker extends KernelWorker {
 
   public constructor() {
     super();
-    registerKernelModules();
   }
 
-  protected override async initialize(_input: InitializeInput, { logger }: KernelRuntime): Promise<void> {
-    logger.debug('Initialized JSCAD worker with @jscad/modeling');
+  /**
+   * Register @jscad/modeling as a runtime module.
+   */
+  protected override async registerKernelModules(): Promise<void> {
+    this.registerRuntimeModule('@jscad/modeling', '2.12.6', jscadModeling, {
+      globalName: 'jscadModeling',
+      submodules: [
+        'booleans',
+        'colors',
+        'curves',
+        'expansions',
+        'extrusions',
+        'geometries',
+        'hulls',
+        'maths',
+        'measurements',
+        'modifiers',
+        'primitives',
+        'text',
+        'transforms',
+        'utils',
+      ],
+    });
+  }
+
+  /**
+   * Include JSCAD-specific `getParameterDefinitions` in auto-export names.
+   */
+  protected override getAutoExportNames(): string[] {
+    return [...super.getAutoExportNames(), 'getParameterDefinitions'];
+  }
+
+  protected override async initialize(input: InitializeInput, runtime: KernelRuntime): Promise<void> {
+    await super.initialize(input, runtime);
+    runtime.logger.debug('Initialized JSCAD worker with @jscad/modeling');
   }
 
   protected override async cleanup(): Promise<void> {
@@ -235,52 +184,51 @@ export class JscadWorker extends KernelWorker {
    */
   protected override async getParameters(
     { filePath, basePath }: GetParametersInput,
-    { filesystem }: KernelRuntime,
+    runtime: KernelRuntime,
   ): Promise<GetParametersResult> {
     const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
+
     try {
-      const code = await filesystem.readFile(filePath, 'utf8');
+      // Bundle the entry file
+      const bundleResult = await this.bundle(filePath, runtime, basePath);
+
+      if (!bundleResult.success) {
+        return createKernelError(bundleResult.issues);
+      }
+
+      // Execute the bundled code
+      const executeResult = await this.execute(bundleResult.code);
+
+      if (!executeResult.success) {
+        return createKernelError(executeResult.issues);
+      }
+
+      const module = executeResult.value;
       let defaultParameters: Record<string, unknown> = {};
       let jsonSchema;
 
-      if (/^\s*export\s+/m.test(code)) {
-        // ES Module format
-        const module = await buildEsModule(code);
-
-        // Check for getParameterDefinitions function (ES module export)
-        if (isModuleWithParameters(module)) {
-          if (typeof module.getParameterDefinitions === 'function') {
-            const definitions = module.getParameterDefinitions();
-            defaultParameters = convertParameterDefinitionsToDefaults(definitions);
-            jsonSchema = convertParameterDefinitionsToJsonSchema(definitions);
-          } else if (module.defaultParams && isRecordObject(module.defaultParams)) {
-            defaultParameters = module.defaultParams;
-            jsonSchema = await jsonSchemaFromJson(defaultParameters);
-          } else {
-            jsonSchema = await jsonSchemaFromJson(defaultParameters);
-          }
+      // Check for getParameterDefinitions function (ES module export)
+      if (isModuleWithParameters(module)) {
+        if (typeof module.getParameterDefinitions === 'function') {
+          const definitions = module.getParameterDefinitions();
+          defaultParameters = convertParameterDefinitionsToDefaults(definitions);
+          jsonSchema = convertParameterDefinitionsToJsonSchema(definitions);
+        } else if (module.defaultParams && isRecordObject(module.defaultParams)) {
+          defaultParameters = module.defaultParams;
+          jsonSchema = await jsonSchemaFromJson(defaultParameters);
         } else {
+          // Also check for the standard defaultParams export
+          const baseParameters = this.extractDefaultParams(module);
+          if (Object.keys(baseParameters).length > 0) {
+            defaultParameters = baseParameters;
+          }
+
           jsonSchema = await jsonSchemaFromJson(defaultParameters);
         }
       } else {
-        // CommonJS format - execute code to get module.exports
-        const cjsResult = runInCjsContext<Record<string, unknown>, Record<string, unknown>>(code, {});
-
-        // Check for getParameterDefinitions function
-        if (isModuleWithParameters(cjsResult)) {
-          if (typeof cjsResult.getParameterDefinitions === 'function') {
-            const definitions = cjsResult.getParameterDefinitions();
-            defaultParameters = convertParameterDefinitionsToDefaults(definitions);
-            jsonSchema = convertParameterDefinitionsToJsonSchema(definitions);
-          } else if (cjsResult.defaultParams && isRecordObject(cjsResult.defaultParams)) {
-            defaultParameters = cjsResult.defaultParams;
-            jsonSchema = await jsonSchemaFromJson(defaultParameters);
-          } else {
-            jsonSchema = await jsonSchemaFromJson(defaultParameters);
-          }
-        } else {
-          jsonSchema = await jsonSchemaFromJson(defaultParameters);
-        }
+        // Fall back to extracting defaultParams from the module
+        defaultParameters = this.extractDefaultParams(module);
+        jsonSchema = await jsonSchemaFromJson(defaultParameters);
       }
 
       return createKernelSuccess({
@@ -288,7 +236,7 @@ export class JscadWorker extends KernelWorker {
         jsonSchema,
       });
     } catch (error) {
-      return createJscadKernelIssue(error, 'Failed to extract parameters', relativeFilePath);
+      return this.createKernelIssueFromError(error, 'Failed to extract parameters', relativeFilePath);
     }
   }
 
@@ -330,28 +278,52 @@ export class JscadWorker extends KernelWorker {
    */
   protected override async createGeometry(
     { filePath, basePath, parameters }: CreateGeometryInput,
-    { filesystem, logger }: KernelRuntime,
+    runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
+    const { logger } = runtime;
     const geometryId = 'default';
     const relativeFilePath = KernelWorker.resolveToRelative(filePath, basePath);
     const startTime = performance.now();
     logger.log('Computing JSCAD geometry from code');
 
     try {
-      const code = await filesystem.readFile(filePath, 'utf8');
+      // Bundle the entry file
+      const bundleStartTime = performance.now();
+      const bundleResult = await this.bundle(filePath, runtime, basePath);
+      const bundleEndTime = performance.now();
+      logger.log(`Bundling took ${bundleEndTime - bundleStartTime}ms`);
+
+      if (!bundleResult.success) {
+        return createKernelError(bundleResult.issues);
+      }
+
+      // Execute the bundled code
+      const executeResult = await this.execute(bundleResult.code);
+
+      if (!executeResult.success) {
+        return createKernelError(executeResult.issues);
+      }
+
+      const module = executeResult.value;
 
       // Execute the user code with parameters
       let shapes: unknown;
 
       try {
         const runCodeStartTime = performance.now();
-        shapes = await this.runCode(code, parameters);
+        const mainResult = await this.runMain<unknown>(module, parameters);
+
+        if (!mainResult.success) {
+          return createKernelError(mainResult.issues);
+        }
+
+        shapes = mainResult.value;
         const runCodeEndTime = performance.now();
         logger.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`);
       } catch (error) {
         const endTime = performance.now();
         logger.error(`Error occurred after ${endTime - startTime}ms`, { data: error });
-        return createJscadKernelIssue(error, 'Failed to execute JSCAD code', relativeFilePath);
+        return this.createKernelIssueFromError(error, 'Failed to execute JSCAD code', relativeFilePath);
       }
 
       // Store shapes in memory for export with LRU cleanup
@@ -388,7 +360,7 @@ export class JscadWorker extends KernelWorker {
 
       return createKernelSuccess(geometries);
     } catch (error) {
-      return createJscadKernelIssue(error, 'Failed to compute JSCAD geometry', relativeFilePath);
+      return this.createKernelIssueFromError(error, 'Failed to compute JSCAD geometry', relativeFilePath);
     }
   }
 
@@ -445,72 +417,8 @@ export class JscadWorker extends KernelWorker {
         },
       ]);
     } catch (error) {
-      return createJscadKernelIssue(error, 'Failed to export JSCAD geometry');
+      return this.createKernelIssueFromError(error, 'Failed to export JSCAD geometry');
     }
-  }
-
-  /**
-   * Execute JSCAD code in a sandboxed VM with @jscad/modeling available
-   *
-   * Handles both ES Module and CommonJS code formats and extracts the geometry
-   * by looking for either a `main` function or `default` export/value.
-   *
-   * Execution flow:
-   * 1. Detects code format (ES Module vs CommonJS)
-   * 2. Executes code in isolated VM context with @jscad/modeling injected
-   * 3. Looks for entry point: main() function or default export
-   * 4. Calls entry point with user parameters
-   * 5. Returns the resulting JSCAD geometry object(s)
-   *
-   * For ES modules, priority is: main() > default() > default value
-   * For CommonJS, priority is: main() function > entire module.exports
-   *
-   * @param code - JSCAD source code (string)
-   * @param parameters - Object containing user parameter values to pass to main()
-   * @returns Promise resolving to JSCAD geometry object(s)
-   *          Can be single geom3, geom2, or array of geometries
-   *          May also be undefined if code has no explicit return
-   *
-   * @throws Throws error if code execution fails (syntax errors, runtime errors)
-   *         Errors are caught by callers and converted to kernel issues
-   *
-   * @internal This is a private method used internally by createGeometry().
-   */
-  private async runCode(code: string, parameters: Record<string, unknown>): Promise<unknown> {
-    if (/^\s*export\s+/m.test(code)) {
-      // ES module format
-      const module = await buildEsModule(code);
-
-      if (isModuleWithEntryPoint(module)) {
-        if (typeof module.main === 'function') {
-          return module.main(parameters);
-        }
-
-        if (typeof module.default === 'function') {
-          return module.default(parameters);
-        }
-
-        // Module doesn't match expected shape, return as-is
-        return module;
-      }
-    }
-
-    // CommonJS format - execute code to get module.exports
-    const cjsResult = runInCjsContext<Record<string, unknown>, Record<string, unknown>>(code, {});
-
-    // Check for main function in module.exports
-    if (isModuleWithEntryPoint(cjsResult)) {
-      if (typeof cjsResult.main === 'function') {
-        return cjsResult.main(parameters);
-      }
-
-      if (typeof cjsResult.default === 'function') {
-        return cjsResult.default(parameters);
-      }
-    }
-
-    // If no main function, return the module.exports itself (might be the geometry)
-    return cjsResult;
   }
 
   /**

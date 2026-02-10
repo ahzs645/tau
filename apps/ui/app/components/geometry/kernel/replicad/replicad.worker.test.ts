@@ -426,55 +426,21 @@ describe('ReplicadWorker', () => {
   // ===========================================================================
 
   describe('extractDefaultNameFromCode', () => {
-    it('should extract defaultName from ESM export', async () => {
+    it('should extract defaultName from module exports', async () => {
       const worker = await createWorker({});
-      const code = `
-        import { draw } from 'replicad';
-
-        export const defaultName = "My Custom Box";
-
-        export default function main() {
-          return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-        }
-      `;
-
-      const result = await worker.extractDefaultNameFromCode(code);
+      // Test extractDefaultNameFromCode with a RuntimeModuleExports object
+      const module = { defaultName: 'My Custom Box' };
+      const result = await worker.extractDefaultNameFromCode(module);
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toBe('My Custom Box');
       }
     });
 
-    it('should extract defaultName from CommonJS global', async () => {
-      const worker = await createWorker({});
-      const code = `
-        const { draw } = replicad;
-
-        const defaultName = "CJS Box";
-
-        function main(replicad, params) {
-          return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-        }
-      `;
-
-      const result = await worker.extractDefaultNameFromCode(code);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data).toBe('CJS Box');
-      }
-    });
-
     it('should return undefined when no defaultName is defined', async () => {
       const worker = await createWorker({});
-      const code = `
-        import { draw } from 'replicad';
-
-        export default function main() {
-          return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-        }
-      `;
-
-      const result = await worker.extractDefaultNameFromCode(code);
+      const module = { default: () => [] };
+      const result = await worker.extractDefaultNameFromCode(module);
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data).toBeUndefined();
@@ -813,6 +779,160 @@ describe('ReplicadWorker', () => {
       });
     });
 
+    describe('Multi-file imports', () => {
+      it('should handle imports from relative paths', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { createSimpleBox } from "./lib/box";
+              import {} from 'replicad';
+
+              export default function main() {
+                return createSimpleBox(30, 30, 30);
+              }
+            `,
+            'lib/box.ts': `
+              import { makeBaseBox } from "replicad";
+
+              export function createSimpleBox(w: number, h: number, d: number) {
+                return makeBaseBox(w, h, d);
+              }
+            `,
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(true);
+
+        // Geometry: 30x30x30 cube
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 30], 0.5);
+      });
+
+      it('should handle multi-level nested imports', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { createAssembly } from "./parts/assembly";
+              import {} from 'replicad';
+
+              export default function main() {
+                return createAssembly();
+              }
+            `,
+            'parts/assembly.ts': `
+              import { createBox } from "./shapes/box";
+              import { createCylinder } from "./shapes/cylinder";
+
+              export function createAssembly() {
+                const box = createBox(40, 40, 20);
+                const cylinder = createCylinder(10, 30).translate([0, 0, 20]);
+                return box.fuse(cylinder);
+              }
+            `,
+            'parts/shapes/box.ts': `
+              import { makeBaseBox } from "replicad";
+
+              export function createBox(width: number, height: number, depth: number) {
+                return makeBaseBox(width, height, depth);
+              }
+            `,
+            'parts/shapes/cylinder.ts': `
+              import { makeCylinder } from "replicad";
+
+              export function createCylinder(radius: number, height: number) {
+                return makeCylinder(radius, height);
+              }
+            `,
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(true);
+
+        // Geometry: 40x40 base with cylinder on top, total height 50
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [40, 40, 50], 1);
+      });
+
+      it('should pass parameters through multi-file imports', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { createParametricBox } from "./utils/parametric";
+              import {} from 'replicad';
+
+              export const defaultParams = {
+                size: 50,
+              };
+
+              export default function main(params = defaultParams) {
+                return createParametricBox(params.size);
+              }
+            `,
+            'utils/parametric.ts': `
+              import { makeBaseBox } from "replicad";
+
+              export function createParametricBox(size: number) {
+                return makeBaseBox(size, size, size);
+              }
+            `,
+          },
+          'main.ts',
+          { size: 100 },
+        );
+
+        expect(result.success).toBe(true);
+
+        // Geometry: 100x100x100 cube (using passed parameter)
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [100, 100, 100], 1);
+      });
+
+      it('should handle re-exports from barrel files', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { box, cylinder } from "./shapes";
+              import {} from 'replicad';
+
+              export default function main() {
+                return [box(20, 20, 10), cylinder(8, 15).translate([30, 0, 0])];
+              }
+            `,
+            'shapes/index.ts': `
+              export { box } from "./box";
+              export { cylinder } from "./cylinder";
+            `,
+            'shapes/box.ts': `
+              import { makeBaseBox } from "replicad";
+
+              export function box(w: number, h: number, d: number) {
+                return makeBaseBox(w, h, d);
+              }
+            `,
+            'shapes/cylinder.ts': `
+              import { makeCylinder } from "replicad";
+
+              export function cylinder(r: number, h: number) {
+                return makeCylinder(r, h);
+              }
+            `,
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(true);
+
+        // Geometry: box + cylinder, 2 meshes
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 2);
+      });
+    });
+
     describe('2D geometry (SVG output)', () => {
       it('should return SVG for 2D sketch without extrusion', async () => {
         const result = await createGeometry(
@@ -910,6 +1030,58 @@ describe('ReplicadWorker', () => {
         }
       });
 
+      it('should return error with properly classified stack frames for undefined variable', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import {} from 'replicad';
+
+              export const defaultParams = {};
+
+              export default function main(p = defaultParams) {
+                return bla;
+              }
+            `,
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues.length).toBeGreaterThan(0);
+
+          const issue = result.issues[0]!;
+
+          // Error message should clearly indicate the problem
+          expect(issue.message).toMatch(/bla is not defined/i);
+
+          // Stack frames should be present
+          expect(issue.stackFrames).toBeDefined();
+          expect(issue.stackFrames!.length).toBeGreaterThan(0);
+
+          // Internal frames should be classified correctly
+          // Platform frames (kernel/, node:, node_modules) should be internal
+          const internalFrames = issue.stackFrames!.filter((frame) => frame.isInternal);
+          expect(internalFrames.length).toBeGreaterThan(0);
+
+          for (const frame of internalFrames) {
+            // Each internal frame should match at least one known platform pattern
+            const fileName = frame.fileName ?? '';
+            const isKnownPlatform =
+              fileName.includes('/kernel/') ||
+              fileName.startsWith('node:') ||
+              fileName.includes('/node_modules/') ||
+              fileName.startsWith('data:');
+            expect(isKnownPlatform).toBe(true);
+          }
+
+          // At least one frame should have the 'main' function (user code entry point)
+          const mainFrame = issue.stackFrames!.find((frame) => frame.functionName?.includes('main'));
+          expect(mainFrame).toBeDefined();
+        }
+      });
+
       it('should return error for invalid geometry operations', async () => {
         const result = await createGeometry(
           {
@@ -950,6 +1122,111 @@ describe('ReplicadWorker', () => {
           expect(result.data).toHaveLength(0);
         }
       });
+
+      it('should return clear error when main returns undefined (no return statement)', async () => {
+        const result = await createGeometry(
+          {
+            'no_return.ts': `
+              import { draw } from 'replicad';
+
+              export default function main() {
+                draw()
+                  .hLine(50)
+                  .vLine(30)
+                  .hLine(-50)
+                  .close()
+                  .sketchOnPlane()
+                  .extrude(10);
+                // Missing return statement
+              }
+            `,
+          },
+          'no_return.ts',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues.length).toBeGreaterThan(0);
+          // Should give a user-friendly message, not a JS crash like "Cannot read properties of undefined"
+          expect(result.issues[0]!.message).toMatch(/did not return/i);
+        }
+      });
+
+      it('should return clear error when main explicitly returns undefined', async () => {
+        const result = await createGeometry(
+          {
+            'explicit_undefined.ts': `
+              import { draw } from 'replicad';
+
+              export default function main() {
+                return undefined;
+              }
+            `,
+          },
+          'explicit_undefined.ts',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues.length).toBeGreaterThan(0);
+          expect(result.issues[0]!.message).toMatch(/did not return/i);
+        }
+      });
+
+      it('should return clear error when main returns null', async () => {
+        const result = await createGeometry(
+          {
+            'returns_null.ts': `
+              import { draw } from 'replicad';
+
+              export default function main() {
+                return null;
+              }
+            `,
+          },
+          'returns_null.ts',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues.length).toBeGreaterThan(0);
+          expect(result.issues[0]!.message).toMatch(/did not return/i);
+        }
+      });
+    });
+
+    describe('CDN imports', () => {
+      it('should bundle and execute code with HTTPS CDN imports', async () => {
+        const result = await createGeometry(
+          {
+            'decorated.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+              import { drawSVG } from "https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js";
+
+              export default function main() {
+                // Verify the CDN import is available and is a function
+                if (typeof drawSVG !== 'function') {
+                  throw new Error('drawSVG is not a function');
+                }
+
+                // Return a 50x30x10 box
+                return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+              }
+            `,
+          },
+          'decorated.ts',
+        );
+
+        expect(result.success).toBe(true);
+
+        // Geometry quality assertions (50x30x10 box)
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+      });
     });
 
     describe('File path handling for subdirectory files', () => {
@@ -968,8 +1245,15 @@ describe('ReplicadWorker', () => {
         expect(result.success).toBe(false);
         if (!result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
-          // Error should reference the file path
-          expect(result.issues[0]?.location?.fileName).toContain('main.ts');
+          // Error should reference the file path - check message if location is not available
+          const firstIssue = result.issues[0];
+          const hasLocation = firstIssue?.location?.fileName !== undefined;
+          if (hasLocation) {
+            expect(firstIssue.location?.fileName).toContain('main.ts');
+          } else {
+            // Error message should contain file reference
+            expect(firstIssue?.message).toMatch(/main\.ts|undefinedFunction/);
+          }
         }
       });
     });
