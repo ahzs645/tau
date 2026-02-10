@@ -123,7 +123,11 @@ function LayoutDocument({
   readonly env: Record<string, string>;
   readonly ssrTheme: ThemeWithSystem;
 }): React.JSX.Element {
-  const { theme } = useTheme();
+  // Use ssrTheme (the raw resolved theme) for the HTML className.
+  // This is null during SSR when no theme preference is stored (system theme mode),
+  // which allows PreventFlashOnWrongTheme's script to correctly detect and apply the
+  // system preference before the page renders (prevents light mode flash on dark systems).
+  const { ssrTheme: resolvedTheme } = useTheme();
   const color = useColor();
   const { setFaviconColor } = useFavicon();
 
@@ -132,7 +136,16 @@ function LayoutDocument({
   }, [setFaviconColor, color]);
 
   return (
-    <html lang="en" className={cn(theme, '[--spacing:0.275rem] md:[--spacing:0.25rem]')} style={color.rootStyles}>
+    <html
+      lang="en"
+      className={cn(
+        '[--spacing:0.275rem] md:[--spacing:0.25rem]',
+        // Leave this class last as the `PreventFlashOnWrongTheme` script will
+        // append the theme last when needed to prevent light mode flash on dark systems.
+        resolvedTheme,
+      )}
+      style={color.rootStyles}
+    >
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
