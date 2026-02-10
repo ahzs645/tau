@@ -21,6 +21,8 @@ export type KernelStackFrame = {
   lineNumber?: number;
   columnNumber?: number;
   source?: string;
+  /** True for node_modules, bundler, or runtime frames - helps filter user code from internal code */
+  isInternal?: boolean;
 };
 
 // Location information for errors that can point to a specific code location

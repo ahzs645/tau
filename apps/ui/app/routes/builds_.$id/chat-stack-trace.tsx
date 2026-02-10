@@ -144,6 +144,52 @@ function StackFrame({ frame, index }: { readonly frame: KernelStackFrame; readon
   );
 }
 
+function StackTraceSection({
+  stackFrames,
+  styles,
+}: {
+  readonly stackFrames: KernelStackFrame[];
+  readonly styles: ReturnType<typeof getSeverityStyles>;
+}): React.JSX.Element {
+  const [showInternal, setShowInternal] = useState(false);
+
+  // Split frames into user frames and internal frames
+  const userFrames = stackFrames.filter((frame) => !frame.isInternal);
+  const internalFrames = stackFrames.filter((frame) => frame.isInternal);
+  const hasInternalFrames = internalFrames.length > 0;
+
+  // When collapsed, show only user frames; when expanded, show all in original order
+  const visibleFrames = showInternal ? stackFrames : userFrames;
+
+  return (
+    <div className="space-y-1">
+      <div className="font-medium text-muted-foreground">Stack trace:</div>
+      <div className={cn('space-y-0.5 rounded border bg-background/80 p-2', styles.stackBorder)}>
+        {visibleFrames.map((frame, index) => (
+          <StackFrame
+            key={`${frame.functionName}-${frame.fileName}-${frame.lineNumber}-${frame.columnNumber}`}
+            frame={frame}
+            index={index}
+          />
+        ))}
+        {hasInternalFrames ? (
+          <button
+            type="button"
+            className="mt-1 cursor-pointer font-mono text-[0.625rem] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+            onClick={() => {
+              setShowInternal(!showInternal);
+            }}
+          >
+            {showInternal
+              ? `▾ Hide platform internals (${internalFrames.length} frames)`
+              : `▸ Show platform internals (${internalFrames.length} frames)`}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function getBasename(path: string): string {
   return path.split('/').pop() ?? path;
 }
@@ -307,20 +353,7 @@ function ErrorStackTrace({
       </div>
 
       {/* Stack trace */}
-      {stackFrames && stackFrames.length > 0 ? (
-        <div className="space-y-1">
-          <div className="font-medium text-muted-foreground">Stack trace:</div>
-          <div className={cn('space-y-0.5 rounded border bg-background/80 p-2', styles.stackBorder)}>
-            {stackFrames.map((frame, index) => (
-              <StackFrame
-                key={`${frame.functionName}-${frame.fileName}-${frame.lineNumber}-${frame.columnNumber}`}
-                frame={frame}
-                index={index}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {stackFrames && stackFrames.length > 0 ? <StackTraceSection stackFrames={stackFrames} styles={styles} /> : null}
     </div>
   );
 }
