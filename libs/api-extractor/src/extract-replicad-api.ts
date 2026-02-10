@@ -1,100 +1,23 @@
 #!/usr/bin/env node
-/* eslint-disable @typescript-eslint/naming-convention, no-bitwise, complexity -- This is a utility script for API extraction */
+/* eslint-disable no-bitwise -- Utility script using TS Compiler API with bitwise flag checks */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
+import type { ApiData, ApiEntry } from '#api-extraction.types.js';
 
-type ExtractedApi = {
-  name: string;
-  type: 'function' | 'class' | 'type' | 'interface' | 'constant';
-  category: string;
-  signature: string;
-  signatureWithJSDoc: string;
-  parameters?: Parameter[];
-  returnType?: string;
-  usageCount: number;
-  jsDoc?: string;
-};
+// =============================================================================
+// Configuration
+// =============================================================================
 
-type Parameter = {
-  name: string;
-  type: string;
-  optional: boolean;
-  defaultValue?: string;
-};
+const typeDefinitionsPath = join(import.meta.dirname, '../../../node_modules/replicad/dist/replicad.d.ts');
 
-// Track removed vs kept nodes
-type NodeStats = {
-  kept: Array<{
-    name: string;
-    type: string;
-    nodeType: string;
-    reason: string;
-  }>;
-  removed: Array<{
-    name: string;
-    type: string;
-    nodeType: string;
-    reason: string;
-  }>;
-};
-
-// Documentation generation function
-function generateDocumentation(apis: ExtractedApi[]): string {
-  const categories = groupApisByCategory(apis);
-
-  let markdown = '# Replicad Public API Reference\n\n';
-  markdown += `Total APIs: ${apis.length}\n\n`;
-
-  for (const [category, categoryApis] of Object.entries(categories)) {
-    markdown += `## ${category}\n\n`;
-
-    for (const api of categoryApis) {
-      markdown += `### ${api.name}\n\n`;
-      markdown += `**Type:** ${api.type}\n\n`;
-      markdown += `**Usage Count:** ${api.usageCount}\n\n`;
-      markdown += `**Signature:**\n\`\`\`typescript\n${api.signature}\n\`\`\`\n\n`;
-
-      if (api.parameters && api.parameters.length > 0) {
-        markdown += `**Parameters:**\n`;
-        for (const parameter of api.parameters) {
-          markdown += `- \`${parameter.name}${parameter.optional ? '?' : ''}: ${parameter.type}\`\n`;
-        }
-
-        markdown += '\n';
-      }
-
-      markdown += '---\n\n';
-    }
-  }
-
-  return markdown;
-}
-
-function groupApisByCategory(apis: ExtractedApi[]): Record<string, ExtractedApi[]> {
-  const categories: Record<string, ExtractedApi[]> = {};
-
-  for (const api of apis) {
-    const { category } = api;
-    categories[category] ??= [];
-    categories[category].push(api);
-  }
-
-  // Sort categories and APIs within each category
-  const sortedCategories: Record<string, ExtractedApi[]> = {};
-  for (const category of Object.keys(categories).sort()) {
-    sortedCategories[category] = categories[category]!.sort(
-      (a, b) => b.usageCount - a.usageCount || a.name.localeCompare(b.name),
-    );
-  }
-
-  return sortedCategories;
-}
+// =============================================================================
+// Categorization
+// =============================================================================
 
 function categorizeApi(name: string): string {
-  // Simple automatic categorization based on name patterns
   if (/^draw[A-Z]|^sketch[A-Z]|Blueprint|Drawing|Pen/.test(name)) {
     return 'Drawing & Sketching';
   }
@@ -134,77 +57,9 @@ function categorizeApi(name: string): string {
   return 'Utilities';
 }
 
-function countUsage(name: string, buildExamples: string[]): number {
-  let total = 0;
-  for (const example of buildExamples) {
-    const regex = new RegExp(`\\b${name}\\b`, 'g');
-    const matches = example.match(regex);
-    total += matches ? matches.length : 0;
-  }
-
-  return total;
-}
-
-function getTypeText(typeNode: ts.TypeNode | undefined, sourceFile: ts.SourceFile): string {
-  if (!typeNode) {
-    return 'any';
-  }
-
-  return typeNode.getText(sourceFile);
-}
-
-function getParameterInfo(parameter: ts.ParameterDeclaration, sourceFile: ts.SourceFile): Parameter {
-  return {
-    name: parameter.name.getText(sourceFile),
-    type: getTypeText(parameter.type, sourceFile),
-    optional: Boolean(parameter.questionToken),
-    defaultValue: parameter.initializer?.getText(sourceFile),
-  };
-}
-
-function extractJsDoc(node: ts.Node): string | undefined {
-  const jsDocTags = ts.getJSDocTags(node);
-  if (jsDocTags.length > 0) {
-    return jsDocTags
-      .map((tag) => tag.comment)
-      .filter(Boolean)
-      .join(' ');
-  }
-
-  return undefined;
-}
-
-// Check if a class member should be excluded
-function shouldExcludeMember(
-  member: ts.ClassElement,
-  _sourceFile: ts.SourceFile,
-): { exclude: boolean; reason: string } {
-  const memberName = getMemberName(member);
-
-  // Check for "oc" property
-  if (memberName === 'oc') {
-    return { exclude: true, reason: 'oc property excluded' };
-  }
-
-  // Check for private/protected modifiers using getCombinedModifierFlags
-  // TypeScript modifier flags use bitwise operations for efficient flag checking
-  // Each modifier is a power of 2, so we use bitwise AND (&) to test if a flag is set
-  const modifierFlags = ts.getCombinedModifierFlags(member);
-  if (modifierFlags & ts.ModifierFlags.Private) {
-    return { exclude: true, reason: 'private member' };
-  }
-
-  if (modifierFlags & ts.ModifierFlags.Protected) {
-    return { exclude: true, reason: 'protected member' };
-  }
-
-  // Check for private naming convention (underscore prefix)
-  if (memberName.startsWith('_')) {
-    return { exclude: true, reason: 'private naming convention (underscore)' };
-  }
-
-  return { exclude: false, reason: 'public member' };
-}
+// =============================================================================
+// Class Member Filtering
+// =============================================================================
 
 function getMemberName(member: ts.ClassElement): string {
   if ('name' in member && member.name) {
@@ -218,115 +73,80 @@ function getMemberName(member: ts.ClassElement): string {
   return 'unknown';
 }
 
-function getNodeTypeName(node: ts.Node): string {
-  return ts.SyntaxKind[node.kind];
+function shouldExcludeMember(member: ts.ClassElement): boolean {
+  const memberName = getMemberName(member);
+
+  // Exclude "oc" property (OpenCascade internal)
+  if (memberName === 'oc') {
+    return true;
+  }
+
+  // Exclude private/protected members
+  const modifierFlags = ts.getCombinedModifierFlags(member);
+  if (modifierFlags & ts.ModifierFlags.Private || modifierFlags & ts.ModifierFlags.Protected) {
+    return true;
+  }
+
+  // Exclude underscore-prefixed (private convention)
+  if (memberName.startsWith('_')) {
+    return true;
+  }
+
+  return false;
 }
 
-// Create TypeScript printer for clean output without JSDoc
+// =============================================================================
+// API Extraction
+// =============================================================================
+
 const printer = ts.createPrinter({
   omitTrailingSemicolon: false,
   newLine: ts.NewLineKind.LineFeed,
   removeComments: true,
 });
 
-// Create TypeScript printer that keeps JSDoc comments
-const printerWithJSDoc = ts.createPrinter({
-  omitTrailingSemicolon: false,
-  newLine: ts.NewLineKind.LineFeed,
-  removeComments: false,
-});
+function getTypeText(typeNode: ts.TypeNode | undefined, sourceFile: ts.SourceFile): string {
+  if (!typeNode) {
+    return 'any';
+  }
 
-function getCleanSignature(node: ts.Node, sourceFile: ts.SourceFile): string {
-  // Use TypeScript's printer to get clean output
-  return printer.printNode(ts.EmitHint.Unspecified, node, sourceFile).trim();
+  return typeNode.getText(sourceFile);
 }
 
-function getSignatureWithJSDoc(node: ts.Node, sourceFile: ts.SourceFile): string {
-  // Use TypeScript's printer to get output with JSDoc comments
-  return printerWithJSDoc.printNode(ts.EmitHint.Unspecified, node, sourceFile).trim();
-}
+/**
+ * Extract structured API entries from the replicad type definitions file.
+ * Exported for testing.
+ */
+export function extractApi(): ApiEntry[] {
+  const sourceCode = readFileSync(typeDefinitionsPath, 'utf8');
+  const sourceFile = ts.createSourceFile(typeDefinitionsPath, sourceCode, ts.ScriptTarget.Latest, true);
+  const entries: ApiEntry[] = [];
 
-function extractAPIFromTypeScript(
-  filePath: string,
-  buildExamples: string[],
-): { apis: ExtractedApi[]; stats: NodeStats } {
-  const apis: ExtractedApi[] = [];
-  const stats: NodeStats = { kept: [], removed: [] };
-
-  // Read and parse the TypeScript file
-  const sourceCode = readFileSync(filePath, 'utf8');
-  const sourceFile = ts.createSourceFile(filePath, sourceCode, ts.ScriptTarget.Latest, true);
+  function isExported(node: ts.Node): boolean {
+    const flags = ts.getCombinedModifierFlags(node as ts.Declaration);
+    return Boolean(flags & ts.ModifierFlags.Export || flags & ts.ModifierFlags.Ambient);
+  }
 
   function visit(node: ts.Node): void {
-    // Extract ALL exported functions
-    // Use bitwise AND (&) to check if Export or Ambient modifier flags are present
-    if (
-      ts.isFunctionDeclaration(node) &&
-      node.name &&
-      (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export ||
-        ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient)
-    ) {
-      const name = node.name.text;
-      const usageCount = countUsage(name, buildExamples);
-
-      const parameters = node.parameters.map((parameter) => getParameterInfo(parameter, sourceFile));
-      const returnType = getTypeText(node.type, sourceFile);
-
-      apis.push({
-        name,
-        type: 'function',
-        category: categorizeApi(name),
-        signature: getCleanSignature(node, sourceFile),
-        signatureWithJSDoc: getSignatureWithJSDoc(node, sourceFile),
-        parameters,
-        returnType,
-        usageCount,
-        jsDoc: extractJsDoc(node),
-      });
-
-      stats.kept.push({
-        name,
-        type: 'function',
-        nodeType: getNodeTypeName(node),
-        reason: 'exported function',
+    // Functions
+    if (ts.isFunctionDeclaration(node) && node.name && isExported(node)) {
+      entries.push({
+        name: node.name.text,
+        kind: 'function',
+        category: categorizeApi(node.name.text),
+        signature: printer.printNode(ts.EmitHint.Unspecified, node, sourceFile).trim(),
+        parameters: node.parameters.map((parameter) => ({
+          name: parameter.name.getText(sourceFile),
+          type: getTypeText(parameter.type, sourceFile),
+          optional: Boolean(parameter.questionToken) || parameter.initializer !== undefined,
+        })),
+        returnType: getTypeText(node.type, sourceFile),
       });
     }
 
-    // Extract ALL exported classes (with filtering for members)
-    else if (
-      ts.isClassDeclaration(node) &&
-      node.name &&
-      (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export ||
-        ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient)
-    ) {
-      const name = node.name.text;
-      const usageCount = countUsage(name, buildExamples);
-
-      // Filter class members
-      const filteredMembers: ts.ClassElement[] = [];
-      for (const member of node.members) {
-        const memberName = getMemberName(member);
-        const { exclude, reason } = shouldExcludeMember(member, sourceFile);
-
-        if (exclude) {
-          stats.removed.push({
-            name: `${name}.${memberName}`,
-            type: 'class member',
-            nodeType: getNodeTypeName(member),
-            reason,
-          });
-        } else {
-          filteredMembers.push(member);
-          stats.kept.push({
-            name: `${name}.${memberName}`,
-            type: 'class member',
-            nodeType: getNodeTypeName(member),
-            reason,
-          });
-        }
-      }
-
-      // Create a new class node with filtered members
+    // Classes (with member filtering)
+    else if (ts.isClassDeclaration(node) && node.name && isExported(node)) {
+      const filteredMembers = node.members.filter((member) => !shouldExcludeMember(member));
       const filteredClass = ts.factory.updateClassDeclaration(
         node,
         node.modifiers,
@@ -336,79 +156,35 @@ function extractAPIFromTypeScript(
         filteredMembers,
       );
 
-      apis.push({
-        name,
-        type: 'class',
-        category: categorizeApi(name),
-        signature: getCleanSignature(filteredClass, sourceFile),
-        signatureWithJSDoc: getSignatureWithJSDoc(filteredClass, sourceFile),
-        usageCount,
-        jsDoc: extractJsDoc(node),
-      });
-
-      stats.kept.push({
-        name,
-        type: 'class',
-        nodeType: getNodeTypeName(node),
-        reason: 'exported class',
+      entries.push({
+        name: node.name.text,
+        kind: 'class',
+        category: categorizeApi(node.name.text),
+        signature: printer.printNode(ts.EmitHint.Unspecified, filteredClass, sourceFile).trim(),
       });
     }
 
-    // Extract ALL exported type aliases
-    else if (
-      ts.isTypeAliasDeclaration(node) &&
-      (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export ||
-        ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient)
-    ) {
-      const name = node.name.text;
-      const usageCount = countUsage(name, buildExamples);
-
-      apis.push({
-        name,
-        type: 'type',
-        category: categorizeApi(name),
-        signature: getCleanSignature(node, sourceFile),
-        signatureWithJSDoc: getSignatureWithJSDoc(node, sourceFile),
-        usageCount,
-        jsDoc: extractJsDoc(node),
-      });
-
-      stats.kept.push({
-        name,
-        type: 'type',
-        nodeType: getNodeTypeName(node),
-        reason: 'exported type alias',
+    // Type aliases
+    else if (ts.isTypeAliasDeclaration(node) && isExported(node)) {
+      entries.push({
+        name: node.name.text,
+        kind: 'type',
+        category: categorizeApi(node.name.text),
+        signature: printer.printNode(ts.EmitHint.Unspecified, node, sourceFile).trim(),
       });
     }
 
-    // Extract ALL exported interfaces
-    else if (
-      ts.isInterfaceDeclaration(node) &&
-      (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export ||
-        ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient)
-    ) {
-      const name = node.name.text;
-      const usageCount = countUsage(name, buildExamples);
-
-      apis.push({
-        name,
-        type: 'interface',
-        category: categorizeApi(name),
-        signature: getCleanSignature(node, sourceFile),
-        signatureWithJSDoc: getSignatureWithJSDoc(node, sourceFile),
-        usageCount,
-        jsDoc: extractJsDoc(node),
-      });
-
-      stats.kept.push({
-        name,
-        type: 'interface',
-        nodeType: getNodeTypeName(node),
-        reason: 'exported interface',
+    // Interfaces
+    else if (ts.isInterfaceDeclaration(node) && isExported(node)) {
+      entries.push({
+        name: node.name.text,
+        kind: 'interface',
+        category: categorizeApi(node.name.text),
+        signature: printer.printNode(ts.EmitHint.Unspecified, node, sourceFile).trim(),
       });
     }
 
-    // Extract ALL exported constants/variables
+    // Constants
     else if (
       ts.isVariableStatement(node) &&
       node.modifiers?.some(
@@ -417,24 +193,11 @@ function extractAPIFromTypeScript(
     ) {
       for (const declaration of node.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name)) {
-          const name = declaration.name.text;
-          const usageCount = countUsage(name, buildExamples);
-
-          apis.push({
-            name,
-            type: 'constant',
-            category: categorizeApi(name),
-            signature: getCleanSignature(node, sourceFile),
-            signatureWithJSDoc: getSignatureWithJSDoc(node, sourceFile),
-            usageCount,
-            jsDoc: extractJsDoc(node),
-          });
-
-          stats.kept.push({
-            name,
-            type: 'constant',
-            nodeType: getNodeTypeName(node),
-            reason: 'exported constant',
+          entries.push({
+            name: declaration.name.text,
+            kind: 'constant',
+            category: categorizeApi(declaration.name.text),
+            signature: printer.printNode(ts.EmitHint.Unspecified, node, sourceFile).trim(),
           });
         }
       }
@@ -443,181 +206,98 @@ function extractAPIFromTypeScript(
     ts.forEachChild(node, visit);
   }
 
-  // Visit all top-level statements
   for (const statement of sourceFile.statements) {
     visit(statement);
   }
 
-  return {
-    apis: apis.sort((a, b) => {
-      // Sort by usage count, then alphabetically
-      if (a.usageCount !== b.usageCount) {
-        return b.usageCount - a.usageCount;
-      }
+  return entries;
+}
 
-      return a.name.localeCompare(b.name);
-    }),
-    stats,
+// =============================================================================
+// Output Generation
+// =============================================================================
+
+/**
+ * Build the bundled type declarations string wrapped in `declare module`.
+ * Exported for testing.
+ */
+export function buildBundledTypes(): string {
+  const originalTypes = readFileSync(typeDefinitionsPath, 'utf8');
+  const indented = originalTypes
+    .split('\n')
+    .map((line) => (line.trim() ? '  ' + line : ''))
+    .join('\n');
+
+  return [
+    '// Bundled type declarations for replicad.',
+    '// Auto-generated by extract-replicad-api.ts - do not edit manually.',
+    '',
+    "declare module 'replicad' {",
+    indented,
+    '}',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Build the structured API data JSON.
+ * Exported for testing.
+ */
+export function buildApiData(): ApiData {
+  const entries = extractApi();
+
+  const breakdown: Record<string, number> = {};
+  for (const entry of entries) {
+    breakdown[entry.kind] = (breakdown[entry.kind] ?? 0) + 1;
+  }
+
+  return {
+    metadata: {
+      extractionDate: new Date().toISOString(),
+      source: 'TypeScript Compiler API (replicad)',
+      totalEntries: entries.length,
+      breakdown,
+    },
+    entries,
   };
 }
 
-function generateCleanTypeDefinitions(apis: ExtractedApi[]): string {
-  return apis.map((api) => api.signature).join('\n');
-}
+// =============================================================================
+// Main Pipeline
+// =============================================================================
 
-function generateCleanTypeDefinitionsWithJSDoc(apis: ExtractedApi[]): string {
-  return apis.map((api) => api.signatureWithJSDoc).join('\n');
-}
-
-function generateStatsReport(stats: NodeStats): string {
-  let report = '\n📊 EXTRACTION STATISTICS\n';
-  report += '='.repeat(50) + '\n\n';
-
-  // Overall stats
-  const totalKept = stats.kept.length;
-  const totalRemoved = stats.removed.length;
-  const totalProcessed = totalKept + totalRemoved;
-
-  report += `📈 OVERALL STATISTICS:\n`;
-  report += `  Total nodes processed: ${totalProcessed}\n`;
-  report += `  Nodes kept: ${totalKept} (${((totalKept / totalProcessed) * 100).toFixed(1)}%)\n`;
-  report += `  Nodes removed: ${totalRemoved} (${((totalRemoved / totalProcessed) * 100).toFixed(1)}%)\n\n`;
-
-  // Stats by type
-  const keptByType: Record<string, number> = {};
-  const removedByType: Record<string, number> = {};
-
-  for (const item of stats.kept) {
-    keptByType[item.type] = (keptByType[item.type] ?? 0) + 1;
-  }
-
-  for (const item of stats.removed) {
-    removedByType[item.type] = (removedByType[item.type] ?? 0) + 1;
-  }
-
-  report += `📊 BREAKDOWN BY TYPE:\n`;
-  const allTypes = new Set([...Object.keys(keptByType), ...Object.keys(removedByType)]);
-
-  for (const type of [...allTypes].sort()) {
-    const kept = keptByType[type] ?? 0;
-    const removed = removedByType[type] ?? 0;
-    const total = kept + removed;
-    report += `  ${type}:\n`;
-    report += `    Kept: ${kept}/${total} (${((kept / total) * 100).toFixed(1)}%)\n`;
-    report += `    Removed: ${removed}/${total} (${((removed / total) * 100).toFixed(1)}%)\n`;
-  }
-
-  // Removal reasons
-  report += `\n🚫 REMOVAL REASONS:\n`;
-  const removalReasons: Record<string, number> = {};
-  for (const item of stats.removed) {
-    removalReasons[item.reason] = (removalReasons[item.reason] ?? 0) + 1;
-  }
-
-  for (const [reason, count] of Object.entries(removalReasons).sort((a, b) => b[1] - a[1])) {
-    report += `  ${reason}: ${count} nodes\n`;
-  }
-
-  return report;
-}
-
-function main() {
+function main(): void {
   try {
-    console.log('🔍 Extracting Replicad Public APIs using TypeScript Compiler API (with filtering)...\n');
+    console.log('Extracting replicad type declarations...\n');
 
-    const typeDefinitionsPath = join(import.meta.dirname, '../../../node_modules/replicad/dist/replicad.d.ts');
-    const buildExamplesPath = join(import.meta.dirname, '../../tau-examples/src/build.examples.ts');
-
-    // Create output directory
     const outputDir = join(import.meta.dirname, 'generated/replicad');
     mkdirSync(outputDir, { recursive: true });
-    console.log(`📁 Created output directory: ${outputDir}`);
+    console.log(`Output directory: ${outputDir}`);
 
-    console.log(`✅ Parsing ${typeDefinitionsPath} with TypeScript compiler`);
+    // Generate bundled .d.ts
+    const bundledTypes = buildBundledTypes();
+    const bundledPath = join(outputDir, 'replicad-modeling.bundled.d.ts');
+    writeFileSync(bundledPath, bundledTypes);
+    console.log(`\nBundled type declarations written to ${bundledPath}`);
+    console.log(`Output size: ${(bundledTypes.length / 1024).toFixed(1)} KB`);
 
-    const buildExamples = readFileSync(buildExamplesPath, 'utf8');
-    const codeBlocks = buildExamples.match(/`[^`]*`/g) ?? [];
+    // Generate structured JSON
+    console.log('\n📝 Generating structured API data JSON...');
+    const apiData = buildApiData();
+    const jsonPath = join(outputDir, 'replicad-api-data.json');
+    writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
+    console.log(`✅ API data JSON saved to ${jsonPath}`);
+    console.log(
+      `   ${apiData.metadata.totalEntries} entries: ${Object.entries(apiData.metadata.breakdown)
+        .map(([k, v]) => `${v} ${k}s`)
+        .join(', ')}`,
+    );
 
-    console.log('🔄 Extracting and filtering APIs using TypeScript AST...');
-    const { apis: extractedApis, stats } = extractAPIFromTypeScript(typeDefinitionsPath, codeBlocks);
-
-    console.log(`✅ Extracted ${extractedApis.length} APIs after filtering`);
-    console.log(`📊 Used in examples: ${extractedApis.filter((api) => api.usageCount > 0).length}`);
-
-    // Generate clean TypeScript definitions (without JSDoc)
-    console.log('\n📝 Generating clean TypeScript definitions...');
-    const cleanDefinitions = generateCleanTypeDefinitions(extractedApis);
-    const cleanApiPath = join(outputDir, 'replicad-clean.d.ts');
-    writeFileSync(cleanApiPath, cleanDefinitions);
-    console.log(`✅ Clean definitions saved to ${cleanApiPath}`);
-
-    // Generate clean TypeScript definitions (with JSDoc)
-    console.log('📝 Generating clean TypeScript definitions with JSDoc...');
-    const cleanDefinitionsWithJSDoc = generateCleanTypeDefinitionsWithJSDoc(extractedApis);
-    const cleanApiWithJSDocPath = join(outputDir, 'replicad-clean-jsdoc.d.ts');
-    writeFileSync(cleanApiWithJSDocPath, cleanDefinitionsWithJSDoc);
-    console.log(`✅ Clean definitions with JSDoc saved to ${cleanApiWithJSDocPath}`);
-
-    // Generate documentation
-    console.log('📝 Generating API documentation...');
-    const documentation = generateDocumentation(extractedApis);
-    const docsPath = join(outputDir, 'replicad-api-docs.md');
-    writeFileSync(docsPath, documentation);
-    console.log(`✅ Documentation saved to ${docsPath}`);
-
-    // Generate detailed JSON
-    console.log('📝 Generating detailed JSON data...');
-    const jsonData = {
-      metadata: {
-        extractionDate: new Date().toISOString(),
-        extractionMethod: 'TypeScript Compiler API (Filtered)',
-        totalApis: extractedApis.length,
-        usedApis: extractedApis.filter((api) => api.usageCount > 0).length,
-        filtering: {
-          removedPrivateProtected: true,
-          removedOcProperties: true,
-          removedUnderscorePrefixed: true,
-        },
-      },
-      apis: extractedApis,
-      stats,
-    };
-    const jsonPath = join(outputDir, 'replicad-ts-api-data.json');
-    writeFileSync(jsonPath, JSON.stringify(jsonData, null, 2));
-    console.log(`✅ Detailed JSON saved to ${jsonPath}`);
-
-    // Generate and display statistics report
-    const statsReport = generateStatsReport(stats);
-    const statsPath = join(outputDir, 'replicad-extraction-stats.txt');
-    writeFileSync(statsPath, statsReport);
-    console.log(`✅ Statistics report saved to ${statsPath}`);
-
-    console.log('\n🎉 TypeScript-based extraction with filtering completed successfully!');
-
-    // Show top APIs
-    console.log('\n🌟 Top 10 Most Used APIs:');
-    for (const [index, api] of extractedApis
-      .filter((api) => api.usageCount > 0)
-      .slice(0, 10)
-      .entries()) {
-      console.log(`${index + 1}. ${api.name} (${api.usageCount} uses) - ${api.type}`);
-    }
-
-    // Display stats summary
-    console.log(statsReport);
+    console.log('\nReplicad type extraction completed successfully!');
   } catch (error) {
-    console.error('❌ Error during TypeScript-based extraction:', error);
+    console.error('Error during replicad type extraction:', error);
     process.exit(1);
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
-}
-
-export {
-  extractAPIFromTypeScript,
-  generateCleanTypeDefinitions,
-  generateCleanTypeDefinitionsWithJSDoc,
-  generateDocumentation,
-};
+main();

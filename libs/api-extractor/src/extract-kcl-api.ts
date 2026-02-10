@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
+import type { ApiData, ApiEntry, ApiEntryKind } from '#api-extraction.types.js';
 
 // ============================================================================
 // Rust JSON Export Schema Types
@@ -175,6 +176,68 @@ function transformRustSchema(data: RustExportSchema): KclDocEntry[] {
   }
 
   return entries;
+}
+
+// ============================================================================
+// Structured API Data (shared schema)
+// ============================================================================
+
+const kclCategoryToKind: Record<KclDocCategory, ApiEntryKind> = {
+  functions: 'function',
+  types: 'type',
+  consts: 'constant',
+  modules: 'module',
+};
+
+/**
+ * Convert KCL doc entries to the shared ApiData format.
+ */
+function kclEntryToApiEntry(entry: KclDocEntry): ApiEntry {
+  const apiEntry: ApiEntry = {
+    name: entry.name,
+    kind: kclCategoryToKind[entry.category],
+    module: entry.module,
+    signature: entry.signature,
+    description: entry.excerpt || entry.description || undefined,
+  };
+
+  if (entry.arguments.length > 0) {
+    apiEntry.parameters = entry.arguments.map((argument) => ({
+      name: argument.name,
+      type: argument.type,
+      optional: !argument.required,
+      description: argument.description || undefined,
+    }));
+  }
+
+  if (entry.returns) {
+    apiEntry.returnType = entry.returns;
+  }
+
+  return apiEntry;
+}
+
+/**
+ * Build the structured API data in the shared schema.
+ * Exported for testing.
+ */
+export function buildApiData(entries: KclDocEntry[], kclVersion: string): ApiData {
+  const apiEntries = entries.map((entry) => kclEntryToApiEntry(entry));
+
+  const breakdown: Record<string, number> = {};
+  for (const entry of apiEntries) {
+    breakdown[entry.kind] = (breakdown[entry.kind] ?? 0) + 1;
+  }
+
+  return {
+    metadata: {
+      extractionDate: new Date().toISOString(),
+      source: `KCL v${kclVersion}`,
+      totalEntries: apiEntries.length,
+      breakdown,
+    },
+    entries: apiEntries,
+  };
 }
 
 // ============================================================================
@@ -442,33 +505,21 @@ function main(): void {
     writeFileSync(compactDocsPath, compactDocs);
     console.log(`Compact reference saved to ${compactDocsPath}`);
 
-    // Generate our own JSON data (with our schema)
+    // Generate structured JSON data (shared schema)
     console.log('Generating JSON data...');
-    const jsonData = {
-      metadata: {
-        extractionDate: new Date().toISOString(),
-        kclVersion: rawData.metadata.version,
-        totalEntries: entries.length,
-        breakdown: {
-          functions: entries.filter((entry) => entry.category === 'functions').length,
-          types: entries.filter((entry) => entry.category === 'types').length,
-          consts: entries.filter((entry) => entry.category === 'consts').length,
-          modules: entries.filter((entry) => entry.category === 'modules').length,
-        },
-      },
-      entries,
-    };
+    const apiData = buildApiData(entries, rawData.metadata.version);
     const jsonPath = join(outputDir, 'kcl-stdlib-data.json');
-    writeFileSync(jsonPath, JSON.stringify(jsonData, null, 2));
+    writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
     console.log(`JSON data saved to ${jsonPath}`);
 
     // Summary
     console.log('\nKCL API extraction completed successfully!');
     console.log(`\nSummary:`);
-    console.log(`  Functions: ${jsonData.metadata.breakdown.functions}`);
-    console.log(`  Types: ${jsonData.metadata.breakdown.types}`);
-    console.log(`  Constants: ${jsonData.metadata.breakdown.consts}`);
-    console.log(`  Modules: ${jsonData.metadata.breakdown.modules}`);
+    console.log(
+      `  ${apiData.metadata.totalEntries} entries: ${Object.entries(apiData.metadata.breakdown)
+        .map(([k, v]) => `${v} ${k}s`)
+        .join(', ')}`,
+    );
   } catch (error) {
     console.error('Error during KCL API extraction:', error);
     process.exit(1);
