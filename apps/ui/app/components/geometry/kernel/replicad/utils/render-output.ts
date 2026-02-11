@@ -31,7 +31,7 @@ type MeshableConfiguration = {
   opacity?: number;
 };
 
-export type MainResultShapes = AnyShape | AnyShape[] | InputShape | InputShape[];
+export type MainResultShapes = AnyShape | AnyShape[] | InputShape | InputShape[] | undefined;
 
 const isSvgable = (shape: unknown): shape is Svgable => {
   return (
@@ -60,7 +60,7 @@ function createBasicShapeConfig(
   baseName = 'AnyShape',
 ): Array<InputShape & { name: string }> {
   // We accept a single shape or an array of shapes
-  const raw: Array<AnyShape | InputShape> = Array.isArray(inputShapes) ? inputShapes : [inputShapes];
+  const raw: Array<AnyShape | InputShape | undefined> = Array.isArray(inputShapes) ? inputShapes : [inputShapes];
 
   // Filter out nullish entries (e.g., from main() returning undefined)
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime values can be nullish despite types
@@ -136,19 +136,14 @@ function renderMesh(shapeConfig: MeshableConfiguration) {
     },
   };
 
-  try {
-    geometry.faces = shape.mesh({
-      tolerance: 0.1,
-      angularTolerance: 30,
-    });
-    geometry.edges = shape.meshEdges({
-      tolerance: 0.1,
-      angularTolerance: 30,
-    });
-  } catch (error) {
-    console.error(error);
-    return geometry;
-  }
+  geometry.faces = shape.mesh({
+    tolerance: 0.1,
+    angularTolerance: 30,
+  });
+  geometry.edges = shape.meshEdges({
+    tolerance: 0.1,
+    angularTolerance: 30,
+  });
 
   return geometry;
 }
