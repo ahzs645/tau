@@ -4,7 +4,7 @@ import type { DeepMockProxy } from 'vitest-mock-extended';
 import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import { Reflector } from '@nestjs/core';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import type { StreamTextResult as StreamTextResultType, ToolSet, UIMessage, UIMessageChunk } from 'ai';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import type { ChatUsageTokens, MyUIMessage } from '@taucad/chat';
@@ -123,19 +123,6 @@ function createMockResponse(): DeepMockProxy<FastifyReply> {
   return mockReply;
 }
 
-/**
- * Creates a deep mock of FastifyRequest with required properties for controller tests.
- * Uses vitest-mock-extended for proper type safety.
- */
-function createMockRequest(): DeepMockProxy<FastifyRequest> {
-  const mockRequest = mockDeep<FastifyRequest>();
-
-  // Configure the raw.destroyed property (used for abort handling)
-  mockRequest.raw.destroyed = false;
-
-  return mockRequest;
-}
-
 describe('ChatController', () => {
   let controller: ChatController;
   let chatService: ChatService;
@@ -214,14 +201,14 @@ describe('ChatController', () => {
     it('should execute agent with correct parameters', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const body = {
         id: 'chat_123',
         messages: [createMockUserMessage('test-model')],
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       expect(chatService.createAgent).toHaveBeenCalledWith('test-model', 'auto', 'openscad');
@@ -242,7 +229,7 @@ describe('ChatController', () => {
     it('should use custom tool choice when provided', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const body = {
         id: 'chat_tool_choice',
         messages: [
@@ -256,7 +243,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       expect(chatService.createAgent).toHaveBeenCalledWith('test-model', 'none', 'openscad');
@@ -267,7 +254,7 @@ describe('ChatController', () => {
     it('should use name generator when modelId is name-generator', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const body = {
         id: 'chat_name_gen',
         messages: [createMockUserMessage('name-generator')],
@@ -277,7 +264,7 @@ describe('ChatController', () => {
       vi.mocked(chatService.getBuildNameGenerator).mockReturnValue(mockStreamResult);
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       expect(chatService.getBuildNameGenerator).toHaveBeenCalled();
@@ -288,7 +275,7 @@ describe('ChatController', () => {
     it('should use commit message generator when modelId is commit-name-generator', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const body = {
         id: 'chat_commit_gen',
         messages: [createMockUserMessage('commit-name-generator')],
@@ -298,7 +285,7 @@ describe('ChatController', () => {
       vi.mocked(chatService.getCommitMessageGenerator).mockReturnValue(mockStreamResult);
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       expect(chatService.getCommitMessageGenerator).toHaveBeenCalled();
@@ -311,7 +298,7 @@ describe('ChatController', () => {
     it('should throw error when last message is not a user message', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const assistantMessage: MyUIMessage = {
         id: 'msg_1',
         role: 'assistant',
@@ -323,15 +310,13 @@ describe('ChatController', () => {
       };
 
       // Act & Assert
-      await expect(controller.createChat(body, mockResponse, mockRequest)).rejects.toThrow(
-        'Last message is not a user message',
-      );
+      await expect(controller.createChat(body, mockResponse)).rejects.toThrow('Last message is not a user message');
     });
 
     it('should throw error when message model is missing', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const userMessageWithoutModel: MyUIMessage = {
         id: 'msg_1',
         role: 'user',
@@ -344,7 +329,7 @@ describe('ChatController', () => {
       };
 
       // Act & Assert
-      await expect(controller.createChat(body, mockResponse, mockRequest)).rejects.toThrow('Message model is required');
+      await expect(controller.createChat(body, mockResponse)).rejects.toThrow('Message model is required');
     });
   });
 
@@ -352,14 +337,14 @@ describe('ChatController', () => {
     it('should set correct SSE headers for agent execution', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const body = {
         id: 'chat_headers',
         messages: [createMockUserMessage('test-model')],
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       expect(mockResponse.header).toHaveBeenCalledWith('content-type', 'text/event-stream');
@@ -372,14 +357,14 @@ describe('ChatController', () => {
     it('should use toUIMessageStream to convert agent stream', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const body = {
         id: 'chat_adapter',
         messages: [createMockUserMessage('test-model')],
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       // The agent.graph.stream should have been called
@@ -393,7 +378,7 @@ describe('ChatController', () => {
     it('should inject snapshot context into messages passed to toBaseMessages', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const snapshot = {
         fileTree: [
           { path: 'src', name: 'src', type: 'dir' as const, size: 0 },
@@ -416,7 +401,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Verify toBaseMessages was called with messages containing injected context
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
@@ -445,7 +430,7 @@ describe('ChatController', () => {
     it('should pass original messages unchanged when no snapshot is provided', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const messageWithoutSnapshot: MyUIMessage = {
         id: 'msg_no_snapshot',
         role: 'user',
@@ -459,7 +444,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Verify toBaseMessages was called with original messages (no context injection)
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
@@ -479,7 +464,7 @@ describe('ChatController', () => {
     it('should inject only activeFile context when only activeFile is provided', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const partialSnapshot = {
         activeFile: { path: 'main.scad', name: 'main.scad' },
       };
@@ -497,7 +482,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Verify context contains only activeFile (no fileTree, no openFiles)
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
@@ -517,7 +502,7 @@ describe('ChatController', () => {
     it('should not inject context when snapshot has only empty arrays', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
+
       const emptySnapshot = {
         fileTree: [],
         openFiles: [],
@@ -536,7 +521,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Empty arrays mean no context to inject, so messages should be unchanged
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
@@ -600,7 +585,6 @@ describe('ChatController', () => {
     it('should normalize error chunks through the error transform pipeline', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const rawErrorChunk: UIMessageChunk = { type: 'error', errorText: 'Rate limit exceeded' };
       mockStreamWithChunks([rawErrorChunk]);
@@ -612,7 +596,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Read the captured stream to verify error was normalized
       const reader = getStream().getReader();
@@ -640,7 +624,6 @@ describe('ChatController', () => {
     it('should normalize tool_use/tool_result errors with correct category', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const toolErrorChunk: UIMessageChunk = {
         type: 'error',
@@ -655,7 +638,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Verify tool error was normalized with tool_error category
       const reader = getStream().getReader();
@@ -674,7 +657,6 @@ describe('ChatController', () => {
     it('should normalize abort errors with cancelled category', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const abortErrorChunk: UIMessageChunk = { type: 'error', errorText: 'Aborted' };
       mockStreamWithChunks([abortErrorChunk]);
@@ -686,7 +668,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Verify abort error was normalized with cancelled category
       const reader = getStream().getReader();
@@ -708,7 +690,6 @@ describe('ChatController', () => {
     it('should pass non-error chunks through unchanged', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const textChunk: UIMessageChunk = { type: 'text-delta', delta: 'Hello world', id: 'msg_1' };
       mockStreamWithChunks([textChunk]);
@@ -720,7 +701,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Text chunk should pass through unchanged
       const reader = getStream().getReader();
@@ -732,7 +713,6 @@ describe('ChatController', () => {
     it('should handle multiple chunks including errors in sequence', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const textChunk: UIMessageChunk = { type: 'text-delta', delta: 'Processing...', id: 'msg_1' };
       const errorChunk: UIMessageChunk = { type: 'error', errorText: 'Authentication failed' };
@@ -745,7 +725,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - Read all chunks and verify each is handled correctly
       const reader = getStream().getReader();
@@ -825,7 +805,6 @@ describe('ChatController', () => {
     it('should strip dynamic flag from read_file tool-input-available chunks', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const readFileToolChunk: ToolInputChunk = {
         type: 'tool-input-available',
@@ -843,7 +822,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - read_file should have dynamic flag stripped
       const reader = getStream().getReader();
@@ -861,7 +840,6 @@ describe('ChatController', () => {
     it('should preserve dynamic flag for unknown/dynamic tools', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const unknownToolChunk: ToolInputChunk = {
         type: 'tool-input-available',
@@ -879,7 +857,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert - unknown tool should keep dynamic flag
       const reader = getStream().getReader();
@@ -893,7 +871,6 @@ describe('ChatController', () => {
     it('should handle mixed static and dynamic tools in sequence', async () => {
       // Arrange
       const mockResponse = createMockResponse();
-      const mockRequest = createMockRequest();
 
       const staticToolChunk: ToolInputChunk = {
         type: 'tool-input-available',
@@ -918,7 +895,7 @@ describe('ChatController', () => {
       };
 
       // Act
-      await controller.createChat(body, mockResponse, mockRequest);
+      await controller.createChat(body, mockResponse);
 
       // Assert
       const reader = getStream().getReader();

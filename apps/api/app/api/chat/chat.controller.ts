@@ -1,7 +1,7 @@
-import { Body, Controller, Logger, Post, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
+import { Body, Controller, Logger, Post, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import type { ToolSelection } from '@taucad/chat';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -32,11 +32,7 @@ export class ChatController {
   ) {}
 
   @Post()
-  public async createChat(
-    @Body() body: CreateChatDto,
-    @Res() response: FastifyReply,
-    @Req() request: FastifyRequest,
-  ): Promise<void> {
+  public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
     const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
@@ -101,18 +97,20 @@ export class ChatController {
     // Get the agent from the service
     const agent = await this.chatService.createAgent(modelId, selectedToolChoice, selectedKernel);
 
-    // Abort the request if the client disconnects
-    // Listen on request.raw (IncomingMessage) not socket — the socket's 'close'
-    // event doesn't fire for individual request aborts under HTTP keep-alive
+    // Abort the request if the client disconnects.
+    // Listen on response.raw (ServerResponse) — for SSE, the response stream
+    // stays open and its 'close' event fires when the client disconnects.
+    // request.raw (IncomingMessage) fires 'close' when the POST body is consumed,
+    // which is too early to detect SSE disconnects.
     const abortController = new AbortController();
 
-    const handleRequestClose = (): void => {
-      if (request.raw.destroyed) {
+    response.raw.on('close', () => {
+      // WritableFinished is true when the stream completed normally.
+      // If false, the client disconnected before the stream finished.
+      if (!response.raw.writableFinished) {
         abortController.abort();
       }
-    };
-
-    request.raw.on('close', handleRequestClose);
+    });
 
     // Register the abort signal on the RPC service so in-flight RPC calls
     // are rejected immediately when the client aborts, rather than waiting
