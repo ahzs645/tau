@@ -50,6 +50,7 @@ export const jsTsContribution: LanguageContribution = {
     monaco.typescript.typescriptDefaults.setCompilerOptions({
       experimentalDecorators: true,
       allowSyntheticDefaultImports: true,
+      allowImportingTsExtensions: true,
       moduleResolution: monaco.typescript.ModuleResolutionKind.NodeJs,
       target: monaco.typescript.ScriptTarget.ESNext,
       module: monaco.typescript.ModuleKind.ESNext,
