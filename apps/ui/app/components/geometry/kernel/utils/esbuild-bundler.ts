@@ -325,6 +325,20 @@ function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
           return { path: toRelative(args.path), namespace: 'zenfs' };
         }
 
+        // Imports originating from the http-url namespace (sub-imports within
+        // fetched CDN modules) must be resolved by the namespace-specific handlers
+        // registered below. Only full URLs are handled here; relative, absolute, and
+        // bare paths are passed through by returning undefined so esbuild falls
+        // through to the http-url onResolve handlers.
+        if (args.namespace === 'http-url') {
+          if (args.path.startsWith('http://') || args.path.startsWith('https://')) {
+            return { path: args.path, namespace: 'http-url' };
+          }
+
+          // Let the http-url-specific onResolve handlers below handle this import
+          return undefined;
+        }
+
         // Handle data: URLs (esbuild internal)
         if (args.path.startsWith('data:')) {
           return { external: true };
@@ -415,12 +429,7 @@ function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
           const contents = await response.text();
           const loader = getLoader(new URL(args.path).pathname);
 
-          return {
-            contents,
-            loader,
-            // Use the URL's directory for resolving relative imports within the fetched module
-            resolveDir: new URL('./', args.path).href,
-          };
+          return { contents, loader };
         } catch (error) {
           return {
             errors: [
@@ -431,24 +440,33 @@ function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       });
 
       // -----------------------------------------------------------------
-      // onResolve: relative imports within HTTP modules
+      // onResolve: relative imports within HTTP modules (e.g. ./lib/foo.js)
       // -----------------------------------------------------------------
       build.onResolve({ filter: /^\./, namespace: 'http-url' }, (args) => {
-        const resolvedUrl = new URL(args.path, args.resolveDir).href;
+        // Resolve relative to the importer URL (resolveDir is unreliable for URLs)
+        const resolvedUrl = new URL(args.path, args.importer).href;
         return { path: resolvedUrl, namespace: 'http-url' };
       });
 
       // -----------------------------------------------------------------
-      // onResolve: bare imports within HTTP modules
+      // onResolve: absolute-path imports within HTTP modules (e.g. /lodash@4.17.21/es2022/lodash.mjs)
+      // -----------------------------------------------------------------
+      build.onResolve({ filter: /^\//, namespace: 'http-url' }, (args) => {
+        // Resolve absolute paths against the importer's origin
+        const importerUrl = new URL(args.importer);
+        const resolvedUrl = new URL(args.path, importerUrl.origin).href;
+        return { path: resolvedUrl, namespace: 'http-url' };
+      });
+
+      // -----------------------------------------------------------------
+      // onResolve: bare imports within HTTP modules (e.g. lit-html/lib/shady-render.js)
+      // Bare specifiers can't be resolved against the importer's CDN origin because
+      // CDNs use different URL schemes (e.g. JSPM uses npm: prefixes, Skypack uses
+      // hashed pins). Instead, resolve through esm.sh which handles bare specifiers.
       // -----------------------------------------------------------------
       build.onResolve({ filter: /^[^./]/, namespace: 'http-url' }, (args) => {
-        try {
-          const baseUrl = new URL(args.resolveDir);
-          const resolvedUrl = new URL(args.path, baseUrl.origin + '/').href;
-          return { path: resolvedUrl, namespace: 'http-url' };
-        } catch {
-          return { external: true };
-        }
+        const resolvedUrl = `https://esm.sh/${args.path}`;
+        return { path: resolvedUrl, namespace: 'http-url' };
       });
 
       // -----------------------------------------------------------------
