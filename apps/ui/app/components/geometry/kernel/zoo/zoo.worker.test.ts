@@ -556,11 +556,9 @@ describe('ZooWorker', () => {
       it('should return error with correct location for single-file undefined variable', async () => {
         const result = await getParametersWithError(
           {
-            'main.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'export cube = garbage', // Line 3 -- error here
-            ].join('\n'),
+            'main.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+export cube = garbage`,
           },
           'main.kcl',
         );
@@ -584,16 +582,12 @@ describe('ZooWorker', () => {
         // The imported filename and sub-error are embedded in the message string.
         const result = await getParametersWithError(
           {
-            'main.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'import cube from "bad.kcl"', // Line 3
-            ].join('\n'),
-            'bad.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'export cube = garbage', // Line 3 -- error here
-            ].join('\n'),
+            'main.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+import cube from "bad.kcl"`,
+            'bad.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+export cube = garbage`,
           },
           'main.kcl',
         );
@@ -617,15 +611,13 @@ describe('ZooWorker', () => {
         // The WASM provides a backtrace through function calls within a single file.
         const result = await getParametersWithError(
           {
-            'main.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'fn makeBadShape() {', // Line 3
-              '  return garbage', // Line 4 -- error here
-              '}', // Line 5
-              '', // Line 6
-              'result = makeBadShape()', // Line 7
-            ].join('\n'),
+            'main.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+fn makeBadShape() {
+  return garbage
+}
+
+result = makeBadShape()`,
           },
           'main.kcl',
         );
@@ -658,23 +650,17 @@ describe('ZooWorker', () => {
         // chain is encoded in the nested error message instead.
         const result = await getParametersWithError(
           {
-            'main.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'import shape from "middle.kcl"', // Line 3
-            ].join('\n'),
-            'middle.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'import badThing from "bad.kcl"', // Line 3
-              '', // Line 4
-              'export shape = badThing', // Line 5
-            ].join('\n'),
-            'bad.kcl': [
-              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
-              '', // Line 2
-              'export badThing = garbage', // Line 3 -- error here
-            ].join('\n'),
+            'main.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+import shape from "middle.kcl"`,
+            'middle.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+import badThing from "bad.kcl"
+
+export shape = badThing`,
+            'bad.kcl': `@settings(defaultLengthUnit = mm, kclVersion = 1.0)
+
+export badThing = garbage`,
           },
           'main.kcl',
         );

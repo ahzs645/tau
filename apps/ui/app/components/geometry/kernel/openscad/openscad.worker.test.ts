@@ -1199,12 +1199,10 @@ ${errorLine}
       it('should return error with correct location for single-file syntax error', async () => {
         const result = await createGeometry(
           {
-            'main.scad': [
-              '// Parametric box', // Line 1
-              'size = 10;', // Line 2
-              'x += 5;', // Line 3 -- syntax error (compound assignment not supported)
-              'cube([size, size, size]);', // Line 4
-            ].join('\n'),
+            'main.scad': `// Parametric box
+size = 10;
+x += 5;
+cube([size, size, size]);`,
           },
           'main.scad',
         );
@@ -1226,14 +1224,12 @@ ${errorLine}
         // modules are caught at parse time with the correct line number.
         const result = await createGeometry(
           {
-            'main.scad': [
-              '// Main file', // Line 1
-              'module badModule() {', // Line 2
-              '  x += 5;', // Line 3 -- syntax error inside module
-              '}', // Line 4
-              '', // Line 5
-              'badModule();', // Line 6 -- call site
-            ].join('\n'),
+            'main.scad': `// Main file
+module badModule() {
+  x += 5;
+}
+
+badModule();`,
           },
           'main.scad',
         );
@@ -1253,15 +1249,11 @@ ${errorLine}
       it('should return error pointing to correct included file in multi-file project', async () => {
         const result = await createGeometry(
           {
-            'main.scad': [
-              'include <lib.scad>', // Line 1
-              '', // Line 2
-              'cube([10, 10, 10]);', // Line 3
-            ].join('\n'),
-            'lib.scad': [
-              'x = 10;', // Line 1
-              'x += 5;', // Line 2 -- syntax error
-            ].join('\n'),
+            'main.scad': `include <lib.scad>
+
+cube([10, 10, 10]);`,
+            'lib.scad': `x = 10;
+x += 5;`,
           },
           'main.scad',
         );
@@ -1282,19 +1274,13 @@ ${errorLine}
         // 3-file chain: main.scad -> middle.scad -> bad.scad
         const result = await createGeometry(
           {
-            'main.scad': [
-              'include <middle.scad>', // Line 1
-              '', // Line 2
-              'cube([10, 10, 10]);', // Line 3
-            ].join('\n'),
-            'middle.scad': [
-              'include <bad.scad>', // Line 1
-              'y = 20;', // Line 2
-            ].join('\n'),
-            'bad.scad': [
-              'z = 10;', // Line 1
-              'z += 5;', // Line 2 -- syntax error
-            ].join('\n'),
+            'main.scad': `include <middle.scad>
+
+cube([10, 10, 10]);`,
+            'middle.scad': `include <bad.scad>
+y = 20;`,
+            'bad.scad': `z = 10;
+z += 5;`,
           },
           'main.scad',
         );
@@ -1322,15 +1308,11 @@ ${errorLine}
         // allow us to reconstruct the include chain.
         const result = await createGeometry(
           {
-            'main.scad': [
-              'include <lib.scad>', // Line 1
-              '', // Line 2
-              'cube([10, 10, 10]);', // Line 3
-            ].join('\n'),
-            'lib.scad': [
-              'x = 10;', // Line 1
-              'x += 5;', // Line 2 -- syntax error
-            ].join('\n'),
+            'main.scad': `include <lib.scad>
+
+cube([10, 10, 10]);`,
+            'lib.scad': `x = 10;
+x += 5;`,
           },
           'main.scad',
         );
@@ -1353,19 +1335,13 @@ ${errorLine}
         // reconstruct the full chain: main.scad -> middle.scad -> bad.scad.
         const result = await createGeometry(
           {
-            'main.scad': [
-              'include <middle.scad>', // Line 1
-              '', // Line 2
-              'cube([10, 10, 10]);', // Line 3
-            ].join('\n'),
-            'middle.scad': [
-              'include <bad.scad>', // Line 1
-              'y = 20;', // Line 2
-            ].join('\n'),
-            'bad.scad': [
-              'z = 10;', // Line 1
-              'z += 5;', // Line 2 -- syntax error
-            ].join('\n'),
+            'main.scad': `include <middle.scad>
+
+cube([10, 10, 10]);`,
+            'middle.scad': `include <bad.scad>
+y = 20;`,
+            'bad.scad': `z = 10;
+z += 5;`,
           },
           'main.scad',
         );
@@ -1392,17 +1368,15 @@ ${errorLine}
         // OpenSCAD TRACE lines provide a complete call stack.
         const result = await createGeometry(
           {
-            'main.scad': [
-              'module outer() {', // Line 1
-              '  inner();', // Line 2
-              '}', // Line 3
-              '', // Line 4
-              'module inner() {', // Line 5
-              '  assert(false, "deliberate failure");', // Line 6 -- error
-              '}', // Line 7
-              '', // Line 8
-              'outer();', // Line 9 -- top-level call site
-            ].join('\n'),
+            'main.scad': `module outer() {
+  inner();
+}
+
+module inner() {
+  assert(false, "deliberate failure");
+}
+
+outer();`,
           },
           'main.scad',
         );
@@ -1435,16 +1409,12 @@ ${errorLine}
       it('should return stack frames across files for cross-file module call', async () => {
         const result = await createGeometry(
           {
-            'main.scad': [
-              'use <lib.scad>', // Line 1
-              '', // Line 2
-              'broken_module();', // Line 3 -- call site
-            ].join('\n'),
-            'lib.scad': [
-              'module broken_module() {', // Line 1
-              '  assert(false, "fail in lib");', // Line 2 -- error site
-              '}', // Line 3
-            ].join('\n'),
+            'main.scad': `use <lib.scad>
+
+broken_module();`,
+            'lib.scad': `module broken_module() {
+  assert(false, "fail in lib");
+}`,
           },
           'main.scad',
         );
@@ -1476,23 +1446,17 @@ ${errorLine}
         // Chain: main.scad -> middle.scad -> bad.scad, assertion in bad.scad.
         const result = await createGeometry(
           {
-            'main.scad': [
-              'use <middle.scad>', // Line 1
-              '', // Line 2
-              'call_middle();', // Line 3
-            ].join('\n'),
-            'middle.scad': [
-              'use <bad.scad>', // Line 1
-              '', // Line 2
-              'module call_middle() {', // Line 3
-              '  call_bad();', // Line 4
-              '}', // Line 5
-            ].join('\n'),
-            'bad.scad': [
-              'module call_bad() {', // Line 1
-              '  assert(false, "deepest failure");', // Line 2 -- error
-              '}', // Line 3
-            ].join('\n'),
+            'main.scad': `use <middle.scad>
+
+call_middle();`,
+            'middle.scad': `use <bad.scad>
+
+module call_middle() {
+  call_bad();
+}`,
+            'bad.scad': `module call_bad() {
+  assert(false, "deepest failure");
+}`,
           },
           'main.scad',
         );
@@ -1525,11 +1489,9 @@ ${errorLine}
       it('should not produce stack frames for warnings (undefined variable)', async () => {
         const result = await createGeometry(
           {
-            'main.scad': [
-              'function get_size() = garbage;', // Line 1 -- undefined variable
-              '', // Line 2
-              'cube([get_size(), 10, 10]);', // Line 3
-            ].join('\n'),
+            'main.scad': `function get_size() = garbage;
+
+cube([get_size(), 10, 10]);`,
           },
           'main.scad',
         );
