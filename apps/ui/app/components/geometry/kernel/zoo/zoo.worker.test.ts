@@ -553,6 +553,198 @@ describe('ZooWorker', () => {
         expect(result.issues).toBeDefined();
       });
 
+      it('should return error with correct location for single-file undefined variable', async () => {
+        // Error is on line 3 (`garbage` is undefined)
+        const result = await getParametersWithError(
+          {
+            'main.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'export cube = garbage', // Line 3 -- error here
+            ].join('\n'),
+          },
+          'main.kcl',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues!.length).toBeGreaterThan(0);
+
+          const issue = result.issues![0] as {
+            message: string;
+            location?: { fileName: string; startLineNumber: number; startColumn: number };
+          };
+
+          // Error should reference main.kcl
+          expect(issue.location).toBeDefined();
+          expect(issue.location!.fileName).toBe('main.kcl');
+          // Error should point to line 3 where `garbage` is
+          expect(issue.location!.startLineNumber).toBe(3);
+        }
+      });
+
+      it('should return error with imported file name in message for multi-file project', async () => {
+        // Error is in bad.kcl (line 3: `garbage` is undefined), imported by main.kcl.
+        //
+        // NOTE: The KCL WASM only provides sourceRanges/backtrace for the import
+        // site in main.kcl (moduleId 0), not for the actual error in bad.kcl.
+        // The imported filename and sub-error are embedded in the message string.
+        // Accurate cross-file stack traces would require the WASM to include
+        // sourceRanges with moduleId > 0 and character offsets for the imported file,
+        // which it currently does not provide.
+        const result = await getParametersWithError(
+          {
+            'main.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'import cube from "bad.kcl"', // Line 3
+            ].join('\n'),
+            'bad.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'export cube = garbage', // Line 3 -- error here
+            ].join('\n'),
+          },
+          'main.kcl',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues!.length).toBeGreaterThan(0);
+
+          const issue = result.issues![0] as {
+            message: string;
+            location?: { fileName: string; startLineNumber: number; startColumn: number };
+          };
+
+          // The error message should mention the imported file and the actual error
+          expect(issue.message).toContain('bad.kcl');
+          expect(issue.message).toMatch(/garbage.*is not defined/i);
+
+          // Location currently points to the import site in main.kcl (WASM limitation)
+          expect(issue.location).toBeDefined();
+          expect(issue.location!.fileName).toBe('main.kcl');
+          expect(issue.location!.startLineNumber).toBe(3);
+        }
+      });
+
+      it('should return error with correct stack trace for function call error', async () => {
+        // Error is inside a custom function `makeBadShape` called from the top level.
+        // The WASM provides a backtrace through function calls within a single file.
+        const result = await getParametersWithError(
+          {
+            'main.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'fn makeBadShape() {', // Line 3
+              '  return garbage', // Line 4 -- error here
+              '}', // Line 5
+              '', // Line 6
+              'result = makeBadShape()', // Line 7
+            ].join('\n'),
+          },
+          'main.kcl',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues!.length).toBeGreaterThan(0);
+
+          const issue = result.issues![0] as {
+            message: string;
+            location?: { fileName: string; startLineNumber: number; startColumn: number };
+            stackFrames?: Array<{
+              functionName?: string;
+              fileName?: string;
+              lineNumber?: number;
+              columnNumber?: number;
+            }>;
+          };
+
+          expect(issue.message).toMatch(/garbage.*is not defined/i);
+
+          // Location should point to the error site (line 4 inside the function)
+          expect(issue.location).toBeDefined();
+          expect(issue.location!.fileName).toBe('main.kcl');
+          expect(issue.location!.startLineNumber).toBe(4);
+
+          // Stack frames should show the call chain:
+          // Frame 0: makeBadShape at line 4 (error site)
+          // Frame 1: <anonymous> at line 7 (call site)
+          expect(issue.stackFrames).toBeDefined();
+          expect(issue.stackFrames!.length).toBe(2);
+
+          expect(issue.stackFrames![0]!.functionName).toBe('makeBadShape');
+          expect(issue.stackFrames![0]!.fileName).toBe('main.kcl');
+          expect(issue.stackFrames![0]!.lineNumber).toBe(4);
+
+          expect(issue.stackFrames![1]!.fileName).toBe('main.kcl');
+          expect(issue.stackFrames![1]!.lineNumber).toBe(7);
+        }
+      });
+
+      it('should return error with nested import chain in message for 3-file project', async () => {
+        // 3-file chain: main.kcl -> middle.kcl -> bad.kcl
+        // Error is in bad.kcl, imported transitively through middle.kcl.
+        //
+        // NOTE: Same WASM limitation as 2-file imports -- the backtrace only
+        // contains a single frame at the import site in main.kcl. The import
+        // chain is encoded in the nested error message instead.
+        const result = await getParametersWithError(
+          {
+            'main.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'import shape from "middle.kcl"', // Line 3
+            ].join('\n'),
+            'middle.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'import badThing from "bad.kcl"', // Line 3
+              '', // Line 4
+              'export shape = badThing', // Line 5
+            ].join('\n'),
+            'bad.kcl': [
+              '@settings(defaultLengthUnit = mm, kclVersion = 1.0)', // Line 1
+              '', // Line 2
+              'export badThing = garbage', // Line 3 -- error here
+            ].join('\n'),
+          },
+          'main.kcl',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.issues).toBeDefined();
+          expect(result.issues!.length).toBeGreaterThan(0);
+
+          const issue = result.issues![0] as {
+            message: string;
+            location?: { fileName: string; startLineNumber: number; startColumn: number };
+            stackFrames?: Array<{ fileName?: string; lineNumber?: number }>;
+          };
+
+          // The nested message should show the full import chain
+          expect(issue.message).toContain('middle.kcl');
+          expect(issue.message).toContain('bad.kcl');
+          expect(issue.message).toMatch(/garbage.*is not defined/i);
+
+          // Location points to the import site in main.kcl (WASM limitation)
+          expect(issue.location).toBeDefined();
+          expect(issue.location!.fileName).toBe('main.kcl');
+          expect(issue.location!.startLineNumber).toBe(3);
+
+          // Only one stack frame at the import site (no cross-file frames)
+          expect(issue.stackFrames).toBeDefined();
+          expect(issue.stackFrames!.length).toBe(1);
+          expect(issue.stackFrames![0]!.fileName).toBe('main.kcl');
+          expect(issue.stackFrames![0]!.lineNumber).toBe(3);
+        }
+      });
+
       it('should return error for syntax error with missing closing parenthesis', async () => {
         // This tests a syntax error: missing closing parenthesis on close(
         const result = await getParametersWithError(
