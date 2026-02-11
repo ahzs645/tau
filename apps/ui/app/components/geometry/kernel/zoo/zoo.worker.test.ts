@@ -571,7 +571,9 @@ export cube = garbage`,
             type: 'unknown',
             stack: '    at <anonymous> (main.kcl:3:14)',
             location: { fileName: 'main.kcl', startLineNumber: 3, startColumn: 14 },
-            stackFrames: [{ fileName: 'main.kcl', lineNumber: 3, columnNumber: 14 }],
+            stackFrames: [
+              { fileName: 'main.kcl', lineNumber: 3, columnNumber: 14, context: 'user', functionName: undefined },
+            ],
           },
         ]);
       });
@@ -601,7 +603,9 @@ export cube = garbage`,
             stack: '    at <anonymous> (main.kcl:3:0)',
             // Location points to the import site in main.kcl (WASM limitation)
             location: { fileName: 'main.kcl', startLineNumber: 3, startColumn: 0 },
-            stackFrames: [{ fileName: 'main.kcl', lineNumber: 3, columnNumber: 0 }],
+            stackFrames: [
+              { fileName: 'main.kcl', lineNumber: 3, columnNumber: 0, context: 'user', functionName: undefined },
+            ],
           },
         ]);
       });
@@ -634,8 +638,8 @@ result = makeBadShape()`,
             // Frame 0: makeBadShape at line 4 (error site)
             // Frame 1: <anonymous> at line 7 (call site)
             stackFrames: [
-              { functionName: 'makeBadShape', fileName: 'main.kcl', lineNumber: 4, columnNumber: 9 },
-              { fileName: 'main.kcl', lineNumber: 7, columnNumber: 9 },
+              { functionName: 'makeBadShape', fileName: 'main.kcl', lineNumber: 4, columnNumber: 9, context: 'user' },
+              { fileName: 'main.kcl', lineNumber: 7, columnNumber: 9, context: 'user', functionName: undefined },
             ],
           },
         ]);
@@ -676,7 +680,9 @@ export badThing = garbage`,
             // Location points to the import site in main.kcl (WASM limitation)
             location: { fileName: 'main.kcl', startLineNumber: 3, startColumn: 0 },
             // Only one stack frame at the import site (no cross-file frames)
-            stackFrames: [{ fileName: 'main.kcl', lineNumber: 3, columnNumber: 0 }],
+            stackFrames: [
+              { fileName: 'main.kcl', lineNumber: 3, columnNumber: 0, context: 'user', functionName: undefined },
+            ],
           },
         ]);
       });

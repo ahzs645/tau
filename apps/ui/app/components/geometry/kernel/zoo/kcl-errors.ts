@@ -153,6 +153,7 @@ export class KclWasmError extends KclError {
         fileName,
         lineNumber: position.line,
         columnNumber: position.column,
+        context: 'user',
       };
 
       return stackFrame;

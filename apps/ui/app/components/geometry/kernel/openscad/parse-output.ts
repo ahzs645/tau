@@ -168,7 +168,7 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
       functionName: name,
       fileName: normalizeFileName(file ?? '', mainFilePath),
       lineNumber: Number(line),
-      isInternal: openscadBuiltinFunctions.has(name),
+      context: openscadBuiltinFunctions.has(name) ? ('framework' as const) : ('user' as const),
     };
   }
 
@@ -183,7 +183,7 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
       functionName: name,
       fileName: normalizeFileName(file ?? '', mainFilePath),
       lineNumber: Number(line),
-      isInternal: openscadBuiltinFunctions.has(name),
+      context: openscadBuiltinFunctions.has(name) ? ('framework' as const) : ('user' as const),
     };
   }
 
@@ -394,7 +394,7 @@ export class OpenScadStderrParser {
         functionName: 'include',
         fileName: topLevelFile,
         lineNumber: 1,
-        isInternal: false,
+        context: 'user',
       });
       return true;
     }
@@ -456,7 +456,7 @@ export class OpenScadStderrParser {
   private buildIncludeChain(topLevelFile: string, errorFile: string): KernelStackFrame[] {
     if (!this.getFileContents) {
       // Without file contents, we can only show the top-level file
-      return [{ functionName: 'include', fileName: topLevelFile, lineNumber: 1, isInternal: false }];
+      return [{ functionName: 'include', fileName: topLevelFile, lineNumber: 1, context: 'user' as const }];
     }
 
     // Walk from topLevelFile, following include/use directives toward errorFile.
@@ -466,7 +466,9 @@ export class OpenScadStderrParser {
     if (chain.length === 0) {
       // Couldn't trace the chain — fall back to showing just the top-level file
       const directLine = this.findIncludeLineInFile(topLevelFile, errorFile);
-      return [{ functionName: 'include', fileName: topLevelFile, lineNumber: directLine ?? 1, isInternal: false }];
+      return [
+        { functionName: 'include', fileName: topLevelFile, lineNumber: directLine ?? 1, context: 'user' as const },
+      ];
     }
 
     return chain;
@@ -501,7 +503,7 @@ export class OpenScadStderrParser {
             functionName: 'include',
             fileName: entry.file,
             lineNumber: entry.line,
-            isInternal: false,
+            context: 'user' as const,
           }));
         }
 

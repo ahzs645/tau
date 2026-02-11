@@ -399,9 +399,9 @@ describe('parseStderrLine', () => {
             endColumn: 1000,
           },
           stackFrames: [
-            { functionName: 'assert', fileName: 'main.scad', lineNumber: 6, isInternal: true },
-            { functionName: 'inner()', fileName: 'main.scad', lineNumber: 5, isInternal: false },
-            { functionName: 'inner', fileName: 'main.scad', lineNumber: 2, isInternal: false },
+            { functionName: 'assert', fileName: 'main.scad', lineNumber: 6, context: 'framework' },
+            { functionName: 'inner()', fileName: 'main.scad', lineNumber: 5, context: 'user' },
+            { functionName: 'inner', fileName: 'main.scad', lineNumber: 2, context: 'user' },
           ],
         },
       ]);
@@ -431,8 +431,8 @@ describe('parseStderrLine', () => {
           },
           // Leading slashes should be stripped from file names
           stackFrames: [
-            { functionName: 'assert', fileName: 'lib.scad', lineNumber: 2, isInternal: true },
-            { functionName: 'broken_module', fileName: 'main.scad', lineNumber: 3, isInternal: false },
+            { functionName: 'assert', fileName: 'lib.scad', lineNumber: 2, context: 'framework' },
+            { functionName: 'broken_module', fileName: 'main.scad', lineNumber: 3, context: 'user' },
           ],
         },
       ]);
@@ -507,8 +507,8 @@ describe('parseStderrLine', () => {
             endColumn: 1000,
           },
           stackFrames: [
-            { functionName: 'assert', fileName: 'a.scad', lineNumber: 1, isInternal: true },
-            { functionName: 'mod_a', fileName: 'main.scad', lineNumber: 5, isInternal: false },
+            { functionName: 'assert', fileName: 'a.scad', lineNumber: 1, context: 'framework' },
+            { functionName: 'mod_a', fileName: 'main.scad', lineNumber: 5, context: 'user' },
           ],
         },
         {
@@ -522,7 +522,7 @@ describe('parseStderrLine', () => {
             endLineNumber: 3,
             endColumn: 1000,
           },
-          stackFrames: [{ functionName: 'assert', fileName: 'b.scad', lineNumber: 3, isInternal: true }],
+          stackFrames: [{ functionName: 'assert', fileName: 'b.scad', lineNumber: 3, context: 'framework' }],
         },
       ]);
     });
@@ -558,7 +558,7 @@ describe('parseStderrLine', () => {
               functionName: 'broken',
               fileName: 'site/backyard.scad',
               lineNumber: 3,
-              isInternal: false,
+              context: 'user',
             },
           ],
         },
@@ -595,7 +595,7 @@ describe('parseStderrLine', () => {
               functionName: 'include',
               fileName: 'main.scad',
               lineNumber: 1,
-              isInternal: false,
+              context: 'user',
             },
           ],
         },
@@ -633,7 +633,7 @@ describe('parseStderrLine', () => {
               functionName: 'include',
               fileName: 'main.scad',
               lineNumber: 2,
-              isInternal: false,
+              context: 'user',
             },
           ],
         },
@@ -669,9 +669,9 @@ describe('parseStderrLine', () => {
           },
           stackFrames: [
             // Deepest first: middle.scad includes bad.scad
-            { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, isInternal: false },
+            { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, context: 'user' },
             // Shallowest: main.scad includes middle.scad
-            { functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false },
+            { functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' },
           ],
         },
       ]);

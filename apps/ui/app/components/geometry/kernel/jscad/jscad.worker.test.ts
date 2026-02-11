@@ -1026,17 +1026,21 @@ module.exports = { main, getParameterDefinitions }
         );
 
         expect(result.success).toBe(false);
-        // Internal frames have machine-specific paths; filter to user frames only
+        // Framework/runtime frames have machine-specific paths; filter to user frames only
         const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-        expect({ ...issue, stackFrames: userFrames }).toEqual({
-          message: 'primitives.nonExistentShape is not a function',
-          type: 'runtime',
-          severity: 'error',
-          stackFrames: [
-            { functionName: 'main', fileName: 'undefined_func.ts', lineNumber: 5, columnNumber: 35, isInternal: false },
-          ],
-        });
+        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+        expect({ ...issue, stackFrames: userFrames }).toEqual(
+          expect.objectContaining({
+            message: 'primitives.nonExistentShape is not a function',
+            type: 'runtime',
+            severity: 'error',
+            stackFrames: [
+              { functionName: 'main', fileName: 'undefined_func.ts', lineNumber: 5, columnNumber: 35, context: 'user' },
+            ],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({ fileName: 'undefined_func.ts', startLineNumber: 5 }),
+          }),
+        );
       });
 
       it('should return error for runtime errors', async () => {
@@ -1055,15 +1059,19 @@ module.exports = { main, getParameterDefinitions }
 
         expect(result.success).toBe(false);
         const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-        expect({ ...issue, stackFrames: userFrames }).toEqual({
-          message: 'Something went wrong',
-          type: 'runtime',
-          severity: 'error',
-          stackFrames: [
-            { functionName: 'main', fileName: 'runtime_error.ts', lineNumber: 5, columnNumber: 23, isInternal: false },
-          ],
-        });
+        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+        expect({ ...issue, stackFrames: userFrames }).toEqual(
+          expect.objectContaining({
+            message: 'Something went wrong',
+            type: 'runtime',
+            severity: 'error',
+            stackFrames: [
+              { functionName: 'main', fileName: 'runtime_error.ts', lineNumber: 5, columnNumber: 23, context: 'user' },
+            ],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({ fileName: 'runtime_error.ts', startLineNumber: 5 }),
+          }),
+        );
       });
 
       it('should return warning when main returns undefined (no return statement)', async () => {
