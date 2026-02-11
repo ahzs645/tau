@@ -209,8 +209,11 @@ export class OpenScadStderrParser {
   private lastError: KernelIssue | undefined;
 
   public constructor(
+    // @ts-expect-error -- TypeScript erasableSyntaxOnly doesn't support parameter properties, but ESLint requires them
     private readonly addError: AddErrorFn,
+    // @ts-expect-error -- TypeScript erasableSyntaxOnly doesn't support parameter properties, but ESLint requires them
     private readonly getFileContents?: GetFileContentsFn,
+    // @ts-expect-error -- TypeScript erasableSyntaxOnly doesn't support parameter properties, but ESLint requires them
     private readonly mainFilePath?: string,
   ) {}
 
