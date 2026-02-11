@@ -15,14 +15,23 @@ import type { Geometry, GeometryResponse } from '#types/cad.types.js';
 // Error Types
 // =============================================================================
 
+/**
+ * Classification for stack frame origin.
+ * - `user` -- the developer's project code. Visible by default. Used for Monaco error markers.
+ * - `library` -- third-party CAD libraries the user imported (replicad, @jscad/modeling). Visible by default.
+ * - `framework` -- kernel worker infrastructure (Proxy traps, bundler, esbuild). Hidden by default.
+ * - `runtime` -- V8/Emscripten/WASM boundary frames, `node:` internals, native code. Hidden by default.
+ */
+export type FrameContext = 'user' | 'library' | 'framework' | 'runtime';
+
 export type KernelStackFrame = {
   fileName?: string;
   functionName?: string;
   lineNumber?: number;
   columnNumber?: number;
   source?: string;
-  /** True for node_modules, bundler, or runtime frames - helps filter user code from internal code */
-  isInternal?: boolean;
+  /** Classification of the frame's origin for visibility and error location purposes */
+  context?: FrameContext;
 };
 
 // Location information for errors that can point to a specific code location
