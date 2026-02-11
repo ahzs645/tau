@@ -1,7 +1,7 @@
 // @vitest-environment node
 /* eslint-disable max-lines -- comprehensive kernel test suite */
 import * as kernelSymbols from '@taucad/types/symbols';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReplicadWorker } from '#components/geometry/kernel/replicad/replicad.worker.js';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
 import {
@@ -1063,13 +1063,15 @@ describe('ReplicadWorker', () => {
           expect(issue.stackFrames).toBeDefined();
           expect(issue.stackFrames!.length).toBeGreaterThan(0);
 
-          // Internal frames should be classified correctly
-          // Platform frames (kernel/, node:, node_modules) should be internal
-          const internalFrames = issue.stackFrames!.filter((frame) => frame.isInternal);
-          expect(internalFrames.length).toBeGreaterThan(0);
+          // Framework/runtime frames should be classified correctly
+          // Platform frames (kernel/, node:, node_modules) should be framework or runtime
+          const hiddenFrames = issue.stackFrames!.filter(
+            (frame) => frame.context === 'framework' || frame.context === 'runtime',
+          );
+          expect(hiddenFrames.length).toBeGreaterThan(0);
 
-          for (const frame of internalFrames) {
-            // Each internal frame should match at least one known platform pattern
+          for (const frame of hiddenFrames) {
+            // Each hidden frame should match at least one known platform pattern
             const fileName = frame.fileName ?? '';
             const isKnownPlatform =
               fileName.includes('/kernel/') ||
@@ -1128,6 +1130,358 @@ describe('ReplicadWorker', () => {
           expect(issue.severity).toBe('error');
           expect(issue.message).not.toMatch(/^\d+$/);
           expect(issue.message.length).toBeGreaterThan(3);
+        }
+      });
+
+      it('should return decoded OC error with type info for zero-height extrusion', async () => {
+        const result = await createGeometry(
+          {
+            'zero_extrude.ts': `
+              import { draw } from 'replicad';
+
+              export default function main() {
+                return draw()
+                  .hLine(10)
+                  .vLine(10)
+                  .hLine(-10)
+                  .close()
+                  .sketchOnPlane()
+                  .extrude(0);
+              }
+            `,
+          },
+          'zero_extrude.ts',
+          {},
+          { workerOptions: { withExceptions: true } },
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.type).toBe('kernel');
+          expect(issue.severity).toBe('error');
+          // Message should contain the OC error, not a raw number
+          expect(issue.message).not.toMatch(/^\d+$/);
+          expect(issue.message.length).toBeGreaterThan(3);
+        }
+      });
+
+      it('should include user code stack frames for OC exceptions with helper function', async () => {
+        // Code with a helper function that triggers an OC error.
+        // The stack trace should show both the helper (extrude site) and the caller (main).
+        const code = `import { draw } from 'replicad';
+
+function buildShape() {
+  const sketch = draw()
+    .hLine(10)
+    .vLine(10)
+    .hLine(-10)
+    .close()
+    .sketchOnPlane();
+  return sketch.extrude(0);
+}
+
+export default function main() {
+  return buildShape();
+}
+`;
+
+        const result = await createGeometry(
+          { 'extrude_stack.ts': code },
+          'extrude_stack.ts',
+          {},
+          { workerOptions: { withExceptions: true } },
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.type).toBe('kernel');
+          expect(issue.severity).toBe('error');
+          expect(issue.message).toBe(
+            'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+          );
+
+          // User frames should include both buildShape and main
+          const userFrames = issue.stackFrames?.filter((frame) => frame.context === 'user');
+          expect(userFrames).toBeDefined();
+          expect(userFrames!.length).toBeGreaterThanOrEqual(2);
+          expect(userFrames![0]).toEqual(
+            expect.objectContaining({
+              functionName: 'buildShape',
+              fileName: 'extrude_stack.ts',
+              lineNumber: 10,
+              context: 'user',
+            }),
+          );
+          expect(userFrames![1]).toEqual(
+            expect.objectContaining({
+              functionName: 'main',
+              fileName: 'extrude_stack.ts',
+              lineNumber: 14,
+              context: 'user',
+            }),
+          );
+
+          // Library frames should be present with source-mapped positions
+          const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
+          expect(libraryFrames).toBeDefined();
+          expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
+
+          // Location should point to the first user frame (error origin)
+          expect(issue.location).toBeDefined();
+          expect(issue.location).toEqual(
+            expect.objectContaining({
+              fileName: 'extrude_stack.ts',
+              startLineNumber: 10,
+            }),
+          );
+        }
+      });
+
+      it('should include stack frames for nested helpers in same file', async () => {
+        // Deeper call chain: main -> extrudeProfile -> createSketch
+        // createSketch succeeds (it just draws), extrudeProfile triggers the OC error.
+        const code = `import { draw } from 'replicad';
+
+function createSketch() {
+  return draw()
+    .hLine(10)
+    .vLine(10)
+    .hLine(-10)
+    .close()
+    .sketchOnPlane();
+}
+
+function extrudeProfile() {
+  const sketch = createSketch();
+  return sketch.extrude(0);
+}
+
+export default function main() {
+  return extrudeProfile();
+}
+`;
+
+        const result = await createGeometry(
+          { 'nested_helpers.ts': code },
+          'nested_helpers.ts',
+          {},
+          { workerOptions: { withExceptions: true } },
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.type).toBe('kernel');
+          expect(issue.severity).toBe('error');
+          expect(issue.message).toBe(
+            'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+          );
+
+          const userFrames = issue.stackFrames?.filter((frame) => frame.context === 'user');
+          expect(userFrames).toBeDefined();
+          expect(userFrames!.length).toBeGreaterThanOrEqual(2);
+
+          // First user frame: extrudeProfile at the extrude call
+          expect(userFrames![0]).toEqual(
+            expect.objectContaining({
+              functionName: 'extrudeProfile',
+              fileName: 'nested_helpers.ts',
+              lineNumber: 14,
+              context: 'user',
+            }),
+          );
+
+          // Second user frame: main at the call site
+          expect(userFrames![1]).toEqual(
+            expect.objectContaining({
+              functionName: 'main',
+              fileName: 'nested_helpers.ts',
+              lineNumber: 18,
+              context: 'user',
+            }),
+          );
+
+          // Library frames should be present
+          const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
+          expect(libraryFrames).toBeDefined();
+          expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
+
+          // Location should point to the error origin (extrudeProfile)
+          expect(issue.location).toEqual(
+            expect.objectContaining({
+              fileName: 'nested_helpers.ts',
+              startLineNumber: 14,
+            }),
+          );
+        }
+      });
+
+      it('should include stack frames for cross-file OC exceptions', async () => {
+        // Cross-file: main.ts imports buildGeometry from helpers.ts.
+        // The OC error originates in helpers.ts.
+        const result = await createGeometry(
+          {
+            'main.ts': `import { buildGeometry } from './helpers';
+import {} from 'replicad';
+export default function main() { return buildGeometry(); }
+`,
+            'helpers.ts': `import { draw } from 'replicad';
+
+export function buildGeometry() {
+  return draw()
+    .hLine(10)
+    .vLine(10)
+    .hLine(-10)
+    .close()
+    .sketchOnPlane()
+    .extrude(0);
+}
+`,
+          },
+          'main.ts',
+          {},
+          { workerOptions: { withExceptions: true } },
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.type).toBe('kernel');
+          expect(issue.severity).toBe('error');
+          expect(issue.message).toBe(
+            'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+          );
+
+          const userFrames = issue.stackFrames?.filter((frame) => frame.context === 'user');
+          expect(userFrames).toBeDefined();
+          expect(userFrames!.length).toBeGreaterThanOrEqual(2);
+
+          // First user frame: buildGeometry in helpers.ts
+          expect(userFrames![0]).toEqual(
+            expect.objectContaining({
+              functionName: 'buildGeometry',
+              fileName: 'helpers.ts',
+              context: 'user',
+            }),
+          );
+
+          // Second user frame: main in main.ts
+          expect(userFrames![1]).toEqual(
+            expect.objectContaining({
+              functionName: 'main',
+              fileName: 'main.ts',
+              context: 'user',
+            }),
+          );
+
+          // Library frames should be present
+          const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
+          expect(libraryFrames).toBeDefined();
+          expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
+
+          // Location should point to the error origin (helpers.ts)
+          expect(issue.location).toEqual(
+            expect.objectContaining({
+              fileName: 'helpers.ts',
+              startLineNumber: 10,
+            }),
+          );
+        }
+      });
+
+      it('should produce exact stack frames and location for fluent-chain OC exception', async () => {
+        // Fluent chain: draw().hLine().vLine().hLine().close().sketchOnPlane().extrude(0)
+        // Only .extrude(0) throws -- preceding fluent calls already completed
+        // and are NOT on the call stack. This is inherent to JavaScript: each
+        // call returns before the next one starts.
+        const code = `import { draw } from 'replicad';
+
+export default function main() {
+  return draw()
+    .hLine(10)
+    .vLine(10)
+    .hLine(-10)
+    .close()
+    .sketchOnPlane()
+    .extrude(0);
+}
+`;
+        // Line 10: "    .extrude(0);"
+        //           12345678901234567
+        //               ^          ^
+        //               5(.)      16(after ')' exclusive)
+
+        const result = await createGeometry(
+          { 'fluent.ts': code },
+          'fluent.ts',
+          {},
+          { workerOptions: { withExceptions: true } },
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.type).toBe('kernel');
+          expect(issue.severity).toBe('error');
+          expect(issue.message).toBe(
+            'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+          );
+
+          // --- Location should cover the full .extrude(0) expression ---
+          // Derived from the first 'user' context frame only (not library frames).
+          expect(issue.location).toEqual({
+            fileName: 'fluent.ts',
+            startLineNumber: 10,
+            startColumn: 5, // The '.' before extrude
+            endLineNumber: 10,
+            endColumn: 16, // One past the closing ')'
+          });
+
+          // --- User frames: only main at the extrude call site ---
+          // Note: stack frame columnNumber stays at the source-mapped position (6 = 'e' of extrude),
+          // while location.startColumn is extended backward to include the '.' (column 5).
+          const userFrames = issue.stackFrames?.filter((frame) => frame.context === 'user');
+          expect(userFrames).toEqual([
+            {
+              functionName: 'main',
+              fileName: 'fluent.ts',
+              lineNumber: 10,
+              columnNumber: 6,
+              context: 'user',
+            },
+          ]);
+
+          // --- Library frames: replicad call chain with source-mapped TS positions ---
+          const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
+          expect(libraryFrames).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'Sketch.extrude',
+                fileName: 'replicad/src/sketches/Sketch.ts',
+                context: 'library',
+              }),
+              expect.objectContaining({
+                functionName: 'basicFaceExtrusion',
+                fileName: 'replicad/src/addThickness.ts',
+                context: 'library',
+              }),
+            ]),
+          );
+
+          // --- Framework frames: proxy infrastructure ---
+          const frameworkNames = issue.stackFrames
+            ?.filter((frame) => frame.context === 'framework')
+            .map((frame) => frame.functionName);
+          expect(frameworkNames).toEqual(expect.arrayContaining(['rethrowIfNumeric']));
+
+          // --- Fluent API calls before extrude are NOT in the stack ---
+          // This is a JavaScript limitation: completed calls are not on the stack.
+          const allFunctionNames = issue.stackFrames?.map((frame) => frame.functionName) ?? [];
+          for (const completedCall of ['draw', 'hLine', 'vLine', 'close', 'sketchOnPlane']) {
+            expect(allFunctionNames).not.toContain(completedCall);
+          }
         }
       });
 
@@ -1206,42 +1560,44 @@ describe('ReplicadWorker', () => {
 
     describe('source map stack trace resolution', () => {
       it('should map stack trace to original source positions (single file)', async () => {
-        const code = [
-          "import {} from 'replicad';", // Line 1
-          '', // Line 2
-          'export const defaultParams = {};', // Line 3
-          '', // Line 4
-          'export default function main() {', // Line 5
-          '  return bla;', // Line 6 -- error here
-          '}', // Line 7
-        ].join('\n');
+        const code = `import {} from 'replicad';
+
+export const defaultParams = {};
+
+export default function main() {
+  return bla;
+}
+`;
 
         const result = await createGeometry({ 'main.ts': code }, 'main.ts');
         expect(result.success).toBe(false);
 
-        // Internal frames have machine-specific paths; filter to user frames only
+        // Framework/runtime frames have machine-specific paths; filter to user frames only
         const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-        expect({ ...issue, stackFrames: userFrames }).toEqual({
-          message: 'bla is not defined',
-          type: 'runtime',
-          severity: 'error',
-          // Source map should resolve to original file name (not blob UUID)
-          // and original line 6 (not post-banner offset line 9)
-          stackFrames: [
-            { functionName: 'main', fileName: 'main.ts', lineNumber: 6, columnNumber: 3, isInternal: false },
-          ],
-        });
+        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+        expect({ ...issue, stackFrames: userFrames }).toEqual(
+          expect.objectContaining({
+            message: 'bla is not defined',
+            type: 'runtime',
+            severity: 'error',
+            // Source map should resolve to original file name (not blob UUID)
+            // and original line 6 (not post-banner offset line 9)
+            stackFrames: [
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 6, columnNumber: 3, context: 'user' },
+            ],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({ fileName: 'main.ts', startLineNumber: 6 }),
+          }),
+        );
       });
 
       it('should map stack trace to correct file in multi-file project', async () => {
         const result = await createGeometry(
           {
-            'main.ts': [
-              "import { broken } from './lib/helper';",
-              "import {} from 'replicad';",
-              'export default function main() { return broken(); }',
-            ].join('\n'),
+            'main.ts': `import { broken } from './lib/helper';
+import {} from 'replicad';
+export default function main() { return broken(); }
+`,
             'lib/helper.ts': 'export function broken() { return bla; }',
           },
           'main.ts',
@@ -1250,47 +1606,54 @@ describe('ReplicadWorker', () => {
         expect(result.success).toBe(false);
 
         const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-        expect({ ...issue, stackFrames: userFrames }).toEqual({
-          message: 'bla is not defined',
-          type: 'runtime',
-          severity: 'error',
-          stackFrames: [
-            { functionName: 'broken', fileName: 'lib/helper.ts', lineNumber: 1, columnNumber: 28, isInternal: false },
-            { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, isInternal: false },
-          ],
-        });
+        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+        expect({ ...issue, stackFrames: userFrames }).toEqual(
+          expect.objectContaining({
+            message: 'bla is not defined',
+            type: 'runtime',
+            severity: 'error',
+            stackFrames: [
+              { functionName: 'broken', fileName: 'lib/helper.ts', lineNumber: 1, columnNumber: 28, context: 'user' },
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, context: 'user' },
+            ],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({ fileName: 'lib/helper.ts', startLineNumber: 1 }),
+          }),
+        );
       });
 
       it('should map stack trace through function call to correct line', async () => {
         // Error is inside a helper function `makeBadShape` called from main.
         // The stack trace should show both the error site and the call site.
-        const code = [
-          "import {} from 'replicad';", // Line 1
-          '', // Line 2
-          'function makeBadShape() {', // Line 3
-          '  return bla;', // Line 4 -- error here
-          '}', // Line 5
-          '', // Line 6
-          'export default function main() {', // Line 7
-          '  return makeBadShape();', // Line 8 -- call site
-          '}', // Line 9
-        ].join('\n');
+        const code = `import {} from 'replicad';
+
+function makeBadShape() {
+  return bla;
+}
+
+export default function main() {
+  return makeBadShape();
+}
+`;
 
         const result = await createGeometry({ 'main.ts': code }, 'main.ts');
         expect(result.success).toBe(false);
 
         const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-        expect({ ...issue, stackFrames: userFrames }).toEqual({
-          message: 'bla is not defined',
-          type: 'runtime',
-          severity: 'error',
-          stackFrames: [
-            { functionName: 'makeBadShape', fileName: 'main.ts', lineNumber: 4, columnNumber: 3, isInternal: false },
-            { functionName: 'main', fileName: 'main.ts', lineNumber: 8, columnNumber: 10, isInternal: false },
-          ],
-        });
+        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+        expect({ ...issue, stackFrames: userFrames }).toEqual(
+          expect.objectContaining({
+            message: 'bla is not defined',
+            type: 'runtime',
+            severity: 'error',
+            stackFrames: [
+              { functionName: 'makeBadShape', fileName: 'main.ts', lineNumber: 4, columnNumber: 3, context: 'user' },
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 8, columnNumber: 10, context: 'user' },
+            ],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({ fileName: 'main.ts', startLineNumber: 4 }),
+          }),
+        );
       });
 
       it('should map stack trace through 3-file import chain', async () => {
@@ -1298,15 +1661,13 @@ describe('ReplicadWorker', () => {
         // Error is in bad.ts, called through middle.ts from main.ts.
         const result = await createGeometry(
           {
-            'main.ts': [
-              "import { getShape } from './lib/middle';",
-              "import {} from 'replicad';",
-              'export default function main() { return getShape(); }',
-            ].join('\n'),
-            'lib/middle.ts': [
-              "import { broken } from './bad';",
-              'export function getShape() { return broken(); }',
-            ].join('\n'),
+            'main.ts': `import { getShape } from './lib/middle';
+import {} from 'replicad';
+export default function main() { return getShape(); }
+`,
+            'lib/middle.ts': `import { broken } from './bad';
+export function getShape() { return broken(); }
+`,
             'lib/bad.ts': 'export function broken() { return bla; }',
           },
           'main.ts',
@@ -1315,21 +1676,51 @@ describe('ReplicadWorker', () => {
         expect(result.success).toBe(false);
 
         const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-        expect({ ...issue, stackFrames: userFrames }).toEqual({
-          message: 'bla is not defined',
-          type: 'runtime',
-          severity: 'error',
-          stackFrames: [
-            { functionName: 'broken', fileName: 'lib/bad.ts', lineNumber: 1, columnNumber: 28, isInternal: false },
-            { functionName: 'getShape', fileName: 'lib/middle.ts', lineNumber: 2, columnNumber: 37, isInternal: false },
-            { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, isInternal: false },
-          ],
-        });
+        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+        expect({ ...issue, stackFrames: userFrames }).toEqual(
+          expect.objectContaining({
+            message: 'bla is not defined',
+            type: 'runtime',
+            severity: 'error',
+            stackFrames: [
+              { functionName: 'broken', fileName: 'lib/bad.ts', lineNumber: 1, columnNumber: 28, context: 'user' },
+              { functionName: 'getShape', fileName: 'lib/middle.ts', lineNumber: 2, columnNumber: 37, context: 'user' },
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, context: 'user' },
+            ],
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({ fileName: 'lib/bad.ts', startLineNumber: 1 }),
+          }),
+        );
       });
     });
 
     describe('CDN imports', () => {
+      // Mock fetch to avoid real CDN requests - tests must work without internet.
+      // Stub CDN URLs with minimal modules; pass everything else through (WASM loading, etc.).
+      const originalFetch = globalThis.fetch;
+
+      beforeEach(() => {
+        vi.stubGlobal(
+          'fetch',
+          vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+            if (url.includes('replicad-decorate')) {
+              return new Response('export function drawSVG() {} export function addVoronoi() {}', {
+                status: 200,
+                headers: { 'Content-Type': 'application/javascript' },
+              });
+            }
+
+            return originalFetch(input, init);
+          }),
+        );
+      });
+
+      afterEach(() => {
+        vi.stubGlobal('fetch', originalFetch);
+      });
+
       it('should bundle and execute code with HTTPS CDN imports', async () => {
         const result = await createGeometry(
           {
@@ -1378,16 +1769,20 @@ describe('ReplicadWorker', () => {
           expect(result.issues.length).toBeGreaterThan(0);
 
           const issue = result.issues[0]!;
-          const userFrames = issue.stackFrames?.filter((f) => !f.isInternal);
-          expect({ ...issue, stackFrames: userFrames }).toEqual({
-            message: 'undefinedFunction is not defined',
-            type: 'runtime',
-            severity: 'error',
-            // Source map should resolve to full relative path including subdirectory
-            stackFrames: [
-              { functionName: 'main', fileName: 'project/main.ts', lineNumber: 5, columnNumber: 15, isInternal: false },
-            ],
-          });
+          const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
+          expect({ ...issue, stackFrames: userFrames }).toEqual(
+            expect.objectContaining({
+              message: 'undefinedFunction is not defined',
+              type: 'runtime',
+              severity: 'error',
+              // Source map should resolve to full relative path including subdirectory
+              stackFrames: [
+                { functionName: 'main', fileName: 'project/main.ts', lineNumber: 5, columnNumber: 15, context: 'user' },
+              ],
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+              location: expect.objectContaining({ fileName: 'project/main.ts', startLineNumber: 5 }),
+            }),
+          );
         }
       });
     });
