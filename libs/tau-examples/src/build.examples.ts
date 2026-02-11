@@ -15,12 +15,12 @@ export const jscadExamples: Model[] = [
     name: 'JSCAD Cube',
     description:
       'The perfect starting point for your 3D modeling journey. This simple yet powerful cube demonstrates the fundamentals of parametric design with JSCAD. Adjust the size parameter to create anything from tiny components to large building blocks. Ideal for learning the basics or as a foundation for more complex geometric shapes.',
-    code: `import { primitives } from '@jscad/modeling';
+    code: `import { cube } from '@jscad/modeling/primitives'
+import type { Geom3 } from '@jscad/modeling'
 
 export const defaultParams = { size: 20 };
 
-export default function main(p = defaultParams) {
-  const { cube } = primitives;
+export default function main(p = defaultParams): Geom3 {
   return cube({ size: p.size });
 }
 `,
@@ -31,12 +31,12 @@ export default function main(p = defaultParams) {
     name: 'JSCAD Cylinder',
     description:
       'Create precise cylindrical shapes with full control over dimensions and smoothness. Perfect for rods, pins, spacers, or any round component. Adjust height and radius for your exact needs, and fine-tune the segment count to balance between smooth curves and performance. Essential for mechanical parts, architectural elements, or decorative objects.',
-    code: `import { primitives } from '@jscad/modeling';
+    code: `import { cylinder } from '@jscad/modeling/primitives'
+import type { Geom3 } from '@jscad/modeling'
 
 export const defaultParams = { height: 20, radius: 8, segments: 48 };
 
-export default function main(p = defaultParams) {
-  const { cylinder } = primitives;
+export default function main(p = defaultParams): Geom3 {
   return cylinder({ height: p.height, radius: p.radius, segments: p.segments });
 }
 `,
@@ -47,38 +47,36 @@ export default function main(p = defaultParams) {
     name: 'Involute Gear',
     description:
       'Design precision mechanical gears with mathematically accurate involute profiles. This advanced example showcases complex parametric modeling with customizable tooth count, pitch, pressure angle, and thickness. Perfect for creating functional gear systems, educational demonstrations, or replacement parts. Features optional center hole for shaft mounting and professional-grade gear geometry calculations.',
-    code: `"use strict"
+    code: `import { cylinder, polygon } from '@jscad/modeling/primitives'
+import { rotateZ } from '@jscad/modeling/transforms'
+import { extrudeLinear } from '@jscad/modeling/extrusions'
+import { union, subtract } from '@jscad/modeling/booleans'
+import { vec2 } from '@jscad/modeling/maths'
+import { degToRad } from '@jscad/modeling/utils'
+import type { Geom3, Vec2, Vec3 } from '@jscad/modeling'
 
-const jscad = require('@jscad/modeling')
-const { cylinder, polygon } = jscad.primitives
-const { rotateZ } = jscad.transforms
-const { extrudeLinear } = jscad.extrusions
-const { union, subtract } = jscad.booleans
-const { vec2 } = jscad.maths
-const { degToRad } = jscad.utils
+export const defaultParams = {
+  numTeeth: 10,
+  circularPitch: 5,
+  pressureAngle: 20,
+  clearance: 0.0,
+  thickness: 5,
+  centerHoleRadius: 2
+}
 
-const getParameterDefinitions = () => [
-  { name: 'numTeeth', caption: 'Number of teeth:', type: 'int', initial: 10, min: 5, max: 20 },
-  { name: 'circularPitch', caption: 'Circular pitch:', type: 'float', initial: 5 },
-  { name: 'pressureAngle', caption: 'Pressure angle:', type: 'float', initial: 20 },
-  { name: 'clearance', caption: 'Clearance:', type: 'float', initial: 0.0 },
-  { name: 'thickness', caption: 'Thickness:', type: 'float', initial: 5, min: 0 },
-  { name: 'centerHoleRadius', caption: 'Center hole:', type: 'float', initial: 2, min: 0 }
-]
-
-const main = (params) => {
+export default function main(p = defaultParams): Geom3 {
   let gear = involuteGear(
-    params.numTeeth,
-    params.circularPitch,
-    degToRad(params.pressureAngle),
-    params.clearance,
-    params.thickness
+    p.numTeeth,
+    p.circularPitch,
+    degToRad(p.pressureAngle),
+    p.clearance,
+    p.thickness
   )
-  if (params.centerHoleRadius > 0) {
+  if (p.centerHoleRadius > 0) {
     const centerHole = cylinder({
-      height: params.thickness,
-      radius: params.centerHoleRadius,
-      center: [0, 0, params.thickness / 2],
+      height: p.thickness,
+      radius: p.centerHoleRadius,
+      center: [0, 0, p.thickness / 2] as Vec3,
       segments: 16
     })
     gear = subtract(gear, centerHole)
@@ -86,7 +84,7 @@ const main = (params) => {
   return gear
 }
 
-const involuteGear = (numTeeth, circularPitch, pressureAngle, clearance, thickness) => {
+const involuteGear = (numTeeth: number, circularPitch: number, pressureAngle: number, clearance: number, thickness: number): Geom3 => {
   const addendum = circularPitch / Math.PI
   const dedendum = addendum + clearance
 
@@ -104,7 +102,7 @@ const involuteGear = (numTeeth, circularPitch, pressureAngle, clearance, thickne
   const angularToothWidthAtBase = (Math.PI / numTeeth) + (2 * diffAngle)
 
   const toothCurveResolution = 5
-  const points = [[0, 0]]
+  const points: [number, number][] = [[0, 0]]
   for (let i = 0; i <= toothCurveResolution; i++) {
     const angle = maxAngle * Math.pow(i / toothCurveResolution, 2 / 3)
     const tanLength = angle * baseRadius
@@ -119,32 +117,30 @@ const involuteGear = (numTeeth, circularPitch, pressureAngle, clearance, thickne
     points[(2 * toothCurveResolution) + 2 - i] = [radiantVector[0] + tangentVector[0], radiantVector[1] + tangentVector[1]]
   }
 
-  const singleTooth2D = polygon({ points, closed: true })
+  const singleTooth2D = polygon({ points })
   const singleTooth3D = extrudeLinear({ height: thickness }, singleTooth2D)
 
-  const allTeeth = []
+  const allTeeth: Geom3[] = []
   for (let j = 0; j < numTeeth; j++) {
     const currentToothAngle = j * 2 * Math.PI / numTeeth
     const rotatedTooth = rotateZ(currentToothAngle, singleTooth3D)
     allTeeth.push(rotatedTooth)
   }
 
-  const rootPoints = []
+  const rootPoints: Vec2[] = []
   const toothAngle = 2 * Math.PI / numTeeth
   const toothCenterAngle = 0.5 * angularToothWidthAtBase
   for (let k = 0; k < numTeeth; k++) {
     const currentAngle = toothCenterAngle + k * toothAngle
     const p1 = vec2.scale(vec2.create(), vec2.fromAngleRadians(vec2.create(), currentAngle), rootRadius)
-    rootPoints.push([p1[0], p1[1]])
+    rootPoints.push([p1[0], p1[1]] as Vec2)
   }
 
-  const rootCircle2D = polygon({ points: rootPoints, closed: true })
+  const rootCircle2D = polygon({ points: rootPoints })
   const rootcircle = extrudeLinear({ height: thickness }, rootCircle2D)
 
   return union(rootcircle, allTeeth)
 }
-
-module.exports = { main, getParameterDefinitions }
 `,
     thumbnail: '/placeholder.svg',
   },
