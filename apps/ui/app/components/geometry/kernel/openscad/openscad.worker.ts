@@ -34,7 +34,7 @@ import { joinPath } from '#utils/path.utils.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { createKernelError, createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import type { AddErrorFn, GetFileContentsFn } from '#components/geometry/kernel/openscad/parse-output.js';
-import { parseStderrLine } from '#components/geometry/kernel/openscad/parse-output.js';
+import { OpenScadStderrParser } from '#components/geometry/kernel/openscad/parse-output.js';
 // Font files for OpenSCAD text() rendering (Vite ?url imports)
 import geistRegularUrl from '#components/geometry/kernel/openscad/fonts/Geist-Regular.ttf?url';
 import geistBoldUrl from '#components/geometry/kernel/openscad/fonts/Geist-Bold.ttf?url';
@@ -598,6 +598,10 @@ export class OpenScadWorker extends KernelWorker {
       return logLevels.info;
     };
 
+    // Create a stateful stderr parser to accumulate TRACE lines as stack frames
+    // on the preceding error. This enables cross-file call stack resolution.
+    const stderrParser = addError ? new OpenScadStderrParser(addError, getFileContents, mainFilePath) : undefined;
+
     const instance = await createOpenSCAD({
       noInitialRun: true,
       print(message) {
@@ -605,9 +609,7 @@ export class OpenScadWorker extends KernelWorker {
       },
       printErr(message) {
         logger.custom(parseLogLevel(message), message, { data: { operation: 'internal' } });
-        if (addError) {
-          parseStderrLine(message, addError, getFileContents, mainFilePath);
-        }
+        stderrParser?.parseLine(message);
       },
     });
 
