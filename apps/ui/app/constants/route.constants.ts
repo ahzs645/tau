@@ -13,11 +13,14 @@ import {
   UsersRound,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 type NavRoute = {
   title: string;
   url: string;
   icon: LucideIcon;
+  /** When set, clicking the item calls this instead of navigating to `url`. */
+  action?: () => void;
 };
 
 type NavProject = {
@@ -97,6 +100,9 @@ export const navRoutes: {
       title: 'Settings',
       url: '/settings',
       icon: Settings,
+      action(): void {
+        openSettingsDialog();
+      },
     },
   ],
   projects: [

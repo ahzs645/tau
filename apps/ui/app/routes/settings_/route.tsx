@@ -1,37 +1,12 @@
-import { useEffect } from 'react';
-import { Link, Outlet, redirect, useLocation, useNavigate } from 'react-router';
-import type { LoaderFunction } from 'react-router';
-import type { Handle } from '#types/matches.types.js';
-import { Button } from '#components/ui/button.js';
+import { redirect } from 'react-router';
 
-export const handle: Handle = {
-  breadcrumb() {
-    return (
-      <Button asChild variant="ghost">
-        <Link to="/settings">Settings</Link>
-      </Button>
-    );
-  },
-};
-
-export const loader: LoaderFunction = async ({ request }) => {
-  const url = new URL(request.url);
-  if (url.pathname === '/settings') {
-    return redirect('/settings/general');
-  }
-
-  return null;
-};
-
-export default function SettingsPage(): React.JSX.Element {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    if (location.pathname === '/settings') {
-      void navigate('/settings/general');
-    }
-  }, [navigate, location.pathname]);
-
-  return <Outlet />;
+/**
+ * Redirect /settings to /?settings=general
+ *
+ * The settings dialog is now a global modal driven by the `?settings`
+ * search param. This route ensures direct navigation or bookmarked
+ * links to `/settings` produce a proper 302 redirect.
+ */
+export function loader(): Response {
+  return redirect('/?settings=general');
 }
