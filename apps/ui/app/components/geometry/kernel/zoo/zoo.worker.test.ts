@@ -554,7 +554,6 @@ describe('ZooWorker', () => {
       });
 
       it('should return error with correct location for single-file undefined variable', async () => {
-        // Error is on line 3 (`garbage` is undefined)
         const result = await getParametersWithError(
           {
             'main.kcl': [
@@ -567,32 +566,22 @@ describe('ZooWorker', () => {
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues).toBeDefined();
-          expect(result.issues!.length).toBeGreaterThan(0);
-
-          const issue = result.issues![0] as {
-            message: string;
-            location?: { fileName: string; startLineNumber: number; startColumn: number };
-          };
-
-          // Error should reference main.kcl
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toBe('main.kcl');
-          // Error should point to line 3 where `garbage` is
-          expect(issue.location!.startLineNumber).toBe(3);
-        }
+        expect(result.issues).toEqual([
+          {
+            message: '`garbage` is not defined',
+            severity: 'error',
+            type: 'unknown',
+            stack: '    at <anonymous> (main.kcl:3:14)',
+            location: { fileName: 'main.kcl', startLineNumber: 3, startColumn: 14 },
+            stackFrames: [{ fileName: 'main.kcl', lineNumber: 3, columnNumber: 14 }],
+          },
+        ]);
       });
 
       it('should return error with imported file name in message for multi-file project', async () => {
-        // Error is in bad.kcl (line 3: `garbage` is undefined), imported by main.kcl.
-        //
         // NOTE: The KCL WASM only provides sourceRanges/backtrace for the import
         // site in main.kcl (moduleId 0), not for the actual error in bad.kcl.
         // The imported filename and sub-error are embedded in the message string.
-        // Accurate cross-file stack traces would require the WASM to include
-        // sourceRanges with moduleId > 0 and character offsets for the imported file,
-        // which it currently does not provide.
         const result = await getParametersWithError(
           {
             'main.kcl': [
@@ -610,24 +599,17 @@ describe('ZooWorker', () => {
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues).toBeDefined();
-          expect(result.issues!.length).toBeGreaterThan(0);
-
-          const issue = result.issues![0] as {
-            message: string;
-            location?: { fileName: string; startLineNumber: number; startColumn: number };
-          };
-
-          // The error message should mention the imported file and the actual error
-          expect(issue.message).toContain('bad.kcl');
-          expect(issue.message).toMatch(/garbage.*is not defined/i);
-
-          // Location currently points to the import site in main.kcl (WASM limitation)
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toBe('main.kcl');
-          expect(issue.location!.startLineNumber).toBe(3);
-        }
+        expect(result.issues).toEqual([
+          {
+            message: 'Error loading imported file (bad.kcl). Open it to view more details.\n  `garbage` is not defined',
+            severity: 'error',
+            type: 'compilation',
+            stack: '    at <anonymous> (main.kcl:3:0)',
+            // Location points to the import site in main.kcl (WASM limitation)
+            location: { fileName: 'main.kcl', startLineNumber: 3, startColumn: 0 },
+            stackFrames: [{ fileName: 'main.kcl', lineNumber: 3, columnNumber: 0 }],
+          },
+        ]);
       });
 
       it('should return error with correct stack trace for function call error', async () => {
@@ -649,41 +631,22 @@ describe('ZooWorker', () => {
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues).toBeDefined();
-          expect(result.issues!.length).toBeGreaterThan(0);
-
-          const issue = result.issues![0] as {
-            message: string;
-            location?: { fileName: string; startLineNumber: number; startColumn: number };
-            stackFrames?: Array<{
-              functionName?: string;
-              fileName?: string;
-              lineNumber?: number;
-              columnNumber?: number;
-            }>;
-          };
-
-          expect(issue.message).toMatch(/garbage.*is not defined/i);
-
-          // Location should point to the error site (line 4 inside the function)
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toBe('main.kcl');
-          expect(issue.location!.startLineNumber).toBe(4);
-
-          // Stack frames should show the call chain:
-          // Frame 0: makeBadShape at line 4 (error site)
-          // Frame 1: <anonymous> at line 7 (call site)
-          expect(issue.stackFrames).toBeDefined();
-          expect(issue.stackFrames!.length).toBe(2);
-
-          expect(issue.stackFrames![0]!.functionName).toBe('makeBadShape');
-          expect(issue.stackFrames![0]!.fileName).toBe('main.kcl');
-          expect(issue.stackFrames![0]!.lineNumber).toBe(4);
-
-          expect(issue.stackFrames![1]!.fileName).toBe('main.kcl');
-          expect(issue.stackFrames![1]!.lineNumber).toBe(7);
-        }
+        expect(result.issues).toEqual([
+          {
+            message: '`garbage` is not defined',
+            severity: 'error',
+            type: 'unknown',
+            stack: '    at makeBadShape (main.kcl:4:9)\n    at <anonymous> (main.kcl:7:9)',
+            location: { fileName: 'main.kcl', startLineNumber: 4, startColumn: 9 },
+            // Stack frames show the call chain:
+            // Frame 0: makeBadShape at line 4 (error site)
+            // Frame 1: <anonymous> at line 7 (call site)
+            stackFrames: [
+              { functionName: 'makeBadShape', fileName: 'main.kcl', lineNumber: 4, columnNumber: 9 },
+              { fileName: 'main.kcl', lineNumber: 7, columnNumber: 9 },
+            ],
+          },
+        ]);
       });
 
       it('should return error with nested import chain in message for 3-file project', async () => {
@@ -717,32 +680,19 @@ describe('ZooWorker', () => {
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues).toBeDefined();
-          expect(result.issues!.length).toBeGreaterThan(0);
-
-          const issue = result.issues![0] as {
-            message: string;
-            location?: { fileName: string; startLineNumber: number; startColumn: number };
-            stackFrames?: Array<{ fileName?: string; lineNumber?: number }>;
-          };
-
-          // The nested message should show the full import chain
-          expect(issue.message).toContain('middle.kcl');
-          expect(issue.message).toContain('bad.kcl');
-          expect(issue.message).toMatch(/garbage.*is not defined/i);
-
-          // Location points to the import site in main.kcl (WASM limitation)
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toBe('main.kcl');
-          expect(issue.location!.startLineNumber).toBe(3);
-
-          // Only one stack frame at the import site (no cross-file frames)
-          expect(issue.stackFrames).toBeDefined();
-          expect(issue.stackFrames!.length).toBe(1);
-          expect(issue.stackFrames![0]!.fileName).toBe('main.kcl');
-          expect(issue.stackFrames![0]!.lineNumber).toBe(3);
-        }
+        expect(result.issues).toEqual([
+          {
+            message:
+              'Error loading imported file (middle.kcl). Open it to view more details.\n  Error loading imported file (bad.kcl). Open it to view more details.\n  `garbage` is not defined',
+            severity: 'error',
+            type: 'compilation',
+            stack: '    at <anonymous> (main.kcl:3:0)',
+            // Location points to the import site in main.kcl (WASM limitation)
+            location: { fileName: 'main.kcl', startLineNumber: 3, startColumn: 0 },
+            // Only one stack frame at the import site (no cross-file frames)
+            stackFrames: [{ fileName: 'main.kcl', lineNumber: 3, columnNumber: 0 }],
+          },
+        ]);
       });
 
       it('should return error for syntax error with missing closing parenthesis', async () => {
