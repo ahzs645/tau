@@ -74,6 +74,7 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
         Array<{
           message: string;
           location?: {
+            fileName: string;
             startLineNumber: number;
             startColumn: number;
             endLineNumber?: number;
@@ -92,23 +93,45 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
 
     const currentFiles = new Set<string>();
 
-    // Set markers for all files with issues
+    // Set markers for all files with issues.
+    // Issues may reference files different from the entry file (cross-file errors),
+    // so we group by location.fileName to place markers on the correct file.
     for (const [filePath, issues] of kernelIssues) {
-      currentFiles.add(filePath);
+      // Group issues by their actual source file (from location.fileName),
+      // falling back to the entry filePath for issues without location.
+      const issuesByFile = new Map<string, Monaco.editor.IMarkerData[]>();
 
-      const uri = monaco.Uri.file(`/${filePath}`).toString();
-      const markers: Monaco.editor.IMarkerData[] = issues
-        .filter((issue) => issue.location)
-        .map((issue) => ({
-          startLineNumber: issue.location!.startLineNumber,
-          startColumn: issue.location!.startColumn,
-          endLineNumber: issue.location!.endLineNumber ?? issue.location!.startLineNumber,
-          endColumn: issue.location!.endColumn ?? issue.location!.startColumn + 1,
+      for (const issue of issues) {
+        if (!issue.location) {
+          continue;
+        }
+
+        const targetFile = issue.location.fileName;
+        if (!issuesByFile.has(targetFile)) {
+          issuesByFile.set(targetFile, []);
+        }
+
+        issuesByFile.get(targetFile)!.push({
+          startLineNumber: issue.location.startLineNumber,
+          startColumn: issue.location.startColumn,
+          endLineNumber: issue.location.endLineNumber ?? issue.location.startLineNumber,
+          endColumn: issue.location.endColumn ?? issue.location.startColumn + 1,
           message: issue.message,
           severity: getMarkerSeverity(monaco, issue.severity),
-        }));
+        });
+      }
 
-      markerService.setMarkers(uri, kernelMarkerOwner, markers);
+      // Apply markers to each target file
+      for (const [targetFile, markers] of issuesByFile) {
+        currentFiles.add(targetFile);
+        const uri = monaco.Uri.file(`/${targetFile}`).toString();
+        markerService.setMarkers(uri, kernelMarkerOwner, markers);
+      }
+
+      // If no issues had location, still track the entry file to clear stale markers
+      if (issuesByFile.size === 0) {
+        currentFiles.add(filePath);
+      }
     }
 
     // Clear markers for files that no longer have issues
