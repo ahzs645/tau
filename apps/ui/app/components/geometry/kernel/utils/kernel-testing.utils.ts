@@ -82,6 +82,16 @@ export async function clearTestFilesystem(): Promise<void> {
 // =============================================================================
 
 /**
+ * Options for initializing a kernel worker in tests.
+ */
+export type InitializeWorkerOptions = {
+  /** Custom log handler */
+  onLog?: OnWorkerLog;
+  /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
+  workerOptions?: Record<string, unknown>;
+};
+
+/**
  * Initialize a kernel worker using the production code path.
  * Uses MessageChannel to connect to the real fileManager, ensuring tests
  * exercise the same code path as production.
@@ -91,12 +101,12 @@ export async function clearTestFilesystem(): Promise<void> {
  * so the fileManager's ensureFilesystemConfigured('indexeddb') just waits.
  *
  * @param worker - The kernel worker instance to initialize
- * @param options - Optional configuration
+ * @param options - Optional configuration (onLog, workerOptions for kernel-specific settings like withExceptions)
  * @returns Promise resolving to the initialized worker
  */
 export async function initializeWorkerForTesting<T extends KernelWorker>(
   worker: T,
-  options?: { onLog?: OnWorkerLog },
+  options?: InitializeWorkerOptions,
 ): Promise<T> {
   // Create MessageChannel to connect worker to fileManager
   const channel = new MessageChannel();
@@ -111,7 +121,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
         }),
     },
     { fileManagerPort: channel.port2 },
-    {},
+    options?.workerOptions ?? {},
   );
 
   return worker;
@@ -386,12 +396,21 @@ export function createGeometryFile(filename: string, basePath = '/builds/test'):
 export type KernelWorkerConstructor<T extends KernelWorker> = new () => T;
 
 /**
+ * Options for createTestWorker.
+ */
+export type CreateTestWorkerOptions = {
+  /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
+  workerOptions?: Record<string, unknown>;
+};
+
+/**
  * Create and initialize a kernel worker for testing.
  * Seeds the filesystem with provided files before creating the worker.
  * Uses the real production code path via initializeWorkerForTesting.
  *
  * @param WorkerClass - The worker class to instantiate (e.g., JscadWorker, OpenScadWorker)
  * @param files - Record of relative paths to file contents
+ * @param options - Optional worker options (e.g., { workerOptions: { withExceptions: true } } for ReplicadWorker)
  * @returns Promise resolving to the initialized worker
  *
  * @example
@@ -399,11 +418,15 @@ export type KernelWorkerConstructor<T extends KernelWorker> = new () => T;
  * const worker = await createTestWorker(JscadWorker, {
  *   'cube.ts': `import { primitives } from '@jscad/modeling'; ...`
  * });
+ * const replicadWorker = await createTestWorker(ReplicadWorker, files, {
+ *   workerOptions: { withExceptions: true }
+ * });
  * ```
  */
 export async function createTestWorker<T extends KernelWorker>(
   WorkerClass: KernelWorkerConstructor<T>,
   files: Record<string, string>,
+  options?: CreateTestWorkerOptions,
 ): Promise<T> {
   const basePath = '/builds/test';
 
@@ -418,7 +441,9 @@ export async function createTestWorker<T extends KernelWorker>(
 
   // Create worker and initialize using production code path
   const worker = new WorkerClass();
-  await initializeWorkerForTesting(worker);
+  await initializeWorkerForTesting(worker, {
+    workerOptions: options?.workerOptions,
+  });
 
   return worker;
 }
@@ -458,6 +483,7 @@ export async function getTestParameters<T extends KernelWorker>(
  * @param files - Record of relative paths to file contents
  * @param mainFile - The main file to create geometry from
  * @param parameters - Optional parameters to pass to the geometry creation
+ * @param options - Optional worker options (e.g., { workerOptions: { withExceptions: true } } for ReplicadWorker)
  * @returns Promise resolving to the geometry creation result
  */
 export async function createTestGeometry<T extends KernelWorker>(
@@ -465,8 +491,9 @@ export async function createTestGeometry<T extends KernelWorker>(
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
+  options?: CreateTestWorkerOptions,
 ): Promise<CreateGeometryResult> {
-  const worker = await createTestWorker(WorkerClass, files);
+  const worker = await createTestWorker(WorkerClass, files, options);
   const geometryFile = createGeometryFile(mainFile);
   return worker[kernelSymbols.createGeometryEntry](geometryFile, parameters);
 }
