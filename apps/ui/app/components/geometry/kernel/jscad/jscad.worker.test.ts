@@ -1,4 +1,5 @@
 // @vitest-environment node
+/* eslint-disable max-lines -- comprehensive kernel test suite */
 import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
 import { JscadWorker } from '#components/geometry/kernel/jscad/jscad.worker.js';
@@ -105,6 +106,76 @@ describe('JscadWorker', () => {
             function main() {
               return primitives.cube({ size: 10 });
             }
+            module.exports = { main };
+          `,
+        });
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
+        expect(result).toBe(true);
+      });
+    });
+
+    describe('Should handle files with @jscad/modeling submodule imports', () => {
+      it('should handle TypeScript file with import from @jscad/modeling/primitives', async () => {
+        const worker = await createWorker({
+          'cube.ts': `
+            import { cube } from '@jscad/modeling/primitives';
+
+            export default function main() {
+              return cube({ size: 10 });
+            }
+          `,
+        });
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
+        expect(result).toBe(true);
+      });
+
+      it('should handle file with multiple submodule imports', async () => {
+        const worker = await createWorker({
+          'main.ts': `
+            import { cylinder, polygon } from '@jscad/modeling/primitives';
+            import { rotateZ } from '@jscad/modeling/transforms';
+            import { extrudeLinear } from '@jscad/modeling/extrusions';
+            import { union, subtract } from '@jscad/modeling/booleans';
+            import { vec2 } from '@jscad/modeling/maths';
+            import { degToRad } from '@jscad/modeling/utils';
+            import type { Vec2 } from '@jscad/modeling/maths/vec2';
+            import type { Geom3 } from '@jscad/modeling/geometries/geom3';
+
+            export default function main() {
+              return cylinder({ height: 10, radius: 5 });
+            }
+          `,
+        });
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('main.ts'));
+        expect(result).toBe(true);
+      });
+
+      it('should handle file with type-only imports alongside submodule value imports', async () => {
+        const worker = await createWorker({
+          'cube.ts': `
+            import { cube } from '@jscad/modeling/primitives';
+            import type { Geom3 } from '@jscad/modeling';
+
+            export const defaultParams = { size: 20 };
+
+            export default function main(p = defaultParams): Geom3 {
+              return cube({ size: p.size });
+            }
+          `,
+        });
+        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
+        expect(result).toBe(true);
+      });
+
+      it('should handle JavaScript file with require from @jscad/modeling/primitives', async () => {
+        const worker = await createWorker({
+          'cube.js': `
+            const { cube } = require('@jscad/modeling/primitives');
+
+            function main() {
+              return cube({ size: 10 });
+            }
+
             module.exports = { main };
           `,
         });
@@ -1051,6 +1122,630 @@ module.exports = { main, getParameterDefinitions }
       // JSCAD only supports gltf/glb
       const exportResult = await worker[kernelSymbols.exportGeometryEntry]('step');
       expect(exportResult.success).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // Tests: TypeScript Bundling Support
+  // ===========================================================================
+
+  describe('TypeScript bundling', () => {
+    describe('Type annotations', () => {
+      it('should bundle code with typed function parameters and return types', async () => {
+        const result = await createGeometry(
+          {
+            'typed-cube.ts': `
+              import { primitives, type Geom3 } from '@jscad/modeling';
+
+              export const defaultParams = {
+                size: 20,
+                segments: 32,
+              };
+
+              type CubeParams = { size: number; segments: number };
+
+              export default function main(p: CubeParams = defaultParams): Geom3 {
+                return primitives.cube({ size: p.size });
+              }
+            `,
+          },
+          'typed-cube.ts',
+          { size: 20, segments: 32 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+      });
+
+      it('should bundle code with type assertions (as)', async () => {
+        const result = await createGeometry(
+          {
+            'assertions.ts': `
+              import { primitives, transforms, type Vec3 } from '@jscad/modeling';
+
+              export default function main() {
+                const size = 10 as number;
+                const offset: Vec3 = [20, 0, 0];
+                const cube = primitives.cube({ size });
+                return transforms.translate(offset, cube);
+              }
+            `,
+          },
+          'assertions.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should bundle code with const assertions (as const)', async () => {
+        const result = await createGeometry(
+          {
+            'const-assertion.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              const config = {
+                size: 15,
+                center: [0, 0, 0] as const,
+              } as const;
+
+              export default function main() {
+                return primitives.cuboid({ size: [config.size, config.size, config.size] });
+              }
+            `,
+          },
+          'const-assertion.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [15, 15, 15], 0.5);
+      });
+    });
+
+    describe('Type-only imports', () => {
+      it('should strip import type declarations from @jscad/modeling', async () => {
+        const result = await createGeometry(
+          {
+            'type-import.ts': `
+              import { primitives } from '@jscad/modeling';
+              import type { Geom3 } from '@jscad/modeling';
+
+              export default function main() {
+                const cube: Geom3 = primitives.cube({ size: 10 });
+                return cube;
+              }
+            `,
+          },
+          'type-import.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+
+      it('should strip inline type imports (import { type X })', async () => {
+        const result = await createGeometry(
+          {
+            'inline-type.ts': `
+              import { primitives, booleans, type Geom3, type Vec3 } from '@jscad/modeling';
+
+              export default function main() {
+                const cube1: Geom3 = primitives.cube({ size: 10 });
+                const cube2: Geom3 = primitives.cube({ size: 8 });
+                return booleans.union(cube1, cube2);
+              }
+            `,
+          },
+          'inline-type.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should strip type imports from submodules', async () => {
+        const result = await createGeometry(
+          {
+            'submodule-type.ts': `
+              import { cuboid } from '@jscad/modeling/primitives';
+              import type { Geom3 } from '@jscad/modeling';
+
+              export default function main() {
+                const cube: Geom3 = cuboid({ size: [10, 10, 10] });
+                return cube;
+              }
+            `,
+          },
+          'submodule-type.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+
+      it('should handle Geom3 type import from root with submodule value imports', async () => {
+        const result = await createGeometry(
+          {
+            'geom-type.ts': `
+              import { cube } from '@jscad/modeling/primitives';
+              import type { Geom3 } from '@jscad/modeling';
+
+              export const defaultParams = { size: 20 };
+
+              export default function main(p = defaultParams): Geom3 {
+                return cube({ size: p.size });
+              }
+            `,
+          },
+          'geom-type.ts',
+          { size: 20 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+      });
+
+      it('should handle Geom3 type with multiple submodule value imports', async () => {
+        const result = await createGeometry(
+          {
+            'multi-type.ts': `
+              import { cylinder } from '@jscad/modeling/primitives';
+              import { subtract } from '@jscad/modeling/booleans';
+              import type { Geom3 } from '@jscad/modeling';
+
+              export const defaultParams = { radius: 10, height: 20, holeRadius: 3 };
+
+              export default function main(p = defaultParams): Geom3 {
+                const outer = cylinder({ radius: p.radius, height: p.height });
+                const inner = cylinder({ radius: p.holeRadius, height: p.height + 2 });
+                return subtract(outer, inner);
+              }
+            `,
+          },
+          'multi-type.ts',
+          { radius: 10, height: 20, holeRadius: 3 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should handle geom3.Geom3 namespace type from @jscad/modeling/geometries (non-standard)', async () => {
+        const result = await createGeometry(
+          {
+            'ns-type.ts': `
+              import { cube } from '@jscad/modeling/primitives';
+              import type { geom3 } from '@jscad/modeling/geometries';
+
+              export default function main(): geom3.Geom3 {
+                return cube({ size: 10 });
+              }
+            `,
+          },
+          'ns-type.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+    });
+
+    describe('Interfaces and type aliases', () => {
+      it('should bundle code with local interface definitions', async () => {
+        const result = await createGeometry(
+          {
+            'interfaces.ts': `
+              import { primitives, transforms, booleans, type Vec3 } from '@jscad/modeling';
+
+              interface CubeConfig {
+                size: number;
+                offset: Vec3;
+              }
+
+              function createOffsetCube(config: CubeConfig) {
+                const cube = primitives.cube({ size: config.size });
+                return transforms.translate(config.offset, cube);
+              }
+
+              export default function main() {
+                const cubes: CubeConfig[] = [
+                  { size: 10, offset: [0, 0, 0] },
+                  { size: 8, offset: [15, 0, 0] },
+                ];
+
+                return cubes.map((c) => createOffsetCube(c));
+              }
+            `,
+          },
+          'interfaces.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+      });
+
+      it('should bundle code with type aliases and union types', async () => {
+        const result = await createGeometry(
+          {
+            'type-aliases.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              type ShapeType = 'cube' | 'sphere' | 'cylinder';
+              type Size3D = [number, number, number];
+
+              function createShape(type: ShapeType, size: number) {
+                switch (type) {
+                  case 'cube':
+                    return primitives.cube({ size });
+                  case 'sphere':
+                    return primitives.sphere({ radius: size / 2 });
+                  case 'cylinder':
+                    return primitives.cylinder({ height: size, radius: size / 2 });
+                }
+              }
+
+              export default function main() {
+                return createShape('cube', 10);
+              }
+            `,
+          },
+          'type-aliases.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+    });
+
+    describe('Generics and advanced TypeScript features', () => {
+      it('should bundle code with generic utility functions', async () => {
+        const result = await createGeometry(
+          {
+            'generics.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              function withDefaults<T extends Record<string, number>>(
+                defaults: T,
+                overrides: Partial<T>,
+              ): T {
+                return { ...defaults, ...overrides };
+              }
+
+              const baseParams = { size: 10, segments: 32 };
+
+              export default function main() {
+                const p = withDefaults(baseParams, { size: 20 });
+                return primitives.cube({ size: p.size });
+              }
+            `,
+          },
+          'generics.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+      });
+
+      it('should bundle code with enums', async () => {
+        const result = await createGeometry(
+          {
+            'enums.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              enum ShapeKind {
+                Cube = 'cube',
+                Sphere = 'sphere',
+              }
+
+              export default function main() {
+                const kind: ShapeKind = ShapeKind.Cube;
+                if (kind === ShapeKind.Cube) {
+                  return primitives.cube({ size: 10 });
+                }
+                return primitives.sphere({ radius: 5 });
+              }
+            `,
+          },
+          'enums.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+      });
+
+      it('should bundle code with optional chaining and nullish coalescing', async () => {
+        const result = await createGeometry(
+          {
+            'modern-ts.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              type Config = {
+                shape?: {
+                  size?: number;
+                  segments?: number;
+                };
+              };
+
+              export default function main() {
+                const config: Config = { shape: { size: 15 } };
+                const size = config.shape?.size ?? 10;
+                const segments = config.shape?.segments ?? 32;
+
+                return primitives.cube({ size });
+              }
+            `,
+          },
+          'modern-ts.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [15, 15, 15], 0.5);
+      });
+    });
+
+    describe('Multi-file TypeScript with shared types', () => {
+      it('should bundle multi-file project with shared type definitions', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { primitives, booleans } from '@jscad/modeling';
+              import type { BoxConfig, SphereConfig } from './types';
+              import { createBox, createSphere } from './shapes';
+
+              export default function main() {
+                const boxConfig: BoxConfig = { size: [20, 15, 10] };
+                const sphereConfig: SphereConfig = { radius: 8 };
+
+                const box = createBox(boxConfig);
+                const sphere = createSphere(sphereConfig);
+                return booleans.union(box, sphere);
+              }
+            `,
+            'types.ts': `
+              export interface BoxConfig {
+                size: [number, number, number];
+              }
+
+              export interface SphereConfig {
+                radius: number;
+                segments?: number;
+              }
+
+              export type Point3D = [number, number, number];
+            `,
+            'shapes.ts': `
+              import { primitives } from '@jscad/modeling';
+              import type { BoxConfig, SphereConfig } from './types';
+
+              export function createBox(config: BoxConfig) {
+                return primitives.cuboid({ size: config.size });
+              }
+
+              export function createSphere(config: SphereConfig) {
+                return primitives.sphere({
+                  radius: config.radius,
+                  segments: config.segments ?? 32,
+                });
+              }
+            `,
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should bundle multi-file project with type-only re-exports', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { primitives, extrusions } from '@jscad/modeling';
+              import type { AppParams } from './config';
+              import { DEFAULT_PARAMS } from './config';
+
+              export const defaultParams = DEFAULT_PARAMS;
+
+              export default function main(p: AppParams = defaultParams) {
+                const rect = primitives.rectangle({ size: [p.width, p.height] });
+                return extrusions.extrudeLinear({ height: p.depth }, rect);
+              }
+            `,
+            'config/index.ts': `
+              export type { AppParams } from './params';
+              export { DEFAULT_PARAMS } from './params';
+            `,
+            'config/params.ts': `
+              export interface AppParams {
+                width: number;
+                height: number;
+                depth: number;
+              }
+
+              export const DEFAULT_PARAMS: AppParams = {
+                width: 30,
+                height: 20,
+                depth: 15,
+              };
+            `,
+          },
+          'main.ts',
+          { width: 30, height: 20, depth: 15 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [30, 20, 15], 0.5);
+      });
+    });
+
+    describe('Real-world TypeScript CAD patterns', () => {
+      it('should bundle a parametric model with full TypeScript features', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { primitives, transforms, booleans, type Geom3, type Vec3 } from '@jscad/modeling';
+
+              interface BracketParams {
+                baseWidth: number;
+                baseHeight: number;
+                baseDepth: number;
+                holeRadius: number;
+                holeOffset: number;
+              }
+
+              export const defaultParams: BracketParams = {
+                baseWidth: 40,
+                baseHeight: 30,
+                baseDepth: 5,
+                holeRadius: 3,
+                holeOffset: 10,
+              };
+
+              function createHole(radius: number, depth: number): Geom3 {
+                return primitives.cylinder({ radius, height: depth + 2 });
+              }
+
+              export default function main(p: BracketParams = defaultParams): Geom3 {
+                // Create the base plate
+                const base = primitives.cuboid({
+                  size: [p.baseWidth, p.baseHeight, p.baseDepth],
+                });
+
+                // Create mounting holes
+                const holePositions: Vec3[] = [
+                  [-p.holeOffset, -p.holeOffset, 0],
+                  [p.holeOffset, -p.holeOffset, 0],
+                  [-p.holeOffset, p.holeOffset, 0],
+                  [p.holeOffset, p.holeOffset, 0],
+                ];
+
+                let result: Geom3 = base;
+                for (const pos of holePositions) {
+                  const hole = transforms.translate(pos, createHole(p.holeRadius, p.baseDepth));
+                  result = booleans.subtract(result, hole);
+                }
+
+                return result;
+              }
+            `,
+          },
+          'main.ts',
+          {
+            baseWidth: 40,
+            baseHeight: 30,
+            baseDepth: 5,
+            holeRadius: 3,
+            holeOffset: 10,
+          },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [40, 30, 5], 0.5);
+      });
+
+      it('should bundle a multi-file parametric assembly with TypeScript', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { booleans } from '@jscad/modeling';
+              import type { AssemblyConfig } from './types';
+              import { createBase } from './parts/base';
+              import { createPillar } from './parts/pillar';
+
+              export const defaultParams: AssemblyConfig = {
+                base: { width: 40, depth: 30, thickness: 5 },
+                pillar: { radius: 4, height: 25 },
+              };
+
+              export default function main(p: AssemblyConfig = defaultParams) {
+                const base = createBase(p.base);
+                const pillar = createPillar(p.pillar, p.base.thickness);
+                return booleans.union(base, pillar);
+              }
+            `,
+            'types.ts': `
+              export interface BaseConfig {
+                width: number;
+                depth: number;
+                thickness: number;
+              }
+
+              export interface PillarConfig {
+                radius: number;
+                height: number;
+              }
+
+              export interface AssemblyConfig {
+                base: BaseConfig;
+                pillar: PillarConfig;
+              }
+            `,
+            'parts/base.ts': `
+              import { primitives } from '@jscad/modeling';
+              import type { BaseConfig } from '../types';
+
+              export function createBase(config: BaseConfig) {
+                return primitives.cuboid({
+                  size: [config.width, config.depth, config.thickness],
+                });
+              }
+            `,
+            'parts/pillar.ts': `
+              import { primitives, transforms } from '@jscad/modeling';
+              import type { PillarConfig } from '../types';
+
+              export function createPillar(config: PillarConfig, baseThickness: number) {
+                const pillar = primitives.cylinder({
+                  radius: config.radius,
+                  height: config.height,
+                });
+                // Position pillar on top of base
+                return transforms.translate(
+                  [0, 0, baseThickness / 2 + config.height / 2],
+                  pillar,
+                );
+              }
+            `,
+          },
+          'main.ts',
+          {
+            base: { width: 40, depth: 30, thickness: 5 },
+            pillar: { radius: 4, height: 25 },
+          },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
     });
   });
 });

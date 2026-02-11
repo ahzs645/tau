@@ -133,10 +133,9 @@ export class JscadWorker extends JavaScriptWorker {
     }
 
     const code = await filesystem.readFile(filePath, 'utf8');
-    const hasEsmImport = /import\s+.*from\s+['"]@jscad\/modeling['"]/.test(code);
-    const hasRequire = /require\s*\(\s*['"]@jscad\/modeling['"]\s*\)/.test(code);
-    const hasNamespaceUsage = /\b@jscad\/modeling\b/.test(code);
-    return hasEsmImport || hasRequire || hasNamespaceUsage;
+    const hasEsmImport = /import\s+.*from\s+['"]@jscad\/modeling(\/[^'"]*)?['"]/.test(code);
+    const hasRequire = /require\s*\(\s*['"]@jscad\/modeling(\/[^'"]*)?['"]\s*\)/.test(code);
+    return hasEsmImport || hasRequire;
   }
 
   protected override async getDependencies({ filePath }: GetDependenciesInput): Promise<string[]> {
