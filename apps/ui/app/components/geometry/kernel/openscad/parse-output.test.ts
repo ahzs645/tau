@@ -386,33 +386,25 @@ describe('parseStderrLine', () => {
       parser.parseLine("TRACE: call of 'inner()' in file /main.scad, line 5");
       parser.parseLine("TRACE: called by 'inner' in file /main.scad, line 2");
 
-      expect(errors).toHaveLength(1);
-      expect(errors[0]?.stackFrames).toBeDefined();
-      expect(errors[0]!.stackFrames).toHaveLength(3);
-
-      // Assert (built-in) should be internal
-      expect(errors[0]!.stackFrames![0]).toEqual({
-        functionName: 'assert',
-        fileName: 'main.scad',
-        lineNumber: 6,
-        isInternal: true,
-      });
-
-      // Module definition frame
-      expect(errors[0]!.stackFrames![1]).toEqual({
-        functionName: 'inner()',
-        fileName: 'main.scad',
-        lineNumber: 5,
-        isInternal: false,
-      });
-
-      // Call site frame
-      expect(errors[0]!.stackFrames![2]).toEqual({
-        functionName: 'inner',
-        fileName: 'main.scad',
-        lineNumber: 2,
-        isInternal: false,
-      });
+      expect(errors).toEqual([
+        {
+          message: "Assertion 'false' failed",
+          type: 'runtime',
+          severity: 'error',
+          location: {
+            fileName: 'main.scad',
+            startLineNumber: 6,
+            startColumn: 1,
+            endLineNumber: 6,
+            endColumn: 1000,
+          },
+          stackFrames: [
+            { functionName: 'assert', fileName: 'main.scad', lineNumber: 6, isInternal: true },
+            { functionName: 'inner()', fileName: 'main.scad', lineNumber: 5, isInternal: false },
+            { functionName: 'inner', fileName: 'main.scad', lineNumber: 2, isInternal: false },
+          ],
+        },
+      ]);
     });
 
     it('should normalize file paths in TRACE frames', () => {
@@ -425,10 +417,25 @@ describe('parseStderrLine', () => {
       parser.parseLine("TRACE: called by 'assert' in file /lib.scad, line 2");
       parser.parseLine("TRACE: called by 'broken_module' in file /main.scad, line 3");
 
-      expect(errors).toHaveLength(1);
-      // Leading slashes should be stripped
-      expect(errors[0]!.stackFrames![0]!.fileName).toBe('lib.scad');
-      expect(errors[0]!.stackFrames![1]!.fileName).toBe('main.scad');
+      expect(errors).toEqual([
+        {
+          message: "Assertion 'false' failed",
+          type: 'runtime',
+          severity: 'error',
+          location: {
+            fileName: 'lib.scad',
+            startLineNumber: 2,
+            startColumn: 1,
+            endLineNumber: 2,
+            endColumn: 1000,
+          },
+          // Leading slashes should be stripped from file names
+          stackFrames: [
+            { functionName: 'assert', fileName: 'lib.scad', lineNumber: 2, isInternal: true },
+            { functionName: 'broken_module', fileName: 'main.scad', lineNumber: 3, isInternal: false },
+          ],
+        },
+      ]);
     });
 
     it('should not attach TRACE frames to non-error lines', () => {
@@ -441,7 +448,7 @@ describe('parseStderrLine', () => {
       parser.parseLine("TRACE: called by 'assert' in file /main.scad, line 6");
       parser.parseLine("TRACE: called by 'inner' in file /main.scad, line 2");
 
-      expect(errors).toHaveLength(0);
+      expect(errors).toEqual([]);
     });
 
     it('should not attach TRACE frames across non-trace intervening lines', () => {
@@ -455,9 +462,21 @@ describe('parseStderrLine', () => {
       parser.parseLine('Compiling design (CSG Tree generation)...');
       parser.parseLine("TRACE: called by 'inner' in file /main.scad, line 2");
 
-      expect(errors).toHaveLength(1);
       // TRACE after non-trace line should NOT be attached to the error
-      expect(errors[0]?.stackFrames).toBeUndefined();
+      expect(errors).toEqual([
+        {
+          message: "Assertion 'false' failed",
+          type: 'runtime',
+          severity: 'error',
+          location: {
+            fileName: 'main.scad',
+            startLineNumber: 6,
+            startColumn: 1,
+            endLineNumber: 6,
+            endColumn: 1000,
+          },
+        },
+      ]);
     });
 
     it('should handle multiple errors with separate TRACE blocks', () => {
@@ -475,13 +494,37 @@ describe('parseStderrLine', () => {
       parser.parseLine("ERROR: Assertion 'false' failed in file /b.scad, line 3");
       parser.parseLine("TRACE: called by 'assert' in file /b.scad, line 3");
 
-      expect(errors).toHaveLength(2);
-      expect(errors[0]!.stackFrames).toHaveLength(2);
-      expect(errors[1]!.stackFrames).toHaveLength(1);
-
-      // Verify each error has its own stack frames
-      expect(errors[0]!.stackFrames![1]!.fileName).toBe('main.scad');
-      expect(errors[1]!.stackFrames![0]!.fileName).toBe('b.scad');
+      expect(errors).toEqual([
+        {
+          message: "Assertion 'false' failed",
+          type: 'runtime',
+          severity: 'error',
+          location: {
+            fileName: 'a.scad',
+            startLineNumber: 1,
+            startColumn: 1,
+            endLineNumber: 1,
+            endColumn: 1000,
+          },
+          stackFrames: [
+            { functionName: 'assert', fileName: 'a.scad', lineNumber: 1, isInternal: true },
+            { functionName: 'mod_a', fileName: 'main.scad', lineNumber: 5, isInternal: false },
+          ],
+        },
+        {
+          message: "Assertion 'false' failed",
+          type: 'runtime',
+          severity: 'error',
+          location: {
+            fileName: 'b.scad',
+            startLineNumber: 3,
+            startColumn: 1,
+            endLineNumber: 3,
+            endColumn: 1000,
+          },
+          stackFrames: [{ functionName: 'assert', fileName: 'b.scad', lineNumber: 3, isInternal: true }],
+        },
+      ]);
     });
 
     it('should map main file basename in TRACE frames when mainFilePath is provided', () => {
@@ -497,9 +540,29 @@ describe('parseStderrLine', () => {
       parser.parseLine("ERROR: Assertion 'false' failed in file /lib.scad, line 2");
       parser.parseLine("TRACE: called by 'broken' in file /backyard.scad, line 3");
 
-      expect(errors).toHaveLength(1);
-      // Main file basename should map to full path in trace frame
-      expect(errors[0]!.stackFrames![0]!.fileName).toBe('site/backyard.scad');
+      expect(errors).toEqual([
+        {
+          message: "Assertion 'false' failed",
+          type: 'runtime',
+          severity: 'error',
+          location: {
+            fileName: 'lib.scad',
+            startLineNumber: 2,
+            startColumn: 1,
+            endLineNumber: 2,
+            endColumn: 1000,
+          },
+          // Main file basename should map to full path in trace frame
+          stackFrames: [
+            {
+              functionName: 'broken',
+              fileName: 'site/backyard.scad',
+              lineNumber: 3,
+              isInternal: false,
+            },
+          ],
+        },
+      ]);
     });
   });
 
@@ -514,15 +577,29 @@ describe('parseStderrLine', () => {
       parser.parseLine('ERROR: Parser error: syntax error in file /lib.scad, line 2');
       parser.parseLine("Can't parse file 'main.scad'!");
 
-      expect(errors).toHaveLength(1);
-      expect(errors[0]!.stackFrames).toBeDefined();
-      expect(errors[0]!.stackFrames).toHaveLength(1);
-      expect(errors[0]!.stackFrames![0]).toEqual({
-        functionName: 'include',
-        fileName: 'main.scad',
-        lineNumber: 1, // Fallback line (no file contents to search)
-        isInternal: false,
-      });
+      expect(errors).toEqual([
+        {
+          message: 'syntax error',
+          type: 'compilation',
+          severity: 'error',
+          location: {
+            fileName: 'lib.scad',
+            startLineNumber: 2,
+            startColumn: 1,
+            endLineNumber: 2,
+            endColumn: 1000,
+          },
+          // Fallback line 1 (no file contents to search)
+          stackFrames: [
+            {
+              functionName: 'include',
+              fileName: 'main.scad',
+              lineNumber: 1,
+              isInternal: false,
+            },
+          ],
+        },
+      ]);
     });
 
     it('should find correct include line when file contents are available', () => {
@@ -538,9 +615,29 @@ describe('parseStderrLine', () => {
       parser.parseLine('ERROR: Parser error: syntax error in file /lib.scad, line 5');
       parser.parseLine("Can't parse file 'main.scad'!");
 
-      expect(errors).toHaveLength(1);
-      expect(errors[0]!.stackFrames).toBeDefined();
-      expect(errors[0]!.stackFrames![0]!.lineNumber).toBe(2); // Include is on line 2
+      expect(errors).toEqual([
+        {
+          message: 'syntax error',
+          type: 'compilation',
+          severity: 'error',
+          location: {
+            fileName: 'lib.scad',
+            startLineNumber: 5,
+            startColumn: 1,
+            endLineNumber: 5,
+            endColumn: 1000,
+          },
+          // Include is on line 2 of main.scad
+          stackFrames: [
+            {
+              functionName: 'include',
+              fileName: 'main.scad',
+              lineNumber: 2,
+              isInternal: false,
+            },
+          ],
+        },
+      ]);
     });
 
     it('should reconstruct 3-file include chain from file contents', () => {
@@ -558,24 +655,26 @@ describe('parseStderrLine', () => {
       parser.parseLine('ERROR: Parser error: syntax error in file /bad.scad, line 2');
       parser.parseLine("Can't parse file 'main.scad'!");
 
-      expect(errors).toHaveLength(1);
-      expect(errors[0]!.stackFrames).toHaveLength(2);
-
-      // Deepest first: middle.scad includes bad.scad
-      expect(errors[0]!.stackFrames![0]).toEqual({
-        functionName: 'include',
-        fileName: 'middle.scad',
-        lineNumber: 1,
-        isInternal: false,
-      });
-
-      // Shallowest: main.scad includes middle.scad
-      expect(errors[0]!.stackFrames![1]).toEqual({
-        functionName: 'include',
-        fileName: 'main.scad',
-        lineNumber: 1,
-        isInternal: false,
-      });
+      expect(errors).toEqual([
+        {
+          message: 'syntax error',
+          type: 'compilation',
+          severity: 'error',
+          location: {
+            fileName: 'bad.scad',
+            startLineNumber: 2,
+            startColumn: 1,
+            endLineNumber: 2,
+            endColumn: 1000,
+          },
+          stackFrames: [
+            // Deepest first: middle.scad includes bad.scad
+            { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, isInternal: false },
+            // Shallowest: main.scad includes middle.scad
+            { functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false },
+          ],
+        },
+      ]);
     });
 
     it("should not create stack frame from 'Can't parse file' without preceding error", () => {
@@ -587,7 +686,7 @@ describe('parseStderrLine', () => {
       // Orphaned "Can't parse file" without a preceding error
       parser.parseLine("Can't parse file 'main.scad'!");
 
-      expect(errors).toHaveLength(0);
+      expect(errors).toEqual([]);
     });
   });
 

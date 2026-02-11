@@ -1196,8 +1196,7 @@ ${errorLine}
     });
 
     describe('Stack trace and error location', () => {
-      it('should return error with correct location for single-file undefined variable', async () => {
-        // Error on line 3: `garbage` is not a valid OpenSCAD identifier usage
+      it('should return error with correct location for single-file syntax error', async () => {
         const result = await createGeometry(
           {
             'main.scad': [
@@ -1211,19 +1210,18 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues.length).toBeGreaterThan(0);
-          const issue = result.issues[0]!;
-
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toBe('main.scad');
-          expect(issue.location!.startLineNumber).toBe(3);
-          expect(issue.message).toContain('syntax error');
-        }
+        expect(result.issues).toEqual([
+          {
+            message: 'syntax error',
+            type: 'compilation',
+            severity: 'error',
+            location: { fileName: 'main.scad', startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 8 },
+            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false }],
+          },
+        ]);
       });
 
       it('should return error with correct location for error inside a module', async () => {
-        // Error is inside a custom module `badModule` that is called from top level.
         // OpenSCAD parses the full file before execution, so syntax errors in
         // modules are caught at parse time with the correct line number.
         const result = await createGeometry(
@@ -1241,22 +1239,18 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues.length).toBeGreaterThan(0);
-          const issue = result.issues[0]!;
-
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toBe('main.scad');
-          // Error should point to line 3 inside the module
-          expect(issue.location!.startLineNumber).toBe(3);
-          expect(issue.message).toContain('syntax error');
-        }
+        expect(result.issues).toEqual([
+          {
+            message: 'syntax error',
+            type: 'compilation',
+            severity: 'error',
+            location: { fileName: 'main.scad', startLineNumber: 3, startColumn: 3, endLineNumber: 3, endColumn: 10 },
+            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false }],
+          },
+        ]);
       });
 
       it('should return error pointing to correct included file in multi-file project', async () => {
-        // Error is in lib.scad (line 1: compound assignment syntax error),
-        // included by main.scad. OpenSCAD's error parser extracts the file name
-        // from the stderr message.
         const result = await createGeometry(
           {
             'main.scad': [
@@ -1273,20 +1267,19 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues.length).toBeGreaterThan(0);
-          const issue = result.issues[0]!;
-
-          // Error should reference lib.scad, not main.scad
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toContain('lib.scad');
-          expect(issue.location!.startLineNumber).toBe(2);
-        }
+        expect(result.issues).toEqual([
+          {
+            message: 'syntax error',
+            type: 'compilation',
+            severity: 'error',
+            location: { fileName: 'lib.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
+            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false }],
+          },
+        ]);
       });
 
       it('should return error pointing to correct file in 3-file include chain', async () => {
         // 3-file chain: main.scad -> middle.scad -> bad.scad
-        // Error is in bad.scad, included transitively through middle.scad.
         const result = await createGeometry(
           {
             'main.scad': [
@@ -1307,15 +1300,19 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        if (!result.success) {
-          expect(result.issues.length).toBeGreaterThan(0);
-          const issue = result.issues[0]!;
-
-          // Error should reference bad.scad (the actual error location)
-          expect(issue.location).toBeDefined();
-          expect(issue.location!.fileName).toContain('bad.scad');
-          expect(issue.location!.startLineNumber).toBe(2);
-        }
+        expect(result.issues).toEqual([
+          {
+            message: 'syntax error',
+            type: 'compilation',
+            severity: 'error',
+            location: { fileName: 'bad.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
+            // Stack frames reconstruct the full include chain (deepest first)
+            stackFrames: [
+              { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, isInternal: false },
+              { functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false },
+            ],
+          },
+        ]);
       });
     });
 
@@ -1339,22 +1336,15 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        const error = result.issues.find((i) => i.severity === 'error');
-        expect(error).toBeDefined();
-
-        // Error location points to the actual error in lib.scad
-        expect(error!.location!.fileName).toBe('lib.scad');
-        expect(error!.location!.startLineNumber).toBe(2);
-
-        // Stack frame should show the include directive in main.scad
-        expect(error!.stackFrames).toBeDefined();
-        expect(error!.stackFrames).toHaveLength(1);
-        expect(error!.stackFrames![0]).toEqual({
-          functionName: 'include',
-          fileName: 'main.scad',
-          lineNumber: 1,
-          isInternal: false,
-        });
+        expect(result.issues).toEqual([
+          {
+            message: 'syntax error',
+            type: 'compilation',
+            severity: 'error',
+            location: { fileName: 'lib.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
+            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false }],
+          },
+        ]);
       });
 
       it('should reconstruct full include chain for 3-file syntax error', async () => {
@@ -1381,32 +1371,18 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        const error = result.issues.find((i) => i.severity === 'error');
-        expect(error).toBeDefined();
-
-        // Error location points to the actual error in bad.scad
-        expect(error!.location!.fileName).toBe('bad.scad');
-        expect(error!.location!.startLineNumber).toBe(2);
-
-        // Stack frames reconstruct the full include chain (deepest first)
-        expect(error!.stackFrames).toBeDefined();
-        expect(error!.stackFrames).toHaveLength(2);
-
-        // First frame: middle.scad includes bad.scad (closest to error)
-        expect(error!.stackFrames![0]).toEqual({
-          functionName: 'include',
-          fileName: 'middle.scad',
-          lineNumber: 1,
-          isInternal: false,
-        });
-
-        // Second frame: main.scad includes middle.scad (entry point)
-        expect(error!.stackFrames![1]).toEqual({
-          functionName: 'include',
-          fileName: 'main.scad',
-          lineNumber: 1,
-          isInternal: false,
-        });
+        expect(result.issues).toEqual([
+          {
+            message: 'syntax error',
+            type: 'compilation',
+            severity: 'error',
+            location: { fileName: 'bad.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
+            stackFrames: [
+              { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, isInternal: false },
+              { functionName: 'include', fileName: 'main.scad', lineNumber: 1, isInternal: false },
+            ],
+          },
+        ]);
       });
     });
 
@@ -1432,36 +1408,31 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        const error = result.issues.find((i) => i.severity === 'error');
-        expect(error).toBeDefined();
-        expect(error!.location!.fileName).toBe('main.scad');
-        expect(error!.location!.startLineNumber).toBe(6);
-
-        // Should have stack frames from TRACE lines
-        expect(error!.stackFrames).toBeDefined();
-        expect(error!.stackFrames!.length).toBeGreaterThanOrEqual(3);
-
-        // First non-internal frame should be 'assert' (internal built-in)
-        const assertFrame = error!.stackFrames!.find((f) => f.functionName === 'assert');
-        expect(assertFrame).toBeDefined();
-        expect(assertFrame!.isInternal).toBe(true);
-
-        // Should have a frame for 'inner' being called from outer (line 2)
-        const innerCallFrame = error!.stackFrames!.find((f) => f.functionName === 'inner' && !f.isInternal);
-        expect(innerCallFrame).toBeDefined();
-        expect(innerCallFrame!.fileName).toBe('main.scad');
-        expect(innerCallFrame!.lineNumber).toBe(2);
-
-        // Should have a frame for 'outer' being called at top level (line 9)
-        const outerCallFrame = error!.stackFrames!.find((f) => f.functionName === 'outer' && !f.isInternal);
-        expect(outerCallFrame).toBeDefined();
-        expect(outerCallFrame!.fileName).toBe('main.scad');
-        expect(outerCallFrame!.lineNumber).toBe(9);
+        expect(result.issues).toEqual([
+          {
+            message: 'Assertion \'false\' failed: "deliberate failure"',
+            type: 'runtime',
+            severity: 'error',
+            location: { fileName: 'main.scad', startLineNumber: 6, startColumn: 3, endLineNumber: 6, endColumn: 39 },
+            stackFrames: [
+              { functionName: 'assert', fileName: 'main.scad', lineNumber: 6, isInternal: true },
+              { functionName: 'inner()', fileName: 'main.scad', lineNumber: 5, isInternal: false },
+              { functionName: 'inner', fileName: 'main.scad', lineNumber: 2, isInternal: false },
+              { functionName: 'outer()', fileName: 'main.scad', lineNumber: 1, isInternal: false },
+              { functionName: 'outer', fileName: 'main.scad', lineNumber: 9, isInternal: false },
+            ],
+          },
+          {
+            message:
+              'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
+            type: 'runtime',
+            severity: 'warning',
+            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1 },
+          },
+        ]);
       });
 
       it('should return stack frames across files for cross-file module call', async () => {
-        // Main.scad uses lib.scad which has a module with an assertion error.
-        // TRACE lines should show the call chain crossing file boundaries.
         const result = await createGeometry(
           {
             'main.scad': [
@@ -1479,28 +1450,30 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        const error = result.issues.find((i) => i.severity === 'error');
-        expect(error).toBeDefined();
-
-        // Error location should point to lib.scad where the assertion is
-        expect(error!.location!.fileName).toBe('lib.scad');
-        expect(error!.location!.startLineNumber).toBe(2);
-
-        // Stack frames should cross file boundaries
-        expect(error!.stackFrames).toBeDefined();
-        expect(error!.stackFrames!.length).toBeGreaterThanOrEqual(2);
-
-        // Should have a frame showing broken_module was called from main.scad line 3
-        const callSiteFrame = error!.stackFrames!.find(
-          (f) => f.functionName === 'broken_module' && f.fileName === 'main.scad',
-        );
-        expect(callSiteFrame).toBeDefined();
-        expect(callSiteFrame!.lineNumber).toBe(3);
+        expect(result.issues).toEqual([
+          {
+            message: 'Assertion \'false\' failed: "fail in lib"',
+            type: 'runtime',
+            severity: 'error',
+            location: { fileName: 'lib.scad', startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 32 },
+            stackFrames: [
+              { functionName: 'assert', fileName: 'lib.scad', lineNumber: 2, isInternal: true },
+              { functionName: 'broken_module()', fileName: 'lib.scad', lineNumber: 1, isInternal: false },
+              { functionName: 'broken_module', fileName: 'main.scad', lineNumber: 3, isInternal: false },
+            ],
+          },
+          {
+            message:
+              'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
+            type: 'runtime',
+            severity: 'warning',
+            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1 },
+          },
+        ]);
       });
 
       it('should return stack frames across 3-file module call chain', async () => {
         // Chain: main.scad -> middle.scad -> bad.scad, assertion in bad.scad.
-        // TRACE lines should show the complete cross-file call chain.
         const result = await createGeometry(
           {
             'main.scad': [
@@ -1525,35 +1498,31 @@ ${errorLine}
         );
 
         expect(result.success).toBe(false);
-        const error = result.issues.find((i) => i.severity === 'error');
-        expect(error).toBeDefined();
-
-        // Error location should point to bad.scad where the assertion is
-        expect(error!.location!.fileName).toBe('bad.scad');
-        expect(error!.location!.startLineNumber).toBe(2);
-
-        // Stack frames should trace through all 3 files
-        expect(error!.stackFrames).toBeDefined();
-        expect(error!.stackFrames!.length).toBeGreaterThanOrEqual(3);
-
-        // Should have call_bad called from middle.scad line 4
-        const callBadFrame = error!.stackFrames!.find(
-          (f) => f.functionName === 'call_bad' && f.fileName === 'middle.scad',
-        );
-        expect(callBadFrame).toBeDefined();
-        expect(callBadFrame!.lineNumber).toBe(4);
-
-        // Should have call_middle called from main.scad line 3
-        const callMiddleFrame = error!.stackFrames!.find(
-          (f) => f.functionName === 'call_middle' && f.fileName === 'main.scad',
-        );
-        expect(callMiddleFrame).toBeDefined();
-        expect(callMiddleFrame!.lineNumber).toBe(3);
+        expect(result.issues).toEqual([
+          {
+            message: 'Assertion \'false\' failed: "deepest failure"',
+            type: 'runtime',
+            severity: 'error',
+            location: { fileName: 'bad.scad', startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 36 },
+            stackFrames: [
+              { functionName: 'assert', fileName: 'bad.scad', lineNumber: 2, isInternal: true },
+              { functionName: 'call_bad()', fileName: 'bad.scad', lineNumber: 1, isInternal: false },
+              { functionName: 'call_bad', fileName: 'middle.scad', lineNumber: 4, isInternal: false },
+              { functionName: 'call_middle()', fileName: 'middle.scad', lineNumber: 3, isInternal: false },
+              { functionName: 'call_middle', fileName: 'main.scad', lineNumber: 3, isInternal: false },
+            ],
+          },
+          {
+            message:
+              'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
+            type: 'runtime',
+            severity: 'warning',
+            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1 },
+          },
+        ]);
       });
 
       it('should not produce stack frames for warnings (undefined variable)', async () => {
-        // Warnings (like undefined variables) do not generate TRACE lines.
-        // Only runtime errors like assertion failures produce TRACE output.
         const result = await createGeometry(
           {
             'main.scad': [
@@ -1567,12 +1536,20 @@ ${errorLine}
 
         // OpenSCAD still produces geometry with undef values (warnings, not errors)
         expect(result.success).toBe(true);
-        if (result.success) {
-          // Warnings should not have stack frames
-          for (const issue of result.issues) {
-            expect(issue.stackFrames).toBeUndefined();
-          }
-        }
+        expect(result.issues).toEqual([
+          {
+            message: 'Ignoring unknown variable "garbage"',
+            type: 'compilation',
+            severity: 'warning',
+            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 31 },
+          },
+          {
+            message: 'Unable to convert cube(size=[undef, 10, 10], ...) parameter to a number or a vec3 of numbers',
+            type: 'compilation',
+            severity: 'warning',
+            location: { fileName: 'main.scad', startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 28 },
+          },
+        ]);
       });
     });
 
