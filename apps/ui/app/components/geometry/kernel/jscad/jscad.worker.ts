@@ -319,6 +319,19 @@ export class JscadWorker extends JavaScriptWorker {
         shapes = mainResult.value;
         const runCodeEndTime = performance.now();
         logger.log(`Kernel computation took ${runCodeEndTime - runCodeStartTime}ms`);
+
+        if (shapes === undefined) {
+          return createKernelSuccess(
+            [],
+            [
+              {
+                message: 'The main function did not return a value. Did you forget a return statement?',
+                type: 'runtime',
+                severity: 'warning',
+              },
+            ],
+          );
+        }
       } catch (error) {
         const endTime = performance.now();
         logger.error(`Error occurred after ${endTime - startTime}ms`, { data: error });

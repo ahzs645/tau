@@ -1065,6 +1065,51 @@ module.exports = { main, getParameterDefinitions }
           ],
         });
       });
+
+      it('should return warning when main returns undefined (no return statement)', async () => {
+        const result = await createGeometry(
+          {
+            'no_return.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              export default function main() {
+                primitives.cube({ size: 10 });
+                // Missing return statement
+              }
+            `,
+          },
+          'no_return.ts',
+        );
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.issues.length).toBeGreaterThan(0);
+          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
+          expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+        }
+      });
+
+      it('should return warning when main explicitly returns undefined', async () => {
+        const result = await createGeometry(
+          {
+            'explicit_undefined.ts': `
+              import { primitives } from '@jscad/modeling';
+
+              export default function main() {
+                return undefined;
+              }
+            `,
+          },
+          'explicit_undefined.ts',
+        );
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.issues.length).toBeGreaterThan(0);
+          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
+          expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+        }
+      });
     });
   });
 
