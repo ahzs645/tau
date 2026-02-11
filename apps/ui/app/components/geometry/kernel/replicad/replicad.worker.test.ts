@@ -1253,6 +1253,91 @@ describe('ReplicadWorker', () => {
         }
       });
 
+      it('should map stack trace through function call to correct line', async () => {
+        // Error is inside a helper function `makeBadShape` called from main.
+        // The stack trace should show both the error site and the call site.
+        const code = [
+          "import {} from 'replicad';", // Line 1
+          '', // Line 2
+          'function makeBadShape() {', // Line 3
+          '  return bla;', // Line 4 -- error here
+          '}', // Line 5
+          '', // Line 6
+          'export default function main() {', // Line 7
+          '  return makeBadShape();', // Line 8 -- call site
+          '}', // Line 9
+        ].join('\n');
+
+        const result = await createGeometry({ 'main.ts': code }, 'main.ts');
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.message).toMatch(/bla is not defined/i);
+          expect(issue.stackFrames).toBeDefined();
+
+          // Should have a frame for makeBadShape at line 4 (error site)
+          const errorFrame = issue.stackFrames?.find((frame) => frame.functionName?.includes('makeBadShape'));
+          expect(errorFrame).toBeDefined();
+          expect(errorFrame!.fileName).toBe('main.ts');
+          expect(errorFrame!.lineNumber).toBe(4);
+
+          // Should have a frame for main at line 8 (call site)
+          const callFrame = issue.stackFrames?.find((frame) => frame.functionName?.includes('main'));
+          expect(callFrame).toBeDefined();
+          expect(callFrame!.fileName).toBe('main.ts');
+          expect(callFrame!.lineNumber).toBe(8);
+        }
+      });
+
+      it('should map stack trace through 3-file import chain', async () => {
+        // 3-file chain: main.ts -> lib/middle.ts -> lib/bad.ts
+        // Error is in bad.ts, called through middle.ts from main.ts.
+        const result = await createGeometry(
+          {
+            'main.ts': [
+              "import { getShape } from './lib/middle';",
+              "import {} from 'replicad';",
+              'export default function main() { return getShape(); }',
+            ].join('\n'),
+            'lib/middle.ts': [
+              "import { broken } from './bad';",
+              'export function getShape() { return broken(); }',
+            ].join('\n'),
+            'lib/bad.ts': 'export function broken() { return bla; }',
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          expect(issue.message).toMatch(/bla is not defined/i);
+          expect(issue.stackFrames).toBeDefined();
+
+          // Should have a frame for the error in bad.ts
+          const errorFrame = issue.stackFrames?.find((frame) => frame.functionName?.includes('broken'));
+          expect(errorFrame).toBeDefined();
+          expect(errorFrame!.fileName).toContain('bad.ts');
+
+          // Should have a frame for the call in middle.ts
+          const middleFrame = issue.stackFrames?.find((frame) => frame.functionName?.includes('getShape'));
+          expect(middleFrame).toBeDefined();
+          expect(middleFrame!.fileName).toContain('middle.ts');
+
+          // Should have a frame for main
+          const mainFrame = issue.stackFrames?.find((frame) => frame.functionName?.includes('main'));
+          expect(mainFrame).toBeDefined();
+          expect(mainFrame!.fileName).toBe('main.ts');
+
+          // No blob/data UUIDs in any user frames
+          const userFrames = issue.stackFrames!.filter((frame) => !frame.isInternal);
+          for (const frame of userFrames) {
+            expect(frame.fileName).not.toMatch(/^blob:/);
+            expect(frame.fileName).not.toMatch(/^data:/);
+          }
+        }
+      });
+
       it('should not expose blob or data UUIDs in user stack frames', async () => {
         const code = [
           "import {} from 'replicad';", // Line 1
@@ -1577,6 +1662,562 @@ describe('ReplicadWorker', () => {
       );
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // Tests: TypeScript Bundling Support
+  // ===========================================================================
+
+  describe('TypeScript bundling', () => {
+    describe('Type annotations', () => {
+      it('should bundle code with typed function parameters and return types', async () => {
+        const result = await createGeometry(
+          {
+            'typed-box.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+
+              export const defaultParams = {
+                width: 50,
+                height: 30,
+                depth: 10,
+              };
+
+              type BoxParams = { width: number; height: number; depth: number };
+
+              export default function main(p: BoxParams = defaultParams) {
+                const { width, height, depth } = p;
+                return drawRoundedRectangle(width, height).sketchOnPlane().extrude(depth);
+              }
+            `,
+          },
+          'typed-box.ts',
+          { width: 50, height: 30, depth: 10 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+      });
+
+      it('should bundle code with type assertions (as)', async () => {
+        const result = await createGeometry(
+          {
+            'assertions.ts': `
+              import { makeCylinder } from 'replicad';
+
+              export default function main() {
+                const height = 20 as number;
+                const center = [0, 0, 10] as [number, number, number];
+                return makeCylinder(10, height).translate(center);
+              }
+            `,
+          },
+          'assertions.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should bundle code with const assertions (as const)', async () => {
+        const result = await createGeometry(
+          {
+            'const-assertion.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+
+              const dimensions = {
+                width: 40,
+                height: 20,
+                depth: 15,
+              } as const;
+
+              export default function main() {
+                return drawRoundedRectangle(dimensions.width, dimensions.height)
+                  .sketchOnPlane()
+                  .extrude(dimensions.depth);
+              }
+            `,
+          },
+          'const-assertion.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [40, 20, 15], 0.5);
+      });
+    });
+
+    describe('Type-only imports', () => {
+      it('should strip import type declarations from replicad', async () => {
+        const result = await createGeometry(
+          {
+            'type-import.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+              import type { Drawing } from 'replicad';
+
+              export default function main() {
+                const shape = drawRoundedRectangle(50, 30);
+                return shape.sketchOnPlane().extrude(10);
+              }
+            `,
+          },
+          'type-import.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+      });
+
+      it('should strip inline type imports (import { type X })', async () => {
+        const result = await createGeometry(
+          {
+            'inline-type.ts': `
+              import { draw, type Sketcher, type Drawing } from 'replicad';
+
+              export default function main() {
+                return draw()
+                  .hLine(50)
+                  .vLine(30)
+                  .hLine(-50)
+                  .close()
+                  .sketchOnPlane()
+                  .extrude(10);
+              }
+            `,
+          },
+          'inline-type.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+      });
+    });
+
+    describe('Interfaces and type aliases', () => {
+      it('should bundle code with local interface definitions', async () => {
+        const result = await createGeometry(
+          {
+            'interfaces.ts': `
+              import { drawRoundedRectangle, drawCircle } from 'replicad';
+
+              interface ShapeConfig {
+                width: number;
+                height: number;
+                depth: number;
+              }
+
+              interface CylinderConfig {
+                radius: number;
+                height: number;
+              }
+
+              function createBox(config: ShapeConfig) {
+                return drawRoundedRectangle(config.width, config.height)
+                  .sketchOnPlane()
+                  .extrude(config.depth);
+              }
+
+              function createCylinder(config: CylinderConfig) {
+                return drawCircle(config.radius)
+                  .sketchOnPlane()
+                  .extrude(config.height);
+              }
+
+              export default function main() {
+                const box = createBox({ width: 50, height: 30, depth: 10 });
+                const cyl = createCylinder({ radius: 8, height: 20 });
+                return [box, cyl.translate([0, 0, 10])];
+              }
+            `,
+          },
+          'interfaces.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 2);
+      });
+
+      it('should bundle code with type aliases and union types', async () => {
+        const result = await createGeometry(
+          {
+            'type-aliases.ts': `
+              import { drawRoundedRectangle, drawCircle } from 'replicad';
+
+              type Dimensions = { width: number; height: number; depth: number };
+              type ShapeType = 'box' | 'cylinder';
+              type Point3D = [number, number, number];
+
+              function createShape(type: ShapeType, dims: Dimensions) {
+                if (type === 'box') {
+                  return drawRoundedRectangle(dims.width, dims.height)
+                    .sketchOnPlane()
+                    .extrude(dims.depth);
+                }
+                return drawCircle(dims.width / 2)
+                  .sketchOnPlane()
+                  .extrude(dims.depth);
+              }
+
+              export default function main() {
+                const offset: Point3D = [0, 0, 10];
+                const box = createShape('box', { width: 50, height: 30, depth: 10 });
+                const cyl = createShape('cylinder', { width: 20, height: 20, depth: 20 });
+                return [box, cyl.translate(offset)];
+              }
+            `,
+          },
+          'type-aliases.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 2);
+      });
+    });
+
+    describe('Generics and advanced TypeScript features', () => {
+      it('should bundle code with generic utility functions', async () => {
+        const result = await createGeometry(
+          {
+            'generics.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+
+              function withDefaults<T extends Record<string, number>>(
+                defaults: T,
+                overrides: Partial<T>,
+              ): T {
+                return { ...defaults, ...overrides };
+              }
+
+              const baseParams = { width: 50, height: 30, depth: 10 };
+
+              export default function main() {
+                const p = withDefaults(baseParams, { depth: 20 });
+                return drawRoundedRectangle(p.width, p.height)
+                  .sketchOnPlane()
+                  .extrude(p.depth);
+              }
+            `,
+          },
+          'generics.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 20], 0.5);
+      });
+
+      it('should bundle code with enums', async () => {
+        const result = await createGeometry(
+          {
+            'enums.ts': `
+              import { drawRoundedRectangle, drawCircle } from 'replicad';
+
+              enum ShapeKind {
+                Box = 'box',
+                Cylinder = 'cylinder',
+              }
+
+              export default function main() {
+                const kind: ShapeKind = ShapeKind.Box;
+                if (kind === ShapeKind.Box) {
+                  return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+                }
+                return drawCircle(15).sketchOnPlane().extrude(20);
+              }
+            `,
+          },
+          'enums.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+      });
+
+      it('should bundle code with optional chaining and nullish coalescing', async () => {
+        const result = await createGeometry(
+          {
+            'modern-ts.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+
+              type Config = {
+                dimensions?: {
+                  width?: number;
+                  height?: number;
+                  depth?: number;
+                };
+              };
+
+              export default function main() {
+                const config: Config = { dimensions: { width: 50 } };
+                const width = config.dimensions?.width ?? 30;
+                const height = config.dimensions?.height ?? 20;
+                const depth = config.dimensions?.depth ?? 10;
+
+                return drawRoundedRectangle(width, height).sketchOnPlane().extrude(depth);
+              }
+            `,
+          },
+          'modern-ts.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [50, 20, 10], 0.5);
+      });
+    });
+
+    describe('Multi-file TypeScript with shared types', () => {
+      it('should bundle multi-file project with shared type definitions', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { drawRoundedRectangle, drawCircle } from 'replicad';
+              import type { BoxConfig, CylinderConfig } from './types';
+              import { createBox, createCylinder } from './shapes';
+
+              export default function main() {
+                const boxConfig: BoxConfig = { width: 50, height: 30, depth: 10 };
+                const cylConfig: CylinderConfig = { radius: 8, height: 25 };
+
+                const box = createBox(boxConfig);
+                const cyl = createCylinder(cylConfig).translate([0, 0, 10]);
+
+                return [box, cyl];
+              }
+            `,
+            'types.ts': `
+              export interface BoxConfig {
+                width: number;
+                height: number;
+                depth: number;
+              }
+
+              export interface CylinderConfig {
+                radius: number;
+                height: number;
+              }
+
+              export type Point3D = [number, number, number];
+            `,
+            'shapes.ts': `
+              import { drawRoundedRectangle, drawCircle } from 'replicad';
+              import type { BoxConfig, CylinderConfig } from './types';
+
+              export function createBox(config: BoxConfig) {
+                return drawRoundedRectangle(config.width, config.height)
+                  .sketchOnPlane()
+                  .extrude(config.depth);
+              }
+
+              export function createCylinder(config: CylinderConfig) {
+                return drawCircle(config.radius)
+                  .sketchOnPlane()
+                  .extrude(config.height);
+              }
+            `,
+          },
+          'main.ts',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 2);
+      });
+
+      it('should bundle multi-file project with type-only re-exports', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+              import type { AppParams } from './config';
+              import { DEFAULT_PARAMS } from './config';
+
+              export const defaultParams = DEFAULT_PARAMS;
+
+              export default function main(p: AppParams = defaultParams) {
+                return drawRoundedRectangle(p.width, p.height)
+                  .sketchOnPlane()
+                  .extrude(p.depth);
+              }
+            `,
+            'config/index.ts': `
+              export type { AppParams } from './params';
+              export { DEFAULT_PARAMS } from './params';
+            `,
+            'config/params.ts': `
+              export interface AppParams {
+                width: number;
+                height: number;
+                depth: number;
+              }
+
+              export const DEFAULT_PARAMS: AppParams = {
+                width: 60,
+                height: 40,
+                depth: 15,
+              };
+            `,
+          },
+          'main.ts',
+          { width: 60, height: 40, depth: 15 },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [60, 40, 15], 0.5);
+      });
+    });
+
+    describe('Real-world TypeScript CAD patterns', () => {
+      it('should bundle a parametric model with full TypeScript features (watering can style)', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import { makePlane, makeCylinder, draw, drawCircle } from 'replicad';
+
+              interface WateringCanParams {
+                baseWidth: number;
+                bodyHeight: number;
+                spoutRadius: number;
+                spoutLength: number;
+                spoutAngle: number;
+              }
+
+              export const defaultParams: WateringCanParams = {
+                baseWidth: 20,
+                bodyHeight: 50,
+                spoutRadius: 5,
+                spoutLength: 30,
+                spoutAngle: 45,
+              };
+
+              export default function main(p: WateringCanParams = defaultParams) {
+                // Build the body using draw + revolve
+                const profile = draw()
+                  .hLine(p.baseWidth)
+                  .line(5, 3)
+                  .vLine(3)
+                  .lineTo([8, p.bodyHeight])
+                  .hLine(-8)
+                  .close();
+
+                const body = profile.sketchOnPlane("XZ").revolve([0, 0, 1]);
+
+                // Build the spout
+                const spout = makeCylinder(p.spoutRadius, p.spoutLength)
+                  .translateZ(p.bodyHeight)
+                  .rotate(p.spoutAngle, [0, 0, p.bodyHeight], [0, 1, 0]);
+
+                const spoutOpening = [
+                  Math.cos((p.spoutAngle * Math.PI) / 180) * p.spoutLength,
+                  0,
+                  p.bodyHeight + Math.sin((p.spoutAngle * Math.PI) / 180) * p.spoutLength,
+                ] as [number, number, number];
+
+                return body.fuse(spout);
+              }
+            `,
+          },
+          'main.ts',
+          {
+            baseWidth: 20,
+            bodyHeight: 50,
+            spoutRadius: 5,
+            spoutLength: 30,
+            spoutAngle: 45,
+          },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should bundle a multi-file parametric assembly with TypeScript', async () => {
+        const result = await createGeometry(
+          {
+            'main.ts': `
+              import {} from 'replicad';
+              import type { AssemblyConfig } from './types';
+              import { createBase } from './parts/base';
+              import { createPillar } from './parts/pillar';
+
+              export const defaultParams: AssemblyConfig = {
+                base: { width: 60, depth: 40, thickness: 5 },
+                pillar: { radius: 4, height: 30 },
+              };
+
+              export default function main(p: AssemblyConfig = defaultParams) {
+                const base = createBase(p.base);
+                const pillar = createPillar(p.pillar).translate([0, 0, p.base.thickness]);
+                return base.fuse(pillar);
+              }
+            `,
+            'types.ts': `
+              export interface BaseConfig {
+                width: number;
+                depth: number;
+                thickness: number;
+              }
+
+              export interface PillarConfig {
+                radius: number;
+                height: number;
+              }
+
+              export interface AssemblyConfig {
+                base: BaseConfig;
+                pillar: PillarConfig;
+              }
+            `,
+            'parts/base.ts': `
+              import { drawRoundedRectangle } from 'replicad';
+              import type { BaseConfig } from '../types';
+
+              export function createBase(config: BaseConfig) {
+                return drawRoundedRectangle(config.width, config.depth)
+                  .sketchOnPlane()
+                  .extrude(config.thickness);
+              }
+            `,
+            'parts/pillar.ts': `
+              import { drawCircle } from 'replicad';
+              import type { PillarConfig } from '../types';
+
+              export function createPillar(config: PillarConfig) {
+                return drawCircle(config.radius)
+                  .sketchOnPlane()
+                  .extrude(config.height);
+              }
+            `,
+          },
+          'main.ts',
+          {
+            base: { width: 60, depth: 40, thickness: 5 },
+            pillar: { radius: 4, height: 30 },
+          },
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [60, 40, 35], 1);
+      });
     });
   });
 });
