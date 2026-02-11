@@ -24,7 +24,7 @@
 
 import type * as Monaco from 'monaco-editor';
 import { getAllImports } from '#lib/javascript-import-parser.js';
-import { isBareSpecifier } from '#utils/import.utils.js';
+import { isBareSpecifier, extractPackageFromCdnUrl } from '#utils/import.utils.js';
 
 // =============================================================================
 // Types
@@ -59,6 +59,15 @@ const retryDelayMs = 60_000;
 /** JS/TS language IDs that we watch for imports */
 const jsTsLanguages = new Set(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- toggle to enable debug logging
+const ATA_DEBUG = false;
+function ataLog(...arguments_: unknown[]): void {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag toggled manually
+  if (ATA_DEBUG) {
+    console.log('[ATA]', ...arguments_);
+  }
+}
+
 // =============================================================================
 // TypeAcquisitionService
 // =============================================================================
@@ -82,6 +91,10 @@ export class TypeAcquisitionService {
   private readonly modelListeners = new Map<Monaco.editor.ITextModel, Monaco.IDisposable>();
   private readonly debounceTimers = new Map<Monaco.editor.ITextModel, ReturnType<typeof setTimeout>>();
   private readonly globalListeners: Monaco.IDisposable[] = [];
+
+  // --- CDN URL aliases ---
+  /** Maps packageName -> set of CDN URLs that import this package */
+  private readonly cdnUrlAliases = new Map<string, Set<string>>();
 
   // --- Fetch management ---
   private readonly fetchCache = new Map<string, string>(); // PackageName -> .d.ts content
@@ -175,6 +188,7 @@ export class TypeAcquisitionService {
 
     this.pendingFetches.clear();
     this.failedPackages.clear();
+    this.cdnUrlAliases.clear();
 
     // Keep fetchCache -- types don't change between sessions, avoids redundant CDN requests
 
@@ -248,6 +262,7 @@ export class TypeAcquisitionService {
     this.fetchCache.clear();
     this.pendingFetches.clear();
     this.failedPackages.clear();
+    this.cdnUrlAliases.clear();
 
     this.monaco = undefined;
   }
@@ -319,22 +334,34 @@ export class TypeAcquisitionService {
   private async scanModelImports(model: Monaco.editor.ITextModel): Promise<void> {
     try {
       const imports = await getAllImports(model);
+      ataLog('scan:', model.uri.toString(), `(${imports.length} imports)`);
 
       for (const imp of imports) {
-        if (!isBareSpecifier(imp.specifier)) {
+        if (isBareSpecifier(imp.specifier)) {
+          const packageName = extractPackageName(imp.specifier);
+          if (!packageName || this.acquiredTypes.has(packageName)) {
+            continue;
+          }
+
+          ataLog('acquire:', packageName);
+          void this.acquireTypes(packageName);
           continue;
         }
 
-        const packageName = extractPackageName(imp.specifier);
+        // CDN URL import (e.g., 'https://cdn.jsdelivr.net/npm/replicad-decorate/...')
+        const packageName = extractPackageFromCdnUrl(imp.specifier);
         if (!packageName) {
           continue;
         }
 
+        this.registerCdnAlias(packageName, imp.specifier);
+
         if (this.acquiredTypes.has(packageName)) {
+          this.injectCdnAliasIfNeeded(packageName, imp.specifier);
           continue;
         }
 
-        // Fire-and-forget -- errors are handled internally
+        ataLog('acquire CDN:', packageName, 'from', imp.specifier);
         void this.acquireTypes(packageName);
       }
     } catch {
@@ -362,10 +389,12 @@ export class TypeAcquisitionService {
     // Check fetch cache (persisted across sessions)
     const cached = this.fetchCache.get(packageName);
     if (cached) {
+      ataLog('cache hit:', packageName);
       this.injectDynamicTypes(packageName, cached);
       return;
     }
 
+    ataLog('fetch:', packageName);
     // Capture epoch for async safety
     const currentEpoch = this.sessionEpoch;
     const { signal } = this.abortController ?? {};
@@ -388,28 +417,25 @@ export class TypeAcquisitionService {
     signal: AbortSignal | undefined,
   ): Promise<void> {
     try {
-      // Step 1: Fetch the module to get the X-TypeScript-Types header
+      // Fetch the module to discover the X-TypeScript-Types header
       const moduleUrl = `${esmShBase}/${packageName}`;
       const moduleResponse = await fetch(moduleUrl, { signal });
 
-      // Epoch guard: session may have changed during fetch
       if (this.sessionEpoch !== epoch) {
         return;
       }
 
       const typesUrl = moduleResponse.headers.get('X-TypeScript-Types');
       if (!typesUrl) {
-        // No types available for this package -- mark as acquired to prevent re-scanning
+        // No types available -- mark as acquired to prevent re-scanning
         this.acquiredTypes.add(packageName);
         return;
       }
 
-      // Step 2: Fetch the type declarations
+      // Fetch the type declarations
       const resolvedTypesUrl = typesUrl.startsWith('http') ? typesUrl : `${esmShBase}${typesUrl}`;
-
       const typesResponse = await fetch(resolvedTypesUrl, { signal });
 
-      // Epoch guard: session may have changed during second fetch
       if (this.sessionEpoch !== epoch) {
         return;
       }
@@ -420,7 +446,6 @@ export class TypeAcquisitionService {
 
       const typesContent = await typesResponse.text();
 
-      // Final epoch guard before injection
       if (this.sessionEpoch !== epoch) {
         return;
       }
@@ -428,14 +453,16 @@ export class TypeAcquisitionService {
       // Cache and inject
       this.fetchCache.set(packageName, typesContent);
       this.injectDynamicTypes(packageName, typesContent);
-
-      // Clear from failed packages on success
       this.failedPackages.delete(packageName);
+
+      ataLog('fetched:', packageName, `(${typesContent.length} chars)`);
     } catch (error: unknown) {
       // Don't record AbortError as a failure (it's intentional)
       if (error instanceof DOMException && error.name === 'AbortError') {
         return;
       }
+
+      ataLog('fetch failed:', packageName, error);
 
       // Record failure with timestamp for retry delay
       this.failedPackages.set(packageName, Date.now());
@@ -445,27 +472,65 @@ export class TypeAcquisitionService {
     }
   }
 
-  private injectDynamicTypes(packageName: string, content: string): void {
+  /** Track a CDN URL as an alias for a package name. */
+  private registerCdnAlias(packageName: string, cdnUrl: string): void {
+    let aliases = this.cdnUrlAliases.get(packageName);
+    if (!aliases) {
+      aliases = new Set();
+      this.cdnUrlAliases.set(packageName, aliases);
+    }
+
+    aliases.add(cdnUrl);
+  }
+
+  /** Inject a CDN URL alias declaration if the package types are cached and the alias is not yet registered. */
+  private injectCdnAliasIfNeeded(packageName: string, cdnUrl: string): void {
+    if (this.acquiredTypes.has(cdnUrl)) {
+      return;
+    }
+
+    const cached = this.fetchCache.get(packageName);
+    if (cached) {
+      this.injectDynamicTypes(cdnUrl, cached);
+    }
+  }
+
+  private injectDynamicTypes(moduleName: string, content: string): void {
     if (!this.monaco) {
       return;
     }
 
-    // Dispose existing libs for this package (if re-injecting from cache)
-    const existing = this.dynamicLibs.get(packageName);
+    ataLog('inject:', moduleName, `(${content.length} chars)`);
+
+    // Dispose existing libs for this module (if re-injecting from cache)
+    const existing = this.dynamicLibs.get(moduleName);
     if (existing) {
       for (const disposable of existing) {
         disposable.dispose();
       }
     }
 
-    const wrapped = `declare module '${packageName}' {\n${content}\n}`;
-    const filePath = `file:///node_modules/${packageName}/index.d.ts`;
+    const wrapped = `declare module '${moduleName}' {\n${content}\n}`;
+    // Use a clean file path for CDN URLs, standard path for package names
+    const filePath = moduleName.startsWith('http')
+      ? `file:///cdn-types/${encodeURIComponent(moduleName)}.d.ts`
+      : `file:///node_modules/${moduleName}/index.d.ts`;
 
     const tsDisposable = this.monaco.typescript.typescriptDefaults.addExtraLib(wrapped, filePath);
     const jsDisposable = this.monaco.typescript.javascriptDefaults.addExtraLib(wrapped, filePath);
 
-    this.dynamicLibs.set(packageName, [tsDisposable, jsDisposable]);
-    this.acquiredTypes.add(packageName);
+    this.dynamicLibs.set(moduleName, [tsDisposable, jsDisposable]);
+    this.acquiredTypes.add(moduleName);
+
+    // Also inject for any registered CDN URL aliases
+    const aliases = this.cdnUrlAliases.get(moduleName);
+    if (aliases) {
+      for (const alias of aliases) {
+        if (!this.acquiredTypes.has(alias)) {
+          this.injectDynamicTypes(alias, content);
+        }
+      }
+    }
   }
 }
 

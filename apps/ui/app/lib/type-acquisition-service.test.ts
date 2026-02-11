@@ -1034,6 +1034,316 @@ describe('TypeAcquisitionService', () => {
   });
 
   // =========================================================================
+  // CDN URL type acquisition
+  // =========================================================================
+
+  describe('CDN URL type acquisition', () => {
+    beforeEach(() => {
+      service.initialize(mockMonaco.monaco, { staticTypes: [staticReplicad] });
+    });
+
+    it('should acquire types for jsdelivr CDN URL imports', async () => {
+      const typesContent = 'export function drawSVG(): void;';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) =>
+              header === 'X-TypeScript-Types' ? '/v135/replicad-decorate@1.0.0/index.d.ts' : null,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => typesContent,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content:
+          "import { drawSVG } from 'https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Should have fetched types for the package
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://esm.sh/replicad-decorate',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    it('should inject types under the CDN URL module specifier', async () => {
+      const typesContent = 'export function drawSVG(): void;';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) =>
+              header === 'X-TypeScript-Types' ? 'https://esm.sh/types/replicad-decorate.d.ts' : null,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => typesContent,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const cdnUrl = 'https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js';
+      const { model } = createMockModel({
+        content: `import { drawSVG } from '${cdnUrl}';`,
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+
+      // Should inject types under the CDN URL module specifier
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining(`declare module '${cdnUrl}'`),
+        expect.any(String),
+      );
+    });
+
+    it('should also inject types under the package name for CDN URL imports', async () => {
+      const typesContent = 'export function drawSVG(): void;';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) =>
+              header === 'X-TypeScript-Types' ? 'https://esm.sh/types/replicad-decorate.d.ts' : null,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => typesContent,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const cdnUrl = 'https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js';
+      const { model } = createMockModel({
+        content: `import { drawSVG } from '${cdnUrl}';`,
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+
+      // Should also inject under the bare package name
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'replicad-decorate'"),
+        'file:///node_modules/replicad-decorate/index.d.ts',
+      );
+    });
+
+    it('should only fetch once for multiple CDN URLs of the same package', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: [
+          "import { drawSVG } from 'https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js';",
+          "import { otherFunc } from 'https://esm.sh/replicad-decorate';",
+        ].join('\n'),
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Should only fetch once for replicad-decorate
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://esm.sh/replicad-decorate',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    it('should handle scoped packages in CDN URLs', async () => {
+      // Use a fresh service without @jscad/modeling in static types
+      service.dispose();
+      service = new TypeAcquisitionService();
+      service.initialize(mockMonaco.monaco, { staticTypes: [] });
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: "import booleans from 'https://cdn.jsdelivr.net/npm/@jscad/modeling@2.12.6/booleans';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://esm.sh/@jscad/modeling',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    it('should skip non-CDN URL imports', async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: "import { helper } from 'https://example.com/not-a-cdn/module.js';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should not re-fetch CDN package if already acquired via bare import', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      // First: bare import acquires the package
+      const { model, fireContentChange } = createMockModel({
+        content: "import lodash from 'lodash';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // Then: CDN URL import for same package
+      mockFetch.mockClear();
+      model._setContent("import lodash from 'https://cdn.jsdelivr.net/npm/lodash';");
+      fireContentChange();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(10);
+
+      // Should NOT fetch again
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should clear CDN URL aliases on session change', async () => {
+      const typesContent = 'export function drawSVG(): void;';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) =>
+              header === 'X-TypeScript-Types' ? 'https://esm.sh/types/replicad-decorate.d.ts' : null,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => typesContent,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const cdnUrl = 'https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js';
+      const { model } = createMockModel({
+        content: `import { drawSVG } from '${cdnUrl}';`,
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Get the CDN URL alias disposable (injected after the package name + static replicad)
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      const cdnUrlCall = tsDefaults.addExtraLib.mock.calls.find(
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes(`declare module '${cdnUrl}'`),
+      );
+      expect(cdnUrlCall).toBeDefined();
+
+      // Session change should dispose CDN alias libs
+      service.onBuildSessionChange();
+
+      // The CDN URL lib disposable should have been disposed
+      const cdnUrlCallIndex = tsDefaults.addExtraLib.mock.calls.indexOf(cdnUrlCall!);
+      const cdnUrlDisposable = tsDefaults.addExtraLib.mock.results[cdnUrlCallIndex]!.value as MockDisposable;
+      expect(cdnUrlDisposable.dispose).toHaveBeenCalled();
+    });
+
+    it('should acquire types for Skypack CDN URL imports', async () => {
+      const typesContent = 'export function qrcode(): void;';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) =>
+              header === 'X-TypeScript-Types' ? '/v135/qrcode-generator@2.0.4/index.d.ts' : null,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => typesContent,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const skypackUrl = 'https://cdn.skypack.dev/qrcode-generator@2.0.4';
+      const { model } = createMockModel({
+        content: `import { qrcode } from '${skypackUrl}';`,
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Should have fetched types for the package via esm.sh
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://esm.sh/qrcode-generator',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+
+      // Should inject types under the Skypack CDN URL module specifier
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining(`declare module '${skypackUrl}'`),
+        expect.any(String),
+      );
+
+      // Should also inject types under the bare package name
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'qrcode-generator'"),
+        'file:///node_modules/qrcode-generator/index.d.ts',
+      );
+    });
+  });
+
+  // =========================================================================
   // Disposal
   // =========================================================================
 
