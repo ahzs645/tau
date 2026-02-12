@@ -1,5 +1,7 @@
 import type { LinkDescriptor } from 'react-router';
 import allotmentStylesUrl from 'allotment/dist/style.css?url';
+import dockviewStylesUrl from 'dockview-react/dist/styles/dockview.css?url';
+import tauDockviewStylesUrl from '#components/panes/tau-dockview.css?url';
 import globalStylesUrl from '#styles/global.css?url';
 
 const fonts: LinkDescriptor[] = [
@@ -22,11 +24,20 @@ const fonts: LinkDescriptor[] = [
 const styleSheets: LinkDescriptor[] = [
   {
     rel: 'stylesheet',
-    href: globalStylesUrl,
+    href: allotmentStylesUrl,
   },
   {
     rel: 'stylesheet',
-    href: allotmentStylesUrl,
+    href: dockviewStylesUrl,
+  },
+  {
+    // Must load AFTER dockview.css so our .dockview-theme-tau overrides win on specificity ties
+    rel: 'stylesheet',
+    href: tauDockviewStylesUrl,
+  },
+  {
+    rel: 'stylesheet',
+    href: globalStylesUrl,
   },
 ];
 
