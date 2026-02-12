@@ -29,31 +29,53 @@ const primitiveModeTriangles = 4;
 const primitiveModeLines = 1;
 
 /**
- * Create edge primitives for all triangle meshes in a glTF document.
+ * Create edge primitives for triangle meshes in a glTF document that don't already have edges.
  *
- * For each mesh containing TRIANGULAR primitives:
+ * For each mesh that has no existing LINE primitives:
  * 1. Run edge detection to find sharp edges
  * 2. Create a new LINES primitive with the edge geometry
  * 3. Apply an unlit material with edge color
  *
+ * Meshes that already contain LINE primitives (e.g., from replicad's meshEdges) are
+ * skipped. Native kernel edges use exact CAD topology and are higher quality than
+ * dihedral-angle detection on the tessellated mesh.
+ *
  * @param document - The glTF document to process
+ * @returns Whether any edge primitives were added
  */
-function addEdgePrimitivesToDocument(document: Document): void {
-  // Create unlit extension for edge materials
-  const unlitExtension = document.createExtension(KHRMaterialsUnlit);
-  const unlit = unlitExtension.createUnlit();
+function addEdgePrimitivesToDocument(document: Document): boolean {
+  let edgesAdded = false;
 
-  // Create shared edge material
-  const edgeMaterial = document
-    .createMaterial('tau-edge-material')
-    .setBaseColorFactor(edgeColor)
-    .setMetallicFactor(0)
-    .setRoughnessFactor(1)
-    .setDoubleSided(true)
-    .setExtension('KHR_materials_unlit', unlit);
+  // Create unlit extension for edge materials (lazily initialized)
+  let edgeMaterial: ReturnType<Document['createMaterial']> | undefined;
+
+  function getEdgeMaterial(): ReturnType<Document['createMaterial']> {
+    if (!edgeMaterial) {
+      const unlitExtension = document.createExtension(KHRMaterialsUnlit);
+      const unlit = unlitExtension.createUnlit();
+
+      edgeMaterial = document
+        .createMaterial('tau-edge-material')
+        .setBaseColorFactor(edgeColor)
+        .setMetallicFactor(0)
+        .setRoughnessFactor(1)
+        .setDoubleSided(true)
+        .setExtension('KHR_materials_unlit', unlit);
+    }
+
+    return edgeMaterial;
+  }
 
   // Process each mesh
   for (const mesh of document.getRoot().listMeshes()) {
+    // Skip meshes that already have LINE primitives (e.g., from replicad's meshEdges).
+    // Native kernel edges are higher quality than dihedral-angle detection
+    // because they use exact CAD topology rather than tessellated approximation.
+    const hasExistingLines = mesh.listPrimitives().some((p) => p.getMode() === primitiveModeLines);
+    if (hasExistingLines) {
+      continue;
+    }
+
     const primitivesToAdd: Primitive[] = [];
 
     for (const primitive of mesh.listPrimitives()) {
@@ -95,7 +117,7 @@ function addEdgePrimitivesToDocument(document: Document): void {
       const edgePrimitive = document
         .createPrimitive()
         .setMode(primitiveModeLines)
-        .setMaterial(edgeMaterial)
+        .setMaterial(getEdgeMaterial())
         .setAttribute(
           'POSITION',
           document.createAccessor('edge-positions').setType('VEC3').setArray(edgeResult.positions),
@@ -108,15 +130,21 @@ function addEdgePrimitivesToDocument(document: Document): void {
     // Add edge primitives to mesh
     for (const edgePrimitive of primitivesToAdd) {
       mesh.addPrimitive(edgePrimitive);
+      edgesAdded = true;
     }
   }
+
+  return edgesAdded;
 }
 
 /**
  * Add edge primitives to a GLTF geometry.
  *
+ * If all meshes already contain LINE primitives (e.g., from replicad's meshEdges),
+ * the original geometry is returned unchanged to avoid unnecessary re-serialization.
+ *
  * @param geometry - The GLTF geometry to process
- * @returns The geometry with edge primitives added
+ * @returns The geometry with edge primitives added, or the original if no edges were needed
  */
 async function addEdgePrimitivesToGltf(geometry: GeometryGltf): Promise<GeometryGltf> {
   const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
@@ -124,8 +152,14 @@ async function addEdgePrimitivesToGltf(geometry: GeometryGltf): Promise<Geometry
   // Read the GLTF document from the binary data
   const document = await io.readBinary(geometry.content);
 
-  // Add edge primitives
-  addEdgePrimitivesToDocument(document);
+  // Add edge primitives to meshes that don't already have them
+  const hadEdgesAdded = addEdgePrimitivesToDocument(document);
+
+  // If no edges were added (all meshes had native edges), return the original
+  // geometry to avoid unnecessary re-serialization through @gltf-transform
+  if (!hadEdgesAdded) {
+    return geometry;
+  }
 
   // Write back to binary format
   const transformedContent = await io.writeBinary(document);
