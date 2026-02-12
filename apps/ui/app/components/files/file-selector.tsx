@@ -127,6 +127,54 @@ function sortNodes(a: TreeNode, b: TreeNode): number {
 }
 
 /**
+ * Recursively search tree for files matching the query
+ */
+function searchFilesRecursively(node: TreeNode, query: string): TreeNode[] {
+  const results: TreeNode[] = [];
+  const lowerQuery = query.toLowerCase();
+
+  function traverse(current: TreeNode): void {
+    for (const child of current.children.values()) {
+      if (child.isFolder) {
+        traverse(child);
+      } else if (child.name.toLowerCase().includes(lowerQuery)) {
+        results.push(child);
+      }
+    }
+  }
+
+  traverse(node);
+  return results.sort(sortNodes);
+}
+
+/**
+ * Get a relative directory hint for a file path from a base path
+ */
+function getDirectoryHint(filePath: string, basePath: string): string {
+  const parts = filePath.split('/');
+  parts.pop();
+  const directory = parts.join('/');
+
+  if (!directory) {
+    return '';
+  }
+
+  if (!basePath) {
+    return directory;
+  }
+
+  if (directory === basePath) {
+    return '';
+  }
+
+  if (directory.startsWith(basePath + '/')) {
+    return directory.slice(basePath.length + 1);
+  }
+
+  return directory;
+}
+
+/**
  * Format bytes to human-readable size.
  * Supports sizes up to Quettabytes (QB, ~10^30 bytes).
  */
@@ -244,11 +292,13 @@ function BreadcrumbNav({
 function FileSelectorItem({
   item,
   isSelected,
+  directoryHint,
   onDrillDown,
   onSelect,
 }: {
   readonly item: TreeNode;
   readonly isSelected: boolean;
+  readonly directoryHint?: string;
   readonly onDrillDown: (path: string) => void;
   readonly onSelect: (path: string) => void;
 }): React.JSX.Element {
@@ -280,7 +330,10 @@ function FileSelectorItem({
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <FileExtensionIcon filename={item.name} className="size-4 shrink-0" />
-        <span className={cn('truncate', isSelected && 'font-medium')}>{item.name}</span>
+        <span className={cn(directoryHint ? 'shrink-0' : 'truncate', isSelected && 'font-medium')}>{item.name}</span>
+        {directoryHint ? (
+          <span className="min-w-0 truncate text-xs text-muted-foreground">{directoryHint}</span>
+        ) : undefined}
       </div>
       {item.size === undefined ? undefined : (
         <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(item.size)}</span>
@@ -294,6 +347,8 @@ function FileSelectorItem({
  */
 function FileSelectorList({
   items,
+  rootNode,
+  currentPath,
   selectedFile,
   searchQuery,
   virtualizationThreshold,
@@ -302,6 +357,8 @@ function FileSelectorList({
   onSelect,
 }: {
   readonly items: TreeNode[];
+  readonly rootNode: TreeNode;
+  readonly currentPath: string;
   readonly selectedFile: string | undefined;
   readonly searchQuery: string;
   readonly virtualizationThreshold: number;
@@ -309,15 +366,16 @@ function FileSelectorList({
   readonly onDrillDown: (path: string) => void;
   readonly onSelect: (path: string) => void;
 }): React.JSX.Element {
-  // Filter items based on search query
+  const isSearching = searchQuery.length > 0;
+
+  // When searching, recursively find matching files from the root of the tree; otherwise show current level items
   const filteredItems = useMemo(() => {
     if (!searchQuery) {
       return items;
     }
 
-    const query = searchQuery.toLowerCase();
-    return items.filter((item) => item.name.toLowerCase().includes(query));
-  }, [items, searchQuery]);
+    return searchFilesRecursively(rootNode, searchQuery);
+  }, [items, searchQuery, rootNode]);
 
   const renderItem = useCallback(
     (index: number) => {
@@ -326,17 +384,20 @@ function FileSelectorList({
         return undefined;
       }
 
+      const hint = isSearching ? getDirectoryHint(item.path, currentPath) : undefined;
+
       return (
         <FileSelectorItem
           key={item.path}
           item={item}
           isSelected={selectedFile === item.path}
+          directoryHint={hint ?? undefined}
           onDrillDown={onDrillDown}
           onSelect={onSelect}
         />
       );
     },
-    [filteredItems, selectedFile, onDrillDown, onSelect],
+    [filteredItems, selectedFile, isSearching, currentPath, onDrillDown, onSelect],
   );
 
   // Show empty message when no items match
@@ -364,15 +425,19 @@ function FileSelectorList({
 
   return (
     <div className="p-1">
-      {filteredItems.map((item) => (
-        <FileSelectorItem
-          key={item.path}
-          item={item}
-          isSelected={selectedFile === item.path}
-          onDrillDown={onDrillDown}
-          onSelect={onSelect}
-        />
-      ))}
+      {filteredItems.map((item) => {
+        const hint = isSearching ? getDirectoryHint(item.path, currentPath) : undefined;
+        return (
+          <FileSelectorItem
+            key={item.path}
+            item={item}
+            isSelected={selectedFile === item.path}
+            directoryHint={hint ?? undefined}
+            onDrillDown={onDrillDown}
+            onSelect={onSelect}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -476,6 +541,8 @@ export function FileSelector({
       <CommandList className="max-h-[300px]">
         <FileSelectorList
           items={currentItems}
+          rootNode={tree}
+          currentPath={currentPath}
           selectedFile={selectedFile}
           searchQuery={searchQuery}
           virtualizationThreshold={virtualizationThreshold}
