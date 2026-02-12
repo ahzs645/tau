@@ -185,14 +185,14 @@ export class JscadWorker extends JavaScriptWorker {
       const bundleResult = await this.bundle(filePath, runtime, basePath);
 
       if (!bundleResult.success) {
-        return createKernelError(bundleResult.issues);
+        return createKernelError(this.enrichIssuesWithFallbackLocation(bundleResult.issues, relativeFilePath));
       }
 
       // Execute the bundled code
       const executeResult = await this.execute(bundleResult.code);
 
       if (!executeResult.success) {
-        return createKernelError(executeResult.issues);
+        return createKernelError(this.enrichIssuesWithFallbackLocation(executeResult.issues, relativeFilePath));
       }
 
       const module = executeResult.value;
@@ -286,14 +286,14 @@ export class JscadWorker extends JavaScriptWorker {
       logger.log(`Bundling took ${bundleEndTime - bundleStartTime}ms`);
 
       if (!bundleResult.success) {
-        return createKernelError(bundleResult.issues);
+        return createKernelError(this.enrichIssuesWithFallbackLocation(bundleResult.issues, relativeFilePath));
       }
 
       // Execute the bundled code
       const executeResult = await this.execute(bundleResult.code);
 
       if (!executeResult.success) {
-        return createKernelError(executeResult.issues);
+        return createKernelError(this.enrichIssuesWithFallbackLocation(executeResult.issues, relativeFilePath));
       }
 
       const module = executeResult.value;
@@ -306,7 +306,7 @@ export class JscadWorker extends JavaScriptWorker {
         const mainResult = await this.runMain<unknown>(module, parameters);
 
         if (!mainResult.success) {
-          return createKernelError(mainResult.issues);
+          return createKernelError(this.enrichIssuesWithFallbackLocation(mainResult.issues, relativeFilePath));
         }
 
         shapes = mainResult.value;
@@ -319,6 +319,7 @@ export class JscadWorker extends JavaScriptWorker {
             [
               {
                 message: 'The main function did not return a value. Did you forget a return statement?',
+                location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
                 type: 'runtime',
                 severity: 'warning',
               },

@@ -433,12 +433,14 @@ export abstract class JavaScriptWorker<
       message = error;
     }
 
-    // Only include location if we have a fileName and meaningful position data
-    const hasLocation = fileName && (startLineNumber > 0 || startColumn > 0);
-
+    // Include location when fileName is available, defaulting to line 1 of the file.
+    // This ensures users can always navigate to the file being rendered,
+    // even when the stack trace doesn't contain user-code frames (e.g., missing exports).
     const issue: KernelIssue = {
       message,
-      location: hasLocation ? { fileName, startLineNumber, startColumn } : undefined,
+      location: fileName
+        ? { fileName, startLineNumber: startLineNumber || 1, startColumn: startColumn || 0 }
+        : undefined,
       stack,
       stackFrames: stackFrames.length > 0 ? stackFrames : undefined,
       type: 'runtime',
@@ -446,6 +448,27 @@ export abstract class JavaScriptWorker<
     };
 
     return { success: false as const, issues: [issue] };
+  }
+
+  /**
+   * Enrich kernel issues with a fallback location when they don't already have one.
+   *
+   * When errors from `execute()` or `runMain()` don't contain user-code stack frames
+   * (e.g., module loading errors, missing exports), the issues won't have a location.
+   * This method adds a fallback location pointing to the first line of the file being
+   * rendered, so that the user can still navigate to the file.
+   *
+   * Issues that already have a location are left unchanged.
+   *
+   * @param issues - The kernel issues to enrich
+   * @param fileName - The file name to use as fallback location (relative to project root)
+   * @returns Issues with fallback locations added where missing
+   */
+  protected enrichIssuesWithFallbackLocation(issues: KernelIssue[], fileName: string): KernelIssue[] {
+    return issues.map((issue) => ({
+      ...issue,
+      location: issue.location ?? { fileName, startLineNumber: 1, startColumn: 0 },
+    }));
   }
 
   /**

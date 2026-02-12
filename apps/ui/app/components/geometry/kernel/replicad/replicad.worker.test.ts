@@ -1532,6 +1532,8 @@ export default function main() {
           expect(result.issues.length).toBeGreaterThan(0);
           expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
           expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+          // Warning should point to line 1 of the file for navigation
+          expect(result.issues[0]?.location).toEqual({ fileName: 'no_return.ts', startLineNumber: 1 });
         }
       });
 
@@ -1554,6 +1556,8 @@ export default function main() {
           expect(result.issues.length).toBeGreaterThan(0);
           expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
           expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+          // Warning should point to line 1 of the file for navigation
+          expect(result.issues[0]?.location).toEqual({ fileName: 'explicit_undefined.ts', startLineNumber: 1 });
         }
       });
     });
