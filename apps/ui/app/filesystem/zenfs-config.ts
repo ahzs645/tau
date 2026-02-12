@@ -38,17 +38,51 @@ const indexedDbBackend = {
   ...filesystemBackendMeta.indexeddb,
   canHandle: () => true,
   async create() {
-    await configure({
+    const storeName = `${metaConfig.databasePrefix}fs`;
+    const mountConfig = {
       mounts: {
         // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
         '/': {
           backend: IndexedDB,
-          storeName: `${metaConfig.databasePrefix}fs`,
+          storeName,
         },
       },
-    });
+    };
+
+    try {
+      await configure(mountConfig);
+    } catch (error) {
+      // Detect IndexedDB corruption (e.g. from prior ZenFS race conditions) and recover
+      // by deleting the corrupt database and retrying with a fresh store.
+      if (error instanceof SyntaxError && error.message.includes('is not valid JSON')) {
+        console.warn(
+          '[FileManager:ZenFS] Corrupt IndexedDB detected, deleting database and retrying with fresh store...',
+        );
+        await deleteIndexedDatabase(storeName);
+        await configure(mountConfig);
+        return;
+      }
+
+      throw error;
+    }
   },
 } as const satisfies FilesystemBackendConfig;
+
+/**
+ * Delete an IndexedDB database by name.
+ * Used for corruption recovery when the stored data is invalid.
+ */
+async function deleteIndexedDatabase(name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.addEventListener('success', () => {
+      resolve();
+    });
+    request.addEventListener('error', () => {
+      reject(request.error ?? new Error(`Failed to delete IndexedDB database: ${name}`));
+    });
+  });
+}
 
 const opfsBackend = {
   name: 'opfs',
