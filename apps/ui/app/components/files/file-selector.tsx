@@ -507,7 +507,7 @@ export function FileSelector({
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
-      <PopoverContent {...popoverProperties} className={cn('w-[300px] p-0', className)}>
+      <PopoverContent {...popoverProperties} className={cn('w-[300px] p-0', popoverProperties?.className)}>
         {content}
       </PopoverContent>
     </Popover>
