@@ -14,7 +14,6 @@ import type {
   KernelLogger,
   InitializeInput,
   CanHandleInput,
-  GetDependenciesInput,
   GetParametersInput,
   CreateGeometryInput,
   ExportGeometryInput,
@@ -439,12 +438,6 @@ export class ReplicadWorker extends JavaScriptWorker<ReplicadOptions> {
       hasReplicadTypedef ||
       hasReplicadCdnImport
     );
-  }
-
-  protected override async getDependencies({ filePath }: GetDependenciesInput): Promise<string[]> {
-    // Replicad currently only supports single-file operations
-    // Return absolute path
-    return [filePath];
   }
 
   protected override getAssetUrls(): string[] {

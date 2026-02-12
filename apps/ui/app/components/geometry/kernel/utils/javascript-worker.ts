@@ -17,6 +17,7 @@ import type {
   KernelErrorResult,
   KernelRuntime,
   InitializeInput,
+  GetDependenciesInput,
   KernelStackFrame,
   ErrorLocation,
   FrameContext,
@@ -217,6 +218,25 @@ export abstract class JavaScriptWorker<
     this.lastEntryName = entryPath.split('/').pop();
 
     return bundleResult;
+  }
+
+  /**
+   * Discover all transitive file dependencies for the given entry file.
+   * Uses the esbuild bundler to resolve all imports and extract the list of
+   * project files from the metafile. This ensures that changes to any imported
+   * file correctly invalidate the geometry cache.
+   *
+   * @param input - Input containing file path and project root
+   * @param runtime - Runtime services (filesystem, logger)
+   * @returns Absolute paths of all project files that are dependencies (including the entry file)
+   */
+  protected override async getDependencies(
+    { filePath, basePath }: GetDependenciesInput,
+    runtime: KernelRuntime,
+  ): Promise<string[]> {
+    const bundler = await this.getBundler(runtime.filesystem, basePath);
+    const bundleResult = await bundler.bundle(filePath);
+    return bundleResult.dependencies;
   }
 
   /**

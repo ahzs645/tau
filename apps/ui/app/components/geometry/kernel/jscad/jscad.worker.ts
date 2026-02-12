@@ -9,7 +9,6 @@ import type {
   KernelLogger,
   InitializeInput,
   CanHandleInput,
-  GetDependenciesInput,
   GetParametersInput,
   CreateGeometryInput,
   ExportGeometryInput,
@@ -136,12 +135,6 @@ export class JscadWorker extends JavaScriptWorker {
     const hasEsmImport = /import\s+.*from\s+['"]@jscad\/modeling(\/[^'"]*)?['"]/.test(code);
     const hasRequire = /require\s*\(\s*['"]@jscad\/modeling(\/[^'"]*)?['"]\s*\)/.test(code);
     return hasEsmImport || hasRequire;
-  }
-
-  protected override async getDependencies({ filePath }: GetDependenciesInput): Promise<string[]> {
-    // JSCAD currently only supports single-file operations
-    // Return absolute path
-    return [filePath];
   }
 
   /**

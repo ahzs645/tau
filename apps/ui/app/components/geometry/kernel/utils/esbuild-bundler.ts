@@ -16,7 +16,7 @@
  */
 
 import * as esbuild from 'esbuild-wasm';
-import type { Plugin, BuildResult, BuildOptions, Message } from 'esbuild-wasm';
+import type { Plugin, BuildResult, BuildOptions, Message, Metafile } from 'esbuild-wasm';
 import type { KernelFilesystem, KernelIssue } from '@taucad/types';
 import { base64ToString } from 'uint8array-extras';
 import type { BuiltinModule } from '#components/geometry/kernel/utils/module-manager.js';
@@ -36,6 +36,8 @@ export type BundleResult = {
   issues: KernelIssue[];
   /** Whether bundling succeeded */
   success: boolean;
+  /** Absolute paths of all project files that were resolved during bundling (transitive dependencies). */
+  dependencies: string[];
 };
 
 export type BundlerOptions = {
@@ -580,6 +582,7 @@ const module = { exports };
         write: false,
         format: 'esm',
         target: 'es2022',
+        metafile: true,
         sourcemap: this.sourceMaps ? 'inline' : false,
         platform: 'browser',
         plugins: [
@@ -600,6 +603,12 @@ const module = { exports };
 
       const result: BuildResult = await esbuild.build(buildOptions);
 
+      // Extract project-file dependencies from the metafile.
+      // Keys in metafile.inputs use the format "namespace:path".
+      // Project files live in the zenfs namespace with project-relative paths.
+      // CDN/node_modules paths are excluded (tracked via asset hashes separately).
+      const dependencies = this.extractDependencies(result.metafile);
+
       // Collect warnings
       for (const warning of result.warnings) {
         issues.push(this.convertEsbuildMessage(warning, 'warning'));
@@ -618,12 +627,14 @@ const module = { exports };
           code: output.text,
           sourceMap,
           issues,
+          dependencies,
           success: result.errors.length === 0,
         };
       }
 
       return {
         code: '',
+        dependencies,
         issues: [
           ...issues,
           {
@@ -656,10 +667,49 @@ const module = { exports };
 
       return {
         code: '',
+        dependencies: [],
         issues,
         success: false,
       };
     }
+  }
+
+  /**
+   * Extract absolute paths of project-file dependencies from the esbuild metafile.
+   *
+   * Metafile input keys use "namespace:path" format. Project files live in the
+   * `zenfs` namespace with project-relative paths. CDN/node_modules and builtin
+   * modules are excluded since they are tracked separately via asset hashes.
+   *
+   * @param metafile - The esbuild metafile from a build with `metafile: true`
+   * @returns Absolute paths of all project files involved in the bundle
+   */
+  private extractDependencies(metafile: Metafile | undefined): string[] {
+    if (!metafile) {
+      return [];
+    }
+
+    const projectPrefix = this.projectPath.endsWith('/') ? this.projectPath : this.projectPath + '/';
+    const dependencies: string[] = [];
+
+    for (const inputKey of Object.keys(metafile.inputs)) {
+      // Only include project files from the zenfs namespace
+      if (!inputKey.startsWith(zenfsPrefix)) {
+        continue;
+      }
+
+      const relativePath = inputKey.slice(zenfsPrefix.length);
+
+      // Exclude CDN/node_modules paths (they start with '/')
+      if (relativePath.startsWith('/')) {
+        continue;
+      }
+
+      // Convert project-relative path to absolute
+      dependencies.push(`${projectPrefix}${relativePath}`);
+    }
+
+    return dependencies;
   }
 
   /**
