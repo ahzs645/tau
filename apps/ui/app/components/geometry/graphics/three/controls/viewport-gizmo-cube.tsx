@@ -35,7 +35,7 @@ const className = 'viewport-gizmo-cube';
 const emptyDependencies: readonly unknown[] = [];
 
 export function ViewportGizmoCube({
-  size = 128,
+  size = 96,
   container,
   dependencies = emptyDependencies,
 }: ViewportGizmoCubeProps): ReactNode {
