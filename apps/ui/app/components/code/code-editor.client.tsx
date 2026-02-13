@@ -16,6 +16,35 @@ type CodeEditorProperties = EditorProps & {
 
 await configureMonaco();
 
+/**
+ * Create a shared overflow widgets container for all Monaco editors.
+ *
+ * Monaco's hover tooltip, suggest widget, and parameter hints use
+ * `position: fixed` when `fixedOverflowWidgets` is enabled. Inside
+ * Dockview panels, CSS `transform: translate3d(0,0,0)` and
+ * `contain: layout paint` on ancestor elements create new containing
+ * blocks that break fixed positioning -- widgets get clipped by
+ * `overflow: hidden` on the group view instead of rendering above
+ * everything.
+ *
+ * Placing the overflow container on `document.body` (outside the
+ * Dockview DOM hierarchy) avoids all CSS containment issues. Each
+ * Monaco editor appends its own child `overflowingContentWidgets`
+ * container inside this shared node. Combined with
+ * `fixedOverflowWidgets: true`, widgets use viewport coordinates and
+ * render above all panes -- matching VSCode's multi-diff editor
+ * pattern (see `multiDiffEditorWidgetImpl.ts` line 78).
+ */
+function createOverflowWidgetsDomNode(): HTMLDivElement {
+  const node = document.createElement('div');
+  node.className = 'monaco-editor';
+  node.style.cssText = 'position:fixed;top:0;left:0;overflow:visible;z-index:50;pointer-events:none;';
+  document.body.append(node);
+  return node;
+}
+
+const overflowWidgetsDomNode = createOverflowWidgetsDomNode();
+
 export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.JSX.Element {
   const { theme } = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
@@ -39,6 +68,12 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
     }
   }, [monaco]);
 
+  // Sync the shared overflow widgets container theme class so hover
+  // tooltips, suggest widgets, and parameter hints are styled correctly.
+  useEffect(() => {
+    overflowWidgetsDomNode.className = `monaco-editor ${theme === Theme.DARK ? 'vs-dark' : 'vs'}`;
+  }, [theme]);
+
   const options = useMemo(
     () =>
       ({
@@ -56,8 +91,12 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
         // Disable vertical scroll beyond last line
         scrollBeyondLastLine: false,
         wordWrap: 'on',
-        // Ensure widgets like intellisense can appear above nearby elements
+        // Render overflow widgets (hover, suggest, parameter hints) in a shared
+        // container on document.body so they escape Dockview's CSS containment.
+        // fixedOverflowWidgets uses position:fixed with viewport coordinates;
+        // overflowWidgetsDomNode places the container outside the Dockview hierarchy.
         fixedOverflowWidgets: true,
+        overflowWidgetsDomNode,
         // Enable smooth cursor animation when typing and keying left/right/up/down
         cursorSmoothCaretAnimation: 'on',
         // Disable the sticky scrolling which displays the parent closure at the top of the editor for better performance.
