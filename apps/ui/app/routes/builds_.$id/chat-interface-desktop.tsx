@@ -324,7 +324,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
             {/* Viewer - DockviewReact manages tabs, splits, and per-view overlays */}
             <div
               className={cn(
-                'absolute inset-y-0 border-y',
+                'absolute inset-y-0 overflow-hidden border-y',
                 isAnyLeftPanelOpen ? 'left-0' : 'left-2 rounded-l-md border-l',
                 isAnyRightPanelOpen ? 'right-0' : 'right-2 rounded-r-md border-r',
               )}
