@@ -63,6 +63,7 @@ import {
   AlertDialogTitle,
 } from '#components/ui/alert-dialog.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { BuildActionDropdown } from '#routes/builds_.library/build-action-dropdown.js';
 import { Checkbox } from '#components/ui/checkbox.js';
@@ -462,7 +463,7 @@ function UnifiedBuildList({
             <div className="flex justify-center">
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
-                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
+                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1">
                     {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}
@@ -532,9 +533,21 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
   const [hasLoadedModel, setHasLoadedModel] = useState(false);
 
   // Get actors from BuildProvider context
-  const { cadRef, buildRef } = useBuild();
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const status = useSelector(cadRef, (state) => state.value);
+  const { compilationUnits, mainEntryFile, buildRef, viewGraphics } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
+  const geometries = useSelector(cadActor, (snapshot) => snapshot?.context.geometries ?? []);
+  const status = useSelector(cadActor, (snapshot) => snapshot?.value);
+
+  const libraryViewId = `library-${build.id}`;
+
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: libraryViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: libraryViewId });
+    };
+  }, [buildRef, libraryViewId]);
+
+  const graphicsRef = viewGraphics.get(libraryViewId);
 
   const mechanicalAsset = build.assets.mechanical;
   if (!mechanicalAsset) {
@@ -571,21 +584,25 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
               event.preventDefault();
             }}
           >
-            {['initializing', 'booting'].includes(status) ? (
+            {!graphicsRef || (status && ['initializing', 'booting'].includes(status)) ? (
               <div className="flex size-full items-center justify-center">
                 <Loader className="size-10" />
               </div>
             ) : null}
-            <CadViewer
-              geometries={geometries}
-              enablePan={false}
-              enableLines={false}
-              enableMatcap={false}
-              className="bg-muted"
-              stageOptions={{
-                zoomLevel: 1.5,
-              }}
-            />
+            {graphicsRef ? (
+            <GraphicsProvider graphicsRef={graphicsRef}>
+              <CadViewer
+                geometries={geometries}
+                enablePan={false}
+                enableLines={false}
+                enableMatcap={false}
+                className="bg-muted"
+                stageOptions={{
+                  zoomLevel: 1.5,
+                }}
+              />
+            </GraphicsProvider>
+            ) : null}
           </div>
         ) : null}
         <Button

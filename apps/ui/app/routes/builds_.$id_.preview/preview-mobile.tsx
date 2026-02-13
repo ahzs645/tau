@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useActorRef, useSelector } from '@xstate/react';
 import { Code, ChevronDown, Download, FileCode } from 'lucide-react';
@@ -20,6 +20,7 @@ import { toast } from '#components/ui/sonner.js';
 import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
 import { cn } from '#utils/ui.utils.js';
 import { useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { usePreviewState } from '#routes/builds_.$id_.preview/use-preview-state.js';
@@ -38,12 +39,24 @@ export const PreviewMobile = memo(function ({
   staticBuildFiles,
 }: PreviewMobileProps): React.JSX.Element {
   const navigate = useNavigate();
-  const { buildRef, cadRef } = useBuild();
+  const { buildRef, compilationUnits, mainEntryFile, viewGraphics } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const build = useSelector(buildRef, (state) => state.context.build);
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const cadState = useSelector(cadRef, (state) => state.value);
+  const geometries = useSelector(cadActor, (snapshot) => snapshot?.context.geometries ?? []);
+  const cadState = useSelector(cadActor, (snapshot) => snapshot?.value);
   const fileManager = useFileManager();
   const buildManager = useBuildManager();
+
+  const previewViewId = 'preview-main';
+
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: previewViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: previewViewId });
+    };
+  }, [buildRef]);
+
+  const graphicsRef = viewGraphics.get(previewViewId);
 
   const [isCloning, setIsCloning] = useState(false);
 
@@ -68,7 +81,7 @@ export const PreviewMobile = memo(function ({
 
   // Create export geometry machine instance
   const exportActorRef = useActorRef(exportGeometryMachine, {
-    input: { cadRef },
+    input: { cadRef: cadActor },
   });
 
   const handleExport = useCallback(
@@ -168,7 +181,7 @@ export const PreviewMobile = memo(function ({
     }
   }, [isStaticBuild, staticBuildFiles, build, isCloning, buildManager, navigate]);
 
-  const isLoading = ['buffering', 'rendering', 'booting', 'initializing'].includes(cadState);
+  const isLoading = cadState ? ['buffering', 'rendering', 'booting', 'initializing'].includes(cadState) : false;
 
   if (!build) {
     return (
@@ -189,8 +202,10 @@ export const PreviewMobile = memo(function ({
       >
         {/* 3D Viewer */}
         <div className="relative h-full">
-          {geometries.length > 0 ? (
-            <CadViewer enableZoom enablePan geometries={geometries} />
+          {geometries.length > 0 && graphicsRef ? (
+            <GraphicsProvider graphicsRef={graphicsRef}>
+              <CadViewer enableZoom enablePan geometries={geometries} />
+            </GraphicsProvider>
           ) : (
             <div className="flex h-full items-center justify-center">
               <Loader className="size-16 text-primary" />

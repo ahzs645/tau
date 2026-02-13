@@ -1,13 +1,10 @@
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useMemo } from 'react';
 import type { ClassValue } from 'clsx';
 import { Info, Lock, LockIcon, LockOpen } from 'lucide-react';
-import { useSelector } from '@xstate/react';
 import type { LengthSymbol } from '@taucad/units';
 import { standardInternationalBaseUnits } from '@taucad/units/constants';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { useBuild } from '#hooks/use-build.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,9 +16,9 @@ import {
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
 import { cn } from '#utils/ui.utils.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { formatNumberEngineeringNotation } from '#utils/number.utils.js';
 import { toTitleCase } from '#utils/string.utils.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 type GridSizeIndicatorProps = {
   /**
@@ -61,42 +58,32 @@ const gridUnitOptions = gridUnitOrder.map((symbol) => {
 });
 
 /**
- * Component that displays the current grid size from the GraphicsProvider
+ * Component that displays the current grid size from the per-view GraphicsMachine via GraphicsProvider
  */
 export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.ReactNode {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const gridSizes = useSelector(graphicsActor, (state) => state.context.gridSizes);
-  const isGridSizeLocked = useSelector(graphicsActor, (state) => state.context.isGridSizeLocked);
-  const gridFactor = useSelector(graphicsActor, (state) => state.context.units.length.factor);
-  const gridSystem = useSelector(graphicsActor, (state) => state.context.units.length.system);
+  const graphicsRef = useGraphics();
+  const gridSizes = useGraphicsSelector((state) => state.context.gridSizes);
+  const isGridSizeLocked = useGraphicsSelector((state) => state.context.isGridSizeLocked);
+  const gridFactor = useGraphicsSelector((state) => state.context.units.length.factor);
+  const unit = useGraphicsSelector((state) => state.context.units.length.symbol);
 
   const [isOpen, setIsOpen] = useState(false);
 
-  // Derive system from current gridUnit symbol to determine default
-  const defaultUnit = gridSystem === 'imperial' ? ('in' as const) : ('mm' as const);
-
-  const [unit, setUnit] = useCookie<LengthSymbol>(cookieName.cadUnit, defaultUnit);
-
-  // Sync graphics machine with cookie value on change
-  useEffect(() => {
-    graphicsActor.send({
-      type: 'setGridUnit',
-      payload: { unit },
-    });
-  }, [unit, graphicsActor]);
-
   const handleLockToggle = useCallback(
     (checked: boolean) => {
-      graphicsActor.send({ type: 'setGridSizeLocked', payload: checked });
+      graphicsRef.send({ type: 'setGridSizeLocked', payload: checked });
     },
-    [graphicsActor],
+    [graphicsRef],
   );
 
   const handleUnitChange = useCallback(
     (selectedUnit: string) => {
-      setUnit(selectedUnit as LengthSymbol);
+      graphicsRef.send({
+        type: 'setGridUnit',
+        payload: { unit: selectedUnit as LengthSymbol },
+      });
     },
-    [setUnit],
+    [graphicsRef],
   );
 
   const preventClose = useCallback((event: Event) => {

@@ -6,23 +6,27 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import { cn } from '#utils/ui.utils.js';
 import { hasJsonSchemaObjectProperties } from '#utils/schema.utils.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useBuild, useMainGraphics } from '#hooks/use-build.js';
 
 export function PreviewParameters(): React.JSX.Element {
-  const { cadRef, graphicsRef } = useBuild();
-  const parameters = useSelector(cadRef, (state) => state.context.parameters);
-  const defaultParameters = useSelector(cadRef, (state) => state.context.defaultParameters);
-  const jsonSchema = useSelector(cadRef, (state) => state.context.jsonSchema);
-  const units = useSelector(graphicsRef, (state) => state.context.units);
+  const { compilationUnits, mainEntryFile } = useBuild();
+  const graphicsActor = useMainGraphics();
+  const cadActor = compilationUnits.get(mainEntryFile);
+  const parameters = useSelector(cadActor, (snapshot) => snapshot?.context.parameters ?? {});
+  const defaultParameters = useSelector(cadActor, (snapshot) => snapshot?.context.defaultParameters ?? {});
+  const jsonSchema = useSelector(cadActor, (snapshot) => snapshot?.context.jsonSchema);
+  const units = useSelector(graphicsActor, (state) => state?.context.units) ?? {
+    length: { symbol: 'mm' as const, factor: 1 },
+  };
 
   const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [isAllExpanded, setIsAllExpanded] = useState(true);
 
   const handleParametersChange = useCallback(
     (newParameters: Record<string, unknown>) => {
-      cadRef.send({ type: 'setParameters', parameters: newParameters });
+      cadActor?.send({ type: 'setParameters', parameters: newParameters });
     },
-    [cadRef],
+    [cadActor],
   );
 
   const toggleSearch = useCallback(() => {
@@ -34,8 +38,8 @@ export function PreviewParameters(): React.JSX.Element {
   }, []);
 
   const resetAllParameters = useCallback(() => {
-    cadRef.send({ type: 'setParameters', parameters: {} });
-  }, [cadRef]);
+    cadActor?.send({ type: 'setParameters', parameters: {} });
+  }, [cadActor]);
 
   const hasModifiedParameters = Object.keys(parameters).length > 0;
 

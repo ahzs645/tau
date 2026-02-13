@@ -1,11 +1,10 @@
 import { OrbitControls } from '@react-three/drei';
 import React from 'react';
 import type * as THREE from 'three';
-import { useSelector } from '@xstate/react';
 import { ViewportGizmoCube } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube.js';
 import { SectionViewControls } from '#components/geometry/graphics/three/react/section-view-controls.js';
 import { MeasureTool } from '#components/geometry/graphics/three/react/measure-tool.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 type ControlsProperties = {
   /**
@@ -42,15 +41,15 @@ export const Controls = React.memo(function ({
   zoomSpeed,
   gizmoContainer,
 }: ControlsProperties) {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const isActive = useSelector(graphicsActor, (state) => state.context.isSectionViewActive);
-  const selectedPlaneId = useSelector(graphicsActor, (state) => state.context.selectedSectionViewId);
-  const rotation = useSelector(graphicsActor, (state) => state.context.sectionViewRotation);
-  const pivot = useSelector(graphicsActor, (state) => state.context.sectionViewPivot);
-  const availablePlanes = useSelector(graphicsActor, (state) => state.context.availableSectionViews);
-  const planeName = useSelector(graphicsActor, (state) => state.context.planeName);
-  const hoveredSectionViewId = useSelector(graphicsActor, (state) => state.context.hoveredSectionViewId);
-  const upDirection = useSelector(graphicsActor, (state) => state.context.upDirection);
+  const graphicsActor = useGraphics();
+  const isActive = useGraphicsSelector((state) => state.context.isSectionViewActive);
+  const selectedPlaneId = useGraphicsSelector((state) => state.context.selectedSectionViewId);
+  const rotation = useGraphicsSelector((state) => state.context.sectionViewRotation);
+  const pivot = useGraphicsSelector((state) => state.context.sectionViewPivot);
+  const availablePlanes = useGraphicsSelector((state) => state.context.availableSectionViews);
+  const planeName = useGraphicsSelector((state) => state.context.planeName);
+  const hoveredSectionViewId = useGraphicsSelector((state) => state.context.hoveredSectionViewId);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
 
   // Handlers to send events to xstate
   const handleSelectPlane = (planeId: 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy'): void => {

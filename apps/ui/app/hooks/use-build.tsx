@@ -12,8 +12,6 @@ import type { gitMachine } from '#machines/git.machine.js';
 import { editorMachine } from '#machines/editor.machine.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
-import type { screenshotCapabilityMachine } from '#machines/screenshot-capability.machine.js';
-import type { cameraCapabilityMachine } from '#machines/camera-capability.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import { inspect } from '#machines/inspector.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
@@ -23,10 +21,12 @@ type BuildContextType = {
   buildRef: ActorRefFrom<typeof buildMachine>;
   editorRef: ActorRefFrom<typeof editorMachine>;
   gitRef: ActorRefFrom<typeof gitMachine>;
-  graphicsRef: ActorRefFrom<typeof graphicsMachine>;
-  cadRef: ActorRefFrom<typeof cadMachine>;
-  screenshotRef: ActorRefFrom<typeof screenshotCapabilityMachine>;
-  cameraRef: ActorRefFrom<typeof cameraCapabilityMachine>;
+  /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
+  viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
+  /** Dynamic compilation units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
+  compilationUnits: Map<string, ActorRefFrom<typeof cadMachine>>;
+  /** The main entry file path from build.assets.mechanical.main. */
+  mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
   setCodeParameters: (
     files: Record<string, { content: Uint8Array<ArrayBuffer> }>,
@@ -124,35 +124,27 @@ export function BuildProvider({
 
   // Select state from the machine
   const gitRef = useSelector(actorRef, (state) => state.context.gitRef);
-  const graphicsRef = useSelector(actorRef, (state) => state.context.graphicsRef);
-  const cadRef = useSelector(actorRef, (state) => state.context.cadRef);
-  const screenshotRef = useSelector(actorRef, (state) => state.context.screenshotRef);
-  const cameraRef = useSelector(actorRef, (state) => state.context.cameraRef);
+  const viewGraphics = useSelector(actorRef, (state) => state.context.viewGraphics);
+  const compilationUnits = useSelector(actorRef, (state) => state.context.compilationUnits);
+  const mainEntryFile = useSelector(
+    actorRef,
+
+    (state) => state.context.mainEntryFile,
+  );
   const logRef = useSelector(actorRef, (state) => state.context.logRef);
 
   useEffect(() => {
-    // FileManager → CAD coordination
-    const fileWrittenSub = fileManager.fileManagerRef.on('fileWritten', (event) => {
-      // For machine sources (LLM/chat tools streaming to multiple files),
-      // always render the active file to avoid switching context, but ensure
-      // downstream file changes are incorporated into the active file's render
-      const isMachine = event.source === 'machine';
-      const { activeFilePath } = editorRef.getSnapshot().context;
-
-      if (isMachine) {
-        // Machine writes: always re-render the active file to pick up any
-        // downstream changes (e.g., imported files that were modified)
-        if (activeFilePath) {
-          cadRef.send({
-            type: 'setFile',
-            file: { path: `/builds/${buildId}`, filename: activeFilePath },
-          });
-        }
-      } else {
-        // Non-machine writes: render the written file directly
-        cadRef.send({
+    // FileManager → Compilation Units coordination.
+    // When any file is written, re-trigger ALL compilation units with their own entry file.
+    // Each unit re-compiles its entry point, picking up any changed imports from the written file.
+    // No distinction between machine/user writes -- all writes are treated identically.
+    const fileWrittenSub = fileManager.fileManagerRef.on('fileWritten', () => {
+      const snapshot = actorRef.getSnapshot();
+      const units = snapshot.context.compilationUnits;
+      for (const [entryFile, unit] of units) {
+        unit.send({
           type: 'setFile',
-          file: { path: `/builds/${buildId}`, filename: event.path },
+          file: { path: `/builds/${buildId}`, filename: entryFile },
         });
       }
     });
@@ -160,7 +152,7 @@ export function BuildProvider({
     return () => {
       fileWrittenSub.unsubscribe();
     };
-  }, [fileManager.fileManagerRef, cadRef, buildId, editorRef]);
+  }, [fileManager.fileManagerRef, actorRef, buildId]);
 
   useEffect(() => {
     // Load the new build when the buildId changes
@@ -259,10 +251,9 @@ export function BuildProvider({
       buildRef: actorRef,
       editorRef,
       gitRef,
-      graphicsRef,
-      cadRef,
-      screenshotRef,
-      cameraRef,
+      viewGraphics,
+      compilationUnits,
+      mainEntryFile,
       logRef,
       setCodeParameters,
       setParameters,
@@ -278,10 +269,9 @@ export function BuildProvider({
     actorRef,
     editorRef,
     gitRef,
-    graphicsRef,
-    cadRef,
-    screenshotRef,
-    cameraRef,
+    viewGraphics,
+    compilationUnits,
+    mainEntryFile,
     logRef,
     setCodeParameters,
     setParameters,
@@ -294,6 +284,39 @@ export function BuildProvider({
   ]);
 
   return <BuildContext.Provider value={value}>{children}</BuildContext.Provider>;
+}
+
+/**
+ * Find the graphics actor for the viewer panel displaying the main entry file.
+ * Falls back to the first available graphics actor from viewGraphics.
+ * Returns undefined when no viewGraphics exist (e.g. before any viewer panel mounts).
+ * Used by external consumers (screenshot, RPC handlers, parameters) that are NOT inside a GraphicsProvider.
+ */
+export function useMainGraphics(): ActorRefFrom<typeof graphicsMachine> | undefined {
+  const context = useContext(BuildContext);
+  if (!context) {
+    throw new Error('useMainGraphics must be used within a BuildProvider');
+  }
+
+  const { viewGraphics, editorRef, mainEntryFile } = context;
+
+  const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
+
+  // Find a viewer panel showing mainEntryFile
+  for (const [viewId, graphicsRef] of viewGraphics) {
+    const settings = viewSettings[viewId];
+    if (settings?.entryFile === mainEntryFile) {
+      return graphicsRef;
+    }
+  }
+
+  // Fallback: return the first available graphics actor from viewGraphics
+  const firstViewGraphics = viewGraphics.values().next().value;
+  if (firstViewGraphics) {
+    return firstViewGraphics;
+  }
+
+  return undefined;
 }
 
 export function useBuild<T extends BuildContextType = BuildContextType>(options?: {

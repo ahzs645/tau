@@ -4,6 +4,7 @@
  * Provides filesystem configuration for different backends:
  * - IndexedDB: Default production backend using IndexedDB for persistent storage
  * - OPFS: Alternative production backend using Origin Private File System
+ * - WebAccess: File System Access API backend for real local directory access
  * - InMemory: Used in tests for fast, isolated filesystem operations
  *
  * Mount points:
@@ -99,6 +100,50 @@ const opfsBackend = {
   },
 } as const satisfies FilesystemBackendConfig;
 
+/**
+ * WebAccess (File System Access API) backend state.
+ *
+ * The FileSystemDirectoryHandle is set from the main thread via the worker's
+ * setDirectoryHandle() method before configuring the webaccess backend.
+ * The handle is obtained via showDirectoryPicker() and persisted in IndexedDB
+ * by the handle-store module.
+ */
+let webAccessHandle: FileSystemDirectoryHandle | undefined;
+
+/**
+ * Set the FileSystemDirectoryHandle for the webaccess backend.
+ * Must be called before configuring with 'webaccess' backend.
+ */
+export function setWebAccessHandle(handle: FileSystemDirectoryHandle): void {
+  webAccessHandle = handle;
+}
+
+/**
+ * Get the current FileSystemDirectoryHandle for the webaccess backend.
+ * Returns undefined if no handle has been set.
+ */
+export function getWebAccessHandle(): FileSystemDirectoryHandle | undefined {
+  return webAccessHandle;
+}
+
+const webAccessBackend = {
+  name: 'webaccess',
+  ...filesystemBackendMeta.webaccess,
+  canHandle: () => webAccessHandle !== undefined,
+  async create() {
+    if (!webAccessHandle) {
+      throw new Error('No directory handle set. Call setWebAccessHandle() before configuring webaccess backend.');
+    }
+
+    await configure({
+      mounts: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
+        '/': { backend: WebAccess, handle: webAccessHandle },
+      },
+    });
+  },
+} as const satisfies FilesystemBackendConfig;
+
 const memoryBackend = {
   name: 'memory',
   ...filesystemBackendMeta.memory,
@@ -114,7 +159,7 @@ const memoryBackend = {
 } as const satisfies FilesystemBackendConfig;
 
 /** Registry of all available backends */
-export const filesystemBackends = [indexedDbBackend, opfsBackend, memoryBackend] as const;
+export const filesystemBackends = [indexedDbBackend, opfsBackend, webAccessBackend, memoryBackend] as const;
 
 /** Get backend config by name */
 export function getBackendConfig(name: FilesystemBackend): FilesystemBackendConfig {
@@ -133,7 +178,7 @@ export function getBackendConfig(name: FilesystemBackend): FilesystemBackendConf
  * @param backend - The backend type to use ('indexeddb' or 'opfs' for production, 'memory' for tests)
  * @throws Error if the backend is not supported by the browser
  */
-export async function configureFilesystem(backend: FilesystemBackend = 'indexeddb'): Promise<void> {
+export async function configureFilesystem(backend: FilesystemBackend = 'opfs'): Promise<void> {
   // If already configured with the same backend, return the existing promise
   if (currentBackend === backend && configurationPromise) {
     return configurationPromise;

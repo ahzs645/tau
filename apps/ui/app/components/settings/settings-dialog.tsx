@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import type { MouseEvent } from 'react';
 import { AccountView } from '@daveyplate/better-auth-ui';
-import { CreditCard, Key, Lock, Settings2, User } from 'lucide-react';
+import { CreditCard, HardDrive, Key, Lock, Settings2, User } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '#components/ui/dialog.js';
 import {
@@ -11,6 +11,7 @@ import {
   openSettingsDialog,
 } from '#hooks/use-settings-dialog.js';
 import type { SettingsSection } from '#hooks/use-settings-dialog.js';
+import { FilesystemSettings } from '#components/settings/filesystem-settings.js';
 import { GeneralSettings } from '#components/settings/general-settings.js';
 import { SettingsAuthGate } from '#components/settings/settings-auth-gate.js';
 import { cn } from '#utils/ui.utils.js';
@@ -28,6 +29,7 @@ type SettingsSectionDefinition = {
 
 const sections: readonly SettingsSectionDefinition[] = [
   { id: 'general', label: 'General', icon: Settings2, requiresAuth: false },
+  { id: 'filesystem', label: 'Filesystem', icon: HardDrive, requiresAuth: false },
   { id: 'account', label: 'Account', icon: User, requiresAuth: true },
   { id: 'security', label: 'Security', icon: Lock, requiresAuth: true },
   { id: 'api-keys', label: 'API Keys', icon: Key, requiresAuth: true },
@@ -36,6 +38,7 @@ const sections: readonly SettingsSectionDefinition[] = [
 
 const sectionPathMap: Record<SettingsSection, string> = {
   general: '/settings/general',
+  filesystem: '/settings/filesystem',
   account: '/settings/account',
   security: '/settings/security',
   'api-keys': '/settings/api-keys',
@@ -133,6 +136,9 @@ export function SettingsDialog(): React.JSX.Element {
             ))}
             <TabsContent enableAnimation={false} value="General">
               <GeneralSettings />
+            </TabsContent>
+            <TabsContent enableAnimation={false} value="Filesystem">
+              <FilesystemSettings />
             </TabsContent>
             <TabsContent enableAnimation={false} value="Billing">
               <SettingsAuthGate>

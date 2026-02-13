@@ -99,7 +99,7 @@ function buildRelatedInformation(
 
 type UseKernelDiagnosticsOptions = {
   monaco: typeof Monaco | undefined;
-  cadActor: AnyActorRef;
+  cadActor: AnyActorRef | undefined;
   markerService: MonacoMarkerService | undefined;
 };
 
@@ -125,21 +125,23 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
   const kernelIssues = useSelector(
     cadActor,
     (state) =>
-      state.context.kernelIssues as Map<
-        string,
-        Array<{
-          message: string;
-          location?: {
-            fileName: string;
-            startLineNumber: number;
-            startColumn: number;
-            endLineNumber?: number;
-            endColumn?: number;
-          };
-          stackFrames?: KernelStackFrame[];
-          severity: IssueSeverity;
-        }>
-      >,
+      (state?.context.kernelIssues as
+        | Map<
+            string,
+            Array<{
+              message: string;
+              location?: {
+                fileName: string;
+                startLineNumber: number;
+                startColumn: number;
+                endLineNumber?: number;
+                endColumn?: number;
+              };
+              stackFrames?: KernelStackFrame[];
+              severity: IssueSeverity;
+            }>
+          >
+        | undefined) ?? [],
   );
 
   // Sync kernel issues to Monaco markers via MarkerService
@@ -206,7 +208,7 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
 
   // Monaco-to-Kernel: forward TS error markers to CAD actor
   const handleValidate = useCallback(() => {
-    if (!monaco) {
+    if (!monaco || !cadActor) {
       return;
     }
 

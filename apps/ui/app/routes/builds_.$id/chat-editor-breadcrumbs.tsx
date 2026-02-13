@@ -8,7 +8,11 @@ import { useHorizontalScroll } from '#hooks/use-horizontal-scroll.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { FileSelector } from '#components/files/file-selector.js';
 
-export function ChatEditorBreadcrumbs(): ReactNode {
+type ChatEditorBreadcrumbsProperties = {
+  readonly filePath: string;
+};
+
+export function ChatEditorBreadcrumbs({ filePath }: ChatEditorBreadcrumbsProperties): ReactNode {
   const { editorRef } = useBuild();
   const { fileManagerRef } = useFileManager();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -16,12 +20,15 @@ export function ChatEditorBreadcrumbs(): ReactNode {
   // Enable horizontal scrolling with mouse wheel
   useHorizontalScroll(scrollContainerRef);
 
-  // Get active file path from editor
-  const activeFile = useSelector(editorRef, (state) => ({
-    path: state.context.activeFilePath,
-    parts: state.context.activeFilePath?.split('/') ?? [],
-    name: state.context.activeFilePath?.split('/').pop() ?? '',
-  }));
+  // Derive breadcrumb data from the panel's own file path
+  const activeFile = useMemo(
+    () => ({
+      path: filePath,
+      parts: filePath.split('/'),
+      name: filePath.split('/').pop() ?? '',
+    }),
+    [filePath],
+  );
 
   // Get file list from file manager for the FileSelector
   const files = useSelector(

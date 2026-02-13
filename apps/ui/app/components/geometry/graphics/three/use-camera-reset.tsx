@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import type { RefObject } from 'react';
 import { resetCamera as resetCameraFn } from '#components/geometry/graphics/three/utils/camera.utils.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useCameraCapability } from '#hooks/use-graphics.js';
 
 // Define the specific types needed for camera reset
 type ResetRotation = {
@@ -41,7 +41,7 @@ export function useCameraReset(parameters: ResetCameraParameters): (options?: {
   enableConfiguredAngles?: boolean;
 }) => void {
   const { camera, invalidate } = useThree();
-  const { cameraRef: cameraCapabilityActor } = useBuild();
+  const cameraCapabilityActor = useCameraCapability();
   const isRegistered = useRef(false);
 
   const { geometryRadius, rotation, perspective, setSceneRadius, originalDistanceReference, cameraFovAngle } =

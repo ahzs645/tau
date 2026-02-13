@@ -66,6 +66,43 @@ export const allotmentPanelOrder = [
 ] as const;
 
 // ============================================================================
+// Graphics View Settings
+// ============================================================================
+
+/**
+ * Per-view graphics settings type.
+ * These settings are stored per-build-per-view in EditorState and used to
+ * initialize GraphicsMachine instances for each viewer panel.
+ */
+export type GraphicsViewSettings = {
+  enableSurfaces: boolean;
+  enableLines: boolean;
+  enableGizmo: boolean;
+  enableGrid: boolean;
+  enableAxes: boolean;
+  enableMatcap: boolean;
+  upDirection: 'x' | 'y' | 'z';
+  cameraFovAngle: number;
+  renderTimeout: number;
+};
+
+/**
+ * Default graphics settings for new viewer panels.
+ * Used when no persisted settings exist or when seeding a fresh layout.
+ */
+export const defaultGraphicsSettings: GraphicsViewSettings = {
+  enableSurfaces: true,
+  enableLines: true,
+  enableGizmo: true,
+  enableGrid: true,
+  enableAxes: true,
+  enableMatcap: false,
+  upDirection: 'z',
+  cameraFovAngle: 60,
+  renderTimeout: 60,
+};
+
+// ============================================================================
 // Panel State Types (derived from constants above)
 // ============================================================================
 

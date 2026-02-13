@@ -5,6 +5,7 @@ import type { Build } from '@taucad/types';
 import { Box } from 'lucide-react';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { Loader } from '#components/ui/loader.js';
 
@@ -52,15 +53,25 @@ type ImportViewerContentProperties = {
   readonly buildId: string;
 };
 
+const importViewId = 'import-main';
+
 function ImportViewerContent({ files, buildId }: ImportViewerContentProperties): React.JSX.Element {
-  const { cadRef, buildRef } = useBuild();
+  const { compilationUnits, mainEntryFile, buildRef, viewGraphics } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const { writeFiles } = useFileManager();
 
   const [hasLoadedModel, setHasLoadedModel] = useState(false);
   const hasWrittenFilesRef = useRef(false);
 
-  const geometries = useSelector(cadRef, (snapshot) => snapshot.context.geometries);
-  const cadStatus = useSelector(cadRef, (snapshot) => snapshot.value);
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: importViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: importViewId });
+    };
+  }, [buildRef]);
+
+  const geometries = useSelector(cadActor, (snapshot) => snapshot?.context.geometries ?? []);
+  const cadStatus = useSelector(cadActor, (snapshot) => snapshot?.value);
 
   // Write files and load model
   useEffect(() => {
@@ -84,9 +95,10 @@ function ImportViewerContent({ files, buildId }: ImportViewerContentProperties):
     void initializeAndLoadModel();
   }, [files, writeFiles, buildRef, hasLoadedModel, buildId]);
 
-  const isLoading = ['initializing', 'booting', 'buffering', 'rendering'].includes(cadStatus);
+  const isLoading = cadStatus ? ['initializing', 'booting', 'buffering', 'rendering'].includes(cadStatus) : false;
+  const graphicsRef = viewGraphics.get(importViewId);
 
-  if (isLoading) {
+  if (isLoading || !graphicsRef) {
     return (
       <div className="flex size-full items-center justify-center">
         <Loader className="size-12" />
@@ -96,13 +108,15 @@ function ImportViewerContent({ files, buildId }: ImportViewerContentProperties):
 
   if (geometries.length > 0) {
     return (
-      <CadViewer
-        geometries={geometries}
-        className="size-full"
-        stageOptions={{
-          zoomLevel: 1.5,
-        }}
-      />
+      <GraphicsProvider graphicsRef={graphicsRef}>
+        <CadViewer
+          geometries={geometries}
+          className="size-full"
+          stageOptions={{
+            zoomLevel: 1.5,
+          }}
+        />
+      </GraphicsProvider>
     );
   }
 

@@ -1,21 +1,7 @@
 import { useCallback, useState, useRef, useMemo, useEffect, memo } from 'react';
 import { flushSync } from 'react-dom';
 import type { ItemInstance } from '@headless-tree/core';
-import {
-  FilePlus,
-  FolderPlus,
-  MoreHorizontal,
-  Trash2,
-  Copy,
-  Upload,
-  FileEdit,
-  Search,
-  Eye,
-  EyeOff,
-  Folder,
-  FolderOpen,
-  CopyMinus,
-} from 'lucide-react';
+import { FilePlus, FolderPlus, MoreHorizontal, Search, Eye, EyeOff, Folder, FolderOpen, CopyMinus } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { minimatch } from 'minimatch';
 import {
@@ -31,7 +17,7 @@ import {
 } from '@headless-tree/core';
 import { useTree, AssistiveTreeDescription } from '@headless-tree/react';
 import type { Build } from '@taucad/types';
-import { kernelConfigurations } from '@taucad/types/constants';
+import { kernelConfigurations, tauFileDragMime } from '@taucad/types/constants';
 import type { KernelConfiguration } from '@taucad/types/constants';
 import type { FileItem } from '#types/editor.types.js';
 import { cn } from '#utils/ui.utils.js';
@@ -191,27 +177,18 @@ export const ChatEditorFileTree = memo(function ({
   // It's necessary to opt out of React Compiler auto-memoization for this component due to:
   // https://headless-tree.lukasbach.com/guides/react-compiler/
   'use no memo'; // Opt out of React Compiler memoization
-  const { buildRef, editorRef, gitRef, cadRef } = useBuild();
+  const { buildRef, editorRef, gitRef } = useBuild();
   const buildId = useSelector(buildRef, (state) => state.context.buildId);
   const fileManager = useFileManager();
   const { fileManagerRef, readFile, writeFile, renameFile, deleteFile } = fileManager;
 
   useEffect(() => {
-    // Editor → FileManager → CAD coordination
+    // Editor → FileManager coordination (reading file content for the editor)
+    // Note: Editor file navigation no longer drives the viewport.
+    // The viewport has its own independent FileSelector (Step 7).
     const fileOpenedSub = editorRef.on('fileOpened', (event) => {
-      // Read file directly - this properly awaits the worker call
+      // Read file content for the editor display
       void readFile(event.path);
-
-      // Only send setFile when switching to a different file
-      // This prevents unnecessary re-renders when clicking on an already open file
-      // Content changes from editor/chat tools trigger setFile separately
-      const currentFile = cadRef.getSnapshot().context.file;
-      if (currentFile?.filename !== event.path) {
-        cadRef.send({
-          type: 'setFile',
-          file: { path: `/builds/${buildId}`, filename: event.path },
-        });
-      }
     });
 
     // Track both build and Editor state loading to handle race condition
@@ -294,7 +271,7 @@ export const ChatEditorFileTree = memo(function ({
       fileDeletedSub.unsubscribe();
       fileWrittenSub.unsubscribe();
     };
-  }, [buildRef, editorRef, fileManagerRef, cadRef, buildId, readFile]);
+  }, [buildRef, editorRef, fileManagerRef, buildId, readFile]);
 
   // Derive file tree from file-manager (reactive selector)
   // Use custom equality to prevent unnecessary re-renders
@@ -652,6 +629,14 @@ export const ChatEditorFileTree = memo(function ({
 
       return !allItemsAlreadyInTarget;
     },
+    // Set custom data on the drag event so Dockview panels can receive file drops
+    createForeignDragObject(items) {
+      const paths = items.map((item) => item.getId()).filter((id) => id !== rootId);
+      return {
+        format: tauFileDragMime,
+        data: JSON.stringify(paths),
+      };
+    },
     // Allow file drops from computer on folders, root, or root-level files
     canDropForeignDragObject(_dataTransfer, target) {
       const targetId = target.item.getId();
@@ -726,6 +711,56 @@ export const ChatEditorFileTree = memo(function ({
       setFocusedItem(activeFilePath);
     }
   }, [activeFilePath, focusedItem]);
+
+  // Reveal a file in the tree when requested from the tab context menu.
+  // Expands all parent directories, focuses the item, and scrolls it into view.
+  useEffect(() => {
+    const subscription = editorRef.on('fileRevealRequested', (event) => {
+      const targetPath = event.path;
+
+      // Expand all parent directories
+      const parts = targetPath.split('/');
+      parts.pop(); // Remove the filename
+      const parentPaths: string[] = [];
+      let current = '';
+      for (const part of parts) {
+        if (!part) {
+          continue;
+        }
+
+        current = current ? `${current}/${part}` : part;
+        parentPaths.push(current);
+      }
+
+      if (parentPaths.length > 0) {
+        setExpandedItems((previous) => {
+          const newExpanded = new Set(previous);
+          for (const path of parentPaths) {
+            newExpanded.add(path);
+          }
+
+          return [...newExpanded];
+        });
+      }
+
+      // Focus the item and scroll into view after the tree re-renders
+      setFocusedItem(targetPath);
+      setSelectedItems([targetPath]);
+
+      requestAnimationFrame(() => {
+        try {
+          const item = tree.getItemInstance(targetPath);
+          void item.scrollTo({ block: 'center' });
+        } catch {
+          // Item may not exist in the tree yet
+        }
+      });
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [editorRef, tree, setExpandedItems, setFocusedItem, setSelectedItems]);
 
   const handleCreateFile = useCallback(
     (template: KernelConfiguration | undefined) => {
@@ -1001,7 +1036,6 @@ export const ChatEditorFileTree = memo(function ({
                       });
                     }}
                   >
-                    <FileExtensionIcon filename="file.txt" className="size-4" />
                     Blank
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -1015,7 +1049,6 @@ export const ChatEditorFileTree = memo(function ({
                         });
                       }}
                     >
-                      <FileExtensionIcon filename={kernel.mainFile} className="size-4" />
                       {kernel.name}
                     </DropdownMenuItem>
                   ))}
@@ -1055,7 +1088,7 @@ export const ChatEditorFileTree = memo(function ({
             </Tooltip>
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <FloatingPanelContentBody className="flex min-h-0 flex-col">
+        <FloatingPanelContentBody className="group/filetree flex min-h-0 flex-col">
           {enableSearch ? (
             <div className="flex w-full shrink-0 flex-row gap-2 border-b bg-sidebar p-2">
               <SearchInput
@@ -1127,6 +1160,7 @@ export const ChatEditorFileTree = memo(function ({
               {(() => {
                 const items = tree.getItems();
                 const rootItem = tree.getRootItem();
+                const activeFileLevel = activeFilePath ? activeFilePath.split('/').length - 1 : 0;
                 const dragTargetItem = items.find((i) => i.isDragTarget());
 
                 // Determine highlighting strategy
@@ -1176,6 +1210,7 @@ export const ChatEditorFileTree = memo(function ({
                               isOpen={openFiles.some((f) => f.path === itemId)}
                               searchQuery={tree.getState().search ?? ''}
                               isInsideDragTarget={isInsideDragTarget}
+                              activeFileLevel={activeFileLevel}
                               onDelete={handleDelete}
                               onDuplicate={handleDuplicate}
                               onUpload={handleUploadClick}
@@ -1254,6 +1289,7 @@ type TreeItemProps = {
   readonly isOpen: boolean;
   readonly searchQuery: string;
   readonly isInsideDragTarget: boolean;
+  readonly activeFileLevel: number;
   readonly onDelete: (items: Array<ItemInstance<TreeItemData>>) => void;
   readonly onDuplicate: (items: Array<ItemInstance<TreeItemData>>) => void;
   readonly onUpload: (path: string) => void;
@@ -1266,13 +1302,15 @@ function TreeItem({
   isOpen,
   searchQuery,
   isInsideDragTarget,
+  activeFileLevel,
   onDelete,
   onDuplicate,
   onUpload,
 }: TreeItemProps): React.JSX.Element {
   const data = item.getItemData();
   const hasGitChanges = Boolean(data.gitStatus && data.gitStatus !== 'clean');
-  const paddingLeft = item.getItemMeta().level * 16 + 8;
+  const itemLevel = item.getItemMeta().level;
+  const paddingLeft = itemLevel * 16 + 8;
   const isSelected = item.isSelected();
   const isRenaming = item.isRenaming();
   const isFolder = item.isFolder();
@@ -1282,9 +1320,25 @@ function TreeItem({
     const renameInputProps = item.getRenameInputProps() as React.InputHTMLAttributes<HTMLInputElement>;
     return (
       <div
-        className="flex h-7 items-center border border-primary py-1 pr-1 pl-2"
+        className="relative flex h-7 items-center border border-primary py-1 pr-1 pl-2"
         style={{ paddingLeft: `${paddingLeft}px` }}
       >
+        {/* Indent guide lines (VS Code-style) */}
+        {Array.from({ length: itemLevel }, (_, index) => {
+          const guideDepth = index + 1;
+          const isActiveGuide = activeFileLevel > 0 ? guideDepth === activeFileLevel : guideDepth === itemLevel;
+          return (
+            <span
+              key={guideDepth}
+              aria-hidden
+              className={cn(
+                'pointer-events-none absolute top-0 h-full w-px',
+                isActiveGuide ? 'bg-border' : 'bg-border opacity-0 transition-opacity group-hover/filetree:opacity-100',
+              )}
+              style={{ left: `${guideDepth * 16}px` }}
+            />
+          );
+        })}
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {isFolder ? (
             item.isExpanded() ? (
@@ -1335,6 +1389,24 @@ function TreeItem({
           )}
           style={{ paddingLeft: `${paddingLeft}px` }}
         >
+          {/* Indent guide lines (VS Code-style) */}
+          {Array.from({ length: itemLevel }, (_, index) => {
+            const guideDepth = index + 1;
+            const isActiveGuide = activeFileLevel > 0 ? guideDepth === activeFileLevel : guideDepth === itemLevel;
+            return (
+              <span
+                key={guideDepth}
+                aria-hidden
+                className={cn(
+                  'pointer-events-none absolute top-0 h-full w-px',
+                  isActiveGuide
+                    ? 'bg-border'
+                    : 'bg-border opacity-0 transition-opacity group-hover/filetree:opacity-100',
+                )}
+                style={{ left: `${guideDepth * 16}px` }}
+              />
+            );
+          })}
           <div className="flex min-w-0 flex-1 grow items-center gap-2">
             {isFolder ? (
               item.isExpanded() ? (
@@ -1360,7 +1432,7 @@ function TreeItem({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   size="icon"
                   className="absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100"
                   onClick={(event) => {
@@ -1376,7 +1448,6 @@ function TreeItem({
                     item.startRenaming();
                   }}
                 >
-                  <FileEdit className="size-4" />
                   Rename
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -1385,7 +1456,6 @@ function TreeItem({
                     onUpload(item.getId());
                   }}
                 >
-                  <Upload className="size-4" />
                   Upload Files
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -1394,7 +1464,6 @@ function TreeItem({
                     onDuplicate([item]);
                   }}
                 >
-                  <Copy className="size-4" />
                   Duplicate
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -1405,7 +1474,6 @@ function TreeItem({
                     onDelete([item]);
                   }}
                 >
-                  <Trash2 className="size-4" />
                   Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -1419,7 +1487,6 @@ function TreeItem({
             item.startRenaming();
           }}
         >
-          <FileEdit className="size-4" />
           Rename
         </ContextMenuItem>
         {isFolder ? (
@@ -1428,7 +1495,6 @@ function TreeItem({
               onUpload(item.getId());
             }}
           >
-            <Upload className="size-4" />
             Upload Files
           </ContextMenuItem>
         ) : (
@@ -1438,7 +1504,6 @@ function TreeItem({
                 onUpload(item.getId());
               }}
             >
-              <Upload className="size-4" />
               Upload Files
             </ContextMenuItem>
             <ContextMenuItem
@@ -1446,7 +1511,6 @@ function TreeItem({
                 onDuplicate([item]);
               }}
             >
-              <Copy className="size-4" />
               Duplicate
             </ContextMenuItem>
           </>
@@ -1458,7 +1522,6 @@ function TreeItem({
             onDelete([item]);
           }}
         >
-          <Trash2 className="size-4" />
           Delete
         </ContextMenuItem>
       </ContextMenuContent>

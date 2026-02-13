@@ -1,11 +1,11 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { useThree } from '@react-three/fiber';
-import { useActorRef, useSelector } from '@xstate/react';
+import { useActorRef } from '@xstate/react';
 import type { OrbitControls } from 'three/addons';
 import { controlsListenerMachine } from '#machines/controls-listener.machine.js';
 import { updateCameraFov } from '#components/geometry/graphics/three/utils/camera.utils.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useGraphics, useGraphicsSelector, useScreenshotCapability } from '#hooks/use-graphics.js';
 
 /**
  * Component that bridges Three.js context with XState actors
@@ -14,10 +14,11 @@ import { useBuild } from '#hooks/use-build.js';
  */
 export function ActorBridge(): ReactNode {
   const { gl, scene, camera, controls, invalidate } = useThree();
-  const { graphicsRef: graphicsActor, screenshotRef: screenshotCapabilityActor } = useBuild();
+  const screenshotCapabilityActor = useScreenshotCapability();
+  const graphicsActor = useGraphics();
 
   // Subscribe to camera FOV angle from graphics actor
-  const cameraFovAngle = useSelector(graphicsActor, (state) => state.context.cameraFovAngle);
+  const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
 
   // Setup screenshot capability
   useEffect(() => {
@@ -29,7 +30,7 @@ export function ActorBridge(): ReactNode {
     });
 
     return () => {
-      screenshotCapabilityActor.send({ type: 'unregisterCapture' });
+      screenshotCapabilityActor.send({ type: 'unregisterCapture', captureMode: 'threejs' });
     };
   }, [gl, scene, camera, screenshotCapabilityActor]);
 

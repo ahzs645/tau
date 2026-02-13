@@ -1,18 +1,17 @@
 import React from 'react';
-import { useSelector } from '@xstate/react';
 import * as THREE from 'three';
 import { InfiniteGrid } from '#components/geometry/graphics/three/react/infinite-grid.js';
-import { useBuild } from '#hooks/use-build.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
+import { useGraphicsSelector } from '#hooks/use-graphics.js';
 
 /**
  * Grid component that renders the infinite grid using sizes from the graphics machine
  * and handles theme-aware color selection and coordinate system orientation.
+ * Uses GraphicsProvider context for per-view state.
  */
 export const Grid = React.memo(() => {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const gridSizes = useSelector(graphicsActor, (state) => state.context.gridSizes);
-  const upDirection = useSelector(graphicsActor, (state) => state.context.upDirection);
+  const gridSizes = useGraphicsSelector((state) => state.context.gridSizes);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
   const { theme } = useTheme();
 
   // Calculate theme-aware grid color

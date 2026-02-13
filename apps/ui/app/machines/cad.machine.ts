@@ -5,7 +5,6 @@ import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { kernelMachine } from '#machines/kernel.machine.js';
 import type { KernelEventExternal } from '#machines/kernel.machine.js';
-import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
 
@@ -29,7 +28,6 @@ export type CadContext = {
   shouldInitializeKernelOnStart: boolean;
   isKernelInitializing: boolean;
   isKernelInitialized: boolean;
-  graphicsRef?: ActorRefFrom<typeof graphicsMachine>;
   logActorRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   jsonSchema?: JSONSchema7;
@@ -54,7 +52,6 @@ type CadEmitted =
 
 type CadInput = {
   shouldInitializeKernelOnStart: boolean;
-  graphicsRef?: ActorRefFrom<typeof graphicsMachine>;
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
 };
@@ -169,16 +166,6 @@ export const cadMachine = setup({
         type: 'geometryEvaluated' as const,
         geometries: event.geometries,
       });
-      // Send geometries to graphics machine with units
-      if (context.graphicsRef) {
-        enqueue.sendTo(context.graphicsRef, {
-          type: 'updateGeometries',
-          geometries: event.geometries,
-          units: {
-            length: context.units.length,
-          },
-        });
-      }
     }),
     setKernelIssue: assign({
       kernelIssues({ context, event }) {
@@ -346,7 +333,6 @@ export const cadMachine = setup({
     shouldInitializeKernelOnStart: input.shouldInitializeKernelOnStart,
     isKernelInitializing: false,
     isKernelInitialized: false,
-    graphicsRef: input.graphicsRef,
     logActorRef: input.logRef,
     fileManagerRef: input.fileManagerRef,
     jsonSchema: undefined,

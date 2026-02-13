@@ -65,9 +65,10 @@ export const ChatConverter = memo(function (properties: {
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
   const { className, isExpanded = true, setIsExpanded } = properties;
-  const { buildRef, cadRef: cadActor } = useBuild();
+  const { buildRef, compilationUnits, mainEntryFile } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const buildName = useSelector(buildRef, (state) => state.context.build?.name) ?? 'model';
-  const geometries = useSelector(cadActor, (state) => state.context.geometries);
+  const geometries = useSelector(cadActor, (state) => state?.context.geometries ?? []);
   const fileManager = useFileManager();
 
   // State for GLB data (lazy-loaded)

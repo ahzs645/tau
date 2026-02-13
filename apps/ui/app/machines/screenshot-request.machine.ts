@@ -6,7 +6,7 @@ import { generateSecureId } from '#utils/crypto.utils.js';
 
 // Context type
 type ScreenshotRequestContext = {
-  graphicsRef: AnyActorRef;
+  graphicsRef: AnyActorRef | undefined;
   currentRequest?: {
     requestId: string;
     options: ScreenshotOptions;
@@ -37,7 +37,7 @@ type ScreenshotRequestEvent =
 
 // Input type
 type ScreenshotRequestInput = {
-  graphicsRef: ActorRefFrom<typeof graphicsMachine>;
+  graphicsRef: ActorRefFrom<typeof graphicsMachine> | undefined;
 };
 
 // Predefined orthographic views for easy reference
@@ -92,6 +92,10 @@ export const screenshotRequestMachine = setup({
     >(({ input, sendBack }) => {
       const { graphicsRef } = input;
 
+      if (!graphicsRef) {
+        return;
+      }
+
       // Subscribe to graphics actor events and forward them
       const completedSubscription = graphicsRef.on('screenshotCompleted', (event) => {
         sendBack({
@@ -120,6 +124,11 @@ export const screenshotRequestMachine = setup({
     sendRequest: enqueueActions(({ enqueue, context, event }) => {
       assertEvent(event, 'requestScreenshot');
 
+      if (!context.graphicsRef) {
+        event.onError?.('No graphics view is currently mounted');
+        return;
+      }
+
       const requestId = generateSecureId();
 
       // Store request details in context
@@ -144,6 +153,11 @@ export const screenshotRequestMachine = setup({
 
     sendCompositeRequest: enqueueActions(({ enqueue, context, event }) => {
       assertEvent(event, 'requestCompositeScreenshot');
+
+      if (!context.graphicsRef) {
+        event.onError?.('No graphics view is currently mounted');
+        return;
+      }
 
       const requestId = generateSecureId();
 

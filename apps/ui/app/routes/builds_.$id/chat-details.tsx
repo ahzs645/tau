@@ -1,6 +1,8 @@
-import { XIcon, Info } from 'lucide-react';
+import { XIcon, Info, Database, HardDrive, FolderOpen, MemoryStick } from 'lucide-react';
 import { useCallback } from 'react';
 import { useSelector } from '@xstate/react';
+import type { FilesystemBackend } from '@taucad/types';
+import { filesystemBackendMeta } from '@taucad/types/constants';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
   FloatingPanel,
@@ -26,6 +28,44 @@ const keyCombinationEditor = {
   key: 'i',
   ctrlKey: true,
 } as const satisfies KeyCombination;
+
+const backendIcons: Record<FilesystemBackend, typeof Database> = {
+  indexeddb: Database,
+  opfs: HardDrive,
+  webaccess: FolderOpen,
+  memory: MemoryStick,
+};
+
+/**
+ * Displays the filesystem backend info for the current build.
+ */
+function FilesystemInfo({
+  backendType,
+  connectedDirectoryName,
+}: {
+  readonly backendType: FilesystemBackend;
+  readonly connectedDirectoryName: string | undefined;
+}): React.JSX.Element {
+  const meta = filesystemBackendMeta[backendType];
+  const Icon = backendIcons[backendType];
+
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium text-foreground">Storage:</label>
+      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+        <Icon className="size-4 shrink-0 text-muted-foreground" />
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-medium">{meta.label}</span>
+          {backendType === 'webaccess' && connectedDirectoryName ? (
+            <span className="text-xs text-muted-foreground">{connectedDirectoryName}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">{meta.description}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Details Trigger Component
 export function ChatDetailsTrigger({
@@ -64,8 +104,9 @@ export function ChatDetails({
   const buildDescription = useSelector(buildRef, (state) => state.context.build?.description ?? '');
   const buildTags = useSelector(buildRef, (state) => state.context.build?.tags ?? []);
   const mainFile = useSelector(buildRef, (state) => state.context.build?.assets.mechanical?.main ?? '');
-  const { fileManagerRef } = useFileManager();
+  const { fileManagerRef, connectedDirectoryName } = useFileManager();
   const availableFiles = useSelector(fileManagerRef, (state) => [...state.context.fileTree.entries()].map(([k]) => k));
+  const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
 
   const toggleDetails = (): void => {
     setIsExpanded?.((current) => !current);
@@ -158,6 +199,9 @@ export function ChatDetails({
                 />
               </div>
             </div>
+
+            {/* Filesystem Info */}
+            <FilesystemInfo backendType={backendType} connectedDirectoryName={connectedDirectoryName} />
 
             {/* Usage Statistics */}
             <ChatDetailsUsage />

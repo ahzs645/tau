@@ -3,13 +3,13 @@ import type { ActorRefFrom, OutputFrom, DoneActorEvent, AnyStateMachine } from '
 import { produce } from 'immer';
 import type { Build } from '@taucad/types';
 import { isBrowser } from '#constants/browser.constants.js';
+import type { GraphicsViewSettings } from '#constants/editor.constants.js';
+import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
-import { cameraCapabilityMachine } from '#machines/camera-capability.machine.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import { gitMachine } from '#machines/git.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { logMachine } from '#machines/logs.machine.js';
-import { screenshotCapabilityMachine } from '#machines/screenshot-capability.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
 
 /**
@@ -20,14 +20,15 @@ export type BuildContext = {
   build: Build | undefined;
   error: Error | undefined;
   isLoading: boolean;
-  enableFilePreview: boolean;
   shouldLoadModelOnStart: boolean;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   gitRef: ActorRefFrom<typeof gitMachine>;
-  graphicsRef: ActorRefFrom<typeof graphicsMachine>;
-  cadRef: ActorRefFrom<typeof cadMachine>;
-  screenshotRef: ActorRefFrom<typeof screenshotCapabilityMachine>;
-  cameraRef: ActorRefFrom<typeof cameraCapabilityMachine>;
+  /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
+  viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
+  /** Dynamic compilation units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
+  compilationUnits: Map<string, ActorRefFrom<typeof cadMachine>>;
+  /** The main entry file path from build.assets.mechanical.main. Set after build loads. */
+  mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
 };
 
@@ -61,8 +62,6 @@ const buildActors = {
   // This has no impact on machine consumer typings, only to this machine where
   // some types will need to be manually asserted (Eslint will report those places).
   cad: cadMachine as AnyStateMachine,
-  screenshot: screenshotCapabilityMachine,
-  camera: cameraCapabilityMachine,
   logs: logMachine,
 } as const;
 
@@ -83,9 +82,12 @@ type BuildEventInternal =
       parameters: Record<string, unknown>;
     }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
-  | { type: 'setEnableFilePreview'; enabled: boolean }
   | { type: 'loadModel' }
-  | { type: 'setMainFile'; path: string };
+  | { type: 'setMainFile'; path: string }
+  | { type: 'createCompilationUnit'; entryFile: string }
+  | { type: 'destroyCompilationUnit'; entryFile: string }
+  | { type: 'createViewGraphics'; viewId: string; settings?: GraphicsViewSettings }
+  | { type: 'destroyViewGraphics'; viewId: string };
 
 export type BuildEventExternal = OutputFrom<(typeof buildActors)[BuildActorNames]>;
 type BuildEventExternalDone = DoneActorEvent<BuildEventExternal, BuildActorNames>;
@@ -245,11 +247,14 @@ export const buildMachine = setup({
         }),
       );
 
-      // Forward to CAD machine
-      enqueue.sendTo(context.cadRef, {
-        type: 'setParameters',
-        parameters: event.parameters,
-      });
+      // Forward to the main file compilation unit
+      const mainUnit = context.compilationUnits.get(context.mainEntryFile);
+      if (mainUnit) {
+        enqueue.sendTo(mainUnit, {
+          type: 'setParameters',
+          parameters: event.parameters,
+        });
+      }
     }),
     setMainFileInContext: assign(({ context, event }) => {
       assertEvent(event, 'setMainFile');
@@ -267,7 +272,16 @@ export const buildMachine = setup({
     stopStatefulActors: enqueueActions(({ enqueue, context }) => {
       // Stop the old stateful actors (they'll be garbage collected)
       enqueue.stopChild(context.gitRef);
-      enqueue.stopChild(context.cadRef);
+
+      // Stop all compilation units
+      for (const unit of context.compilationUnits.values()) {
+        enqueue.stopChild(unit);
+      }
+
+      // Stop all view graphics machines
+      for (const gfx of context.viewGraphics.values()) {
+        enqueue.stopChild(gfx);
+      }
     }),
     respawnStatefulActors: assign({
       gitRef({ context, spawn, self }) {
@@ -276,17 +290,11 @@ export const buildMachine = setup({
           input: { buildId: context.buildId, parentRef: self },
         });
       },
-      cadRef({ context, spawn }) {
-        return spawn('cad', {
-          id: `cad-${context.buildId}`,
-          input: {
-            shouldInitializeKernelOnStart: false,
-            graphicsRef: context.graphicsRef,
-            logRef: context.logRef,
-            fileManagerRef: context.fileManagerRef,
-          },
-        });
-      },
+      // Reset compilation units - the primary one will be created during initializeKernelIfNeeded after build load
+      compilationUnits: () => new Map(),
+      mainEntryFile: () => '',
+      // Reset view graphics - they'll be created by Dockview viewer panels
+      viewGraphics: () => new Map(),
     }),
     initializeKernelIfNeeded: enqueueActions(({ enqueue, context }) => {
       // Only initialize if shouldLoadModelOnStart is true
@@ -299,18 +307,51 @@ export const buildMachine = setup({
         return;
       }
 
-      // Initialize kernel first
-      enqueue.sendTo(context.cadRef, { type: 'initializeKernel' });
+      const mainFile = mechanicalAsset.main;
 
-      // Then initialize the model with current build data
-      enqueue.sendTo(context.cadRef, {
-        type: 'initializeModel',
-        file: {
-          path: `/builds/${context.buildId}`,
-          filename: mechanicalAsset.main,
-        },
-        parameters: mechanicalAsset.parameters,
-      });
+      // Create the primary compilation unit for the main file if it doesn't exist
+      if (context.compilationUnits.has(mainFile)) {
+        // Compilation unit already exists, just set the main entry file and re-initialize
+        enqueue.assign({ mainEntryFile: mainFile });
+        const existingUnit = context.compilationUnits.get(mainFile)!;
+        enqueue.sendTo(existingUnit, { type: 'initializeKernel' });
+        enqueue.sendTo(existingUnit, {
+          type: 'initializeModel',
+          file: {
+            path: `/builds/${context.buildId}`,
+            filename: mainFile,
+          },
+          parameters: mechanicalAsset.parameters,
+        });
+      } else {
+        // Spawn is only available inside assign callbacks in XState v5.
+        // We spawn and immediately send events to the new actor within the assign.
+        enqueue.assign(({ spawn, context: ctx }) => {
+          const cadUnit = spawn('cad', {
+            id: `cad-${ctx.buildId}-${mainFile.replaceAll('/', '-')}`,
+            input: {
+              shouldInitializeKernelOnStart: false,
+              logRef: ctx.logRef,
+              fileManagerRef: ctx.fileManagerRef,
+            },
+          });
+
+          // Initialize kernel and model directly on the spawned actor
+          cadUnit.send({ type: 'initializeKernel' });
+          cadUnit.send({
+            type: 'initializeModel',
+            file: {
+              path: `/builds/${ctx.buildId}`,
+              filename: mainFile,
+            },
+            parameters: mechanicalAsset.parameters,
+          });
+
+          const newUnits = new Map(ctx.compilationUnits);
+          newUnits.set(mainFile, cadUnit as ActorRefFrom<typeof cadMachine>);
+          return { compilationUnits: newUnits, mainEntryFile: mainFile };
+        });
+      }
     }),
     loadModel: enqueueActions(({ enqueue, context }) => {
       const mechanicalAsset = context.build?.assets.mechanical;
@@ -318,24 +359,144 @@ export const buildMachine = setup({
         return;
       }
 
-      // Initialize kernel first
-      enqueue.sendTo(context.cadRef, { type: 'initializeKernel' });
+      const mainFile = mechanicalAsset.main;
 
-      // Initialize the model with current build data
-      enqueue.sendTo(context.cadRef, {
-        type: 'initializeModel',
-        file: {
-          path: `/builds/${context.buildId}`,
-          filename: mechanicalAsset.main,
-        },
-        parameters: mechanicalAsset.parameters,
+      // Find or create the compilation unit for the main file
+      const mainUnit = context.compilationUnits.get(mainFile);
+      if (mainUnit) {
+        // Initialize kernel and model on existing unit
+        enqueue.sendTo(mainUnit, { type: 'initializeKernel' });
+        enqueue.sendTo(mainUnit, {
+          type: 'initializeModel',
+          file: {
+            path: `/builds/${context.buildId}`,
+            filename: mainFile,
+          },
+          parameters: mechanicalAsset.parameters,
+        });
+      } else {
+        // Spawn is only available inside assign callbacks in XState v5.
+        enqueue.assign(({ spawn, context: ctx }) => {
+          const cadUnit = spawn('cad', {
+            id: `cad-${ctx.buildId}-${mainFile.replaceAll('/', '-')}`,
+            input: {
+              shouldInitializeKernelOnStart: false,
+              logRef: ctx.logRef,
+              fileManagerRef: ctx.fileManagerRef,
+            },
+          });
+
+          // Initialize kernel and model directly on the spawned actor
+          cadUnit.send({ type: 'initializeKernel' });
+          cadUnit.send({
+            type: 'initializeModel',
+            file: {
+              path: `/builds/${ctx.buildId}`,
+              filename: mainFile,
+            },
+            parameters: mechanicalAsset.parameters,
+          });
+
+          const newUnits = new Map(ctx.compilationUnits);
+          newUnits.set(mainFile, cadUnit as ActorRefFrom<typeof cadMachine>);
+          return { compilationUnits: newUnits, mainEntryFile: mainFile };
+        });
+      }
+    }),
+    createCompilationUnit: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'createCompilationUnit');
+
+      // No-op if a compilation unit already exists for this entry file
+      if (context.compilationUnits.has(event.entryFile)) {
+        return;
+      }
+
+      // Spawn is only available inside assign callbacks in XState v5.
+      enqueue.assign(({ spawn, context: ctx }) => {
+        const cadUnit = spawn('cad', {
+          id: `cad-${ctx.buildId}-${event.entryFile.replaceAll('/', '-')}`,
+          input: {
+            shouldInitializeKernelOnStart: true,
+            logRef: ctx.logRef,
+            fileManagerRef: ctx.fileManagerRef,
+          },
+        });
+
+        // Initialize model with the entry file directly on the spawned actor
+        cadUnit.send({
+          type: 'initializeModel',
+          file: {
+            path: `/builds/${ctx.buildId}`,
+            filename: event.entryFile,
+          },
+          parameters: ctx.build?.assets.mechanical?.parameters ?? {},
+        });
+
+        const newUnits = new Map(ctx.compilationUnits);
+        newUnits.set(event.entryFile, cadUnit as ActorRefFrom<typeof cadMachine>);
+        return { compilationUnits: newUnits };
       });
     }),
-    setEnableFilePreview: assign({
-      enableFilePreview({ event }) {
-        assertEvent(event, 'setEnableFilePreview');
-        return event.enabled;
-      },
+    destroyCompilationUnit: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'destroyCompilationUnit');
+
+      const unit = context.compilationUnits.get(event.entryFile);
+      if (!unit) {
+        return;
+      }
+
+      enqueue.stopChild(unit);
+      enqueue.assign(({ context: ctx }) => {
+        const newUnits = new Map(ctx.compilationUnits);
+        newUnits.delete(event.entryFile);
+        return { compilationUnits: newUnits };
+      });
+    }),
+    createViewGraphics: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'createViewGraphics');
+
+      // No-op if a graphics actor already exists for this view
+      if (context.viewGraphics.has(event.viewId)) {
+        return;
+      }
+
+      const settings = event.settings ?? defaultGraphicsSettings;
+
+      enqueue.assign(({ spawn, context: ctx }) => {
+        const gfx = spawn('graphics', {
+          id: `graphics-view-${ctx.buildId}-${event.viewId}`,
+          input: {
+            defaultCameraFovAngle: settings.cameraFovAngle,
+            measureSnapDistance: 40,
+            enableSurfaces: settings.enableSurfaces,
+            enableLines: settings.enableLines,
+            enableGizmo: settings.enableGizmo,
+            enableGrid: settings.enableGrid,
+            enableAxes: settings.enableAxes,
+            enableMatcap: settings.enableMatcap,
+            upDirection: settings.upDirection,
+          },
+        });
+
+        const newMap = new Map(ctx.viewGraphics);
+        newMap.set(event.viewId, gfx);
+        return { viewGraphics: newMap };
+      });
+    }),
+    destroyViewGraphics: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'destroyViewGraphics');
+
+      const gfx = context.viewGraphics.get(event.viewId);
+      if (!gfx) {
+        return;
+      }
+
+      enqueue.stopChild(gfx);
+      enqueue.assign(({ context: ctx }) => {
+        const newMap = new Map(ctx.viewGraphics);
+        newMap.delete(event.viewId);
+        return { viewGraphics: newMap };
+      });
     }),
     emitBuildLoaded: emit(({ event }) => {
       assertActorDoneEvent(event);
@@ -377,51 +538,28 @@ export const buildMachine = setup({
       input: { buildId, parentRef: self },
     });
 
-    const graphicsRef = spawn('graphics', {
-      id: `graphics-${buildId}`,
-      input: {
-        defaultCameraFovAngle: 60,
-        measureSnapDistance: 40,
-      },
-    });
-
     const logRef = spawn('logs', {
       id: `log-${buildId}`,
     });
 
-    const cadRef = spawn('cad', {
-      id: `cad-${buildId}`,
-      input: {
-        shouldInitializeKernelOnStart: false,
-        graphicsRef,
-        logRef,
-        fileManagerRef,
-      },
-    });
+    // Compilation units are created dynamically after build loads (when we know the main file).
+    // The primary compilation unit is created by initializeKernelIfNeeded.
+    const compilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
 
-    const screenshotRef = spawn('screenshot', {
-      id: `screenshot-${buildId}`,
-      input: { graphicsRef },
-    });
-
-    const cameraRef = spawn('camera', {
-      id: `camera-${buildId}`,
-      input: { graphicsRef },
-    });
+    // View graphics are created dynamically by Dockview viewer panels.
+    const viewGraphics = new Map<string, ActorRefFrom<typeof graphicsMachine>>();
 
     return {
       buildId,
       build: undefined,
       error: undefined,
       isLoading: true,
-      enableFilePreview: true, // Default to enabled
       shouldLoadModelOnStart,
       fileManagerRef,
       gitRef,
-      graphicsRef,
-      cadRef,
-      screenshotRef,
-      cameraRef,
+      viewGraphics,
+      compilationUnits,
+      mainEntryFile: '',
       logRef,
     };
   },
@@ -451,10 +589,29 @@ export const buildMachine = setup({
           target: 'loading',
           actions: ['updateBuildId', 'setLoading'],
         },
+        // Accept view graphics lifecycle events in idle state so they
+        // are not silently dropped if a useEffect fires before loading starts.
+        createViewGraphics: {
+          actions: 'createViewGraphics',
+        },
+        destroyViewGraphics: {
+          actions: 'destroyViewGraphics',
+        },
       },
     },
     loading: {
-      entry: 'clearError',
+      on: {
+        // Accept view graphics lifecycle events during loading.
+        // These are safe to process in any state -- they only depend on
+        // context.buildId (always set) and defaultGraphicsSettings, with
+        // zero dependency on context.build or any loaded data.
+        createViewGraphics: {
+          actions: 'createViewGraphics',
+        },
+        destroyViewGraphics: {
+          actions: 'destroyViewGraphics',
+        },
+      },
       invoke: {
         src: 'loadBuildActor',
         input: ({ context }) => ({ buildId: context.buildId }),
@@ -506,14 +663,23 @@ export const buildMachine = setup({
             setParameters: {
               actions: ['setParametersInContext'],
             },
-            setEnableFilePreview: {
-              actions: 'setEnableFilePreview',
-            },
             loadModel: {
               actions: 'loadModel',
             },
             setMainFile: {
               actions: 'setMainFileInContext',
+            },
+            createCompilationUnit: {
+              actions: 'createCompilationUnit',
+            },
+            destroyCompilationUnit: {
+              actions: 'destroyCompilationUnit',
+            },
+            createViewGraphics: {
+              actions: 'createViewGraphics',
+            },
+            destroyViewGraphics: {
+              actions: 'destroyViewGraphics',
             },
           },
         },

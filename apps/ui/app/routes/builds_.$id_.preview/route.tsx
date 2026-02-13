@@ -119,7 +119,7 @@ function RouteProvider({ children }: { readonly children?: React.ReactNode }): R
 
   return (
     <StaticBuildContext.Provider value={staticBuild}>
-      <FileManagerProvider rootDirectory={`/builds/${id}`}>
+      <FileManagerProvider buildId={id} rootDirectory={`/builds/${id}`}>
         {staticBuild ? (
           <StaticBuildProvider buildId={id!} staticBuild={staticBuild}>
             {children}

@@ -18,7 +18,7 @@ import { MonacoModelServiceProvider } from '#hooks/use-monaco-model-service.js';
 function RouteProvider({ children }: { readonly children?: React.ReactNode }): React.JSX.Element {
   const { id } = useParams();
   return (
-    <FileManagerProvider rootDirectory={`/builds/${id}`}>
+    <FileManagerProvider buildId={id} rootDirectory={`/builds/${id}`}>
       <BuildProvider buildId={id!}>
         <MonacoModelServiceProvider>{children}</MonacoModelServiceProvider>
       </BuildProvider>

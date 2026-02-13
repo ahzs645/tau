@@ -19,7 +19,7 @@ import { hasJsonSchemaObjectProperties } from '#utils/schema.utils.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useBuild, useMainGraphics } from '#hooks/use-build.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 
 const toggleParametersKeyCombination = {
@@ -56,14 +56,18 @@ export const ChatParameters = memo(function (props: {
   readonly isExpanded?: boolean;
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
-  const { buildRef, cadRef, graphicsRef, setParameters } = useBuild();
+  const { buildRef, compilationUnits, mainEntryFile, setParameters } = useBuild();
   const { className, isExpanded = true, setIsExpanded } = props;
+  const graphicsActor = useMainGraphics();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const parameters = useSelector(buildRef, (state) => state.context.build?.assets.mechanical?.parameters ?? {});
-  const defaultParameters = useSelector(cadRef, (state) => state.context.defaultParameters);
-  const jsonSchema = useSelector(cadRef, (state) => state.context.jsonSchema);
+  const defaultParameters = useSelector(cadActor, (state) => state?.context.defaultParameters ?? {});
+  const jsonSchema = useSelector(cadActor, (state) => state?.context.jsonSchema ?? undefined);
 
   // Build CadUnits object reactively from graphics state
-  const units = useSelector(graphicsRef, (state) => state.context.units);
+  const units = useSelector(graphicsActor, (state) => state?.context.units) ?? {
+    length: { symbol: 'mm' as const, factor: 1 },
+  };
 
   // State to toggle search visibility
   const [isSearchVisible, setIsSearchVisible] = useState(false);

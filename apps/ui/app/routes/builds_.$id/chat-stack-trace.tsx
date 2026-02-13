@@ -1,4 +1,3 @@
-import { useSelector } from '@xstate/react';
 import { useCallback, useState } from 'react';
 import { ChevronRight, Sparkles } from 'lucide-react';
 import type { KernelProvider, KernelIssue, KernelStackFrame, IssueSeverity } from '@taucad/types';
@@ -10,10 +9,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { FileLink } from '#components/files/file-link.js';
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
+import { useBuild } from '#hooks/use-build.js';
+import { useCadSelector } from '#hooks/use-cad.js';
 import { useChatActions } from '#hooks/use-chat.js';
 import { useChats } from '#hooks/use-chats.js';
 import { useKeydown } from '#hooks/use-keydown.js';
-import { useBuild } from '#hooks/use-build.js';
 import { cn } from '#utils/ui.utils.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
@@ -433,6 +433,8 @@ function IssuesSummary({ counts }: { readonly counts: IssueCounts }): React.JSX.
 }
 
 type ChatStackTraceProps = React.HTMLAttributes<HTMLDivElement> & {
+  /** Entry file being rendered in this viewer */
+  readonly entryFile: string;
   /**
    * Which side to show the collapsible trigger.
    * - 'top': Trigger at the top, content expands below
@@ -441,23 +443,14 @@ type ChatStackTraceProps = React.HTMLAttributes<HTMLDivElement> & {
   readonly side: 'top' | 'bottom';
 };
 
-export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProps): React.ReactNode {
-  const { getMainFilename, cadRef, editorRef, buildId, setLastChatId } = useBuild();
+export function ChatStackTrace({ entryFile, className, side, ...props }: ChatStackTraceProps): React.ReactNode {
+  const { getMainFilename, editorRef, buildId, setLastChatId } = useBuild();
   const fileManager = useFileManager();
   const { createChat } = useChats(buildId);
   const [isOpen, setIsOpen] = useState(true);
 
-  // Get the active file path from editor
-  const activeFilePath = useSelector(editorRef, (state) => state.context.activeFilePath);
-
-  // Get all kernel issues for the active file
-  const errors = useSelector(cadRef, (state) => {
-    if (!activeFilePath) {
-      return undefined;
-    }
-
-    return state.context.kernelIssues.get(activeFilePath);
-  });
+  // Get all kernel issues for this viewer's compilation unit via CadProvider context
+  const errors = useCadSelector((state) => state.context.kernelIssues.get(entryFile), undefined);
 
   const { sendMessage } = useChatActions();
   const { selectedModel } = useModels();

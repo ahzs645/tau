@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import type { OrbitControls } from 'three/addons';
 import * as THREE from 'three';
-import { useBuild } from '#hooks/use-build.js';
+import { useCameraCapability } from '#hooks/use-graphics.js';
 
 type UpDirectionHandlerProperties = {
   readonly upDirection: 'x' | 'y' | 'z';
@@ -14,7 +14,7 @@ type UpDirectionHandlerProperties = {
  */
 export function UpDirectionHandler({ upDirection }: UpDirectionHandlerProperties): undefined {
   const { camera, scene, controls, invalidate } = useThree();
-  const { cameraRef: cameraCapabilityActor } = useBuild();
+  const cameraCapabilityActor = useCameraCapability();
 
   useEffect(() => {
     // Define the new up direction based on the selected axis

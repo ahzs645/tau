@@ -1,12 +1,11 @@
 import React, { useMemo } from 'react';
-import { useSelector } from '@xstate/react';
 import { Box, PenLine, Ruler } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { Tabs, TabsList, TabsTrigger } from '#components/ui/tabs.js';
 import { Switch } from '#components/ui/switch.js';
 import { ParametersNumber } from '#components/geometry/parameters/parameters-number.js';
-import { useBuild } from '#hooks/use-build.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 function toDegrees(radians: number): number {
   const degrees = (radians * 180) / Math.PI;
@@ -72,7 +71,7 @@ function getPlaneButtonsForUpDirection(upDirection: 'x' | 'y' | 'z'): PlaneButto
 }
 
 export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
+  const graphicsActor = useGraphics();
   const {
     selectedSectionViewId,
     sectionViewTranslation,
@@ -85,7 +84,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     sceneRadius,
     units,
     upDirection,
-  } = useSelector(graphicsActor, (s) => ({
+  } = useGraphicsSelector((s) => ({
     selectedSectionViewId: s.context.selectedSectionViewId,
     sectionViewTranslation: s.context.sectionViewTranslation,
     sectionViewRotation: s.context.sectionViewRotation,

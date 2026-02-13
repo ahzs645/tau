@@ -202,6 +202,7 @@
     "streamdown": "^1.6.10",
     "tailwind-merge": "^3.4.0",
     "three": "^0.179.0",
+    "three-mesh-bvh": "^0.9.8",
     "three-viewport-gizmo": "https://codeload.github.com/taucad/three-viewport-gizmo/tar.gz/d5ae66010e7f5f067931aaeb6a74880a73d23b5d",
     "uint8array-extras": "^1.4.0",
     "uzip": "^0.20201231.0",

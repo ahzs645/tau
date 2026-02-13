@@ -191,6 +191,13 @@
   opacity: 1;
 }
 
+/* ── Always show action buttons when the group has no tabs (empty / watermark state) ──
+   Without this the user must hover the narrow tab bar to discover the "+" and split
+   buttons.  :has() checks whether the tabs container holds any tab elements. */
+.dockview-theme-tau .dv-groupview:not(:has(.dv-tab)) .dv-pane-action {
+  opacity: 1;
+}
+
 /* ── Content container background (matches the code editor bg-background) ── */
 .dockview-theme-tau .dv-groupview > .dv-content-container {
   background-color: var(--background);

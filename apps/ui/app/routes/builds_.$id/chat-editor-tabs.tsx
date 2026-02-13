@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { X, Download, Eye, EyeOff } from 'lucide-react';
+import { X, Download } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { useBuild } from '#hooks/use-build.js';
 import { useHorizontalScroll } from '#hooks/use-horizontal-scroll.js';
@@ -9,7 +9,6 @@ import { FloatingPanelContentHeader, FloatingPanelContentHeaderActions } from '#
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { useCookie } from '#hooks/use-cookie.js';
 import { CopyButton } from '#components/copy-button.js';
 import { toast } from '#components/ui/sonner.js';
 import { asBuffer, downloadBlob } from '#utils/file.utils.js';
@@ -29,8 +28,6 @@ export function ChatEditorTabs(): React.JSX.Element {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const fileManager = useFileManager();
-
-  const [enableFilePreview, setEnableFilePreview] = useCookie<boolean>('cad-file-preview', true);
 
   const handleDownloadCode = useCallback(() => {
     toast.promise(
@@ -61,10 +58,6 @@ export function ChatEditorTabs(): React.JSX.Element {
 
     return decodeTextFile(activeFileData);
   }, [activeFile.path, fileManager]);
-
-  const handleToggleFilePreview = () => {
-    setEnableFilePreview(!enableFilePreview);
-  };
 
   // Get git statuses for display
   const gitStatuses = useSelector(gitRef, (state) => state.context.fileStatuses);
@@ -188,20 +181,6 @@ export function ChatEditorTabs(): React.JSX.Element {
         </div>
       </div>
       <FloatingPanelContentHeaderActions>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="size-6 rounded-sm"
-              aria-label={enableFilePreview ? 'Disable file preview' : 'Enable file preview'}
-              onClick={handleToggleFilePreview}
-            >
-              {enableFilePreview ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{enableFilePreview ? 'Disable file preview' : 'Enable file preview'}</TooltipContent>
-        </Tooltip>
         {Boolean(activeFile) && (
           <>
             <CopyButton

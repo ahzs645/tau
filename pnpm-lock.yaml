@@ -526,6 +526,9 @@ importers:
       three:
         specifier: ^0.179.0
         version: 0.179.0
+      three-mesh-bvh:
+        specifier: ^0.9.8
+        version: 0.9.8(three@0.179.0)
       three-viewport-gizmo:
         specifier: https://codeload.github.com/taucad/three-viewport-gizmo/tar.gz/d5ae66010e7f5f067931aaeb6a74880a73d23b5d
         version: https://codeload.github.com/taucad/three-viewport-gizmo/tar.gz/d5ae66010e7f5f067931aaeb6a74880a73d23b5d(three@0.179.0)
@@ -15762,6 +15765,11 @@ packages:
     peerDependencies:
       three: '>= 0.159.0'
 
+  three-mesh-bvh@0.9.8:
+    resolution: {integrity: sha512-YphYvdXEZSXdz6iNdWJo1RB6qvSCRyiXPEVSvNU6xVWbLDOdSrfEIsJOpgFOnefdmVEvZ6M+sY0cjh9gl7MvdA==}
+    peerDependencies:
+      three: '>= 0.159.0'
+
   three-stdlib@2.36.0:
     resolution: {integrity: sha512-kv0Byb++AXztEGsULgMAs8U2jgUdz6HPpAB/wDJnLiLlaWQX2APHhiTJIN7rqW+Of0eRgcp7jn05U1BsCP3xBA==}
     peerDependencies:
@@ -28426,7 +28434,7 @@ snapshots:
       isstream: 0.1.2
       jsonwebtoken: 9.0.2
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.7.9(debug@4.4.3))
+      retry-axios: 2.6.0(axios@1.7.9)
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -32771,7 +32779,7 @@ snapshots:
 
   ret@0.5.0: {}
 
-  retry-axios@2.6.0(axios@1.7.9(debug@4.4.3)):
+  retry-axios@2.6.0(axios@1.7.9):
     dependencies:
       axios: 1.7.9(debug@4.4.3)
 
@@ -33964,6 +33972,10 @@ snapshots:
       real-require: 0.2.0
 
   three-mesh-bvh@0.8.3(three@0.179.0):
+    dependencies:
+      three: 0.179.0
+
+  three-mesh-bvh@0.9.8(three@0.179.0):
     dependencies:
       three: 0.179.0
 

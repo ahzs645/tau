@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useActorRef, useSelector } from '@xstate/react';
 import { Download, FileCode, Eye, Code, ChevronDown, SlidersHorizontal } from 'lucide-react';
@@ -22,6 +22,7 @@ import { toast } from '#components/ui/sonner.js';
 import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
 import { cn } from '#utils/ui.utils.js';
 import { useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { PreviewDetails } from '#routes/builds_.$id_.preview/preview-details.js';
@@ -34,10 +35,11 @@ type PreviewDesktopProps = {
 };
 
 function ViewerStatus({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { cadRef } = useBuild();
-  const state = useSelector(cadRef, (state) => state.value);
+  const { compilationUnits, mainEntryFile } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
+  const state = useSelector(cadActor, (snapshot) => snapshot?.value);
 
-  return ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
+  return state && ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
     <div
       {...props}
       className={cn(
@@ -57,12 +59,24 @@ export const PreviewDesktop = memo(function ({
 }: PreviewDesktopProps): React.JSX.Element {
   const navigate = useNavigate();
   const { id } = useParams();
-  const { buildRef, cadRef } = useBuild();
+  const { buildRef, compilationUnits, mainEntryFile, viewGraphics } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const build = useSelector(buildRef, (state) => state.context.build);
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const hasParameters = useSelector(cadRef, (state) => Boolean(state.context.jsonSchema));
+  const geometries = useSelector(cadActor, (snapshot) => snapshot?.context.geometries ?? []);
+  const hasParameters = useSelector(cadActor, (snapshot) => Boolean(snapshot?.context.jsonSchema));
   const fileManager = useFileManager();
   const buildManager = useBuildManager();
+
+  const previewViewId = 'preview-main';
+
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: previewViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: previewViewId });
+    };
+  }, [buildRef]);
+
+  const graphicsRef = viewGraphics.get(previewViewId);
 
   const [isCloning, setIsCloning] = useState(false);
 
@@ -85,7 +99,7 @@ export const PreviewDesktop = memo(function ({
 
   // Create export geometry machine instance
   const exportActorRef = useActorRef(exportGeometryMachine, {
-    input: { cadRef },
+    input: { cadRef: cadActor },
   });
 
   const handleExport = useCallback(
@@ -282,8 +296,10 @@ export const PreviewDesktop = memo(function ({
                   {/* 3D Viewer - min-w-0 is required for proper flex shrinking when Canvas is present */}
                   <div className="relative min-w-0 flex-1">
                     <ViewerStatus />
-                    {geometries.length > 0 ? (
-                      <CadViewer enableZoom enablePan geometries={geometries} />
+                    {geometries.length > 0 && graphicsRef ? (
+                      <GraphicsProvider graphicsRef={graphicsRef}>
+                        <CadViewer enableZoom enablePan geometries={geometries} />
+                      </GraphicsProvider>
                     ) : (
                       <div className="flex h-full items-center justify-center">
                         <Loader className="size-16 text-primary" />

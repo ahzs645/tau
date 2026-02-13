@@ -199,6 +199,14 @@ export type GraphicsEmitted =
 export type GraphicsInput = {
   defaultCameraFovAngle?: number;
   measureSnapDistance?: number; // Default 20px
+  // Per-view initial settings (from persisted GraphicsViewSettings)
+  enableSurfaces?: boolean;
+  enableLines?: boolean;
+  enableGizmo?: boolean;
+  enableGrid?: boolean;
+  enableAxes?: boolean;
+  enableMatcap?: boolean;
+  upDirection?: 'x' | 'y' | 'z';
 };
 
 type LengthUnitData = {
@@ -1059,14 +1067,14 @@ export const graphicsMachine = setup({
     geometryRadius: 0,
     sceneRadius: undefined,
 
-    // Visibility state
-    enableSurfaces: true,
-    enableLines: true,
-    enableGizmo: true,
-    enableGrid: true,
-    enableAxes: true,
-    enableMatcap: false,
-    upDirection: 'z',
+    // Visibility state (from per-view settings or defaults)
+    enableSurfaces: input.enableSurfaces ?? true,
+    enableLines: input.enableLines ?? true,
+    enableGizmo: input.enableGizmo ?? true,
+    enableGrid: input.enableGrid ?? true,
+    enableAxes: input.enableAxes ?? true,
+    enableMatcap: input.enableMatcap ?? false,
+    upDirection: input.upDirection ?? 'z',
 
     // Clipping plane state
     isSectionViewActive: false,

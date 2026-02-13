@@ -3,12 +3,17 @@ import type { AnyActorRef } from 'xstate';
 import * as THREE from 'three';
 import type { ScreenshotOptions, CameraAngle, CompositeScreenshotOptions } from '@taucad/types';
 
+// Capture mode discriminator
+type CaptureMode = 'threejs' | 'svg';
+
 // Context type
 type ScreenshotCapabilityContext = {
   graphicsRef: AnyActorRef;
   gl?: THREE.WebGLRenderer;
   scene?: THREE.Scene;
   camera?: THREE.Camera;
+  svgElement?: SVGSVGElement;
+  captureMode?: CaptureMode;
   queuedCaptureRequests: Array<{ options?: ScreenshotOptions; requestId: string; isComposite?: boolean }>;
   isRegistered: boolean;
   registrationError?: string;
@@ -17,7 +22,8 @@ type ScreenshotCapabilityContext = {
 // Event types
 type ScreenshotCapabilityEvent =
   | { type: 'registerCapture'; gl: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera }
-  | { type: 'unregisterCapture' }
+  | { type: 'registerSvgCapture'; svgElement: SVGSVGElement }
+  | { type: 'unregisterCapture'; captureMode?: 'threejs' | 'svg' }
   | { type: 'capture'; options?: ScreenshotOptions; requestId: string }
   | {
       type: 'captureComposite';
@@ -234,6 +240,204 @@ async function createCompositeImage(
 
   return compositeDataUrl;
 }
+
+// ---------------------------------------------------------------------------
+// SVG Screenshot Capture
+// ---------------------------------------------------------------------------
+
+/**
+ * SVG style properties that affect rendering and must be inlined for standalone
+ * serialisation (CSS classes and custom properties won't resolve in an Image).
+ */
+const svgStyleProperties = [
+  'stroke',
+  'fill',
+  'opacity',
+  'stroke-width',
+  'stroke-dasharray',
+  'stroke-dashoffset',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-opacity',
+  'fill-opacity',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'text-anchor',
+  'dominant-baseline',
+  'color',
+  'visibility',
+  'display',
+] as const;
+
+/**
+ * Recursively inline computed styles onto a cloned SVG tree so the serialised
+ * SVG renders identically without access to the page's stylesheets.
+ */
+function inlineSvgStyles(clone: Element, original: Element): void {
+  if (!(original instanceof SVGElement) || !(clone instanceof SVGElement)) {
+    return;
+  }
+
+  const computed = globalThis.getComputedStyle(original);
+
+  for (const property of svgStyleProperties) {
+    const value = computed.getPropertyValue(property);
+    if (value) {
+      clone.style.setProperty(property, value);
+    }
+  }
+
+  const originalChildren = [...original.children];
+  const cloneChildren = [...clone.children];
+  for (const [index, origChild] of originalChildren.entries()) {
+    const cloneChild = cloneChildren[index];
+    if (cloneChild) {
+      inlineSvgStyles(cloneChild, origChild);
+    }
+  }
+}
+
+/**
+ * Core SVG screenshot capture logic.
+ * Captures the current SVG view as a flat image (camera angles are ignored).
+ */
+async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: ScreenshotOptions): Promise<string[]> {
+  if (!svgElement.isConnected) {
+    throw new Error('Screenshot attempted on disconnected SVG element');
+  }
+
+  // Setup default options (camera angles irrelevant for 2D SVG)
+  const defaultOptions = {
+    aspectRatio: 16 / 9,
+    output: {
+      format: 'image/png' as const,
+      quality: 0.92,
+      isPreview: true,
+    },
+  };
+
+  const config = {
+    ...defaultOptions,
+    ...options,
+    output: {
+      ...defaultOptions.output,
+      ...options?.output,
+    },
+  };
+
+  // Calculate target dimensions based on aspect ratio and maxResolution
+  const svgRect = svgElement.getBoundingClientRect();
+  const targetAspect = config.aspectRatio;
+  let width = Math.round(svgRect.height * targetAspect);
+  let height = Math.round(svgRect.height);
+
+  if (config.maxResolution) {
+    const maxDimension = Math.max(width, height);
+    if (maxDimension > config.maxResolution) {
+      const rescale = config.maxResolution / maxDimension;
+      width = Math.round(width * rescale);
+      height = Math.round(height * rescale);
+    }
+  }
+
+  width = Math.max(width, 1);
+  height = Math.max(height, 1);
+
+  // Clone the SVG and inline all computed styles so serialisation is faithful
+  const clone = svgElement.cloneNode(true) as SVGSVGElement;
+  inlineSvgStyles(clone, svgElement);
+
+  // Resolve the container's background colour (the SVG element itself uses
+  // Tailwind's `bg-background` which resolves to a CSS variable).
+  const { parentElement } = svgElement;
+  const bgColor = parentElement ? globalThis.getComputedStyle(parentElement).backgroundColor : 'white';
+
+  // Set explicit dimensions on the serialised clone
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+
+  // Serialise and create a Blob URL
+  const serializer = new XMLSerializer();
+  const svgString = serializer.serializeToString(clone);
+  const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+
+  try {
+    // Load into an Image element
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new globalThis.Image();
+      image.addEventListener('load', () => {
+        resolve(image);
+      });
+      image.addEventListener('error', () => {
+        reject(new Error('Failed to load serialised SVG into Image'));
+      });
+      image.src = url;
+    });
+
+    // Draw onto a canvas
+    const canvas = document.createElement('canvas');
+    const pixelRatio = globalThis.devicePixelRatio || 1;
+    canvas.width = width * pixelRatio;
+    canvas.height = height * pixelRatio;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Could not get 2D canvas context for SVG screenshot');
+    }
+
+    ctx.scale(pixelRatio, pixelRatio);
+
+    // Fill background colour
+    if (bgColor && bgColor !== 'transparent' && bgColor !== 'rgba(0, 0, 0, 0)') {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    ctx.drawImage(img, 0, 0, width, height);
+
+    // Export as data URL via Blob → FileReader (consistent with Three.js path)
+    const mimeType = config.output.format;
+    const quality = mimeType === 'image/jpeg' || mimeType === 'image/webp' ? config.output.quality : undefined;
+
+    const outputBlob = await new Promise<Blob | undefined>((resolve) => {
+      canvas.toBlob(
+        (result) => {
+          resolve(result ?? undefined);
+        },
+        mimeType,
+        quality,
+      );
+    });
+
+    if (!outputBlob) {
+      throw new Error('Failed to create blob from SVG canvas');
+    }
+
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener('load', () => {
+        resolve(reader.result as string);
+      });
+      reader.addEventListener('error', reject);
+      reader.readAsDataURL(outputBlob);
+    });
+
+    // Cleanup canvas memory
+    canvas.width = 0;
+    canvas.height = 0;
+
+    return [dataUrl];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Three.js Screenshot Capture
+// ---------------------------------------------------------------------------
 
 /**
  * Core screenshot capture logic shared between regular and composite captures
@@ -529,6 +733,67 @@ export const screenshotCapabilityMachine = setup({
         }
       })();
     }),
+
+    // SVG capture actors (flat-image only, camera angles ignored)
+    captureSvgScreenshot: fromCallback<
+      | { type: 'screenshotCompleted'; dataUrls: string[]; requestId: string }
+      | { type: 'screenshotFailed'; error: string; requestId: string },
+      {
+        svgElement: SVGSVGElement;
+        options?: ScreenshotOptions;
+        requestId: string;
+      }
+    >(({ input, sendBack }) => {
+      const { svgElement, options, requestId } = input;
+
+      (async () => {
+        try {
+          const dataUrls = await captureSvgScreenshots(svgElement, options);
+          sendBack({ type: 'screenshotCompleted', dataUrls, requestId });
+        } catch (error: unknown) {
+          sendBack({
+            type: 'screenshotFailed',
+            error: error instanceof Error ? error.message : 'SVG screenshot failed',
+            requestId,
+          });
+        }
+      })();
+    }),
+
+    captureSvgCompositeScreenshot: fromCallback<
+      | { type: 'screenshotCompleted'; dataUrls: string[]; requestId: string }
+      | { type: 'screenshotFailed'; error: string; requestId: string },
+      {
+        svgElement: SVGSVGElement;
+        options?: ScreenshotOptions;
+        requestId: string;
+      }
+    >(({ input, sendBack }) => {
+      const { svgElement, options, requestId } = input;
+
+      (async () => {
+        try {
+          // SVG is always a single flat image (no camera angles)
+          const dataUrls = await captureSvgScreenshots(svgElement, options);
+
+          // For composite, still wrap in the composite image creator
+          const compositeOptions = options?.composite ?? defaultCompositeOptions;
+          const screenshots = dataUrls.map((dataUrl) => ({
+            label: '2D View',
+            dataUrl,
+          }));
+
+          const compositeDataUrl = await createCompositeImage(screenshots, compositeOptions);
+          sendBack({ type: 'screenshotCompleted', dataUrls: [compositeDataUrl], requestId });
+        } catch (error: unknown) {
+          sendBack({
+            type: 'screenshotFailed',
+            error: error instanceof Error ? error.message : 'SVG composite screenshot failed',
+            requestId,
+          });
+        }
+      })();
+    }),
   },
   actions: {
     registerWithGraphics: enqueueActions(({ enqueue, context, event, self }) => {
@@ -537,6 +802,19 @@ export const screenshotCapabilityMachine = setup({
         gl: event.gl,
         scene: event.scene,
         camera: event.camera,
+        captureMode: 'threejs' as const,
+        isRegistered: true,
+      });
+      enqueue.sendTo(context.graphicsRef, {
+        type: 'registerScreenshotCapability',
+        actorRef: self,
+      });
+    }),
+    registerSvgWithGraphics: enqueueActions(({ enqueue, context, event, self }) => {
+      assertEvent(event, 'registerSvgCapture');
+      enqueue.assign({
+        svgElement: event.svgElement,
+        captureMode: 'svg' as const,
         isRegistered: true,
       });
       enqueue.sendTo(context.graphicsRef, {
@@ -550,6 +828,8 @@ export const screenshotCapabilityMachine = setup({
         gl: undefined,
         scene: undefined,
         camera: undefined,
+        svgElement: undefined,
+        captureMode: undefined,
         isRegistered: false,
       });
       enqueue.sendTo(context.graphicsRef, { type: 'unregisterScreenshotCapability' });
@@ -601,6 +881,17 @@ export const screenshotCapabilityMachine = setup({
   guards: {
     isRegistered: ({ context }) => context.isRegistered,
     hasQueuedRequests: ({ context }) => context.queuedCaptureRequests.length > 0,
+    isSvgMode: ({ context }) => context.captureMode === 'svg',
+    /**
+     * Guard for unregisterCapture: skip if the event's captureMode doesn't match
+     * the current captureMode. This prevents a deferred Three.js Canvas teardown
+     * (which runs in a separate React reconciler with async timing) from undoing
+     * a newer SVG registration, and vice versa.
+     */
+    shouldUnregister: ({ context, event }) => {
+      assertEvent(event, 'unregisterCapture');
+      return !event.captureMode || event.captureMode === context.captureMode;
+    },
   },
   delays: {
     registrationTimeout: 5000,
@@ -612,13 +903,15 @@ export const screenshotCapabilityMachine = setup({
     gl: undefined,
     scene: undefined,
     camera: undefined,
+    svgElement: undefined,
+    captureMode: undefined,
     queuedCaptureRequests: [],
     isRegistered: false,
     registrationError: undefined,
   }),
   initial: 'waitingForRegistration',
   states: {
-    // Waiting for camera registration with timeout
+    // Waiting for capture registration (Three.js or SVG) with timeout
     waitingForRegistration: {
       after: {
         registrationTimeout: {
@@ -638,6 +931,17 @@ export const screenshotCapabilityMachine = setup({
             actions: 'registerWithGraphics',
           },
         ],
+        registerSvgCapture: [
+          {
+            guard: 'hasQueuedRequests',
+            target: 'registered',
+            actions: ['registerSvgWithGraphics', 'processQueuedRequests'],
+          },
+          {
+            target: 'registered',
+            actions: 'registerSvgWithGraphics',
+          },
+        ],
         capture: {
           actions: 'queueCaptureRequest',
         },
@@ -648,20 +952,18 @@ export const screenshotCapabilityMachine = setup({
     },
     registered: {
       on: {
-        capture: {
-          target: 'capturing',
-        },
-        captureComposite: {
-          target: 'capturingComposite',
-        },
+        capture: [{ guard: 'isSvgMode', target: 'capturingSvg' }, { target: 'capturing' }],
+        captureComposite: [{ guard: 'isSvgMode', target: 'capturingCompositeSvg' }, { target: 'capturingComposite' }],
         // Allow re-registration when canvas is recreated
         registerCapture: {
           actions: 'registerWithGraphics',
         },
-        unregisterCapture: {
-          target: 'waitingForRegistration',
-          actions: 'unregisterCapture',
+        registerSvgCapture: {
+          actions: 'registerSvgWithGraphics',
         },
+        unregisterCapture: [
+          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+        ],
       },
     },
     capturing: {
@@ -694,10 +996,9 @@ export const screenshotCapabilityMachine = setup({
         captureComposite: {
           actions: 'queueCaptureRequest',
         },
-        unregisterCapture: {
-          target: 'waitingForRegistration',
-          actions: 'unregisterCapture',
-        },
+        unregisterCapture: [
+          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+        ],
       },
     },
     capturingComposite: {
@@ -730,10 +1031,76 @@ export const screenshotCapabilityMachine = setup({
         captureComposite: {
           actions: 'queueCaptureRequest',
         },
-        unregisterCapture: {
-          target: 'waitingForRegistration',
-          actions: 'unregisterCapture',
+        unregisterCapture: [
+          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+        ],
+      },
+    },
+    // SVG capture states (flat-image only, no camera angle support)
+    capturingSvg: {
+      invoke: {
+        id: 'captureSvgScreenshot',
+        src: 'captureSvgScreenshot',
+        input({ context, event }) {
+          assertEvent(event, 'capture');
+          return {
+            svgElement: context.svgElement!,
+            options: event.options,
+            requestId: event.requestId,
+          };
         },
+      },
+      on: {
+        screenshotCompleted: {
+          target: 'registered',
+          actions: 'forwardResult',
+        },
+        screenshotFailed: {
+          target: 'registered',
+          actions: 'forwardResult',
+        },
+        capture: {
+          actions: 'queueCaptureRequest',
+        },
+        captureComposite: {
+          actions: 'queueCaptureRequest',
+        },
+        unregisterCapture: [
+          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+        ],
+      },
+    },
+    capturingCompositeSvg: {
+      invoke: {
+        id: 'captureSvgCompositeScreenshot',
+        src: 'captureSvgCompositeScreenshot',
+        input({ context, event }) {
+          assertEvent(event, 'captureComposite');
+          return {
+            svgElement: context.svgElement!,
+            options: event.options,
+            requestId: event.requestId,
+          };
+        },
+      },
+      on: {
+        screenshotCompleted: {
+          target: 'registered',
+          actions: 'forwardResult',
+        },
+        screenshotFailed: {
+          target: 'registered',
+          actions: 'forwardResult',
+        },
+        capture: {
+          actions: 'queueCaptureRequest',
+        },
+        captureComposite: {
+          actions: 'queueCaptureRequest',
+        },
+        unregisterCapture: [
+          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+        ],
       },
     },
     registrationFailed: {
@@ -741,6 +1108,10 @@ export const screenshotCapabilityMachine = setup({
         registerCapture: {
           target: 'registered',
           actions: 'registerWithGraphics',
+        },
+        registerSvgCapture: {
+          target: 'registered',
+          actions: 'registerSvgWithGraphics',
         },
         capture: {
           actions: enqueueActions(({ enqueue, context, event }) => {

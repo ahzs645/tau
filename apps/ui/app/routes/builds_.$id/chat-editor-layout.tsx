@@ -13,7 +13,7 @@ import {
 import { cookieName } from '#constants/cookie.constants.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useKeydown } from '#hooks/use-keydown.js';
-import { ChatEditor } from '#routes/builds_.$id/chat-editor.js';
+import { EditorDockview } from '#routes/builds_.$id/chat-editor-dockview.js';
 import { ChatConsole, collapsedConsoleSize } from '#routes/builds_.$id/chat-console.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
@@ -109,9 +109,9 @@ export function ChatEditorLayout({
           className={cn('h-full', className)}
           onLayout={setConsoleSize}
         >
-          {/* Editor Panel */}
+          {/* Editor Panel - DockviewReact handles tabs + splitting */}
           <ResizablePanel order={1} defaultSize={consoleSize[0]} minSize={5} id="chat-editor" className="size-full">
-            <ChatEditor />
+            <EditorDockview />
           </ResizablePanel>
 
           <ResizableHandle />

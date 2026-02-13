@@ -5,7 +5,7 @@ import type { cadMachine } from '#machines/cad.machine.js';
 
 // Context
 type ExportGeometryContext = {
-  cadRef: ActorRefFrom<typeof cadMachine>;
+  cadRef: ActorRefFrom<typeof cadMachine> | undefined;
   activeRequest?: {
     format: ExportFormat;
     onSuccess: (blob: Blob, format: string) => void;
@@ -26,13 +26,17 @@ type ExportGeometryEvent =
 
 // Input
 type ExportGeometryInput = {
-  cadRef: ActorRefFrom<typeof cadMachine>;
+  cadRef: ActorRefFrom<typeof cadMachine> | undefined;
 };
 
 // CAD listener actor - handles subscriptions to CAD machine events
-const cadListener = fromCallback<ExportGeometryEvent, { cadRef: ActorRefFrom<typeof cadMachine> }>(
+const cadListener = fromCallback<ExportGeometryEvent, { cadRef: ActorRefFrom<typeof cadMachine> | undefined }>(
   ({ sendBack, input }) => {
     const { cadRef } = input;
+
+    if (!cadRef) {
+      return () => undefined;
+    }
 
     // Subscribe to geometry export events
     const exportSubscription = cadRef.on('geometryExported', (event) => {
@@ -91,7 +95,7 @@ export const exportGeometryMachine = setup({
       activeRequest: undefined,
     }),
     sendExportRequest({ context }) {
-      if (!context.activeRequest) {
+      if (!context.activeRequest || !context.cadRef) {
         return;
       }
 

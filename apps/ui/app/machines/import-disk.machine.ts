@@ -3,7 +3,13 @@ import type { AnyActorRef, OutputFrom, DoneActorEvent } from 'xstate';
 import JSZip from 'jszip';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import type { FileMap } from '#utils/file-reader.utils.js';
-import { readFromFileList, readFromDataTransfer, normalizeFilePaths, getImportName } from '#utils/file-reader.utils.js';
+import {
+  readFromFileList,
+  readFromDataTransfer,
+  readFromDirectoryHandle,
+  normalizeFilePaths,
+  getImportName,
+} from '#utils/file-reader.utils.js';
 import { findMainFile } from '#routes/import.$/import.utils.js';
 
 /**
@@ -32,6 +38,7 @@ type ImportDiskInput = {
 type ImportDiskEventInternal =
   | { type: 'processFiles'; files: FileList | File[] }
   | { type: 'processDataTransfer'; items: DataTransferItemList }
+  | { type: 'processDirectoryHandle'; handle: FileSystemDirectoryHandle }
   | { type: 'processZip'; file: File }
   | { type: 'updateProgress'; processed: number; total: number }
   | { type: 'selectMainFile'; file: string }
@@ -113,6 +120,21 @@ const extractZipActor = fromPromise<
 });
 
 /**
+ * Read directory handle actor - recursively reads files from a FileSystemDirectoryHandle.
+ * Used for the File System Access API import flow.
+ */
+const readDirectoryHandleActor = fromPromise<
+  FilesReadResult,
+  { handle: FileSystemDirectoryHandle; onProgress: (processed: number, total: number) => void }
+>(async ({ input }) => {
+  const files = await readFromDirectoryHandle(input.handle, input.onProgress);
+  const normalizedFiles = normalizeFilePaths(files);
+  const importName = getImportName(normalizedFiles, input.handle.name);
+
+  return { type: 'filesRead', files: normalizedFiles, importName };
+});
+
+/**
  * Create build actor - placeholder that should be provided by the route
  */
 const createBuildActor = fromPromise<BuildCreatedResult, { importName: string; mainFile: string; files: FileMap }>(
@@ -124,6 +146,7 @@ const createBuildActor = fromPromise<BuildCreatedResult, { importName: string; m
 const importDiskActors = {
   readFilesActor,
   readDataTransferActor,
+  readDirectoryHandleActor,
   extractZipActor,
   createBuildActor,
 } as const;
@@ -263,6 +286,9 @@ export const importDiskMachine = setup({
         processDataTransfer: {
           target: 'readingDataTransfer',
         },
+        processDirectoryHandle: {
+          target: 'readingDirectoryHandle',
+        },
         processZip: {
           target: 'extracting',
         },
@@ -309,6 +335,35 @@ export const importDiskMachine = setup({
 
           return {
             items: event.items,
+            onProgress(processed: number, total: number) {
+              self.send({ type: 'updateProgress', processed, total });
+            },
+          };
+        },
+        onDone: {
+          target: 'selectingMainFile',
+          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
+        },
+        onError: {
+          target: 'error',
+          actions: ['setError', 'emitError'],
+        },
+      },
+      on: {
+        updateProgress: {
+          actions: ['setProgress', 'emitProgress'],
+        },
+      },
+    },
+    readingDirectoryHandle: {
+      entry: 'clearError',
+      invoke: {
+        src: 'readDirectoryHandleActor',
+        input({ event, self }) {
+          assertEvent(event, 'processDirectoryHandle');
+
+          return {
+            handle: event.handle,
             onProgress(processed: number, total: number) {
               self.send({ type: 'updateProgress', processed, total });
             },

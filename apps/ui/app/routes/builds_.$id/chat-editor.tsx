@@ -11,8 +11,6 @@ import { Loader } from '#components/ui/loader.js';
 import { ChatEditorBreadcrumbs } from '#routes/builds_.$id/chat-editor-breadcrumbs.js';
 import { useBuild } from '#hooks/use-build.js';
 import { ChatEditorTabs } from '#routes/builds_.$id/chat-editor-tabs.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
 import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { ChatEditorBinaryWarning } from '#routes/builds_.$id/chat-editor-binary-warning.js';
@@ -38,15 +36,20 @@ function createMonacoPath(relativePath: string): string {
 
 export const ChatEditor = memo(function ({ className }: { readonly className?: string }): React.JSX.Element {
   const monaco = useMonaco();
-  const { buildId, editorRef, cadRef: cadActor, buildRef } = useBuild();
+  const { buildId, editorRef, compilationUnits, mainEntryFile } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const fileManager = useFileManager();
   const { fileManagerRef } = useFileManager();
   const [forceOpenBinary, setForceOpenBinary] = useState(false);
   const { setIsEditorOpen } = useViewContext();
   const { modelService, markerService } = useMonacoServices();
 
-  // Kernel diagnostics (replaces manual marker management)
-  const { handleValidate } = useKernelDiagnostics({ monaco: monaco ?? undefined, cadActor, markerService });
+  // Kernel diagnostics (replaces manual marker management) - uses viewport's compilation unit
+  const { handleValidate } = useKernelDiagnostics({
+    monaco: monaco ?? undefined,
+    cadActor,
+    markerService,
+  });
 
   // Get active file path from editor
   const activeFilePath = useSelector(editorRef, (state) => {
@@ -80,17 +83,6 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
   useEffect(() => {
     setForceOpenBinary(false);
   }, [activeFile?.path]);
-
-  // Sync file preview preference between cookie and build machine
-  const [enableFilePreview] = useCookie<boolean>(cookieName.cadFilePreview, true);
-  const enableFilePreviewInMachine = useSelector(buildRef, (state) => state.context.enableFilePreview);
-
-  // Sync cookie to build machine on mount and when cookie changes
-  useEffect(() => {
-    if (enableFilePreview !== enableFilePreviewInMachine) {
-      buildRef.send({ type: 'setEnableFilePreview', enabled: enableFilePreview });
-    }
-  }, [enableFilePreview, enableFilePreviewInMachine, buildRef]);
 
   const handleCodeChange = useCallback(
     (value: ComponentProps<typeof CodeEditor>['value']) => {
@@ -175,7 +167,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
   return (
     <div className={cn('flex h-full flex-col bg-background', className)}>
       <ChatEditorTabs />
-      <ChatEditorBreadcrumbs />
+      {activeFilePath ? <ChatEditorBreadcrumbs filePath={activeFilePath} /> : undefined}
       {activeFile ? (
         activeFile.isBinary && !forceOpenBinary ? (
           <ChatEditorBinaryWarning onForceOpen={handleForceOpenBinary} />

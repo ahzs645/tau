@@ -1,8 +1,6 @@
-import { useSelector } from '@xstate/react';
 import type { StateFrom } from 'xstate';
 import { ChevronDown, Info, X } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { useBuild } from '#hooks/use-build.js';
 import { cn } from '#utils/ui.utils.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import { useCookie } from '#hooks/use-cookie.js';
@@ -11,8 +9,11 @@ import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { useKeydown } from '#hooks/use-keydown.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 type GraphicsState = StateFrom<typeof graphicsMachine>;
+
+type ChatInterfaceStatusProps = React.HTMLAttributes<HTMLDivElement>;
 
 const infoFromState = (
   state: GraphicsState,
@@ -66,16 +67,16 @@ const infoFromState = (
   }
 };
 
-export function ChatInterfaceStatus({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const state = useSelector(graphicsActor, (state) => state);
+export function ChatInterfaceStatus({ className, ...props }: ChatInterfaceStatusProps): React.ReactNode {
+  const graphicsRef = useGraphics();
+  const state = useGraphicsSelector((state) => state);
   const [isViewerStatusOpen, setIsViewerStatusOpen] = useCookie(cookieName.viewOpStatus, true);
 
   const handleClose = (): void => {
     if (state.matches({ operational: 'section-view' })) {
-      graphicsActor.send({ type: 'setSectionViewActive', payload: false });
+      graphicsRef.send({ type: 'setSectionViewActive', payload: false });
     } else if (state.matches({ operational: 'measure' })) {
-      graphicsActor.send({ type: 'setMeasureActive', payload: false });
+      graphicsRef.send({ type: 'setMeasureActive', payload: false });
     }
   };
 

@@ -2,7 +2,6 @@ import React, { useMemo, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import * as THREE from 'three';
 import { PerspectiveCamera } from '@react-three/drei';
-import { useSelector } from '@xstate/react';
 import { useFrame } from '@react-three/fiber';
 import { AxesHelper } from '#components/geometry/graphics/three/react/axes-helper.js';
 import { Grid } from '#components/geometry/graphics/three/grid.js';
@@ -10,7 +9,7 @@ import { useCameraReset } from '#components/geometry/graphics/three/use-camera-r
 import { Lights } from '#components/geometry/graphics/three/react/lights.js';
 import { SectionView } from '#components/geometry/graphics/three/react/section-view.js';
 import { createStripedMaterial } from '#components/geometry/graphics/three/materials/striped-material.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export type StageOptions = {
   /**
@@ -77,20 +76,19 @@ export function Stage({
 }: StageProperties): React.JSX.Element {
   const outer = React.useRef<THREE.Group>(null);
   const inner = React.useRef<THREE.Group>(null);
-  const { graphicsRef: graphicsActor } = useBuild();
 
-  const cameraFovAngle = useSelector(graphicsActor, (state) => state.context.cameraFovAngle);
+  const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
 
-  const isSectionViewActive = useSelector(graphicsActor, (state) => state.context.isSectionViewActive);
-  const selectedSectionViewId = useSelector(graphicsActor, (state) => state.context.selectedSectionViewId);
+  const isSectionViewActive = useGraphicsSelector((state) => state.context.isSectionViewActive);
+  const selectedSectionViewId = useGraphicsSelector((state) => state.context.selectedSectionViewId);
   // Translation is derived from pivot for display; Stage uses pivot directly
-  const sectionViewRotation = useSelector(graphicsActor, (state) => state.context.sectionViewRotation);
-  const sectionViewDirection = useSelector(graphicsActor, (state) => state.context.sectionViewDirection);
-  const sectionViewPivot = useSelector(graphicsActor, (state) => state.context.sectionViewPivot);
-  const availableSectionViews = useSelector(graphicsActor, (state) => state.context.availableSectionViews);
-  const enableClippingLines = useSelector(graphicsActor, (state) => state.context.enableClippingLines);
-  const enableClippingMesh = useSelector(graphicsActor, (state) => state.context.enableClippingMesh);
-  const gridSizesComputed = useSelector(graphicsActor, (state) => state.context.gridSizesComputed);
+  const sectionViewRotation = useGraphicsSelector((state) => state.context.sectionViewRotation);
+  const sectionViewDirection = useGraphicsSelector((state) => state.context.sectionViewDirection);
+  const sectionViewPivot = useGraphicsSelector((state) => state.context.sectionViewPivot);
+  const availableSectionViews = useGraphicsSelector((state) => state.context.availableSectionViews);
+  const enableClippingLines = useGraphicsSelector((state) => state.context.enableClippingLines);
+  const enableClippingMesh = useGraphicsSelector((state) => state.context.enableClippingMesh);
+  const gridSizesComputed = useGraphicsSelector((state) => state.context.gridSizesComputed);
 
   // Build THREE.Plane for the SectionView component
   const sectionView = useMemo(() => {

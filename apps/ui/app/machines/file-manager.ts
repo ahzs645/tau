@@ -1,6 +1,10 @@
 import JSZip from 'jszip';
+import { resolveMountConfig, isDirectory } from '@zenfs/core';
+import { IndexedDB, WebAccess } from '@zenfs/dom';
+import type { FileSystem } from '@zenfs/core';
 import type { FileStat, FilesystemBackend } from '@taucad/types';
-import { fs, ensureFilesystemConfigured, reconfigureFilesystem } from '#filesystem/zenfs-config.js';
+import { fs, ensureFilesystemConfigured, reconfigureFilesystem, setWebAccessHandle } from '#filesystem/zenfs-config.js';
+import { metaConfig } from '#constants/meta.constants.js';
 import { asBuffer } from '#utils/file.utils.js';
 import { joinPath } from '#utils/path.utils.js';
 
@@ -12,11 +16,60 @@ const fsp = fs.promises;
  * This is awaited at the start of every fileManager method to guarantee
  * the ZenFS backend is initialized before any filesystem operations.
  */
-const ensureReady = async (): Promise<void> => ensureFilesystemConfigured('indexeddb');
+async function ensureReady(): Promise<void> {
+  await ensureFilesystemConfigured('indexeddb');
+}
+
+/**
+ * Global write serialization queue.
+ *
+ * ZenFS has a known race condition (zen-fs/core#256) where concurrent
+ * write operations to the same directory corrupt the directory listing
+ * in IndexedDB. Each `commitNew` call reads the parent directory listing,
+ * adds an entry, and writes it back -- but concurrent calls read the same
+ * snapshot and the last writer wins, losing all other entries.
+ *
+ * This queue serializes ALL mutating filesystem operations so they execute
+ * one at a time, preventing the race entirely. Read-only operations
+ * (readFile, readdir, stat, exists) are not serialized and can run freely.
+ */
+let writeQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Serialize a mutating filesystem operation through the global write queue.
+ * Operations are executed one at a time in FIFO order. If a previous
+ * operation failed, the next one still runs (errors don't block the queue).
+ */
+async function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+  const result = writeQueue.catch(operation).then(operation);
+  // Update the queue tail, swallowing errors so the chain never rejects
+
+  writeQueue = result
+    // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+    .catch(() => {
+      // No-op
+    })
+    // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+    .then(() => {
+      // No-op
+    });
+  return result;
+}
 
 export type MkdirOptions = {
   mode?: number;
   recursive?: boolean;
+};
+
+/**
+ * Node in a standalone backend file tree.
+ * Used by the /files route to display all backends side-by-side.
+ */
+export type FileTreeNode = {
+  id: string;
+  name: string;
+  children?: FileTreeNode[];
 };
 
 export type FileManager = {
@@ -43,6 +96,18 @@ export type FileManager = {
   copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
   getZippedDirectory(path: string): Promise<Blob>;
   reconfigure(backend: FilesystemBackend): Promise<void>;
+  /**
+   * Set the FileSystemDirectoryHandle for the webaccess backend.
+   * The handle is transferred from the main thread via Comlink's structured cloning.
+   * Must be called before reconfigure('webaccess').
+   */
+  setDirectoryHandle(handle: FileSystemDirectoryHandle): void;
+  /**
+   * Read the file tree from a specific backend using a standalone FileSystem instance.
+   * Does not affect the main mounted filesystem.
+   * Used by the /files route grid view to show all backends in parallel.
+   */
+  readBackendFileTree(backend: FilesystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]>;
 };
 
 // Internal implementation for readFile with proper overload handling
@@ -65,6 +130,30 @@ async function readFile(
   // Return as Uint8Array
   const buffer = await fsp.readFile(filepath);
   return new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
+}
+
+/**
+ * Internal (non-serialized) version of ensureDirectoryExists.
+ * Used by writeFile/writeFiles within their already-serialized context
+ * to avoid deadlocking by re-entering the serialization queue.
+ */
+async function ensureDirectoryExistsInternal(targetPath: string): Promise<void> {
+  const normalizedPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
+  const segments = normalizedPath.split('/').filter((segment) => segment.length > 0);
+
+  let currentPath = '';
+  for (const segment of segments) {
+    currentPath += `/${segment}`;
+    try {
+      // eslint-disable-next-line no-await-in-loop -- Need to create directories sequentially
+      await fsp.mkdir(currentPath);
+    } catch (error) {
+      // Ignore if directory already exists
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+    }
+  }
 }
 
 export const fileManager: FileManager = {
@@ -101,64 +190,51 @@ export const fileManager: FileManager = {
 
   // Ensure a directory path exists, creating all parent directories as needed
   async ensureDirectoryExists(targetPath: string): Promise<void> {
-    await ensureReady();
-    const normalizedPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
-    const segments = normalizedPath.split('/').filter((segment) => segment.length > 0);
-
-    // Build all directory paths that need to be created
-    const directoryPaths: string[] = [];
-    let currentPath = '';
-
-    for (const segment of segments) {
-      currentPath += `/${segment}`;
-      directoryPaths.push(currentPath);
-    }
-
-    // Batch check which directories already exist
-    const existsMap = await this.batchExists(directoryPaths);
-
-    // Create only the directories that don't exist (in order)
-    for (const directoryPath of directoryPaths) {
-      if (!existsMap[directoryPath]) {
-        try {
-          // eslint-disable-next-line no-await-in-loop -- Need to create directories sequentially
-          await fsp.mkdir(directoryPath);
-        } catch (error) {
-          // Ignore error if directory was created by another concurrent operation
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-            throw error;
-          }
-        }
-      }
-    }
+    return serialized(async () => {
+      await ensureReady();
+      await ensureDirectoryExistsInternal(targetPath);
+    });
   },
 
-  // Write a file from provided binary data
+  // Write a file from provided binary data (serialized to prevent ZenFS race conditions)
   async writeFile(path: string, content: Uint8Array<ArrayBuffer> | string): Promise<void> {
-    await ensureReady();
-    // Ensure parent directory exists before writing
-    const lastSlashIndex = path.lastIndexOf('/');
-    if (lastSlashIndex > 0) {
-      const directoryPath = path.slice(0, lastSlashIndex);
-      await this.ensureDirectoryExists(directoryPath);
-    }
+    return serialized(async () => {
+      await ensureReady();
+      // Ensure parent directory exists before writing
+      const lastSlashIndex = path.lastIndexOf('/');
+      if (lastSlashIndex > 0) {
+        const directoryPath = path.slice(0, lastSlashIndex);
+        await ensureDirectoryExistsInternal(directoryPath);
+      }
 
-    await fsp.writeFile(path, content);
+      await fsp.writeFile(path, content);
+    });
   },
 
   async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void> {
-    await ensureReady();
-    await Promise.all(
-      Object.entries(files).map(async ([path, file]) => {
-        await this.writeFile(path, file.content);
-      }),
-    );
+    return serialized(async () => {
+      await ensureReady();
+      for (const [path, file] of Object.entries(files)) {
+        // Ensure parent directory exists before writing
+        const lastSlashIndex = path.lastIndexOf('/');
+        if (lastSlashIndex > 0) {
+          const directoryPath = path.slice(0, lastSlashIndex);
+          // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+          await ensureDirectoryExistsInternal(directoryPath);
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+        await fsp.writeFile(path, file.content);
+      }
+    });
   },
 
-  // Create a directory (recursive: true creates parent directories if needed)
+  // Create a directory (serialized to prevent ZenFS race conditions)
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
-    await ensureReady();
-    await fsp.mkdir(path, options);
+    return serialized(async () => {
+      await ensureReady();
+      await fsp.mkdir(path, options);
+    });
   },
 
   // List directory contents
@@ -183,22 +259,28 @@ export const fileManager: FileManager = {
     };
   },
 
-  // Rename a file or directory
+  // Rename a file or directory (serialized to prevent ZenFS race conditions)
   async rename(oldPath: string, newPath: string): Promise<void> {
-    await ensureReady();
-    await fsp.rename(oldPath, newPath);
+    return serialized(async () => {
+      await ensureReady();
+      await fsp.rename(oldPath, newPath);
+    });
   },
 
-  // Delete a file
+  // Delete a file (serialized to prevent ZenFS race conditions)
   async unlink(path: string): Promise<void> {
-    await ensureReady();
-    await fsp.unlink(path);
+    return serialized(async () => {
+      await ensureReady();
+      await fsp.unlink(path);
+    });
   },
 
-  // Delete a directory (must be empty)
+  // Delete a directory (must be empty, serialized to prevent ZenFS race conditions)
   async rmdir(path: string): Promise<void> {
-    await ensureReady();
-    await fsp.rmdir(path);
+    return serialized(async () => {
+      await ensureReady();
+      await fsp.rmdir(path);
+    });
   },
 
   // Get all file stats in a directory recursively as an array of file stat objects
@@ -269,15 +351,24 @@ export const fileManager: FileManager = {
   },
 
   async copyDirectory(sourcePath: string, destinationPath: string): Promise<void> {
-    await ensureReady();
-    const files = await this.getDirectoryContents(sourcePath);
-    const destinationFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
+    return serialized(async () => {
+      await ensureReady();
+      const files = await this.getDirectoryContents(sourcePath);
 
-    for (const [relativePath, content] of Object.entries(files)) {
-      destinationFiles[joinPath(destinationPath, relativePath)] = { content };
-    }
+      for (const [relativePath, content] of Object.entries(files)) {
+        const destinationFilePath = joinPath(destinationPath, relativePath);
+        // Ensure parent directory exists before writing
+        const lastSlashIndex = destinationFilePath.lastIndexOf('/');
+        if (lastSlashIndex > 0) {
+          const directoryPath = destinationFilePath.slice(0, lastSlashIndex);
+          // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+          await ensureDirectoryExistsInternal(directoryPath);
+        }
 
-    await this.writeFiles(destinationFiles);
+        // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+        await fsp.writeFile(destinationFilePath, content);
+      }
+    });
   },
 
   async getZippedDirectory(path: string): Promise<Blob> {
@@ -298,5 +389,104 @@ export const fileManager: FileManager = {
    */
   async reconfigure(backend: FilesystemBackend): Promise<void> {
     await reconfigureFilesystem(backend);
+  },
+
+  /**
+   * Set the FileSystemDirectoryHandle for the webaccess backend.
+   * Called from the main thread via Comlink before reconfigure('webaccess').
+   * The handle is automatically structured-cloned by postMessage.
+   */
+  setDirectoryHandle(handle: FileSystemDirectoryHandle): void {
+    setWebAccessHandle(handle);
+  },
+
+  /**
+   * Read the file tree from a specific backend using a standalone FileSystem instance.
+   * Creates a temporary, independent FileSystem that reads from the same underlying
+   * storage as the main filesystem but without affecting the global mount.
+   *
+   * @param backend - The backend to read from
+   * @param handle - Optional FileSystemDirectoryHandle for webaccess backend
+   * @returns Tree of FileTreeNode objects, sorted folders-first then alphabetically
+   */
+  async readBackendFileTree(backend: FilesystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]> {
+    if (backend === 'memory') {
+      return [];
+    }
+
+    let standaloneFs: FileSystem;
+
+    switch (backend) {
+      case 'indexeddb': {
+        const storeName = `${metaConfig.databasePrefix}fs`;
+        standaloneFs = await resolveMountConfig({ backend: IndexedDB, storeName });
+        break;
+      }
+
+      case 'opfs': {
+        const rootHandle = await navigator.storage.getDirectory();
+        standaloneFs = await resolveMountConfig({ backend: WebAccess, handle: rootHandle });
+        break;
+      }
+
+      case 'webaccess': {
+        if (!handle) {
+          return [];
+        }
+
+        standaloneFs = await resolveMountConfig({ backend: WebAccess, handle });
+        break;
+      }
+
+      default: {
+        return [];
+      }
+    }
+
+    // Recursively traverse the standalone filesystem instance
+    const buildTree = async (currentPath: string): Promise<FileTreeNode[]> => {
+      let entries: string[];
+      try {
+        entries = await standaloneFs.readdir(currentPath);
+      } catch {
+        return [];
+      }
+
+      const nodes: FileTreeNode[] = [];
+
+      for (const entry of entries) {
+        const fullPath = currentPath === '/' ? `/${entry}` : `${currentPath}/${entry}`;
+        try {
+          // eslint-disable-next-line no-await-in-loop -- Sequential stat required for correct tree building
+          const stats = await standaloneFs.stat(fullPath);
+          if (isDirectory(stats)) {
+            // eslint-disable-next-line no-await-in-loop -- Sequential traversal required for correct tree building
+            const children = await buildTree(fullPath);
+            nodes.push({ id: fullPath, name: entry, children });
+          } else {
+            nodes.push({ id: fullPath, name: entry });
+          }
+        } catch {
+          // Skip entries that can't be stat'd
+        }
+      }
+
+      // Sort: folders first, then alphabetically
+      return nodes.sort((a, b) => {
+        const aIsFolder = a.children !== undefined;
+        const bIsFolder = b.children !== undefined;
+        if (aIsFolder && !bIsFolder) {
+          return -1;
+        }
+
+        if (!aIsFolder && bIsFolder) {
+          return 1;
+        }
+
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      });
+    };
+
+    return buildTree('/');
   },
 };

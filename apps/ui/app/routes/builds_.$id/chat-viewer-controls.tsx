@@ -9,7 +9,7 @@ import { ViewerSettings } from '#components/geometry/cad/viewer-settings.js';
 export function ChatViewerControls({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   return (
     <div className={cn('flex items-center gap-2', className)} {...props}>
-      <FovControl defaultAngle={60} className="w-60" />
+      <FovControl className="w-60" />
       <GridSizeIndicator />
       <SectionViewControl />
       <MeasureControl />

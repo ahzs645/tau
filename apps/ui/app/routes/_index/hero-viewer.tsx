@@ -9,6 +9,7 @@ import type { Build } from '@taucad/types';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { Button } from '#components/ui/button.js';
@@ -51,10 +52,11 @@ function createHeroBuild(fileContent: Uint8Array<ArrayBuffer>): HeroBuild {
 }
 
 function ViewerStatus({ className, ...properties }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { cadRef } = useBuild();
-  const state = useSelector(cadRef, (snapshot) => snapshot.value);
+  const { compilationUnits, mainEntryFile } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
+  const state = useSelector(cadActor, (snapshot) => snapshot?.value);
 
-  return ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
+  return state && ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
     <div
       {...properties}
       className={cn(
@@ -88,9 +90,38 @@ const exportFormatOptions: ExportFormatOption[] = [
   { format: 'ply', label: 'PLY' },
 ];
 
+const heroViewId = 'hero-main';
+
 function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.Element {
+  const { buildRef, viewGraphics } = useBuild();
+
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: heroViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: heroViewId });
+    };
+  }, [buildRef]);
+
+  const graphicsRef = viewGraphics.get(heroViewId);
+  if (!graphicsRef) {
+    return (
+      <div className="flex size-full items-center justify-center">
+        <Loader className="size-16" />
+      </div>
+    );
+  }
+
+  return (
+    <GraphicsProvider graphicsRef={graphicsRef}>
+      <HeroViewerInner files={files} />
+    </GraphicsProvider>
+  );
+}
+
+function HeroViewerInner({ files }: HeroViewerContentProperties): React.JSX.Element {
   const navigate = useNavigate();
-  const { cadRef, buildRef, graphicsRef } = useBuild();
+  const { compilationUnits, mainEntryFile, buildRef } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   // Use the root FileManagerProvider (same pattern as project-grid.tsx)
   const { writeFiles } = useFileManager();
   const buildManager = useBuildManager();
@@ -100,13 +131,13 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
   const [isCreatingBuild, setIsCreatingBuild] = useState(false);
   const hasWrittenFilesRef = useRef(false);
 
-  const geometries = useSelector(cadRef, (snapshot) => snapshot.context.geometries);
-  const parameters = useSelector(cadRef, (snapshot) => snapshot.context.parameters);
-  const defaultParameters = useSelector(cadRef, (snapshot) => snapshot.context.defaultParameters);
-  const units = useSelector(graphicsRef, (snapshot) => snapshot.context.units);
-  const jsonSchema = useSelector(cadRef, (snapshot) => snapshot.context.jsonSchema);
-  const hasParameters = useSelector(cadRef, (snapshot) => Boolean(snapshot.context.jsonSchema));
-  const cadStatus = useSelector(cadRef, (snapshot) => snapshot.value);
+  const geometries = useSelector(cadActor, (snapshot) => snapshot?.context.geometries ?? []);
+  const parameters = useSelector(cadActor, (snapshot) => snapshot?.context.parameters ?? {});
+  const defaultParameters = useSelector(cadActor, (snapshot) => snapshot?.context.defaultParameters ?? {});
+  const units = useGraphicsSelector((snapshot) => snapshot.context.units);
+  const jsonSchema = useSelector(cadActor, (snapshot) => snapshot?.context.jsonSchema);
+  const hasParameters = useSelector(cadActor, (snapshot) => Boolean(snapshot?.context.jsonSchema));
+  const cadStatus = useSelector(cadActor, (snapshot) => snapshot?.value);
 
   // Get GLB data from geometries (same pattern as chat-converter.tsx)
   const getGlbData = useCallback((): Uint8Array<ArrayBuffer> => {
@@ -144,9 +175,9 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
 
   const handleParametersChange = useCallback(
     (newParameters: Record<string, unknown>) => {
-      cadRef.send({ type: 'setParameters', parameters: newParameters });
+      cadActor?.send({ type: 'setParameters', parameters: newParameters });
     },
-    [cadRef],
+    [cadActor],
   );
 
   const handleExport = useCallback(() => {
@@ -197,7 +228,7 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
 
     try {
       // Get the current parameters from the CAD context
-      const currentParameters = cadRef.getSnapshot().context.parameters;
+      const currentParameters = cadActor?.getSnapshot().context.parameters ?? {};
 
       const createdBuild = await buildManager.createBuild({
         build: {
@@ -227,127 +258,127 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
       toast.error('Failed to create build');
       setIsCreatingBuild(false);
     }
-  }, [isCreatingBuild, cadRef, buildManager, files, navigate]);
+  }, [isCreatingBuild, cadActor, buildManager, files, navigate]);
 
-  const isLoading = ['initializing', 'booting'].includes(cadStatus);
+  const isLoading = cadStatus && ['initializing', 'booting'].includes(cadStatus);
   const canExport = geometries.length > 0;
 
   return (
-    <div className="space-y-6">
-      {/* Hero Text */}
-      <div className="text-center">
-        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">See It in Action</h2>
-        <p className="mt-2 text-muted-foreground">
-          Tweak parameters, watch the model update instantly, then export to any format.
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground/70">Try scanning the QR code with your phone!</p>
-      </div>
-
-      <div className="flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row">
-        {/* 3D Viewer */}
-        <div className="relative h-[300px] md:h-full md:flex-1">
-          <ViewerStatus />
-
-          {/* Continue in Editor Button - Top Right overlay */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="absolute top-2 right-2 z-10 gap-1.5 bg-background/80 backdrop-blur-sm"
-            disabled={isCreatingBuild}
-            onClick={handleContinueInEditor}
-          >
-            <span>Continue in Editor</span>
-            {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
-          </Button>
-
-          {isLoading ? (
-            <div className="flex size-full items-center justify-center">
-              <Loader className="size-16" />
-            </div>
-          ) : geometries.length > 0 ? (
-            <CadViewer
-              enableGrid
-              enableAxes
-              geometries={geometries}
-              className="size-full"
-              stageOptions={{
-                zoomLevel: 1.2,
-              }}
-            />
-          ) : (
-            <div className="flex size-full items-center justify-center">
-              <Loader className="size-16" />
-            </div>
-          )}
+      <div className="space-y-6">
+        {/* Hero Text */}
+        <div className="text-center">
+          <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">See It in Action</h2>
+          <p className="mt-2 text-muted-foreground">
+            Tweak parameters, watch the model update instantly, then export to any format.
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground/70">Try scanning the QR code with your phone!</p>
         </div>
 
-        {/* Parameters Panel - Below on mobile, side on desktop */}
-        {hasParameters ? (
-          <div className="border-t bg-background md:w-80 md:border-t-0 md:border-l">
-            <div className="flex h-full flex-col">
-              <div className="border-b p-3">
-                <h3 className="text-sm font-semibold">Parameters</h3>
-                <p className="text-xs text-muted-foreground">Adjust the QR code settings</p>
+        <div className="flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row">
+          {/* 3D Viewer */}
+          <div className="relative h-[300px] md:h-full md:flex-1">
+            <ViewerStatus />
+
+            {/* Continue in Editor Button - Top Right overlay */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="absolute top-2 right-2 z-10 gap-1.5 bg-background/80 backdrop-blur-sm"
+              disabled={isCreatingBuild}
+              onClick={handleContinueInEditor}
+            >
+              <span>Continue in Editor</span>
+              {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
+            </Button>
+
+            {isLoading ? (
+              <div className="flex size-full items-center justify-center">
+                <Loader className="size-16" />
               </div>
-              <div className="h-[280px] overflow-hidden md:h-auto md:flex-1">
-                <Parameters
-                  isInitialExpanded={false}
-                  parameters={parameters}
-                  defaultParameters={defaultParameters}
-                  jsonSchema={jsonSchema}
-                  units={units}
-                  emptyDescription="Loading parameters..."
-                  onParametersChange={handleParametersChange}
-                />
+            ) : geometries.length > 0 ? (
+              <CadViewer
+                enableGrid
+                enableAxes
+                geometries={geometries}
+                className="size-full"
+                stageOptions={{
+                  zoomLevel: 1.2,
+                }}
+              />
+            ) : (
+              <div className="flex size-full items-center justify-center">
+                <Loader className="size-16" />
               </div>
-              {/* Export Controls */}
-              <div className="border-t p-3">
-                <div className="flex items-center gap-2">
-                  <ComboBoxResponsive
-                    searchPlaceHolder="Search formats..."
-                    title="Export Format"
-                    description="Select a format to export the model"
-                    groupedItems={[
-                      {
-                        name: 'Formats',
-                        items: exportFormatOptions,
-                      },
-                    ]}
-                    defaultValue={selectedFormat}
-                    getValue={(item) => item.format}
-                    renderLabel={(item, selected) => (
-                      <div className="flex items-center gap-2">
-                        <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
-                        <span>{item.label}</span>
-                        {selected?.format === item.format ? <Check className="ml-auto size-4" /> : null}
-                      </div>
-                    )}
-                    className="min-w-0 flex-1"
-                    isSearchEnabled={false}
-                    onSelect={handleFormatSelect}
-                  >
-                    <Button variant="outline" size="sm" className="min-w-0 grow justify-start gap-2">
-                      <FileExtensionIcon filename={`file.${selectedFormat.format}`} className="size-4 shrink-0" />
-                      <span className="truncate">{selectedFormat.label}</span>
-                      <ChevronDown className="ml-auto size-3 shrink-0 opacity-50" />
+            )}
+          </div>
+
+          {/* Parameters Panel - Below on mobile, side on desktop */}
+          {hasParameters ? (
+            <div className="border-t bg-background md:w-80 md:border-t-0 md:border-l">
+              <div className="flex h-full flex-col">
+                <div className="border-b p-3">
+                  <h3 className="text-sm font-semibold">Parameters</h3>
+                  <p className="text-xs text-muted-foreground">Adjust the QR code settings</p>
+                </div>
+                <div className="h-[280px] overflow-hidden md:h-auto md:flex-1">
+                  <Parameters
+                    isInitialExpanded={false}
+                    parameters={parameters}
+                    defaultParameters={defaultParameters}
+                    jsonSchema={jsonSchema}
+                    units={units}
+                    emptyDescription="Loading parameters..."
+                    onParametersChange={handleParametersChange}
+                  />
+                </div>
+                {/* Export Controls */}
+                <div className="border-t p-3">
+                  <div className="flex items-center gap-2">
+                    <ComboBoxResponsive
+                      searchPlaceHolder="Search formats..."
+                      title="Export Format"
+                      description="Select a format to export the model"
+                      groupedItems={[
+                        {
+                          name: 'Formats',
+                          items: exportFormatOptions,
+                        },
+                      ]}
+                      defaultValue={selectedFormat}
+                      getValue={(item) => item.format}
+                      renderLabel={(item, selected) => (
+                        <div className="flex items-center gap-2">
+                          <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
+                          <span>{item.label}</span>
+                          {selected?.format === item.format ? <Check className="ml-auto size-4" /> : null}
+                        </div>
+                      )}
+                      className="min-w-0 flex-1"
+                      isSearchEnabled={false}
+                      onSelect={handleFormatSelect}
+                    >
+                      <Button variant="outline" size="sm" className="min-w-0 grow justify-start gap-2">
+                        <FileExtensionIcon filename={`file.${selectedFormat.format}`} className="size-4 shrink-0" />
+                        <span className="truncate">{selectedFormat.label}</span>
+                        <ChevronDown className="ml-auto size-3 shrink-0 opacity-50" />
+                      </Button>
+                    </ComboBoxResponsive>
+                    <Button
+                      size="sm"
+                      className="shrink-0"
+                      disabled={!canExport}
+                      title={canExport ? `Download as ${selectedFormat.label}` : 'Model not ready'}
+                      onClick={handleExport}
+                    >
+                      <Download className="size-4" />
                     </Button>
-                  </ComboBoxResponsive>
-                  <Button
-                    size="sm"
-                    className="shrink-0"
-                    disabled={!canExport}
-                    title={canExport ? `Download as ${selectedFormat.label}` : 'Model not ready'}
-                    onClick={handleExport}
-                  >
-                    <Download className="size-4" />
-                  </Button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
-    </div>
   );
 }
 

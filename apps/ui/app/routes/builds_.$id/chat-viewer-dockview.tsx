@@ -1,0 +1,426 @@
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from '@xstate/react';
+import type {
+  DockviewApi,
+  DockviewGroupPanel,
+  DockviewReadyEvent,
+  DockviewDidDropEvent,
+  IDockviewPanelProps,
+  IWatermarkPanelProps,
+} from 'dockview-react';
+import { positionToDirection } from 'dockview-react';
+import { Box, ChevronDown } from 'lucide-react';
+import type { FileEntry } from '@taucad/types';
+import { tauFileDragMime } from '@taucad/types/constants';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { FileSelector } from '#components/files/file-selector.js';
+import { Button } from '#components/ui/button.js';
+import { useBuild } from '#hooks/use-build.js';
+import { useFileManager } from '#hooks/use-file-manager.js';
+import { defaultGraphicsSettings } from '#constants/editor.constants.js';
+import { ChatViewer } from '#routes/builds_.$id/chat-viewer.js';
+import { Dockview } from '#components/panes/dockview.js';
+import { ViewerDockviewTab } from '#components/panes/viewer-tab-context-menu.js';
+import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
+
+/**
+ * Params passed to each viewer panel via Dockview.
+ */
+type ViewerPanelParameters = {
+  viewId: string;
+  entryFile: string | undefined;
+};
+
+/**
+ * Viewer panel component rendered inside each Dockview panel.
+ */
+function ViewerPanel(properties: IDockviewPanelProps<ViewerPanelParameters>): React.JSX.Element {
+  const { viewId, entryFile } = properties.params;
+  return <ChatViewer viewId={viewId} entryFile={entryFile} panelApi={properties.api} />;
+}
+
+const components = {
+  viewer: ViewerPanel,
+};
+
+/**
+ * Empty state shown when all viewer panels have been closed.
+ */
+function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.JSX.Element {
+  const { buildRef, editorRef } = useBuild();
+  const { fileManagerRef } = useFileManager();
+  const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
+
+  const files = useMemo(
+    () =>
+      [...fileTree.values()]
+        .filter((entry: FileEntry) => entry.type === 'file')
+        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
+    [fileTree],
+  );
+
+  const handleSelect = useCallback(
+    (path: string) => {
+      const viewId = generatePrefixedId('view');
+      const fileName = path.split('/').pop() ?? path;
+
+      containerApi.addPanel({
+        id: viewId,
+        component: 'viewer',
+        title: fileName,
+        params: { viewId, entryFile: path },
+      });
+
+      editorRef.send({
+        type: 'setViewSettings',
+        viewId,
+        viewState: {
+          entryFile: path,
+          graphicsSettings: { ...defaultGraphicsSettings },
+        },
+      });
+
+      buildRef.send({ type: 'createCompilationUnit', entryFile: path });
+    },
+    [containerApi, buildRef, editorRef],
+  );
+
+  const handleClose = useCallback(() => {
+    if (group) {
+      containerApi.removeGroup(group);
+    }
+  }, [containerApi, group]);
+
+  return (
+    <div className="@container/viewer-watermark flex h-full flex-col items-center justify-center gap-2 px-3 text-muted-foreground @xs/viewer-watermark:gap-4 @xs/viewer-watermark:px-6">
+      <Box className="size-8 stroke-1 @xs/viewer-watermark:size-12" />
+      <div className="flex flex-col items-center gap-1 text-center">
+        <p className="text-xs font-medium @xs/viewer-watermark:text-sm">No geometry selected</p>
+        <p className="hidden text-xs @xs/viewer-watermark:block">Drag a file from the file tree, or select one below</p>
+      </div>
+      <FileSelector
+        files={files}
+        selectedFile={undefined}
+        title="Viewport File"
+        description="Choose which file to render in the viewport"
+        searchPlaceholder="Search files..."
+        emptyMessage="No files found."
+        onSelect={handleSelect}
+      >
+        <Button variant="outline" className="h-8 w-full max-w-[200px] justify-between">
+          <span className="truncate text-muted-foreground">
+            <span className="@xs/viewer-watermark:hidden">Select file...</span>
+            <span className="hidden @xs/viewer-watermark:inline">Select file to render...</span>
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        </Button>
+      </FileSelector>
+      <Button variant="link" size="sm" className="h-7 gap-0.5 text-xs text-muted-foreground" onClick={handleClose}>
+        <span>Close pane</span>
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * ViewerDockview
+ *
+ * DockviewReact wrapper for the geometry viewer area. Provides:
+ * - Tab support with file names as tab titles
+ * - Split-view via drag-to-split
+ * - Layout save/restore via EditorState persistence
+ * - External file drops from the file tree
+ * - Actor reconciliation on layout restore
+ */
+export const ViewerDockview = memo(function (): React.JSX.Element {
+  const { buildRef, editorRef, mainEntryFile } = useBuild();
+  const [api, setApi] = useState<DockviewApi>();
+  const isRestoringLayout = useRef(false);
+
+  // Read persisted layout from editor machine
+  const viewerLayout = useSelector(editorRef, (state) => state.context.viewerLayout);
+  const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
+
+  // Save layout to editor machine on layout changes
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const disposable = api.onDidLayoutChange(() => {
+      // Don't persist while restoring layout (fromJSON triggers layout changes)
+      if (isRestoringLayout.current) {
+        return;
+      }
+
+      editorRef.send({ type: 'setViewerLayout', layout: api.toJSON() });
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [api, editorRef]);
+
+  // Handle actor lifecycle for panels
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const addDisposable = api.onDidAddPanel((event) => {
+      const viewId = event.id;
+      const existingSettings = viewSettings[viewId];
+      buildRef.send({
+        type: 'createViewGraphics',
+        viewId,
+        settings: existingSettings?.graphicsSettings ?? defaultGraphicsSettings,
+      });
+    });
+
+    const removeDisposable = api.onDidRemovePanel((event) => {
+      const viewId = event.id;
+      buildRef.send({ type: 'destroyViewGraphics', viewId });
+      editorRef.send({ type: 'removeViewSettings', viewId });
+    });
+
+    return () => {
+      addDisposable.dispose();
+      removeDisposable.dispose();
+    };
+  }, [api, buildRef, editorRef, viewSettings]);
+
+  // Accept external file drags
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const disposable = api.onUnhandledDragOverEvent((event) => {
+      if (event.nativeEvent.dataTransfer?.types.includes(tauFileDragMime)) {
+        event.accept();
+      }
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [api]);
+
+  // Reconcile restored panels once the build machine reaches 'ready'.
+  // onReady fires while the build machine is still 'loading', so
+  // createViewGraphics events sent there are silently dropped. This effect
+  // waits for the build to be ready and then ensures every panel has its
+  // graphics actor and compilation unit. Both actions are idempotent.
+  //
+  // It also assigns `mainEntryFile` to any panel that was seeded without an
+  // entryFile (happens when onReady fires before the build loads and the
+  // main file is unknown).
+  const buildIsReady = useSelector(buildRef, (state) => state.matches('ready'));
+  const hasReconciled = useRef(false);
+
+  useEffect(() => {
+    if (!api || !buildIsReady || hasReconciled.current) {
+      return;
+    }
+
+    hasReconciled.current = true;
+
+    for (const panel of api.panels) {
+      const panelViewId = panel.id;
+      const settings = viewSettings[panelViewId];
+
+      buildRef.send({
+        type: 'createViewGraphics',
+        viewId: panelViewId,
+        settings: settings?.graphicsSettings ?? defaultGraphicsSettings,
+      });
+
+      let panelEntryFile = (panel.params as ViewerPanelParameters | undefined)?.entryFile;
+
+      // If the panel was created without an entry file (build was still loading),
+      // assign the main entry file now that the build is ready.
+      if (!panelEntryFile && mainEntryFile) {
+        panelEntryFile = mainEntryFile;
+        const fileName = mainEntryFile.split('/').pop() ?? mainEntryFile;
+        panel.api.setTitle(fileName);
+        panel.api.updateParameters({ entryFile: mainEntryFile });
+        editorRef.send({
+          type: 'setViewSettings',
+          viewId: panelViewId,
+          viewState: {
+            entryFile: mainEntryFile,
+            graphicsSettings: settings?.graphicsSettings ?? defaultGraphicsSettings,
+          },
+        });
+      }
+
+      if (panelEntryFile) {
+        buildRef.send({ type: 'createCompilationUnit', entryFile: panelEntryFile });
+      }
+    }
+  }, [api, buildIsReady, buildRef, editorRef, mainEntryFile, viewSettings]);
+
+  // Handle ready event: restore layout or seed default
+  const onReady = useCallback(
+    (event: DockviewReadyEvent) => {
+      const dockApi = event.api;
+      setApi(dockApi);
+
+      isRestoringLayout.current = true;
+
+      try {
+        if (viewerLayout) {
+          dockApi.fromJSON(viewerLayout);
+        } else {
+          // Seed default: single viewer panel for mainEntryFile
+          const viewId = generatePrefixedId('view');
+          dockApi.addPanel({
+            id: viewId,
+            component: 'viewer',
+            title: mainEntryFile || 'Viewer',
+            params: { viewId, entryFile: mainEntryFile || undefined },
+          });
+
+          // Persist view settings for the seeded panel
+          editorRef.send({
+            type: 'setViewSettings',
+            viewId,
+            viewState: {
+              entryFile: mainEntryFile || undefined,
+              graphicsSettings: { ...defaultGraphicsSettings },
+            },
+          });
+        }
+      } catch {
+        // Corrupt layout -- re-seed defaults
+        dockApi.clear();
+        const viewId = generatePrefixedId('view');
+        dockApi.addPanel({
+          id: viewId,
+          component: 'viewer',
+          title: mainEntryFile || 'Viewer',
+          params: { viewId, entryFile: mainEntryFile || undefined },
+        });
+
+        editorRef.send({
+          type: 'setViewSettings',
+          viewId,
+          viewState: {
+            entryFile: mainEntryFile || undefined,
+            graphicsSettings: { ...defaultGraphicsSettings },
+          },
+        });
+      } finally {
+        isRestoringLayout.current = false;
+      }
+    },
+    [viewerLayout, mainEntryFile, editorRef],
+  );
+
+  // Handle external file drops
+  const onDidDrop = useCallback(
+    (event: DockviewDidDropEvent) => {
+      const data = event.nativeEvent.dataTransfer?.getData(tauFileDragMime);
+      if (!data) {
+        return;
+      }
+
+      let paths: string[];
+      try {
+        paths = JSON.parse(data) as string[];
+      } catch {
+        return;
+      }
+
+      const filePath = paths[0];
+      if (!filePath) {
+        return;
+      }
+
+      // Dedup: if the target group already has a panel for this file, activate it
+      const targetGroup = event.group;
+      if (targetGroup) {
+        const existing = targetGroup.panels.find(
+          (p) => (p.params as ViewerPanelParameters | undefined)?.entryFile === filePath,
+        );
+        if (existing) {
+          existing.api.setActive();
+          return;
+        }
+      }
+
+      const viewId = generatePrefixedId('view');
+      const fileName = filePath.split('/').pop() ?? filePath;
+
+      event.api.addPanel({
+        id: viewId,
+        component: 'viewer',
+        title: fileName,
+        params: { viewId, entryFile: filePath },
+        position: {
+          direction: positionToDirection(event.position),
+          referenceGroup: event.group ?? undefined,
+        },
+      });
+
+      // Persist view settings
+      editorRef.send({
+        type: 'setViewSettings',
+        viewId,
+        viewState: {
+          entryFile: filePath,
+          graphicsSettings: { ...defaultGraphicsSettings },
+        },
+      });
+
+      // Ensure compilation unit exists
+      buildRef.send({ type: 'createCompilationUnit', entryFile: filePath });
+    },
+    [buildRef, editorRef],
+  );
+
+  // Open-file action: add a new viewer panel in the same group
+  const handleOpenFile = useCallback(
+    (path: string, group: DockviewGroupPanel, containerApi: DockviewApi) => {
+      const viewId = generatePrefixedId('view');
+      const fileName = path.split('/').pop() ?? path;
+
+      containerApi.addPanel({
+        id: viewId,
+        component: 'viewer',
+        title: fileName,
+        params: { viewId, entryFile: path },
+        position: {
+          direction: 'within',
+          referenceGroup: group,
+        },
+      });
+
+      editorRef.send({
+        type: 'setViewSettings',
+        viewId,
+        viewState: {
+          entryFile: path,
+          graphicsSettings: { ...defaultGraphicsSettings },
+        },
+      });
+
+      buildRef.send({ type: 'createCompilationUnit', entryFile: path });
+    },
+    [buildRef, editorRef],
+  );
+
+  return (
+    <DockviewFileActionProvider value={handleOpenFile}>
+      <Dockview
+        components={components}
+        noPanelsOverlay="emptyGroup"
+        defaultTabComponent={ViewerDockviewTab}
+        watermarkComponent={ViewerWatermark}
+        leftHeaderActionsComponent={DockviewOpenFileAction}
+        onReady={onReady}
+        onDidDrop={onDidDrop}
+      />
+    </DockviewFileActionProvider>
+  );
+});

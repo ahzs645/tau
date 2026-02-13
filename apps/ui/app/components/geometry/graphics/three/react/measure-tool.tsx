@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
-import { useSelector } from '@xstate/react';
 import {
   LabelTextGeometry,
   LabelBackgroundGeometry,
@@ -14,7 +13,7 @@ import {
 import type { SnapPoint } from '#components/geometry/graphics/three/utils/snap-detection.utils.js';
 import { computeAxisRotationForCamera } from '#components/geometry/graphics/three/utils/rotation.utils.js';
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 function calculateScaleFromCamera(position: THREE.Vector3, camera: THREE.Camera): number {
   const distanceToCamera = camera.position.distanceTo(position);
@@ -37,14 +36,14 @@ function calculateScaleFromCamera(position: THREE.Vector3, camera: THREE.Camera)
 
 export function MeasureTool(): React.JSX.Element {
   const { camera, gl, scene } = useThree();
-  const { graphicsRef: graphicsActor } = useBuild();
-  const measurements = useSelector(graphicsActor, (state) => state.context.measurements);
-  const currentStart = useSelector(graphicsActor, (state) => state.context.currentMeasurementStart);
-  const snapDistance = useSelector(graphicsActor, (state) => state.context.measureSnapDistance);
-  const lengthFactor = useSelector(graphicsActor, (state) => state.context.units.length.factor);
-  const lengthSymbol = useSelector(graphicsActor, (state) => state.context.units.length.symbol);
-  const hoveredMeasurementId = useSelector(graphicsActor, (state) => state.context.hoveredMeasurementId);
-  const isMeasureActive = useSelector(graphicsActor, (state) => state.context.isMeasureActive);
+  const graphicsActor = useGraphics();
+  const measurements = useGraphicsSelector((state) => state.context.measurements);
+  const currentStart = useGraphicsSelector((state) => state.context.currentMeasurementStart);
+  const snapDistance = useGraphicsSelector((state) => state.context.measureSnapDistance);
+  const lengthFactor = useGraphicsSelector((state) => state.context.units.length.factor);
+  const lengthSymbol = useGraphicsSelector((state) => state.context.units.length.symbol);
+  const hoveredMeasurementId = useGraphicsSelector((state) => state.context.hoveredMeasurementId);
+  const isMeasureActive = useGraphicsSelector((state) => state.context.isMeasureActive);
 
   const [hoveredSnapPoints, setHoveredSnapPoints] = useState<SnapPoint[]>([]);
   const [activeSnapPoint, setActiveSnapPoint] = useState<SnapPoint | undefined>();
@@ -458,7 +457,7 @@ function MeasurementLine({
   const endConeMeshRef = useRef<THREE.Mesh>(null);
   const [isLabelHovered, setIsLabelHovered] = useState(false);
   const isHovered = isLabelHovered || isExternallyHovered;
-  const { graphicsRef: graphicsActor } = useBuild();
+  const graphicsActor = useGraphics();
 
   // Create matcap materials following transform-controls pattern
   const derivedMaterials = useMemo(() => {

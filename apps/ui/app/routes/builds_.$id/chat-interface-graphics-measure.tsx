@@ -1,17 +1,16 @@
 import { useMemo } from 'react';
-import { useSelector } from '@xstate/react';
 import { Pin, PinOff, Trash } from 'lucide-react';
-import { useBuild } from '#hooks/use-build.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { axesColors } from '#constants/color.constants.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export function ChatInterfaceGraphicsMeasure(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
+  const graphicsActor = useGraphics();
 
-  const lengthSymbol = useSelector(graphicsActor, (state) => state.context.units.length.symbol);
-  const { measurements, lengthFactor, hoveredMeasurementId } = useSelector(graphicsActor, (state) => {
+  const lengthSymbol = useGraphicsSelector((state) => state.context.units.length.symbol);
+  const { measurements, lengthFactor, hoveredMeasurementId } = useGraphicsSelector((state) => {
     const lengthFactor = state.context.units.length.factor;
     const { measurements: ms, hoveredMeasurementId: hoveredId } = state.context;
 

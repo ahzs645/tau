@@ -12,6 +12,7 @@ import { SvgIcon } from '#components/icons/svg-icon.js';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Loader } from '#components/ui/loader.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import type { BuildWithFiles } from '#constants/build-examples.js';
@@ -74,15 +75,27 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
   const hasWrittenFilesRef = useRef(false);
 
   // Get actors from BuildProvider context
-  const { cadRef, buildRef } = useBuild();
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const status = useSelector(cadRef, (state) => state.value);
+  const { compilationUnits, mainEntryFile, buildRef, viewGraphics } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
+  const geometries = useSelector(cadActor, (snapshot) => snapshot?.context.geometries ?? []);
+  const status = useSelector(cadActor, (snapshot) => snapshot?.value);
   const buildManager = useBuildManager();
   const { writeFiles } = useFileManager();
 
   const navigate = useNavigate();
 
   const kernels = useMemo(() => [], []);
+
+  const previewViewId = `preview-${id}`;
+
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: previewViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: previewViewId });
+    };
+  }, [buildRef, previewViewId]);
+
+  const graphicsRef = viewGraphics.get(previewViewId);
 
   const mechanicalAsset = assets.mechanical;
   if (!mechanicalAsset) {
@@ -95,7 +108,7 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
       buildRef.send({ type: 'loadModel' });
       setHasLoadedModel(true);
     }
-  }, [showPreview, hasLoadedModel, buildRef]);
+  }, [showPreview, hasLoadedModel, buildRef, id]);
 
   const handleFork = useCallback(
     async (event: React.MouseEvent) => {
@@ -172,28 +185,32 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
           )}
           {showPreview ? (
             <div className="size-full object-cover">
-              {['initializing', 'booting'].includes(status) ? (
+              {!graphicsRef || (status && ['initializing', 'booting'].includes(status)) ? (
                 <div className="flex size-full items-center justify-center">
                   <Loader className="size-10" />
                 </div>
               ) : null}
+              {graphicsRef ? (
               <div
                 className="size-full"
                 onClick={(event) => {
                   event.stopPropagation();
                 }}
               >
-                <CadViewer
-                  enablePan={false}
-                  enableLines={false}
-                  enableMatcap={false}
-                  geometries={geometries}
-                  className="cursor-default bg-transparent"
-                  stageOptions={{
-                    zoomLevel: 1.5,
-                  }}
-                />
+                <GraphicsProvider graphicsRef={graphicsRef}>
+                  <CadViewer
+                    enablePan={false}
+                    enableLines={false}
+                    enableMatcap={false}
+                    geometries={geometries}
+                    className="cursor-default bg-transparent"
+                    stageOptions={{
+                      zoomLevel: 1.5,
+                    }}
+                  />
+                </GraphicsProvider>
               </div>
+              ) : null}
             </div>
           ) : null}
           <Button
