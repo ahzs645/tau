@@ -17,7 +17,7 @@ type DockviewPaneActionProperties = {
  * Forwards its ref so it works with `asChild` wrappers (Tooltip, Popover, etc.).
  */
 export const DockviewPaneAction = forwardRef<HTMLButtonElement, DockviewPaneActionProperties>(
-  function DockviewPaneAction({ className, children, ...properties }, ref): React.JSX.Element {
+  ({ className, children, ...properties }, ref): React.JSX.Element => {
     return (
       <button
         ref={ref}

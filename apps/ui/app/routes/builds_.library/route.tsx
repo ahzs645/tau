@@ -590,18 +590,18 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
               </div>
             ) : null}
             {graphicsRef ? (
-            <GraphicsProvider graphicsRef={graphicsRef}>
-              <CadViewer
-                geometries={geometries}
-                enablePan={false}
-                enableLines={false}
-                enableMatcap={false}
-                className="bg-muted"
-                stageOptions={{
-                  zoomLevel: 1.5,
-                }}
-              />
-            </GraphicsProvider>
+              <GraphicsProvider graphicsRef={graphicsRef}>
+                <CadViewer
+                  geometries={geometries}
+                  enablePan={false}
+                  enableLines={false}
+                  enableMatcap={false}
+                  className="bg-muted"
+                  stageOptions={{
+                    zoomLevel: 1.5,
+                  }}
+                />
+              </GraphicsProvider>
             ) : null}
           </div>
         ) : null}

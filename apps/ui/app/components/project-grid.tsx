@@ -191,25 +191,25 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
                 </div>
               ) : null}
               {graphicsRef ? (
-              <div
-                className="size-full"
-                onClick={(event) => {
-                  event.stopPropagation();
-                }}
-              >
-                <GraphicsProvider graphicsRef={graphicsRef}>
-                  <CadViewer
-                    enablePan={false}
-                    enableLines={false}
-                    enableMatcap={false}
-                    geometries={geometries}
-                    className="cursor-default bg-transparent"
-                    stageOptions={{
-                      zoomLevel: 1.5,
-                    }}
-                  />
-                </GraphicsProvider>
-              </div>
+                <div
+                  className="size-full"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <GraphicsProvider graphicsRef={graphicsRef}>
+                    <CadViewer
+                      enablePan={false}
+                      enableLines={false}
+                      enableMatcap={false}
+                      geometries={geometries}
+                      className="cursor-default bg-transparent"
+                      stageOptions={{
+                        zoomLevel: 1.5,
+                      }}
+                    />
+                  </GraphicsProvider>
+                </div>
               ) : null}
             </div>
           ) : null}

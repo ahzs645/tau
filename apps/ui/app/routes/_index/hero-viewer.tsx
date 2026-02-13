@@ -264,121 +264,121 @@ function HeroViewerInner({ files }: HeroViewerContentProperties): React.JSX.Elem
   const canExport = geometries.length > 0;
 
   return (
-      <div className="space-y-6">
-        {/* Hero Text */}
-        <div className="text-center">
-          <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">See It in Action</h2>
-          <p className="mt-2 text-muted-foreground">
-            Tweak parameters, watch the model update instantly, then export to any format.
-          </p>
-          <p className="mt-1 text-sm text-muted-foreground/70">Try scanning the QR code with your phone!</p>
+    <div className="space-y-6">
+      {/* Hero Text */}
+      <div className="text-center">
+        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">See It in Action</h2>
+        <p className="mt-2 text-muted-foreground">
+          Tweak parameters, watch the model update instantly, then export to any format.
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground/70">Try scanning the QR code with your phone!</p>
+      </div>
+
+      <div className="flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row">
+        {/* 3D Viewer */}
+        <div className="relative h-[300px] md:h-full md:flex-1">
+          <ViewerStatus />
+
+          {/* Continue in Editor Button - Top Right overlay */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="absolute top-2 right-2 z-10 gap-1.5 bg-background/80 backdrop-blur-sm"
+            disabled={isCreatingBuild}
+            onClick={handleContinueInEditor}
+          >
+            <span>Continue in Editor</span>
+            {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
+          </Button>
+
+          {isLoading ? (
+            <div className="flex size-full items-center justify-center">
+              <Loader className="size-16" />
+            </div>
+          ) : geometries.length > 0 ? (
+            <CadViewer
+              enableGrid
+              enableAxes
+              geometries={geometries}
+              className="size-full"
+              stageOptions={{
+                zoomLevel: 1.2,
+              }}
+            />
+          ) : (
+            <div className="flex size-full items-center justify-center">
+              <Loader className="size-16" />
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row">
-          {/* 3D Viewer */}
-          <div className="relative h-[300px] md:h-full md:flex-1">
-            <ViewerStatus />
-
-            {/* Continue in Editor Button - Top Right overlay */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="absolute top-2 right-2 z-10 gap-1.5 bg-background/80 backdrop-blur-sm"
-              disabled={isCreatingBuild}
-              onClick={handleContinueInEditor}
-            >
-              <span>Continue in Editor</span>
-              {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
-            </Button>
-
-            {isLoading ? (
-              <div className="flex size-full items-center justify-center">
-                <Loader className="size-16" />
+        {/* Parameters Panel - Below on mobile, side on desktop */}
+        {hasParameters ? (
+          <div className="border-t bg-background md:w-80 md:border-t-0 md:border-l">
+            <div className="flex h-full flex-col">
+              <div className="border-b p-3">
+                <h3 className="text-sm font-semibold">Parameters</h3>
+                <p className="text-xs text-muted-foreground">Adjust the QR code settings</p>
               </div>
-            ) : geometries.length > 0 ? (
-              <CadViewer
-                enableGrid
-                enableAxes
-                geometries={geometries}
-                className="size-full"
-                stageOptions={{
-                  zoomLevel: 1.2,
-                }}
-              />
-            ) : (
-              <div className="flex size-full items-center justify-center">
-                <Loader className="size-16" />
+              <div className="h-[280px] overflow-hidden md:h-auto md:flex-1">
+                <Parameters
+                  isInitialExpanded={false}
+                  parameters={parameters}
+                  defaultParameters={defaultParameters}
+                  jsonSchema={jsonSchema}
+                  units={units}
+                  emptyDescription="Loading parameters..."
+                  onParametersChange={handleParametersChange}
+                />
               </div>
-            )}
-          </div>
-
-          {/* Parameters Panel - Below on mobile, side on desktop */}
-          {hasParameters ? (
-            <div className="border-t bg-background md:w-80 md:border-t-0 md:border-l">
-              <div className="flex h-full flex-col">
-                <div className="border-b p-3">
-                  <h3 className="text-sm font-semibold">Parameters</h3>
-                  <p className="text-xs text-muted-foreground">Adjust the QR code settings</p>
-                </div>
-                <div className="h-[280px] overflow-hidden md:h-auto md:flex-1">
-                  <Parameters
-                    isInitialExpanded={false}
-                    parameters={parameters}
-                    defaultParameters={defaultParameters}
-                    jsonSchema={jsonSchema}
-                    units={units}
-                    emptyDescription="Loading parameters..."
-                    onParametersChange={handleParametersChange}
-                  />
-                </div>
-                {/* Export Controls */}
-                <div className="border-t p-3">
-                  <div className="flex items-center gap-2">
-                    <ComboBoxResponsive
-                      searchPlaceHolder="Search formats..."
-                      title="Export Format"
-                      description="Select a format to export the model"
-                      groupedItems={[
-                        {
-                          name: 'Formats',
-                          items: exportFormatOptions,
-                        },
-                      ]}
-                      defaultValue={selectedFormat}
-                      getValue={(item) => item.format}
-                      renderLabel={(item, selected) => (
-                        <div className="flex items-center gap-2">
-                          <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
-                          <span>{item.label}</span>
-                          {selected?.format === item.format ? <Check className="ml-auto size-4" /> : null}
-                        </div>
-                      )}
-                      className="min-w-0 flex-1"
-                      isSearchEnabled={false}
-                      onSelect={handleFormatSelect}
-                    >
-                      <Button variant="outline" size="sm" className="min-w-0 grow justify-start gap-2">
-                        <FileExtensionIcon filename={`file.${selectedFormat.format}`} className="size-4 shrink-0" />
-                        <span className="truncate">{selectedFormat.label}</span>
-                        <ChevronDown className="ml-auto size-3 shrink-0 opacity-50" />
-                      </Button>
-                    </ComboBoxResponsive>
-                    <Button
-                      size="sm"
-                      className="shrink-0"
-                      disabled={!canExport}
-                      title={canExport ? `Download as ${selectedFormat.label}` : 'Model not ready'}
-                      onClick={handleExport}
-                    >
-                      <Download className="size-4" />
+              {/* Export Controls */}
+              <div className="border-t p-3">
+                <div className="flex items-center gap-2">
+                  <ComboBoxResponsive
+                    searchPlaceHolder="Search formats..."
+                    title="Export Format"
+                    description="Select a format to export the model"
+                    groupedItems={[
+                      {
+                        name: 'Formats',
+                        items: exportFormatOptions,
+                      },
+                    ]}
+                    defaultValue={selectedFormat}
+                    getValue={(item) => item.format}
+                    renderLabel={(item, selected) => (
+                      <div className="flex items-center gap-2">
+                        <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
+                        <span>{item.label}</span>
+                        {selected?.format === item.format ? <Check className="ml-auto size-4" /> : null}
+                      </div>
+                    )}
+                    className="min-w-0 flex-1"
+                    isSearchEnabled={false}
+                    onSelect={handleFormatSelect}
+                  >
+                    <Button variant="outline" size="sm" className="min-w-0 grow justify-start gap-2">
+                      <FileExtensionIcon filename={`file.${selectedFormat.format}`} className="size-4 shrink-0" />
+                      <span className="truncate">{selectedFormat.label}</span>
+                      <ChevronDown className="ml-auto size-3 shrink-0 opacity-50" />
                     </Button>
-                  </div>
+                  </ComboBoxResponsive>
+                  <Button
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!canExport}
+                    title={canExport ? `Download as ${selectedFormat.label}` : 'Model not ready'}
+                    onClick={handleExport}
+                  >
+                    <Download className="size-4" />
+                  </Button>
                 </div>
               </div>
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
+    </div>
   );
 }
 

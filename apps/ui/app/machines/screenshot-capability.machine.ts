@@ -888,7 +888,7 @@ export const screenshotCapabilityMachine = setup({
      * (which runs in a separate React reconciler with async timing) from undoing
      * a newer SVG registration, and vice versa.
      */
-    shouldUnregister: ({ context, event }) => {
+    shouldUnregister({ context, event }) {
       assertEvent(event, 'unregisterCapture');
       return !event.captureMode || event.captureMode === context.captureMode;
     },
