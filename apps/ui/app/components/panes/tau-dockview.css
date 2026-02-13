@@ -121,22 +121,39 @@
 }
 
 /* ── Tab borders ──
-   Top: 2px transparent by default; primary for active tab in focused group.
+   Top: 1px transparent by default; primary for active tab in focused group.
    Bottom: 1px var(--border) on inactive tabs for visual separation from content.
    Active tab's bottom border matches the content background → seamless. */
 .dockview-theme-tau .dv-tab {
-  border-top: 2px solid transparent;
+  border-top: 1px solid transparent;
   border-bottom: 1px solid var(--border);
 }
 
 /* ── Tab divider height fix ──
    Dockview's tab dividers (::before on :not(:first-child)) use height: 100%
-   which resolves to the padding-box. Our border-top (2px) and border-bottom (1px)
-   sit outside the padding-box, making dividers 3px shorter than the tab.
+   which resolves to the padding-box. Our border-top (1px) and border-bottom (1px)
+   sit outside the padding-box, making dividers 2px shorter than the tab.
    Extend the divider into the border areas so it spans the full tab height. */
 .dockview-theme-tau .dv-tabs-container.dv-horizontal .dv-tab:not(:first-child)::before {
-  top: -2px;
+  top: -1px;
   bottom: -1px;
+  height: auto;
+}
+
+/* ── Last-tab right divider ──
+   Dockview only creates left-side dividers (::before on :not(:first-child)).
+   Add a right-side divider on the last tab so there is a visible separator
+   between the tab and the void / action area to its right. */
+.dockview-theme-tau .dv-tabs-container.dv-horizontal .dv-tab:last-child::after {
+  content: " ";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  right: 0;
+  z-index: 5;
+  pointer-events: none;
+  background-color: var(--dv-tab-divider-color);
+  width: 1px;
   height: auto;
 }
 

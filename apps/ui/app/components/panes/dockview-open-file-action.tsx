@@ -12,11 +12,7 @@ import { useFileManager } from '#hooks/use-file-manager.js';
  * Receives the selected file path, the Dockview group the button belongs to,
  * and the container API so each dock can handle file opening appropriately.
  */
-export type DockviewFileSelectHandler = (
-  path: string,
-  group: DockviewGroupPanel,
-  containerApi: DockviewApi,
-) => void;
+export type DockviewFileSelectHandler = (path: string, group: DockviewGroupPanel, containerApi: DockviewApi) => void;
 
 const DockviewFileActionContext = createContext<DockviewFileSelectHandler | undefined>(undefined);
 
@@ -61,8 +57,8 @@ export function DockviewOpenFileAction({
       return undefined;
     }
 
-    const parameters = activePanel.params as Record<string, unknown> | undefined;
-    const filePath = (parameters?.filePath ?? parameters?.entryFile) as string | undefined;
+    const parameters = activePanel.params;
+    const filePath = (parameters?.['filePath'] ?? parameters?.['entryFile']) as string | undefined;
     if (!filePath) {
       return undefined;
     }
@@ -90,8 +86,8 @@ export function DockviewOpenFileAction({
       description="Choose a file to open in this pane"
       searchPlaceholder="Search files..."
       emptyMessage="No files found."
-      onSelect={handleSelect}
       popoverProperties={{ align: 'start' }}
+      onSelect={handleSelect}
     >
       <DockviewPaneAction aria-label="Open file">
         <Plus className="size-3.5" />
