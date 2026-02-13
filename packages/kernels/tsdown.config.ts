@@ -14,6 +14,7 @@ const cjsConfig: Options = {
   ...baseConfig,
   format: 'cjs',
   outDir: 'dist/cjs',
+  dts: false,
 };
 
 const esmConfig: Options = {
