@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { PanzoomObject } from '@panzoom/panzoom';
-import { useBuild } from '#hooks/use-build.js';
+import { useCameraCapability } from '#hooks/use-graphics.js';
 
 type PanzoomResetParameters = {
   /**
@@ -24,7 +24,7 @@ type PanzoomResetParameters = {
  * @returns The reset function.
  */
 export function usePanzoomReset(parameters: PanzoomResetParameters): () => void {
-  const { cameraRef: cameraCapabilityActor } = useBuild();
+  const cameraCapabilityActor = useCameraCapability();
   const isRegistered = useRef(false);
 
   const { panzoomRef, containerRef } = parameters;
