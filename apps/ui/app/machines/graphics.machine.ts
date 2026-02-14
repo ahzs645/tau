@@ -5,6 +5,7 @@ import { idPrefix } from '@taucad/types/constants';
 import type { LengthSymbol, UnitSystem } from '@taucad/units';
 import { standardInternationalBaseUnits } from '@taucad/units/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
+import type { EnvironmentPreset } from '#constants/editor.constants.js';
 
 // Context type definition
 export type GraphicsContext = {
@@ -63,6 +64,7 @@ export type GraphicsContext = {
   enableAxes: boolean;
   enableMatcap: boolean;
   upDirection: 'x' | 'y' | 'z';
+  environmentPreset: EnvironmentPreset;
 
   // Clipping plane state
   isSectionViewActive: boolean;
@@ -139,6 +141,7 @@ export type GraphicsEvent =
   | { type: 'setAxesVisibility'; payload: boolean }
   | { type: 'setMatcapVisibility'; payload: boolean }
   | { type: 'setUpDirection'; payload: 'x' | 'y' | 'z' }
+  | { type: 'setEnvironmentPreset'; payload: EnvironmentPreset }
   // Clipping plane events
   | { type: 'setSectionViewActive'; payload: boolean }
   | { type: 'selectSectionView'; payload: 'xy' | 'xz' | 'yz' | undefined }
@@ -207,6 +210,7 @@ export type GraphicsInput = {
   enableAxes?: boolean;
   enableMatcap?: boolean;
   upDirection?: 'x' | 'y' | 'z';
+  environmentPreset?: EnvironmentPreset;
 };
 
 type LengthUnitData = {
@@ -754,6 +758,13 @@ export const graphicsMachine = setup({
       },
     }),
 
+    setEnvironmentPreset: assign({
+      environmentPreset({ event }) {
+        assertEvent(event, 'setEnvironmentPreset');
+        return event.payload;
+      },
+    }),
+
     setSectionViewActive: assign({
       isSectionViewActive({ event }) {
         assertEvent(event, 'setSectionViewActive');
@@ -1075,6 +1086,7 @@ export const graphicsMachine = setup({
     enableAxes: input.enableAxes ?? true,
     enableMatcap: input.enableMatcap ?? false,
     upDirection: input.upDirection ?? 'z',
+    environmentPreset: input.environmentPreset ?? 'studio',
 
     // Clipping plane state
     isSectionViewActive: false,
@@ -1167,6 +1179,9 @@ export const graphicsMachine = setup({
         },
         setUpDirection: {
           actions: 'setUpDirection',
+        },
+        setEnvironmentPreset: {
+          actions: 'setEnvironmentPreset',
         },
 
         // Plane naming and hover are global in operational state

@@ -74,6 +74,8 @@ export const allotmentPanelOrder = [
  * These settings are stored per-build-per-view in EditorState and used to
  * initialize GraphicsMachine instances for each viewer panel.
  */
+export type EnvironmentPreset = 'studio' | 'neutral' | 'soft' | 'performance';
+
 export type GraphicsViewSettings = {
   enableSurfaces: boolean;
   enableLines: boolean;
@@ -84,6 +86,7 @@ export type GraphicsViewSettings = {
   upDirection: 'x' | 'y' | 'z';
   cameraFovAngle: number;
   renderTimeout: number;
+  environmentPreset: EnvironmentPreset;
 };
 
 /**
@@ -100,6 +103,7 @@ export const defaultGraphicsSettings: GraphicsViewSettings = {
   upDirection: 'z',
   cameraFovAngle: 60,
   renderTimeout: 60,
+  environmentPreset: 'studio',
 };
 
 // ============================================================================
