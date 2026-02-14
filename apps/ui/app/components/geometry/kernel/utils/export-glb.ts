@@ -1,5 +1,6 @@
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import type { Color, IndexedPolyhedron } from '#components/geometry/kernel/utils/common.js';
 import { transformVerticesGltf } from '#components/geometry/kernel/utils/common.js';
 
@@ -82,8 +83,8 @@ function createPrimitiveFromColorGroup(document: Document, geometry: ColorGroupG
     .createMaterial()
     .setDoubleSided(true)
     .setAlphaMode(alphaMode)
-    .setMetallicFactor(0)
-    .setRoughnessFactor(0.8)
+    .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+    .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
     .setBaseColorFactor(color);
 
   // Name the material for debugging

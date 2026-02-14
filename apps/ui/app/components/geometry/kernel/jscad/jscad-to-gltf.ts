@@ -1,6 +1,7 @@
 import { geometries, maths } from '@jscad/modeling';
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import { transformNormalArray, transformVertexArray } from '#components/geometry/kernel/utils/common.js';
 
 /**
@@ -212,8 +213,8 @@ function createPrimitiveFromJscadMesh(
   const material = document
     .createMaterial()
     .setDoubleSided(true)
-    .setMetallicFactor(0.1)
-    .setRoughnessFactor(0.7)
+    .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+    .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
     .setBaseColorFactor(baseColor);
 
   // Set alpha mode based on opacity

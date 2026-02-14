@@ -1,5 +1,6 @@
 import type { Primitive } from '@gltf-transform/core';
 import { Document, NodeIO } from '@gltf-transform/core';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import { normalizeColor } from '#components/geometry/kernel/replicad/utils/normalize-color.js';
 import { transformNormalArray, transformVertexArray } from '#components/geometry/kernel/utils/common.js';
 import type { GeometryReplicad } from '#components/geometry/kernel/replicad/replicad.types.js';
@@ -42,8 +43,8 @@ function createPrimitiveFromReplicadShape(document: Document, geometry: Geometry
   const material = document
     .createMaterial()
     .setDoubleSided(true)
-    .setMetallicFactor(0.1)
-    .setRoughnessFactor(0.7)
+    .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+    .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
     .setBaseColorFactor(baseColor);
 
   if (geometry.color) {
