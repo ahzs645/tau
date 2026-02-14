@@ -12,6 +12,10 @@ type CodeEditorProperties = EditorProps & {
   readonly onChange: (value: string) => void;
 };
 
+// Cap synchronous tokenization to avoid blocking the main thread on very large
+// files. For typical engineering code files (< 500 lines) this is < 5 ms.
+const maxForceTokenizeLines = 5000;
+
 await configureMonaco();
 
 export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.JSX.Element {
@@ -21,6 +25,25 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
 
   const handleMount = useCallback((editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
     completionRef.current = registerCompletions(editor, monaco);
+
+    // Force immediate tokenization of visible lines.
+    // Monaco schedules background tokenization via requestIdleCallback, which
+    // can be indefinitely delayed during initial page load when the browser is
+    // busy with layout, React hydration, and Dockview initialization. This
+    // causes code to appear without syntax highlighting until the user scrolls.
+    // Forcing synchronous tokenization here ensures highlighting is visible
+    // from the first render.
+    const model = editor.getModel();
+    if (model) {
+      const targetLine = Math.min(model.getLineCount(), maxForceTokenizeLines);
+      // Monaco's tokenization.forceTokenization is a stable internal API used
+      // extensively by its own features (colorizer, auto-indent, comment commands,
+      // etc.) but not exposed in public type declarations.
+      const tokenization = model as unknown as {
+        tokenization?: { forceTokenization?: (lineNumber: number) => void };
+      };
+      tokenization.tokenization?.forceTokenization?.(targetLine);
+    }
   }, []);
 
   useEffect(() => {
