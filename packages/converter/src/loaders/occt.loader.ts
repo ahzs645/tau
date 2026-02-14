@@ -2,6 +2,7 @@
 import { Document, NodeIO } from '@gltf-transform/core';
 import occtimportjs from 'occt-import-js';
 import type { ImportResult as OcctImportResult } from 'occt-import-js';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import type { InputFormat, File } from '#types.js';
 import { BaseLoader } from '#loaders/base.loader.js';
 
@@ -91,13 +92,23 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
         primitive.setAttribute('NORMAL', normalAccessor);
       }
 
-      // Create material with color if specified
+      // Create material with color if specified, or fallback default
       if (meshData.color) {
         const [red, green, blue] = meshData.color;
         const material = document
           .createMaterial()
           .setBaseColorFactor([red, green, blue, 1])
+          .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
+          .setMetallicFactor(cadMaterialDefaults.metallicFactor)
           .setName(`Material_${meshData.name || 'Default'}`);
+        primitive.setMaterial(material);
+      } else {
+        const material = document
+          .createMaterial()
+          .setBaseColorFactor([...cadMaterialDefaults.baseColorFactor])
+          .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
+          .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+          .setName('Material_Default');
         primitive.setMaterial(material);
       }
 

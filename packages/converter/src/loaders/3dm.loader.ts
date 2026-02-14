@@ -22,6 +22,7 @@ import type {
   File3dmObject,
 } from 'rhino3dm';
 import rhino3dm from 'rhino3dm';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import { BaseLoader } from '#loaders/base.loader.js';
 import type { BaseLoaderOptions } from '#loaders/base.loader.js';
 import type { File } from '#types.js';
@@ -782,8 +783,8 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     return document
       .createMaterial()
       .setBaseColorFactor([color.r, color.g, color.b, 1])
-      .setMetallicFactor(0.1)
-      .setRoughnessFactor(0.8);
+      .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+      .setRoughnessFactor(cadMaterialDefaults.roughnessFactor);
   }
 
   /**
