@@ -47,6 +47,11 @@ export type StageOptions = {
 
 const significantRadiusChangeRatio = 0.1;
 
+// Reusable temporaries for per-frame bounding calculations (avoids GC pressure)
+const _box3 = new THREE.Box3();
+const _centerPoint = new THREE.Vector3();
+const _sphere = new THREE.Sphere();
+
 // Default configuration constants
 export const defaultStageOptions = {
   offsetRatio: 3,
@@ -198,24 +203,28 @@ export function Stage({
       return;
     }
 
-    const box3 = new THREE.Box3().setFromObject(inner.current);
+    _box3.setFromObject(inner.current);
 
     if (enableCentering) {
-      const centerPoint = new THREE.Vector3();
-      box3.getCenter(centerPoint);
+      _box3.getCenter(_centerPoint);
       if (outer.current) {
         outer.current.position.set(
-          outer.current.position.x - centerPoint.x,
-          outer.current.position.y - centerPoint.y,
-          outer.current.position.z - centerPoint.z,
+          outer.current.position.x - _centerPoint.x,
+          outer.current.position.y - _centerPoint.y,
+          outer.current.position.z - _centerPoint.z,
         );
       }
     }
 
-    const sphere = new THREE.Sphere();
-    box3.getBoundingSphere(sphere);
+    _box3.getBoundingSphere(_sphere);
+
+    // Only update state when the radius has actually changed to avoid unnecessary re-renders
     set((previous) => {
-      return { geometryRadius: sphere.radius, sceneRadius: previous.sceneRadius };
+      if (previous.geometryRadius === _sphere.radius) {
+        return previous;
+      }
+
+      return { geometryRadius: _sphere.radius, sceneRadius: previous.sceneRadius };
     });
   });
 

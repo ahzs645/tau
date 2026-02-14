@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { GLTFLoader, LineSegments2 } from 'three/addons';
-import type { Group } from 'three';
+import type { Group, Object3D, Material, BufferGeometry, Texture } from 'three';
 import { Vector2 } from 'three';
 import { useThree } from '@react-three/fiber';
 import { applyMatcap } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
@@ -8,6 +8,44 @@ import {
   applyFatLineSegments,
   updateLineMaterialResolution,
 } from '#components/geometry/graphics/three/materials/gltf-edges.js';
+
+/**
+ * Dispose a material and all its texture properties.
+ */
+function disposeMaterialWithTextures(mat: Material): void {
+  for (const value of Object.values(mat)) {
+    if (value && typeof value === 'object' && 'isTexture' in value) {
+      (value as Texture).dispose();
+    }
+  }
+
+  mat.dispose();
+}
+
+/**
+ * Recursively dispose all GPU resources (geometries, materials, textures) in a scene graph.
+ * This prevents GPU memory leaks when replacing or unmounting GLTF scenes.
+ */
+function disposeSceneResources(object: Object3D): void {
+  object.traverse((child) => {
+    // Dispose geometry
+    if ('geometry' in child) {
+      const { geometry } = child as { geometry?: BufferGeometry };
+      geometry?.dispose();
+    }
+
+    // Dispose material(s) and their textures
+    if ('material' in child) {
+      const { material } = child as { material?: Material | Material[] };
+      if (material) {
+        const materials = Array.isArray(material) ? material : [material];
+        for (const mat of materials) {
+          disposeMaterialWithTextures(mat);
+        }
+      }
+    }
+  });
+}
 
 type GltfMeshDisplayProperties = {
   /**
@@ -95,6 +133,9 @@ export function GltfMesh({
     }
   }, [size, scene, invalidate]);
 
+  // Track previous scene for disposal when replaced
+  const previousSceneRef = useRef<Group | undefined>(undefined);
+
   // Load GLTF and process scene
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +154,8 @@ export function GltfMesh({
         );
 
         if (cancelled) {
+          // Dispose the loaded scene immediately since we won't use it
+          disposeSceneResources(gltf.scene);
           return;
         }
 
@@ -126,12 +169,20 @@ export function GltfMesh({
 
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be set by cleanup between awaits
         if (cancelled) {
+          // Dispose the loaded scene immediately since we won't use it
+          disposeSceneResources(gltf.scene);
           return;
         }
 
         // Set initial visibility
         updateVisibility(gltf.scene, enableSurfaces, enableLines);
 
+        // Dispose the previous scene before replacing it
+        if (previousSceneRef.current) {
+          disposeSceneResources(previousSceneRef.current);
+        }
+
+        previousSceneRef.current = gltf.scene;
         setScene(gltf.scene);
 
         // Force R3F to re-render since we loaded the scene asynchronously
@@ -147,6 +198,12 @@ export function GltfMesh({
 
     return () => {
       cancelled = true;
+
+      // Dispose the current scene on unmount or before replacement
+      if (previousSceneRef.current) {
+        disposeSceneResources(previousSceneRef.current);
+        previousSceneRef.current = undefined;
+      }
     };
     // Reload GLTF when matcap changes - need fresh materials to toggle matcap
     // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility handled by separate effect

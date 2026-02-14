@@ -186,8 +186,9 @@ export function ViewportGizmoCube({
         canvas.remove();
       }
 
-      // Dispose the renderer
+      // Release WebGL context and dispose the renderer to prevent context exhaustion
       if (renderer) {
+        renderer.forceContextLoss();
         renderer.dispose();
       }
     };

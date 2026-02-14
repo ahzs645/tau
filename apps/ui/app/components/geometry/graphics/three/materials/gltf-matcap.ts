@@ -1,8 +1,18 @@
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import type { Mesh } from 'three';
+import type { Mesh, Material } from 'three';
 import { DoubleSide, MeshMatcapMaterial } from 'three';
 import { LineSegments2 } from 'three/addons';
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
+
+/**
+ * Dispose a material or array of materials, releasing GPU resources.
+ */
+function disposeMaterials(material: Material | Material[]): void {
+  const materials = Array.isArray(material) ? material : [material];
+  for (const mat of materials) {
+    mat.dispose();
+  }
+}
 
 /**
  * Apply Three.js matcap to a GLTF scene, respecting vertex colors and material colors.
@@ -47,6 +57,9 @@ export const applyMatcap = async (gltf: GLTF): Promise<void> => {
           }
         }
       }
+
+      // Dispose the old material(s) before replacing to prevent GPU memory leaks
+      disposeMaterials(mesh.material);
 
       mesh.material = meshMatcap;
     }

@@ -9,6 +9,11 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Plane } from '@react-three/drei';
 
+// Reusable temporaries for per-frame plane positioning (avoids GC pressure)
+const _defaultNormal = new THREE.Vector3(0, 0, 1);
+const _quaternion = new THREE.Quaternion();
+const _worldPosition = new THREE.Vector3();
+
 export type CutterProperties = {
   readonly children: React.ReactNode;
   readonly plane: THREE.Plane;
@@ -154,26 +159,24 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
 
     useFrame(() => {
       if (enableSection && planeListRef.current && rootGroupRef.current) {
-        // Create a quaternion to rotate from default plane normal (0,0,1) to clipping plane normal
-        const defaultNormal = new THREE.Vector3(0, 0, 1);
-        const quaternion = new THREE.Quaternion();
-        quaternion.setFromUnitVectors(defaultNormal, plane.normal);
+        // Reuse module-scoped temporaries to avoid per-frame allocations
+        _defaultNormal.set(0, 0, 1);
+        _quaternion.setFromUnitVectors(_defaultNormal, plane.normal);
 
         for (const [, planeObject] of planeListRef.current) {
           // Get a point on the clipping plane in world space
-          const worldPosition = new THREE.Vector3();
-          plane.coplanarPoint(worldPosition);
+          plane.coplanarPoint(_worldPosition);
 
           // Offset slightly opposite to the plane normal to prevent z-fighting with the mesh surface
           const zFightingOffset = 0.1;
-          worldPosition.addScaledVector(plane.normal, -zFightingOffset);
+          _worldPosition.addScaledVector(plane.normal, -zFightingOffset);
 
           // Transform the world position to the local space of the root group
           // This accounts for any centering or translation applied to the parent group
-          rootGroupRef.current.worldToLocal(planeObject.position.copy(worldPosition));
+          rootGroupRef.current.worldToLocal(planeObject.position.copy(_worldPosition));
 
           // Orient the plane to match the clipping plane's normal
-          planeObject.quaternion.copy(quaternion);
+          planeObject.quaternion.copy(_quaternion);
         }
       }
     });

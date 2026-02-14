@@ -44,6 +44,10 @@ export function ThreeProvider({
 
   return (
     <Canvas
+      // Disable tone mapping (NoToneMapping) for CAD color accuracy.
+      // ACES filmic (R3F default) compresses/shifts colors, which is undesirable for
+      // engineering visuals where exact material colors matter. Consistent with gizmo renderers.
+      flat
       gl={{
         // Enable logarithmic depth buffer for better precision at low field of view,
         // eliminating visual artifacts on the object.
