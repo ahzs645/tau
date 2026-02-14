@@ -1,7 +1,21 @@
 import { useCallback, useState, useRef, useMemo, useEffect, memo } from 'react';
 import { flushSync } from 'react-dom';
 import type { ItemInstance } from '@headless-tree/core';
-import { FilePlus, FolderPlus, MoreHorizontal, Search, Eye, EyeOff, Folder, FolderOpen, CopyMinus } from 'lucide-react';
+import {
+  FilePlus,
+  FolderPlus,
+  MoreHorizontal,
+  Search,
+  Eye,
+  EyeOff,
+  Folder,
+  FolderOpen,
+  CopyMinus,
+  Edit,
+  Upload,
+  Copy,
+  Trash2,
+} from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { minimatch } from 'minimatch';
 import {
@@ -1448,7 +1462,8 @@ function TreeItem({
                     item.startRenaming();
                   }}
                 >
-                  Rename
+                  <Edit />
+                  <span>Rename</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={(event) => {
@@ -1456,7 +1471,8 @@ function TreeItem({
                     onUpload(item.getId());
                   }}
                 >
-                  Upload Files
+                  <Upload />
+                  <span>Upload Files</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={(event) => {
@@ -1464,7 +1480,8 @@ function TreeItem({
                     onDuplicate([item]);
                   }}
                 >
-                  Duplicate
+                  <Copy />
+                  <span>Duplicate</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -1474,7 +1491,8 @@ function TreeItem({
                     onDelete([item]);
                   }}
                 >
-                  Delete
+                  <Trash2 />
+                  <span>Delete</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1487,7 +1505,8 @@ function TreeItem({
             item.startRenaming();
           }}
         >
-          Rename
+          <Edit />
+          <span>Rename</span>
         </ContextMenuItem>
         {isFolder ? (
           <ContextMenuItem
@@ -1495,7 +1514,8 @@ function TreeItem({
               onUpload(item.getId());
             }}
           >
-            Upload Files
+            <Upload />
+            <span>Upload Files</span>
           </ContextMenuItem>
         ) : (
           <>
@@ -1504,14 +1524,16 @@ function TreeItem({
                 onUpload(item.getId());
               }}
             >
-              Upload Files
+              <Upload />
+              <span>Upload Files</span>
             </ContextMenuItem>
             <ContextMenuItem
               onClick={() => {
                 onDuplicate([item]);
               }}
             >
-              Duplicate
+              <Copy />
+              <span>Duplicate</span>
             </ContextMenuItem>
           </>
         )}
@@ -1522,7 +1544,8 @@ function TreeItem({
             onDelete([item]);
           }}
         >
-          Delete
+          <Trash2 />
+          <span>Delete</span>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
