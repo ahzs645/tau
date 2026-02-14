@@ -386,7 +386,7 @@ export function DataTableColumnHeader<Data, Value>({
               column.toggleSorting(false);
             }}
           >
-            <ArrowUp className="mr-2 h-3.5 w-3.5 text-muted-foreground/70" />
+            <ArrowUp className="text-muted-foreground/70" />
             Asc
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -394,7 +394,7 @@ export function DataTableColumnHeader<Data, Value>({
               column.toggleSorting(true);
             }}
           >
-            <ArrowDown className="mr-2 h-3.5 w-3.5 text-muted-foreground/70" />
+            <ArrowDown className="text-muted-foreground/70" />
             Desc
           </DropdownMenuItem>
           {column.getCanHide() && (
@@ -405,7 +405,7 @@ export function DataTableColumnHeader<Data, Value>({
                   column.toggleVisibility(false);
                 }}
               >
-                <EyeOff className="mr-2 h-3.5 w-3.5 text-muted-foreground/70" />
+                <EyeOff className="text-muted-foreground/70" />
                 Hide
               </DropdownMenuItem>
             </>
@@ -451,7 +451,7 @@ export function DataTableSortingDropdown<Data>({ table }: DataTableSortingDropdo
       return undefined;
     }
 
-    return sortingState.desc ? <ArrowDown className="ml-auto size-4" /> : <ArrowUp className="ml-auto size-4" />;
+    return sortingState.desc ? <ArrowDown className="ml-auto" /> : <ArrowUp className="ml-auto" />;
   };
 
   return (

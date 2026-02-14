@@ -103,6 +103,11 @@
   --popover: oklch(var(--l-base) 0 var(--hue-neutral));
   --popover-foreground: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
 
+  /* Menu opaque colors (pre-blended equivalents of transparent overlays over popover) */
+  --menu-ring: color-mix(in oklch, black 10%, var(--popover));
+  --menu-highlight: color-mix(in oklch, var(--neutral) 20%, var(--popover));
+  --menu-highlight-destructive: color-mix(in oklch, var(--destructive) 10%, var(--popover));
+
   --card: oklch(var(--l-base) 0 var(--hue-neutral));
   --card-foreground: oklch(var(--l-deepest) 0.02 var(--hue-neutral));
 
@@ -158,6 +163,9 @@
   --sidebar-background: oklch(calc(var(--l-surface) * 0.85) 0 var(--hue-neutral));
   --sidebar-border: oklch(calc(var(--l-subtle) * 0.85) 0.005 var(--hue-neutral));
   --sidebar-accent: oklch(calc(var(--l-subtle) * 0.85) 0.02 var(--hue-neutral));
+  --menu-ring: color-mix(in oklch, white 25%, var(--popover));
+  --menu-highlight: color-mix(in oklch, var(--neutral) 30%, var(--popover));
+  --menu-highlight-destructive: color-mix(in oklch, var(--destructive) 20%, var(--popover));
 
   --primary-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral));
   --secondary-foreground: oklch(var(--l-base) 0.01 var(--hue-neutral));
@@ -196,6 +204,7 @@
   --shadow-sm: 0px 1px 2px 0px #1018280f, 0px 1px 3px 0px #1018281a;
   --shadow-md: 0px 16px 32px -12px rgba(14, 18, 27, 0.1);
   --shadow: 0px 16px 32px -12px #0e121b1a;
+  --shadow-menu: 0 0 0 1px var(--menu-ring), 0 6px 20px -4px rgba(0, 0, 0, 0.25);
 
   /* Fonts */
   --font-sans: 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
@@ -257,6 +266,8 @@
 
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
+  --color-menu-highlight: var(--menu-highlight);
+  --color-menu-highlight-destructive: var(--menu-highlight-destructive);
 
   /* Highlighter specific */
   --color-highlighter: var(--highlighter);

@@ -238,11 +238,11 @@ export const PreviewMobile = memo(function ({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem disabled={isCloning} onClick={handleRemix}>
-                {isCloning ? <Loader className="mr-2 size-4" /> : <FileCode className="mr-2 size-4" />}
+                {isCloning ? <Loader /> : <FileCode />}
                 {isCloning ? 'Remixing...' : 'Remix'}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDownloadZip}>
-                <Download className="mr-2 size-4" />
+                <Download />
                 Download ZIP
               </DropdownMenuItem>
             </DropdownMenuContent>

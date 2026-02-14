@@ -21,6 +21,7 @@ type ColorPickerProperties = {
   readonly isDisabled?: boolean;
   readonly className?: string;
   readonly hasTooltip?: boolean;
+  readonly popoverProperties?: React.ComponentProps<typeof PopoverContent>;
 };
 
 function ColorPicker({
@@ -32,6 +33,7 @@ function ColorPicker({
   isDisabled,
   className,
   hasTooltip = true,
+  popoverProperties,
 }: ColorPickerProperties): React.JSX.Element {
   const [open, setOpen] = useState(false);
 
@@ -75,7 +77,11 @@ function ColorPicker({
           {triggerContent}
         </PopoverTrigger>
       )}
-      <PopoverContent side="top" className="flex w-48 flex-col gap-2 p-2">
+      <PopoverContent
+        side="top"
+        {...popoverProperties}
+        className={cn('flex w-48 flex-col gap-2 p-2', popoverProperties?.className)}
+      >
         <span className="w-full items-center text-sm text-muted-foreground">Select hue ({value.h}°)</span>
         <div className="flex w-full flex-row gap-2">
           <Slider

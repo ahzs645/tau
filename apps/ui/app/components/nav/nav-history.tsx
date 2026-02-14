@@ -278,7 +278,7 @@ function NavHistoryItem({
     <SidebarMenuItem key={build.id}>
       {isEditing ? (
         // Show editing state without NavLink to prevent drag issues
-        <SidebarMenuButton className="bg-sidebar-accent">
+        <SidebarMenuButton className="bg-sidebar-accent pr-8">
           <History className="size-4 shrink-0" />
           <input
             autoFocus
@@ -320,11 +320,11 @@ function NavHistoryItem({
             align={isMobile ? 'end' : 'start'}
           >
             <DropdownMenuItem onClick={handleRenameClick}>
-              <Edit className="text-muted-foreground" />
+              <Edit />
               <span>Rename</span>
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleDuplicateClick}>
-              <Copy className="text-muted-foreground" />
+              <Copy />
               <span>Duplicate</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

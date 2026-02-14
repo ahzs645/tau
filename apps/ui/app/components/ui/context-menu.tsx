@@ -10,6 +10,7 @@ import {
   menuSeparatorVariants,
   menuSubTriggerOpenClass,
   menuShortcutClass,
+  subMenuSideAlignOffset,
 } from '#components/ui/menu.variants.js';
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>): React.JSX.Element {
@@ -63,11 +64,13 @@ function ContextMenuSubTrigger({
 
 function ContextMenuSubContent({
   className,
+  alignOffset = subMenuSideAlignOffset,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>): React.JSX.Element {
   return (
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
+      alignOffset={alignOffset}
       className={cn(
         menuContentVariants(),
         'shadow-lg origin-(--radix-context-menu-content-transform-origin)',

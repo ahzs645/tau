@@ -28,6 +28,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '#components/ui/dropdown-menu.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
@@ -134,7 +135,7 @@ export function ChatHistorySettings(): React.ReactNode {
       >
         <DropdownMenuLabel>Metadata Display</DropdownMenuLabel>
         <DropdownMenuSwitchItem isChecked={showModelCost} onIsCheckedChange={handleShowModelCostToggle}>
-          <DollarSign className="size-4 stroke-2" />
+          <DollarSign className="stroke-2" />
           Show Model Cost
         </DropdownMenuSwitchItem>
 
@@ -145,22 +146,22 @@ export function ChatHistorySettings(): React.ReactNode {
         {/* Context Settings Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <span className="flex items-center gap-2">
-              <Layers className="size-4" />
+            <span className={menuItemLayoutClass}>
+              <Layers />
               Editor Context
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuSwitchItem isChecked={includeFilesystem} onIsCheckedChange={handleIncludeFilesystemToggle}>
-              <FolderTree className="size-4" />
+              <FolderTree />
               Filesystem
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem isChecked={includeActiveFile} onIsCheckedChange={handleIncludeActiveFileToggle}>
-              <FileCode className="size-4" />
+              <FileCode />
               Active File
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem isChecked={includeOpenFiles} onIsCheckedChange={handleIncludeOpenFilesToggle}>
-              <File className="size-4" />
+              <File />
               Open Tabs
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
@@ -173,14 +174,14 @@ export function ChatHistorySettings(): React.ReactNode {
         {/* File Operations Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <span className="flex items-center gap-2">
-              <File className="size-4" />
+            <span className={menuItemLayoutClass}>
+              <File />
               File Operations
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuSwitchItem isChecked={showCodePreview} onIsCheckedChange={handleShowCodePreviewToggle}>
-              <Code className="size-4" />
+              <Code />
               Preview
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
@@ -189,15 +190,15 @@ export function ChatHistorySettings(): React.ReactNode {
         {/* Analysis Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <span className="flex items-center gap-2">
-              <ScanEye className="size-4" />
+            <span className={menuItemLayoutClass}>
+              <ScanEye />
               Analysis
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuLabel>Image Analysis</DropdownMenuLabel>
             <DropdownMenuSwitchItem isChecked={showAnalysisImages} onIsCheckedChange={handleShowAnalysisImagesToggle}>
-              <Image className="size-4" />
+              <Image />
               Preview
             </DropdownMenuSwitchItem>
             <DropdownMenuSliderItem
@@ -225,7 +226,7 @@ export function ChatHistorySettings(): React.ReactNode {
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Export</DropdownMenuLabel>
         <DropdownMenuItem disabled={messages.length === 0} onSelect={handleExport}>
-          <Download className="size-4" />
+          <Download />
           Export Transcript
         </DropdownMenuItem>
       </DropdownMenuContent>

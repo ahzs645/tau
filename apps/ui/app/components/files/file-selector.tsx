@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.
 import { Button } from '#components/ui/button.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { Loader } from '#components/ui/loader.js';
 
 type FileItem = {
@@ -311,11 +312,11 @@ function FileSelectorItem({
           onDrillDown(item.path);
         }}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Folder className="size-4 shrink-0 text-muted-foreground" />
+        <div className={cn(menuItemLayoutClass, 'min-w-0 flex-1')}>
+          <Folder className="shrink-0 text-muted-foreground" />
           <span className="truncate">{item.name}</span>
         </div>
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+        <ChevronRight className="shrink-0 text-muted-foreground" />
       </CommandItem>
     );
   }
@@ -328,8 +329,8 @@ function FileSelectorItem({
         onSelect(item.path);
       }}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <FileExtensionIcon filename={item.name} className="size-4 shrink-0" />
+      <div className={cn(menuItemLayoutClass, 'min-w-0 flex-1')}>
+        <FileExtensionIcon filename={item.name} className="shrink-0" />
         <span className={cn(directoryHint ? 'shrink-0' : 'truncate', isSelected && 'font-medium')}>{item.name}</span>
         {directoryHint ? (
           <span className="min-w-0 truncate text-xs text-muted-foreground">{directoryHint}</span>

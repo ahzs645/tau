@@ -347,11 +347,13 @@ function HeroViewerInner({ files }: HeroViewerContentProperties): React.JSX.Elem
                     defaultValue={selectedFormat}
                     getValue={(item) => item.format}
                     renderLabel={(item, selected) => (
-                      <div className="flex items-center gap-2">
-                        <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
-                        <span>{item.label}</span>
-                        {selected?.format === item.format ? <Check className="ml-auto size-4" /> : null}
-                      </div>
+                      <span className="flex w-full items-center justify-between">
+                        <span className="flex items-center gap-2">
+                          <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
+                          <span>{item.label}</span>
+                        </span>
+                        {selected?.format === item.format ? <Check className="size-4" /> : null}
+                      </span>
                     )}
                     className="min-w-0 flex-1"
                     isSearchEnabled={false}

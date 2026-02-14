@@ -61,7 +61,7 @@ export function NavUser(): React.JSX.Element {
                   openSettingsDialog('billing');
                 }}
               >
-                <Sparkles className="size-4" />
+                <Sparkles />
                 Upgrade to Pro
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -70,7 +70,7 @@ export function NavUser(): React.JSX.Element {
                   openSettingsDialog('billing');
                 }}
               >
-                <CreditCard className="size-4" />
+                <CreditCard />
                 Billing
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -79,7 +79,7 @@ export function NavUser(): React.JSX.Element {
                   openSettingsDialog('general');
                 }}
               >
-                <Settings className="size-4" />
+                <Settings />
                 Settings
               </DropdownMenuItem>
             </DropdownMenuGroup>
@@ -87,7 +87,7 @@ export function NavUser(): React.JSX.Element {
             <DropdownMenuGroup>
               <DropdownMenuItem asChild className="cursor-pointer">
                 <NavLink to={signOut}>
-                  <LogOut className="size-4" />
+                  <LogOut />
                   Sign Out
                 </NavLink>
               </DropdownMenuItem>

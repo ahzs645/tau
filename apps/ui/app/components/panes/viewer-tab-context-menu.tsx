@@ -100,11 +100,11 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
     <>
       {/* ── Close group ── */}
       <ContextMenuItem onSelect={handleClose}>
-        <X className="size-4" />
+        <X />
         Close
       </ContextMenuItem>
       <ContextMenuItem disabled={!hasOthers} onSelect={handleCloseOthers}>
-        <XCircle className="size-4" />
+        <XCircle />
         Close Others
       </ContextMenuItem>
       <ContextMenuItem disabled={!hasRight} onSelect={handleCloseRight}>
@@ -119,7 +119,7 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
 
       {/* ── Copy path ── */}
       <ContextMenuItem disabled={!entryFile} onSelect={handleCopyPath}>
-        <Copy className="size-4" />
+        <Copy />
         Copy Path
       </ContextMenuItem>
 
@@ -127,11 +127,11 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
 
       {/* ── Split group ── */}
       <ContextMenuItem onSelect={handleSplitRight}>
-        <Columns2 className="size-4" />
+        <Columns2 />
         Split Right
       </ContextMenuItem>
       <ContextMenuItem onSelect={handleSplitDown}>
-        <Rows2 className="size-4" />
+        <Rows2 />
         Split Down
       </ContextMenuItem>
 
@@ -139,11 +139,11 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
 
       {/* ── Navigation group ── */}
       <ContextMenuItem disabled={!entryFile} onSelect={handleOpenInEditor}>
-        <FileCode className="size-4" />
+        <FileCode />
         Open in Editor
       </ContextMenuItem>
       <ContextMenuItem disabled={!entryFile} onSelect={handleRevealInFileTree}>
-        <FolderTree className="size-4" />
+        <FolderTree />
         Reveal in File Tree
       </ContextMenuItem>
     </>

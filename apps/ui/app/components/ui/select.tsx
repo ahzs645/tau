@@ -96,7 +96,7 @@ function SelectItem({
       data-slot="select-item"
       className={cn(
         menuItemVariants(),
-        'w-full cursor-pointer pr-8 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2',
+        'w-full pr-8 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2',
         className,
       )}
       {...properties}

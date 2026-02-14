@@ -5,27 +5,28 @@ import { cva } from 'class-variance-authority';
  * Compact macOS-inspired design with primary focus highlight.
  */
 export const menuItemVariants = cva(
-  "relative flex cursor-default items-center gap-2 rounded-md px-3 py-1 text-[13px] outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
+  "relative flex cursor-pointer items-center gap-2 rounded-sm px-3 py-1 text-[13px] outline-hidden select-none data-disabled:pointer-events-none data-disabled:text-muted-foreground/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:-translate-y-[0.5px] [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
   {
     variants: {
       variant: {
         default: '',
-        destructive:
-          'text-destructive focus:bg-destructive/10 focus:text-destructive dark:focus:bg-destructive/20 *:[svg]:text-destructive!',
+        destructive: 'focus:bg-menu-highlight-destructive',
       },
       inset: {
         true: 'pl-8', // For items with left indicator (checkbox/radio)
         false: '',
       },
-      focusable: {
-        true: 'focus:bg-neutral/30 focus:text-foreground focus:[&_svg]:text-foreground',
-        false: '', // For cmdk which uses data-[selected=true] instead of focus
+      highlight: {
+        // Uses :not([class*='text-']) to match the same SVGs as the base muted rule with higher specificity
+        focus: "focus:bg-menu-highlight focus:text-foreground focus:[&_svg:not([class*='text-'])]:text-foreground",
+        selected:
+          "hover:bg-menu-highlight hover:text-foreground hover:[&_svg:not([class*='text-'])]:text-foreground data-[selected=true]:bg-menu-highlight data-[selected=true]:text-foreground data-[selected=true]:[&_svg:not([class*='text-'])]:text-foreground",
       },
     },
     defaultVariants: {
       variant: 'default',
       inset: false,
-      focusable: true,
+      highlight: 'focus',
     },
   },
 );
@@ -35,7 +36,7 @@ export const menuItemVariants = cva(
  * Instant open/close (no animation) by default for a snappy feel.
  */
 export const menuContentVariants = cva(
-  'z-50 min-w-32 overflow-hidden rounded-[13px] border border-foreground/10 bg-popover p-0.75 text-popover-foreground shadow-md',
+  'z-50 min-w-32 overflow-hidden rounded-[10px] bg-popover p-0.75 text-popover-foreground shadow-menu',
   {
     variants: {
       animated: {
@@ -53,7 +54,7 @@ export const menuContentVariants = cva(
  * Shared open-state styling for sub-menu triggers.
  */
 export const menuSubTriggerOpenClass =
-  'data-[state=open]:bg-neutral/30 data-[state=open]:text-foreground data-[state=open]:[&_svg]:text-foreground';
+  'data-[state=open]:bg-menu-highlight data-[state=open]:text-foreground data-[state=open]:[&_svg]:text-foreground';
 
 /**
  * Shared shortcut styling for keyboard shortcut hints.
@@ -78,4 +79,26 @@ export const menuLabelVariants = cva('px-3 py-1 text-xs font-medium text-muted-f
 /**
  * Separator styling for menu dividers.
  */
-export const menuSeparatorVariants = cva('mx-0 my-0.75 h-px bg-border');
+export const menuSeparatorVariants = cva('mx-1.5 my-1 h-px bg-border');
+
+/**
+ * Negative vertical offset for side-positioned menus (left/right) and sub-menus.
+ * Aligns the first item's text with the trigger's text.
+ * Derived from: content padding (p-0.75 = 3px), adjusted to 2.5px to account
+ * for the visual inset of the items' rounded-sm corners.
+ */
+export const menuSideAlignOffset = -7;
+
+export const subMenuSideAlignOffset = -2.5;
+
+/**
+ * Shared icon+label flex layout. Use inside menu items, sub-triggers, select values, commands, etc.
+ */
+export const menuItemLayoutClass = 'flex items-center gap-2';
+
+/**
+ * SVG icon rules for standalone label containers not inside a menuItemVariants parent.
+ * Extracted from menuItemVariants (minus -translate-y-[0.5px] which is item-level only).
+ */
+export const menuItemIconClass =
+  "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground";

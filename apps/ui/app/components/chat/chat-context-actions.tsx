@@ -12,6 +12,7 @@ import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { orthographicViews, screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 
 type ChatContextActionsProperties = {
@@ -305,7 +306,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         id: 'add-model-screenshot',
         label: 'Model screenshot',
         group: 'Visual',
-        icon: <Image className="mr-2 size-4" />,
+        icon: <Image />,
         action: handleAddModelScreenshot,
         disabled: !isScreenshotReady,
       },
@@ -313,7 +314,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         id: 'add-all-views-screenshots',
         label: 'All views screenshots',
         group: 'Visual',
-        icon: <Camera className="mr-2 size-4" />,
+        icon: <Camera />,
         action: handleAddAllViewsScreenshots,
         disabled: !isScreenshotReady,
       },
@@ -334,7 +335,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
           id: `view-screenshot-${viewId}`,
           label: fileName,
           group: 'View Screenshots',
-          icon: <Image className="mr-2 size-4" />,
+          icon: <Image />,
           action() {
             handleViewScreenshot(graphicsRef);
           },
@@ -348,7 +349,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         id: 'add-code-errors',
         label: 'Code errors',
         group: 'Code',
-        icon: <AlertTriangle className="mr-2 size-4" />,
+        icon: <AlertTriangle />,
         action: handleAddCodeIssues,
         disabled: codeIssues.length === 0,
       },
@@ -356,7 +357,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         id: 'add-kernel-error',
         label: kernelIssue && kernelIssue.length > 1 ? `Kernel issues (${kernelIssue.length})` : 'Kernel error',
         group: 'Code',
-        icon: <AlertCircle className="mr-2 size-4" />,
+        icon: <AlertCircle />,
         action: handleAddKernelIssue,
         disabled: !kernelIssue || kernelIssue.length === 0,
       },
@@ -397,7 +398,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
   }, [contextItems]);
 
   const renderContextItemLabel = (item: ContextActionItem, _selectedItem: ContextActionItem | undefined) => (
-    <div className="flex items-center">
+    <div className={menuItemLayoutClass}>
       {item.icon}
       {item.label}
     </div>
