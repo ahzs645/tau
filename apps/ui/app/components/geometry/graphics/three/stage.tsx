@@ -83,6 +83,8 @@ export function Stage({
   const inner = React.useRef<THREE.Group>(null);
 
   const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
+  const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const environmentPreset = useGraphicsSelector((state) => state.context.environmentPreset);
 
   const isSectionViewActive = useGraphicsSelector((state) => state.context.isSectionViewActive);
   const selectedSectionViewId = useGraphicsSelector((state) => state.context.selectedSectionViewId);
@@ -263,7 +265,7 @@ export function Stage({
           <group ref={inner}>{children}</group>
         </SectionView>
       </group>
-      <Lights />
+      <Lights enableMatcap={enableMatcap} environmentPreset={environmentPreset} sceneRadius={geometryRadius} />
     </group>
   );
 }

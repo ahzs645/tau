@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { GLTFLoader, LineSegments2 } from 'three/addons';
-import type { Group, Object3D, Material, BufferGeometry, Texture } from 'three';
+import type { Group, Object3D, Material, BufferGeometry, Mesh, MeshStandardMaterial, Texture } from 'three';
 import { Vector2 } from 'three';
 import { useThree } from '@react-three/fiber';
 import { applyMatcap } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
@@ -8,6 +8,16 @@ import {
   applyFatLineSegments,
   updateLineMaterialResolution,
 } from '#components/geometry/graphics/three/materials/gltf-edges.js';
+
+/** Environment map reflection multiplier for glossy CAD appearance (PBR path only). */
+const envMapIntensity = 2.5;
+
+/**
+ * Runtime roughness override applied to all loaded PBR materials.
+ * Lower roughness = sharper, more concentrated specular highlights.
+ * This overrides the GLTF-baked roughness to ensure consistent CAD appearance.
+ */
+const roughnessOverride = 0.2;
 
 /**
  * Dispose a material and all its texture properties.
@@ -161,6 +171,20 @@ export function GltfMesh({
 
         // Convert LineSegments to LineSegments2 for fat line rendering
         applyFatLineSegments(gltf, resolutionRef.current);
+
+        // Enhance PBR materials for a glossy CAD look
+        if (!enableMatcap) {
+          gltf.scene.traverse((object) => {
+            if ('isMesh' in object && object.isMesh) {
+              const mesh = object as Mesh;
+              const mat = mesh.material as MeshStandardMaterial;
+              if ('envMapIntensity' in mat) {
+                mat.envMapIntensity = envMapIntensity;
+                mat.roughness = roughnessOverride;
+              }
+            }
+          });
+        }
 
         // Apply matcap material if enabled
         if (enableMatcap) {
