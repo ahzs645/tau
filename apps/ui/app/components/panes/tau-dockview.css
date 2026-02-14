@@ -181,7 +181,13 @@
 
 /* ── Group-hover action buttons ──
    Hidden by default, shown on group hover to reduce visual noise.
-   All pane action buttons share the `.dv-pane-action` class. */
+   All pane action buttons share the `.dv-pane-action` class.
+
+   Dockview v4.13+ defaults to `'onlyWhenVisible'` rendering, which appends
+   panel content directly into `.dv-content-container` (a child of
+   `.dv-groupview`). This keeps everything inside the groupview DOM tree, so
+   plain CSS `:hover` fires for both the tab bar and the content area of
+   every split pane. */
 .dockview-theme-tau .dv-pane-action {
   opacity: 0;
   transition: opacity 0.15s ease;

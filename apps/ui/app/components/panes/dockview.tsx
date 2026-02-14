@@ -21,6 +21,12 @@ type DockviewProperties = Omit<ComponentProps<typeof DockviewReact>, 'theme'>;
  * Includes a "split right" button in the right side of each group's tab bar
  * (visible on hover). All theme CSS lives in the co-located `tau-dockview.css`
  * stylesheet which is loaded via `global.styles.ts` after the base dockview CSS.
+ *
+ * Dockview v4.13+ defaults to `'onlyWhenVisible'` rendering, which appends
+ * panel content directly into `.dv-content-container` (a child of
+ * `.dv-groupview`).  This keeps the content inside the groupview DOM tree,
+ * allowing plain CSS `.dv-groupview:hover` to fire for both the tab bar and
+ * the content area of every split pane.
  */
 export function Dockview(properties: DockviewProperties): React.JSX.Element {
   return (
