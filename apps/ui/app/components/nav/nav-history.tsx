@@ -328,11 +328,8 @@ function NavHistoryItem({
               <span>Duplicate</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="hover:text-destructive [&:hover>svg]:text-destructive"
-              onClick={handleDeleteClick}
-            >
-              <Trash2 className="text-muted-foreground" />
+            <DropdownMenuItem variant="destructive" onClick={handleDeleteClick}>
+              <Trash2 />
               <span>Delete</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
