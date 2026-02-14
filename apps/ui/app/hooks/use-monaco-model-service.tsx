@@ -22,12 +22,6 @@ import { registerMonacoNavigation } from '#lib/monaco-navigation-service.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 
-const diagnosticsDebugPrefix = '[diag-debug]';
-
-function diagnosticsDebugLog(scope: string, details: Record<string, unknown>): void {
-  console.info(`${diagnosticsDebugPrefix} ${scope}`, details);
-}
-
 type MonacoServicesContextType = {
   modelService: MonacoModelService | undefined;
   markerService: MonacoMarkerService | undefined;
@@ -86,15 +80,8 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
     });
 
     setServices({ modelService, markerService });
-    diagnosticsDebugLog('MonacoModelServiceProvider:init', {
-      buildId,
-      hasMonaco: Boolean(monaco),
-    });
 
     return () => {
-      diagnosticsDebugLog('MonacoModelServiceProvider:dispose', {
-        buildId,
-      });
       openerDisposable.dispose();
       registry.dispose();
       modelService.dispose();
@@ -106,10 +93,6 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
 
   // Forward build session changes to services
   useEffect(() => {
-    diagnosticsDebugLog('MonacoModelServiceProvider:build-session-change', {
-      buildId,
-      hasModelService: Boolean(services.modelService),
-    });
     services.modelService?.setBuildSession(buildId);
     registry.onBuildSessionChange(buildId);
   }, [buildId, services.modelService]);

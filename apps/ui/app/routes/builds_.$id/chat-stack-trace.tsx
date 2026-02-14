@@ -10,7 +10,7 @@ import { FileLink } from '#components/files/file-link.js';
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useBuild } from '#hooks/use-build.js';
-import { useCadSelector } from '#hooks/use-cad.js';
+import { useCad, useCadSelector } from '#hooks/use-cad.js';
 import { useChatActions } from '#hooks/use-chat.js';
 import { useChats } from '#hooks/use-chats.js';
 import { useModifiers } from '#hooks/use-keyboard.js';
@@ -24,7 +24,6 @@ import { useFileManager } from '#hooks/use-file-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
-const shiftKeyCombination = { key: 'Shift' } as const;
 const shiftKey = formatKeyCombination({ key: 'Shift' });
 
 type FormatErrorPromptOptions = {
@@ -445,8 +444,16 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
   const { createChat } = useChats(buildId);
   const [isOpen, setIsOpen] = useState(true);
 
+  // Guard against stale cadActor during build transitions.
+  // CadProvider may still hold the previous build's actor while buildId has
+  // already changed to the new build. Check that the actor ID matches the
+  // expected pattern "cad-{buildId}-{entryFile}" before reading its state.
+  const cadRef = useCad();
+  const isCadActorStale = cadRef ? !cadRef.id.includes(buildId) : true;
+
   // Get all kernel issues for this viewer's compilation unit via CadProvider context
-  const errors = useCadSelector((state) => state.context.kernelIssues.get(entryFile), undefined);
+  const rawErrors = useCadSelector((state) => state.context.kernelIssues.get(entryFile), undefined);
+  const errors = isCadActorStale ? undefined : rawErrors;
 
   const { sendMessage } = useChatActions();
   const { selectedModel } = useModels();

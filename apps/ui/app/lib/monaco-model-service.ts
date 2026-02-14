@@ -475,10 +475,6 @@ export class MonacoModelService {
     }
 
     const uri = this.createUri(filePath);
-    if (this.monaco.editor.getModel(uri)) {
-      this.syncedPaths.add(filePath);
-      return;
-    }
 
     try {
       const content = await this.fileManager.readFile(filePath);
@@ -487,13 +483,28 @@ export class MonacoModelService {
         return;
       }
 
-      // Re-check model
-      if (this.monaco.editor.getModel(uri)) {
+      const text = decodeTextFile(content);
+
+      // Check if model already exists (may have been recreated by the Editor
+      // component with stale content after setBuildSession disposed it).
+      const existingModel = this.monaco.editor.getModel(uri);
+      if (existingModel) {
+        // Update content if it differs from the filesystem (fixes stale model content)
+        if (existingModel.getValue() !== text) {
+          existingModel.setValue(text);
+
+          // Safety net: immediately clear TypeScript/JavaScript worker markers
+          // from the previous build. The TS worker will re-validate the updated
+          // content asynchronously and set fresh markers, but clearing now prevents
+          // stale errors from showing during the debounce window.
+          this.monaco.editor.setModelMarkers(existingModel, 'typescript', []);
+          this.monaco.editor.setModelMarkers(existingModel, 'javascript', []);
+        }
+
         this.syncedPaths.add(filePath);
         return;
       }
 
-      const text = decodeTextFile(content);
       const language = getMonacoLanguage(filePath);
       if (language) {
         this.monaco.editor.createModel(text, language, uri);
