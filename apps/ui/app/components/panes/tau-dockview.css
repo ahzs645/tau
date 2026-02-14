@@ -202,3 +202,45 @@
 .dockview-theme-tau .dv-groupview > .dv-content-container {
   background-color: var(--background);
 }
+
+/* ── Override CSS containment that breaks position:fixed for Monaco widgets ──
+   Dockview's .dv-dockview applies `contain: layout` which per the CSS Containment
+   spec creates a new containing block for position:fixed descendants. This causes
+   Monaco's fixedOverflowWidgets (hover tooltips, suggest widget, parameter hints)
+   to position relative to .dv-dockview instead of the viewport, rendering them
+   off-screen. We remove the containment so position:fixed works correctly.
+
+   Note: overflow:hidden on .dv-groupview does NOT clip position:fixed elements
+   as long as no ancestor creates a containing block — so removing contain:layout
+   is sufficient. The overflow:hidden is set as an inline style by Dockview JS and
+   cannot be overridden without !important, but it's not needed for the fix. */
+
+/* Root: remove layout containment.
+   Dockview's .dv-dockview has `contain: layout` which creates a new containing
+   block for position:fixed descendants (per CSS Containment spec). This causes
+   Monaco's fixedOverflowWidgets (hover tooltips, suggest widget, parameter hints)
+   to be positioned relative to .dv-dockview instead of the viewport, rendering
+   them off-screen. Note: .dockview-theme-tau is a wrapper PARENT of .dv-dockview
+   in the DOM, so a descendant selector (space) is required here. */
+.dockview-theme-tau .dv-dockview {
+  contain: none;
+}
+
+/* Render overlay: remove ALL containing-block and stacking-context properties.
+   This is the innermost wrapper around panel content. */
+.dockview-theme-tau .dv-render-overlay {
+  contain: none;
+  transform: none;
+  will-change: auto;
+  backface-visibility: visible;
+  isolation: auto;
+}
+
+/* Animation: during resize/drag animations Dockview applies transform and
+   will-change on .dv-view which creates a temporary containing block.
+   Override to prevent position:fixed widgets from shifting during animation. */
+.dockview-theme-tau .dv-split-view-container.dv-animation .dv-view {
+  will-change: auto;
+  transform: none;
+  backface-visibility: visible;
+}
