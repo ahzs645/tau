@@ -872,6 +872,9 @@ importers:
       '@gltf-transform/functions':
         specifier: ^4.2.1
         version: 4.2.1
+      '@taucad/types':
+        specifier: workspace:*
+        version: link:../../libs/types
       assimpjs:
         specifier: https://codeload.github.com/taucad/assimpjs/tar.gz/cf36dc8e4ef85f1153d041defac70bb1bc1c6454
         version: https://codeload.github.com/taucad/assimpjs/tar.gz/cf36dc8e4ef85f1153d041defac70bb1bc1c6454
