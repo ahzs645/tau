@@ -355,7 +355,7 @@ export abstract class JavaScriptWorker<
             {
               message: 'No main or default export function found',
               type: 'runtime',
-              severity: 'error',
+              severity: 'warning',
             },
           ],
         };
