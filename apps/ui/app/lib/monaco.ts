@@ -2,10 +2,12 @@ import { loader } from '@monaco-editor/react';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import { shikiToMonaco } from '@shikijs/monaco';
 import { registerCompletion } from 'monacopilot';
 import type { CompletionRegistration, CompletionCopilot } from 'monacopilot';
 import type * as Monaco from 'monaco-editor';
 import { ENV } from '#environment.config.js';
+import { highlighter } from '#lib/shiki.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { monacoLanguages } from '#lib/monaco.constants.js';
 import { kclContribution } from '#lib/kcl-language/kcl-register-language.js';
@@ -58,6 +60,12 @@ export const configureMonaco = async (): Promise<void> => {
 
     // Phase 1: Register language metadata for all contributions (idempotent)
     registry.registerAll(monaco);
+
+    // Register Shiki highlighter ONCE globally. shikiToMonaco monkey-patches
+    // monaco.editor.create and monaco.editor.setTheme, creating chained wrappers
+    // on repeated calls. Calling it once here (instead of per-editor instance)
+    // prevents wrapper multiplication that can interfere with editor creation.
+    shikiToMonaco(highlighter, monaco);
   }
 };
 
