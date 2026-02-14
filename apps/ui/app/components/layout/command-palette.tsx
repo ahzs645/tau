@@ -11,7 +11,7 @@ import {
   CommandGroup,
   CommandItem,
 } from '#components/ui/command.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -136,7 +136,7 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
 
 const commandKeyCombination = {
   key: 'k',
-  metaKey: true,
+  modKey: true,
 } as const satisfies KeyCombination;
 
 type CommandPaletteTriggerProperties = {
@@ -146,7 +146,7 @@ type CommandPaletteTriggerProperties = {
 function CommandPaletteTrigger({ items }: CommandPaletteTriggerProperties): React.JSX.Element {
   const [open, setOpen] = useState(false);
 
-  const { formattedKeyCombination } = useKeydown(commandKeyCombination, () => {
+  const { formattedKeyCombination } = useKeybinding(commandKeyCombination, () => {
     setOpen((previous) => !previous);
   });
 

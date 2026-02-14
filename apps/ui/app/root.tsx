@@ -28,6 +28,7 @@ import { BuildManagerProvider } from '#hooks/use-build-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { AnalyticsProvider } from '#hooks/use-analytics.js';
 import { ChatRpcSocketProvider } from '#hooks/use-chat-rpc-socket.js';
+import { KeyboardProvider } from '#hooks/use-keyboard.js';
 
 export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
 
@@ -99,9 +100,11 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
                 <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
                   <ColorProvider>
                     <TooltipProvider>
-                      <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
-                        {children}
-                      </LayoutDocument>
+                      <KeyboardProvider>
+                        <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
+                          {children}
+                        </LayoutDocument>
+                      </KeyboardProvider>
                     </TooltipProvider>
                   </ColorProvider>
                 </ThemeProvider>

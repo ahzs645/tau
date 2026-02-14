@@ -4,9 +4,10 @@ import { Columns2, Rows2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { DockviewPaneAction } from '#components/panes/dockview-pane-action.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useModifiers } from '#hooks/use-keyboard.js';
+import { formatKeyCombination } from '#utils/keys.utils.js';
 
-const shiftKeyCombination = { key: 'Shift' } as const;
+const shiftKey = formatKeyCombination({ key: 'Shift' });
 
 /**
  * Right-side header action for Dockview groups.
@@ -17,13 +18,7 @@ const shiftKeyCombination = { key: 'Shift' } as const;
  * CSS (opacity transition on group hover).
  */
 export function DockviewSplitAction({ containerApi, group }: IDockviewHeaderActionsProps): React.JSX.Element {
-  const { isKeyPressed: isShiftHeld, formattedKeyCombination: shiftKey } = useKeydown(
-    shiftKeyCombination,
-    () => {
-      // No-op callback - we only care about isKeyPressed state
-    },
-    { preventDefault: false, stopPropagation: false },
-  );
+  const { shift: isShiftHeld } = useModifiers();
 
   const handleSplit = useCallback(() => {
     containerApi.addGroup({

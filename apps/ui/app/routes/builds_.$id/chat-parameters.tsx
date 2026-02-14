@@ -16,7 +16,7 @@ import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { cn } from '#utils/ui.utils.js';
 import { hasJsonSchemaObjectProperties } from '#utils/schema.utils.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useBuild, useMainGraphics } from '#hooks/use-build.js';
@@ -93,7 +93,7 @@ export const ChatParameters = memo(function (props: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination: formattedParametersKeyCombination } = useKeydown(
+  const { formattedKeyCombination: formattedParametersKeyCombination } = useKeybinding(
     toggleParametersKeyCombination,
     toggleParametersOpen,
   );

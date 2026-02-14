@@ -1,17 +1,17 @@
 import { Laptop, Moon, Sun } from 'lucide-react';
 import { SidebarMenuButton } from '#components/ui/sidebar.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useTheme } from '#hooks/use-theme.js';
 
 export function ThemeToggle(): React.JSX.Element {
   const { themeWithSystem, cycleTheme } = useTheme();
 
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     {
       key: 'u',
-      metaKey: true,
+      modKey: true,
     },
     cycleTheme,
   );

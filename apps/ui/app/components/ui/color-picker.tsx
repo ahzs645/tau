@@ -8,7 +8,7 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 
 export type ColorPickerValue = HslColor;
 
@@ -41,10 +41,10 @@ function ColorPicker({
     onChange(newValue);
   };
 
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     {
       key: 'i',
-      metaKey: true,
+      modKey: true,
     },
     () => {
       setOpen((previous) => !previous);

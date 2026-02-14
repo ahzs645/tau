@@ -25,7 +25,7 @@ const floatingPanelTriggerButtonVariants = cva(cn('text-muted-foreground'), {
         'absolute group-data-[state=open]/floating-panel:z-10',
         'rounded-md group-data-[state=open]/floating-panel:rounded-sm',
         'size-8 group-data-[state=open]/floating-panel:size-6',
-        'md:opacity-0 md:group-hover/floating-panel:opacity-100 group-has-[[aria-expanded=true]]/floating-panel:opacity-100',
+        'md:opacity-0 md:group-hover/floating-panel:opacity-100',
         'max-md:size-6 max-md:items-center max-md:justify-center max-md:border',
       ),
       static: '',
@@ -461,7 +461,7 @@ function FloatingPanelContentHeaderActions({
     <div
       className={cn(
         'flex items-center pl-1 max-md:gap-0.5',
-        'group-hover/floating-panel:opacity-100 has-aria-expanded:opacity-100 md:opacity-0',
+        'group-hover/floating-panel:opacity-100 md:opacity-0',
         className,
       )}
       data-slot="floating-panel-content-header-actions"

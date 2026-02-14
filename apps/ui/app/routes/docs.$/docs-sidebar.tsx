@@ -33,7 +33,7 @@ import { Loader } from '#components/ui/loader.js';
 import { DocsIcon } from '#components/icons/docs-icon.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { Button } from '#components/ui/button.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 
 const docsSidebarWidthIcon = 'calc(var(--spacing) * 17)';
@@ -243,7 +243,7 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
 function DocsSidebarSearch(): React.JSX.Element | undefined {
   const { enabled, setOpenSearch } = useSearchContext();
 
-  const { formattedKeyCombination: formattedSearchKeyCombination } = useKeydown(
+  const { formattedKeyCombination: formattedSearchKeyCombination } = useKeybinding(
     { key: '/' },
     () => {
       // @ts-expect-error -- fumadocs has incorrect typing

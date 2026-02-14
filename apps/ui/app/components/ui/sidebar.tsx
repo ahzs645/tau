@@ -4,7 +4,7 @@ import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
 import { useLocation } from 'react-router';
 import { useIsMobile } from '#hooks/use-mobile.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
@@ -25,7 +25,7 @@ const sidebarWidthIcon = 'calc(var(--spacing) * 2)';
 
 const sidebarToggleKeyCombo = {
   key: 'b',
-  metaKey: true,
+  modKey: true,
 } as const satisfies KeyCombination;
 
 type SidebarContextProperties = {
@@ -86,7 +86,7 @@ function SidebarProvider({
     }
   }, [isMobile, setOpen, setOpenMobile]);
 
-  useKeydown(sidebarToggleKeyCombo, toggleSidebar, {
+  useKeybinding(sidebarToggleKeyCombo, toggleSidebar, {
     preventDefault: true,
     stopPropagation: true,
   });

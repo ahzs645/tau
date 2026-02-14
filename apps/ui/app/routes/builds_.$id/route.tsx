@@ -8,7 +8,7 @@ import type { Handle } from '#types/matches.types.js';
 import { ChatProvider, useChatContext } from '#hooks/use-chat.js';
 import { BuildNameEditor } from '#routes/builds_.$id/build-name-editor.js';
 import { ViewContextProvider } from '#routes/builds_.$id/chat-interface-view-context.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { BuildCommandPaletteItems } from '#routes/builds_.$id/build-command-items.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { useChatRpcConnection } from '#hooks/use-chat-rpc-socket.js';
@@ -54,10 +54,10 @@ function Chat(): React.JSX.Element {
     enabled: !isLoadingChat,
   });
 
-  useKeydown(
+  useKeybinding(
     {
       key: 's',
-      metaKey: true,
+      modKey: true,
     },
     () => {
       toast.success('Your build is saved automatically');

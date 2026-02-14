@@ -11,7 +11,7 @@ import {
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { ChatEditorExplorerFiles } from '#routes/builds_.$id/chat-explorer-files.js';
@@ -69,7 +69,7 @@ export function ChatExplorerTree({
     setIsExpanded?.((current) => !current);
   };
 
-  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeydown(keyCombinationEditor, toggleEditor);
+  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleEditor);
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>

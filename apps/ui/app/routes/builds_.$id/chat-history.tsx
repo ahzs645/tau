@@ -21,7 +21,7 @@ import {
   FloatingPanelErrorContent,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
@@ -83,7 +83,7 @@ export const ChatHistory = memo(function (props: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination } = useKeydown(toggleChatHistoryKeyCombination, toggleChatHistory);
+  const { formattedKeyCombination } = useKeybinding(toggleChatHistoryKeyCombination, toggleChatHistory);
 
   // State to trigger focus on the textarea when a new chat is created
   const [shouldFocusTextarea, setShouldFocusTextarea] = useState(false);

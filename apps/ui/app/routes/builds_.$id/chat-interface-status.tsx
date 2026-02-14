@@ -7,7 +7,7 @@ import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
@@ -80,7 +80,7 @@ export function ChatInterfaceStatus({ className, ...props }: ChatInterfaceStatus
     }
   };
 
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     {
       key: 'Escape',
     },

@@ -12,7 +12,7 @@ import {
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useBuild } from '#hooks/use-build.js';
@@ -154,7 +154,7 @@ export const ChatConverter = memo(function (properties: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination: formattedConverterKeyCombination } = useKeydown(
+  const { formattedKeyCombination: formattedConverterKeyCombination } = useKeybinding(
     toggleConverterKeyCombination,
     toggleConverterOpen,
   );

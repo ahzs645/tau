@@ -6,7 +6,7 @@ import {
   FloatingPanelContent,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
@@ -55,7 +55,7 @@ export const ChatFileTree = memo(function (props: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination } = useKeydown(toggleFileTreeKeyCombination, toggleFileTree);
+  const { formattedKeyCombination } = useKeybinding(toggleFileTreeKeyCombination, toggleFileTree);
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>

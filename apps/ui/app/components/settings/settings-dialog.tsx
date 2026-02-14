@@ -15,7 +15,7 @@ import { FilesystemSettings } from '#components/settings/filesystem-settings.js'
 import { GeneralSettings } from '#components/settings/general-settings.js';
 import { SettingsAuthGate } from '#components/settings/settings-auth-gate.js';
 import { cn } from '#utils/ui.utils.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { ResponsiveTabs } from '#components/ui/responsive-tabs.js';
 import type { ResponsiveTabItem } from '#components/ui/responsive-tabs.js';
 import { TabsContent } from '#components/ui/tabs.js';
@@ -90,7 +90,7 @@ export function SettingsDialog(): React.JSX.Element {
   }, []);
 
   // Register Cmd+, keyboard shortcut
-  useKeydown({ key: ',', metaKey: true }, () => {
+  useKeybinding({ key: ',', modKey: true }, () => {
     openSettingsDialog();
   });
 

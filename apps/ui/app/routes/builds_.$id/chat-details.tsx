@@ -18,7 +18,7 @@ import { Textarea } from '#components/ui/textarea.js';
 import { Tags, TagsTrigger } from '#components/ui/input-tags.js';
 import { FileSelector } from '#components/files/file-selector.js';
 import { ChatDetailsUsage } from '#routes/builds_.$id/chat-details-usage.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { useBuild } from '#hooks/use-build.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
@@ -128,7 +128,7 @@ export function ChatDetails({
     [buildRef],
   );
 
-  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeydown(keyCombinationEditor, toggleDetails);
+  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleDetails);
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>

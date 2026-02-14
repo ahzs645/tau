@@ -3,7 +3,7 @@ import { Slider } from '#components/ui/slider.js';
 import { buttonVariants } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useModifiers } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
@@ -26,16 +26,7 @@ export function FovControl({ className }: FovControlProps): React.JSX.Element {
   const fovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
 
   // Track Shift key state for changing slider step
-  const { isKeyPressed: isShiftHeld } = useKeydown(
-    { key: 'Shift' },
-    () => {
-      // No-op callback, we just use the returned isKeyPressed state
-    },
-    {
-      preventDefault: false,
-      stopPropagation: false,
-    },
-  );
+  const { shift: isShiftHeld } = useModifiers();
 
   const handleFovChange = (value: number[]): void => {
     graphicsRef.send({ type: 'setFovAngle', payload: value[0]! });

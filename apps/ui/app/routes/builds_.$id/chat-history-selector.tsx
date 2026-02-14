@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogC
 import { Input } from '#components/ui/input.js';
 import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { FloatingPanelContentHeaderActions } from '#components/ui/floating-panel.js';
 import { useChatRpcStatus } from '#hooks/use-chat-rpc-socket.js';
@@ -62,7 +62,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
     onNewChat?.();
   }, [createChat, setLastChatId, onNewChat]);
 
-  const { formattedKeyCombination } = useKeydown(newChatKeyCombination, handleAddChat);
+  const { formattedKeyCombination } = useKeybinding(newChatKeyCombination, handleAddChat);
 
   const { sendMessage } = useChat({
     ...useChatConstants,

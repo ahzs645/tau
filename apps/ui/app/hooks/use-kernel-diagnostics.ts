@@ -17,6 +17,20 @@ import type { IssueSeverity, KernelStackFrame } from '@taucad/types';
 import type { MonacoMarkerService } from '#lib/monaco-marker-service.js';
 
 const kernelMarkerOwner = 'kernel';
+const diagnosticsDebugPrefix = '[diag-debug]';
+
+function getActorId(actorRef: AnyActorRef | undefined): string {
+  if (!actorRef) {
+    return 'undefined';
+  }
+
+  const maybeId = actorRef as { id?: string };
+  return maybeId.id ?? 'unknown';
+}
+
+function diagnosticsDebugLog(scope: string, details: Record<string, unknown>): void {
+  console.info(`${diagnosticsDebugPrefix} ${scope}`, details);
+}
 
 /**
  * Map IssueSeverity to Monaco MarkerSeverity.
@@ -103,6 +117,19 @@ type UseKernelDiagnosticsOptions = {
   markerService: MonacoMarkerService | undefined;
 };
 
+type KernelDiagnosticsIssue = {
+  message: string;
+  location?: {
+    fileName: string;
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber?: number;
+    endColumn?: number;
+  };
+  stackFrames?: KernelStackFrame[];
+  severity: IssueSeverity;
+};
+
 type UseKernelDiagnosticsReturn = {
   handleValidate: () => void;
 };
@@ -122,27 +149,18 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
   const previousFilesRef = useRef<Set<string>>(new Set());
 
   // Subscribe to ALL kernel issues (not just active file)
-  const kernelIssues = useSelector(
-    cadActor,
-    (state) =>
-      (state?.context.kernelIssues as
-        | Map<
-            string,
-            Array<{
-              message: string;
-              location?: {
-                fileName: string;
-                startLineNumber: number;
-                startColumn: number;
-                endLineNumber?: number;
-                endColumn?: number;
-              };
-              stackFrames?: KernelStackFrame[];
-              severity: IssueSeverity;
-            }>
-          >
-        | undefined) ?? [],
-  );
+  const kernelIssues = useSelector(cadActor, (state): Map<string, KernelDiagnosticsIssue[]> => {
+    const issues = state?.context.kernelIssues as Map<string, KernelDiagnosticsIssue[]> | undefined;
+    return issues ?? new Map<string, KernelDiagnosticsIssue[]>();
+  });
+
+  useEffect(() => {
+    diagnosticsDebugLog('useKernelDiagnostics:actor-change', {
+      cadActorId: getActorId(cadActor),
+      hasMonaco: Boolean(monaco),
+      hasMarkerService: Boolean(markerService),
+    });
+  }, [cadActor, monaco, markerService]);
 
   // Sync kernel issues to Monaco markers via MarkerService
   useEffect(() => {
@@ -151,6 +169,12 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
     }
 
     const currentFiles = new Set<string>();
+
+    diagnosticsDebugLog('useKernelDiagnostics:sync-start', {
+      cadActorId: getActorId(cadActor),
+      kernelIssueFileCount: kernelIssues.size,
+      previousTrackedFileCount: previousFilesRef.current.size,
+    });
 
     // Set markers for all files with issues.
     // Issues may reference files different from the entry file (cross-file errors),
@@ -187,6 +211,11 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
         currentFiles.add(targetFile);
         const uri = monaco.Uri.file(`/${targetFile}`).toString();
         markerService.setMarkers(uri, kernelMarkerOwner, markers);
+        diagnosticsDebugLog('useKernelDiagnostics:set-markers', {
+          cadActorId: getActorId(cadActor),
+          targetFile,
+          markerCount: markers.length,
+        });
       }
 
       // If no issues had location, still track the entry file to clear stale markers
@@ -200,11 +229,15 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
       if (!currentFiles.has(previousFile)) {
         const uri = monaco.Uri.file(`/${previousFile}`).toString();
         markerService.clearMarkers(uri, kernelMarkerOwner);
+        diagnosticsDebugLog('useKernelDiagnostics:clear-stale-markers', {
+          cadActorId: getActorId(cadActor),
+          clearedFile: previousFile,
+        });
       }
     }
 
     previousFilesRef.current = currentFiles;
-  }, [monaco, markerService, kernelIssues]);
+  }, [monaco, markerService, kernelIssues, cadActor]);
 
   // Monaco-to-Kernel: forward TS error markers to CAD actor
   const handleValidate = useCallback(() => {
@@ -215,6 +248,12 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
     const errors = monaco.editor.getModelMarkers({});
     // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- monaco has import issues. This is safe.
     const filteredErrors = errors.filter((error) => error.severity === 8);
+    diagnosticsDebugLog('useKernelDiagnostics:validate', {
+      cadActorId: getActorId(cadActor),
+      totalMarkerCount: errors.length,
+      errorMarkerCount: filteredErrors.length,
+      resources: [...new Set(filteredErrors.map((error) => error.resource.toString()))],
+    });
 
     if (filteredErrors.length > 0) {
       cadActor.send({

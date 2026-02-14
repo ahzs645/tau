@@ -10,7 +10,7 @@ import {
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useBuild } from '#hooks/use-build.js';
@@ -56,7 +56,7 @@ export const ChatGit = memo(function (props: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination: formattedGitKeyCombination } = useKeydown(toggleGitKeyCombination, toggleGitOpen);
+  const { formattedKeyCombination: formattedGitKeyCombination } = useKeybinding(toggleGitKeyCombination, toggleGitOpen);
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>

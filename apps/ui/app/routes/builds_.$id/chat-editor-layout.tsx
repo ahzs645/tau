@@ -12,7 +12,7 @@ import {
 } from '#components/ui/floating-panel.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { useCookie } from '#hooks/use-cookie.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { EditorDockview } from '#routes/builds_.$id/chat-editor-dockview.js';
 import { ChatConsole, collapsedConsoleSize } from '#routes/builds_.$id/chat-console.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
@@ -85,8 +85,8 @@ export function ChatEditorLayout({
     }
   }, [consolePanelReference]);
 
-  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeydown(keyCombinationEditor, toggleEditor);
-  const { formattedKeyCombination: formattedToggleConsoleKeyCombination } = useKeydown(
+  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleEditor);
+  const { formattedKeyCombination: formattedToggleConsoleKeyCombination } = useKeybinding(
     toggleConsoleKeyCombination,
     toggleConsolePanel,
   );
