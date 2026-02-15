@@ -218,7 +218,7 @@ describe('messageContentSanitizerMiddleware', () => {
 
   describe('AIMessages with tool_calls should not be modified', () => {
     it('should not modify AIMessage with tool_calls and empty content', async () => {
-      // tool_use blocks count as valid content for the Anthropic API,
+      // `tool_use` blocks count as valid content for the Anthropic API,
       // and reconstructing these messages can break tool_use/tool_result pairing
       const aiMessage = new AIMessage({
         content: '',
@@ -403,7 +403,6 @@ describe('messageContentSanitizerMiddleware', () => {
         toolCallId: 'call_abc',
       });
 
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       expect(syntheticTool.tool_call_id).toBe('call_abc');
       expect(syntheticTool.name).toBe('create_file');
       expect(syntheticTool.status).toBe('error');
@@ -538,13 +537,13 @@ describe('messageContentSanitizerMiddleware', () => {
       // First synthetic after first AI
       const firstSynthetic = request.messages[2] as ToolMessage;
       expect(firstSynthetic).toBeInstanceOf(ToolMessage);
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+
       expect(firstSynthetic.tool_call_id).toBe('call_first');
 
       // Second synthetic after second AI
       const secondSynthetic = request.messages[5] as ToolMessage;
       expect(secondSynthetic).toBeInstanceOf(ToolMessage);
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+
       expect(secondSynthetic.tool_call_id).toBe('call_second');
     });
 
