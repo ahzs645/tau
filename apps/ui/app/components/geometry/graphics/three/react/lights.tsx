@@ -7,13 +7,13 @@ import { Environment, Lightformer } from '@react-three/drei';
 // All tuning values live at module scope for easy adjustment.
 
 /** Ambient fill -- provides base diffuse illumination so surfaces are visible. */
-const ambientIntensity = 0.5;
+const ambientIntensity = 0.3;
 
 /** Camera-relative directional -- even orbit-following fill light. */
-const cameraDirectionalIntensity = 1;
+const cameraDirectionalIntensity = 0.7;
 
 /** Fixed directional key light from above-front -- creates angle-dependent specular highlights. */
-const fixedKeyIntensity = 3.5;
+const fixedKeyIntensity = 3;
 
 /** Environment cubemap resolution (px). Higher = sharper specular reflections. */
 const envResolution = 512;
@@ -88,11 +88,7 @@ export function Lights({
       <directionalLight ref={cameraLightReference} intensity={cameraDirectionalIntensity} color="white" />
 
       {/* Fixed key light from above-front -- produces angle-dependent specular highlights */}
-      <directionalLight
-        intensity={fixedKeyIntensity}
-        color="white"
-        position={[-r, r * 4, r * 4]}
-      />
+      <directionalLight intensity={fixedKeyIntensity} color="white" position={[-r, r * 4, r * 4]} />
 
       {showEnvironment ? (
         <Environment resolution={envResolution}>
