@@ -60,7 +60,7 @@ export function Safari({
             <path
               fillRule="evenodd"
               clipRule="evenodd"
-              d="M1.06738 12C1.06738 5.92487 5.99225 1 12.0674 1H1189.93C1196.01 1 1200.93 5.92487 1200.93 12V51H1.06738V12Z"
+              d="M0 12C0 5.37258 5.37258 0 12 0H1190C1196.63 0 1202 5.37258 1202 12V51H0V12Z"
               className="fill-white dark:fill-[#262626]"
             />
             {/* Traffic lights */}
