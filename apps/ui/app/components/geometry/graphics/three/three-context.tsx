@@ -55,7 +55,10 @@ export function ThreeProvider({
       dpr={dpr}
       frameloop="demand"
       className={cn('bg-background', className)}
-      onCreated={() => {
+      onCreated={({ gl }) => {
+        // Increase tone mapping exposure for brighter mid-tones and visible specular highlights.
+        // Default ACES exposure (1.0) compresses highlights too aggressively for CAD rendering.
+        gl.toneMappingExposure = 1.5;
         setIsCanvasReady(true);
       }}
       {...properties}
