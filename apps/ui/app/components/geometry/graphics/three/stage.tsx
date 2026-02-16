@@ -3,13 +3,11 @@ import type { ReactNode } from 'react';
 import * as THREE from 'three';
 import { PerspectiveCamera } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
-import { AxesHelper } from '#components/geometry/graphics/three/react/axes-helper.js';
-import { Grid } from '#components/geometry/graphics/three/grid.js';
 import { useCameraReset } from '#components/geometry/graphics/three/use-camera-reset.js';
 import { Lights } from '#components/geometry/graphics/three/react/lights.js';
 import { SectionView } from '#components/geometry/graphics/three/react/section-view.js';
 import { createStripedMaterial } from '#components/geometry/graphics/three/materials/striped-material.js';
-import { useGraphicsSelector } from '#hooks/use-graphics.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export type StageOptions = {
   /**
@@ -54,7 +52,7 @@ const _sphere = new THREE.Sphere();
 
 // Default configuration constants
 export const defaultStageOptions = {
-  offsetRatio: 3,
+  offsetRatio: 1.5,
   nearPlane: 1e-3,
   minimumFarPlane: 10_000_000_000,
   farPlaneRadiusMultiplier: 5,
@@ -69,8 +67,6 @@ type StageProperties = {
   readonly children: ReactNode;
   readonly enableCentering?: boolean;
   readonly stageOptions?: StageOptions;
-  readonly enableGrid?: boolean;
-  readonly enableAxes?: boolean;
 } & Omit<React.HTMLAttributes<HTMLDivElement>, 'id'>;
 
 export function Stage({
@@ -84,7 +80,9 @@ export function Stage({
 
   const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
   const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const geometryKey = useGraphicsSelector((state) => state.context.geometryKey);
   const environmentPreset = useGraphicsSelector((state) => state.context.environmentPreset);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
 
   const isSectionViewActive = useGraphicsSelector((state) => state.context.isSectionViewActive);
   const selectedSectionViewId = useGraphicsSelector((state) => state.context.selectedSectionViewId);
@@ -192,10 +190,12 @@ export function Stage({
     cameraFovAngle,
   });
 
-  /**
-   * Position the scene.
-   */
-  // TODO: implement a solution that doesn't require hooking into the frame loop.
+  // Track geometry key changes to avoid expensive per-frame scene traversal.
+  // When geometryKey is provided, bounds are only recomputed when geometry changes
+  // and until the radius stabilizes, then skipped entirely during orbit/pan/zoom.
+  const lastGeometryKeyRef = React.useRef<string | undefined>(undefined);
+  const boundsStableRef = React.useRef(false);
+
   useFrame(() => {
     if (outer.current) {
       outer.current.updateWorldMatrix(true, true);
@@ -205,7 +205,24 @@ export function Stage({
       return;
     }
 
+    // When geometryKey is provided, invalidate stability when it changes
+    if (geometryKey !== lastGeometryKeyRef.current) {
+      lastGeometryKeyRef.current = geometryKey;
+      boundsStableRef.current = false;
+    }
+
+    // Skip expensive scene traversal once bounds have stabilized
+    if (boundsStableRef.current) {
+      return;
+    }
+
     _box3.setFromObject(inner.current);
+
+    // Don't mark stable or update state when the bounding box is empty
+    // (geometry hasn't loaded yet -- GltfMesh parses GLTF asynchronously)
+    if (_box3.isEmpty()) {
+      return;
+    }
 
     if (enableCentering) {
       _box3.getCenter(_centerPoint);
@@ -223,12 +240,24 @@ export function Stage({
     // Only update state when the radius has actually changed to avoid unnecessary re-renders
     set((previous) => {
       if (previous.geometryRadius === _sphere.radius) {
+        // Radius converged -- bounds are stable, stop polling
+        boundsStableRef.current = true;
         return previous;
       }
 
       return { geometryRadius: _sphere.radius, sceneRadius: previous.sceneRadius };
     });
   });
+
+  // Sync the real bounding-sphere radius to the graphics machine so other
+  // components (and downstream consumers of geometryRadius) get the actual value
+  // computed from the Three.js scene graph, not a placeholder.
+  const graphicsActor = useGraphics();
+  React.useEffect(() => {
+    if (geometryRadius > 0) {
+      graphicsActor.send({ type: 'sceneRadiusUpdated', radius: geometryRadius });
+    }
+  }, [graphicsActor, geometryRadius]);
 
   /**
    * Position the camera based on the scene's bounding box.
@@ -253,8 +282,6 @@ export function Stage({
     <group {...properties}>
       <PerspectiveCamera makeDefault />
       <group ref={outer}>
-        {properties.enableAxes ? <AxesHelper /> : null}
-        {properties.enableGrid ? <Grid /> : null}
         <SectionView
           plane={sectionView}
           enableSection={Boolean(isSectionViewActive && selectedSectionViewId)}
@@ -265,7 +292,12 @@ export function Stage({
           <group ref={inner}>{children}</group>
         </SectionView>
       </group>
-      <Lights enableMatcap={enableMatcap} environmentPreset={environmentPreset} sceneRadius={geometryRadius} />
+      <Lights
+        enableMatcap={enableMatcap}
+        environmentPreset={environmentPreset}
+        sceneRadius={geometryRadius}
+        upDirection={upDirection}
+      />
     </group>
   );
 }
