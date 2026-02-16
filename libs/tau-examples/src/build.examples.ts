@@ -243,7 +243,7 @@ const drinkingGlassCode = `/**
  * Parametric Drinking Glass
  * A customizable glass with adjustable dimensions for height, radii, and thickness.
  */
-import { draw, FaceFinder, EdgeFinder } from 'replicad';
+import { draw } from 'replicad';
 
 export const defaultParams = {
   height: 140.0, // Overall height of the glass in mm
@@ -333,7 +333,10 @@ export default function main(p = defaultParams) {
     }
   }
 
-  return glassSolid;
+  return {
+    shape: glassSolid,
+    color: '#7598a321'
+  };
 }
 `;
 
