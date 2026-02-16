@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useMemo } from 'react';
 import type { ClassValue } from 'clsx';
-import { Axis3D, Box, Grid3X3, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
+import { Axis3D, Box, Grid3X3, Layers, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
 import { useCad, useCadSelector } from '#hooks/use-cad.js';
@@ -70,6 +70,7 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
   const enableGrid = useGraphicsSelector((state) => state.context.enableGrid);
   const enableAxes = useGraphicsSelector((state) => state.context.enableAxes);
   const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const enablePostProcessing = useGraphicsSelector((state) => state.context.enablePostProcessing);
   const upDirection = useGraphicsSelector((state) => state.context.upDirection);
   const is2dGeometry = useGraphicsSelector((state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
@@ -117,6 +118,13 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
   const handleMatcapToggle = useCallback(
     (checked: boolean) => {
       graphicsRef.send({ type: 'setMatcapVisibility', payload: checked });
+    },
+    [graphicsRef],
+  );
+
+  const handlePostProcessingToggle = useCallback(
+    (checked: boolean) => {
+      graphicsRef.send({ type: 'setPostProcessingVisibility', payload: checked });
     },
     [graphicsRef],
   );
@@ -190,6 +198,24 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
                 </span>
                 <span className="text-xs font-medium text-muted-foreground/80">
                   Lighting effects are {enableMatcap ? 'inactive' : 'active'}
+                </span>
+              </div>
+            </DropdownMenuSwitchItem>
+            <DropdownMenuSwitchItem
+              className="h-10"
+              isChecked={enablePostProcessing}
+              onIsCheckedChange={handlePostProcessingToggle}
+            >
+              <Layers />
+              <div className="flex flex-col">
+                <span className="flex items-center gap-1">
+                  Post-processing{' '}
+                  <InfoTooltip>
+                    Enables screen-space ambient occlusion for more realistic depth and contact shadows.
+                  </InfoTooltip>
+                </span>
+                <span className="text-xs font-medium text-muted-foreground/80">
+                  Ambient occlusion is {enablePostProcessing ? 'active' : 'inactive'}
                 </span>
               </div>
             </DropdownMenuSwitchItem>
