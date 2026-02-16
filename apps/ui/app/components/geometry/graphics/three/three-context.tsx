@@ -2,8 +2,11 @@ import type { CanvasProps } from '@react-three/fiber';
 import { Canvas } from '@react-three/fiber';
 import { useState } from 'react';
 import { Scene } from '#components/geometry/graphics/three/scene.js';
+import { SceneOverlay } from '#components/geometry/graphics/three/scene-overlay.js';
 import { PostProcessing } from '#components/geometry/graphics/three/post-processing.js';
 import type { StageOptions } from '#components/geometry/graphics/three/stage.js';
+import { Grid } from '#components/geometry/graphics/three/grid.js';
+import { AxesHelper } from '#components/geometry/graphics/three/react/axes-helper.js';
 import { ActorBridge } from '#components/geometry/graphics/three/actor-bridge.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -57,9 +60,8 @@ export function ThreeProvider({
       frameloop="demand"
       className={cn('bg-background', className)}
       onCreated={({ gl }) => {
-        // Increase tone mapping exposure for brighter mid-tones and visible specular highlights.
-        // Default ACES exposure (1.0) compresses highlights too aggressively for CAD rendering.
-        gl.toneMappingExposure = 1.5;
+        // Neutral ACES exposure -- depth contrast comes from AO and targeted directional lights.
+        gl.toneMappingExposure = 1;
         setIsCanvasReady(true);
       }}
       {...properties}
@@ -70,8 +72,6 @@ export function ThreeProvider({
         enableDamping={enableDamping}
         enableZoom={enableZoom}
         enablePan={enablePan}
-        enableGrid={enableGrid}
-        enableAxes={enableAxes}
         upDirection={upDirection}
         stageOptions={stageOptions}
         zoomSpeed={zoomSpeed}
@@ -80,6 +80,10 @@ export function ThreeProvider({
         {children}
       </Scene>
       <PostProcessing />
+      <SceneOverlay>
+        {enableAxes ? <AxesHelper /> : null}
+        {enableGrid ? <Grid /> : null}
+      </SceneOverlay>
       {isCanvasReady ? <ActorBridge /> : null}
     </Canvas>
   );
