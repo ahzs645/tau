@@ -63,6 +63,7 @@ export type GraphicsContext = {
   enableGrid: boolean;
   enableAxes: boolean;
   enableMatcap: boolean;
+  enablePostProcessing: boolean;
   upDirection: 'x' | 'y' | 'z';
   environmentPreset: EnvironmentPreset;
 
@@ -140,6 +141,7 @@ export type GraphicsEvent =
   | { type: 'setGridVisibility'; payload: boolean }
   | { type: 'setAxesVisibility'; payload: boolean }
   | { type: 'setMatcapVisibility'; payload: boolean }
+  | { type: 'setPostProcessingVisibility'; payload: boolean }
   | { type: 'setUpDirection'; payload: 'x' | 'y' | 'z' }
   | { type: 'setEnvironmentPreset'; payload: EnvironmentPreset }
   // Clipping plane events
@@ -209,6 +211,7 @@ export type GraphicsInput = {
   enableGrid?: boolean;
   enableAxes?: boolean;
   enableMatcap?: boolean;
+  enablePostProcessing?: boolean;
   upDirection?: 'x' | 'y' | 'z';
   environmentPreset?: EnvironmentPreset;
 };
@@ -751,6 +754,13 @@ export const graphicsMachine = setup({
       },
     }),
 
+    setPostProcessingVisibility: assign({
+      enablePostProcessing({ event }) {
+        assertEvent(event, 'setPostProcessingVisibility');
+        return event.payload;
+      },
+    }),
+
     setUpDirection: assign({
       upDirection({ event }) {
         assertEvent(event, 'setUpDirection');
@@ -1085,6 +1095,7 @@ export const graphicsMachine = setup({
     enableGrid: input.enableGrid ?? true,
     enableAxes: input.enableAxes ?? true,
     enableMatcap: input.enableMatcap ?? false,
+    enablePostProcessing: input.enablePostProcessing ?? true,
     upDirection: input.upDirection ?? 'z',
     environmentPreset: input.environmentPreset ?? 'studio',
 
@@ -1177,6 +1188,9 @@ export const graphicsMachine = setup({
         setMatcapVisibility: {
           actions: 'setMatcapVisibility',
         },
+        setPostProcessingVisibility: {
+          actions: 'setPostProcessingVisibility',
+        },
         setUpDirection: {
           actions: 'setUpDirection',
         },
@@ -1234,6 +1248,9 @@ export const graphicsMachine = setup({
         // Geometry updates
         updateGeometries: {
           actions: 'updateGeometries',
+        },
+        sceneRadiusUpdated: {
+          actions: 'updateSceneRadius',
         },
 
         // Section view pivot updates (world-space anchor)

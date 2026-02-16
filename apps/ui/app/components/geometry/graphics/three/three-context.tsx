@@ -2,6 +2,7 @@ import type { CanvasProps } from '@react-three/fiber';
 import { Canvas } from '@react-three/fiber';
 import { useState } from 'react';
 import { Scene } from '#components/geometry/graphics/three/scene.js';
+import { PostProcessing } from '#components/geometry/graphics/three/post-processing.js';
 import type { StageOptions } from '#components/geometry/graphics/three/stage.js';
 import { ActorBridge } from '#components/geometry/graphics/three/actor-bridge.js';
 import { cn } from '#utils/ui.utils.js';
@@ -78,6 +79,7 @@ export function ThreeProvider({
       >
         {children}
       </Scene>
+      <PostProcessing />
       {isCanvasReady ? <ActorBridge /> : null}
     </Canvas>
   );
