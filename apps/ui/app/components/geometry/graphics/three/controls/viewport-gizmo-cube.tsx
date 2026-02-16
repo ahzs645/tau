@@ -2,13 +2,22 @@
 import { useThree } from '@react-three/fiber';
 import type { GizmoAxisOptions, GizmoOptions } from 'three-viewport-gizmo';
 import { ViewportGizmo } from 'three-viewport-gizmo';
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
 import { useColor } from '#hooks/use-color.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { createViewportGizmoCubeAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.js';
+import { useGraphicsSelector } from '#hooks/use-graphics.js';
+import {
+  calculateGizmoFovFromAngle,
+  calculateFovDistanceCompensation,
+  gizmoBaseFov,
+  gizmoBaseDistance,
+  gizmoDepthMargin,
+  gizmoFocusOffset,
+} from '#components/geometry/graphics/three/utils/math.utils.js';
 
 type ViewportGizmoCubeProps = {
   readonly size?: number;
@@ -34,6 +43,35 @@ type ViewportGizmoCubeProps = {
 const className = 'viewport-gizmo-cube';
 const emptyDependencies: readonly unknown[] = [];
 
+/**
+ * Synchronize the gizmo's internal camera FOV with the viewport camera FOV.
+ *
+ * The `three-viewport-gizmo` library creates its own internal PerspectiveCamera
+ * (accessed via the private `_camera` property) with hardcoded defaults (FOV=26,
+ * distance=7). This function updates that internal camera so the gizmo shows the
+ * same perspective as the main viewport, while compensating the camera distance to
+ * keep the gizmo cube at a consistent apparent size.
+ *
+ * NOTE: `_camera` is a non-public property. If the library ever exposes a public
+ * FOV API, this should be migrated. The runtime `instanceof` guard ensures a
+ * silent no-op if the internal structure changes.
+ */
+function syncGizmoFov(gizmo: ViewportGizmo, cameraFovAngle: number): void {
+  const internalCamera = (gizmo as unknown as { _camera: THREE.PerspectiveCamera })._camera;
+  if (!(internalCamera instanceof THREE.PerspectiveCamera)) {
+    return;
+  }
+
+  const gizmoFov = calculateGizmoFovFromAngle(cameraFovAngle);
+  const newDistance = calculateFovDistanceCompensation(gizmoBaseFov, gizmoFov, gizmoBaseDistance, gizmoFocusOffset);
+
+  internalCamera.fov = gizmoFov;
+  internalCamera.position.set(0, 0, newDistance);
+  internalCamera.near = Math.max(0.01, newDistance - gizmoDepthMargin);
+  internalCamera.far = newDistance + gizmoDepthMargin;
+  internalCamera.updateProjectionMatrix();
+}
+
 export function ViewportGizmoCube({
   size = 96,
   container,
@@ -49,6 +87,18 @@ export function ViewportGizmoCube({
 
   const { serialized } = useColor();
   const { theme } = useTheme();
+
+  // Subscribe to the viewport FOV from the per-view graphics machine
+  const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
+
+  // Keep a ref to the current angle so the creation effect can read it without
+  // adding cameraFovAngle as a dependency (which would cause expensive recreation)
+  const cameraFovAngleRef = useRef(cameraFovAngle);
+  cameraFovAngleRef.current = cameraFovAngle;
+
+  // Ref to the live gizmo instance for the FOV sync effect
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  const gizmoRef = useRef<ViewportGizmo | null>(null);
 
   const handleChange = useCallback((): void => {
     invalidate();
@@ -152,6 +202,10 @@ export function ViewportGizmoCube({
 
     // Create the gizmo
     const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
+    gizmoRef.current = gizmo;
+
+    // Synchronize the gizmo's internal camera FOV with the current viewport FOV
+    syncGizmoFov(gizmo, cameraFovAngleRef.current);
 
     // Add event listeners for the gizmo
     gizmo.addEventListener('change', handleChange);
@@ -160,6 +214,7 @@ export function ViewportGizmoCube({
     gizmo.add(
       createViewportGizmoCubeAxes({
         axesSize: 2.1,
+        rendererSize: size,
         xAxisColor: 'red',
         yAxisColor: 'green',
         zAxisColor: 'rgb(37, 78, 136)',
@@ -175,6 +230,9 @@ export function ViewportGizmoCube({
 
     // Cleanup function
     return () => {
+      // Clear the ref so the FOV sync effect cannot operate on a disposed gizmo
+      gizmoRef.current = null;
+
       // Remove event listeners
       gizmo.removeEventListener('change', handleChange);
 
@@ -194,6 +252,14 @@ export function ViewportGizmoCube({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
+
+  // Real-time FOV sync: update the gizmo's internal camera when the viewport FOV changes.
+  // This is a separate effect to avoid expensive gizmo recreation on every slider tick.
+  useEffect(() => {
+    if (gizmoRef.current) {
+      syncGizmoFov(gizmoRef.current, cameraFovAngle);
+    }
+  }, [cameraFovAngle]);
 
   return null;
 }

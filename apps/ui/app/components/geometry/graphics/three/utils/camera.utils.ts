@@ -1,14 +1,9 @@
 import * as THREE from 'three';
-
-/**
- * Calculates the field of view (FOV) in degrees from a camera FOV angle parameter.
- * Maps the input angle (0-90) to a FOV range (0.1-90 degrees).
- */
-function calculateFovFromAngle(cameraFovAngle: number): number {
-  const minFov = 0.1; // Very narrow FOV at 0 degrees (nearly orthographic)
-  const maxFov = 90; // Very wide FOV at 90 degrees (extreme perspective)
-  return minFov + (maxFov - minFov) * (cameraFovAngle / maxFov);
-}
+import {
+  calculateFovFromAngle,
+  calculateFovDistanceCompensation,
+  tanEpsilon,
+} from '#components/geometry/graphics/three/utils/math.utils.js';
 
 /**
  * Calculates a 3D position from spherical coordinates.
@@ -79,25 +74,16 @@ export function updateCameraFov({
   const newFov = calculateFovFromAngle(cameraFovAngle);
   camera.fov = newFov;
 
-  // Adjust camera distance to maintain perceived size
-  // The formula is: d2 = d1 * (tan(fov1/2) / tan(fov2/2))
-  // This keeps objects the same apparent size when FOV changes
-  const oldHalfFovRad = THREE.MathUtils.degToRad(oldFov / 2);
-  const newHalfFovRad = THREE.MathUtils.degToRad(newFov / 2);
-
-  if (oldHalfFovRad !== 0 && newHalfFovRad !== 0 && camera.position.lengthSq() >= 1e-9) {
-    // Direction from camera to target
-    const direction = camera.position.clone().normalize();
-
-    // Calculate the adjustment ratio
-    // When FOV decreases, we need to move camera farther away
-    const distanceRatio = Math.tan(oldHalfFovRad) / Math.tan(newHalfFovRad);
-
-    // Apply distance adjustment preserving direction
+  // Adjust camera distance to maintain perceived size.
+  // This keeps objects the same apparent size when FOV changes.
+  if (camera.position.lengthSq() >= tanEpsilon) {
     const currentDistance = camera.position.length();
-    const newDistance = currentDistance * distanceRatio;
+    const newDistance = calculateFovDistanceCompensation(oldFov, newFov, currentDistance);
 
-    camera.position.copy(direction.multiplyScalar(newDistance));
+    if (newDistance !== currentDistance) {
+      const direction = camera.position.clone().normalize();
+      camera.position.copy(direction.multiplyScalar(newDistance));
+    }
   }
 
   camera.updateProjectionMatrix();
@@ -158,11 +144,9 @@ export function resetCamera({
   }
 
   const standardFov = 60;
-  const fovAdjustmentFactor =
-    Math.tan(THREE.MathUtils.degToRad(standardFov / 2)) /
-    Math.tan(THREE.MathUtils.degToRad(effectiveFovForAdjustment / 2));
-
-  const adjustedOffsetRatio = perspective.offsetRatio * fovAdjustmentFactor;
+  // Distance compensation ratio: pass distance=1 to get the pure tan(std/2)/tan(eff/2) ratio
+  const adjustedOffsetRatio =
+    perspective.offsetRatio * calculateFovDistanceCompensation(standardFov, effectiveFovForAdjustment, 1);
   const newDistance = adjustedGeometryRadius * adjustedOffsetRatio;
 
   if (useConfiguredAngles) {

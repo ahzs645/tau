@@ -2,19 +2,75 @@
 import { useThree } from '@react-three/fiber';
 import type { GizmoAxisOptions, GizmoOptions } from 'three-viewport-gizmo';
 import { ViewportGizmo } from 'three-viewport-gizmo';
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
 import { useColor } from '#hooks/use-color.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { createViewportGizmoCubeAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.js';
+import { useGraphicsSelector } from '#hooks/use-graphics.js';
+import {
+  calculateGizmoFovFromAngle,
+  calculateFovDistanceCompensation,
+  gizmoBaseFov,
+  gizmoBaseDistance,
+  gizmoDepthMargin,
+  gizmoFocusOffset,
+} from '#components/geometry/graphics/three/utils/math.utils.js';
 
 type ViewportGizmoOnshapeProps = {
   readonly size?: number;
+  /**
+   * A container element or selector to append the gizmo to.
+   *
+   * When provided, the gizmo will be appended to this container instead of the renderer's parent.
+   */
+  readonly container?: HTMLElement | string;
+  /**
+   * Optional dependencies array that will be appended to the effect dependencies.
+   * When any of these values change, the gizmo will be disposed and recreated.
+   */
+  readonly dependencies?: readonly unknown[];
 };
 
-export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps): ReactNode {
+const className = 'viewport-gizmo-onshape';
+const emptyDependencies: readonly unknown[] = [];
+
+/**
+ * Synchronize the gizmo's internal camera FOV with the viewport camera FOV.
+ *
+ * The `three-viewport-gizmo` library creates its own internal PerspectiveCamera
+ * (accessed via the private `_camera` property) with hardcoded defaults (FOV=26,
+ * distance=7). This function updates that internal camera so the gizmo shows the
+ * same perspective as the main viewport, while compensating the camera distance to
+ * keep the gizmo cube at a consistent apparent size.
+ *
+ * NOTE: `_camera` is a non-public property. If the library ever exposes a public
+ * FOV API, this should be migrated. The runtime `instanceof` guard ensures a
+ * silent no-op if the internal structure changes.
+ */
+function syncGizmoFov(gizmo: ViewportGizmo, cameraFovAngle: number): void {
+  const internalCamera = (gizmo as unknown as { _camera: THREE.PerspectiveCamera })._camera;
+  if (!(internalCamera instanceof THREE.PerspectiveCamera)) {
+    return;
+  }
+
+  const gizmoFov = calculateGizmoFovFromAngle(cameraFovAngle);
+  const newDistance = calculateFovDistanceCompensation(gizmoBaseFov, gizmoFov, gizmoBaseDistance, gizmoFocusOffset);
+
+  internalCamera.fov = gizmoFov;
+  internalCamera.position.set(0, 0, newDistance);
+  internalCamera.near = Math.max(0.01, newDistance - gizmoDepthMargin);
+  internalCamera.far = newDistance + gizmoDepthMargin;
+  internalCamera.updateProjectionMatrix();
+}
+
+export function ViewportGizmoOnshape({
+  size = 96,
+  container,
+  dependencies = emptyDependencies,
+}: ViewportGizmoOnshapeProps): ReactNode {
   const { camera, gl, controls, scene, invalidate } = useThree((state) => ({
     camera: state.camera,
     gl: state.gl,
@@ -25,6 +81,17 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
 
   const { serialized } = useColor();
   const { theme } = useTheme();
+
+  // Subscribe to the viewport FOV from the per-view graphics machine
+  const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
+
+  // Keep a ref to the current angle so the creation effect can read it without
+  // adding cameraFovAngle as a dependency (which would cause expensive recreation)
+  const cameraFovAngleRef = useRef(cameraFovAngle);
+  cameraFovAngleRef.current = cameraFovAngle;
+
+  // Ref to the live gizmo instance for the FOV sync effect
+  const gizmoRef = useRef<ViewportGizmo | undefined>(null);
 
   const handleChange = useCallback((): void => {
     invalidate();
@@ -45,19 +112,25 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
 
     // Create a separate canvas for the gizmo
     const canvas = document.createElement('canvas');
+    canvas.className = className;
     canvas.style.position = 'absolute';
     canvas.style.bottom = '0';
     canvas.style.right = '0';
     canvas.style.zIndex = '10';
 
     // Find the parent container to append our canvas
-    const container = gl.domElement.parentElement;
-    if (!container) {
+    // Use the dedicated gizmo container if available (to support CSS anchor positioning),
+    // otherwise fallback to the renderer's parent (legacy behavior).
+    const containerToUse =
+      typeof container === 'string'
+        ? document.querySelector<HTMLElement>(container)
+        : (container ?? gl.domElement.parentElement);
+    if (!containerToUse) {
       return;
     }
 
     // Append the canvas to the container
-    container.append(canvas);
+    containerToUse.append(canvas);
 
     // Create a renderer for the gizmo
     const renderer = new THREE.WebGLRenderer({
@@ -104,6 +177,8 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
         family: 'monospace',
       },
       resolution: 256,
+      className,
+      container: containerToUse,
       background: {
         color: backgroundColor,
         hover: { color: backgroundColor },
@@ -124,6 +199,10 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
 
     // Create the gizmo
     const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
+    gizmoRef.current = gizmo;
+
+    // Synchronize the gizmo's internal camera FOV with the current viewport FOV
+    syncGizmoFov(gizmo, cameraFovAngleRef.current);
 
     // Add event listeners for the gizmo
     gizmo.addEventListener('change', handleChange);
@@ -132,6 +211,7 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
     gizmo.add(
       createViewportGizmoCubeAxes({
         axesSize: 2.1,
+        rendererSize: size,
         xAxisColor: 'red',
         yAxisColor: 'green',
         zAxisColor: 'rgb(37, 78, 136)',
@@ -147,6 +227,9 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
 
     // Cleanup function
     return () => {
+      // Clear the ref so the FOV sync effect cannot operate on a disposed gizmo
+      gizmoRef.current = null;
+
       // Remove event listeners
       gizmo.removeEventListener('change', handleChange);
 
@@ -164,7 +247,16 @@ export function ViewportGizmoOnshape({ size = 128 }: ViewportGizmoOnshapeProps):
         renderer.dispose();
       }
     };
-  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
+  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
+
+  // Real-time FOV sync: update the gizmo's internal camera when the viewport FOV changes.
+  // This is a separate effect to avoid expensive gizmo recreation on every slider tick.
+  useEffect(() => {
+    if (gizmoRef.current) {
+      syncGizmoFov(gizmoRef.current, cameraFovAngle);
+    }
+  }, [cameraFovAngle]);
 
   return null;
 }

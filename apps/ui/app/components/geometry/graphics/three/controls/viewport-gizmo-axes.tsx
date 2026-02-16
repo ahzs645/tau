@@ -11,9 +11,27 @@ import { useTheme } from '#hooks/use-theme.js';
 
 type ViewportGizmoAxesProps = {
   readonly size?: number;
+  /**
+   * A container element or selector to append the gizmo to.
+   *
+   * When provided, the gizmo will be appended to this container instead of the renderer's parent.
+   */
+  readonly container?: HTMLElement | string;
+  /**
+   * Optional dependencies array that will be appended to the effect dependencies.
+   * When any of these values change, the gizmo will be disposed and recreated.
+   */
+  readonly dependencies?: readonly unknown[];
 };
 
-export function ViewportGizmoAxes({ size = 128 }: ViewportGizmoAxesProps): ReactNode {
+const className = 'viewport-gizmo-axes';
+const emptyDependencies: readonly unknown[] = [];
+
+export function ViewportGizmoAxes({
+  size = 96,
+  container,
+  dependencies = emptyDependencies,
+}: ViewportGizmoAxesProps): ReactNode {
   const { camera, gl, controls, scene, invalidate } = useThree((state) => ({
     camera: state.camera as THREE.PerspectiveCamera,
     gl: state.gl,
@@ -44,19 +62,25 @@ export function ViewportGizmoAxes({ size = 128 }: ViewportGizmoAxesProps): React
 
     // Create a separate canvas for the gizmo
     const canvas = document.createElement('canvas');
+    canvas.className = className;
     canvas.style.position = 'absolute';
     canvas.style.bottom = '0';
     canvas.style.right = '0';
     canvas.style.zIndex = '10';
 
     // Find the parent container to append our canvas
-    const container = gl.domElement.parentElement;
-    if (!container) {
+    // Use the dedicated gizmo container if available (to support CSS anchor positioning),
+    // otherwise fallback to the renderer's parent (legacy behavior).
+    const containerToUse =
+      typeof container === 'string'
+        ? document.querySelector<HTMLElement>(container)
+        : (container ?? gl.domElement.parentElement);
+    if (!containerToUse) {
       return;
     }
 
     // Append the canvas to the container
-    container.append(canvas);
+    containerToUse.append(canvas);
 
     // Create a renderer for the gizmo
     const renderer = new THREE.WebGLRenderer({
@@ -76,6 +100,8 @@ export function ViewportGizmoAxes({ size = 128 }: ViewportGizmoAxesProps): React
       placement: 'bottom-right',
       size,
       resolution: 256,
+      className,
+      container: containerToUse,
       font: {
         weight: 'normal',
         family: 'monospace',
@@ -84,7 +110,6 @@ export function ViewportGizmoAxes({ size = 128 }: ViewportGizmoAxesProps): React
         bottom: 0,
         right: 0,
       },
-      container,
     };
 
     // Create the gizmo
@@ -117,7 +142,8 @@ export function ViewportGizmoAxes({ size = 128 }: ViewportGizmoAxesProps): React
         renderer.dispose();
       }
     };
-  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
+  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
 
   return null;
 }
