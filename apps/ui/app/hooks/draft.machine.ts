@@ -87,7 +87,9 @@ type DraftMachineEvents =
   | { type: 'startEditingMessage'; messageId: string; originalMessage?: MyUIMessage }
   | { type: 'exitEditMode' }
   | { type: 'clearEditDraft' }
-  | { type: 'clearMessageEdit'; messageId: string };
+  | { type: 'clearMessageEdit'; messageId: string }
+  // Flush pending state immediately (bypasses debounce, used on tab close)
+  | { type: 'flushNow' };
 
 // Placeholder actors - actual implementations provided via machine.provide()
 const persistDraftActor = fromPromise<void, { chatId: string; draft: MyUIMessage }>(async () => {
@@ -348,6 +350,11 @@ export const draftMachine = setup({
               target: 'pending',
               reenter: true,
             },
+            // Immediately bypass debounce and persist
+            flushNow: {
+              target: 'persisting',
+              guard: 'canPersist',
+            },
           },
         },
         persisting: {
@@ -404,6 +411,11 @@ export const draftMachine = setup({
             removeEditDraftImage: {
               target: 'pending',
               reenter: true,
+            },
+            // Immediately bypass debounce and persist
+            flushNow: {
+              target: 'persisting',
+              guard: 'canPersist',
             },
           },
         },

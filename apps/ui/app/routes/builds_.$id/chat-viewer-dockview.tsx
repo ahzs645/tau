@@ -17,7 +17,8 @@ import { FileSelector } from '#components/files/file-selector.js';
 import { Button } from '#components/ui/button.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { defaultGraphicsSettings } from '#constants/editor.constants.js';
+import { defaultGraphicsSettings, parseGraphicsViewSettings } from '#constants/editor.constants.js';
+import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { ChatViewer } from '#routes/builds_.$id/chat-viewer.js';
 import { Dockview } from '#components/panes/dockview.js';
 import { ViewerDockviewTab } from '#components/panes/viewer-tab-context-menu.js';
@@ -107,7 +108,7 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
         emptyMessage="No files found."
         onSelect={handleSelect}
       >
-        <Button variant="outline" className="h-8 w-full max-w-[200px] justify-between">
+        <Button size="sm" variant="outline" className="justify-between">
           <span className="truncate text-muted-foreground">
             <span className="@xs/viewer-watermark:hidden">Select file...</span>
             <span className="hidden @xs/viewer-watermark:inline">Select file to render...</span>
@@ -137,9 +138,34 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
   const [api, setApi] = useState<DockviewApi>();
   const isRestoringLayout = useRef(false);
 
+  // Track the active (focused) viewer panel for settings inheritance
+  const [activeViewerPanelId, setActiveViewerPanelId] = useState<string | undefined>();
+
   // Read persisted layout from editor machine
   const viewerLayout = useSelector(editorRef, (state) => state.context.viewerLayout);
   const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
+
+  /**
+   * Get the graphics settings to use for a new panel.
+   * Inherits from the active panel's settings if available, otherwise falls back
+   * to defaults. This gives new panels the same FOV, visibility toggles,
+   * environment preset, etc. as what the user was just looking at.
+   */
+  const getInheritedSettings = useCallback((): GraphicsViewSettings => {
+    if (activeViewerPanelId) {
+      const activeSettings = viewSettings[activeViewerPanelId]?.graphicsSettings;
+      if (activeSettings) {
+        // Validate persisted settings and clear geometry-dependent state
+        const validated = parseGraphicsViewSettings(activeSettings);
+        return {
+          ...validated,
+          pinnedMeasurements: undefined,
+        };
+      }
+    }
+
+    return { ...defaultGraphicsSettings };
+  }, [activeViewerPanelId, viewSettings]);
 
   // Save layout to editor machine on layout changes
   useEffect(() => {
@@ -161,6 +187,23 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
     };
   }, [api, editorRef]);
 
+  // Track active viewer panel for settings inheritance
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const disposable = api.onDidActivePanelChange((panel) => {
+      if (panel) {
+        setActiveViewerPanelId(panel.id);
+      }
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [api]);
+
   // Handle actor lifecycle for panels
   useEffect(() => {
     if (!api) {
@@ -170,10 +213,13 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
     const addDisposable = api.onDidAddPanel((event) => {
       const viewId = event.id;
       const existingSettings = viewSettings[viewId];
+      const settings = existingSettings?.graphicsSettings
+        ? parseGraphicsViewSettings(existingSettings.graphicsSettings)
+        : defaultGraphicsSettings;
       buildRef.send({
         type: 'createViewGraphics',
         viewId,
-        settings: existingSettings?.graphicsSettings ?? defaultGraphicsSettings,
+        settings,
       });
     });
 
@@ -229,10 +275,14 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
       const panelViewId = panel.id;
       const settings = viewSettings[panelViewId];
 
+      const validatedSettings = settings?.graphicsSettings
+        ? parseGraphicsViewSettings(settings.graphicsSettings)
+        : defaultGraphicsSettings;
+
       buildRef.send({
         type: 'createViewGraphics',
         viewId: panelViewId,
-        settings: settings?.graphicsSettings ?? defaultGraphicsSettings,
+        settings: validatedSettings,
       });
 
       let panelEntryFile = (panel.params as ViewerPanelParameters | undefined)?.entryFile;
@@ -249,7 +299,7 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
           viewId: panelViewId,
           viewState: {
             entryFile: mainEntryFile,
-            graphicsSettings: settings?.graphicsSettings ?? defaultGraphicsSettings,
+            graphicsSettings: validatedSettings,
           },
         });
       }
@@ -363,20 +413,20 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
         },
       });
 
-      // Persist view settings
+      // Persist view settings (inherit from active panel)
       editorRef.send({
         type: 'setViewSettings',
         viewId,
         viewState: {
           entryFile: filePath,
-          graphicsSettings: { ...defaultGraphicsSettings },
+          graphicsSettings: getInheritedSettings(),
         },
       });
 
       // Ensure compilation unit exists
       buildRef.send({ type: 'createCompilationUnit', entryFile: filePath });
     },
-    [buildRef, editorRef],
+    [buildRef, editorRef, getInheritedSettings],
   );
 
   // Open-file action: add a new viewer panel in the same group
@@ -396,18 +446,19 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
         },
       });
 
+      // Inherit settings from active panel
       editorRef.send({
         type: 'setViewSettings',
         viewId,
         viewState: {
           entryFile: path,
-          graphicsSettings: { ...defaultGraphicsSettings },
+          graphicsSettings: getInheritedSettings(),
         },
       });
 
       buildRef.send({ type: 'createCompilationUnit', entryFile: path });
     },
-    [buildRef, editorRef],
+    [buildRef, editorRef, getInheritedSettings],
   );
 
   return (
