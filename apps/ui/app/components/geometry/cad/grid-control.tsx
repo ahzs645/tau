@@ -30,6 +30,10 @@ type GridSizeIndicatorProps = {
 const getTextSizeClass = (sizeText: string) => {
   const { length } = sizeText;
 
+  if (length > 5) {
+    return 'text-[calc(var(--spacing)*1.8)] font-semibold';
+  }
+
   if (length > 3) {
     return 'text-[calc(var(--spacing)*2.2)] font-semibold';
   }

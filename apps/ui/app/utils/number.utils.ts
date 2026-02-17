@@ -85,7 +85,8 @@ export function formatNumberAbbreviation(value: number, options: FormatNumberAbb
 
 /**
  * Format a number value with a specified number of maximum digits
- * Uses engineering notation (multiples of 3) for values >= 1000
+ * Uses engineering notation (multiples of 3) for values >= 1000 or
+ * values too small to represent with the given maxDigits.
  *
  * @param value - The number to format
  * @param maxDigits - The maximum number of digits to display
@@ -103,8 +104,13 @@ export function formatNumberEngineeringNotation(value: number, maxDigits: number
 
   const absValue = Math.abs(value);
 
-  // For values less than 1000, format normally with max digits
-  if (absValue < 1000) {
+  // Threshold below which normal formatting loses all significant digits.
+  // For values < 1, integerDigits is always 1 ("0"), so decimalPlaces = maxDigits - 1.
+  // Values smaller than 10^-(maxDigits-1) would round to "0.00...0" and trim to "0".
+  const smallThreshold = 10 ** -(maxDigits - 1);
+
+  // For values that can be represented normally within maxDigits
+  if (absValue >= smallThreshold && absValue < 1000) {
     // Calculate how many decimal places we need
     const integerPart = Math.floor(absValue).toString();
     const integerDigits = integerPart.length;
@@ -122,8 +128,8 @@ export function formatNumberEngineeringNotation(value: number, maxDigits: number
     return formatted.replace(/\.?0+$/, '');
   }
 
-  // For values >= 1000, use engineering notation (e.g., 1e3, 10e3, 100e3, 1e6)
-  // Engineering notation uses exponents that are multiples of 3
+  // For values >= 1000 or < smallThreshold, use engineering notation
+  // Engineering notation uses exponents that are multiples of 3 (e.g., 1e3, 10e-6)
   const rawExponent = Math.floor(Math.log10(absValue));
   const engineeringExponent = Math.floor(rawExponent / 3) * 3;
   const mantissa = absValue / 10 ** engineeringExponent;
