@@ -128,7 +128,7 @@ function StackFrame({ frame, index }: { readonly frame: KernelStackFrame; readon
     <div className="flex min-w-0 items-center gap-2 font-mono text-[0.625rem]">
       <span className="w-3 shrink-0 text-right text-muted-foreground">{index + 1}</span>
       <span className="shrink-0 text-muted-foreground">|</span>
-      <span className="shrink-0 text-foreground">{frame.functionName ?? '<anonymous>'}</span>
+      <span className="min-w-0 truncate text-foreground">{frame.functionName ?? '<anonymous>'}</span>
       {isClickable ? (
         <FileLink
           path={frame.fileName!}

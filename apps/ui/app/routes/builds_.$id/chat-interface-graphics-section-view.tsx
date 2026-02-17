@@ -164,7 +164,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     <div className="flex h-full flex-col gap-3">
       {selectedSectionViewId ? (
         <div className="grid gap-3">
-          <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-1 px-1 text-xs text-muted-foreground">
             <div>
               Plane: <span className="font-medium text-foreground">{getSelectedHeader()}</span>
             </div>
@@ -315,7 +315,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
       ) : (
         <div className="grid gap-2">
           <div className="px-1 text-xs text-muted-foreground">Select a plane</div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {getPlaneButtonsForUpDirection(upDirection).map((item) => (
               <Button
                 key={`${item.id}`}
@@ -341,7 +341,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
               </Button>
             ))}
           </div>
-          <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex flex-wrap items-center justify-between gap-1 px-1">
             <span className="text-xs text-muted-foreground">Plane naming</span>
             <Tabs
               value={planeName}

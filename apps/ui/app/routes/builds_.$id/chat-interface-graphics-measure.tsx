@@ -63,7 +63,7 @@ export function ChatInterfaceGraphicsMeasure(): React.JSX.Element {
           return (
             <div
               key={m.id}
-              className={`group flex items-center gap-2 rounded-md border bg-card px-1 py-1 ${
+              className={`group grid gap-0.5 rounded-md border bg-card px-1 py-1 ${
                 isExternallyHovered ? 'bg-accent/20 ring-1 ring-primary/30' : ''
               }`}
               onMouseEnter={() => {
@@ -73,21 +73,35 @@ export function ChatInterfaceGraphicsMeasure(): React.JSX.Element {
                 graphicsActor.send({ type: 'setHoveredMeasurement', payload: undefined });
               }}
             >
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn('size-7', m.isPinned ? 'text-primary' : 'text-muted-foreground')}
-                title={m.isPinned ? 'Unpin' : 'Pin'}
-                onClick={() => {
-                  graphicsActor.send({ type: 'toggleMeasurementPinned', id: m.id });
-                }}
-              >
-                {m.isPinned ? <Pin className="size-3.5" /> : <PinOff className="size-3.5" />}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('size-7', m.isPinned ? 'text-primary' : 'text-muted-foreground')}
+                  title={m.isPinned ? 'Unpin' : 'Pin'}
+                  onClick={() => {
+                    graphicsActor.send({ type: 'toggleMeasurementPinned', id: m.id });
+                  }}
+                >
+                  {m.isPinned ? <Pin className="size-3.5" /> : <PinOff className="size-3.5" />}
+                </Button>
 
-              <div className="min-w-0 flex-1 truncate text-sm">{label}</div>
+                <div className="min-w-0 flex-1 truncate text-sm">{label}</div>
 
-              <div className="flex items-center gap-1 text-xs text-neutral">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Delete"
+                  className="size-7 text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    graphicsActor.send({ type: 'clearMeasurement', payload: m.id });
+                  }}
+                >
+                  <Trash className="size-4" />
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-2 pl-9 text-xs text-neutral">
                 <span className="flex items-center gap-1">
                   <span className="font-medium" style={{ color: axesColors.x }}>
                     X:
@@ -106,20 +120,6 @@ export function ChatInterfaceGraphicsMeasure(): React.JSX.Element {
                   </span>
                   {m.deltaZ}
                 </span>
-              </div>
-
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Delete"
-                  className="size-7 text-muted-foreground hover:text-destructive"
-                  onClick={() => {
-                    graphicsActor.send({ type: 'clearMeasurement', payload: m.id });
-                  }}
-                >
-                  <Trash className="size-4" />
-                </Button>
               </div>
             </div>
           );
