@@ -8,6 +8,8 @@ import {
 } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
 import { ensureMatcapTextureLoaded } from '#components/geometry/graphics/three/materials/matcap-material.js';
 import { calculateFovDistanceCompensation } from '#components/geometry/graphics/three/utils/math.utils.js';
+import { computeViewFittingZoom } from '#components/geometry/graphics/three/utils/camera.utils.js';
+import { defaultStageOptions } from '#components/geometry/graphics/three/stage.js';
 
 // Capture mode discriminator
 type CaptureMode = 'threejs' | 'svg';
@@ -563,6 +565,17 @@ async function captureScreenshots(
     screenshotScene.environment = null;
     screenshotScene.environmentIntensity = 0;
 
+    // Compute the geometry's bounding-box center and sphere radius from the
+    // cloned scene so the camera orbits and frames the actual model, not the
+    // world origin. This mirrors what useGeometryBounds + resetCamera do in
+    // the live viewer.
+    const boundingBox = new THREE.Box3().setFromObject(screenshotScene);
+    const geometryCenter = new THREE.Vector3();
+    const boundingSphere = new THREE.Sphere();
+    boundingBox.getCenter(geometryCenter);
+    boundingBox.getBoundingSphere(boundingSphere);
+    const geometryRadius = boundingSphere.radius > 0 ? boundingSphere.radius : 1000;
+
     // Process each camera angle using the same canvas and renderer
     for (const cameraAngle of config.cameraAngles) {
       // Create a copy of the camera for the screenshot so we don't modify the original
@@ -579,9 +592,13 @@ async function captureScreenshots(
 
       // Apply spherical coordinate positioning only if both phi and theta are specified
       if (cameraAngle.phi !== undefined && cameraAngle.theta !== undefined) {
-        // Get the current camera distance from the target (assuming target is at origin)
-        const currentPosition = screenshotCamera.position.clone();
-        const distance = currentPosition.length();
+        // Compute a reasonable camera distance from the bounding-sphere radius.
+        // The tight zoom computed afterwards handles precise framing, so the
+        // distance only needs to be far enough to avoid clipping.
+        const standardFov = 60;
+        const adjustedOffsetRatio =
+          defaultStageOptions.offsetRatio * calculateFovDistanceCompensation(standardFov, screenshotFov, 1);
+        const distance = geometryRadius * adjustedOffsetRatio;
 
         // Convert phi and theta to radians
         const phiRad = (cameraAngle.phi * Math.PI) / 180;
@@ -590,34 +607,46 @@ async function captureScreenshots(
         // Get the current up vector to determine coordinate system
         const upVector = THREE.Object3D.DEFAULT_UP.clone();
 
-        // Calculate position using standard spherical coordinates
+        // Calculate offset using standard spherical coordinates, then add to
+        // the geometry center so the camera orbits the model, not the origin.
         // Standard convention: phi is polar angle from up axis, theta is azimuthal angle
-        let x: number;
-        let y: number;
-        let z: number;
+        let ox: number;
+        let oy: number;
+        let oz: number;
 
         if (upVector.z === 1) {
           // Z-up coordinate system (current app configuration)
-          x = distance * Math.sin(phiRad) * Math.cos(thetaRad);
-          y = distance * Math.sin(phiRad) * Math.sin(thetaRad);
-          z = distance * Math.cos(phiRad);
+          ox = distance * Math.sin(phiRad) * Math.cos(thetaRad);
+          oy = distance * Math.sin(phiRad) * Math.sin(thetaRad);
+          oz = distance * Math.cos(phiRad);
         } else if (upVector.y === 1) {
           // Y-up coordinate system (Three.js default)
-          x = distance * Math.sin(phiRad) * Math.cos(thetaRad);
-          z = distance * Math.sin(phiRad) * Math.sin(thetaRad);
-          y = distance * Math.cos(phiRad);
+          ox = distance * Math.sin(phiRad) * Math.cos(thetaRad);
+          oz = distance * Math.sin(phiRad) * Math.sin(thetaRad);
+          oy = distance * Math.cos(phiRad);
         } else {
           // X-up coordinate system (less common)
-          y = distance * Math.sin(phiRad) * Math.cos(thetaRad);
-          z = distance * Math.sin(phiRad) * Math.sin(thetaRad);
-          x = distance * Math.cos(phiRad);
+          oy = distance * Math.sin(phiRad) * Math.cos(thetaRad);
+          oz = distance * Math.sin(phiRad) * Math.sin(thetaRad);
+          ox = distance * Math.cos(phiRad);
         }
 
-        // Set the new camera position
-        screenshotCamera.position.set(x, y, z);
+        // Position camera at geometryCenter + spherical offset
+        screenshotCamera.position.set(geometryCenter.x + ox, geometryCenter.y + oy, geometryCenter.z + oz);
 
-        // Make the camera look at the origin (or the scene center)
-        screenshotCamera.lookAt(0, 0, 0);
+        // Look at the geometry center, not the world origin
+        screenshotCamera.lookAt(geometryCenter);
+
+        // Compute tight zoom to maximise frame usage for this specific viewing
+        // angle. This projects the bounding-box corners into the camera's view
+        // plane and picks the zoom that fills both dimensions with padding.
+        screenshotCamera.zoom = computeViewFittingZoom({
+          cameraPosition: screenshotCamera.position,
+          target: geometryCenter,
+          boundingBox,
+          fovDeg: screenshotFov,
+          aspectRatio: config.aspectRatio,
+        });
       }
 
       screenshotCamera.updateProjectionMatrix();
