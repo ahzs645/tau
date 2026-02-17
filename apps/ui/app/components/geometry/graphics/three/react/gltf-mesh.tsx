@@ -10,6 +10,10 @@ import {
   updateLineMaterialResolution,
 } from '#components/geometry/graphics/three/materials/gltf-edges.js';
 
+// Module-scoped GLTFLoader instance. GLTFLoader is stateless and fully reusable,
+// so creating a fresh instance per parse wastes initialization overhead and GC pressure.
+const gltfLoader = new GLTFLoader();
+
 /**
  * Dispose a material and all its texture properties.
  */
@@ -91,8 +95,18 @@ function restoreOriginalMaterials(scene: Group, saved: Map<number, Material | Ma
         }
       }
 
-      // Restore cloned originals (scene.environmentIntensity handles IBL scaling globally)
-      mesh.material = Array.isArray(original) ? original.map((m) => m.clone()) : original.clone();
+      // Assign saved clones directly (they are pristine copies never used as active materials).
+      // Re-clone the saved copies so the stored originals remain untouched for future restores.
+      if (Array.isArray(original)) {
+        mesh.material = original;
+        saved.set(
+          mesh.id,
+          original.map((m) => m.clone()),
+        );
+      } else {
+        mesh.material = original;
+        saved.set(mesh.id, original.clone());
+      }
     }
   });
 }
@@ -196,15 +210,24 @@ export function GltfMesh({
   // Saved clones of the original materials so we can restore them after matcap is toggled off.
   const originalMaterialsRef = useRef<Map<number, Material | Material[]>>(new Map());
 
-  // Update resolution when size changes
+  // Update resolution when size changes. Deferred via requestAnimationFrame
+  // so that rapid resize events (e.g. dragging a Dockview divider) batch into
+  // a single scene traversal + invalidation per animation frame.
   useEffect(() => {
     resolutionRef.current.set(size.width, size.height);
 
-    // Update LineMaterial resolution for all LineSegments2
-    if (scene) {
+    if (!scene) {
+      return;
+    }
+
+    const frameId = requestAnimationFrame(() => {
       updateLineMaterialResolution(scene, resolutionRef.current);
       invalidate();
-    }
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
   }, [size, scene, invalidate]);
 
   // ── Effect 1: Parse GLTF binary (expensive, only on gltfFile change) ──────
@@ -215,13 +238,11 @@ export function GltfMesh({
 
     const loadGltf = async (): Promise<void> => {
       try {
-        const loader = new GLTFLoader();
-
         if (typeof SharedArrayBuffer === 'function' && gltfFile.buffer instanceof SharedArrayBuffer) {
           throw new TypeError('SharedArrayBuffer is not supported in <GltfMesh />');
         }
 
-        const gltf = await loader.parseAsync(
+        const gltf = await gltfLoader.parseAsync(
           gltfFile.buffer,
           '', // Path (not needed for ArrayBuffer)
         );
