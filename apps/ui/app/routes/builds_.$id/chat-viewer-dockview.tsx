@@ -37,7 +37,14 @@ type ViewerPanelParameters = {
  */
 function ViewerPanel(properties: IDockviewPanelProps<ViewerPanelParameters>): React.JSX.Element {
   const { viewId, entryFile } = properties.params;
-  return <ChatViewer viewId={viewId} entryFile={entryFile} panelApi={properties.api} />;
+  return (
+    <ChatViewer
+      viewId={viewId}
+      entryFile={entryFile}
+      panelApi={properties.api}
+      containerApi={properties.containerApi}
+    />
+  );
 }
 
 const components = {
