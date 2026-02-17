@@ -34,13 +34,13 @@ export function UpDirectionHandler({ upDirection }: UpDirectionHandlerProperties
     // Update the camera's up vector
     camera.up.copy(newUp);
 
-    // Traverse the scene and update each object's up vector
+    // Set up vectors on all objects without matrix updates during traverse,
+    // then call updateMatrixWorld once on the scene root. This reduces O(N²)
+    // work (recursive update inside traverse) to a single O(N) pass.
     scene.traverse((object) => {
-      if (object instanceof THREE.Object3D) {
-        object.up.copy(newUp);
-        object.updateMatrixWorld(true);
-      }
+      object.up.copy(newUp);
     });
+    scene.updateMatrixWorld(true);
 
     // Update the camera's orientation
     camera.lookAt(0, 0, 0);
