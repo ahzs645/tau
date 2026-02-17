@@ -100,11 +100,13 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
   }, [containerApi, group]);
 
   return (
-    <div className="@container/viewer-watermark flex h-full flex-col items-center justify-center gap-2 px-3 text-muted-foreground @xs/viewer-watermark:gap-4 @xs/viewer-watermark:px-6">
+    <div className="@container/viewer-watermark flex h-full flex-col items-center justify-center gap-2 p-2 text-muted-foreground @xs/viewer-watermark:gap-4">
       <Box className="size-8 stroke-1 @xs/viewer-watermark:size-12" />
       <div className="flex flex-col items-center gap-1 text-center">
         <p className="text-xs font-medium @xs/viewer-watermark:text-sm">No geometry selected</p>
-        <p className="hidden text-xs @xs/viewer-watermark:block">Drag a file from the file tree, or select one below</p>
+        <p className="hidden text-center text-xs @xs/viewer-watermark:block">
+          Drag a file from the file tree, or select one below
+        </p>
       </div>
       <FileSelector
         files={files}
