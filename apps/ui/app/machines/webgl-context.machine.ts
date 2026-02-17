@@ -6,7 +6,7 @@ import { setup, assign } from 'xstate';
  * typically allow 8-16 active contexts per origin; the oldest context is
  * silently lost when the limit is exceeded.
  */
-const maxWebglContexts = 6;
+const maxWebglContexts = 8;
 
 // Type definitions
 type WebglContextMachineContext = {
