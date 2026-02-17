@@ -10,9 +10,14 @@ import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 type FovControlProps = {
   /**
-   * Class name for the slider container
+   * Class name for the slider container (used to set width)
    */
   readonly className?: string;
+  /**
+   * When true, shows abbreviated labels (Orth. / Persp.) instead of full text.
+   * Controlled by the parent toolbar overflow system.
+   */
+  readonly isCompact?: boolean;
 };
 
 /**
@@ -21,7 +26,7 @@ type FovControlProps = {
  *
  * Reads the current FOV from the per-view GraphicsMachine state via GraphicsProvider.
  */
-export function FovControl({ className }: FovControlProps): React.JSX.Element {
+export function FovControl({ className, isCompact = false }: FovControlProps): React.JSX.Element {
   const graphicsRef = useGraphics();
   const fovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
 
@@ -41,7 +46,7 @@ export function FovControl({ className }: FovControlProps): React.JSX.Element {
               variant: 'overlay',
               size: 'sm',
               className: cn(
-                'group relative gap-0 overflow-hidden p-0 transition-[box-shadow] duration-300 max-md:w-30 md:w-50',
+                'group relative gap-0 overflow-hidden p-0 transition-[box-shadow] duration-300',
                 'flex items-center',
                 'hover:cursor-pointer',
                 '[&:focus-within]:border-primary',
@@ -82,11 +87,9 @@ export function FovControl({ className }: FovControlProps): React.JSX.Element {
               'text-xs leading-none text-foreground transition-all duration-300 select-none',
             )}
           >
-            <span className="hidden md:block">Orthographic</span>
-            <span className="md:hidden">Orth.</span>
+            <span>{isCompact ? 'Orth.' : 'Orthographic'}</span>
             <div className="w-[3ch] text-center font-bold">{fovAngle}&deg;</div>
-            <span className="hidden md:block">Perspective</span>
-            <span className="md:hidden">Persp.</span>
+            <span>{isCompact ? 'Persp.' : 'Perspective'}</span>
           </div>
         </div>
       </TooltipTrigger>

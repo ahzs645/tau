@@ -50,6 +50,11 @@ type ViewerSettingsProps = {
    * Optional className for styling
    */
   readonly className?: ClassValue;
+  /**
+   * Controls that have overflowed from the toolbar, rendered at the top of the dropdown.
+   * When undefined or empty, the dropdown renders exactly as usual.
+   */
+  readonly overflowControls?: React.ReactNode;
 };
 
 /**
@@ -57,7 +62,7 @@ type ViewerSettingsProps = {
  * All settings are per-view, read from the per-view GraphicsMachine state via GraphicsProvider
  * and the per-view CadMachine state via CadProvider.
  */
-export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactNode {
+export function ViewerSettings({ className, overflowControls }: ViewerSettingsProps): React.ReactNode {
   const graphicsRef = useGraphics();
   const cadActor = useCad();
 
@@ -267,6 +272,13 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
           <Timer />
           Timeout
         </DropdownMenuSelectItem>
+        {overflowControls !== undefined && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Controls</DropdownMenuLabel>
+            {overflowControls}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
