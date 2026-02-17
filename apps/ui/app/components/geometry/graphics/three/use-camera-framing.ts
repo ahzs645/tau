@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useThree } from '@react-three/fiber';
 import type * as THREE from 'three';
 import { useCameraReset } from '#components/geometry/graphics/three/use-camera-reset.js';
 import { useGraphicsSelector } from '#hooks/use-graphics.js';
@@ -6,6 +7,7 @@ import type { StageOptions } from '#components/geometry/graphics/three/stage.js'
 import { defaultStageOptions } from '#components/geometry/graphics/three/stage.js';
 
 const significantRadiusChangeRatio = 0.1;
+const significantAspectChangeRatio = 0.1;
 
 /**
  * Camera framing policy hook.
@@ -95,6 +97,29 @@ export function useCameraFraming(
       }
     }
   }, [resetCamera, sceneRadius, geometryRadius]);
+
+  // Track viewport aspect ratio and re-frame when it changes significantly.
+  // This ensures the model remains fully visible when Dockview panels are
+  // resized (e.g. split into narrow portrait viewports).
+  const { size } = useThree();
+  const viewportAspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1;
+  const lastAspectRef = useRef<number>(viewportAspect);
+
+  useLayoutEffect(() => {
+    // Skip if the initial geometry reset hasn't happened yet
+    if (!isInitialResetDoneRef.current || geometryRadius <= 0) {
+      lastAspectRef.current = viewportAspect;
+      return;
+    }
+
+    const lastAspect = lastAspectRef.current;
+    const aspectChange = Math.abs(viewportAspect - lastAspect) / Math.max(lastAspect, 1e-9);
+
+    if (aspectChange > significantAspectChangeRatio) {
+      lastAspectRef.current = viewportAspect;
+      resetCamera({ enableConfiguredAngles: false });
+    }
+  }, [viewportAspect, resetCamera, geometryRadius]);
 
   return resetCamera;
 }
