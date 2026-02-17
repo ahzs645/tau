@@ -21,6 +21,7 @@ import { useBuild } from '#hooks/use-build.js';
 import { Dockview } from '#components/panes/dockview.js';
 import { EditorDockviewTab } from '#components/panes/editor-tab-context-menu.js';
 import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
+import { FloatingPanelAwareSplitAction } from '#components/panes/dockview-split-action.js';
 import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { ChatEditorBinaryWarning } from '#routes/builds_.$id/chat-editor-binary-warning.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
@@ -529,6 +530,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
         defaultTabComponent={EditorDockviewTab}
         watermarkComponent={EditorWatermark}
         leftHeaderActionsComponent={DockviewOpenFileAction}
+        rightHeaderActionsComponent={FloatingPanelAwareSplitAction}
         onReady={onReady}
         onDidDrop={onDidDrop}
       />
