@@ -9,6 +9,7 @@ import {
   FloatingPanelClose,
   FloatingPanelContent,
   FloatingPanelContentHeader,
+  FloatingPanelContentHeaderActions,
   FloatingPanelContentTitle,
   FloatingPanelContentBody,
   FloatingPanelTrigger,
@@ -132,18 +133,20 @@ export function ChatDetails({
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Details
-            <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Details</FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Details
+                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
+          </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
         <FloatingPanelContentBody className="px-3 py-2">
           <div className="space-y-4">

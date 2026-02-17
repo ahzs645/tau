@@ -12,9 +12,8 @@ import {
   ScanEye,
   Image,
 } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { Button } from '#components/ui/button.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
+import { FloatingPanelMenuButton } from '#components/ui/floating-panel.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -115,16 +114,11 @@ export function ChatHistorySettings(): React.ReactNode {
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-6 rounded-sm">
-              <Settings className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top">Chat settings</TooltipContent>
-      </Tooltip>
+      <FloatingPanelMenuButton asChild tooltip="Chat settings" aria-label="Chat settings">
+        <DropdownMenuTrigger>
+          <Settings className="size-4" />
+        </DropdownMenuTrigger>
+      </FloatingPanelMenuButton>
       <DropdownMenuContent
         align="end"
         side="bottom"

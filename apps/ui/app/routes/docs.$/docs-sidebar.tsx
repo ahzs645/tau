@@ -16,6 +16,7 @@ import {
   FloatingPanel,
   FloatingPanelContent,
   FloatingPanelContentHeader,
+  FloatingPanelContentHeaderActions,
   FloatingPanelContentTitle,
   FloatingPanelContentBody,
   FloatingPanelClose,
@@ -132,16 +133,18 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
   return (
     <FloatingPanel isOpen={isDocsSidebarOpen} side="right" className={className} onOpenChange={setIsDocsSidebarOpen}>
       <FloatingPanelContent className={cn('overflow-hidden rounded-md border', isDocsSidebarOpen && 'z-100')}>
-        <FloatingPanelContentHeader className="px-0">
-          <FloatingPanelContentTitle className="z-10 flex w-full items-center justify-between pl-0.25">
+        <FloatingPanelContentHeader>
+          <FloatingPanelContentTitle>
+            <DocsSidebarFrameworkSelector />
+          </FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <DocsSidebarSearch />
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => `${isOpen ? 'Close' : 'Open'} Documentation Sidebar`}
-              className="peer mt-0.5 ml-0.5 border md:hidden"
+              className="md:hidden"
             />
-            <DocsSidebarFrameworkSelector className="max-md:ml-7.25!" />
-            <DocsSidebarSearch />
-          </FloatingPanelContentTitle>
+          </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
         <FloatingPanelContentBody>

@@ -9,11 +9,11 @@ import {
   FloatingPanelContentBody,
   FloatingPanelContentHeader,
   FloatingPanelContentHeaderActions,
+  FloatingPanelMenuButton,
+  FloatingPanelButtonGroup,
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { Button } from '#components/ui/button.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { cn } from '#utils/ui.utils.js';
 import { hasJsonSchemaObjectProperties } from '#utils/schema.utils.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
@@ -100,71 +100,50 @@ export const ChatParameters = memo(function (props: {
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Parameters
-            <KeyShortcut variant="tooltip">{formattedParametersKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Parameters</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn('size-6 rounded-sm', isSearchVisible && 'text-primary')}
-                  aria-label={isSearchVisible ? 'Hide search' : 'Show search'}
-                  onClick={toggleSearch}
+            <FloatingPanelButtonGroup>
+              <FloatingPanelMenuButton
+                className={cn(isSearchVisible && 'text-primary')}
+                aria-label={isSearchVisible ? 'Hide search' : 'Show search'}
+                tooltip={isSearchVisible ? 'Hide search' : 'Search parameters'}
+                onClick={toggleSearch}
+              >
+                <Search className="size-4" />
+              </FloatingPanelMenuButton>
+              {hasModifiedParameters ? (
+                <FloatingPanelMenuButton
+                  aria-label="Reset all parameters"
+                  tooltip="Reset all parameters"
+                  onClick={resetAllParameters}
                 >
-                  <Search className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">{isSearchVisible ? 'Hide search' : 'Search parameters'}</TooltipContent>
-            </Tooltip>
-            {hasModifiedParameters ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 rounded-sm"
-                    aria-label="Reset all parameters"
-                    onClick={resetAllParameters}
-                  >
-                    <RefreshCcw className="size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Reset all parameters</TooltipContent>
-              </Tooltip>
-            ) : null}
-            {jsonSchema && hasJsonSchemaObjectProperties(jsonSchema) ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 rounded-sm"
-                    aria-expanded={isAllExpanded}
-                    aria-label={isAllExpanded ? 'Collapse all' : 'Expand all'}
-                    onClick={toggleAllExpanded}
-                  >
-                    <ChevronRight
-                      className={cn(
-                        'size-4 transition-transform duration-300 ease-in-out',
-                        isAllExpanded && 'rotate-90',
-                      )}
-                    />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">{isAllExpanded ? 'Collapse all' : 'Expand all'}</TooltipContent>
-              </Tooltip>
-            ) : null}
+                  <RefreshCcw className="size-4" />
+                </FloatingPanelMenuButton>
+              ) : null}
+              {jsonSchema && hasJsonSchemaObjectProperties(jsonSchema) ? (
+                <FloatingPanelMenuButton
+                  aria-expanded={isAllExpanded}
+                  aria-label={isAllExpanded ? 'Collapse all' : 'Expand all'}
+                  tooltip={isAllExpanded ? 'Collapse all' : 'Expand all'}
+                  onClick={toggleAllExpanded}
+                >
+                  <ChevronRight
+                    className={cn('size-4 transition-transform duration-300 ease-in-out', isAllExpanded && 'rotate-90')}
+                  />
+                </FloatingPanelMenuButton>
+              ) : null}
+            </FloatingPanelButtonGroup>
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Parameters
+                  <KeyShortcut variant="tooltip">{formattedParametersKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 

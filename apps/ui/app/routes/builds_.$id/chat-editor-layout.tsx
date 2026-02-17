@@ -8,6 +8,9 @@ import {
   FloatingPanel,
   FloatingPanelClose,
   FloatingPanelContent,
+  FloatingPanelContentHeader,
+  FloatingPanelContentHeaderActions,
+  FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -19,7 +22,7 @@ import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 
-const keyCombinationEditor = {
+export const keyCombinationEditor = {
   key: 'e',
   ctrlKey: true,
 } as const satisfies KeyCombination;
@@ -93,16 +96,22 @@ export function ChatEditorLayout({
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Editor
-            <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent>
+        {/* Mobile-only header with inline close button */}
+        <FloatingPanelContentHeader className="md:hidden">
+          <FloatingPanelContentTitle>Editor</FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Editor
+                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
+          </FloatingPanelContentHeaderActions>
+        </FloatingPanelContentHeader>
         <ResizablePanelGroup
           direction="vertical"
           autoSaveId={cookieName.chatRsEditor}

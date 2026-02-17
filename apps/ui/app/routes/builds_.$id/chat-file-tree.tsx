@@ -59,17 +59,22 @@ export const ChatFileTree = memo(function (props: {
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Files
-            <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent>
-        <ChatEditorFileTree enableSearch={isSearchVisible} onSearchChange={setIsSearchVisible} />
+        <ChatEditorFileTree
+          enableSearch={isSearchVisible}
+          closeButton={
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Files
+                  <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
+          }
+          onSearchChange={setIsSearchVisible}
+        />
       </FloatingPanelContent>
     </FloatingPanel>
   );

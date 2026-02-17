@@ -44,6 +44,8 @@ import {
   FloatingPanelContentBody,
   FloatingPanelContentHeader,
   FloatingPanelContentHeaderActions,
+  FloatingPanelMenuButton,
+  FloatingPanelButtonGroup,
   FloatingPanelContentTitle,
 } from '#components/ui/floating-panel.js';
 import {
@@ -78,7 +80,6 @@ import { FileExtensionIcon, getIconIdFromExtension } from '#components/icons/fil
 import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
 import { downloadBlob, asBuffer } from '#utils/file.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 
 type TreeItemData = {
   path: string;
@@ -179,11 +180,13 @@ async function processDataTransferItems(
 type ChatEditorFileTreeProps = {
   readonly enableSearch?: boolean;
   readonly onSearchChange?: (isOpen: boolean) => void;
+  readonly closeButton?: React.ReactNode;
 };
 
 export const ChatEditorFileTree = memo(function ({
   enableSearch = false,
   onSearchChange,
+  closeButton,
 }: ChatEditorFileTreeProps): React.JSX.Element {
   // It's necessary to opt out of React Compiler auto-memoization for this component due to:
   // https://headless-tree.lukasbach.com/guides/react-compiler/
@@ -1073,31 +1076,23 @@ export const ChatEditorFileTree = memo(function ({
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Files</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label={enableSearch ? 'Hide search' : 'Search files'}
-                  className={cn('size-6 rounded-sm', enableSearch && 'text-primary')}
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    onSearchChange?.(!enableSearch);
-                  }}
-                >
-                  <Search className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{enableSearch ? 'Hide search' : 'Search files'}</TooltipContent>
-            </Tooltip>
-            <DropdownMenu>
-              <Tooltip>
-                <Button asChild aria-label="Create new file" className="size-6 rounded-sm" size="icon" variant="ghost">
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger>
-                      <FilePlus className="size-4" />
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                </Button>
+            <FloatingPanelButtonGroup>
+              <FloatingPanelMenuButton
+                aria-label={enableSearch ? 'Hide search' : 'Search files'}
+                className={cn(enableSearch && 'text-primary')}
+                tooltip={enableSearch ? 'Hide search' : 'Search files'}
+                onClick={() => {
+                  onSearchChange?.(!enableSearch);
+                }}
+              >
+                <Search className="size-4" />
+              </FloatingPanelMenuButton>
+              <DropdownMenu>
+                <FloatingPanelMenuButton asChild tooltip="Create new file" aria-label="Create new file">
+                  <DropdownMenuTrigger>
+                    <FilePlus className="size-4" />
+                  </DropdownMenuTrigger>
+                </FloatingPanelMenuButton>
                 <DropdownMenuContent
                   align="end"
                   onCloseAutoFocus={(event) => {
@@ -1134,39 +1129,25 @@ export const ChatEditorFileTree = memo(function ({
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
-                <TooltipContent>Create new file</TooltipContent>
-              </Tooltip>
-            </DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Create new folder"
-                  className="size-6 rounded-sm"
-                  size="icon"
-                  variant="ghost"
-                  onClick={handleCreateFolder}
-                >
-                  <FolderPlus className="mt-0.5 size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Create new folder</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Collapse all folders"
-                  className="size-6 rounded-sm"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    tree.collapseAll();
-                  }}
-                >
-                  <CopyMinus className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Collapse all folders</TooltipContent>
-            </Tooltip>
+              </DropdownMenu>
+              <FloatingPanelMenuButton
+                aria-label="Create new folder"
+                tooltip="Create new folder"
+                onClick={handleCreateFolder}
+              >
+                <FolderPlus className="mt-0.5 size-4" />
+              </FloatingPanelMenuButton>
+              <FloatingPanelMenuButton
+                aria-label="Collapse all folders"
+                tooltip="Collapse all folders"
+                onClick={() => {
+                  tree.collapseAll();
+                }}
+              >
+                <CopyMinus className="size-4" />
+              </FloatingPanelMenuButton>
+            </FloatingPanelButtonGroup>
+            {closeButton}
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
         <FloatingPanelContentBody className="group/filetree flex min-h-0 flex-col">

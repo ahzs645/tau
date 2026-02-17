@@ -2,12 +2,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentProps } from 'react';
 import { useMonaco } from '@monaco-editor/react';
 import { useSelector } from '@xstate/react';
-import { ChevronDown, FileCode, FileX } from 'lucide-react';
+import { ChevronDown, FileCode, FileX, XIcon } from 'lucide-react';
 import type * as Monaco from 'monaco-editor';
 import type {
   DockviewApi,
   DockviewReadyEvent,
   DockviewDidDropEvent,
+  IDockviewHeaderActionsProps,
   IDockviewPanelProps,
   IWatermarkPanelProps,
 } from 'dockview-react';
@@ -21,7 +22,13 @@ import { useBuild } from '#hooks/use-build.js';
 import { Dockview } from '#components/panes/dockview.js';
 import { EditorDockviewTab } from '#components/panes/editor-tab-context-menu.js';
 import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
-import { FloatingPanelAwareSplitAction } from '#components/panes/dockview-split-action.js';
+import { DockviewSplitAction } from '#components/panes/dockview-split-action.js';
+import { DockviewPaneAction } from '#components/panes/dockview-pane-action.js';
+import { useIsTopRightGroup } from '#components/panes/use-is-top-right-group.js';
+import { useFloatingPanel } from '#components/ui/floating-panel.js';
+import { KeyShortcut } from '#components/ui/key-shortcut.js';
+import { formatKeyCombination } from '#utils/keys.utils.js';
+import { keyCombinationEditor } from '#routes/builds_.$id/chat-editor-layout.js';
 import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { ChatEditorBinaryWarning } from '#routes/builds_.$id/chat-editor-binary-warning.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
@@ -257,11 +264,11 @@ function EditorWatermark(_properties: IWatermarkPanelProps): React.JSX.Element {
   );
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
+    <div className="flex h-full flex-col items-center justify-center gap-4 p-2 text-muted-foreground">
       <FileCode className="size-12 stroke-1" />
       <div className="flex flex-col items-center gap-1">
         <p className="text-sm font-medium">No files open</p>
-        <p className="text-xs">Pick a file from the file tree, or select one below</p>
+        <p className="text-center text-xs">Pick a file from the file tree, or select one below</p>
       </div>
       <FileSelector
         files={files}
@@ -279,6 +286,41 @@ function EditorWatermark(_properties: IWatermarkPanelProps): React.JSX.Element {
         </Button>
       </FileSelector>
     </div>
+  );
+}
+
+/**
+ * Right-side header actions for editor Dockview groups.
+ *
+ * Renders the split button for every group. For the group that occupies the
+ * top-right corner of the floating panel, an inline close button is also
+ * rendered so the user can dismiss the editor panel directly from the tab bar.
+ *
+ * Both buttons share the `.dv-pane-action` class and therefore participate in
+ * the same group-hover opacity transition.
+ */
+function EditorRightHeaderActions(properties: IDockviewHeaderActionsProps): React.JSX.Element {
+  const isTopRight = useIsTopRightGroup(properties.group, properties.containerApi);
+  const { close } = useFloatingPanel();
+
+  return (
+    <>
+      <DockviewSplitAction {...properties} />
+      {isTopRight ? (
+        <DockviewPaneAction
+          aria-label="Close editor"
+          tooltip={
+            <div className="flex items-center gap-2">
+              Close editor
+              <KeyShortcut variant="tooltip">{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
+            </div>
+          }
+          onClick={close}
+        >
+          <XIcon className="size-3.5" />
+        </DockviewPaneAction>
+      ) : undefined}
+    </>
   );
 }
 
@@ -530,7 +572,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
         defaultTabComponent={EditorDockviewTab}
         watermarkComponent={EditorWatermark}
         leftHeaderActionsComponent={DockviewOpenFileAction}
-        rightHeaderActionsComponent={FloatingPanelAwareSplitAction}
+        rightHeaderActionsComponent={EditorRightHeaderActions}
         onReady={onReady}
         onDidDrop={onDidDrop}
       />

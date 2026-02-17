@@ -6,6 +6,7 @@ import {
   FloatingPanelClose,
   FloatingPanelContent,
   FloatingPanelContentHeader,
+  FloatingPanelContentHeaderActions,
   FloatingPanelContentTitle,
   FloatingPanelContentBody,
   FloatingPanelTrigger,
@@ -75,18 +76,20 @@ export function ChatExplorerTree({
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Explorer
-            <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent className="text-sm">
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Explorer</FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Explorer
+                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
+          </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
         <FloatingPanelContentBody className="flex flex-col px-0 py-0">
           {/* Files Section */}
