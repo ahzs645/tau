@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { Geometry } from '@taucad/types';
 import { GltfMesh } from '#components/geometry/graphics/three/react/gltf-mesh.js';
 import { ThreeProvider } from '#components/geometry/graphics/three/three-context.js';
@@ -11,52 +12,54 @@ type CadViewerProperties = ThreeViewerProperties & {
   readonly enableMatcap?: boolean;
 };
 
-export function CadViewer({
-  geometries,
-  enableSurfaces = true,
-  enableLines = true,
-  enableMatcap = true,
-  ...properties
-}: CadViewerProperties): React.JSX.Element {
-  const svgGeometries = geometries.filter((geometry) => geometry.format === 'svg');
+export const CadViewer = memo(
+  ({
+    geometries,
+    enableSurfaces = true,
+    enableLines = true,
+    enableMatcap = true,
+    ...properties
+  }: CadViewerProperties): React.JSX.Element => {
+    const svgGeometries = geometries.filter((geometry) => geometry.format === 'svg');
 
-  // If there are any SVG geometries, we render them in a SVG viewer
-  if (svgGeometries.length > 0) {
+    // If there are any SVG geometries, we render them in a SVG viewer
+    if (svgGeometries.length > 0) {
+      return (
+        <SvgViewer enableGrid={properties.enableGrid} enableAxes={properties.enableAxes} geometries={svgGeometries} />
+      );
+    }
+
     return (
-      <SvgViewer enableGrid={properties.enableGrid} enableAxes={properties.enableAxes} geometries={svgGeometries} />
+      <ThreeProvider {...properties}>
+        {geometries.map((geometry) => {
+          switch (geometry.format) {
+            case 'gltf': {
+              return (
+                <GltfMesh
+                  key={geometry.hash}
+                  gltfFile={geometry.content}
+                  enableMatcap={enableMatcap}
+                  enableSurfaces={enableSurfaces}
+                  enableLines={enableLines}
+                />
+              );
+            }
+
+            case 'svg': {
+              throw new Error('2D geometries are not supported');
+            }
+
+            case 'webrtc': {
+              throw new Error('WebRTC geometries are not supported');
+            }
+
+            default: {
+              const neverGeometry: never = geometry;
+              throw new Error(`Unknown geometry type: ${JSON.stringify(neverGeometry)}`);
+            }
+          }
+        })}
+      </ThreeProvider>
     );
-  }
-
-  return (
-    <ThreeProvider {...properties}>
-      {geometries.map((geometry) => {
-        switch (geometry.format) {
-          case 'gltf': {
-            return (
-              <GltfMesh
-                key={geometry.hash}
-                gltfFile={geometry.content}
-                enableMatcap={enableMatcap}
-                enableSurfaces={enableSurfaces}
-                enableLines={enableLines}
-              />
-            );
-          }
-
-          case 'svg': {
-            throw new Error('2D geometries are not supported');
-          }
-
-          case 'webrtc': {
-            throw new Error('WebRTC geometries are not supported');
-          }
-
-          default: {
-            const neverGeometry: never = geometry;
-            throw new Error(`Unknown geometry type: ${JSON.stringify(neverGeometry)}`);
-          }
-        }
-      })}
-    </ThreeProvider>
-  );
-}
+  },
+);
