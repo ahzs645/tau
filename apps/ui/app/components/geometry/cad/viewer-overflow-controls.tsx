@@ -6,7 +6,6 @@
 import { useCallback, useMemo } from 'react';
 import { FlipHorizontal, Focus, Grid3X3, Ruler } from 'lucide-react';
 import type { LengthSymbol } from '@taucad/units';
-import { standardInternationalBaseUnits } from '@taucad/units/constants';
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -19,7 +18,7 @@ import {
   DropdownMenuSwitchItem,
 } from '#components/ui/dropdown-menu.js';
 import { formatNumberEngineeringNotation } from '#utils/number.utils.js';
-import { toTitleCase } from '#utils/string.utils.js';
+import { gridUnitOptions, maxGridDigits } from '#components/geometry/cad/grid-unit-options.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 // ── FOV Overflow Control ──────────────────────────────────────────────────────
@@ -54,25 +53,6 @@ export function FovOverflowControl(): React.JSX.Element {
 
 // ── Grid Overflow Control ─────────────────────────────────────────────────────
 
-const maxDigits = 3;
-
-const gridUnitOrder = ['mm', 'cm', 'm', 'in', 'ft', 'yd'] as const;
-
-const gridUnitOptions = gridUnitOrder.map((symbol) => {
-  if (symbol === standardInternationalBaseUnits.length.symbol) {
-    return {
-      label: toTitleCase(standardInternationalBaseUnits.length.unit),
-      value: symbol as LengthSymbol,
-    };
-  }
-
-  const variant = standardInternationalBaseUnits.length.variants.find((v) => v.symbol === symbol);
-  return {
-    label: variant ? toTitleCase(variant.unit) : symbol,
-    value: symbol as LengthSymbol,
-  };
-});
-
 /** Grid unit selector rendered as a DropdownMenuSub */
 export function GridOverflowControl(): React.ReactNode {
   const graphicsRef = useGraphics();
@@ -95,7 +75,10 @@ export function GridOverflowControl(): React.ReactNode {
   }, []);
 
   const displaySize = gridSizes.smallSize / gridFactor;
-  const localizedSmallGridSize = useMemo(() => formatNumberEngineeringNotation(displaySize, maxDigits), [displaySize]);
+  const localizedSmallGridSize = useMemo(
+    () => formatNumberEngineeringNotation(displaySize, maxGridDigits),
+    [displaySize],
+  );
 
   if (!gridSizes.smallSize) {
     return null;

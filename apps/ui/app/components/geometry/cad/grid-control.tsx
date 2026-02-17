@@ -2,7 +2,6 @@ import React, { useCallback, useState, useMemo } from 'react';
 import type { ClassValue } from 'clsx';
 import { Info, Lock, LockIcon, LockOpen } from 'lucide-react';
 import type { LengthSymbol } from '@taucad/units';
-import { standardInternationalBaseUnits } from '@taucad/units/constants';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
 import {
@@ -17,7 +16,7 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { cn } from '#utils/ui.utils.js';
 import { formatNumberEngineeringNotation } from '#utils/number.utils.js';
-import { toTitleCase } from '#utils/string.utils.js';
+import { gridUnitOptions, maxGridDigits } from '#components/geometry/cad/grid-unit-options.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 type GridSizeIndicatorProps = {
@@ -40,26 +39,6 @@ const getTextSizeClass = (sizeText: string) => {
 
   return 'text-[calc(var(--spacing)*3)]';
 };
-
-const maxDigits = 3;
-
-const gridUnitOrder = ['mm', 'cm', 'm', 'in', 'ft', 'yd'] as const;
-
-const gridUnitOptions = gridUnitOrder.map((symbol) => {
-  if (symbol === standardInternationalBaseUnits.length.symbol) {
-    // Base unit (Meter)
-    return {
-      label: toTitleCase(standardInternationalBaseUnits.length.unit),
-      value: symbol as LengthSymbol,
-    };
-  }
-
-  const variant = standardInternationalBaseUnits.length.variants.find((v) => v.symbol === symbol);
-  return {
-    label: variant ? toTitleCase(variant.unit) : symbol,
-    value: symbol as LengthSymbol,
-  };
-});
 
 /**
  * Component that displays the current grid size from the per-view GraphicsMachine via GraphicsProvider
@@ -97,7 +76,10 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
   // Convert the display size based on the unit
   const displaySize = gridSizes.smallSize / gridFactor;
 
-  const localizedSmallGridSize = useMemo(() => formatNumberEngineeringNotation(displaySize, maxDigits), [displaySize]);
+  const localizedSmallGridSize = useMemo(
+    () => formatNumberEngineeringNotation(displaySize, maxGridDigits),
+    [displaySize],
+  );
 
   // If there's no valid grid size, don't render
   if (!gridSizes.smallSize) {
