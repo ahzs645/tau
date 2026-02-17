@@ -82,8 +82,13 @@ export type LightingConfig = {
 // ── Pure functions ─────────────────────────────────────────────────────────
 
 /**
- * Computes the environment rotation Euler that cancels the camera's world
- * orientation so that all Lightformers remain camera-bound (yaw/pitch/roll).
+ * Computes the environment rotation Euler that cancels only the azimuthal
+ * (yaw) component of the camera's world orientation around the up axis.
+ *
+ * By not compensating for polar (pitch) or roll changes, the Lightformers
+ * remain stable during horizontal orbit but shift relative to the camera
+ * when tilting up/down — producing natural lighting variation at different
+ * viewing elevations instead of a uniformly locked rig.
  *
  * Three.js internally negates all Euler components of `environmentRotation`
  * (WebGLMaterials.js "accommodate left-handed frame"), so the returned Euler
@@ -100,7 +105,20 @@ export function computeEnvironmentRotation(
   const order: THREE.EulerOrder = upDirection === 'y' ? 'YXZ' : upDirection === 'z' ? 'ZXY' : 'XZY';
   const inverted = cameraWorldQuaternion.clone().invert();
   const euler = new THREE.Euler().setFromQuaternion(inverted, order);
-  return new THREE.Euler(-euler.x, -euler.y, -euler.z, order);
+
+  // Only compensate for azimuthal (yaw) rotation around the up axis.
+  // Polar (pitch) and roll are left un-compensated so the environment
+  // lighting shifts naturally as the camera tilts.
+  if (upDirection === 'z') {
+    return new THREE.Euler(0, 0, -euler.z, order);
+  }
+
+  if (upDirection === 'y') {
+    return new THREE.Euler(0, -euler.y, 0, order);
+  }
+
+  // UpDirection === 'x'
+  return new THREE.Euler(-euler.x, 0, 0, order);
 }
 
 /**

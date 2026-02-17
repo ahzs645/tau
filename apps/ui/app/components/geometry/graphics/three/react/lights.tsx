@@ -47,9 +47,10 @@ type LightsProperties = {
  * Professional CAD lighting setup matching Onshape's rendering style.
  *
  * Design principles:
- * 1. **Camera-locked environment** — `scene.environmentRotation` is driven from
- *    the inverse camera world quaternion each frame so all Lightformers stay
- *    fully camera-bound (yaw/pitch/roll).
+ * 1. **Azimuth-locked environment** — `scene.environmentRotation` is driven from
+ *    only the azimuthal (yaw) component of the inverse camera quaternion each
+ *    frame, so Lightformers stay stable during horizontal orbit but shift
+ *    naturally when the camera tilts up/down, producing lighting variation.
  *
  * 2. **Asymmetric camera-space lightformers** — Key panel upper-left, fill right,
  *    top overhead, ground below, and back-fill behind camera. This matches Onshape's
