@@ -50,6 +50,129 @@ function calculatePositionFromSphericalCoordinates({
 }
 
 /**
+ * Computes the optimal zoom for a PerspectiveCamera so that the bounding box
+ * tightly fills the frame in both horizontal and vertical dimensions.
+ *
+ * Uses **perspective-correct** angular extents: each bounding-box corner is
+ * projected from the camera position, and the tangent of the angle from the
+ * optical axis is computed per-corner (rightDist / forwardDist). Corners that
+ * are closer to the camera subtend a larger angle and therefore limit the zoom
+ * more than corners further away. This prevents clipping that the simpler
+ * orthographic approximation (constant `distance` divisor) would miss.
+ *
+ * Frustum visibility condition for a point at camera-relative (r, u, f):
+ *   |r/f| <= aspect * tan(fov/2) / zoom   (horizontal)
+ *   |u/f| <= tan(fov/2) / zoom             (vertical)
+ *
+ * @returns The zoom value to set on the camera. Always >= a small floor to
+ *   prevent degenerate values.
+ */
+export function computeViewFittingZoom({
+  cameraPosition,
+  target,
+  boundingBox,
+  fovDeg,
+  aspectRatio,
+  paddingFactor = 0.9,
+}: {
+  cameraPosition: THREE.Vector3;
+  target: THREE.Vector3;
+  boundingBox: THREE.Box3;
+  fovDeg: number;
+  aspectRatio: number;
+  paddingFactor?: number;
+}): number {
+  const distance = cameraPosition.distanceTo(target);
+  if (distance < tanEpsilon) {
+    return 1;
+  }
+
+  // Camera forward direction (from camera toward target)
+  const forward = new THREE.Vector3().subVectors(target, cameraPosition).normalize();
+
+  // Camera right = forward x worldUp (same pattern as computeHeadlampTransform)
+  const worldUp = THREE.Object3D.DEFAULT_UP.clone();
+  const right = new THREE.Vector3().crossVectors(forward, worldUp);
+
+  // Handle degenerate case: camera looking along up axis (e.g. TOP/BOTTOM view)
+  if (right.lengthSq() < 1e-6) {
+    // Pick an arbitrary perpendicular — use the axis with the smallest
+    // component of forward so the cross product is well-conditioned.
+    const absX = Math.abs(forward.x);
+    const absY = Math.abs(forward.y);
+    const absZ = Math.abs(forward.z);
+    const fallback =
+      absX <= absY && absX <= absZ
+        ? new THREE.Vector3(1, 0, 0)
+        : absY <= absZ
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1);
+    right.crossVectors(forward, fallback);
+  }
+
+  right.normalize();
+
+  // Camera up = right x forward
+  const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+
+  const tanHalfFov = Math.tan((fovDeg / 2) * (Math.PI / 180));
+  if (tanHalfFov < tanEpsilon) {
+    return 1;
+  }
+
+  // Compute perspective-correct angular extents for each bounding-box corner.
+  // For each corner we measure the tangent of the angle from the optical axis
+  // (right/forward and up/forward ratios), which correctly accounts for corners
+  // at different depths from the camera.
+  const { min, max } = boundingBox;
+  let maxRightTan = 0;
+  let maxUpTan = 0;
+  let validCorners = 0;
+
+  for (let i = 0; i < 8; i++) {
+    const corner = new THREE.Vector3(
+      // eslint-disable-next-line no-bitwise -- bit mask selects min/max per axis
+      i & 1 ? max.x : min.x,
+      // eslint-disable-next-line no-bitwise -- bit mask selects min/max per axis
+      i & 2 ? max.y : min.y,
+      // eslint-disable-next-line no-bitwise -- bit mask selects min/max per axis
+      i & 4 ? max.z : min.z,
+    );
+
+    // Vector from camera to this corner
+    const toCorner = corner.sub(cameraPosition);
+    const forwardDist = toCorner.dot(forward);
+
+    // Skip corners behind or at the camera plane
+    if (forwardDist <= tanEpsilon) {
+      continue;
+    }
+
+    // Tangent of horizontal and vertical angles from the optical axis
+    maxRightTan = Math.max(maxRightTan, Math.abs(toCorner.dot(right) / forwardDist));
+    maxUpTan = Math.max(maxUpTan, Math.abs(toCorner.dot(up) / forwardDist));
+    validCorners++;
+  }
+
+  // Guard against no visible corners or zero-extent projected geometry
+  if (validCorners === 0 || maxRightTan < tanEpsilon || maxUpTan < tanEpsilon) {
+    return 1;
+  }
+
+  // Max zoom that keeps every corner inside the frustum:
+  //   zoom_v = tan(fov/2) / maxUpTan
+  //   zoom_h = aspect * tan(fov/2) / maxRightTan
+  const zoomVertical = tanHalfFov / maxUpTan;
+  const zoomHorizontal = (aspectRatio * tanHalfFov) / maxRightTan;
+
+  // Tighter constraint wins (smaller zoom = less visible area)
+  const tightZoom = Math.min(zoomVertical, zoomHorizontal) * paddingFactor;
+
+  // Floor to prevent degenerate near-zero zoom
+  return Math.max(tightZoom, tanEpsilon);
+}
+
+/**
  * Updates only the camera FOV based on angle, adjusting distance to maintain perceived size.
  * Does NOT reset camera position or viewing angle - preserves user's current view.
  */
