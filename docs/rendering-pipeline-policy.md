@@ -35,14 +35,35 @@ Edge/line materials use `metallicFactor: 0`, `roughnessFactor: 1`, as they are r
 
 ## Tone Mapping Policy
 
-The renderer uses `ACESFilmicToneMapping` (React Three Fiber default) with default exposure.
+The renderer uses `ACESFilmicToneMapping` (React Three Fiber default) with `toneMappingExposure: 1.5` to offset ACES highlight compression while keeping mid-tones visible.
 
-**Rationale**: Environment maps contain HDR values exceeding 1.0. Without tone mapping, bright reflections clip to pure white, losing surface detail. ACES filmic provides good highlight rolloff while preserving natural colour appearance.
+**Rationale**: Environment maps contain HDR values exceeding 1.0. Without tone mapping, bright reflections clip to pure white, losing surface detail. ACES filmic provides good highlight rolloff while preserving natural colour appearance. The 1.5x exposure boost compensates for ACES's aggressive highlight compression, ensuring specular highlights remain visible.
 
 **Decision gate for AgX**: If visual testing reveals unacceptable hue shifts under ACES (particularly in saturated reds/blues), switch to `THREE.AgXToneMapping` which preserves hues more accurately under bright lighting. Acceptance criteria:
 - Highlight rolloff: smooth gradation from specular peak to diffuse, no hard clipping
 - Color shift: saturated base colors (red, blue, green) should not visibly shift hue under bright environment
 - White clipping: no pure-white patches on curved metallic surfaces
+
+## Ambient Occlusion
+
+The renderer uses **N8AO** (from `@react-three/postprocessing`) for screen-space ambient occlusion, adding depth to crevices, part junctions, and concave areas.
+
+**Configuration** (in `three-context.tsx`):
+
+```
+screenSpaceRadius: true       -- AO radius in pixels, consistent at any zoom level
+aoRadius:          24          -- screen-space radius in pixels
+intensity:         1           -- pow(ao, intensity); 1 = natural, higher = darker AO
+distanceFalloff:   0.2         -- ratio of radius at which AO fades (for screen-space mode)
+```
+
+**Rationale**: Professional CAD viewers (e.g. Onshape at 37.5% AO) use ambient occlusion to create depth perception. Without AO, the scene appears flat, especially from top-down and bottom-up views. N8AO was chosen because it:
+- Supports logarithmic depth buffers (auto-detected)
+- Supports stencil buffers (for section view compatibility)
+- Works with the `frameloop="demand"` mode (AO runs during render passes only)
+- Uses `screenSpaceRadius` for zoom-independent consistent appearance
+
+**Stencil compatibility**: The `EffectComposer` is configured with `stencilBuffer` to preserve stencil-based cross-section rendering in the Section View component.
 
 ## Environment Strategy
 
@@ -54,16 +75,18 @@ The main CAD viewer uses an `<Environment>` component with `<Lightformer>` child
 - **Size-aware placement**: All Lightformer positions and scales are expressed as multiples of the scene's bounding sphere radius (`sceneRadius`). This ensures a 5mm watch gear and a 5-meter building frame both receive proportionally sized soft panels.
 - **No background**: The environment map is used for reflections only (`background` is not set). The app's CSS background shows through, consistent with standard CAD viewer behaviour.
 - **Conditional on matcap**: When matcap is enabled, the environment is skipped entirely since `MeshMatcapMaterial` ignores environment maps. This avoids unnecessary GPU work.
-- **Camera-relative key light**: A directional light (intensity `0.6`) is parented to the camera so the primary illumination follows the user's viewpoint, preventing uneven shading during orbit.
+- **Camera-relative fill light**: A directional light (intensity `0.7`) follows the camera for consistent orbit illumination.
+- **Fixed directional key light**: A world-space directional light (intensity `3`) from above-front for angle-dependent specular highlights.
 - **Environment resolution**: `512px` for sharp, defined reflections on surfaces.
-- **Ambient light**: Low intensity (`0.15`) to preserve contrast and allow environment reflections to dominate.
-- **Post-load envMapIntensity**: After GLTF load, all `MeshStandardMaterial` instances receive `envMapIntensity = 1.5` (PBR path only) to amplify environment reflections for a glossy appearance.
+- **Ambient light**: Moderate intensity (`0.35`) to provide base diffuse illumination, offset by AO in occluded areas.
+- **Post-load envMapIntensity**: After GLTF load, all `MeshStandardMaterial` instances receive `envMapIntensity = 2.5` (PBR path only) to amplify environment reflections.
+- **Post-load roughnessOverride**: After GLTF load, all `MeshStandardMaterial` instances receive `roughness = 0.28` for a semi-matte CAD appearance consistent with professional CAD viewers.
 
 ### Presets
 
 | Preset | Description |
 |--------|-------------|
-| `studio` | Full Lightformer rig -- key (2.0), fill (1.0), rim (0.8), ground (0.3). Default. |
+| `studio` | Full Lightformer rig -- key (8), fill (4), rim (2), ground (0.25). Default. |
 | `neutral` | Reduced intensity, minimal reflections. |
 | `soft` | Hemisphere + ambient only, no environment map. |
 | `performance` | No environment, minimal lights. Equivalent to matcap-era setup. |
@@ -121,6 +144,30 @@ These testing approaches are documented for future implementation, not actioned 
 - Compare ACES vs AgX vs NoToneMapping on all canonical models.
 - Evaluate: highlight rolloff, colour shift on saturated parts, white clipping, shadow depth.
 - Document chosen algorithm and rationale.
+
+## Performance Patterns
+
+### Geometry Key Threading
+
+A deterministic `geometryKey` (derived from geometry content hashes) is threaded through `CadViewer -> ThreeProvider -> Scene -> Stage` and `Scene -> Controls -> MeasureTool`. This enables skip-when-unchanged optimizations:
+
+- **Stage bounds computation**: `_box3.setFromObject()` (O(n) scene traversal) is skipped entirely once the bounding radius stabilizes. It only recomputes when `geometryKey` changes (new geometry loaded). During orbit/pan/zoom, the per-frame cost drops from O(scene_graph_size) to O(1).
+- **MeasureTool mesh cache**: Scene traversal for raycasting mesh collection is cached and reused while `geometryKey` is stable. Without caching, `scene.traverse()` ran on every mousemove event at 60Hz.
+
+### useFrame Scratch Object Pattern
+
+All `useFrame` callbacks that compute transforms (camera-facing rotations, billboard labels, constant screen-size elements) use **module-scope scratch objects** (`_scratchVec3`, `_scratchQuat`, etc.) instead of allocating `new THREE.Vector3()` / `new THREE.Quaternion()` per frame. This eliminates GC pressure during continuous orbit.
+
+Convention: prefix with underscore (`_`), declare at module scope outside any component.
+
+### GLTF Parse / Material Split
+
+The `GltfMesh` component separates GLTF binary parsing (expensive) from material application (cheap). Toggling matcap only re-applies materials to the already-parsed scene, avoiding a full GLTF re-parse. Original PBR materials are cloned and saved during the initial parse so they can be restored when switching from matcap back to PBR mode.
+
+### Post-Processing Performance
+
+- **No double MSAA**: The Canvas `gl` config omits `antialias: true` since `EffectComposer` handles antialiasing via its own `multisampling` FBO.
+- **N8AO halfRes**: The ambient occlusion pass runs at half resolution with depth-aware upsampling for ~2-4x speedup at minimal visual cost on smooth CAD surfaces.
 
 ## Known Limitations
 
