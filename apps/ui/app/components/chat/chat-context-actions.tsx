@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect, useState } from 'react';
+import { useCallback, useMemo, useEffect, useState, useRef } from 'react';
 import { AtSign, Image, AlertTriangle, AlertCircle, Camera } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { createActor } from 'xstate';
@@ -103,6 +103,20 @@ export function ChatContextActions({
     };
   }, [viewGraphics]);
 
+  // Track active screenshot actors for lifecycle cleanup
+  const activeScreenshotActorsRef = useRef(new Set<{ stop: () => void }>());
+
+  useEffect(() => {
+    const actors = activeScreenshotActorsRef;
+    return () => {
+      for (const actor of actors.current) {
+        actor.stop();
+      }
+
+      actors.current.clear();
+    };
+  }, []);
+
   // Helper to take a screenshot of a specific view's graphicsRef (creates actor on-demand)
   const takeScreenshot = useCallback(
     (
@@ -116,7 +130,14 @@ export function ChatContextActions({
       const actor = createActor(screenshotRequestMachine, {
         input: { graphicsRef },
       });
+      const actors = activeScreenshotActorsRef.current;
+      actors.add(actor);
       actor.start();
+
+      const cleanup = () => {
+        actor.stop();
+        actors.delete(actor);
+      };
 
       if (options.type === 'single') {
         actor.send({
@@ -131,12 +152,12 @@ export function ChatContextActions({
             zoomLevel: 1.4,
           },
           onSuccess(dataUrls) {
+            cleanup();
             options.onSuccess(dataUrls);
-            actor.stop();
           },
           onError(error) {
+            cleanup();
             options.onError(error);
-            actor.stop();
           },
         });
       } else {
@@ -164,12 +185,12 @@ export function ChatContextActions({
             },
           },
           onSuccess(dataUrls) {
+            cleanup();
             options.onSuccess(dataUrls);
-            actor.stop();
           },
           onError(error) {
+            cleanup();
             options.onError(error);
-            actor.stop();
           },
         });
       }
