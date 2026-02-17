@@ -1,6 +1,6 @@
 import { memo, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSelector } from '@xstate/react';
-import type { IDockviewPanelHeaderProps } from 'dockview-react';
+import type { DockviewApi, DockviewPanelApi, IDockviewPanelHeaderProps } from 'dockview-react';
 import { FileX, FolderOpen } from 'lucide-react';
 import type { FileEntry } from '@taucad/types';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
@@ -16,6 +16,8 @@ import { ChatViewerStatus } from '#routes/builds_.$id/chat-viewer-status.js';
 import { ChatViewerControls } from '#routes/builds_.$id/chat-viewer-controls.js';
 import { ChatInterfaceGraphics } from '#routes/builds_.$id/chat-interface-graphics.js';
 import { ChatInterfaceStatus } from '#routes/builds_.$id/chat-interface-status.js';
+import { useIsTopRightPanel } from '#components/panes/use-is-top-right-group.js';
+import { cn } from '#utils/ui.utils.js';
 
 type ChatViewerProps = {
   /** Unique Dockview panel ID for this viewer instance */
@@ -24,9 +26,16 @@ type ChatViewerProps = {
   readonly entryFile: string | undefined;
   /** Dockview panel API for updating title, etc. */
   readonly panelApi: IDockviewPanelHeaderProps['api'];
+  /** Dockview container API for layout-aware positioning */
+  readonly containerApi: DockviewApi;
 };
 
-export const ChatViewer = memo(function ({ viewId, entryFile, panelApi }: ChatViewerProps): React.JSX.Element {
+export const ChatViewer = memo(function ({
+  viewId,
+  entryFile,
+  panelApi,
+  containerApi,
+}: ChatViewerProps): React.JSX.Element {
   const { buildRef, editorRef, viewGraphics, compilationUnits } = useBuild();
   const fileManager = useFileManager();
 
@@ -215,7 +224,7 @@ export const ChatViewer = memo(function ({ viewId, entryFile, panelApi }: ChatVi
   return (
     <CadProvider cadRef={cadActor}>
       <GraphicsProvider graphicsRef={graphicsActor}>
-        <ViewerContent viewId={viewId} entryFile={entryFile} />
+        <ViewerContent viewId={viewId} entryFile={entryFile} panelApi={panelApi} containerApi={containerApi} />
       </GraphicsProvider>
     </CadProvider>
   );
@@ -230,9 +239,13 @@ export const ChatViewer = memo(function ({ viewId, entryFile, panelApi }: ChatVi
 const ViewerContent = memo(function ({
   viewId,
   entryFile,
+  panelApi,
+  containerApi,
 }: {
   readonly viewId: string;
   readonly entryFile: string;
+  readonly panelApi: DockviewPanelApi;
+  readonly containerApi: DockviewApi;
 }): React.JSX.Element {
   const { editorRef } = useBuild();
   const geometries = useCadSelector((state) => state.context.geometries, []);
@@ -270,20 +283,26 @@ const ViewerContent = memo(function ({
     }
   }, [cadActorRef, persistedViewSettings]);
 
-  const graphicsState = useGraphicsSelector((state) => ({
-    enableSurfaces: state.context.enableSurfaces,
-    enableLines: state.context.enableLines,
-    enableGizmo: state.context.enableGizmo,
-    enableGrid: state.context.enableGrid,
-    enableAxes: state.context.enableAxes,
-    enableMatcap: state.context.enableMatcap,
-    upDirection: state.context.upDirection,
-  }));
+  // Select individual primitive values so that useSelector's reference equality
+  // check works correctly. An object-returning selector creates a new reference
+  // on every emission, causing unnecessary re-renders.
+  const enableSurfaces = useGraphicsSelector((state) => state.context.enableSurfaces);
+  const enableLines = useGraphicsSelector((state) => state.context.enableLines);
+  const enableGizmo = useGraphicsSelector((state) => state.context.enableGizmo);
+  const enableGrid = useGraphicsSelector((state) => state.context.enableGrid);
+  const enableAxes = useGraphicsSelector((state) => state.context.enableAxes);
+  const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
+
+  // Shift the gizmo left when this panel's group is at the top-right corner
+  // of the dockview grid, so it doesn't overlap with the floating-panel
+  // trigger buttons positioned in the center pane.
+  const isTopRight = useIsTopRightPanel(panelApi, containerApi);
 
   return (
     <div className="group/viewer relative flex h-full flex-col">
       {/* Status overlays */}
-      <div className="absolute top-[10%] left-1/2 z-10 flex -translate-x-1/2 flex-col gap-2">
+      <div className="absolute top-[10%] right-2 left-2 z-10 mx-auto flex w-fit max-w-full flex-col gap-2">
         <ChatInterfaceStatus />
         <ChatViewerStatus />
       </div>
@@ -291,7 +310,10 @@ const ViewerContent = memo(function ({
       {/* Gizmo Container */}
       <div
         id={`viewport-gizmo-container-${viewId}`}
-        className="absolute top-[calc(var(--header-height)+var(--spacing)*12)] right-8 z-10"
+        className={cn(
+          'absolute top-[calc(var(--header-height)+var(--spacing)*12)] z-10',
+          isTopRight ? 'right-10' : 'right-0',
+        )}
       />
 
       {/* Geometry canvas */}
@@ -299,20 +321,20 @@ const ViewerContent = memo(function ({
         <CadViewer
           enableZoom
           enablePan
-          enableGizmo={graphicsState.enableGizmo}
-          enableGrid={graphicsState.enableGrid}
-          enableAxes={graphicsState.enableAxes}
-          enableSurfaces={graphicsState.enableSurfaces}
-          enableLines={graphicsState.enableLines}
-          enableMatcap={graphicsState.enableMatcap}
-          upDirection={graphicsState.upDirection}
+          enableGizmo={enableGizmo}
+          enableGrid={enableGrid}
+          enableAxes={enableAxes}
+          enableSurfaces={enableSurfaces}
+          enableLines={enableLines}
+          enableMatcap={enableMatcap}
+          upDirection={upDirection}
           geometries={geometries}
           gizmoContainer={`#viewport-gizmo-container-${viewId}`}
         />
       </div>
 
       {/* Bottom controls */}
-      <div className="absolute bottom-2 left-2 z-10 flex w-100 shrink-0 flex-col gap-2">
+      <div className="absolute right-2 bottom-2 left-2 z-10 flex shrink-0 flex-col gap-2">
         <ChatInterfaceGraphics />
         <ChatStackTrace entryFile={entryFile} side="bottom" />
         <ChatViewerControls />
