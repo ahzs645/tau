@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DockviewGroupPanel, DockviewPanelApi } from 'dockview-react';
-import {
-  checkGroupIsTopRight,
-  checkPanelIsTopRight,
-  edgeTolerance,
-} from '#components/panes/use-is-top-right-group.js';
+import { checkGroupIsTopRight, checkPanelIsTopRight, edgeTolerance } from '#components/panes/use-is-top-right-group.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -29,7 +25,8 @@ function domRect(partial: Partial<RectLike> = {}): DOMRect {
     y: 0,
     ...partial,
   };
-  return { ...rect, toJSON: () => rect } as DOMRect;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- mock
+  return { ...rect, toJSON: () => rect } satisfies DOMRect;
 }
 
 /** Tracks root elements appended to `document.body` for cleanup. */
@@ -64,27 +61,27 @@ function buildGroupInFloatingPanel(options: {
     omitPanel = false,
   } = options;
 
-  const groupEl = document.createElement('div');
-  groupEl.getBoundingClientRect = () => domRect(groupRect);
+  const groupElement = document.createElement('div');
+  groupElement.getBoundingClientRect = () => domRect(groupRect);
 
-  let root: HTMLElement = groupEl;
+  let root: HTMLElement = groupElement;
 
   if (!omitPanel) {
     const panel = document.createElement('div');
-    panel.setAttribute('data-slot', 'floating-panel');
-    panel.setAttribute('data-state', panelState);
-    panel.setAttribute('data-has-close', panelHasClose);
+    panel.dataset['slot'] = 'floating-panel';
+    panel.dataset['state'] = panelState;
+    panel.dataset['hasClose'] = panelHasClose;
     panel.getBoundingClientRect = () => domRect(panelRect);
-    panel.appendChild(groupEl);
+    panel.append(groupElement);
     root = panel;
   }
 
-  document.body.appendChild(root);
+  document.body.append(root);
   roots.push(root);
 
   return {
     api: { location: { type: locationType } },
-    element: groupEl,
+    element: groupElement,
   } as unknown as DockviewGroupPanel;
 }
 
@@ -105,26 +102,26 @@ function buildPanelInDockview(options: {
     omitContainer = false,
   } = options;
 
-  const groupEl = document.createElement('div');
-  groupEl.getBoundingClientRect = () => domRect(groupRect);
+  const groupElement = document.createElement('div');
+  groupElement.getBoundingClientRect = () => domRect(groupRect);
 
-  let root: HTMLElement = groupEl;
+  let root: HTMLElement = groupElement;
 
   if (!omitContainer) {
     const container = document.createElement('div');
     container.classList.add('dv-dockview');
     container.getBoundingClientRect = () => domRect(containerRect);
-    container.appendChild(groupEl);
+    container.append(groupElement);
     root = container;
   }
 
-  document.body.appendChild(root);
+  document.body.append(root);
   roots.push(root);
 
   return {
     group: {
       api: { location: { type: locationType } },
-      element: groupEl,
+      element: groupElement,
     },
   } as unknown as DockviewPanelApi;
 }
