@@ -97,15 +97,23 @@ export function updateCameraFov({
 export function resetCamera({
   camera,
   geometryRadius,
+  geometryCenter,
   rotation,
   perspective,
   setSceneRadius,
   invalidate,
   enableConfiguredAngles,
   cameraFovAngle,
+  controls,
 }: {
   camera: THREE.Camera;
   geometryRadius: number;
+  /**
+   * The center of the geometry's bounding box. The camera will orbit around
+   * and look at this point rather than the world origin, allowing geometry
+   * to remain at its absolute coordinates.
+   */
+  geometryCenter: THREE.Vector3;
   rotation: { side: number; vertical: number };
   perspective: {
     offsetRatio: number;
@@ -118,6 +126,7 @@ export function resetCamera({
   invalidate: () => void;
   enableConfiguredAngles?: boolean;
   cameraFovAngle: number;
+  controls?: { target: THREE.Vector3; update: () => void } | undefined;
 }): void {
   if (!(camera instanceof THREE.PerspectiveCamera)) {
     console.error('resetCamera requires PerspectiveCamera');
@@ -151,32 +160,39 @@ export function resetCamera({
 
   if (useConfiguredAngles) {
     // Use configured rotation angles (side and vertical) for positioning
-    const position = calculatePositionFromSphericalCoordinates({
+    // Offset from the geometry center so the camera orbits around it
+    const offset = calculatePositionFromSphericalCoordinates({
       distance: newDistance,
       horizontalAngle: rotation.side,
       verticalAngle: rotation.vertical,
     });
-    camera.position.copy(position);
-  } else if (camera.position.lengthSq() >= 1e-9) {
-    // Maintain current viewing direction if not at origin, only adjust distance
-    const currentDirection = camera.position.clone().normalize();
-    camera.position.copy(currentDirection.multiplyScalar(newDistance));
+    camera.position.copy(geometryCenter).add(offset);
+  } else if (camera.position.distanceToSquared(geometryCenter) >= 1e-9) {
+    // Maintain current viewing direction if not at center, only adjust distance
+    const currentDirection = camera.position.clone().sub(geometryCenter).normalize();
+    camera.position.copy(geometryCenter).add(currentDirection.multiplyScalar(newDistance));
   } else {
-    // Fallback for non-configured angle mode: If at origin or too close, use configured angles to set an initial safe direction.
-    const position = calculatePositionFromSphericalCoordinates({
+    // Fallback for non-configured angle mode: If at center or too close, use configured angles to set an initial safe direction.
+    const offset = calculatePositionFromSphericalCoordinates({
       distance: newDistance,
       horizontalAngle: rotation.side,
       verticalAngle: rotation.vertical,
     });
-    camera.position.copy(position);
+    camera.position.copy(geometryCenter).add(offset);
   }
 
   camera.zoom = perspective.zoomLevel;
   camera.near = perspective.nearPlane;
   camera.far = Math.max(perspective.minimumFarPlane, adjustedGeometryRadius * perspective.farPlaneRadiusMultiplier);
 
-  // Aim the camera at the center of the scene
-  camera.lookAt(0, 0, 0);
+  // Aim the camera at the geometry center
+  camera.lookAt(geometryCenter);
+
+  // Update orbit controls target so the user orbits around the geometry center
+  if (controls) {
+    controls.target.copy(geometryCenter);
+    controls.update();
+  }
 
   // Update the scene radius
   setSceneRadius(geometryRadius);

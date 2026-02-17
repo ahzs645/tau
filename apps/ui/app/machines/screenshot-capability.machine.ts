@@ -2,6 +2,16 @@ import { setup, sendTo, fromCallback, assertEvent, enqueueActions, assign } from
 import type { AnyActorRef } from 'xstate';
 import * as THREE from 'three';
 import type { ScreenshotOptions, CameraAngle, CompositeScreenshotOptions } from '@taucad/types';
+import {
+  applyLightingForCamera,
+  findTaggedLights,
+  lightingUserDataKeys,
+  ambientBaseIntensity,
+  headlampBaseIntensity,
+  environmentBaseIntensity,
+  defaultHeadlampConfig,
+} from '#components/geometry/graphics/three/utils/lights.utils.js';
+import type { SceneLightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
 // Capture mode discriminator
 type CaptureMode = 'threejs' | 'svg';
@@ -52,9 +62,13 @@ const defaultCompositeOptions = {
 } satisfies CompositeScreenshotOptions;
 
 /**
- * Calculate optimal grid layout for given number of items
+ * Calculate optimal grid layout for given number of items.
+ *
+ * @param itemCount - Number of items to arrange in a grid.
+ * @param preferredRatio - Target column-to-row ratio.
+ * @returns The grid dimensions that best match the preferred ratio.
  */
-function calculateOptimalGrid(
+export function calculateOptimalGrid(
   itemCount: number,
   preferredRatio: { columns: number; rows: number } = defaultCompositeOptions.preferredRatio,
 ): { columns: number; rows: number } {
@@ -521,6 +535,15 @@ async function captureScreenshots(
     screenshotRenderer.setPixelRatio(pixelRatio);
 
     screenshotRenderer.outputColorSpace = gl.outputColorSpace;
+
+    // The EffectComposer from @react-three/postprocessing permanently sets
+    // gl.toneMapping = NoToneMapping while mounted (it handles tone mapping
+    // internally in its output pass shader). Reading gl.toneMapping here would
+    // give NoToneMapping, producing much darker screenshots. Use the R3F
+    // default (ACESFilmicToneMapping) directly instead.
+    screenshotRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    screenshotRenderer.toneMappingExposure = gl.toneMappingExposure;
+
     screenshotRenderer.shadowMap.enabled = gl.shadowMap.enabled;
     screenshotRenderer.shadowMap.type = gl.shadowMap.type;
 
@@ -537,6 +560,13 @@ async function captureScreenshots(
         }
       });
     }
+
+    // Resolve lighting config and tagged lights once before the loop to avoid
+    // redundant scene traversals for every camera angle.
+    const sceneLightingConfig = screenshotScene.userData[lightingUserDataKeys.config] as
+      | SceneLightingConfig
+      | undefined;
+    const taggedLights = sceneLightingConfig ? findTaggedLights(screenshotScene) : undefined;
 
     // Process each camera angle using the same canvas and renderer
     for (const cameraAngle of config.cameraAngles) {
@@ -589,6 +619,28 @@ async function captureScreenshots(
       }
 
       screenshotCamera.updateProjectionMatrix();
+      // Ensure the camera's world matrix is up-to-date for lighting calculations
+      screenshotCamera.updateMatrixWorld(true);
+
+      // Apply camera-relative lighting for this angle so that environment
+      // rotation, headlamp position, and intensity compensation match the
+      // live renderer's per-frame updates.
+      if (sceneLightingConfig && taggedLights) {
+        applyLightingForCamera({
+          scene: screenshotScene,
+          camera: screenshotCamera,
+          headlamp: taggedLights.headlamp,
+          ambient: taggedLights.ambient,
+          config: {
+            sceneRadius: sceneLightingConfig.sceneRadius,
+            upDirection: sceneLightingConfig.upDirection,
+            headlampIntensity: headlampBaseIntensity,
+            ambientIntensity: ambientBaseIntensity,
+            environmentIntensity: environmentBaseIntensity,
+            headlampConfig: defaultHeadlampConfig,
+          },
+        });
+      }
 
       // Render the scene to the canvas with this camera angle
       screenshotRenderer.render(screenshotScene, screenshotCamera);

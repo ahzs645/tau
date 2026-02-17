@@ -1,37 +1,16 @@
 import { useRef } from 'react';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { Environment, Lightformer } from '@react-three/drei';
-import { calculateFovLightingCompensation } from '#components/geometry/graphics/three/utils/math.utils.js';
-
-// ── Lighting constants ─────────────────────────────────────────────────────
-// All tuning values live at module scope for easy adjustment.
-
-/** Ambient fill -- provides base illumination floor so no surface is fully dark. */
-const ambientIntensity = 0.05;
-
-/**
- * Camera-relative headlamp -- directional light with stable world-up placement
- * plus a camera-right skew so the specular lobe shifts toward upper-right.
- *
- * Reduced from 0.5 since the camera-relative environment now provides directional
- * variation. The headlamp is retained primarily as part of the FOV diffuse
- * compensation system (its intensity is boosted at low FOV).
- */
-const headlampIntensity = 0.8;
-/** Headlamp offsets (multipliers of sceneRadius). */
-const headlampRightOffset = -0.1;
-const headlampUpOffset = 2.1;
-const headlampTargetRightSkew = 0.2;
-const headlampTargetUpSkew = 0.1;
-
-/**
- * Scene-level environment intensity (base value) -- the primary illumination source.
- * The environment rotates with the camera (camera-relative) so that lighting is
- * consistent regardless of orbit angle. This base value is scaled per-frame by the
- * FOV compensation factor.
- */
-const sceneEnvironmentIntensity = 0.9;
+import {
+  applyLightingForCamera,
+  ambientBaseIntensity,
+  headlampBaseIntensity,
+  environmentBaseIntensity,
+  defaultHeadlampConfig,
+  lightingUserDataKeys,
+} from '#components/geometry/graphics/three/utils/lights.utils.js';
+import type { SceneLightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
 /** Environment cubemap resolution (px). Higher = sharper specular reflections. */
 const envResolution = 512;
@@ -51,13 +30,6 @@ const studioGroundIntensity = 1.5;
 /** Specular highlight panel (upper-right for bottom face) -- creates focused off-center specular on flat faces. */
 const studioBackFillIntensity = 8;
 
-/** Scratch vectors used inside useFrame to avoid allocations. */
-const _scratchVec3 = new THREE.Vector3();
-const _scratchVec3A = new THREE.Vector3();
-const _scratchVec3B = new THREE.Vector3();
-const _scratchVec3C = new THREE.Vector3();
-const _scratchQuaternion = new THREE.Quaternion();
-const _scratchEuler = new THREE.Euler();
 // Neutral preset Lightformer intensities ─────────────────────────────────────
 const neutralKeyIntensity = 0.6;
 const neutralGroundIntensity = 0.2;
@@ -112,73 +84,31 @@ export function Lights({
   const radiusRef = useRef(r);
   radiusRef.current = r;
 
-  // Per-frame updates:
-  // 1. Read camera FOV and compute FOV-dependent compensation factors.
-  // 2. Apply compensated environment intensity.
-  // 3. Rotate environment to follow camera (camera-locked lighting).
-  // 4. Apply compensated headlamp + ambient intensities.
-  // 5. Position the headlamp above camera with rightward skew.
+  // Per-frame updates delegated to the shared applyLightingForCamera utility.
+  // This ensures the live renderer and the offline screenshot renderer apply
+  // identical lighting for any camera orientation.
   useFrame(() => {
-    // Read the actual camera FOV (may differ from slider due to zoom)
-    const currentFov = (camera as THREE.PerspectiveCamera).fov;
-    const compensation = calculateFovLightingCompensation(currentFov);
+    // Persist lighting config on scene.userData so the screenshot capture
+    // system can read it from a cloned scene without prop-drilling.
+    scene.userData[lightingUserDataKeys.config] = {
+      sceneRadius: radiusRef.current,
+      upDirection,
+    } satisfies SceneLightingConfig;
 
-    // Primary: reduce environment intensity at low FOV (dims specular wash)
-    scene.environmentIntensity = sceneEnvironmentIntensity * compensation.envFactor;
-
-    // Camera-locked environment: apply full world->camera cancellation so every
-    // Lightformer remains camera-bound (including roll), not just azimuth-bound.
-    //
-    // Three.js internally negates all Euler components of environmentRotation
-    // (WebGLMaterials.js "accommodate left-handed frame"), so we pre-negate.
-    //
-    // Choose an extraction order aligned to configured up axis for robustness.
-    const eulerOrder: THREE.EulerOrder = upDirection === 'y' ? 'YXZ' : upDirection === 'z' ? 'ZXY' : 'XZY';
-    camera.getWorldQuaternion(_scratchQuaternion).invert();
-    _scratchEuler.setFromQuaternion(_scratchQuaternion, eulerOrder);
-    scene.environmentRotation.set(-_scratchEuler.x, -_scratchEuler.y, -_scratchEuler.z, eulerOrder);
-
-    // Compensate diffuse loss with ambient boost
-    if (ambientReference.current) {
-      ambientReference.current.intensity = ambientIntensity * compensation.ambientFactor;
-    }
-
-    if (cameraLightReference.current) {
-      // Compensate diffuse loss with headlamp boost
-      cameraLightReference.current.intensity = headlampIntensity * compensation.headlampFactor;
-
-      const currentRadius = radiusRef.current;
-
-      // Camera basis vectors in world space:
-      // - local +X: camera-right
-      // - local +Y: camera-up
-      _scratchVec3A.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-      _scratchVec3B.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
-
-      // Use pure camera-space offsets to keep directional lighting invariant
-      // under azimuth rotations around the configured world up axis.
-      _scratchVec3.copy(camera.position);
-      _scratchVec3.addScaledVector(_scratchVec3B, currentRadius * headlampUpOffset);
-      _scratchVec3.addScaledVector(_scratchVec3A, currentRadius * headlampRightOffset);
-      cameraLightReference.current.position.copy(_scratchVec3);
-
-      // Aim in camera space (forward with slight lower-left bias) so directional
-      // response stays consistent across per-viewport orbit/target variations.
-      camera.getWorldDirection(_scratchVec3C);
-      _scratchVec3C.normalize();
-
-      cameraLightReference.current.target.position.copy(camera.position);
-      cameraLightReference.current.target.position.addScaledVector(_scratchVec3C, currentRadius * 2);
-      cameraLightReference.current.target.position.addScaledVector(
-        _scratchVec3A,
-        -currentRadius * headlampTargetRightSkew,
-      );
-      cameraLightReference.current.target.position.addScaledVector(
-        _scratchVec3B,
-        -currentRadius * headlampTargetUpSkew,
-      );
-      cameraLightReference.current.target.updateMatrixWorld();
-    }
+    applyLightingForCamera({
+      scene,
+      camera,
+      headlamp: cameraLightReference.current ?? undefined,
+      ambient: ambientReference.current ?? undefined,
+      config: {
+        sceneRadius: radiusRef.current,
+        upDirection,
+        headlampIntensity: headlampBaseIntensity,
+        ambientIntensity: ambientBaseIntensity,
+        environmentIntensity: environmentBaseIntensity,
+        headlampConfig: defaultHeadlampConfig,
+      },
+    });
   });
 
   const showEnvironment = !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral');
@@ -186,10 +116,19 @@ export function Lights({
   return (
     <>
       {/* Base ambient fill -- always present for minimum illumination */}
-      <ambientLight ref={ambientReference} intensity={ambientIntensity} />
+      <ambientLight
+        ref={ambientReference}
+        intensity={ambientBaseIntensity}
+        userData={{ [lightingUserDataKeys.ambient]: true }}
+      />
 
       {/* Headlamp -- positioned above camera in world space for top-down gradients */}
-      <directionalLight ref={cameraLightReference} intensity={headlampIntensity} color="white" />
+      <directionalLight
+        ref={cameraLightReference}
+        intensity={headlampBaseIntensity}
+        color="white"
+        userData={{ [lightingUserDataKeys.headlamp]: true }}
+      />
 
       {showEnvironment ? (
         <Environment resolution={envResolution}>
