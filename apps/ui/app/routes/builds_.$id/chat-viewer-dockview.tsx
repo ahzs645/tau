@@ -23,6 +23,7 @@ import { ChatViewer } from '#routes/builds_.$id/chat-viewer.js';
 import { Dockview } from '#components/panes/dockview.js';
 import { ViewerDockviewTab } from '#components/panes/viewer-tab-context-menu.js';
 import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
+import { WebglContextTrackerProvider } from '#hooks/use-webgl-context-tracker.js';
 
 /**
  * Params passed to each viewer panel via Dockview.
@@ -517,16 +518,18 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
   );
 
   return (
-    <DockviewFileActionProvider value={handleOpenFile}>
-      <Dockview
-        components={components}
-        noPanelsOverlay="emptyGroup"
-        defaultTabComponent={ViewerDockviewTab}
-        watermarkComponent={ViewerWatermark}
-        leftHeaderActionsComponent={DockviewOpenFileAction}
-        onReady={onReady}
-        onDidDrop={onDidDrop}
-      />
-    </DockviewFileActionProvider>
+    <WebglContextTrackerProvider>
+      <DockviewFileActionProvider value={handleOpenFile}>
+        <Dockview
+          components={components}
+          noPanelsOverlay="emptyGroup"
+          defaultTabComponent={ViewerDockviewTab}
+          watermarkComponent={ViewerWatermark}
+          leftHeaderActionsComponent={DockviewOpenFileAction}
+          onReady={onReady}
+          onDidDrop={onDidDrop}
+        />
+      </DockviewFileActionProvider>
+    </WebglContextTrackerProvider>
   );
 });
