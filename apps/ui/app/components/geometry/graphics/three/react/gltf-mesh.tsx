@@ -293,9 +293,11 @@ export function GltfMesh({
     [],
   );
 
-  // Effect 2: Apply materials (lightweight, runs on matcap toggle).
+  // Effect 2: Apply materials (lightweight, runs on matcap toggle or new base scene).
   // Applies matcap or restores original materials on the base scene.
   // When enableMatcap changes, only this effect runs (no GLTF re-parse).
+  // Visibility is NOT handled here -- it is handled by the dedicated visibility effect
+  // below to avoid expensive material re-application on visibility toggles.
   const applyMaterials = useCallback(
     (targetScene: Group): void => {
       if (enableMatcap) {
@@ -313,10 +315,9 @@ export function GltfMesh({
     }
 
     applyMaterials(baseScene);
-    updateVisibility(baseScene, enableSurfaces, enableLines);
     setScene(baseScene);
     invalidate();
-  }, [baseScene, applyMaterials, enableSurfaces, enableLines, invalidate]);
+  }, [baseScene, applyMaterials, invalidate]);
 
   // Toggle visibility when enableSurfaces or enableLines change
   useEffect(() => {
