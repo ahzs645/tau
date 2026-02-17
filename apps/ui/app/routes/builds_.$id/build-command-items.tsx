@@ -1,5 +1,5 @@
 import { Clipboard, Download, GalleryThumbnails, ImageDown } from 'lucide-react';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useSelector, useActorRef } from '@xstate/react';
 import { createActor } from 'xstate';
 import type { UIMatch } from 'react-router';
@@ -32,6 +32,20 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
   const exportActorRef = useActorRef(exportGeometryMachine, {
     input: { cadRef: cadActor },
   });
+
+  // Track active screenshot actors for lifecycle cleanup
+  const activeScreenshotActorsRef = useRef(new Set<{ stop: () => void }>());
+
+  useEffect(() => {
+    const actors = activeScreenshotActorsRef;
+    return () => {
+      for (const actor of actors.current) {
+        actor.stop();
+      }
+
+      actors.current.clear();
+    };
+  }, []);
 
   const handleExport = useCallback(
     async (filename: string, format: ExportFormat) => {
@@ -100,6 +114,21 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
       const actor = createActor(screenshotRequestMachine, {
         input: { graphicsRef: mainGraphicsRef },
       });
+      const actors = activeScreenshotActorsRef.current;
+      actors.add(actor);
+
+      // Auto-stop actor once the screenshot request completes (returns to idle after requesting)
+      let sawRequesting = false;
+      const subscription = actor.subscribe((snapshot) => {
+        if (snapshot.value === 'requesting') {
+          sawRequesting = true;
+        } else if (sawRequesting) {
+          subscription.unsubscribe();
+          actor.stop();
+          actors.delete(actor);
+        }
+      });
+
       actor.start();
       actor.send(event);
     },
