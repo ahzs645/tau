@@ -310,6 +310,52 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
     }
   }, [api, buildIsReady, buildRef, editorRef, mainEntryFile, viewSettings]);
 
+  // Listen for "open in viewer" requests from file tree or editor tab context menus.
+  // Creates a new viewer panel for the requested file if one doesn't already exist.
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const subscription = buildRef.on('viewerFileRequested', (event) => {
+      const { entryFile } = event;
+
+      // If a panel already exists for this file, activate it instead of creating a duplicate
+      const existingPanel = api.panels.find(
+        (panel) => (panel.params as ViewerPanelParameters | undefined)?.entryFile === entryFile,
+      );
+      if (existingPanel) {
+        existingPanel.api.setActive();
+        return;
+      }
+
+      // Create a new viewer panel
+      const viewId = generatePrefixedId('view');
+      const fileName = entryFile.split('/').pop() ?? entryFile;
+
+      api.addPanel({
+        id: viewId,
+        component: 'viewer',
+        title: fileName,
+        params: { viewId, entryFile },
+      });
+
+      // Persist view settings (inherit from active panel)
+      editorRef.send({
+        type: 'setViewSettings',
+        viewId,
+        viewState: {
+          entryFile,
+          graphicsSettings: getInheritedSettings(),
+        },
+      });
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [api, buildRef, editorRef, getInheritedSettings]);
+
   // Handle ready event: restore layout or seed default
   const onReady = useCallback(
     (event: DockviewReadyEvent) => {

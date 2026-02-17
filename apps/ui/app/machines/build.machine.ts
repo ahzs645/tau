@@ -85,6 +85,7 @@ type BuildEventInternal =
   | { type: 'loadModel' }
   | { type: 'setMainFile'; path: string }
   | { type: 'createCompilationUnit'; entryFile: string }
+  | { type: 'openInViewer'; entryFile: string }
   | { type: 'destroyCompilationUnit'; entryFile: string }
   | { type: 'createViewGraphics'; viewId: string; settings?: GraphicsViewSettings }
   | { type: 'destroyViewGraphics'; viewId: string }
@@ -102,7 +103,8 @@ type BuildEvent = BuildEventExternalDone | BuildEventInternal;
 type BuildEmitted =
   | { type: 'buildLoaded'; build: Build }
   | { type: 'error'; error: Error }
-  | { type: 'buildUpdated'; build: Build };
+  | { type: 'buildUpdated'; build: Build }
+  | { type: 'viewerFileRequested'; entryFile: string };
 
 /**
  * Build Machine
@@ -439,6 +441,11 @@ export const buildMachine = setup({
         return { compilationUnits: newUnits };
       });
     }),
+    openInViewer: enqueueActions(({ enqueue, event }) => {
+      assertEvent(event, 'openInViewer');
+      enqueue.raise({ type: 'createCompilationUnit', entryFile: event.entryFile });
+      enqueue.emit({ type: 'viewerFileRequested', entryFile: event.entryFile });
+    }),
     destroyCompilationUnit: enqueueActions(({ enqueue, context, event }) => {
       assertEvent(event, 'destroyCompilationUnit');
 
@@ -676,6 +683,9 @@ export const buildMachine = setup({
             },
             createCompilationUnit: {
               actions: 'createCompilationUnit',
+            },
+            openInViewer: {
+              actions: 'openInViewer',
             },
             destroyCompilationUnit: {
               actions: 'destroyCompilationUnit',
