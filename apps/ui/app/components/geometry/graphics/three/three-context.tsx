@@ -36,7 +36,7 @@ export function ThreeProvider({
   enablePan = false,
   enableDamping = false,
   upDirection = 'z',
-  enableCentering = true,
+  enableCentering = false,
   className,
   stageOptions,
   zoomSpeed = 2,

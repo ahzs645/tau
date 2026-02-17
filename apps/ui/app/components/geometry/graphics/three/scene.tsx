@@ -25,7 +25,7 @@ export function Scene({
   enablePan = false,
   upDirection = 'z',
   stageOptions,
-  enableCentering = true,
+  enableCentering = false,
   zoomSpeed,
   gizmoContainer,
 }: SceneProperties): React.JSX.Element {
