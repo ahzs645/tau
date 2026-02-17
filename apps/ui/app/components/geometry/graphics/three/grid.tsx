@@ -26,10 +26,12 @@ export const Grid = React.memo(() => {
   // z: Z-up (0,0,1) -> grid on XY plane -> 'xyz'
   const axes = upDirection === 'x' ? ('zyx' as const) : upDirection === 'y' ? ('xzy' as const) : ('xyz' as const);
 
-  return (
-    <InfiniteGrid
-      axes={axes}
-      materialProperties={{ smallSize: gridSizes.smallSize, largeSize: gridSizes.largeSize, color: gridColor }}
-    />
+  // Memoize materialProperties to prevent InfiniteGrid from recreating its
+  // ShaderMaterial on every Grid re-render (the inline object would be a new reference each time).
+  const materialProperties = React.useMemo(
+    () => ({ smallSize: gridSizes.smallSize, largeSize: gridSizes.largeSize, color: gridColor }),
+    [gridSizes.smallSize, gridSizes.largeSize, gridColor],
   );
+
+  return <InfiniteGrid axes={axes} materialProperties={materialProperties} />;
 });
