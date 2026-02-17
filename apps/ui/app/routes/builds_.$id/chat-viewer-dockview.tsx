@@ -21,6 +21,7 @@ import { defaultGraphicsSettings, parseGraphicsViewSettings } from '#constants/e
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { ChatViewer } from '#routes/builds_.$id/chat-viewer.js';
 import { Dockview } from '#components/panes/dockview.js';
+import { DockviewWatermark } from '#components/panes/dockview-watermark.js';
 import { ViewerDockviewTab } from '#components/panes/viewer-tab-context-menu.js';
 import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
 import { WebglContextTrackerProvider } from '#hooks/use-webgl-context-tracker.js';
@@ -101,14 +102,12 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
   }, [containerApi, group]);
 
   return (
-    <div className="@container/viewer-watermark flex h-full flex-col items-center justify-center gap-2 p-2 text-muted-foreground @xs/viewer-watermark:gap-4">
-      <Box className="size-8 stroke-1 @xs/viewer-watermark:size-12" />
-      <div className="flex flex-col items-center gap-1 text-center">
-        <p className="text-xs font-medium @xs/viewer-watermark:text-sm">No geometry selected</p>
-        <p className="hidden text-center text-xs @xs/viewer-watermark:block">
-          Drag a file from the file tree, or select one below
-        </p>
-      </div>
+    <DockviewWatermark
+      icon={Box}
+      title="No geometry selected"
+      description="Drag a file from the file tree, or select one below"
+      onClose={handleClose}
+    >
       <FileSelector
         files={files}
         selectedFile={undefined}
@@ -120,16 +119,13 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
       >
         <Button size="sm" variant="outline" className="justify-between">
           <span className="truncate text-muted-foreground">
-            <span className="@xs/viewer-watermark:hidden">Select file...</span>
-            <span className="hidden @xs/viewer-watermark:inline">Select file to render...</span>
+            <span className="@xs/watermark:hidden">Select file...</span>
+            <span className="hidden @xs/watermark:inline">Select file to render...</span>
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
         </Button>
       </FileSelector>
-      <Button variant="link" size="sm" className="h-7 gap-0.5 text-xs text-muted-foreground" onClick={handleClose}>
-        <span>Close pane</span>
-      </Button>
-    </div>
+    </DockviewWatermark>
   );
 }
 

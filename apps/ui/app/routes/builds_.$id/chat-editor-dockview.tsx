@@ -20,6 +20,7 @@ import { Loader } from '#components/ui/loader.js';
 import { ChatEditorBreadcrumbs } from '#routes/builds_.$id/chat-editor-breadcrumbs.js';
 import { useBuild } from '#hooks/use-build.js';
 import { Dockview } from '#components/panes/dockview.js';
+import { DockviewWatermark } from '#components/panes/dockview-watermark.js';
 import { EditorDockviewTab } from '#components/panes/editor-tab-context-menu.js';
 import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
 import { DockviewSplitAction } from '#components/panes/dockview-split-action.js';
@@ -243,7 +244,7 @@ const FileEditor = memo(function ({
 /**
  * Empty state shown when all editor panels have been closed.
  */
-function EditorWatermark(_properties: IWatermarkPanelProps): React.JSX.Element {
+function EditorWatermark({ containerApi, group }: IWatermarkPanelProps): React.JSX.Element {
   const { editorRef } = useBuild();
   const { fileManagerRef } = useFileManager();
   const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
@@ -263,17 +264,22 @@ function EditorWatermark(_properties: IWatermarkPanelProps): React.JSX.Element {
     [editorRef],
   );
 
+  const handleClose = useCallback(() => {
+    if (group) {
+      containerApi.removeGroup(group);
+    }
+  }, [containerApi, group]);
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-2 text-muted-foreground">
-      <FileCode className="size-12 stroke-1" />
-      <div className="flex flex-col items-center gap-1">
-        <p className="text-sm font-medium">No files open</p>
-        <p className="text-center text-xs">Pick a file from the file tree, or select one below</p>
-      </div>
+    <DockviewWatermark
+      icon={FileCode}
+      title="No files open"
+      description="Pick a file from the file tree, or select one below"
+      onClose={handleClose}
+    >
       <FileSelector
         files={files}
         selectedFile={undefined}
-        placeholder="Select file to edit..."
         title="Open File"
         description="Choose a file to open in the editor"
         searchPlaceholder="Search files..."
@@ -281,11 +287,14 @@ function EditorWatermark(_properties: IWatermarkPanelProps): React.JSX.Element {
         onSelect={handleSelect}
       >
         <Button size="sm" variant="outline" className="justify-between">
-          <span className="truncate text-muted-foreground">Select file to edit...</span>
+          <span className="truncate text-muted-foreground">
+            <span className="@xs/watermark:hidden">Select file...</span>
+            <span className="hidden @xs/watermark:inline">Select file to edit...</span>
+          </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
         </Button>
       </FileSelector>
-    </div>
+    </DockviewWatermark>
   );
 }
 
