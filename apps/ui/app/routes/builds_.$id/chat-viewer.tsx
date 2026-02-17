@@ -17,6 +17,7 @@ import { ChatViewerControls } from '#routes/builds_.$id/chat-viewer-controls.js'
 import { ChatInterfaceGraphics } from '#routes/builds_.$id/chat-interface-graphics.js';
 import { ChatInterfaceStatus } from '#routes/builds_.$id/chat-interface-status.js';
 import { useIsTopRightPanel } from '#components/panes/use-is-top-right-group.js';
+import { useIsMobile } from '#hooks/use-mobile.js';
 import { cn } from '#utils/ui.utils.js';
 
 type ChatViewerProps = {
@@ -296,8 +297,11 @@ const ViewerContent = memo(function ({
 
   // Shift the gizmo left when this panel's group is at the top-right corner
   // of the dockview grid, so it doesn't overlap with the floating-panel
-  // trigger buttons positioned in the center pane.
+  // trigger buttons positioned in the center pane.  On mobile the trigger
+  // buttons don't exist, so the shift is skipped.
+  const isMobile = useIsMobile();
   const isTopRight = useIsTopRightPanel(panelApi, containerApi);
+  const shiftGizmo = isTopRight && !isMobile;
 
   return (
     <div className="group/viewer relative flex h-full flex-col">
@@ -312,7 +316,7 @@ const ViewerContent = memo(function ({
         id={`viewport-gizmo-container-${viewId}`}
         className={cn(
           'absolute top-[calc(var(--header-height)+var(--spacing)*12)] z-10',
-          isTopRight ? 'right-10' : 'right-0',
+          shiftGizmo ? 'right-10' : 'right-0',
         )}
       />
 
