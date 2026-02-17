@@ -1467,11 +1467,13 @@ function TreeItem({
   }
 
   // Normal view - wrapped by ContextMenu
+  const treeItemProps = item.getProps();
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          {...item.getProps()}
+          {...treeItemProps}
           className={cn(
             'group/file relative flex h-7 w-full cursor-pointer items-center justify-between py-1 pr-1 pl-2 text-sm text-sidebar-foreground',
             !isActive && 'hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
@@ -1481,6 +1483,23 @@ function TreeItem({
             (item.isDragTarget() || isInsideDragTarget) && 'bg-primary/20',
           )}
           style={{ paddingLeft: `${paddingLeft}px` }}
+          onClick={(event) => {
+            if (event.shiftKey || event.ctrlKey || event.metaKey) {
+              // Multi-select click: handle selection + focus only, skip primaryAction (file open)
+              if (event.shiftKey) {
+                item.selectUpTo(event.ctrlKey || event.metaKey);
+              } else {
+                item.toggleSelect();
+              }
+
+              item.setFocused();
+              return;
+            }
+
+            // Plain click: delegate to tree's onClick (handles selection, focus, primaryAction, expand/collapse)
+            const { onClick } = treeItemProps as { onClick?: (event: MouseEvent) => void };
+            onClick?.(event.nativeEvent);
+          }}
         >
           {/* Indent guide lines (VS Code-style) */}
           {Array.from({ length: itemLevel }, (_, index) => {
