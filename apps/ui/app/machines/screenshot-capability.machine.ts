@@ -3,15 +3,11 @@ import type { AnyActorRef } from 'xstate';
 import * as THREE from 'three';
 import type { ScreenshotOptions, CameraAngle, CompositeScreenshotOptions } from '@taucad/types';
 import {
-  applyLightingForCamera,
-  findTaggedLights,
-  lightingUserDataKeys,
-  ambientBaseIntensity,
-  headlampBaseIntensity,
-  environmentBaseIntensity,
-  defaultHeadlampConfig,
-} from '#components/geometry/graphics/three/utils/lights.utils.js';
-import type { SceneLightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
+  applyMatcapToClonedScene,
+  disposeClonedSceneMaterials,
+} from '#components/geometry/graphics/three/materials/gltf-matcap.js';
+import { ensureMatcapTextureLoaded } from '#components/geometry/graphics/three/materials/matcap-material.js';
+import { calculateFovDistanceCompensation } from '#components/geometry/graphics/three/utils/math.utils.js';
 
 // Capture mode discriminator
 type CaptureMode = 'threejs' | 'svg';
@@ -536,16 +532,11 @@ async function captureScreenshots(
 
     screenshotRenderer.outputColorSpace = gl.outputColorSpace;
 
-    // The EffectComposer from @react-three/postprocessing permanently sets
-    // gl.toneMapping = NoToneMapping while mounted (it handles tone mapping
-    // internally in its output pass shader). Reading gl.toneMapping here would
-    // give NoToneMapping, producing much darker screenshots. Use the R3F
-    // default (ACESFilmicToneMapping) directly instead.
-    screenshotRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-    screenshotRenderer.toneMappingExposure = gl.toneMappingExposure;
-
-    screenshotRenderer.shadowMap.enabled = gl.shadowMap.enabled;
-    screenshotRenderer.shadowMap.type = gl.shadowMap.type;
+    // Matcap materials produce values in displayable range — no filmic
+    // tone-mapping curve needed. NoToneMapping avoids the ACES mid-tone
+    // darkening that previously made screenshots inconsistent with the viewer.
+    screenshotRenderer.toneMapping = THREE.NoToneMapping;
+    screenshotRenderer.toneMappingExposure = 1;
 
     const dataUrls: string[] = [];
 
@@ -561,18 +552,29 @@ async function captureScreenshots(
       });
     }
 
-    // Resolve lighting config and tagged lights once before the loop to avoid
-    // redundant scene traversals for every camera angle.
-    const sceneLightingConfig = screenshotScene.userData[lightingUserDataKeys.config] as
-      | SceneLightingConfig
-      | undefined;
-    const taggedLights = sceneLightingConfig ? findTaggedLights(screenshotScene) : undefined;
+    // Replace all mesh materials with matcap so that screenshots are
+    // lighting-independent and produce consistent results regardless of the
+    // scene's environment map or light rig configuration.
+    const matcapTexture = await ensureMatcapTextureLoaded();
+    applyMatcapToClonedScene(screenshotScene, matcapTexture);
+
+    // Clear the environment map — matcap ignores it but removing avoids
+    // unnecessary GPU work in the temporary renderer.
+    screenshotScene.environment = null;
+    screenshotScene.environmentIntensity = 0;
 
     // Process each camera angle using the same canvas and renderer
     for (const cameraAngle of config.cameraAngles) {
       // Create a copy of the camera for the screenshot so we don't modify the original
       const screenshotCamera = (camera as THREE.PerspectiveCamera).clone();
-      screenshotCamera.zoom = config.zoomLevel;
+
+      // Fix FOV to 45 degrees for consistent perspective across all screenshots,
+      // regardless of the user's FOV slider setting. Compensate zoom so the
+      // same visible area is preserved: tan(newFov/2) / tan(oldFov/2).
+      const screenshotFov = 45;
+      const zoomCompensation = calculateFovDistanceCompensation(screenshotFov, screenshotCamera.fov, 1);
+      screenshotCamera.fov = screenshotFov;
+      screenshotCamera.zoom = config.zoomLevel * zoomCompensation;
       screenshotCamera.aspect = config.aspectRatio;
 
       // Apply spherical coordinate positioning only if both phi and theta are specified
@@ -619,28 +621,10 @@ async function captureScreenshots(
       }
 
       screenshotCamera.updateProjectionMatrix();
-      // Ensure the camera's world matrix is up-to-date for lighting calculations
       screenshotCamera.updateMatrixWorld(true);
 
-      // Apply camera-relative lighting for this angle so that environment
-      // rotation, headlamp position, and intensity compensation match the
-      // live renderer's per-frame updates.
-      if (sceneLightingConfig && taggedLights) {
-        applyLightingForCamera({
-          scene: screenshotScene,
-          camera: screenshotCamera,
-          headlamp: taggedLights.headlamp,
-          ambient: taggedLights.ambient,
-          config: {
-            sceneRadius: sceneLightingConfig.sceneRadius,
-            upDirection: sceneLightingConfig.upDirection,
-            headlampIntensity: headlampBaseIntensity,
-            ambientIntensity: ambientBaseIntensity,
-            environmentIntensity: environmentBaseIntensity,
-            headlampConfig: defaultHeadlampConfig,
-          },
-        });
-      }
+      // No lighting setup needed — matcap materials are self-lit and ignore
+      // all scene lights, environment maps, and headlamp positioning.
 
       // Render the scene to the canvas with this camera angle
       screenshotRenderer.render(screenshotScene, screenshotCamera);
@@ -678,6 +662,11 @@ async function captureScreenshots(
       dataUrls.push(dataUrl);
     }
 
+    // Dispose matcap materials applied to the cloned scene.
+    // Material.dispose() releases the compiled shader program but does NOT
+    // dispose the shared matcap texture singleton.
+    disposeClonedSceneMaterials(screenshotScene);
+
     return dataUrls;
   } finally {
     // Cleanup the temporary renderer
@@ -689,12 +678,6 @@ async function captureScreenshots(
     // Remove the canvas from memory
     screenshotCanvas.width = 0;
     screenshotCanvas.height = 0;
-
-    // // Restore all original state
-    // gl.setPixelRatio(originalPixelRatio);
-
-    // // Re-render to ensure everything is visible
-    // gl.render(scene, camera);
   }
 }
 
