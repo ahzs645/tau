@@ -10,6 +10,7 @@ import {
   headlampBaseIntensity,
   environmentBaseIntensity,
   lightingUserDataKeys,
+  poleFadeAngleDeg,
 } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import type { HeadlampConfig, LightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
@@ -63,9 +64,15 @@ function orbitQuaternion(azimuth: number, polar: number, up: 'x' | 'y' | 'z' = '
   return qYaw.multiply(qPitch);
 }
 
+/** Polar angle (from top) within which the pole-fade is fully active (yaw → 0). */
+const poleFadeRad = (poleFadeAngleDeg * Math.PI) / 180;
+
 describe('computeEnvironmentRotation', () => {
+  // ── Basic identity and order ────────────────────────────────────────────
+
   describe('identity camera', () => {
     it('should produce a near-zero Euler for an identity quaternion', () => {
+      // Identity quaternion sits at the top pole — pole fade drives yaw to 0.
       const identityQuat = new THREE.Quaternion(); // (0, 0, 0, 1)
       const euler = computeEnvironmentRotation(identityQuat, 'z');
 
@@ -95,69 +102,55 @@ describe('computeEnvironmentRotation', () => {
     });
   });
 
+  // ── Azimuth extraction (non-pole cameras) ───────────────────────────────
+
   describe('azimuth-only extraction', () => {
-    it('should produce a non-trivial Euler for a 90° rotation around Z', () => {
-      const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
-      const euler = computeEnvironmentRotation(quat, 'z');
-
-      // Should extract the yaw = π/2 into the z component
-      expect(euler.z).toBeCloseTo(Math.PI / 2, 4);
-      // Other components should be zero (azimuth-only)
-      expect(euler.x).toBeCloseTo(0, 6);
-      expect(euler.y).toBeCloseTo(0, 6);
-    });
-
-    it('should extract correct yaw for each up direction', () => {
+    it('should extract correct yaw for each up direction at equatorial polar', () => {
+      // Use polar = π/2 (equator) where blend = 1 → full yaw
       const angle = Math.PI / 3;
 
-      // Z-up: yaw around Z
-      const qZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle);
-      const eulerZ = computeEnvironmentRotation(qZ, 'z');
+      const eulerZ = computeEnvironmentRotation(orbitQuaternion(angle, Math.PI / 2, 'z'), 'z');
       expect(eulerZ.z).toBeCloseTo(angle, 4);
       expect(eulerZ.x).toBeCloseTo(0, 6);
       expect(eulerZ.y).toBeCloseTo(0, 6);
 
-      // Y-up: yaw around Y
-      const qY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      const eulerY = computeEnvironmentRotation(qY, 'y');
+      const eulerY = computeEnvironmentRotation(orbitQuaternion(angle, Math.PI / 2, 'y'), 'y');
       expect(eulerY.y).toBeCloseTo(angle, 4);
       expect(eulerY.x).toBeCloseTo(0, 6);
       expect(eulerY.z).toBeCloseTo(0, 6);
 
-      // X-up: yaw around X
-      const qX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), angle);
-      const eulerX = computeEnvironmentRotation(qX, 'x');
+      const eulerX = computeEnvironmentRotation(orbitQuaternion(angle, Math.PI / 2, 'x'), 'x');
       expect(eulerX.x).toBeCloseTo(angle, 4);
       expect(eulerX.y).toBeCloseTo(0, 6);
       expect(eulerX.z).toBeCloseTo(0, 6);
     });
 
     it('should only populate the up-axis Euler component (pitch/roll zeroed)', () => {
-      // Combined yaw + pitch rotation — only yaw should survive
-      const quat = orbitQuaternion(Math.PI / 4, Math.PI / 6, 'z');
+      // Polar π/3 (60°) — well away from both poles, blend ≈ 1
+      const quat = orbitQuaternion(Math.PI / 4, Math.PI / 3, 'z');
       const euler = computeEnvironmentRotation(quat, 'z');
 
-      // Z should reflect the azimuth
       expect(euler.z).toBeCloseTo(Math.PI / 4, 4);
-      // X and y must be zero (pitch not tracked)
       expect(euler.x).toBeCloseTo(0, 6);
       expect(euler.y).toBeCloseTo(0, 6);
     });
   });
 
-  describe('polar-angle independence', () => {
-    it('should return the same rotation regardless of polar angle (z-up)', () => {
+  // ── Polar-angle independence (mid-latitude band only) ───────────────────
+
+  describe('polar-angle independence (outside pole caps)', () => {
+    it('should return the same rotation for polar angles in the mid-latitude band (z-up)', () => {
       const azimuth = Math.PI / 4;
+      // Stay well outside the pole-fade caps (poleFadeAngleDeg from each pole)
+      const safeMargin = poleFadeRad + 0.05;
       const polarAngles = [
-        0,
-        Math.PI / 6,
+        safeMargin,
         Math.PI / 4,
         Math.PI / 3,
-        Math.PI / 2 - 0.01,
         Math.PI / 2,
-        Math.PI / 2 + 0.01,
         (2 * Math.PI) / 3,
-        (5 * Math.PI) / 6,
+        (3 * Math.PI) / 4,
+        Math.PI - safeMargin,
       ];
 
       const results = polarAngles.map((polar) => {
@@ -166,15 +159,16 @@ describe('computeEnvironmentRotation', () => {
       });
 
       for (const euler of results) {
-        expect(euler.z).toBeCloseTo(azimuth, 4);
+        expect(euler.z).toBeCloseTo(azimuth, 3);
         expect(euler.x).toBeCloseTo(0, 6);
         expect(euler.y).toBeCloseTo(0, 6);
       }
     });
 
-    it('should return the same rotation regardless of polar angle (y-up)', () => {
+    it('should return the same rotation for polar angles in the mid-latitude band (y-up)', () => {
       const azimuth = -Math.PI / 3;
-      const polarAngles = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4];
+      const safeMargin = poleFadeRad + 0.05;
+      const polarAngles = [safeMargin, Math.PI / 4, Math.PI / 2, Math.PI - safeMargin];
 
       const results = polarAngles.map((polar) => {
         const quat = orbitQuaternion(azimuth, polar, 'y');
@@ -182,17 +176,18 @@ describe('computeEnvironmentRotation', () => {
       });
 
       for (const euler of results) {
-        expect(euler.y).toBeCloseTo(azimuth, 4);
+        expect(euler.y).toBeCloseTo(azimuth, 3);
         expect(euler.x).toBeCloseTo(0, 6);
         expect(euler.z).toBeCloseTo(0, 6);
       }
     });
   });
 
-  describe('continuity across equatorial plane (no lighting hop)', () => {
-    it('should be continuous when sweeping polar angle through 90° (z-up)', () => {
+  // ── Continuity ──────────────────────────────────────────────────────────
+
+  describe('continuity across equatorial plane', () => {
+    it('should be continuous sweeping polar through 90° (z-up)', () => {
       const azimuth = Math.PI / 3;
-      // Dense sweep through the equatorial singularity at polar = π/2
       const steps = 100;
       const polarStart = Math.PI / 4;
       const polarEnd = (3 * Math.PI) / 4;
@@ -204,7 +199,6 @@ describe('computeEnvironmentRotation', () => {
         const euler = computeEnvironmentRotation(quat, 'z');
 
         if (previousZ !== undefined) {
-          // Step-to-step change must be small — a hop would produce a ~π jump
           const delta = Math.abs(euler.z - previousZ);
           expect(delta).toBeLessThan(0.1);
         }
@@ -213,7 +207,7 @@ describe('computeEnvironmentRotation', () => {
       }
     });
 
-    it('should be continuous when sweeping polar angle through 90° (y-up)', () => {
+    it('should be continuous sweeping polar through 90° (y-up)', () => {
       const azimuth = -Math.PI / 6;
       const steps = 100;
       const polarStart = Math.PI / 4;
@@ -236,20 +230,17 @@ describe('computeEnvironmentRotation', () => {
   });
 
   describe('full azimuth sweep is continuous', () => {
-    it('should have no jumps across the full 0→2π azimuth range', () => {
-      const polar = Math.PI / 3;
+    it('should have no jumps across the full −π→+π azimuth range', () => {
+      const polar = Math.PI / 3; // 60° — well away from poles
       const steps = 360;
 
       let previousZ: number | undefined;
       for (let index = 0; index <= steps; index++) {
-        const azimuth = (index / steps) * 2 * Math.PI - Math.PI; // −π → +π
+        const azimuth = (index / steps) * 2 * Math.PI - Math.PI;
         const quat = orbitQuaternion(azimuth, polar, 'z');
         const euler = computeEnvironmentRotation(quat, 'z');
 
         if (previousZ !== undefined) {
-          // Allow wrapping at ±π (which is visually seamless since
-          // sin/cos are 2π-periodic). The raw angular step is ~0.017 rad;
-          // a true discontinuity would be ≫ 0.1 rad even after unwrap.
           let delta = Math.abs(euler.z - previousZ);
           if (delta > Math.PI) {
             delta = 2 * Math.PI - delta;
@@ -263,19 +254,172 @@ describe('computeEnvironmentRotation', () => {
     });
   });
 
-  describe('degenerate case', () => {
-    it('should return identity when camera points exactly along up axis (z-up)', () => {
-      // 180° around Y: q = (0, 1, 0, 0). Both q.z and q.w are 0 so the
-      // twist around Z is degenerate (azimuth undefined). Should fall back
-      // to identity.
-      const degenerate = new THREE.Quaternion(0, 1, 0, 0);
+  // ── Pole-proximity fade ─────────────────────────────────────────────────
+
+  describe('pole-proximity fade', () => {
+    it('should return near-zero yaw at the top pole (polar ≈ 0)', () => {
+      // Top pole: polar = 0° → camera looking straight down along up axis
+      const quat = orbitQuaternion(Math.PI / 2, 0, 'z');
+      const euler = computeEnvironmentRotation(quat, 'z');
+      expect(Math.abs(euler.z)).toBeLessThan(0.01);
+    });
+
+    it('should return near-zero yaw at the bottom pole (polar ≈ π)', () => {
+      // Bottom pole: polar = π → camera looking straight up from below
+      const quat = orbitQuaternion(Math.PI / 2, Math.PI - 0.001, 'z');
+      const euler = computeEnvironmentRotation(quat, 'z');
+      expect(Math.abs(euler.z)).toBeLessThan(0.01);
+    });
+
+    it('should return full yaw at the equator (polar = π/2)', () => {
+      const azimuth = Math.PI / 3;
+      const quat = orbitQuaternion(azimuth, Math.PI / 2, 'z');
+      const euler = computeEnvironmentRotation(quat, 'z');
+      expect(euler.z).toBeCloseTo(azimuth, 4);
+    });
+
+    it('should return full yaw well outside the pole cap', () => {
+      const azimuth = Math.PI / 4;
+      // 30° from top pole — outside the 15° cap
+      const quat = orbitQuaternion(azimuth, Math.PI / 6, 'z');
+      const euler = computeEnvironmentRotation(quat, 'z');
+      expect(euler.z).toBeCloseTo(azimuth, 2);
+    });
+
+    it('should be symmetric between top and bottom poles', () => {
+      const azimuth = Math.PI / 4;
+      // 5° from top pole
+      const topQuat = orbitQuaternion(azimuth, 0.087, 'z');
+      const topEuler = computeEnvironmentRotation(topQuat, 'z');
+
+      // 5° from bottom pole
+      const bottomQuat = orbitQuaternion(azimuth, Math.PI - 0.087, 'z');
+      const bottomEuler = computeEnvironmentRotation(bottomQuat, 'z');
+
+      // Both should have heavily attenuated yaw (blend close to 0)
+      expect(Math.abs(topEuler.z)).toBeLessThan(Math.abs(azimuth) * 0.3);
+      expect(Math.abs(bottomEuler.z)).toBeLessThan(Math.abs(azimuth) * 0.3);
+    });
+
+    it('should produce a monotonically increasing blend from pole to equator', () => {
+      const azimuth = Math.PI / 3;
+      const steps = 50;
+      // Sweep from top pole (polar = 0) to equator (polar = π/2)
+      let previousAbsZ = -1;
+      for (let index = 1; index <= steps; index++) {
+        const polar = (index / steps) * (Math.PI / 2);
+        const quat = orbitQuaternion(azimuth, polar, 'z');
+        const euler = computeEnvironmentRotation(quat, 'z');
+        const absZ = Math.abs(euler.z);
+        expect(absZ).toBeGreaterThanOrEqual(previousAbsZ - 1e-6);
+        previousAbsZ = absZ;
+      }
+    });
+  });
+
+  describe('continuity through pole-fade transition (no lighting hop)', () => {
+    it('should be continuous sweeping from equator through bottom pole cap (z-up)', () => {
+      const azimuth = Math.PI / 3;
+      const steps = 500;
+      // Sweep from π/3 (60°) all the way to near-bottom pole
+      const polarStart = Math.PI / 3;
+      const polarEnd = Math.PI - 0.01;
+
+      let previousZ: number | undefined;
+      for (let index = 0; index <= steps; index++) {
+        const polar = polarStart + (index / steps) * (polarEnd - polarStart);
+        const quat = orbitQuaternion(azimuth, polar, 'z');
+        const euler = computeEnvironmentRotation(quat, 'z');
+
+        if (previousZ !== undefined) {
+          // A genuine hop (the original bug) would produce a delta of ~π.
+          // The smoothstep fade may produce up to ~0.04 rad per step at
+          // 500 steps, well within the 0.1 rad threshold.
+          const delta = Math.abs(euler.z - previousZ);
+          expect(delta).toBeLessThan(0.1);
+        }
+
+        previousZ = euler.z;
+      }
+    });
+
+    it('should be continuous sweeping from equator through top pole cap (z-up)', () => {
+      const azimuth = -Math.PI / 4;
+      const steps = 500;
+      const polarStart = (2 * Math.PI) / 3;
+      const polarEnd = 0.01;
+
+      let previousZ: number | undefined;
+      for (let index = 0; index <= steps; index++) {
+        const polar = polarStart + (index / steps) * (polarEnd - polarStart);
+        const quat = orbitQuaternion(azimuth, polar, 'z');
+        const euler = computeEnvironmentRotation(quat, 'z');
+
+        if (previousZ !== undefined) {
+          const delta = Math.abs(euler.z - previousZ);
+          expect(delta).toBeLessThan(0.1);
+        }
+
+        previousZ = euler.z;
+      }
+    });
+  });
+
+  describe('near-pole perturbation stability', () => {
+    it('should produce small yaw changes for small camera perturbations near bottom pole', () => {
+      // At 3° from the bottom pole, perturb the azimuth by 90° (worst case).
+      // Without pole-fade this would be a massive lighting change; with it
+      // the effective yaw should be heavily attenuated.
+      const polar = Math.PI - 0.05; // ~3° from bottom pole
+      const euler1 = computeEnvironmentRotation(orbitQuaternion(0, polar, 'z'), 'z');
+      const euler2 = computeEnvironmentRotation(orbitQuaternion(Math.PI / 2, polar, 'z'), 'z');
+
+      // The effective yaw difference should be much smaller than π/2 (the raw difference)
+      const effectiveDelta = Math.abs(euler2.z - euler1.z);
+      expect(effectiveDelta).toBeLessThan(0.15); // < ~9°
+    });
+
+    it('should produce small yaw changes for small camera perturbations near top pole', () => {
+      const polar = 0.05; // ~3° from top pole
+      const euler1 = computeEnvironmentRotation(orbitQuaternion(0, polar, 'z'), 'z');
+      const euler2 = computeEnvironmentRotation(orbitQuaternion(Math.PI / 2, polar, 'z'), 'z');
+
+      const effectiveDelta = Math.abs(euler2.z - euler1.z);
+      expect(effectiveDelta).toBeLessThan(0.15);
+    });
+  });
+
+  // ── Degenerate / edge cases ─────────────────────────────────────────────
+
+  describe('degenerate cases', () => {
+    it('should return identity for exact bottom-pole quaternion (q.z = q.w = 0)', () => {
+      const degenerate = new THREE.Quaternion(0, 1, 0, 0); // 180° around Y
       const euler = computeEnvironmentRotation(degenerate, 'z');
 
       expect(euler.x).toBeCloseTo(0, 6);
       expect(euler.y).toBeCloseTo(0, 6);
       expect(euler.z).toBeCloseTo(0, 6);
     });
+
+    it('should return identity for exact top-pole quaternion (q.x = q.y = 0)', () => {
+      // Pure yaw with no pitch → top pole. Pole-fade drives effective yaw to 0.
+      const topPole = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      const euler = computeEnvironmentRotation(topPole, 'z');
+
+      expect(euler.x).toBeCloseTo(0, 6);
+      expect(euler.y).toBeCloseTo(0, 6);
+      // At top pole, blend = 0 so effective yaw = 0
+      expect(euler.z).toBeCloseTo(0, 6);
+    });
+
+    it('should handle near-zero-length quaternion gracefully', () => {
+      // Edge case: quaternion is nearly zero (shouldn't happen but protect against it)
+      const nearZero = new THREE.Quaternion(1e-8, 1e-8, 1e-8, 1e-8);
+      expect(() => computeEnvironmentRotation(nearZero, 'z')).not.toThrow();
+    });
   });
+
+  // ── Input immutability ──────────────────────────────────────────────────
 
   describe('does not mutate input', () => {
     it('should not modify the input quaternion', () => {

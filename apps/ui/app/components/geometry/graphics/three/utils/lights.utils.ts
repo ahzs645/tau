@@ -82,6 +82,20 @@ export type LightingConfig = {
 // ── Pure functions ─────────────────────────────────────────────────────────
 
 /**
+ * Angle (in radians) from either pole within which the yaw compensation
+ * fades to zero. At the equator the blend is 1 (full compensation); inside
+ * this cap the blend smoothsteps to 0 so the environment becomes world-
+ * fixed and small camera perturbations don't swing the lighting wildly.
+ *
+ * 15° keeps standard top/bottom views stable while leaving the vast
+ * majority of the viewing sphere (150° out of 180°) fully compensated.
+ */
+export const poleFadeAngleDeg = 15;
+
+/** `sin²(poleFadeAngle)` — precomputed threshold for the smoothstep ramp. */
+const poleFadeThreshold = Math.sin((poleFadeAngleDeg * Math.PI) / 180) ** 2;
+
+/**
  * Computes the environment rotation Euler that cancels only the azimuthal
  * (yaw) component of the camera's world orientation around the up axis.
  *
@@ -90,11 +104,15 @@ export type LightingConfig = {
  * when tilting up/down — producing natural lighting variation at different
  * viewing elevations instead of a uniformly locked rig.
  *
- * Uses swing-twist quaternion decomposition to extract yaw. This avoids
- * the gimbal-lock discontinuity inherent in Euler decomposition, which
- * causes a 180° lighting hop when the camera crosses the equatorial plane
- * (polar angle ≈ 90°). The twist component around the up axis is simply
- * `normalize(0, …, axisComponent, …, w)` — continuous for all orientations.
+ * **Swing-twist decomposition** extracts yaw in quaternion space, avoiding
+ * the gimbal-lock discontinuity of Euler decomposition that caused 180°
+ * lighting hops at the equatorial plane.
+ *
+ * **Pole-proximity fade** attenuates the yaw compensation smoothly to zero
+ * within {@link poleFadeAngleDeg}° of either pole (top/bottom view). Near
+ * the poles azimuth is geometrically ill-defined and tiny camera movements
+ * would otherwise cause wild lighting swings. The fade uses a smoothstep
+ * over `sin²(polar_angle)` which is symmetric around both poles.
  *
  * Three.js internally negates all Euler components of `environmentRotation`
  * (WebGLMaterials.js "accommodate left-handed frame"), so the returned yaw
@@ -110,35 +128,45 @@ export function computeEnvironmentRotation(
 ): THREE.Euler {
   const order: THREE.EulerOrder = upDirection === 'y' ? 'YXZ' : upDirection === 'z' ? 'ZXY' : 'XZY';
 
-  // Swing-twist decomposition: extract the twist (yaw) around the up axis.
-  // For quaternion Q = (x, y, z, w), the twist keeps only w and the
-  // component aligned with the up axis, then normalises. The yaw angle
-  // is 2·atan2(axisComponent, w), which is continuous everywhere (the only
-  // degeneracy — both zero — occurs when the camera points exactly along
-  // the up axis, where azimuth is genuinely undefined).
+  // ── Swing-twist decomposition ───────────────────────────────────────────
+  // For quaternion Q = (x, y, z, w) the twist around the up axis keeps only
+  // the scalar (w) and the component aligned with the up axis. The yaw angle
+  // is 2·atan2(axisComponent, w).
   const { x, y, z, w } = cameraWorldQuaternion;
   const axisComponent = upDirection === 'z' ? z : upDirection === 'y' ? y : x;
 
-  // Degenerate: camera aligned exactly with the up axis (azimuth undefined)
-  if (axisComponent * axisComponent + w * w < 1e-10) {
+  const twistLengthSq = axisComponent * axisComponent + w * w;
+
+  // Hard safety net: both twist components ≈ 0 → azimuth truly undefined.
+  if (twistLengthSq < 1e-10) {
     return new THREE.Euler(0, 0, 0, order);
   }
 
-  // Yaw angle from the twist quaternion.
-  // Providing +yaw to environmentRotation means Three.js applies −yaw
-  // (its internal negation), which undoes the camera's azimuthal turn.
   const yaw = 2 * Math.atan2(axisComponent, w);
 
+  // ── Pole-proximity fade ─────────────────────────────────────────────────
+  // sin²(polar_angle) = 4 · twistLen² · swingLen². This equals 0 at both
+  // poles and 1 at the equator. We smoothstep from 0 → 1 over the
+  // [0, poleFadeThreshold] range so the yaw compensation fades out
+  // gracefully within ~15° of either pole.
+  const swingLengthSq = Math.max(0, 1 - twistLengthSq); // Clamp for float drift
+  const sinPolarSq = 4 * twistLengthSq * swingLengthSq;
+
+  const t = Math.min(1, sinPolarSq / poleFadeThreshold);
+  const blend = t * t * (3 - 2 * t); // Smoothstep
+
+  const effectiveYaw = yaw * blend;
+
   if (upDirection === 'z') {
-    return new THREE.Euler(0, 0, yaw, order);
+    return new THREE.Euler(0, 0, effectiveYaw, order);
   }
 
   if (upDirection === 'y') {
-    return new THREE.Euler(0, yaw, 0, order);
+    return new THREE.Euler(0, effectiveYaw, 0, order);
   }
 
   // UpDirection === 'x'
-  return new THREE.Euler(yaw, 0, 0, order);
+  return new THREE.Euler(effectiveYaw, 0, 0, order);
 }
 
 /**
