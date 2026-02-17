@@ -7,7 +7,6 @@ import {
   MoreHorizontal,
   Search,
   Eye,
-  EyeOff,
   Folder,
   FolderOpen,
   CopyMinus,
@@ -15,9 +14,11 @@ import {
   Upload,
   Copy,
   Trash2,
+  Download,
+  Code,
+  Clipboard,
 } from 'lucide-react';
 import { useSelector } from '@xstate/react';
-import { minimatch } from 'minimatch';
 import {
   syncDataLoaderFeature,
   selectionFeature,
@@ -75,6 +76,7 @@ import { EmptyItems } from '#components/ui/empty-items.js';
 import { HighlightText } from '#components/highlight-text.js';
 import { FileExtensionIcon, getIconIdFromExtension } from '#components/icons/file-extension-icon.js';
 import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
+import { downloadBlob, asBuffer } from '#utils/file.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 
@@ -87,7 +89,6 @@ type TreeItemData = {
 };
 
 const rootId = '';
-const defaultHiddenPatterns = ['.gitkeep', '**/.gitkeep'];
 
 type PendingFolder = {
   parentPath: string; // '' for root
@@ -101,10 +102,6 @@ type PendingFile = {
   content: string;
   error: string | undefined;
 };
-
-function isHiddenFile(path: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => minimatch(path, pattern));
-}
 
 // Helper to read all entries from a directory (may require multiple calls)
 async function readAllDirectoryEntries(dirReader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
@@ -194,7 +191,7 @@ export const ChatEditorFileTree = memo(function ({
   const { buildRef, editorRef, gitRef } = useBuild();
   const buildId = useSelector(buildRef, (state) => state.context.buildId);
   const fileManager = useFileManager();
-  const { fileManagerRef, readFile, writeFile, renameFile, deleteFile } = fileManager;
+  const { fileManagerRef, readFile, writeFile, renameFile, deleteFile, getZippedDirectory } = fileManager;
 
   useEffect(() => {
     // Editor → FileManager coordination (reading file content for the editor)
@@ -345,8 +342,6 @@ export const ChatEditorFileTree = memo(function ({
   const [expandedItems, setExpandedItems] = useState<string[]>(() => [rootId]);
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [focusedItem, setFocusedItem] = useState<string | undefined>(undefined);
-  const [showHiddenFiles, setShowHiddenFiles] = useState(false);
-  const hiddenFilePatterns = useMemo(() => defaultHiddenPatterns, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadTargetPath, setUploadTargetPath] = useState<string | undefined>(undefined);
   const [pendingFolder, setPendingFolder] = useState<PendingFolder | undefined>(undefined);
@@ -454,13 +449,8 @@ export const ChatEditorFileTree = memo(function ({
           return isImmediateChild;
         });
 
-        // Filter hidden files
-        const filtered = showHiddenFiles
-          ? children
-          : children.filter((path) => !isHiddenFile(path, hiddenFilePatterns));
-
         // Sort alphabetically (folders first, then files)
-        return filtered.sort((a, b) => {
+        return children.sort((a, b) => {
           const aName = a.split('/').pop() ?? a;
           const bName = b.split('/').pop() ?? b;
           const aIsFolder = allPaths.has(a) && fileTree.every((f) => f.path !== a);
@@ -480,7 +470,7 @@ export const ChatEditorFileTree = memo(function ({
         });
       },
     }),
-    [fileTree, allPaths, showHiddenFiles, hiddenFilePatterns],
+    [fileTree, allPaths],
   );
 
   // Initialize headless-tree
@@ -703,11 +693,11 @@ export const ChatEditorFileTree = memo(function ({
     ],
   });
 
-  // Rebuild tree when file data changes or hidden files toggle
+  // Rebuild tree when file data changes
   useEffect(() => {
     tree.rebuildTree();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree or showHiddenFiles changes
-  }, [fileTree, showHiddenFiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree changes
+  }, [fileTree]);
 
   // Sync tree search state with external enableSearch prop
   useEffect(() => {
@@ -882,6 +872,60 @@ export const ChatEditorFileTree = memo(function ({
     toast.info('File duplication is not yet supported');
   }, []);
 
+  const handleOpenInEditor = useCallback(
+    (path: string) => {
+      editorRef.send({ type: 'openFile', path, source: 'user' });
+    },
+    [editorRef],
+  );
+
+  const handleOpenInViewer = useCallback(
+    (path: string) => {
+      buildRef.send({ type: 'openInViewer', entryFile: path });
+    },
+    [buildRef],
+  );
+
+  const handleDownload = useCallback(
+    (path: string, isFolder: boolean) => {
+      const name = path.split('/').pop() ?? path;
+
+      if (isFolder) {
+        const fullPath = `/builds/${buildId}/${path}`;
+        toast.promise(
+          async () => {
+            const zipBlob = await getZippedDirectory(fullPath);
+            downloadBlob(zipBlob, `${name}.zip`);
+          },
+          {
+            loading: `Downloading ${name}...`,
+            success: `Downloaded ${name}.zip`,
+            error: `Failed to download ${name}`,
+          },
+        );
+      } else {
+        toast.promise(
+          async () => {
+            const content = await readFile(path);
+            const blob = new Blob([asBuffer(content.buffer)], { type: 'application/octet-stream' });
+            downloadBlob(blob, name);
+          },
+          {
+            loading: `Downloading ${name}...`,
+            success: `Downloaded ${name}`,
+            error: `Failed to download ${path}`,
+          },
+        );
+      }
+    },
+    [buildId, readFile, getZippedDirectory],
+  );
+
+  const handleCopyPath = useCallback((path: string) => {
+    void navigator.clipboard.writeText(path);
+    toast.success('Path copied to clipboard');
+  }, []);
+
   const handleUploadClick = useCallback((targetPath: string) => {
     setUploadTargetPath(targetPath);
     fileInputRef.current?.click();
@@ -990,22 +1034,6 @@ export const ChatEditorFileTree = memo(function ({
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Files</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label={showHiddenFiles ? 'Hide hidden files' : 'Show hidden files'}
-                  className="size-6 rounded-sm"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    setShowHiddenFiles(!showHiddenFiles);
-                  }}
-                >
-                  {showHiddenFiles ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{showHiddenFiles ? 'Hide hidden files' : 'Show hidden files'}</TooltipContent>
-            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1228,6 +1256,10 @@ export const ChatEditorFileTree = memo(function ({
                               onDelete={handleDelete}
                               onDuplicate={handleDuplicate}
                               onUpload={handleUploadClick}
+                              onOpenInEditor={handleOpenInEditor}
+                              onOpenInViewer={handleOpenInViewer}
+                              onDownload={handleDownload}
+                              onCopyPath={handleCopyPath}
                             />
                             {/* Pending folder inside this folder */}
                             {pendingFolder && pendingFolder.parentPath === itemId && item.isFolder() ? (
@@ -1307,6 +1339,10 @@ type TreeItemProps = {
   readonly onDelete: (items: Array<ItemInstance<TreeItemData>>) => void;
   readonly onDuplicate: (items: Array<ItemInstance<TreeItemData>>) => void;
   readonly onUpload: (path: string) => void;
+  readonly onOpenInEditor: (path: string) => void;
+  readonly onOpenInViewer: (path: string) => void;
+  readonly onDownload: (path: string, isFolder: boolean) => void;
+  readonly onCopyPath: (path: string) => void;
 };
 
 // eslint-disable-next-line complexity -- UI rendering with many conditional states
@@ -1320,6 +1356,10 @@ function TreeItem({
   onDelete,
   onDuplicate,
   onUpload,
+  onOpenInEditor,
+  onOpenInViewer,
+  onDownload,
+  onCopyPath,
 }: TreeItemProps): React.JSX.Element {
   const data = item.getItemData();
   const hasGitChanges = Boolean(data.gitStatus && data.gitStatus !== 'clean');
@@ -1458,6 +1498,25 @@ function TreeItem({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" side="right">
                 <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenInEditor(item.getId());
+                  }}
+                >
+                  <Code />
+                  <span>Open in Editor</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenInViewer(item.getId());
+                  }}
+                >
+                  <Eye />
+                  <span>Open in Viewer</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
                   onSelect={() => {
                     item.startRenaming();
                   }}
@@ -1485,6 +1544,25 @@ function TreeItem({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCopyPath(item.getId());
+                  }}
+                >
+                  <Clipboard />
+                  <span>Copy Path</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDownload(item.getId(), false);
+                  }}
+                >
+                  <Download />
+                  <span>Download</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
                   variant="destructive"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -1500,6 +1578,27 @@ function TreeItem({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {isFolder ? null : (
+          <>
+            <ContextMenuItem
+              onClick={() => {
+                onOpenInEditor(item.getId());
+              }}
+            >
+              <Code />
+              <span>Open in Editor</span>
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => {
+                onOpenInViewer(item.getId());
+              }}
+            >
+              <Eye />
+              <span>Open in Viewer</span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ContextMenuItem
           onSelect={() => {
             item.startRenaming();
@@ -1508,35 +1607,41 @@ function TreeItem({
           <Edit />
           <span>Rename</span>
         </ContextMenuItem>
-        {isFolder ? (
+        <ContextMenuItem
+          onClick={() => {
+            onUpload(item.getId());
+          }}
+        >
+          <Upload />
+          <span>Upload Files</span>
+        </ContextMenuItem>
+        {isFolder ? null : (
           <ContextMenuItem
             onClick={() => {
-              onUpload(item.getId());
+              onDuplicate([item]);
             }}
           >
-            <Upload />
-            <span>Upload Files</span>
+            <Copy />
+            <span>Duplicate</span>
           </ContextMenuItem>
-        ) : (
-          <>
-            <ContextMenuItem
-              onClick={() => {
-                onUpload(item.getId());
-              }}
-            >
-              <Upload />
-              <span>Upload Files</span>
-            </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() => {
-                onDuplicate([item]);
-              }}
-            >
-              <Copy />
-              <span>Duplicate</span>
-            </ContextMenuItem>
-          </>
         )}
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() => {
+            onCopyPath(item.getId());
+          }}
+        >
+          <Clipboard />
+          <span>Copy Path</span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => {
+            onDownload(item.getId(), isFolder);
+          }}
+        >
+          <Download />
+          <span>{isFolder ? 'Download as ZIP' : 'Download'}</span>
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
