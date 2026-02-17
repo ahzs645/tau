@@ -74,10 +74,7 @@ export function UnloadProvider({ children }: { readonly children: ReactNode }): 
     };
   }, []);
 
-  const contextValue = useMemo<UnloadContextValue>(
-    () => ({ register, unregister }),
-    [register, unregister],
-  );
+  const contextValue = useMemo<UnloadContextValue>(() => ({ register, unregister }), [register, unregister]);
 
   return <UnloadContext.Provider value={contextValue}>{children}</UnloadContext.Provider>;
 }
