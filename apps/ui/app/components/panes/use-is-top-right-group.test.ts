@@ -49,7 +49,6 @@ function buildGroupInFloatingPanel(options: {
   groupRect?: Partial<RectLike>;
   panelRect?: Partial<RectLike>;
   panelState?: string;
-  panelHasClose?: string;
   omitPanel?: boolean;
 }): DockviewGroupPanel {
   const {
@@ -57,7 +56,6 @@ function buildGroupInFloatingPanel(options: {
     groupRect = { top: 0, right: 500, width: 500, height: 400, left: 0, bottom: 400 },
     panelRect = { top: 0, right: 500, width: 500, height: 400, left: 0, bottom: 400 },
     panelState = 'open',
-    panelHasClose = 'true',
     omitPanel = false,
   } = options;
 
@@ -70,7 +68,6 @@ function buildGroupInFloatingPanel(options: {
     const panel = document.createElement('div');
     panel.dataset['slot'] = 'floating-panel';
     panel.dataset['state'] = panelState;
-    panel.dataset['hasClose'] = panelHasClose;
     panel.getBoundingClientRect = () => domRect(panelRect);
     panel.append(groupElement);
     root = panel;
@@ -142,11 +139,6 @@ describe('checkGroupIsTopRight', () => {
 
     it('when floating panel is closed (data-state != "open")', () => {
       const group = buildGroupInFloatingPanel({ panelState: 'closed' });
-      expect(checkGroupIsTopRight(group)).toBe(false);
-    });
-
-    it('when floating panel has no close button (data-has-close != "true")', () => {
-      const group = buildGroupInFloatingPanel({ panelHasClose: 'false' });
       expect(checkGroupIsTopRight(group)).toBe(false);
     });
 

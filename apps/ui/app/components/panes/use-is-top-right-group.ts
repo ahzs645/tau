@@ -7,8 +7,8 @@ import type { DockviewApi, DockviewGroupPanel, DockviewPanelApi } from 'dockview
  */
 export const edgeTolerance = 2;
 
-/** CSS selector for an open floating panel with a close button. */
-const floatingPanelSelector = '[data-slot="floating-panel"][data-state="open"][data-has-close="true"]';
+/** CSS selector for an open floating panel. */
+const floatingPanelSelector = '[data-slot="floating-panel"][data-state="open"]';
 
 /**
  * Synchronously checks whether a Dockview group occupies the top-right
@@ -19,8 +19,7 @@ const floatingPanelSelector = '[data-slot="floating-panel"][data-state="open"][d
  *
  * A group is considered "top-right" when:
  * 1. It is in the grid (not floating / popout).
- * 2. It is inside an open floating panel that has a close button
- *    (`data-has-close="true"`).
+ * 2. It is inside an open floating panel (`data-state="open"`).
  * 3. Its right edge aligns with the floating panel's right edge.
  * 4. Its top edge aligns with the floating panel's top edge.
  */
