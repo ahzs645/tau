@@ -4,7 +4,6 @@ import { Columns2, Rows2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { DockviewPaneAction } from '#components/panes/dockview-pane-action.js';
-import { useIsTopRightGroup } from '#components/panes/use-is-top-right-group.js';
 import { useModifiers } from '#hooks/use-keyboard.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 
@@ -38,7 +37,7 @@ export function DockviewSplitAction({ containerApi, group }: IDockviewHeaderActi
           <Icon className="size-3.5" />
         </DockviewPaneAction>
       </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={4} className="flex flex-col gap-1">
+      <TooltipContent side="top" sideOffset={4} className="flex flex-col gap-1">
         <span>{label}</span>
         <span className="flex items-center gap-1 text-xs opacity-70">
           {isShiftHeld ? (
@@ -53,22 +52,5 @@ export function DockviewSplitAction({ containerApi, group }: IDockviewHeaderActi
         </span>
       </TooltipContent>
     </Tooltip>
-  );
-}
-
-/**
- * Position-aware wrapper around `DockviewSplitAction`.
- *
- * When the group occupies the top-right corner of an open floating panel that
- * has an absolutely-positioned close button, right padding is added so the
- * split button does not sit behind the close button.
- */
-export function FloatingPanelAwareSplitAction(properties: IDockviewHeaderActionsProps): React.JSX.Element {
-  const isTopRight = useIsTopRightGroup(properties.group, properties.containerApi);
-
-  return (
-    <div className={isTopRight ? 'pr-7' : undefined}>
-      <DockviewSplitAction {...properties} />
-    </div>
   );
 }
