@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { useResizeObserver } from '#hooks/use-resize-observer.js';
 
@@ -53,7 +53,23 @@ export function useToolbarOverflow(
   const { gap = 8, reservedWidth = 44 } = options ?? {};
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const { width: containerWidth } = useResizeObserver({ ref: containerRef });
+  const { width: observedWidth } = useResizeObserver({ ref: containerRef });
+
+  // Synchronous initial measurement to prevent layout flicker.
+  // useLayoutEffect runs after DOM commit but before the browser paints,
+  // so we read the real container width and trigger a synchronous re-render.
+  // The first visible frame already has the correct overflow state.
+  // Once ResizeObserver reports (observedWidth), it takes over.
+  const [initialWidth, setInitialWidth] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (initialWidth !== undefined || !containerRef.current) {
+      return;
+    }
+
+    setInitialWidth(containerRef.current.getBoundingClientRect().width);
+  }, [initialWidth]);
+
+  const containerWidth = observedWidth ?? initialWidth;
 
   const { visibleIds, overflowIds, isCompact } = useMemo(
     () => computeToolbarOverflow(items, containerWidth, gap, reservedWidth),
