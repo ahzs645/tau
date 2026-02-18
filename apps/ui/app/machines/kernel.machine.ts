@@ -163,7 +163,11 @@ const createWorkersActor = fromPromise<
       const port = await wrappedFileManager[createEndpoint]();
 
       initPromises.push(
-        wrappedWorker.initializeEntry(proxy({ onLog }), transfer({ fileManagerPort: port }, [port]), entry.options ?? {}),
+        wrappedWorker.initializeEntry(
+          proxy({ onLog }),
+          transfer({ fileManagerPort: port }, [port]),
+          entry.options ?? {},
+        ),
       );
     }
 
