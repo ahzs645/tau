@@ -102,18 +102,24 @@ export class LanguageContributionRegistry {
     // Dispose previous activation
     this.disposeActivation();
 
-    this.lastActivatedEpoch = this.activationEpoch;
     this.currentHandlers = [];
 
     for (const contribution of this.contributions.values()) {
-      const result = contribution.activate(context);
+      try {
+        const result = contribution.activate(context);
 
-      this.activationDisposables.push(...result.disposables);
+        this.activationDisposables.push(...result.disposables);
 
-      if (result.navigationHandler) {
-        this.currentHandlers.push(result.navigationHandler);
+        if (result.navigationHandler) {
+          this.currentHandlers.push(result.navigationHandler);
+        }
+      } catch (error) {
+        console.error(`Failed to activate language contribution "${contribution.languageId}":`, error);
       }
     }
+
+    // Commit epoch AFTER all contributions have been processed
+    this.lastActivatedEpoch = this.activationEpoch;
 
     return this.currentHandlers;
   }
