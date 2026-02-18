@@ -55,18 +55,26 @@ export function ThreeProvider({
   // subscribe to count changes.  A reactive subscription in the parent
   // (CadViewer) or here would cause an infinite re-render loop because
   // acquire/release events (sent during effect mount/cleanup) would
-  // synchronously flip `isAtLimit`, triggering mount → acquire → re-render →
-  // unmount → release → re-render → mount … ad infinitum.
+  // synchronously flip `isAtLimit`, triggering mount -> acquire -> re-render ->
+  // unmount -> release -> re-render -> mount ... ad infinitum.
+  //
+  // `webglRef` is `undefined` when no `<WebglContextTrackerProvider>` is
+  // mounted above this component (e.g. single-viewer pages like the landing
+  // page, converter, preview, etc.).  In that case we skip tracking entirely.
   const webglRef = useWebglContextRef();
 
   // eslint-disable-next-line react/hook-use-state -- one-time snapshot, setter intentionally unused
   const [isOverLimit] = useState(() => {
+    if (!webglRef) {
+      return false;
+    }
+
     const snap = webglRef.getSnapshot();
     return snap.context.count >= snap.context.limit;
   });
 
   useEffect(() => {
-    if (isOverLimit) {
+    if (!webglRef || isOverLimit) {
       return;
     }
 
