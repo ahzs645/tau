@@ -8,7 +8,20 @@
  * - Stack trace classification
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import type {
+  KernelRuntime,
+  CanHandleInput,
+  GetParametersInput,
+  GetParametersResult,
+  CreateGeometryInput,
+  CreateGeometryResult,
+  ExportGeometryInput,
+  ExportGeometryResult,
+  GetDependenciesInput,
+  KernelFilesystem,
+  FrameContext,
+} from '@taucad/types';
 import {
   parsePackageSpecifier,
   resolveRelativePath,
@@ -18,6 +31,8 @@ import {
   extractPackageInfoFromCdnUrl,
   isEsmShUrl,
 } from '#utils/import.utils.js';
+import { JavaScriptWorker } from '#components/geometry/kernel/utils/javascript-worker.js';
+import { EsbuildBundler } from '#components/geometry/kernel/utils/esbuild-bundler.js';
 
 describe('Module Manager', () => {
   describe('parsePackageSpecifier', () => {
@@ -211,53 +226,197 @@ describe('Module Manager', () => {
   });
 });
 
+/**
+ * Stack Frame Classification
+ *
+ * Tests the actual classifyFrame method from JavaScriptWorker via
+ * TestableJavaScriptWorker. This exercises the full decision tree:
+ *   1. blob: URLs -> 'user' (bundled user code)
+ *   2. Library patterns -> 'library' (matched before node_modules)
+ *   3. node:/</wasm: -> 'runtime' (engine and native frames)
+ *   4. node_modules/data:/kernel/ -> 'framework' (infrastructure)
+ *   5. Outside projectPath -> 'framework'
+ *   6. Everything else -> 'user'
+ *
+ * @see JavaScriptWorker.classifyFrame in javascript-worker.ts
+ */
 describe('Stack Frame Classification', () => {
-  it('should classify node_modules frames as framework', () => {
-    const fileName = '/builds/project/node_modules/some-lib/index.js';
-    // Node_modules without a library pattern match -> framework
-    const isFramework = fileName.includes('/node_modules/');
-    expect(isFramework).toBe(true);
-  });
+  let worker: TestableJavaScriptWorker;
 
-  it('should classify data: URLs as framework', () => {
-    const fileName = 'data:text/javascript;base64,abc123';
-    const isFramework = fileName.startsWith('data:');
-    expect(isFramework).toBe(true);
+  beforeAll(() => {
+    worker = new TestableJavaScriptWorker();
   });
 
   it('should classify blob: URLs as user code', () => {
-    const fileName = 'blob:https://example.com/abc123';
-    // Blob: URLs are where user's bundled code runs -> user
-    const isUser = fileName.startsWith('blob:');
-    expect(isUser).toBe(true);
+    expect(worker.testClassifyFrame('blob:https://example.com/abc123')).toBe('user');
   });
 
-  it('should classify regular files as user code', () => {
-    const fileName = '/builds/project/main.ts';
-    const isKnownInternal =
-      fileName.includes('/node_modules/') ||
-      fileName.startsWith('data:') ||
-      fileName.startsWith('node:') ||
-      fileName.startsWith('<') ||
-      fileName.includes('/kernel/');
-    expect(isKnownInternal).toBe(false);
+  it('should classify node_modules frames as framework', () => {
+    expect(worker.testClassifyFrame('/builds/project/node_modules/some-lib/index.js')).toBe('framework');
+  });
+
+  it('should classify data: URLs as framework', () => {
+    expect(worker.testClassifyFrame('data:text/javascript;base64,abc123')).toBe('framework');
   });
 
   it('should classify node: URLs as runtime', () => {
-    const fileName = 'node:fs';
-    const isRuntime = fileName.startsWith('node:');
-    expect(isRuntime).toBe(true);
+    expect(worker.testClassifyFrame('node:fs')).toBe('runtime');
   });
 
   it('should classify anonymous frames as runtime', () => {
-    const fileName = '<anonymous>';
-    const isRuntime = fileName.startsWith('<');
-    expect(isRuntime).toBe(true);
+    expect(worker.testClassifyFrame('<anonymous>')).toBe('runtime');
+  });
+
+  it('should classify wasm: URLs as runtime', () => {
+    expect(worker.testClassifyFrame('wasm://wasm/0001b2c3')).toBe('runtime');
+    expect(worker.testClassifyFrame('wasm:module')).toBe('runtime');
   });
 
   it('should classify kernel paths as framework', () => {
-    const fileName = '/builds/project/kernel/worker.js';
-    const isFramework = fileName.includes('/kernel/');
-    expect(isFramework).toBe(true);
+    expect(worker.testClassifyFrame('/builds/project/kernel/worker.js')).toBe('framework');
+  });
+
+  it('should classify regular project files as user code', () => {
+    expect(worker.testClassifyFrame('/builds/project/main.ts')).toBe('user');
+    expect(worker.testClassifyFrame('/builds/project/src/utils.ts')).toBe('user');
+  });
+
+  it('should classify library patterns as library (before node_modules check)', () => {
+    const workerWithLibraries = new TestableJavaScriptWorker();
+    workerWithLibraries.setLibraryPatterns([
+      { pattern: '/node_modules/replicad/', moduleName: 'replicad' },
+      { pattern: '/node_modules/@jscad/modeling/', moduleName: '@jscad/modeling' },
+    ]);
+
+    // Library pattern match takes priority over generic node_modules -> framework
+    expect(workerWithLibraries.testClassifyFrame('/builds/project/node_modules/replicad/dist/index.js')).toBe(
+      'library',
+    );
+    expect(
+      workerWithLibraries.testClassifyFrame('/builds/project/node_modules/@jscad/modeling/src/primitives.js'),
+    ).toBe('library');
+
+    // Non-matching node_modules path is still framework
+    expect(workerWithLibraries.testClassifyFrame('/builds/project/node_modules/lodash/index.js')).toBe('framework');
+  });
+
+  it('should classify files outside projectPath as framework', () => {
+    const projectPath = '/builds/project';
+    expect(worker.testClassifyFrame('/other/location/file.ts', projectPath)).toBe('framework');
+    expect(worker.testClassifyFrame('/tmp/scratch.js', projectPath)).toBe('framework');
+  });
+
+  it('should classify files inside projectPath as user code', () => {
+    const projectPath = '/builds/project';
+    expect(worker.testClassifyFrame('/builds/project/main.ts', projectPath)).toBe('user');
+    expect(worker.testClassifyFrame('/builds/project/src/helpers.ts', projectPath)).toBe('user');
+  });
+});
+
+// =============================================================================
+// Bundler Lifecycle
+// =============================================================================
+
+vi.mock('#components/geometry/kernel/utils/esbuild-bundler.js', () => {
+  // Each instance remembers its own projectPath so changing the mock
+  // for a new call doesn't affect existing instances.
+  const esbuildBundlerMock = vi.fn().mockImplementation((options: { projectPath: string }) => ({
+    initialize: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn(),
+    getProjectPath: vi.fn().mockReturnValue(options.projectPath),
+  }));
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- Mocking a class constructor
+  return { EsbuildBundler: esbuildBundlerMock };
+});
+
+/**
+ * Minimal concrete subclass of JavaScriptWorker for testing protected methods.
+ */
+class TestableJavaScriptWorker extends JavaScriptWorker {
+  protected get name(): string {
+    return 'test-worker';
+  }
+
+  private testLibraryPatterns: Array<{ pattern: string; moduleName: string }> = [];
+
+  public async exposedGetBundler(filesystem: KernelFilesystem, projectPath: string): Promise<EsbuildBundler> {
+    return this.getBundler(filesystem, projectPath);
+  }
+
+  /** Expose protected classifyFrame for direct testing. */
+  public testClassifyFrame(fileName: string, projectPath?: string): FrameContext {
+    return this.classifyFrame(fileName, projectPath);
+  }
+
+  /** Set library patterns for classifyFrame tests. */
+  public setLibraryPatterns(patterns: Array<{ pattern: string; moduleName: string }>): void {
+    this.testLibraryPatterns = patterns;
+  }
+
+  protected override getLibraryPathPatterns(): Array<{ pattern: string; moduleName: string }> {
+    return this.testLibraryPatterns;
+  }
+
+  protected async canHandle(_input: CanHandleInput, _runtime: KernelRuntime): Promise<boolean> {
+    return true;
+  }
+
+  protected async getParameters(_input: GetParametersInput, _runtime: KernelRuntime): Promise<GetParametersResult> {
+    return { success: true, data: { defaultParameters: {}, jsonSchema: undefined }, issues: [] };
+  }
+
+  protected async createGeometry(_input: CreateGeometryInput, _runtime: KernelRuntime): Promise<CreateGeometryResult> {
+    return { success: false, issues: [] };
+  }
+
+  protected async exportGeometry(_input: ExportGeometryInput, _runtime: KernelRuntime): Promise<ExportGeometryResult> {
+    return { success: false, issues: [] };
+  }
+
+  protected override async getDependencies(_input: GetDependenciesInput, _runtime: KernelRuntime): Promise<string[]> {
+    return [];
+  }
+}
+
+describe('Bundler Lifecycle', () => {
+  const mockedEsbuildBundler = vi.mocked(EsbuildBundler);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should dispose old bundler when projectPath changes', async () => {
+    const worker = new TestableJavaScriptWorker();
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Minimal mock for testing
+    const filesystem = {} as KernelFilesystem;
+
+    // First call: create bundler for project A
+    const bundlerA = await worker.exposedGetBundler(filesystem, '/project-a');
+    expect(bundlerA).toBeDefined();
+    expect(mockedEsbuildBundler).toHaveBeenCalledTimes(1);
+    expect(bundlerA.getProjectPath()).toBe('/project-a');
+
+    // Second call with different projectPath: should dispose old and create new
+    const bundlerB = await worker.exposedGetBundler(filesystem, '/project-b');
+    expect(bundlerB).toBeDefined();
+    expect(mockedEsbuildBundler).toHaveBeenCalledTimes(2);
+    expect(bundlerB.getProjectPath()).toBe('/project-b');
+
+    // The old bundler's dispose should have been called
+    expect(bundlerA.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not dispose bundler when projectPath is the same', async () => {
+    const worker = new TestableJavaScriptWorker();
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Minimal mock for testing
+    const filesystem = {} as KernelFilesystem;
+
+    const bundlerA = await worker.exposedGetBundler(filesystem, '/project-a');
+    const bundlerB = await worker.exposedGetBundler(filesystem, '/project-a');
+
+    // Should reuse the same bundler, no dispose called
+    expect(mockedEsbuildBundler).toHaveBeenCalledTimes(1);
+    expect(bundlerA).toBe(bundlerB);
+    expect(bundlerA.dispose).not.toHaveBeenCalled();
   });
 });

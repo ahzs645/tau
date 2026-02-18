@@ -189,6 +189,9 @@ export abstract class JavaScriptWorker<
    */
   protected async getBundler(filesystem: KernelFilesystem, projectPath: string): Promise<EsbuildBundler> {
     if (!this.bundler || this.bundler.getProjectPath() !== projectPath) {
+      // Dispose old bundler to release ModuleManager caches
+      this.bundler?.dispose();
+
       this.bundler = new EsbuildBundler({
         filesystem,
         projectPath,
