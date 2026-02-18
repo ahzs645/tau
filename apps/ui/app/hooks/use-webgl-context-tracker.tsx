@@ -26,7 +26,12 @@ export function WebglContextTrackerProvider({ children }: WebglContextTrackerPro
 // ── Hooks ────────────────────────────────────────────────────────────────────
 
 /**
- * Returns the raw actor ref for the WebGL context tracker.
+ * Returns the raw actor ref for the WebGL context tracker, or `undefined`
+ * if no `<WebglContextTrackerProvider>` is mounted above this component.
+ *
+ * Returning `undefined` (instead of throwing) allows `ThreeProvider` to work
+ * in both tracked contexts (multi-viewer dockview) and untracked contexts
+ * (single-viewer pages like the landing page, converter, preview, etc.).
  *
  * Consumers use `actorRef.send()` to fire `acquire` / `release` events and
  * `actorRef.getSnapshot()` to imperatively read the current count/limit.
@@ -37,12 +42,6 @@ export function WebglContextTrackerProvider({ children }: WebglContextTrackerPro
  * acquire -> count++ -> re-render -> unmount -> release -> count-- -> re-render
  * -> mount -> acquire -> ... (infinite loop).
  */
-export function useWebglContextRef(): WebglContextActorRef {
-  const actorRef = useContext(WebglContextTrackerContext);
-
-  if (!actorRef) {
-    throw new Error('useWebglContextRef must be used within a <WebglContextTrackerProvider>');
-  }
-
-  return actorRef;
+export function useWebglContextRef(): WebglContextActorRef | undefined {
+  return useContext(WebglContextTrackerContext);
 }
