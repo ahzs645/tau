@@ -81,16 +81,16 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         },
       },
     },
-    'claude-sonnet-4.5': {
-      id: 'anthropic-claude-sonnet-4.5',
-      name: 'Sonnet 4.5',
-      slug: 'claude-sonnet-4.5',
-      description: 'Fast and intelligent, great for most design tasks.',
+    'claude-sonnet-4.6': {
+      id: 'anthropic-claude-sonnet-4.6',
+      name: 'Sonnet 4.6',
+      slug: 'claude-sonnet-4.6',
+      description: 'Best combination of speed and intelligence, great for most design tasks.',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
       },
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-4-6',
       support: {
         toolChoice: false,
       },
@@ -98,7 +98,6 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         family: 'claude',
         families: ['claude'],
         contextWindow: 200_000,
-        // Extended thinking mode supports up to 64000 tokens
         maxTokens: 64_000,
         cost: {
           inputTokens: 3,
@@ -114,9 +113,10 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
         max_tokens: 20_000,
         thinking: {
-          type: 'enabled',
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-          budget_tokens: 10_000,
+          type: 'adaptive',
+        },
+        outputConfig: {
+          effort: 'medium',
         },
       },
     },
