@@ -19,7 +19,8 @@
 
 import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
 import type { GeometryResponse, KernelFilesystem } from '@taucad/types';
-import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
+import { z } from 'zod';
+import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { createKernelSuccess } from '#components/geometry/kernel/utils/kernel-helpers.js';
 import { joinPath } from '#utils/path.utils.js';
 
@@ -178,18 +179,6 @@ function getCacheDir(basePath: string): string {
 }
 
 /**
- * Maximum number of cache entries to keep.
- * Uses LRU-style eviction based on file modification time.
- */
-const maxCacheEntries = 100;
-
-/**
- * Maximum age for cache entries in milliseconds (7 days).
- * Entries older than this are eligible for cleanup.
- */
-const maxCacheAgeMs = 7 * 24 * 60 * 60 * 1000;
-
-/**
  * Check if any geometries in the result have webrtc format.
  * Video-stream geometries cannot be cached as they contain live streams.
  *
@@ -279,7 +268,12 @@ export const geometryCacheMiddleware = createKernelMiddleware({
   name: 'GeometryCache',
   version: '1.0.0',
 
-  async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash }) {
+  configSchema: z.object({
+    maxEntries: z.number().default(100),
+    maxAgeMs: z.number().default(7 * 24 * 60 * 60 * 1000),
+  }),
+
+  async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash, config }) {
     const { basePath } = input;
     // Use pre-computed dependency hash as cache key
     const cacheKey = dependencyHash;
@@ -328,7 +322,7 @@ export const geometryCacheMiddleware = createKernelMiddleware({
           logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
 
           // Cleanup old cache entries to prevent unbounded growth
-          await cleanupOldCacheEntries(filesystem, cacheDir, maxCacheAgeMs, maxCacheEntries);
+          await cleanupOldCacheEntries(filesystem, cacheDir, config.maxAgeMs, config.maxEntries);
         } catch (error) {
           // Cache write error - log and continue
           logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);

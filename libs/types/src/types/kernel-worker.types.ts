@@ -40,6 +40,8 @@ export type MiddlewareDependency = {
   version: string;
   /** Position in the middleware chain (0-indexed) */
   index: number;
+  /** SHA-256 hash of the JSON-serialized resolved config */
+  configHash: string;
 };
 
 /**
@@ -269,15 +271,23 @@ export type MiddlewareState<T extends Record<string, unknown>> = {
  * Contains services and utilities available during hook execution.
  *
  * @template State - The state type inferred from the middleware's stateSchema. Must be an object type.
+ * @template Config - The config type inferred from the middleware's configSchema. Must be an object type.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type KernelMiddlewareRuntime<State extends Record<string, unknown> = {}> = {
+
+export type KernelMiddlewareRuntime<
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  State extends Record<string, unknown> = {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  Config extends Record<string, unknown> = {},
+> = {
   /** Logger with middleware name pre-configured as the component */
   logger: KernelLogger;
   /** Filesystem for all file operations (uses absolute path methods for middleware) */
   filesystem: KernelFilesystem;
   /** Type-safe state for persisting data during the wrap hook execution */
   state: MiddlewareState<State>;
+  /** Resolved config (configSchema defaults merged with caller overrides) */
+  config: Config;
   /**
    * Dependencies for cache key computation.
    * Includes file dependencies (source files, fonts), middleware signatures,
@@ -350,11 +360,16 @@ export type GetParametersHandler = (input: GetParametersInput) => Promise<GetPar
  * }
  * ```
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapCreateGeometryHook<State extends Record<string, unknown> = {}> = (
+
+export type WrapCreateGeometryHook<
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  State extends Record<string, unknown> = {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  Config extends Record<string, unknown> = {},
+> = (
   input: CreateGeometryInput,
   handler: CreateGeometryHandler,
-  runtime: KernelMiddlewareRuntime<State>,
+  runtime: KernelMiddlewareRuntime<State, Config>,
 ) => Promise<CreateGeometryResult>;
 
 /**
@@ -363,11 +378,16 @@ export type WrapCreateGeometryHook<State extends Record<string, unknown> = {}> =
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapExportGeometryHook<State extends Record<string, unknown> = {}> = (
+
+export type WrapExportGeometryHook<
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  State extends Record<string, unknown> = {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  Config extends Record<string, unknown> = {},
+> = (
   input: ExportGeometryInput,
   handler: ExportGeometryHandler,
-  runtime: KernelMiddlewareRuntime<State>,
+  runtime: KernelMiddlewareRuntime<State, Config>,
 ) => Promise<ExportGeometryResult>;
 
 /**
@@ -376,9 +396,14 @@ export type WrapExportGeometryHook<State extends Record<string, unknown> = {}> =
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapGetParametersHook<State extends Record<string, unknown> = {}> = (
+
+export type WrapGetParametersHook<
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  State extends Record<string, unknown> = {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  Config extends Record<string, unknown> = {},
+> = (
   input: GetParametersInput,
   handler: GetParametersHandler,
-  runtime: KernelMiddlewareRuntime<State>,
+  runtime: KernelMiddlewareRuntime<State, Config>,
 ) => Promise<GetParametersResult>;

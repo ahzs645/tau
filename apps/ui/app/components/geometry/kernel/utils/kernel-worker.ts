@@ -26,6 +26,7 @@ import type {
   ParameterDependency,
   AssetDependency,
   OnWorkerLog,
+  MiddlewareConfig,
 } from '@taucad/types';
 import * as kernelSymbols from '@taucad/types/symbols';
 import { wrap, transfer } from 'comlink';
@@ -34,34 +35,19 @@ import { version as TAU_VERSION } from 'package.json';
 import { logLevels } from '@taucad/types/constants';
 import type { FileManager } from '#machines/file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
-import type { KernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
-import { createMiddlewareRuntime } from '#components/geometry/kernel/utils/kernel-middleware.js';
-import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
-import { gltfCoordinateTransformMiddleware } from '#components/geometry/kernel/utils/gltf-coordinate-transform.middleware.js';
-import { gltfEdgeDetectionMiddleware } from '#components/geometry/kernel/utils/gltf-edge-detection.middleware.js';
+import type { KernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
+import { createMiddlewareRuntime } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { createKernelError } from '#components/geometry/kernel/utils/kernel-helpers.js';
-import { parameterCacheMiddleware } from '#components/geometry/kernel/utils/parameter-cache.middleware.js';
 
 /**
- * Static array of middleware to apply to all kernel operations.
- * Middleware uses an onion model - each middleware wraps around the next,
- * so code after handler() runs on the "return journey".
- *
- * Order matters (first middleware is outermost):
- * 1. parameterCacheMiddleware - Caches getParameters results.
- * 2. geometryCacheMiddleware - Checks/writes geometry cache, handles export.
- * 3. gltfCoordinateTransformMiddleware - Transforms GLTF output for UI rendering.
- * 4. gltfEdgeDetectionMiddleware - Adds edge primitives for sharp edge rendering.
- *
- * Note: Edge detection must be innermost (runs first on return) so that
- * the coordinate transform can then transform BOTH mesh and edge primitives.
+ * A resolved middleware instance paired with its parsed config.
  */
-const kernelMiddleware: KernelMiddleware[] = [
-  parameterCacheMiddleware,
-  geometryCacheMiddleware,
-  gltfCoordinateTransformMiddleware,
-  gltfEdgeDetectionMiddleware,
-];
+export type ResolvedMiddleware = {
+  middleware: KernelMiddleware;
+  config: Record<string, unknown>;
+  url: string;
+  enabled: boolean;
+};
 
 export abstract class KernelWorker<Options extends Record<string, unknown> = Record<string, unknown>> {
   /**
@@ -185,6 +171,18 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   private readonly assetHashCache = new Map<string, string>();
 
   /**
+   * Dynamically loaded middleware instances with their resolved configs.
+   * Populated during initializeEntry() and updated via configureMiddleware().
+   */
+  private resolvedMiddleware: ResolvedMiddleware[] = [];
+
+  /**
+   * Cache of already-imported middleware modules keyed by URL.
+   * Prevents redundant network requests when reconfiguring middleware.
+   */
+  private readonly middlewareModuleCache = new Map<string, KernelMiddleware>();
+
+  /**
    * Unified filesystem interface for kernel workers.
    * Provides three path resolution contexts:
    * - Relative to basePath (current file's directory)
@@ -236,11 +234,13 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param transferables - Object containing transferable resources like MessagePorts.
    * @param transferables.fileManagerPort - Optional MessagePort for direct communication with file-manager worker.
    * @param options - The options passed to the worker. These are specific to the kernel provider.
+   * @param middlewareConfig - Ordered array of middleware registrations to load dynamically.
    */
   public async [kernelSymbols.initializeEntry](
     callbacks: { onLog: OnWorkerLog },
     transferables: { fileManagerPort?: MessagePort },
     options: Options,
+    middlewareConfig: MiddlewareConfig,
   ): Promise<void> {
     this.onLog = callbacks.onLog;
     this.options = options;
@@ -253,6 +253,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.fileManager = wrap<FileManager>(transferables.fileManagerPort);
       this._filesystem = this.createFilesystem();
     }
+
+    // Load middleware from URLs
+    await this.loadMiddleware(middlewareConfig);
 
     // Call worker-specific initialization
     await this.initialize({ options: this.options }, this.createRuntime());
@@ -329,12 +332,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const dependencies = await this.computeDependencies(basename);
     const dependencyHash = await this.computeDependencyHash(dependencies);
 
-    // Get middleware array (overridable for testing)
-    const middlewareArray = this[kernelSymbols.getMiddleware]();
+    // Get resolved middleware array (overridable for testing)
+    const resolvedArray = this[kernelSymbols.getMiddleware]();
 
     // Create runtimes map - one per middleware for the duration of this operation
     const runtimes = new Map<string, KernelMiddlewareRuntime>();
-    for (const middleware of middlewareArray) {
+    for (const { middleware, config } of resolvedArray) {
       runtimes.set(
         middleware.name,
         createMiddlewareRuntime({
@@ -344,6 +347,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           dependencies,
           dependencyHash,
           stateSchema: middleware.stateSchema,
+          config,
         }),
       );
     }
@@ -359,8 +363,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     };
 
     // Wrap each middleware from last to first (reverse order builds onion correctly)
-    for (const middleware of [...middlewareArray].reverse()) {
-      if (middleware.wrapGetParameters) {
+    for (const { middleware, enabled } of [...resolvedArray].reverse()) {
+      if (enabled && middleware.wrapGetParameters) {
         const inner = chain;
         const runtime = runtimes.get(middleware.name)!;
         const middlewareName = middleware.name;
@@ -435,13 +439,13 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const dependencies = await this.computeDependencies(basename, parameters);
     const dependencyHash = await this.computeDependencyHash(dependencies);
 
-    // Get middleware array (overridable for testing)
-    const middlewareArray = this[kernelSymbols.getMiddleware]();
+    // Get resolved middleware array (overridable for testing)
+    const resolvedArray = this[kernelSymbols.getMiddleware]();
 
     // Create runtimes map - one per middleware for the duration of this operation.
     // This ensures the state is shared across the entire wrap hook execution.
     const runtimes = new Map<string, KernelMiddlewareRuntime>();
-    for (const middleware of middlewareArray) {
+    for (const { middleware, config } of resolvedArray) {
       runtimes.set(
         middleware.name,
         createMiddlewareRuntime({
@@ -451,6 +455,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           dependencies,
           dependencyHash,
           stateSchema: middleware.stateSchema,
+          config,
         }),
       );
     }
@@ -467,8 +472,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Wrap each middleware from last to first (reverse order builds onion correctly)
     // After wrapping: middleware[0] is outermost, middleware[n-1] is closest to main operation
-    for (const middleware of [...middlewareArray].reverse()) {
-      if (middleware.wrapCreateGeometry) {
+    for (const { middleware, enabled } of [...resolvedArray].reverse()) {
+      if (enabled && middleware.wrapCreateGeometry) {
         const inner = chain;
         const runtime = runtimes.get(middleware.name)!;
         const middlewareName = middleware.name;
@@ -569,16 +574,30 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Get the middleware array for this worker.
+   * Get the resolved middleware array for this worker.
    * Override in subclasses to customize middleware (e.g., for testing).
    *
    * Symbol-keyed to hide from kernel developer autocomplete. Tests can import
    * the symbol from @taucad/types/symbols to override this method.
    *
-   * @returns Array of middleware to apply to kernel operations
+   * @returns Array of resolved middleware with their configs
    */
-  public [kernelSymbols.getMiddleware](): KernelMiddleware[] {
-    return kernelMiddleware;
+  public [kernelSymbols.getMiddleware](): ResolvedMiddleware[] {
+    return this.resolvedMiddleware;
+  }
+
+  /**
+   * Reconfigure middleware at runtime without re-importing already loaded modules.
+   * New URLs are imported, removed URLs are dropped, existing URLs get config updates.
+   *
+   * Symbol-keyed to hide from kernel developer autocomplete. Framework code imports
+   * the symbol from @taucad/types/symbols to access this method.
+   *
+   * @param config - New middleware configuration to apply
+   */
+  public async [kernelSymbols.configureMiddleware](config: MiddlewareConfig): Promise<void> {
+    await this.loadMiddleware(config);
+    this.logger.debug(`Middleware reconfigured: ${this.resolvedMiddleware.length} active`);
   }
 
   /**
@@ -670,6 +689,72 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected abstract getDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]>;
 
   /**
+   * Load middleware modules from URLs and resolve their configs.
+   * Uses a module cache to avoid redundant network requests when reconfiguring.
+   *
+   * @param middlewareConfig - Ordered array of middleware entries
+   */
+  private async loadMiddleware(middlewareConfig: MiddlewareConfig): Promise<void> {
+    const resolved: ResolvedMiddleware[] = [];
+
+    for (const entry of middlewareConfig) {
+      // eslint-disable-next-line no-await-in-loop -- Middleware must be loaded sequentially to preserve order
+      const middleware = await this.importMiddlewareModule(entry.url);
+
+      const resolvedConfig = middleware.configSchema
+        ? (middleware.configSchema.parse(entry.config ?? {}) as Record<string, unknown>)
+        : {};
+
+      const enabled = entry.enabled ?? middleware.enabled ?? true;
+
+      resolved.push({ middleware, config: resolvedConfig, url: entry.url, enabled });
+    }
+
+    this.resolvedMiddleware = resolved;
+  }
+
+  /**
+   * Import a middleware module, using the cache to avoid redundant imports.
+   *
+   * @param url - URL of the middleware module
+   * @returns The middleware instance
+   */
+  private async importMiddlewareModule(url: string): Promise<KernelMiddleware> {
+    const cached = this.middlewareModuleCache.get(url);
+    if (cached) {
+      return cached;
+    }
+
+    const mod: Record<string, unknown> = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
+    const middleware = this.resolveMiddlewareExport(mod);
+
+    this.middlewareModuleCache.set(url, middleware);
+    return middleware;
+  }
+
+  /**
+   * Resolve the middleware export from a dynamically imported module.
+   * Checks for a default export first, then looks for the first export
+   * that has a `name` property (duck-typed as KernelMiddleware).
+   *
+   * @param mod - The imported module
+   * @returns The resolved middleware instance
+   */
+  private resolveMiddlewareExport(mod: Record<string, unknown>): KernelMiddleware {
+    if (mod['default'] && typeof mod['default'] === 'object' && 'name' in mod['default']) {
+      return mod['default'] as KernelMiddleware;
+    }
+
+    for (const value of Object.values(mod)) {
+      if (typeof value === 'object' && value !== null && 'name' in value) {
+        return value as KernelMiddleware;
+      }
+    }
+
+    throw new Error('Middleware module does not export a valid KernelMiddleware');
+  }
+
+  /**
    * Create the unified filesystem interface.
    * Called during initializeEntry() after fileManager is set up.
    * All methods use absolute paths - callers use helper methods to construct paths.
@@ -753,13 +838,17 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }),
     );
 
-    // 2. Middleware dependencies (index preserves chain order)
-    const middlewareDeps: MiddlewareDependency[] = this[kernelSymbols.getMiddleware]().map((middleware, index) => ({
-      type: 'middleware' as const,
-      name: middleware.name,
-      version: middleware.version ?? '1',
-      index,
-    }));
+    // 2. Middleware dependencies (only enabled middleware, index preserves chain order)
+    const enabledMiddleware = this[kernelSymbols.getMiddleware]().filter(({ enabled }) => enabled);
+    const middlewareDeps: MiddlewareDependency[] = await Promise.all(
+      enabledMiddleware.map(async ({ middleware, config }, index) => ({
+        type: 'middleware' as const,
+        name: middleware.name,
+        version: middleware.version ?? '1',
+        index,
+        configHash: await this.hashContent(new TextEncoder().encode(JSON.stringify(config))),
+      })),
+    );
 
     // 3. Framework dependency
     const frameworkDep: FrameworkDependency = {

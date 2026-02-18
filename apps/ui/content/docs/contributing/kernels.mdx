@@ -352,6 +352,131 @@ this.warn('Deprecated feature used');
 this.error('Failed to parse', { data: { line: 42 } });
 ```
 
+## Middleware
+
+Middleware wraps kernel operations (geometry creation, parameter extraction, export) using an onion model. Each middleware can intercept, transform, or short-circuit these operations.
+
+### Architecture
+
+Middleware is **dynamically loaded** in the Web Worker via `import(url)`. The main thread injects a `MiddlewareConfig` array — an ordered list of middleware entries — through the same dependency injection pattern used for kernel workers.
+
+```
+BuildProvider → build.machine → cad.machine → kernel.machine → Worker
+                                                    ↓
+                                            MiddlewareConfig[]
+                                                    ↓
+                                          import(url) per entry
+```
+
+### Creating a Middleware
+
+Create your middleware in `apps/ui/app/components/geometry/kernel/middleware/`:
+
+```typescript
+import { z } from 'zod';
+import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
+
+export const myMiddleware = createKernelMiddleware({
+  name: 'MyMiddleware',
+  version: '1.0.0',
+
+  // Optional: Zod schema for configurable options (with defaults)
+  configSchema: z.object({
+    threshold: z.number().default(0.5),
+  }),
+
+  // Optional: Zod schema for internal per-operation state
+  stateSchema: z.object({
+    cache: z.map(z.string(), z.unknown()).default(new Map()),
+  }),
+
+  // Wrap hooks (all optional)
+  async wrapCreateGeometry(input, handler, { logger, config }) {
+    logger.debug(`Processing with threshold: ${config.threshold}`);
+    const result = await handler(input);
+    return result;
+  },
+});
+```
+
+### configSchema vs stateSchema
+
+- **`configSchema`** — External settings from the main thread. Validated and merged with defaults on load. Reconfigurable at runtime via `configureMiddleware`.
+- **`stateSchema`** — Internal per-operation state managed by the middleware itself. Not exposed to the main thread.
+
+### Registering Middleware
+
+#### First-party middleware
+
+Add a `?url` import and entry to `defaultMiddlewareConfig` in `apps/ui/app/constants/kernel.constants.ts`:
+
+```typescript
+import myMiddlewareUrl from '#components/geometry/kernel/middleware/my.middleware.js?url';
+
+export const defaultMiddlewareConfig: MiddlewareConfig = [
+  // ... existing entries (order = execution order)
+  { url: myMiddlewareUrl },
+];
+```
+
+#### Third-party middleware
+
+External consumers extend or replace the default config:
+
+```typescript
+import { defaultMiddlewareConfig } from '#constants/kernel.constants.js';
+import type { MiddlewareConfig } from '@taucad/types';
+
+const extendedConfig: MiddlewareConfig = [
+  ...defaultMiddlewareConfig,
+  { url: '/path/to/custom-middleware.js', config: { threshold: 0.8 } },
+];
+
+<BuildProvider buildId={id} middlewareConfig={extendedConfig}>
+```
+
+### Runtime Reconfiguration
+
+Middleware can be reconfigured at runtime without restarting workers:
+
+```typescript
+buildRef.send({
+  type: 'configureMiddleware',
+  middlewareConfig: [
+    { url: edgeDetectionUrl, enabled: false },
+    { url: cacheUrl, config: { maxEntries: 50 } },
+  ],
+});
+```
+
+This flows through the full machine hierarchy and calls `configureMiddleware` on each active worker, which re-resolves config schemas with new values.
+
+### Enabled Flag
+
+Every middleware has a framework-level `enabled` flag that defaults to `true`. The framework automatically skips hooks for disabled middleware -- middleware authors never need to check it.
+
+Resolution order: `MiddlewareEntry.enabled` > `createKernelMiddleware({ enabled })` > `true`
+
+```typescript
+// Middleware enabled by default (standard)
+export const myMiddleware = createKernelMiddleware({
+  name: 'MyMiddleware',
+  // enabled defaults to true
+});
+
+// Middleware disabled by default (opt-in)
+export const debugMiddleware = createKernelMiddleware({
+  name: 'DebugMiddleware',
+  enabled: false,
+});
+
+// Override at registration or runtime
+{ url: myMiddlewareUrl, enabled: false }   // disable at registration
+{ url: debugMiddlewareUrl, enabled: true } // enable at registration
+```
+
+Disabled middleware modules are still imported (so re-enabling via `configureMiddleware` is instant), but their hooks are skipped in the execution chain.
+
 ## Existing Kernels Reference
 
 | Kernel | Language | Backend | Description |

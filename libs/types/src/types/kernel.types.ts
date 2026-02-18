@@ -125,6 +125,45 @@ export type KernelWorkerEntry = {
  */
 export type KernelConfig = KernelWorkerEntry[];
 
+// =============================================================================
+// Middleware Configuration Types
+// =============================================================================
+
+/**
+ * A single middleware registration.
+ * The worker dynamically imports the module at `url` and resolves it
+ * as a KernelMiddleware. Config is validated against the middleware's
+ * configSchema, with the schema providing defaults for missing fields.
+ *
+ * @example
+ * ```ts
+ * { url: edgeDetectionUrl, config: { thresholdDegrees: 45 } }
+ * ```
+ */
+export type MiddlewareEntry = {
+  /** URL of the middleware module (obtained via `?url` import at build time) */
+  url: string;
+  /** Whether this middleware is active. Defaults to `true`. */
+  enabled?: boolean;
+  /** Config values validated against the middleware's configSchema */
+  config?: Record<string, unknown>;
+};
+
+/**
+ * Ordered array of middleware registrations.
+ * Position determines onion-model wrapping order (first = outermost).
+ *
+ * @example
+ * ```ts
+ * const config: MiddlewareConfig = [
+ *   { url: parameterCacheUrl },
+ *   { url: geometryCacheUrl },
+ *   { url: edgeDetectionUrl, config: { thresholdDegrees: 45 } },
+ * ];
+ * ```
+ */
+export type MiddlewareConfig = MiddlewareEntry[];
+
 /**
  * Public interface for kernel workers as exposed via Comlink.
  *
@@ -138,6 +177,7 @@ export type KernelWorkerInterface = {
     callbacks: { onLog: OnWorkerLog },
     transferables: { fileManagerPort?: MessagePort },
     options: Record<string, unknown>,
+    middlewareConfig: MiddlewareConfig,
   ): Promise<void>;
   cleanupEntry(): Promise<void>;
   canHandleEntry(file: GeometryFile): Promise<boolean>;
@@ -148,6 +188,7 @@ export type KernelWorkerInterface = {
     meshConfig?: { linearTolerance: number; angularTolerance: number },
   ): Promise<ExportGeometryResult>;
   getExportFormats(): ExportFormat[];
+  configureMiddleware(config: MiddlewareConfig): Promise<void>;
 };
 
 // =============================================================================

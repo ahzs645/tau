@@ -35,20 +35,29 @@ type EmptyState = {};
  *
  * @template StateSchema - Optional Zod object schema for the middleware state.
  *   Defaults to an empty object schema when no state is needed.
+ * @template ConfigSchema - Optional Zod object schema for the middleware config.
+ *   Defaults to an empty object schema when no config is needed.
  */
-export type KernelMiddlewareConfig<StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject> = {
+export type KernelMiddlewareConfig<
+  StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+  ConfigSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+> = {
   /** Name of the middleware for debugging and logging */
   name: string;
   /** Version of the middleware for cache key computation. Defaults to '1' if not provided. */
   version?: string;
+  /** Whether the middleware is enabled by default. Defaults to `true`. Overridable via MiddlewareEntry.enabled at registration or runtime. */
+  enabled?: boolean;
   /** Optional Zod schema for type-safe state. Must be a z.object() schema. */
   stateSchema?: StateSchema;
+  /** Optional Zod schema for middleware config with .default() values for each field. */
+  configSchema?: ConfigSchema;
   /** Wrap-style hook for createGeometry with onion model execution */
-  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>>;
+  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
-  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>>;
+  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
   /** Wrap-style hook for getParameters with onion model execution */
-  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>>;
+  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
 };
 
 /**
@@ -57,20 +66,29 @@ export type KernelMiddlewareConfig<StateSchema extends z.ZodObject<z.ZodRawShape
  * @template StateSchema - The Zod schema type for the state.
  *   Keeping the schema type (not inferred type) allows proper type flow from config to middleware.
  *   Defaults to an empty object schema when no state is needed.
+ * @template ConfigSchema - The Zod schema type for the config.
+ *   Defaults to an empty object schema when no config is needed.
  */
-export type KernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject> = {
+export type KernelMiddleware<
+  StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+  ConfigSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+> = {
   /** Name of the middleware */
   name: string;
   /** Version of the middleware for cache key computation. Defaults to '1' if not provided. */
   version?: string;
+  /** Whether the middleware is enabled by default. Defaults to `true`. */
+  enabled?: boolean;
   /** Zod schema for validating state updates (if provided) */
   stateSchema?: StateSchema;
+  /** Zod schema for validating and defaulting config (if provided) */
+  configSchema?: ConfigSchema;
   /** Wrap-style hook for createGeometry with onion model execution */
-  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>>;
+  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
-  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>>;
+  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
   /** Wrap-style hook for getParameters with onion model execution */
-  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>>;
+  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
 };
 
 /**
@@ -124,13 +142,16 @@ export type KernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawShape> = Em
  * });
  * ```
  */
-export function createKernelMiddleware<StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject>(
-  config: KernelMiddlewareConfig<StateSchema>,
-): KernelMiddleware<StateSchema> {
+export function createKernelMiddleware<
+  StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+  ConfigSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+>(config: KernelMiddlewareConfig<StateSchema, ConfigSchema>): KernelMiddleware<StateSchema, ConfigSchema> {
   return {
     name: config.name,
     version: config.version ?? '1',
+    enabled: config.enabled,
     stateSchema: config.stateSchema,
+    configSchema: config.configSchema,
     wrapCreateGeometry: config.wrapCreateGeometry,
     wrapExportGeometry: config.wrapExportGeometry,
     wrapGetParameters: config.wrapGetParameters,
@@ -247,23 +268,28 @@ export type CreateMiddlewareRuntimeOptions = {
   dependencyHash: string;
   /** Optional Zod object schema for the state */
   stateSchema?: z.ZodObject<z.ZodRawShape>;
+  /** Resolved config values (schema defaults merged with caller overrides) */
+  config?: Record<string, unknown>;
 };
 
 /**
- * Create a middleware runtime with logger, filesystem, state, and dependencies.
+ * Create a middleware runtime with logger, filesystem, state, config, and dependencies.
  *
  * @param options - Runtime configuration options
  * @returns Runtime instance for middleware wrap hooks
  */
-export function createMiddlewareRuntime<State extends Record<string, unknown> = EmptyState>(
-  options: CreateMiddlewareRuntimeOptions,
-): KernelMiddlewareRuntime<State> {
-  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema } = options;
+export function createMiddlewareRuntime<
+  State extends Record<string, unknown> = EmptyState,
+  Config extends Record<string, unknown> = EmptyState,
+>(options: CreateMiddlewareRuntimeOptions): KernelMiddlewareRuntime<State, Config> {
+  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema, config } = options;
 
   return {
     logger: createMiddlewareLogger(onLog, middlewareName),
     filesystem,
     state: createMiddlewareState<State>(stateSchema),
+
+    config: (config ?? {}) as Config,
     dependencies,
     dependencyHash,
   };

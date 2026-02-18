@@ -1,7 +1,7 @@
 import { assign, assertEvent, setup, fromPromise, emit, enqueueActions } from 'xstate';
 import type { ActorRefFrom, OutputFrom, DoneActorEvent, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
-import type { Build, KernelConfig } from '@taucad/types';
+import type { Build, KernelConfig, MiddlewareConfig } from '@taucad/types';
 import { isBrowser } from '#constants/browser.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
@@ -22,6 +22,7 @@ export type BuildContext = {
   isLoading: boolean;
   shouldLoadModelOnStart: boolean;
   kernelConfig: KernelConfig;
+  middlewareConfig: MiddlewareConfig;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   gitRef: ActorRefFrom<typeof gitMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
@@ -41,6 +42,7 @@ type BuildInput = {
   shouldLoadModelOnStart?: boolean;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   kernelConfig: KernelConfig;
+  middlewareConfig: MiddlewareConfig;
 };
 
 // Define the actors that the machine can invoke
@@ -92,7 +94,8 @@ type BuildEventInternal =
   | { type: 'createViewGraphics'; viewId: string; settings?: GraphicsViewSettings }
   | { type: 'destroyViewGraphics'; viewId: string }
   // Flush pending state immediately (bypasses debounce, used on tab close)
-  | { type: 'flushNow' };
+  | { type: 'flushNow' }
+  | { type: 'configureMiddleware'; middlewareConfig: MiddlewareConfig };
 
 export type BuildEventExternal = OutputFrom<(typeof buildActors)[BuildActorNames]>;
 type BuildEventExternalDone = DoneActorEvent<BuildEventExternal, BuildActorNames>;
@@ -340,6 +343,7 @@ export const buildMachine = setup({
               logRef: ctx.logRef,
               fileManagerRef: ctx.fileManagerRef,
               kernelConfig: ctx.kernelConfig,
+              middlewareConfig: ctx.middlewareConfig,
             },
           });
 
@@ -391,6 +395,7 @@ export const buildMachine = setup({
               logRef: ctx.logRef,
               fileManagerRef: ctx.fileManagerRef,
               kernelConfig: ctx.kernelConfig,
+              middlewareConfig: ctx.middlewareConfig,
             },
           });
 
@@ -548,7 +553,7 @@ export const buildMachine = setup({
 }).createMachine({
   id: 'build',
   context({ input, spawn, self }) {
-    const { buildId, shouldLoadModelOnStart = true, fileManagerRef, kernelConfig } = input;
+    const { buildId, shouldLoadModelOnStart = true, fileManagerRef, kernelConfig, middlewareConfig } = input;
 
     const gitRef = spawn('git', {
       id: `git-${buildId}`,
@@ -573,6 +578,7 @@ export const buildMachine = setup({
       isLoading: true,
       shouldLoadModelOnStart,
       kernelConfig,
+      middlewareConfig,
       fileManagerRef,
       gitRef,
       viewGraphics,
@@ -580,6 +586,24 @@ export const buildMachine = setup({
       mainEntryFile: '',
       logRef,
     };
+  },
+  on: {
+    configureMiddleware: {
+      actions: [
+        assign({
+          middlewareConfig({ event }) {
+            assertEvent(event, 'configureMiddleware');
+            return event.middlewareConfig;
+          },
+        }),
+        ({ context, event }) => {
+          assertEvent(event, 'configureMiddleware');
+          for (const cadUnit of context.compilationUnits.values()) {
+            cadUnit.send({ type: 'configureMiddleware', middlewareConfig: event.middlewareConfig });
+          }
+        },
+      ],
+    },
   },
   initial: 'checkEnvironment',
   states: {

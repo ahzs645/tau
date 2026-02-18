@@ -1,9 +1,13 @@
-import type { KernelConfig } from '@taucad/types';
+import type { KernelConfig, MiddlewareConfig } from '@taucad/types';
 import replicadWorkerUrl from '#components/geometry/kernel/replicad/replicad.worker.js?url';
 import openscadWorkerUrl from '#components/geometry/kernel/openscad/openscad.worker.js?url';
 import zooWorkerUrl from '#components/geometry/kernel/zoo/zoo.worker.js?url';
 import tauWorkerUrl from '#components/geometry/kernel/tau/tau.worker.js?url';
 import jscadWorkerUrl from '#components/geometry/kernel/jscad/jscad.worker.js?url';
+import parameterCacheUrl from '#components/geometry/kernel/middleware/parameter-cache.middleware.js?url';
+import geometryCacheUrl from '#components/geometry/kernel/middleware/geometry-cache.middleware.js?url';
+import gltfCoordinateTransformUrl from '#components/geometry/kernel/middleware/gltf-coordinate-transform.middleware.js?url';
+import gltfEdgeDetectionUrl from '#components/geometry/kernel/middleware/gltf-edge-detection.middleware.js?url';
 import { ENV } from '#environment.config.js';
 
 /**
@@ -51,3 +55,22 @@ export const defaultKernelConfig: KernelConfig = [
 export const debugKernelConfig: KernelConfig = defaultKernelConfig.map((entry) =>
   entry.id === 'replicad' ? { ...entry, options: { ...entry.options, withExceptions: true } } : entry,
 );
+
+/**
+ * Default middleware configuration for all kernel workers.
+ *
+ * Order determines onion-model wrapping (first = outermost):
+ * 1. ParameterCache -- caches getParameters results
+ * 2. GeometryCache -- checks/writes geometry cache
+ * 3. GltfCoordinateTransform -- Y-up/meters -> Z-up/mm
+ * 4. GltfEdgeDetection -- adds edge primitives for sharp edge rendering
+ *
+ * Edge detection is innermost so coordinate transform can transform both
+ * mesh and edge primitives on the return journey.
+ */
+export const defaultMiddlewareConfig: MiddlewareConfig = [
+  { url: parameterCacheUrl },
+  { url: geometryCacheUrl },
+  { url: gltfCoordinateTransformUrl },
+  { url: gltfEdgeDetectionUrl },
+];

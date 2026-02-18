@@ -10,13 +10,13 @@ import {
   createMiddlewareLogger,
   createMiddlewareState,
   createMiddlewareRuntime,
-} from '#components/geometry/kernel/utils/kernel-middleware.js';
+} from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { createMockFilesystem } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 // Mock dependencies for testing
 const mockDependencies: readonly Dependency[] = [
   { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-  { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0 },
+  { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, configHash: 'mock-config-hash' },
   { type: 'framework', name: 'tau', version: '0.0.1' },
 ];
 

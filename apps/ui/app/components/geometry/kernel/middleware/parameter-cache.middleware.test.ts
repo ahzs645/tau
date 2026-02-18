@@ -4,14 +4,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type {
-  GetParametersResult,
-  GetParametersInput,
-  GetParametersHandler,
-  Dependency,
-  KernelMiddlewareRuntime,
-} from '@taucad/types';
-import { parameterCacheMiddleware } from '#components/geometry/kernel/utils/parameter-cache.middleware.js';
+import type { GetParametersResult, GetParametersHandler, Dependency } from '@taucad/types';
+import { parameterCacheMiddleware } from '#components/geometry/kernel/middleware/parameter-cache.middleware.js';
 import { createMockRuntime, createMockInput } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 /**
@@ -20,7 +14,7 @@ import { createMockRuntime, createMockInput } from '#components/geometry/kernel/
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0 },
+    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, configHash: 'mock-config-hash' },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -85,11 +79,7 @@ function createCacheContext(options?: {
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-}): {
-  input: GetParametersInput;
-
-  runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
-} {
+}) {
   const serializedContent = options?.cachedResult ? createSerializedCacheContent(options.cachedResult) : '';
 
   const runtime = createMockRuntime({
@@ -103,8 +93,7 @@ function createCacheContext(options?: {
 
   return {
     input: createMockInput(options?.input),
-
-    runtime: runtime as KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>,
+    runtime,
   };
 }
 

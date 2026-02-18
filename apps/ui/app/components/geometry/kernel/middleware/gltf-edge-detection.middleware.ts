@@ -3,14 +3,9 @@ import { NodeIO } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import type { GeometryGltf } from '@taucad/types';
 import { isKernelSuccess } from '@taucad/types/guards';
+import { z } from 'zod';
 import { detectEdges } from '#components/geometry/kernel/utils/edge-detection.js';
-import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
-
-/**
- * Default edge detection threshold in degrees.
- * Edges with dihedral angle greater than this value are considered sharp.
- */
-const defaultEdgeThresholdDegrees = 30;
+import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 
 /**
  * Edge color in RGBA format (normalized 0-1).
@@ -43,7 +38,7 @@ const primitiveModeLines = 1;
  * @param document - The glTF document to process
  * @returns Whether any edge primitives were added
  */
-function addEdgePrimitivesToDocument(document: Document): boolean {
+function addEdgePrimitivesToDocument(document: Document, thresholdDegrees: number): boolean {
   let edgesAdded = false;
 
   // Create unlit extension for edge materials (lazily initialized)
@@ -106,7 +101,7 @@ function addEdgePrimitivesToDocument(document: Document): boolean {
       }
 
       // Run edge detection
-      const edgeResult = detectEdges(positions, indices, defaultEdgeThresholdDegrees);
+      const edgeResult = detectEdges(positions, indices, thresholdDegrees);
 
       // Skip if no edges detected
       if (edgeResult.positions.length === 0) {
@@ -146,14 +141,14 @@ function addEdgePrimitivesToDocument(document: Document): boolean {
  * @param geometry - The GLTF geometry to process
  * @returns The geometry with edge primitives added, or the original if no edges were needed
  */
-async function addEdgePrimitivesToGltf(geometry: GeometryGltf): Promise<GeometryGltf> {
+async function addEdgePrimitivesToGltf(geometry: GeometryGltf, thresholdDegrees: number): Promise<GeometryGltf> {
   const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
 
   // Read the GLTF document from the binary data
   const document = await io.readBinary(geometry.content);
 
   // Add edge primitives to meshes that don't already have them
-  const hadEdgesAdded = addEdgePrimitivesToDocument(document);
+  const hadEdgesAdded = addEdgePrimitivesToDocument(document, thresholdDegrees);
 
   // If no edges were added (all meshes had native edges), return the original
   // geometry to avoid unnecessary re-serialization through @gltf-transform
@@ -187,7 +182,11 @@ async function addEdgePrimitivesToGltf(geometry: GeometryGltf): Promise<Geometry
 export const gltfEdgeDetectionMiddleware = createKernelMiddleware({
   name: 'GltfEdgeDetection',
 
-  async wrapCreateGeometry(input, handler, { logger }) {
+  configSchema: z.object({
+    thresholdDegrees: z.number().default(30),
+  }),
+
+  async wrapCreateGeometry(input, handler, { logger, config }) {
     // Execute downstream (no pre-processing needed)
     const result = await handler(input);
 
@@ -203,7 +202,7 @@ export const gltfEdgeDetectionMiddleware = createKernelMiddleware({
       result.data.map(async (geometry) => {
         // Only process GLTF format geometries
         if (geometry.format === 'gltf') {
-          return addEdgePrimitivesToGltf(geometry);
+          return addEdgePrimitivesToGltf(geometry, config.thresholdDegrees);
         }
 
         // Return other formats unchanged (e.g., SVG)

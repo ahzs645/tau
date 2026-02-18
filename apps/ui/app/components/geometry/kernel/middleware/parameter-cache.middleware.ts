@@ -11,7 +11,7 @@
  */
 
 import type { GetParametersResult } from '@taucad/types';
-import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
+import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { joinPath } from '#utils/path.utils.js';
 
 /**

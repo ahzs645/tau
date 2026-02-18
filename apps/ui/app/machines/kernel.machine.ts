@@ -13,6 +13,7 @@ import type {
   OnWorkerLog,
   KernelConfig,
   KernelWorkerInterface,
+  MiddlewareConfig,
 } from '@taucad/types';
 import { isKernelSuccess } from '@taucad/types/guards';
 import type { JSONSchema7 } from 'json-schema';
@@ -167,6 +168,7 @@ const createWorkersActor = fromPromise<
           proxy({ onLog }),
           transfer({ fileManagerPort: port }, [port]),
           entry.options ?? {},
+          context.middlewareConfig,
         ),
       );
     }
@@ -482,7 +484,8 @@ type KernelActorNames = keyof typeof kernelActors;
 type KernelEventInternal =
   | { type: 'initializeKernel'; parentRef: CadActor }
   | { type: 'createGeometry'; file: GeometryFile; parameters: Record<string, unknown> }
-  | { type: 'exportGeometry'; format: ExportFormat };
+  | { type: 'exportGeometry'; format: ExportFormat }
+  | { type: 'configureMiddleware'; middlewareConfig: MiddlewareConfig };
 
 // Define the events that the workers can send to the kernel machine
 type KernelEventWorker = {
@@ -502,6 +505,7 @@ type KernelEvent = KernelEventExternalDone | KernelEventInternal;
 // Interface defining the context for the Kernel machine
 type KernelContext = {
   kernelConfig: KernelConfig;
+  middlewareConfig: MiddlewareConfig;
   workers: Map<string, Worker>;
   wrappedWorkers: Map<string, Remote<KernelWorkerInterface>>;
   workerSelectionCache: Map<string, string>;
@@ -513,6 +517,7 @@ type KernelContext = {
 type KernelInput = {
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
   kernelConfig: KernelConfig;
+  middlewareConfig: MiddlewareConfig;
 };
 
 /**
@@ -578,6 +583,7 @@ export const kernelMachine = setup({
   id: 'kernel',
   context: ({ input }) => ({
     kernelConfig: input.kernelConfig,
+    middlewareConfig: input.middlewareConfig,
     workers: new Map(),
     wrappedWorkers: new Map(),
     workerSelectionCache: new Map(),
@@ -637,6 +643,22 @@ export const kernelMachine = setup({
         },
         exportGeometry: {
           target: 'exporting',
+        },
+        configureMiddleware: {
+          actions: [
+            assign({
+              middlewareConfig({ event }) {
+                assertEvent(event, 'configureMiddleware');
+                return event.middlewareConfig;
+              },
+            }),
+            ({ context, event }) => {
+              assertEvent(event, 'configureMiddleware');
+              for (const wrappedWorker of context.wrappedWorkers.values()) {
+                void wrappedWorker.configureMiddleware(event.middlewareConfig);
+              }
+            },
+          ],
         },
       },
     },

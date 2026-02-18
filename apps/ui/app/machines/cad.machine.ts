@@ -1,6 +1,14 @@
 import { assign, assertEvent, setup, sendTo, enqueueActions } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { CodeIssue, Geometry, ExportFormat, KernelIssue, GeometryFile, KernelConfig } from '@taucad/types';
+import type {
+  CodeIssue,
+  Geometry,
+  ExportFormat,
+  KernelIssue,
+  GeometryFile,
+  KernelConfig,
+  MiddlewareConfig,
+} from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { kernelMachine } from '#machines/kernel.machine.js';
@@ -43,6 +51,7 @@ type CadEvent =
   | { type: 'setCodeIssues'; errors: CadContext['codeIssues'] }
   | { type: 'exportGeometry'; format: ExportFormat }
   | { type: 'setRenderTimeout'; timeout: number }
+  | { type: 'configureMiddleware'; middlewareConfig: MiddlewareConfig }
   | KernelEventExternal;
 
 type CadEmitted =
@@ -55,6 +64,7 @@ type CadInput = {
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   kernelConfig: KernelConfig;
+  middlewareConfig: MiddlewareConfig;
 };
 
 /**
@@ -100,6 +110,16 @@ export const cadMachine = setup({
         return {
           type: 'exportGeometry',
           format: event.format,
+        };
+      },
+    ),
+    forwardConfigureMiddleware: sendTo(
+      ({ context }) => context.kernelRef,
+      ({ event }) => {
+        assertEvent(event, 'configureMiddleware');
+        return {
+          type: 'configureMiddleware',
+          middlewareConfig: event.middlewareConfig,
         };
       },
     ),
@@ -331,6 +351,7 @@ export const cadMachine = setup({
       input: {
         fileManagerRef: input.fileManagerRef,
         kernelConfig: input.kernelConfig,
+        middlewareConfig: input.middlewareConfig,
       },
     }),
     exportedBlob: undefined,
@@ -342,6 +363,11 @@ export const cadMachine = setup({
     jsonSchema: undefined,
     renderTimeout: defaultRenderTimeout,
   }),
+  on: {
+    configureMiddleware: {
+      actions: 'forwardConfigureMiddleware',
+    },
+  },
   initial: 'booting',
   states: {
     // The booting state is used when booting the kernel.

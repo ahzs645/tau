@@ -12,7 +12,7 @@ import type {
   CreateGeometryInput,
   KernelMiddlewareRuntime,
 } from '@taucad/types';
-import { geometryCacheMiddleware } from '#components/geometry/kernel/utils/geometry-cache.middleware.js';
+import { geometryCacheMiddleware } from '#components/geometry/kernel/middleware/geometry-cache.middleware.js';
 import {
   createMockRuntime,
   createMockInput,
@@ -26,7 +26,7 @@ import {
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0 },
+    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, configHash: 'mock-config-hash' },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -52,35 +52,40 @@ function createSerializedCacheContent(content: Uint8Array<ArrayBuffer>): Uint8Ar
  * Create input and runtime for cache testing.
  */
 
+type GeometryCacheConfig = { maxEntries: number; maxAgeMs: number };
+
 function createCacheTestContext(options?: {
   cacheExists?: boolean;
   cachedContent?: Uint8Array<ArrayBuffer>;
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
+  config?: GeometryCacheConfig;
 }): {
   input: CreateGeometryInput;
 
-  runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
+  runtime: KernelMiddlewareRuntime<Record<string, never>, GeometryCacheConfig> &
+    ReturnType<typeof createMockRuntime<Record<string, never>, GeometryCacheConfig>>;
 } {
   // Create serialized content if cachedContent is provided (MessagePack binary format)
   const serializedContent = options?.cachedContent
     ? createSerializedCacheContent(options.cachedContent)
     : new Uint8Array();
 
-  const runtime = createMockRuntime({
+  const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
     filesystemOverrides: {
       existsResult: options?.cacheExists ?? false,
       readFileResult: serializedContent,
     },
     dependencies: options?.dependencies ?? createMockDependencies(),
     dependencyHash: options?.dependencyHash ?? 'a'.repeat(64),
+    config: options?.config ?? { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
   });
 
   return {
     input: createMockInput(options?.input),
 
-    runtime: runtime as KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>,
+    runtime,
   };
 }
 
@@ -434,13 +439,14 @@ describe('geometryCacheMiddleware', () => {
       const cachedContent = new Uint8Array([1, 2, 3]);
       const serializedContent = createSerializedCacheContent(cachedContent);
 
-      const runtime = createMockRuntime({
+      const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
         filesystemOverrides: {
           existsResult: true,
           readFileResult: serializedContent,
         },
         dependencies: createMockDependencies(),
         dependencyHash,
+        config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -448,7 +454,7 @@ describe('geometryCacheMiddleware', () => {
 
       const { wrapCreateGeometry } = geometryCacheMiddleware;
 
-      await wrapCreateGeometry!(input, handler, runtime as KernelMiddlewareRuntime);
+      await wrapCreateGeometry!(input, handler, runtime);
 
       // Verify cache was checked at the correct path using the dependency hash
       expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
@@ -459,12 +465,13 @@ describe('geometryCacheMiddleware', () => {
       const dependencyHash = 'hash2'.repeat(13).slice(0, 64);
 
       // Cache doesn't exist for this new hash
-      const runtime = createMockRuntime({
+      const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
         filesystemOverrides: {
           existsResult: false,
         },
         dependencies: createMockDependencies([{ type: 'parameter', parametersHash: 'newParams123' }]),
         dependencyHash,
+        config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -474,7 +481,7 @@ describe('geometryCacheMiddleware', () => {
 
       const { wrapCreateGeometry } = geometryCacheMiddleware;
 
-      await wrapCreateGeometry!(input, handler, runtime as KernelMiddlewareRuntime);
+      await wrapCreateGeometry!(input, handler, runtime);
 
       // Handler should be called because cache missed
       expect(handler).toHaveBeenCalled();
@@ -485,13 +492,14 @@ describe('geometryCacheMiddleware', () => {
       const cachedContent = new Uint8Array([1, 2, 3]);
       const serializedContent = createSerializedCacheContent(cachedContent);
 
-      const runtime = createMockRuntime({
+      const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
         filesystemOverrides: {
           existsResult: true,
           readFileResult: serializedContent,
         },
         dependencies: createMockDependencies([{ type: 'parameter', parametersHash: 'sameParams' }]),
         dependencyHash,
+        config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -500,7 +508,7 @@ describe('geometryCacheMiddleware', () => {
 
       const { wrapCreateGeometry } = geometryCacheMiddleware;
 
-      await wrapCreateGeometry!(input, handler, runtime as KernelMiddlewareRuntime);
+      await wrapCreateGeometry!(input, handler, runtime);
 
       // Handler should NOT be called because cache hit
       expect(handler).not.toHaveBeenCalled();

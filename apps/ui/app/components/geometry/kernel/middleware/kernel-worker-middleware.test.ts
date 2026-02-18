@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import type { CreateGeometryResult, GeometryGltf, OnWorkerLog } from '@taucad/types';
-import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
+import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { MockKernelWorker } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
 describe('kernel-worker middleware onion chain', () => {
@@ -389,6 +389,106 @@ describe('kernel-worker middleware onion chain', () => {
       expect(result.issues[0]?.message).toBe('main-issue');
       expect(result.issues[1]?.message).toBe('M2-processed');
       expect(result.issues[2]?.message).toBe('M1-processed');
+    });
+  });
+
+  describe('enabled flag', () => {
+    it('should skip hooks of disabled middleware', async () => {
+      const executionOrder: string[] = [];
+
+      const middleware1 = createTrackingMiddleware('M1', executionOrder);
+      const middleware2 = createTrackingMiddleware('M2', executionOrder);
+      const middleware3 = createTrackingMiddleware('M3', executionOrder);
+
+      const worker = new MockKernelWorker({
+        middleware: [middleware1, middleware2, middleware3],
+        middlewareEnabled: [true, false, true],
+        computeResult: successResult,
+        onLog: onLog as OnWorkerLog,
+      });
+
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
+        executionOrder.push('main');
+        return successResult;
+      });
+
+      await worker.runCreateGeometry();
+
+      expect(executionOrder).toEqual([
+        //
+        'M1-before',
+        'M3-before',
+        'main',
+        'M3-after',
+        'M1-after',
+      ]);
+
+      createGeometrySpy.mockRestore();
+    });
+
+    it('should respect middleware-level enabled=false default', async () => {
+      const executionOrder: string[] = [];
+
+      const disabledMiddleware = createKernelMiddleware({
+        name: 'DisabledByDefault',
+        enabled: false,
+        async wrapCreateGeometry(request, handler) {
+          executionOrder.push('disabled-before');
+          const result = await handler(request);
+          executionOrder.push('disabled-after');
+          return result;
+        },
+      });
+
+      const worker = new MockKernelWorker({
+        middleware: [disabledMiddleware],
+        computeResult: successResult,
+        onLog: onLog as OnWorkerLog,
+      });
+
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
+        executionOrder.push('main');
+        return successResult;
+      });
+
+      await worker.runCreateGeometry();
+
+      expect(executionOrder).toEqual(['main']);
+
+      createGeometrySpy.mockRestore();
+    });
+
+    it('should allow entry-level enabled to override middleware default', async () => {
+      const executionOrder: string[] = [];
+
+      const disabledMiddleware = createKernelMiddleware({
+        name: 'DisabledByDefault',
+        enabled: false,
+        async wrapCreateGeometry(request, handler) {
+          executionOrder.push('overridden-before');
+          const result = await handler(request);
+          executionOrder.push('overridden-after');
+          return result;
+        },
+      });
+
+      const worker = new MockKernelWorker({
+        middleware: [disabledMiddleware],
+        middlewareEnabled: [true],
+        computeResult: successResult,
+        onLog: onLog as OnWorkerLog,
+      });
+
+      const createGeometrySpy = vi.spyOn(worker as never, 'createGeometry').mockImplementation(async () => {
+        executionOrder.push('main');
+        return successResult;
+      });
+
+      await worker.runCreateGeometry();
+
+      expect(executionOrder).toEqual(['overridden-before', 'main', 'overridden-after']);
+
+      createGeometrySpy.mockRestore();
     });
   });
 

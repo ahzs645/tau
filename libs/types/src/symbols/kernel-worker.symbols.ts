@@ -37,3 +37,6 @@ export const getExportFormats: unique symbol = Symbol('getExportFormats');
 
 /** Symbol for the getMiddleware method - called internally and overridable by tests */
 export const getMiddleware: unique symbol = Symbol('getMiddleware');
+
+/** Symbol for the configureMiddleware method - called by framework to reconfigure middleware at runtime */
+export const configureMiddleware: unique symbol = Symbol('configureMiddleware');

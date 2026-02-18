@@ -2,7 +2,7 @@ import type { Document } from '@gltf-transform/core';
 import { NodeIO } from '@gltf-transform/core';
 import type { GeometryGltf } from '@taucad/types';
 import { isKernelSuccess } from '@taucad/types/guards';
-import { createKernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
+import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 
 /**
  * Scale factor for converting meters to millimeters.

@@ -5,14 +5,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { Document, NodeIO, Accessor } from '@gltf-transform/core';
-import type {
-  CreateGeometryInput,
-  CreateGeometryHandler,
-  GeometryGltf,
-  GeometrySvg,
-  KernelMiddlewareRuntime,
-} from '@taucad/types';
-import { gltfCoordinateTransformMiddleware } from '#components/geometry/kernel/utils/gltf-coordinate-transform.middleware.js';
+import type { CreateGeometryHandler, GeometryGltf, GeometrySvg } from '@taucad/types';
+import { gltfCoordinateTransformMiddleware } from '#components/geometry/kernel/middleware/gltf-coordinate-transform.middleware.js';
 import {
   createMockRuntime,
   createMockInput,
@@ -109,15 +103,10 @@ async function readGltfPositions(data: Uint8Array<ArrayBuffer>): Promise<number[
 /**
  * Create input and runtime for testing.
  */
-function createTransformContext(): {
-  input: CreateGeometryInput;
-
-  runtime: KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>;
-} {
+function createTransformContext() {
   return {
     input: createMockInput(),
-
-    runtime: createMockRuntime() as KernelMiddlewareRuntime & ReturnType<typeof createMockRuntime>,
+    runtime: createMockRuntime(),
   };
 }
 

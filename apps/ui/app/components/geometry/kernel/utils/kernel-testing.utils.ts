@@ -27,12 +27,14 @@ import type {
   CreateGeometryInput,
   ExportGeometryInput,
   OnWorkerLog,
+  MiddlewareConfig,
 } from '@taucad/types';
 import { dirname } from '@zenfs/core/path';
 import { expose } from 'comlink';
 import { vi } from 'vitest';
 import * as kernelSymbols from '@taucad/types/symbols';
-import type { KernelMiddleware } from '#components/geometry/kernel/utils/kernel-middleware.js';
+import type { KernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
+import type { ResolvedMiddleware } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { configureFilesystem, resetFilesystem, fs } from '#filesystem/zenfs-config.js';
 import { fileManager } from '#machines/file-manager.js';
@@ -89,6 +91,8 @@ export type InitializeWorkerOptions = {
   onLog?: OnWorkerLog;
   /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
   workerOptions?: Record<string, unknown>;
+  /** Middleware configuration (defaults to empty array for tests that bypass dynamic loading) */
+  middlewareConfig?: MiddlewareConfig;
 };
 
 /**
@@ -122,6 +126,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
     },
     { fileManagerPort: channel.port2 },
     options?.workerOptions ?? {},
+    options?.middlewareConfig ?? [],
   );
 
   return worker;
@@ -301,20 +306,27 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
 /** Default mock dependency hash for testing */
 const defaultMockDependencyHash = 'a'.repeat(64);
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export function createMockRuntime<T extends Record<string, unknown> = {}>(options?: {
+export function createMockRuntime<
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  State extends Record<string, unknown> = {},
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  Config extends Record<string, unknown> = {},
+>(options?: {
   filesystemOverrides?: MockFilesystemOptions;
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-}): KernelMiddlewareRuntime<T> & {
+  config?: Config;
+}): KernelMiddlewareRuntime<State, Config> & {
   logger: ReturnType<typeof createMockLogger>;
   filesystem: MockFilesystem;
-  state: ReturnType<typeof createMockState<T>>;
+  state: ReturnType<typeof createMockState<State>>;
 } {
   return {
     logger: createMockLogger(),
     filesystem: createMockFilesystem(options?.filesystemOverrides),
-    state: createMockState<T>(),
+    state: createMockState<State>(),
+
+    config: (options?.config ?? {}) as Config,
     dependencies: options?.dependencies ?? [],
     dependencyHash: options?.dependencyHash ?? defaultMockDependencyHash,
   };
@@ -522,6 +534,10 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
 export type MockKernelWorkerOptions = {
   /** Middleware array to use (overrides default middleware) */
   middleware: KernelMiddleware[];
+  /** Resolved configs parallel to the middleware array (defaults to empty objects) */
+  middlewareConfigs?: Array<Record<string, unknown>>;
+  /** Per-middleware enabled overrides (defaults to middleware.enabled ?? true) */
+  middlewareEnabled?: boolean[];
   /** Result to return from createGeometry */
   computeResult?: CreateGeometryResult;
   /** Custom onLog handler */
@@ -537,12 +553,17 @@ export type MockKernelWorkerOptions = {
 export class MockKernelWorker extends KernelWorker {
   protected override readonly name = 'MockKernelWorker';
 
-  private readonly testMiddleware: KernelMiddleware[];
+  private readonly testResolvedMiddleware: ResolvedMiddleware[];
   private readonly mockComputeResult: CreateGeometryResult;
 
   public constructor(options: MockKernelWorkerOptions) {
     super();
-    this.testMiddleware = options.middleware;
+    this.testResolvedMiddleware = options.middleware.map((middleware, index) => ({
+      middleware,
+      config: options.middlewareConfigs?.[index] ?? {},
+      url: `mock://${middleware.name}`,
+      enabled: options.middlewareEnabled?.[index] ?? middleware.enabled ?? true,
+    }));
     this.mockComputeResult =
       options.computeResult ?? createSuccessResult([{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }]);
 
@@ -572,10 +593,10 @@ export class MockKernelWorker extends KernelWorker {
   }
 
   /**
-   * Override getMiddleware to return test middleware.
+   * Override getMiddleware to return test middleware with resolved configs.
    */
-  public override [kernelSymbols.getMiddleware](): KernelMiddleware[] {
-    return this.testMiddleware;
+  public override [kernelSymbols.getMiddleware](): ResolvedMiddleware[] {
+    return this.testResolvedMiddleware;
   }
 
   // Stub implementations of abstract methods
