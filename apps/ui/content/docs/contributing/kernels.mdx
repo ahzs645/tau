@@ -13,11 +13,10 @@ Tau's multi-kernel architecture allows different CAD engines to be plugged in as
 ### What You'll Create
 
 1. **Worker** — Runs in a Web Worker, handles geometry computation
-2. **Type Export** — Prevents Vite from bundling the worker twice
-3. **Kernel Registry Entry** — Configuration in the types library
-4. **Machine Wiring** — Integration with the kernel state machine
-5. **Examples** (optional) — Sample builds to showcase the kernel
-6. **AI Configuration** (optional) — Prompts for AI-assisted modeling
+2. **Kernel Registry Entry** — Configuration in the types library
+3. **Worker Registration** — Add worker URL and options to the kernel config
+4. **Examples** (optional) — Sample builds to showcase the kernel
+5. **AI Configuration** (optional) — Prompts for AI-assisted modeling
 
 ## Step 1: Create the Worker
 
@@ -143,58 +142,44 @@ protected async exportGeometry(
 }
 ```
 
-### Create the Types File
+## Step 2: Register the Worker
 
-Create a sibling file to prevent Vite double-bundling:
+The kernel machine dynamically creates workers from a `KernelConfig` array injected at startup. Each entry bundles an `id`, `url`, and optional `options`. Array position defines `canHandle` priority (first match wins).
 
-```
-apps/ui/app/components/geometry/kernel/<kernel>/<kernel>.worker.types.ts
-```
+### First-party kernels
 
-```typescript
-// eslint-disable-next-line no-barrel-files/no-barrel-files -- Type re-export prevents Vite from bundling worker twice
-export type { MyKernelWorkerInterface } from '#components/geometry/kernel/<kernel>/<kernel>.worker.js';
-```
-
-## Step 2: Register in Kernel Machine
-
-Edit `apps/ui/app/machines/kernel.machine.ts`:
-
-### Add to Provider Union
+For kernels shipped with Tau, add an entry to `defaultKernelConfig` in `apps/ui/app/constants/kernel-workers.ts`:
 
 ```typescript
-type KernelProvider = CadKernelProvider | 'tau' | 'jscad' | 'mykernel';
+import myKernelWorkerUrl from '#components/geometry/kernel/mykernel/mykernel.worker.js?url';
+
+export const defaultKernelConfig: KernelConfig = [
+  // ... existing entries (order = canHandle priority)
+  { id: 'mykernel', url: myKernelWorkerUrl, options: { /* init options */ } },
+  { id: 'tau', url: tauWorkerUrl }, // tau is typically last
+];
 ```
 
-### Import the Worker
+### Third-party kernels
+
+External consumers can extend the default config without modifying Tau's source:
 
 ```typescript
-import type { MyKernelWorkerInterface as MyKernelWorker } from '#components/geometry/kernel/mykernel/mykernel.worker.types.js';
-import MyKernelBuilderWorker from '#components/geometry/kernel/mykernel/mykernel.worker.js?worker';
+import { defaultKernelConfig } from '#constants/kernel-workers.js';
+import type { KernelConfig } from '@taucad/types';
+
+const extendedConfig: KernelConfig = [
+  ...defaultKernelConfig,
+  { id: 'manifold', url: manifoldWorkerUrl },
+];
+
+// Pass to BuildProvider
+<BuildProvider buildId={id} kernelConfig={extendedConfig}>
 ```
 
-### Add to Workers Map
+The `id` field accepts any string -- known kernel names get autocomplete, but arbitrary third-party IDs work without type errors.
 
-```typescript
-const workers = {
-  // ... existing workers
-  mykernel: MyKernelBuilderWorker,
-} as const satisfies Partial<Record<KernelProvider, new () => Worker>>;
-```
-
-### Add to Priority Array
-
-```typescript
-const workerPriority: KernelProvider[] = ['openscad', 'zoo', 'replicad', 'jscad', 'mykernel', 'tau'];
-```
-
-### Wire Up in `createWorkersActor`
-
-Add worker creation, wrapping, and initialization in the `createWorkersActor` promise actor.
-
-### Add Cleanup in `destroyWorkers`
-
-Ensure the worker is terminated in the cleanup action.
+No changes to `kernel.machine.ts` are needed -- it dynamically creates and initializes all workers from the injected config.
 
 ## Step 3: Add Kernel Configuration
 

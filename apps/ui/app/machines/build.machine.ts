@@ -1,7 +1,7 @@
 import { assign, assertEvent, setup, fromPromise, emit, enqueueActions } from 'xstate';
 import type { ActorRefFrom, OutputFrom, DoneActorEvent, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
-import type { Build } from '@taucad/types';
+import type { Build, KernelConfig } from '@taucad/types';
 import { isBrowser } from '#constants/browser.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
@@ -21,6 +21,7 @@ export type BuildContext = {
   error: Error | undefined;
   isLoading: boolean;
   shouldLoadModelOnStart: boolean;
+  kernelConfig: KernelConfig;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   gitRef: ActorRefFrom<typeof gitMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
@@ -39,6 +40,7 @@ type BuildInput = {
   buildId: string;
   shouldLoadModelOnStart?: boolean;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
+  kernelConfig: KernelConfig;
 };
 
 // Define the actors that the machine can invoke
@@ -337,6 +339,7 @@ export const buildMachine = setup({
               shouldInitializeKernelOnStart: false,
               logRef: ctx.logRef,
               fileManagerRef: ctx.fileManagerRef,
+              kernelConfig: ctx.kernelConfig,
             },
           });
 
@@ -387,6 +390,7 @@ export const buildMachine = setup({
               shouldInitializeKernelOnStart: false,
               logRef: ctx.logRef,
               fileManagerRef: ctx.fileManagerRef,
+              kernelConfig: ctx.kernelConfig,
             },
           });
 
@@ -423,6 +427,7 @@ export const buildMachine = setup({
             shouldInitializeKernelOnStart: true,
             logRef: ctx.logRef,
             fileManagerRef: ctx.fileManagerRef,
+            kernelConfig: ctx.kernelConfig,
           },
         });
 
@@ -543,7 +548,7 @@ export const buildMachine = setup({
 }).createMachine({
   id: 'build',
   context({ input, spawn, self }) {
-    const { buildId, shouldLoadModelOnStart = true, fileManagerRef } = input;
+    const { buildId, shouldLoadModelOnStart = true, fileManagerRef, kernelConfig } = input;
 
     const gitRef = spawn('git', {
       id: `git-${buildId}`,
@@ -567,6 +572,7 @@ export const buildMachine = setup({
       error: undefined,
       isLoading: true,
       shouldLoadModelOnStart,
+      kernelConfig,
       fileManagerRef,
       gitRef,
       viewGraphics,

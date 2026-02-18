@@ -4,6 +4,7 @@ import type { Geometry, GeometryFile } from '@taucad/types';
 import { cadMachine } from '#machines/cad.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
+import { defaultKernelConfig } from '#constants/kernel.constants.js';
 
 /**
  * Options for the useCadFiles hook.
@@ -95,7 +96,7 @@ export function useCadFiles(options: UseCadFilesOptions): UseCadFilesResult {
     input: {
       shouldInitializeKernelOnStart: false,
       fileManagerRef,
-      // No graphicsRef or logRef - we just want geometries
+      kernelConfig: defaultKernelConfig,
     },
   });
 

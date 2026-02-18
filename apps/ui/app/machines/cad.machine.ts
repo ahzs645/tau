@@ -1,6 +1,6 @@
 import { assign, assertEvent, setup, sendTo, enqueueActions } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { CodeIssue, Geometry, ExportFormat, KernelIssue, GeometryFile } from '@taucad/types';
+import type { CodeIssue, Geometry, ExportFormat, KernelIssue, GeometryFile, KernelConfig } from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { kernelMachine } from '#machines/kernel.machine.js';
@@ -54,6 +54,7 @@ type CadInput = {
   shouldInitializeKernelOnStart: boolean;
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
+  kernelConfig: KernelConfig;
 };
 
 /**
@@ -327,7 +328,10 @@ export const cadMachine = setup({
     kernelIssues: new Map(),
     codeIssues: [],
     kernelRef: spawn(kernelMachine, {
-      input: { fileManagerRef: input.fileManagerRef },
+      input: {
+        fileManagerRef: input.fileManagerRef,
+        kernelConfig: input.kernelConfig,
+      },
     }),
     exportedBlob: undefined,
     shouldInitializeKernelOnStart: input.shouldInitializeKernelOnStart,

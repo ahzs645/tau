@@ -5,6 +5,7 @@ import { fromPromise, waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Remote } from 'comlink';
 import { useQueryClient } from '@tanstack/react-query';
+import type { KernelConfig } from '@taucad/types';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import type { ObjectStoreWorker } from '#hooks/object-store.worker.js';
 import { buildMachine } from '#machines/build.machine.js';
@@ -15,6 +16,7 @@ import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import { inspect } from '#machines/inspector.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
+import { defaultKernelConfig } from '#constants/kernel.constants.js';
 
 type BuildContextType = {
   buildId: string;
@@ -48,11 +50,16 @@ export function BuildProvider({
   buildId,
   provide,
   input,
+  kernelConfig,
 }: {
   readonly children: ReactNode;
   readonly buildId: string;
   readonly provide?: Parameters<typeof buildMachine.provide>[0];
-  readonly input?: Omit<Parameters<typeof useActorRef<typeof buildMachine>>[1]['input'], 'buildId' | 'fileManagerRef'>;
+  readonly input?: Omit<
+    Parameters<typeof useActorRef<typeof buildMachine>>[1]['input'],
+    'buildId' | 'fileManagerRef' | 'kernelConfig'
+  >;
+  readonly kernelConfig?: KernelConfig;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   // Create the build machine actor - it will auto-load based on buildId
@@ -80,7 +87,12 @@ export function BuildProvider({
       ...provide,
     }),
     {
-      input: { buildId, fileManagerRef: fileManager.fileManagerRef, ...input },
+      input: {
+        buildId,
+        fileManagerRef: fileManager.fileManagerRef,
+        kernelConfig: kernelConfig ?? defaultKernelConfig,
+        ...input,
+      },
       inspect,
     },
   );
