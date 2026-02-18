@@ -90,7 +90,6 @@ export type KnownKernelProvider = KernelProvider | 'tau';
  * Provides intellisense for first-party kernels while accepting arbitrary
  * third-party IDs (e.g. `'manifold'`, `'cadquery'`) without type errors.
  */
-// eslint-disable-next-line @typescript-eslint/ban-types -- `string & {}` preserves autocomplete for known literals
 export type KernelProviderId = KnownKernelProvider | (string & {});
 
 /**
