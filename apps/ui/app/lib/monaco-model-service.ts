@@ -572,15 +572,23 @@ export class MonacoModelService {
 
   /**
    * Dispose all Monaco models managed by this service.
+   * Only disposes models tracked by this service (editorHolds, backgroundAccessTimes, syncedPaths),
+   * leaving Monaco internals (TypeScript lib files, ATA-injected type declarations, etc.) intact.
    */
   private disposeAllModels(): void {
     if (!this.monaco) {
       return;
     }
 
-    const models = this.monaco.editor.getModels();
-    for (const model of models) {
-      model.dispose();
+    const trackedPaths = new Set([
+      ...this.editorHolds.keys(),
+      ...this.backgroundAccessTimes.keys(),
+      ...this.syncedPaths,
+    ]);
+
+    for (const path of trackedPaths) {
+      const uri = this.createUri(path);
+      this.monaco.editor.getModel(uri)?.dispose();
     }
   }
 
