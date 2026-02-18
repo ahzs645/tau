@@ -84,10 +84,25 @@ export const configureMonaco = async (): Promise<void> => {
 };
 
 /**
- * Register completions for all supported Monaco languages.
+ * Languages that should use monacopilot AI code completion.
+ *
+ * KCL and OpenSCAD register their own completion providers via language
+ * contributions ({@link kclContribution}, {@link openscadContribution}).
+ * Binary/non-code formats (stepfile, stl, usd) don't need AI completion.
+ */
+export const completionLanguages = [
+  monacoLanguages.typescript,
+  monacoLanguages.typescriptreact,
+  monacoLanguages.javascript,
+  monacoLanguages.javascriptreact,
+  monacoLanguages.json,
+] as const;
+
+/**
+ * Register completions for languages that use monacopilot AI code completion.
  *
  * One completion provider is registered per language defined in
- * {@link monacoLanguages}. The returned {@link CompletionRegistration}
+ * {@link completionLanguages}. The returned {@link CompletionRegistration}
  * aggregates every individual registration so the caller can
  * deregister, trigger, or update options for all of them at once.
  *
@@ -99,7 +114,7 @@ export const registerCompletions = (
   editor: Monaco.editor.IStandaloneCodeEditor,
   monaco: typeof Monaco,
 ): CompletionRegistration => {
-  const registrations: CompletionRegistration[] = Object.values(monacoLanguages).map((language) =>
+  const registrations: CompletionRegistration[] = completionLanguages.map((language) =>
     registerCompletion(monaco, editor, {
       endpoint: `${ENV.TAU_API_URL}/v1/code-completion`,
       language,
