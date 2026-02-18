@@ -59,6 +59,16 @@ export type BundlerOptions = {
 };
 
 // =============================================================================
+// HTTP Fetch Limits
+// =============================================================================
+
+/** Maximum time (ms) to wait for a remote HTTP module before aborting. */
+export const httpFetchTimeoutMs = 30_000;
+
+/** Maximum response size (bytes) for fetched HTTP modules (10 MB). */
+export const httpFetchMaxSizeBytes = 10 * 1024 * 1024;
+
+// =============================================================================
 // WASM Configuration
 // =============================================================================
 
@@ -269,7 +279,7 @@ function resolveEsbuildFilePath(filePath: string): string {
 // ZenFS Plugin
 // =============================================================================
 
-type ZenFsPluginOptions = {
+export type ZenFsPluginOptions = {
   filesystem: KernelFilesystem;
   moduleManager: ModuleManager;
   builtinModules: Map<string, BuiltinModule>;
@@ -295,7 +305,7 @@ type ZenFsPluginOptions = {
  * 2. CDN modules -> ensure cached at `/node_modules/`, then `zenfs` namespace
  * 3. Relative/absolute imports -> resolved via filesystem with extension probing
  */
-function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
+export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
   const { filesystem, moduleManager, builtinModules, projectPath, entryPath, autoExportNames } = options;
 
   // Path conversion helpers: esbuild sees project-relative paths in the zenfs namespace,
@@ -421,14 +431,40 @@ function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // -----------------------------------------------------------------
       build.onLoad({ filter: /.*/, namespace: 'http-url' }, async (args) => {
         try {
-          const response = await fetch(args.path);
+          const response = await fetch(args.path, {
+            signal: AbortSignal.timeout(httpFetchTimeoutMs),
+          });
           if (!response.ok) {
             return {
               errors: [{ text: `Failed to fetch '${args.path}': ${response.status} ${response.statusText}` }],
             };
           }
 
+          // Guard against oversized responses
+          const contentLength = response.headers.get('content-length');
+          if (contentLength && Number(contentLength) > httpFetchMaxSizeBytes) {
+            return {
+              errors: [
+                {
+                  text: `Remote module '${args.path}' exceeds maximum size of ${httpFetchMaxSizeBytes} bytes (${contentLength} bytes)`,
+                },
+              ],
+            };
+          }
+
           const contents = await response.text();
+
+          // Check actual size after download (content-length may be absent or incorrect)
+          if (contents.length > httpFetchMaxSizeBytes) {
+            return {
+              errors: [
+                {
+                  text: `Remote module '${args.path}' exceeds maximum size of ${httpFetchMaxSizeBytes} bytes`,
+                },
+              ],
+            };
+          }
+
           const loader = getLoader(new URL(args.path).pathname);
 
           return { contents, loader };
