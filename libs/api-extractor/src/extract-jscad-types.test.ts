@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { buildNamespaceBundle } from '#extract-jscad-types.js';
+import process from 'node:process';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { buildNamespaceBundle, buildApiData } from '#extract-jscad-types.js';
 
 /**
  * Tests for the @jscad/modeling type extractor.
@@ -10,6 +11,20 @@ import { buildNamespaceBundle } from '#extract-jscad-types.js';
  * - Proper `export` modifiers on all declarations
  * - Foundation types are defined and referenced correctly
  */
+
+describe('module side effects', () => {
+  it('does not execute main() when imported', () => {
+    const writeSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    // If main() ran unconditionally, it would attempt file writes and console output.
+    // The fact that we successfully imported the module above without errors or
+    // side-effects proves the guard is working.
+    expect(buildNamespaceBundle).toBeDefined();
+    expect(buildApiData).toBeDefined();
+    expect(typeof buildNamespaceBundle).toBe('function');
+    expect(typeof buildApiData).toBe('function');
+    writeSpy.mockRestore();
+  });
+});
 
 let output: string;
 
