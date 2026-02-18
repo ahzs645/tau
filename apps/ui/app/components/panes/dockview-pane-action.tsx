@@ -16,7 +16,7 @@ type DockviewPaneActionProperties = {
  * Shared button style for Dockview tab-bar actions (e.g. open-file "+", split).
  *
  * Thin wrapper around `PaneButton` that adds the `.dv-pane-action` CSS class
- * for group-hover opacity transitions defined in `tau-dockview.css`.
+ * for group-hover opacity transitions defined in `dockview.tsx`.
  */
 export function DockviewPaneAction({ className, ...properties }: DockviewPaneActionProperties): React.JSX.Element {
   return <PaneButton className={cn('dv-pane-action', className)} {...properties} />;

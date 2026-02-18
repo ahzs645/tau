@@ -71,7 +71,7 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
         wordWrap: 'on',
         // Use position:fixed for overflow widgets (hover, suggest, parameter
         // hints) so they render above all content. Dockview's CSS containment
-        // (contain, transform, will-change) is overridden in tau-dockview.css
+        // (contain, transform, will-change) is overridden in dockview.tsx
         // to ensure position:fixed is relative to the viewport, not the panel.
         fixedOverflowWidgets: true,
         // Enable smooth cursor animation when typing and keying left/right/up/down
