@@ -20,7 +20,7 @@ These values are defined in `libs/types/src/constants/material.constants.ts` as 
 | Pipeline | Source | File |
 |----------|--------|------|
 | OCCT (STEP/IGES/BREP) | `packages/converter` | `loaders/occt.loader.ts` |
-| ReplicaD Kernel | `apps/ui` | `kernel/replicad/utils/replicad-to-gltf.ts` |
+| Replicad Kernel | `apps/ui` | `kernel/replicad/utils/replicad-to-gltf.ts` |
 | JSCAD Kernel | `apps/ui` | `kernel/jscad/jscad-to-gltf.ts` |
 | OpenSCAD Kernel | `apps/ui` | `kernel/utils/export-glb.ts` |
 
@@ -28,7 +28,7 @@ Edge/line materials use `metallicFactor: 0`, `roughnessFactor: 1`, as they are r
 
 ## Material Policy
 
-- **Non-metallic default**: All CAD surfaces default to `metallicFactor: 0.0`. None of the source formats (STEP, ReplicaD, JSCAD, OpenSCAD) carry per-part metal/non-metal metadata.
+- **Non-metallic default**: All CAD surfaces default to `metallicFactor: 0.0`. None of the source formats (STEP, Replicad, JSCAD, OpenSCAD) carry per-part metal/non-metal metadata.
 - **Semi-glossy roughness**: `roughnessFactor: 0.35` produces a glossy CAD sheen with visible specular highlights under studio lighting, closely matching professional CAD viewers like Onshape.
 - **Source colors preserved**: When the source provides a color (STEP color, `colorize()`, etc.), it overrides the default `baseColorFactor`. Roughness and metalness remain at defaults unless the source format provides PBR data (only Rhino 3DM currently does).
 - **Fallback material**: Meshes with no source color receive a unified neutral grey material (`[0.8, 0.8, 0.8, 1]`) across all pipelines rather than inheriting Three.js defaults.
@@ -113,8 +113,8 @@ Current defaults per kernel:
 
 | Kernel | Linear Tolerance | Angular Tolerance | Notes |
 |--------|-----------------|-------------------|-------|
-| ReplicaD | 0.1mm | 30deg | Configurable via `meshConfiguration` |
-| ReplicaD (export) | 0.01mm | 30deg | Higher quality for file export |
+| Replicad | 0.1mm | 30deg | Configurable via `meshConfiguration` |
+| Replicad (export) | 0.01mm | 30deg | Higher quality for file export |
 | JSCAD | N/A | N/A | Fan triangulation of CSG output polygons |
 | OpenSCAD | N/A | N/A | Manifold backend defaults |
 | OCCT (converter) | OCCT defaults | OCCT defaults | `undefined` passed to `ReadStepFile` |
