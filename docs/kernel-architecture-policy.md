@@ -14,9 +14,21 @@ Route (builds_.$id)
        └─ CompilationUnits: Map<entryFile, CadMachine>
             └─ CadMachine (1 per entry file, headless computation)
                  └─ KernelMachine (1 per CadMachine)
-                      └─ Workers: replicad, openscad, zoo, tau, jscad
-                           (5 Web Worker threads per KernelMachine)
+                      └─ KernelRuntimeWorker (1 Web Worker per KernelMachine)
+                           ├─ Loaded kernel module (via defineKernel)
+                           ├─ Loaded bundler module (via defineBundler)
+                           └─ Middleware chain (via defineMiddleware)
 ```
+
+### Three-Pillar Plugin Model
+
+All non-generic capabilities are provided by injectable plugins, not hardcoded in the framework:
+
+| Plugin Type | API | Purpose | Example |
+|-------------|-----|---------|---------|
+| `defineKernel` | `KernelDefinition` | Geometry computation, parameter extraction, export | replicad, jscad, openscad, zoo, tau |
+| `defineBundler` | `BundlerDefinition` | File bundling, code execution, module registry, import detection | esbuild bundler |
+| `defineMiddleware` | `KernelMiddleware` | Operation wrapping (caching, transforms, edge detection) | geometry-cache, edge-detection |
 
 ### Machine Multiplicity
 
@@ -26,23 +38,20 @@ Route (builds_.$id)
 | FileManagerMachine | 1 | -- | Shared across all units |
 | CadMachine | 1 per unique entry file | -- | Shared when multiple panels view the same file |
 | KernelMachine | 1 per CadMachine | -- | Always 1:1 with CadMachine |
-| Workers | 5 per KernelMachine | -- | All 5 created eagerly |
+| KernelRuntimeWorker | 1 per KernelMachine | -- | Single worker, loads kernel on demand |
 | GraphicsMachine | -- | 1 | WebGL renderer per panel |
 
-### Memory Impact (Observed)
+### Memory Impact
 
-With a single build open:
-- Main thread: ~575 MB
-- replicad.worker: ~55-66 MB (includes OpenCASCADE WASM)
-- openscad.worker: ~14 MB (includes Manifold WASM)
-- jscad.worker: ~5 MB
-- zoo.worker: ~3 MB
-- tau.worker: ~5 MB
-- file-manager worker: ~140 MB (ZenFS, file caches)
+With the single-worker-per-CU architecture, only the WASM runtime for the selected kernel is loaded:
 
-Total per KernelMachine: **~90 MB of worker memory** (regardless of which kernel is actually used).
+- replicad file: ~55-66 MB (OpenCASCADE WASM)
+- openscad file: ~14 MB (Manifold WASM)
+- jscad file: ~5 MB
+- kcl file: ~3 MB (KCL WASM)
+- STEP/STL file: ~5 MB (converter)
 
-With a multi-panel dockview (e.g., 4 panels viewing 4 files), this becomes 4 KernelMachines = **~360 MB of worker memory** plus a duplicated openscad worker set.
+Previously, all 5 kernels were loaded eagerly (~90 MB per CadMachine).
 
 ## Data Flow: File Edit to Geometry Display
 
@@ -51,7 +60,7 @@ With a multi-panel dockview (e.g., 4 panels viewing 4 files), this becomes 4 Ker
    │
 2. FileManager writes file → emits fileWritten event
    │
-3. use-build.tsx subscription iterates all compilationUnits
+3. use-build.tsx iterates all compilationUnits with changed path (absolute)
    │
 4. Each CadMachine receives setFile event
    │  ├─ Different file → immediate render
@@ -60,9 +69,10 @@ With a multi-panel dockview (e.g., 4 panels viewing 4 files), this becomes 4 Ker
 5. CadMachine enters rendering state → sends createGeometry to KernelMachine
    │
 6. KernelMachine pipeline:
-   │  ├─ determiningWorker: selects worker via canHandle (cached per filename)
-   │  ├─ parsing: extracts parameters from bundled code
-   │  └─ evaluating: executes code → returns geometries
+   │  ├─ Lazily creates the runtime worker (ensureRuntimeWorkerClient)
+   │  ├─ Worker selects kernel via three-pass detection
+   │  ├─ renderEntry: unified pipeline (deps → params → geometry)
+   │  └─ Streams progress events back to CadMachine
    │
 7. CadMachine receives geometryComputed → updates context.geometries
    │
@@ -81,22 +91,16 @@ With a multi-panel dockview (e.g., 4 panels viewing 4 files), this becomes 4 Ker
 
 ## Worker Lifecycle
 
-### Current: Eager Initialization
+### Lazy Initialization
 
-All 5 workers are created and initialized when `createWorkersActor` runs:
+The single KernelRuntimeWorker is created lazily on first render:
 
-1. `new Worker()` for each (5 separate Web Worker threads)
-2. `wrap<T>(worker)` via Comlink (proxy for cross-thread RPC)
-3. `initializeEntry()` on each in parallel:
-   - Sets up `onLog` callback (proxied)
-   - Registers file manager MessagePort
-   - Calls worker-specific `initialize()`:
-     - JavaScript workers: register kernel modules on `globalThis.__KERNEL_MODULES__`
-     - OpenScad: loads WASM + fonts
-     - Zoo: stores API base URL
-     - Tau: loads converter WASM
+1. `new Worker(runtimeWorkerUrl, { type: 'module' })`
+2. `client.initialize()` sends kernel config, middleware config, and bundler config
+3. Worker loads bundler module via `import(bundlerModuleUrl)`
+4. Kernel module loading is deferred until `selectKernel()` determines which kernel is needed
 
-Workers remain alive for the entire KernelMachine lifetime. They are only destroyed when the CadMachine is stopped.
+Only the WASM runtime for the selected kernel is ever loaded.
 
 ### Cleanup Chain
 
@@ -105,113 +109,122 @@ BuildMachine.stopStatefulActors()
   → enqueue.stopChild(cadMachine)
     → CadMachine stops
       → KernelMachine exit action: destroyWorkers()
-        → wrappedWorker.cleanupEntry()
-          → worker-specific cleanup()
-        → rawWorker.terminate()
+        → runtimeWorkerClient.cleanup()
+        → runtimeWorkerClient.terminate()
 ```
 
-## Worker Selection (`canHandle`)
+## Kernel Selection (Three-Pass Detection)
 
-### Current Detection Strategy
+### Detection Strategy
 
-Workers are queried in priority order until one claims the file:
+```
+1. Check selectionCache (full file path as key) → hit? return immediately
+
+2. Pass 1: Extension + regex fast path
+   - Try each kernel config's detectImport regex against the entry file
+   - Extension-only kernels (openscad, zoo) match immediately
+   - Regex kernels (replicad, jscad) test entry file content
+
+3. Pass 2: Bundler-assisted detection (transitive)
+   - If no kernel matched AND a bundler handles this extension:
+   - Call bundler.detectImports(entryPath) — no modules need to be registered
+   - detectImports marks bare specifiers as external, walks the full import tree
+   - Returns { detectedModules: ['replicad'], dependencies: [...] }
+   - Match detectedModules against each kernel config's builtinModuleNames
+   - Select highest-priority match; initialize ALL matching kernels (multi-module)
+
+4. Pass 3: Catch-all fallback
+   - Try any extensions: ['*'] config (tau converter)
+```
+
+### Detection Priority
 
 ```
 Priority: openscad → zoo → replicad → jscad → tau
 ```
 
-| Worker | Detection Method | Scope |
+| Kernel | Detection Method | Scope |
 |--------|-----------------|-------|
-| OpenScad | Extension: `.scad` | Entry file only |
-| Zoo | Extension: `.kcl` | Entry file only |
-| Replicad | Regex: `import ... from 'replicad'`, `require('replicad')`, destructured assignment, CDN imports | Entry file only |
-| Jscad | Regex: `import ... from '@jscad/modeling'`, `require('@jscad/modeling')` | Entry file only |
-| Tau | Extension: any supported import format (STEP, STL, etc.) | Entry file only |
+| OpenScad | Extension: `.scad` | Immediate |
+| Zoo | Extension: `.kcl` | Immediate |
+| Replicad | Regex + bundler detectImports | Entry file + transitive |
+| Jscad | Regex + bundler detectImports | Entry file + transitive |
+| Tau | Extension: `*` (catch-all) | Fallback |
 
-### Known Limitations
+### Multi-Module Registration
 
-1. **Entry-file-only detection**: `canHandle` only inspects the entry file, not transitive dependencies. A `main.ts` that imports from `./lib/cube.ts` (which imports `replicad`) will NOT be detected as a replicad file unless `main.ts` itself has a direct `import ... from 'replicad'` statement.
+When detection finds imports matching multiple kernels (e.g., both `replicad` and `@jscad/modeling`), the framework:
 
-2. **Worker selection cache**: The `workerSelectionCache` (now scoped to KernelMachine context) caches the first successful `canHandle` result by filename. If an AI agent modifies the file to remove or change the kernel library, the cache correctly resets when the machine is recreated but persists within the same machine session.
+1. Selects the highest-priority kernel for geometry computation
+2. Initializes ALL matching kernels so their modules are registered
 
-3. **No multi-kernel support**: A file that uses both `replicad` and `@jscad/modeling` will be assigned to whichever worker matches first (replicad, due to priority order). There is no mechanism to delegate different operations to different kernels.
+This ensures all library modules are available at bundle time.
 
-4. **Regex fragility**: The regex-based detection can produce false positives (matching imports in comments or strings) and false negatives (missing non-standard import patterns, dynamic imports).
+### Selection Cache Invalidation
 
-## JavaScript Worker Architecture
+The selection cache is invalidated when `notifyFileChanged` is called, since changed imports may shift which kernel handles a file. The cache uses full file paths as keys to prevent collisions.
 
-### Class Hierarchy
+## Plugin Architecture
 
-```
-KernelWorker<Options>  (abstract base)
-  ├─ JavaScriptWorker<Options>  (esbuild bundler, module registry)
-  │    ├─ ReplicadWorker  (OpenCASCADE BREP kernel)
-  │    └─ JscadWorker     (CSG kernel)
-  ├─ OpenScadWorker  (Manifold-based CSG)
-  ├─ ZooWorker       (KCL cloud-native kernel)
-  └─ TauWorker       (format converter, no computation)
-```
+### `defineBundler`
 
-### JavaScriptWorker Bundling Pipeline
+Bundler plugins handle file bundling, code execution, and module registry. The esbuild bundler (`esbuild.bundler.ts`) is the default implementation.
 
-```
-1. Entry file path (e.g., /builds/id/main.ts)
-   │
-2. EsbuildBundler.bundle()
-   │  ├─ ZenFS plugin resolves imports:
-   │  │   ├─ Builtin modules (replicad, @jscad/modeling) → shim code from memory
-   │  │   ├─ CDN modules (npm packages) → fetched and cached in /node_modules/
-   │  │   ├─ HTTP URLs → fetched directly
-   │  │   └─ Project files → read from ZenFS
-   │  ├─ CommonJS auto-export injection for legacy patterns
-   │  └─ esbuild bundles to single ESM output with source map
-   │
-3. JavaScriptWorker.execute()
-   │  └─ Dynamic import via Blob URL (browser) or data URL (Node.js)
-   │
-4. JavaScriptWorker.runMain()
-   │  ├─ ESM style: main(params)
-   │  └─ CommonJS style: main(kernelModule, params)
-   │
-5. Worker-specific geometry conversion
-   │  ├─ Replicad → GLTF via replicad-to-gltf
-   │  └─ Jscad → GLTF via jscad-to-gltf
-```
+Key methods:
+- `detectImports(input)` — lightweight pass that discovers bare-specifier imports transitively using esbuild externals mode. No modules need to be registered. Used for kernel selection.
+- `bundle(input)` — full production bundle with all registered modules resolved. Called after kernel selection and initialization.
+- `execute(code)` — run bundled code via dynamic import (Blob URL / data URL).
+- `registerModule(name, module)` — register/update a builtin module for resolution during bundle().
+- `resolveDependencies(input)` — optional fast-path dependency resolution.
 
-### Module Registry (`globalThis.__KERNEL_MODULES__`)
+### `defineKernel`
 
-Each JavaScript worker registers its kernel library on `globalThis.__KERNEL_MODULES__`:
+Kernel modules define geometry computation logic. Each kernel is an ES module loaded via `import(kernelModuleUrl)`:
 
-- ReplicadWorker: `replicad` (full module + source map for stack traces)
-- JscadWorker: `@jscad/modeling` + 13 submodules (`primitives`, `booleans`, etc.)
+- `initialize(options, runtime)` — load WASM, register builtin modules
+- `canHandle(input, runtime, ctx)` — optional domain-specific check
+- `getDependencies(input, runtime, ctx)` — return file dependencies
+- `getParameters(input, runtime, ctx)` — extract parameters from code
+- `createGeometry(input, runtime, ctx)` — compute geometry + return nativeHandle
+- `exportGeometry(input, runtime, ctx, nativeHandle)` — export using stored handle
 
-The esbuild bundler generates ESM shim code that reads from this registry at runtime:
+### MessagePort Protocol
 
-```javascript
-// Generated shim for import { draw } from 'replicad'
-const __m = globalThis.__KERNEL_MODULES__.get("replicad");
-export const draw = __m.draw;
-export default __m.default;
-```
+The kernel machine communicates with the worker via typed MessagePort events:
 
-### Thread Isolation
+- All request/response commands carry a `requestId` for correlation
+- Fire-and-forget commands (`fileChanged`, `configureMiddleware`) have no requestId
+- `cancel` command allows in-flight operations to be stopped
+- `progress` events stream render phase transitions to the UI
+- `telemetry` events batch performance entries for the kernel panel
 
-Each worker runs in a separate Web Worker thread with its own:
-- `globalThis` scope (no cross-worker pollution)
-- `builtinModules` Map (per worker instance)
-- esbuild bundler instance (initialized lazily per project path)
-- Source map caches
-- Module manager with CDN caches
+### ESBuild Metafile
 
-## ESBuild Metafile
-
-The bundler produces a metafile with all resolved module paths in `namespace:path` format:
+The bundler produces a metafile with all resolved module paths:
 
 | Namespace | Example Key | Description |
 |-----------|-------------|-------------|
 | `zenfs:` | `zenfs:main.ts` | Project-relative file |
-| `zenfs:` | `zenfs:/node_modules/lodash/index.js` | CDN-cached module (absolute path) |
+| `zenfs:` | `zenfs:/node_modules/lodash/index.js` | CDN-cached module |
 | `builtin:` | `builtin:replicad` | Runtime-registered kernel module |
 | `http-url:` | `http-url:https://esm.sh/...` | HTTP-fetched module |
 
-The metafile is currently used only for extracting project-file dependencies (for cache invalidation). It also contains information about which kernel libraries are used transitively, which could be leveraged for improved worker selection.
+During detection, bare specifiers appear as external imports in `metafile.outputs[chunk].imports` rather than in `metafile.inputs`, since they are not resolved.
+
+## Caching Strategy
+
+### File-Level Caches (persist across render cycles)
+
+| Cache | Invalidation | Purpose |
+|-------|-------------|---------|
+| `fileHashCache` | Per-path via `notifyFileChanged` | Avoid re-hashing unchanged files |
+| `fileContentCache` | Per-path via `notifyFileChanged` | Avoid re-reading unchanged files |
+| `bundleResultCache` | Dependency-aware: only entries whose deps overlap with changed files | Avoid re-bundling when deps haven't changed |
+| `selectionCache` | Cleared entirely on any file change | Ensure kernel detection re-runs when imports change |
+
+### Per-Render Caches (cleared each render cycle)
+
+| Cache | Purpose |
+|-------|---------|
+| `renderDependencyCache` | Reuse dependency computation between getParams and createGeometry |
+| `cachedDetectionDeps` | Reuse deps from detectImports for getDependencies (zero cost) |
