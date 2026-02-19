@@ -76,6 +76,7 @@ export type FileManager = {
   readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
   readFile(filepath: string, options?: {}): Promise<Uint8Array<ArrayBuffer>>;
+  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   writeFile(filepath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
   writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void>;
   mkdir(path: string, options?: MkdirOptions): Promise<void>;
@@ -133,6 +134,20 @@ async function readFile(
   return new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
 }
 
+async function readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
+  await ensureReady();
+
+  const results = await Promise.all(
+    paths.map(async (filepath) => {
+      const buffer = await fsp.readFile(filepath);
+      const uint8Array = new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
+      return [filepath, uint8Array] as const;
+    }),
+  );
+
+  return Object.fromEntries(results);
+}
+
 /**
  * Internal (non-serialized) version of ensureDirectoryExists.
  * Used by writeFile/writeFiles within their already-serialized context
@@ -159,6 +174,7 @@ async function ensureDirectoryExistsInternal(targetPath: string): Promise<void> 
 
 export const fileManager: FileManager = {
   readFile,
+  readFiles,
 
   // Check if a path exists (file or directory)
   async exists(path: string): Promise<boolean> {

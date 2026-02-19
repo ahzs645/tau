@@ -10,7 +10,74 @@
 import type { PartialDeep } from 'type-fest';
 import type { ExportFormat, FileStat } from '#types/file.types.js';
 import type { LogLevel } from '#types/logger.types.js';
-import type { CreateGeometryResult, ExportGeometryResult, GetParametersResult } from '#types/kernel.types.js';
+import type {
+  CreateGeometryResult,
+  ExportGeometryResult,
+  GetParametersResult,
+  KernelIssue,
+} from '#types/kernel.types.js';
+import type { GeometryResponse } from '#types/cad.types.js';
+
+// =============================================================================
+// Bundler & Execution Types
+// =============================================================================
+
+/**
+ * Result of bundling a file and its dependencies via esbuild.
+ * Used by JS/TS kernels through runtime.bundler.
+ */
+export type BundleResult = {
+  /** The bundled code as a string */
+  code: string;
+  /** Source map (if enabled) */
+  sourceMap?: string;
+  /** Compilation issues (errors, warnings) */
+  issues: KernelIssue[];
+  /** Whether bundling succeeded */
+  success: boolean;
+  /** Absolute paths of all project files that were resolved during bundling (transitive dependencies). */
+  dependencies: string[];
+};
+
+/**
+ * Result of executing bundled code via dynamic import.
+ * Used by JS/TS kernels through runtime.execute().
+ */
+export type ExecuteResult<T = unknown> = { success: true; value: T } | { success: false; issues: KernelIssue[] };
+
+/**
+ * A built-in module registered on the bundler for pre-loaded libraries.
+ * These modules are served directly from memory without filesystem I/O.
+ */
+export type BuiltinModuleEntry = {
+  /** Pre-bundled ESM code string */
+  code: string;
+  /** Package version */
+  version: string;
+  /** Optional CommonJS global variable name for banner injection */
+  globalName?: string;
+};
+
+/**
+ * Bundler service provided to kernel modules via KernelRuntime.
+ * Wraps esbuild-wasm with ZenFS filesystem integration and CDN module resolution.
+ * Created lazily on first access -- non-JS kernels incur zero cost.
+ */
+export type KernelBundler = {
+  /** Bundle a file and all its transitive dependencies. */
+  bundle(entryPath: string): Promise<BundleResult>;
+  /**
+   * Resolve all transitive dependencies without generating output code.
+   * Equivalent to `(await bundle(entryPath)).dependencies`.
+   */
+  resolveDependencies(entryPath: string): Promise<string[]>;
+  /**
+   * Register a built-in module that will be served from memory during bundling.
+   * Used by JS/TS kernels to register WASM-loaded libraries (replicad, @jscad/modeling).
+   * Must be called before the first bundle() call.
+   */
+  registerModule(name: string, entry: BuiltinModuleEntry): void;
+};
 
 // =============================================================================
 // Dependency Types
@@ -40,8 +107,8 @@ export type MiddlewareDependency = {
   version: string;
   /** Position in the middleware chain (0-indexed) */
   index: number;
-  /** SHA-256 hash of the JSON-serialized resolved config */
-  configHash: string;
+  /** Raw config object -- serialized in the final dependency hash pass */
+  config: Record<string, unknown>;
 };
 
 /**
@@ -73,8 +140,8 @@ export type OptionDependency = {
  */
 export type ParameterDependency = {
   type: 'parameter';
-  /** SHA-256 hash of serialized parameters */
-  parametersHash: string;
+  /** Raw parameters object -- serialized in the final dependency hash pass */
+  parameters: Record<string, unknown>;
 };
 
 /**
@@ -146,6 +213,8 @@ export type KernelFilesystem = {
   readFile(path: string, encoding: 'utf8'): Promise<string>;
   /** Read file as binary */
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  /** Batch read multiple files as binary (single RPC round-trip) */
+  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   /** Check if path exists */
   exists(path: string): Promise<boolean>;
   /** List directory entries */
@@ -170,12 +239,23 @@ export type KernelFilesystem = {
 
 /**
  * Runtime services provided to kernel methods.
+ * The bundler and execute services are lazily initialised -- kernels that
+ * never call them (OpenSCAD, Tau) pay zero cost.
  */
 export type KernelRuntime = {
   /** Filesystem interface (all paths are absolute) */
   filesystem: KernelFilesystem;
   /** Logger with kernel name pre-configured */
   logger: KernelLogger;
+  /** Read-only view of cached file contents (absolute paths), populated during dependency computation */
+  fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
+  /** Esbuild bundler for JS/TS kernels. Lazily initialised on first access. */
+  bundler: KernelBundler;
+  /**
+   * Execute bundled JS/TS code via dynamic import and return the module exports.
+   * Browser uses Blob URL, Node.js uses data URL.
+   */
+  execute(code: string): Promise<ExecuteResult>;
 };
 
 /**
@@ -407,3 +487,87 @@ export type WrapGetParametersHook<
   handler: GetParametersHandler,
   runtime: KernelMiddlewareRuntime<State, Config>,
 ) => Promise<GetParametersResult>;
+
+// =============================================================================
+// defineKernel API Types
+// =============================================================================
+
+/**
+ * Output from a kernel's createGeometry method.
+ * Includes both the display geometry (transferred to main thread) and an opaque
+ * native handle that the framework stores for export operations.
+ *
+ * @template NativeHandle - Kernel-specific type for the native geometry representation
+ */
+export type CreateGeometryOutput<NativeHandle = unknown> = {
+  geometry: GeometryResponse[];
+  nativeHandle: NativeHandle;
+  issues?: KernelIssue[];
+};
+
+/**
+ * Definition for a kernel module loaded via defineKernel().
+ * Kernel modules are ES modules dynamically imported by the worker runtime.
+ * The API is designed to be simple (no class inheritance, no `this` binding)
+ * with all state managed through the typed context returned by initialize().
+ *
+ * @template Ctx - Kernel-specific context type returned by initialize()
+ * @template NativeHandle - Kernel-specific type for native geometry representation
+ */
+export type KernelDefinition<Ctx = unknown, NativeHandle = unknown> = {
+  name: string;
+  version: string;
+
+  initialize(options: Record<string, unknown>, runtime: KernelRuntime): Promise<Ctx>;
+
+  canHandle?(input: CanHandleInput, runtime: KernelRuntime, ctx: Ctx): Promise<boolean>;
+
+  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, ctx: Ctx): Promise<string[]>;
+  getParameters(input: GetParametersInput, runtime: KernelRuntime, ctx: Ctx): Promise<GetParametersResult>;
+  createGeometry(
+    input: CreateGeometryInput,
+    runtime: KernelRuntime,
+    ctx: Ctx,
+  ): Promise<CreateGeometryOutput<NativeHandle>>;
+  exportGeometry(
+    input: ExportGeometryInput,
+    runtime: KernelRuntime,
+    ctx: Ctx,
+    nativeHandle: NativeHandle,
+  ): Promise<ExportGeometryResult>;
+
+  cleanup?(ctx: Ctx): Promise<void>;
+};
+
+/**
+ * Helper function to define a kernel module with proper type inference.
+ * This is the primary API for kernel authors.
+ *
+ * @example
+ * ```typescript
+ * export default defineKernel({
+ *   name: 'MyKernel',
+ *   version: '1.0.0',
+ *   async initialize(options, runtime) {
+ *     return { myContext: true };
+ *   },
+ *   async getDependencies(input, runtime, ctx) {
+ *     return [input.filePath];
+ *   },
+ *   async getParameters(input, runtime, ctx) {
+ *     return { success: true, data: { defaultParameters: {}, jsonSchema: {} } };
+ *   },
+ *   async createGeometry(input, runtime, ctx) {
+ *     return { geometry: [...], nativeHandle: myShapes };
+ *   },
+ *   async exportGeometry(input, runtime, ctx, nativeHandle) {
+ *     return { success: true, data: [{ blob: ... }] };
+ *   },
+ * });
+ * ```
+ */
+export function defineKernel<Ctx, NativeHandle>(
+  definition: KernelDefinition<Ctx, NativeHandle>,
+): KernelDefinition<Ctx, NativeHandle> {
+  return definition;
+}

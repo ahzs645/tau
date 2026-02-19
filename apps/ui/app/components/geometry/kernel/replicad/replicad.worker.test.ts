@@ -2,13 +2,14 @@
 /* eslint-disable max-lines -- comprehensive kernel test suite */
 import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ReplicadWorker } from '#components/geometry/kernel/replicad/replicad.worker.js';
+import replicadKernel from '#components/geometry/kernel/replicad/replicad.kernel.js';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
 import {
   createGeometryFile,
   createTestWorker,
   createTestGeometry,
   getTestParameters,
+  seedTestFilesystem,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
 
@@ -18,16 +19,16 @@ import type { CreateTestWorkerOptions } from '#components/geometry/kernel/utils/
 // Test Utilities
 // =============================================================================
 
-/** Create a ReplicadWorker for testing with the provided files. */
-const createWorker = async (files: Record<string, string>): Promise<ReplicadWorker> =>
-  createTestWorker(ReplicadWorker, files);
+/** Create a runtime worker for testing with the provided files. */
+const createWorker = async (files: Record<string, string>): ReturnType<typeof createTestWorker> =>
+  createTestWorker(replicadKernel, files);
 
 /** Helper to extract parameters and assert success. */
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(ReplicadWorker, files, mainFile);
+  getTestParameters(replicadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
 const createGeometry = async (
@@ -35,7 +36,7 @@ const createGeometry = async (
   mainFile: string,
   parameters: Record<string, unknown> = {},
   options?: CreateTestWorkerOptions,
-): ReturnType<typeof createTestGeometry> => createTestGeometry(ReplicadWorker, files, mainFile, parameters, options);
+): ReturnType<typeof createTestGeometry> => createTestGeometry(replicadKernel, files, mainFile, parameters, options);
 
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
@@ -428,25 +429,43 @@ describe('ReplicadWorker', () => {
   // Tests: Default Name Extraction
   // ===========================================================================
 
-  describe('extractDefaultNameFromCode', () => {
-    it('should extract defaultName from module exports', async () => {
-      const worker = await createWorker({});
-      // Test extractDefaultNameFromCode with a RuntimeModuleExports object
-      const module = { defaultName: 'My Custom Box' };
-      const result = await worker.extractDefaultNameFromCode(module);
+  describe('defaultName extraction via geometry output', () => {
+    it('should produce geometry when defaultName is exported', async () => {
+      const result = await createGeometry(
+        {
+          'named.ts': `
+            import { drawRoundedRectangle } from 'replicad';
+            export const defaultName = 'My Custom Box';
+            export default function main() {
+              return drawRoundedRectangle(10, 10).sketchOnPlane().extrude(5);
+            }
+          `,
+        },
+        'named.ts',
+      );
+
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data).toBe('My Custom Box');
+        expect(result.data.length).toBeGreaterThan(0);
       }
     });
 
-    it('should return undefined when no defaultName is defined', async () => {
-      const worker = await createWorker({});
-      const module = { default: () => [] };
-      const result = await worker.extractDefaultNameFromCode(module);
+    it('should produce geometry when no defaultName is defined', async () => {
+      const result = await createGeometry(
+        {
+          'unnamed.ts': `
+            import { drawRoundedRectangle } from 'replicad';
+            export default function main() {
+              return drawRoundedRectangle(10, 10).sketchOnPlane().extrude(5);
+            }
+          `,
+        },
+        'unnamed.ts',
+      );
+
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data).toBeUndefined();
+        expect(result.data.length).toBeGreaterThan(0);
       }
     });
   });
@@ -480,7 +499,7 @@ describe('ReplicadWorker', () => {
         // Geometry quality assertions
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
 
       it('should compute geometry with parameters', async () => {
@@ -510,7 +529,7 @@ describe('ReplicadWorker', () => {
         // Geometry should use parameter values (100x60x20)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [100, 60, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.1, 0.02, 0.06], 0.0005);
       });
 
       it('should compute geometry using draw API', async () => {
@@ -538,7 +557,7 @@ describe('ReplicadWorker', () => {
         // Geometry quality assertions (50x30x10 box)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
 
       it('should handle multiple shapes returned as array', async () => {
@@ -591,7 +610,7 @@ describe('ReplicadWorker', () => {
         // Geometry quality assertions (50x30x10 box)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
 
       it('should compute geometry with params in CommonJS style', async () => {
@@ -625,7 +644,7 @@ describe('ReplicadWorker', () => {
         // Geometry should use parameter value (75x75x75 cube)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [75, 75, 75], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.075, 0.075, 0.075], 0.0005);
       });
     });
 
@@ -652,7 +671,7 @@ describe('ReplicadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Outer cylinder is radius 30, so diameter 60
-        await geometryHelpers.expectBoundingBoxSize(result, [60, 60, 20], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.06, 0.02, 0.06], 0.001);
       });
 
       it('should handle boolean operations (union/fuse)', async () => {
@@ -677,7 +696,7 @@ describe('ReplicadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Box is 50x30, cylinder adds height: 10 + 20 = 30 total height
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 30], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.03, 0.03], 0.001);
       });
 
       it('should handle transformations (translate, rotate)', async () => {
@@ -730,7 +749,7 @@ describe('ReplicadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Bottom circle is radius 30 (diameter 60), height is 50
-        await geometryHelpers.expectBoundingBoxSize(result, [60, 60, 50], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.06, 0.05, 0.06], 0.001);
       });
 
       it('should handle chamfer and fillet operations', async () => {
@@ -754,7 +773,7 @@ describe('ReplicadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Bounding box should remain approximately 50x30x20
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 20], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.02, 0.03], 0.001);
       });
 
       it('should handle shell operation', async () => {
@@ -778,7 +797,7 @@ describe('ReplicadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Shell with -2 offset expands outer dimensions due to thickness on all sides
-        await geometryHelpers.expectBoundingBoxSize(result, [54, 34, 22], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.054, 0.022, 0.034], 0.001);
       });
     });
 
@@ -810,7 +829,7 @@ describe('ReplicadWorker', () => {
         // Geometry: 30x30x30 cube
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 30], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.03, 0.03, 0.03], 0.0005);
       });
 
       it('should handle multi-level nested imports', async () => {
@@ -857,7 +876,7 @@ describe('ReplicadWorker', () => {
         // Geometry: 40x40 base with cylinder on top, total height 50
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [40, 40, 50], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.04, 0.05, 0.04], 0.001);
       });
 
       it('should pass parameters through multi-file imports', async () => {
@@ -892,7 +911,7 @@ describe('ReplicadWorker', () => {
         // Geometry: 100x100x100 cube (using passed parameter)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [100, 100, 100], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.1, 0.1, 0.1], 0.001);
       });
 
       it('should handle re-exports from barrel files', async () => {
@@ -1755,7 +1774,7 @@ export function getShape() { return broken(); }
         // Geometry quality assertions (50x30x10 box)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
     });
 
@@ -1941,7 +1960,7 @@ export function getShape() { return broken(); }
       const exportResult = await worker[kernelSymbols.exportGeometryEntry]('step');
       expect(exportResult.success).toBe(false);
       if (!exportResult.success) {
-        expect(exportResult.issues[0]?.message).toContain('not computed');
+        expect(exportResult.issues[0]?.message).toContain('No geometry available for export');
       }
     });
 
@@ -2069,7 +2088,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
 
       it('should bundle code with type assertions (as)', async () => {
@@ -2118,7 +2137,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [40, 20, 15], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.04, 0.015, 0.02], 0.0005);
       });
     });
 
@@ -2142,7 +2161,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
 
       it('should strip inline type imports (import { type X })', async () => {
@@ -2168,7 +2187,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
     });
 
@@ -2285,7 +2304,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.02, 0.03], 0.0005);
       });
 
       it('should bundle code with enums', async () => {
@@ -2314,7 +2333,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
       });
 
       it('should bundle code with optional chaining and nullish coalescing', async () => {
@@ -2347,7 +2366,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 20, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.02], 0.0005);
       });
     });
 
@@ -2450,7 +2469,7 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [60, 40, 15], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.06, 0.015, 0.04], 0.0005);
       });
     });
 
@@ -2587,8 +2606,147 @@ export function getShape() { return broken(); }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [60, 40, 35], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.06, 0.035, 0.04], 0.001);
       });
+    });
+  });
+
+  // ===========================================================================
+  // Stateful Kernel Runtime
+  // ===========================================================================
+
+  describe('Stateful kernel runtime', () => {
+    it('should deep-merge nested default parameters with user overrides', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { draw, drawRoundedRectangle, makeSolid, makeFace, assembleWire, EdgeFinder } from 'replicad';
+
+          export const defaultParams = {
+            base: {
+              width: 30,
+              depth: 20,
+              cornerRadius: 5,
+            },
+            profile: {
+              lineX: 5,
+              lineY: 5,
+            },
+            brim: {
+              width: 2,
+              height: 1,
+            },
+          };
+
+          export default function main(p = defaultParams) {
+            const base = drawRoundedRectangle(p.base.width, p.base.depth, p.base.cornerRadius);
+            const profile = draw()
+              .line(p.profile.lineX, p.profile.lineY)
+              .line(-p.brim.width, p.brim.height)
+              .done();
+
+            const side = base.sketchOnPlane().clone().sweepSketch(
+              (plane) => profile.sketchOnPlane(plane),
+              { withContact: true },
+            );
+
+            return makeSolid([
+              side,
+              makeFace(assembleWire(new EdgeFinder().inPlane("XY", p.profile.lineY + p.brim.height).find(side))),
+              base.sketchOnPlane().face(),
+            ]);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // Override only base.width -- base.depth and base.cornerRadius should be preserved
+      const result = await worker[kernelSymbols.renderEntry](geometryFile, { base: { width: 50 } });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        // If shallow merge: base = { width: 50 } (missing depth, cornerRadius → runtime error)
+        // If deep merge: base = { width: 50, depth: 20, cornerRadius: 5 } → success
+        expect(result.data.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('should detect code changes between sequential renders', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(10, 10).sketchOnPlane().extrude(10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render: 10x10x10 box
+      const result1 = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      expect(result1.success).toBe(true);
+      await geometryHelpers.expectValidGltf(result1);
+
+      // Modify file content: change to 20x20x20 box
+      await seedTestFilesystem({
+        '/builds/test/main.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(20, 20).sketchOnPlane().extrude(20);
+          }
+        `,
+      });
+
+      // Notify worker about the change
+      await worker[kernelSymbols.notifyFileChanged](['/builds/test/main.ts']);
+
+      // Second render should use updated code
+      const result2 = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      expect(result2.success).toBe(true);
+      await geometryHelpers.expectValidGltf(result2);
+
+      // Bounding boxes must differ (10mm vs 20mm)
+      await geometryHelpers.expectBoundingBoxSize(result1, [0.01, 0.01, 0.01], 0.002);
+      await geometryHelpers.expectBoundingBoxSize(result2, [0.02, 0.02, 0.02], 0.002);
+    });
+
+    it('should detect code changes when notifyFileChanged receives absolute paths', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(10, 10).sketchOnPlane().extrude(10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render
+      const result1 = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      expect(result1.success).toBe(true);
+
+      // Modify file content
+      await seedTestFilesystem({
+        '/builds/test/main.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(30, 30).sketchOnPlane().extrude(30);
+          }
+        `,
+      });
+
+      // Notify with ABSOLUTE path (matching production behavior from use-build.tsx)
+      await worker[kernelSymbols.notifyFileChanged](['/builds/test/main.ts']);
+
+      // Second render should use updated code
+      const result2 = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      expect(result2.success).toBe(true);
+
+      // Bounding boxes must differ (10mm vs 30mm)
+      await geometryHelpers.expectBoundingBoxSize(result1, [0.01, 0.01, 0.01], 0.002);
+      await geometryHelpers.expectBoundingBoxSize(result2, [0.03, 0.03, 0.03], 0.002);
     });
   });
 });

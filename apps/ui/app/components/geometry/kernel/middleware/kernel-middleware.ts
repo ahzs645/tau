@@ -270,6 +270,8 @@ export type CreateMiddlewareRuntimeOptions = {
   stateSchema?: z.ZodObject<z.ZodRawShape>;
   /** Resolved config values (schema defaults merged with caller overrides) */
   config?: Record<string, unknown>;
+  /** Pre-created logger to avoid closure allocation per operation */
+  logger?: KernelLogger;
 };
 
 /**
@@ -282,10 +284,10 @@ export function createMiddlewareRuntime<
   State extends Record<string, unknown> = EmptyState,
   Config extends Record<string, unknown> = EmptyState,
 >(options: CreateMiddlewareRuntimeOptions): KernelMiddlewareRuntime<State, Config> {
-  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema, config } = options;
+  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema, config, logger } = options;
 
   return {
-    logger: createMiddlewareLogger(onLog, middlewareName),
+    logger: logger ?? createMiddlewareLogger(onLog, middlewareName),
     filesystem,
     state: createMiddlewareState<State>(stateSchema),
 

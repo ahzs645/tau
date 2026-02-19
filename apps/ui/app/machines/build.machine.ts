@@ -433,6 +433,7 @@ export const buildMachine = setup({
             logRef: ctx.logRef,
             fileManagerRef: ctx.fileManagerRef,
             kernelConfig: ctx.kernelConfig,
+            middlewareConfig: ctx.middlewareConfig,
           },
         });
 

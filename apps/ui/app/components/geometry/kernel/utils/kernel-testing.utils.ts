@@ -13,6 +13,7 @@ import type {
   KernelMiddlewareRuntime,
   KernelLogger,
   KernelRuntime,
+  KernelDefinition,
   MiddlewareState,
   KernelFilesystem,
   FileStat,
@@ -29,13 +30,14 @@ import type {
   OnWorkerLog,
   MiddlewareConfig,
 } from '@taucad/types';
-import { dirname } from '@zenfs/core/path';
-import { expose } from 'comlink';
-import { vi } from 'vitest';
 import * as kernelSymbols from '@taucad/types/symbols';
+import { dirname } from '@zenfs/core/path';
+import { vi } from 'vitest';
 import type { KernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
+import { KernelRuntimeWorker } from '#components/geometry/kernel/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#components/geometry/kernel/utils/kernel-worker.js';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
+import { createFileManagerPort } from '#components/geometry/kernel/utils/kernel-worker-filemanager-bridge.js';
 import { configureFilesystem, resetFilesystem, fs } from '#filesystem/zenfs-config.js';
 import { fileManager } from '#machines/file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
@@ -112,9 +114,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
   worker: T,
   options?: InitializeWorkerOptions,
 ): Promise<T> {
-  // Create MessageChannel to connect worker to fileManager
-  const channel = new MessageChannel();
-  expose(fileManager, channel.port1);
+  const port = createFileManagerPort(fileManager);
 
   await worker[kernelSymbols.initializeEntry](
     {
@@ -124,7 +124,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
           // No-op for testing
         }),
     },
-    { fileManagerPort: channel.port2 },
+    { fileManagerPort: port },
     options?.workerOptions ?? {},
     options?.middlewareConfig ?? [],
   );
@@ -256,7 +256,16 @@ export function createMockFilesystem(options?: MockFilesystemOptions): MockFiles
     // Properly typed overloaded function
     readFile,
 
-    // Simple delegates to mocks
+    async readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
+      const result: Record<string, Uint8Array<ArrayBuffer>> = {};
+      for (const path of paths) {
+        const content = (await readFileFn(path)) as Uint8Array<ArrayBuffer>;
+        result[path] = content;
+      }
+
+      return result;
+    },
+
     exists: async (path: string) => existsFn(path) as Promise<boolean>,
     readdir: async (path: string) => readdirFn(path) as Promise<string[]>,
     writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data) as Promise<void>,
@@ -402,81 +411,113 @@ export function createGeometryFile(filename: string, basePath = '/builds/test'):
 // =============================================================================
 
 /**
- * Constructor type for kernel workers.
- * Used to allow generic worker creation in test utilities.
- */
-export type KernelWorkerConstructor<T extends KernelWorker> = new () => T;
-
-/**
  * Options for createTestWorker.
  */
 export type CreateTestWorkerOptions = {
   /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
   workerOptions?: Record<string, unknown>;
+  /** Extensions the kernel handles (defaults to ['ts', 'js', 'scad', 'kcl', '*']) */
+  extensions?: string[];
+  /** Import detection regex source (for JS/TS kernel disambiguation) */
+  detectImport?: string;
 };
 
 /**
- * Create and initialize a kernel worker for testing.
- * Seeds the filesystem with provided files before creating the worker.
- * Uses the real production code path via initializeWorkerForTesting.
- *
- * @param WorkerClass - The worker class to instantiate (e.g., JscadWorker, OpenScadWorker)
- * @param files - Record of relative paths to file contents
- * @param options - Optional worker options (e.g., { workerOptions: { withExceptions: true } } for ReplicadWorker)
- * @returns Promise resolving to the initialized worker
- *
- * @example
- * ```typescript
- * const worker = await createTestWorker(JscadWorker, {
- *   'cube.ts': `import { primitives } from '@jscad/modeling'; ...`
- * });
- * const replicadWorker = await createTestWorker(ReplicadWorker, files, {
- *   workerOptions: { withExceptions: true }
- * });
- * ```
+ * Infer the file extensions a kernel handles from its definition.
+ * Uses the kernel name as a heuristic when extensions aren't explicitly provided.
  */
-export async function createTestWorker<T extends KernelWorker>(
-  WorkerClass: KernelWorkerConstructor<T>,
+function inferExtensions(definition: KernelDefinition): string[] {
+  const name = definition.name.toLowerCase();
+
+  if (name.includes('replicad') || name.includes('jscad')) {
+    return ['ts', 'js'];
+  }
+
+  if (name.includes('openscad') || name.includes('scad')) {
+    return ['scad'];
+  }
+
+  if (name.includes('zoo') || name.includes('kcl')) {
+    return ['kcl'];
+  }
+
+  return ['*'];
+}
+
+/**
+ * Infer an import-detection regex from the kernel name.
+ * Returns undefined when the kernel has its own canHandle() that performs detection.
+ */
+function inferDetectImport(definition: KernelDefinition): string | undefined {
+  if (definition.canHandle) {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * Create and initialize a KernelRuntimeWorker with a single kernel definition.
+ * Seeds the filesystem with provided files before creating the worker.
+ * Uses the production runtime worker path (defineKernel modules).
+ *
+ * @param definition - The kernel definition (from defineKernel())
+ * @param files - Record of relative paths to file contents
+ * @param options - Optional worker options
+ * @returns Promise resolving to the initialized runtime worker
+ */
+export async function createTestWorker(
+  definition: KernelDefinition,
   files: Record<string, string>,
   options?: CreateTestWorkerOptions,
-): Promise<T> {
+): Promise<KernelRuntimeWorker> {
   const basePath = '/builds/test';
 
-  // Convert files to have full paths and seed the filesystem
   const absoluteFiles: Record<string, string> = {};
   for (const [path, content] of Object.entries(files)) {
     absoluteFiles[joinPath(basePath, path)] = content;
   }
 
-  // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request
   await seedTestFilesystem(absoluteFiles);
 
-  // Create worker and initialize using production code path
-  const worker = new WorkerClass();
+  const worker = new KernelRuntimeWorker();
+  const extensions = options?.extensions ?? inferExtensions(definition);
+  const detectImport = options?.detectImport ?? inferDetectImport(definition);
+
   await initializeWorkerForTesting(worker, {
-    workerOptions: options?.workerOptions,
+    workerOptions: {
+      kernelModules: [
+        {
+          id: definition.name,
+          moduleUrl: 'test://inline',
+          extensions,
+          detectImport,
+          options: options?.workerOptions,
+          definition,
+        },
+      ],
+    },
   });
 
   return worker;
 }
 
 /**
- * Helper to extract parameters from a kernel worker and assert success.
+ * Helper to extract parameters from a kernel and assert success.
  *
- * @param WorkerClass - The worker class to use
+ * @param definition - The kernel definition to use
  * @param files - Record of relative paths to file contents
  * @param mainFile - The main file to extract parameters from
  * @returns Promise resolving to the extracted parameters and JSON schema
  */
-export async function getTestParameters<T extends KernelWorker>(
-  WorkerClass: KernelWorkerConstructor<T>,
+export async function getTestParameters(
+  definition: KernelDefinition,
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
-  // Import expect dynamically to avoid coupling this utility to vitest at the module level
   const { expect } = await import('vitest');
 
-  const worker = await createTestWorker(WorkerClass, files);
+  const worker = await createTestWorker(definition, files);
   const result = await worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
 
   expect(result.success).toBe(true);
@@ -489,23 +530,23 @@ export async function getTestParameters<T extends KernelWorker>(
 }
 
 /**
- * Helper to create geometry using a kernel worker and return the result.
+ * Helper to create geometry using a kernel and return the result.
  *
- * @param WorkerClass - The worker class to use
+ * @param definition - The kernel definition to use
  * @param files - Record of relative paths to file contents
  * @param mainFile - The main file to create geometry from
  * @param parameters - Optional parameters to pass to the geometry creation
- * @param options - Optional worker options (e.g., { workerOptions: { withExceptions: true } } for ReplicadWorker)
+ * @param options - Optional worker options
  * @returns Promise resolving to the geometry creation result
  */
-export async function createTestGeometry<T extends KernelWorker>(
-  WorkerClass: KernelWorkerConstructor<T>,
+export async function createTestGeometry(
+  definition: KernelDefinition,
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
   options?: CreateTestWorkerOptions,
 ): Promise<CreateGeometryResult> {
-  const worker = await createTestWorker(WorkerClass, files, options);
+  const worker = await createTestWorker(definition, files, options);
   const geometryFile = createGeometryFile(mainFile);
   return worker[kernelSymbols.createGeometryEntry](geometryFile, parameters);
 }
@@ -521,6 +562,7 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
   return {
     logger: createMockLogger(),
     filesystem: createMockFilesystem(options?.filesystemOverrides),
+    fileContentCache: new Map(),
   };
 }
 

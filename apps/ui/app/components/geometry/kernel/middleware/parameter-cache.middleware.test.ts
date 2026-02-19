@@ -14,7 +14,7 @@ import { createMockRuntime, createMockInput } from '#components/geometry/kernel/
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, configHash: 'mock-config-hash' },
+    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, config: {} },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 

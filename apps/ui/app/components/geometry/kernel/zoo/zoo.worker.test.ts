@@ -1,13 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import * as kernelSymbols from '@taucad/types/symbols';
-import { ZooWorker } from '#components/geometry/kernel/zoo/zoo.worker.js';
+import zooKernel from '#components/geometry/kernel/zoo/zoo.kernel.js';
 import {
-  seedTestFilesystem,
-  initializeWorkerForTesting,
+  createTestWorker,
   createGeometryFile,
 } from '#components/geometry/kernel/utils/kernel-testing.utils.js';
-import { joinPath } from '#utils/path.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'main.kcl' */
 
@@ -16,28 +14,14 @@ import { joinPath } from '#utils/path.utils.js';
 // =============================================================================
 
 /**
- * Initialize a ZooWorker for parameter extraction.
+ * Initialize a Zoo kernel worker for parameter extraction.
  * Seeds the filesystem with provided files before creating the worker.
- * Uses the real production code path via initializeWorkerForTesting.
  *
  * Note: createGeometry requires a cloud websocket connection and is not tested here.
  * These tests focus on getParameters which uses the local KCL WASM parser.
  */
-async function createWorker(files: Record<string, string>): Promise<ZooWorker> {
-  const basePath = '/builds/test';
-
-  // Convert files to have full paths and seed the filesystem
-  const absoluteFiles: Record<string, string> = {};
-  for (const [path, content] of Object.entries(files)) {
-    absoluteFiles[joinPath(basePath, path)] = content;
-  }
-
-  // Seed filesystem with InMemory backend - this "wins" over fileManager's indexeddb request
-  await seedTestFilesystem(absoluteFiles);
-
-  // Create worker and initialize using production code path
-  const worker = new ZooWorker();
-  await initializeWorkerForTesting(worker, {});
+async function createWorker(files: Record<string, string>): ReturnType<typeof createTestWorker> {
+  const worker = await createTestWorker(zooKernel, files);
 
   return worker;
 }

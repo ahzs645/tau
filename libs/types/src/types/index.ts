@@ -12,7 +12,9 @@ export type * from '#types/git.types.js';
 export type * from '#types/graphics.types.js';
 export type * from '#types/id.types.js';
 export type * from '#types/kernel.types.js';
-export type * from '#types/kernel-worker.types.js';
+// eslint-disable-next-line @typescript-eslint/consistent-type-exports -- has runtime defineKernel function
+export * from '#types/kernel-worker.types.js';
+export type * from '#types/kernel-protocol.types.js';
 export type * from '#types/logger.types.js';
 export type * from '#types/manufacturing.types.js';
 export type * from '#types/schema.types.js';

@@ -13,6 +13,8 @@ type ViewContextType = {
   setIsEditorOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isExplorerOpen: boolean;
   setIsExplorerOpen: (value: boolean | ((current: boolean) => boolean)) => void;
+  isKernelOpen: boolean;
+  setIsKernelOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isConverterOpen: boolean;
   setIsConverterOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isGitOpen: boolean;
@@ -80,6 +82,14 @@ export function ViewContextProvider({ children }: { readonly children: React.Rea
     [editorRef, openPanels.explorer],
   );
 
+  const setIsKernelOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.kernel) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { kernel: newValue } } });
+    },
+    [editorRef, openPanels.kernel],
+  );
+
   const setIsConverterOpen = useCallback(
     (value: boolean | ((current: boolean) => boolean)) => {
       const newValue = typeof value === 'function' ? value(openPanels.converter) : value;
@@ -117,6 +127,8 @@ export function ViewContextProvider({ children }: { readonly children: React.Rea
       setIsEditorOpen,
       isExplorerOpen: openPanels.explorer,
       setIsExplorerOpen,
+      isKernelOpen: openPanels.kernel,
+      setIsKernelOpen,
       isConverterOpen: openPanels.converter,
       setIsConverterOpen,
       isGitOpen: openPanels.git,
@@ -131,6 +143,7 @@ export function ViewContextProvider({ children }: { readonly children: React.Rea
       setIsParametersOpen,
       setIsEditorOpen,
       setIsExplorerOpen,
+      setIsKernelOpen,
       setIsConverterOpen,
       setIsGitOpen,
       setIsDetailsOpen,

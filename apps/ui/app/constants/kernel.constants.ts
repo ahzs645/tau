@@ -1,9 +1,9 @@
 import type { KernelConfig, MiddlewareConfig } from '@taucad/types';
-import replicadWorkerUrl from '#components/geometry/kernel/replicad/replicad.worker.js?url';
-import openscadWorkerUrl from '#components/geometry/kernel/openscad/openscad.worker.js?url';
-import zooWorkerUrl from '#components/geometry/kernel/zoo/zoo.worker.js?url';
-import tauWorkerUrl from '#components/geometry/kernel/tau/tau.worker.js?url';
-import jscadWorkerUrl from '#components/geometry/kernel/jscad/jscad.worker.js?url';
+import tauKernelModuleUrl from '#components/geometry/kernel/tau/tau.kernel.js?url';
+import replicadKernelModuleUrl from '#components/geometry/kernel/replicad/replicad.kernel.js?url';
+import jscadKernelModuleUrl from '#components/geometry/kernel/jscad/jscad.kernel.js?url';
+import openscadKernelModuleUrl from '#components/geometry/kernel/openscad/openscad.kernel.js?url';
+import zooKernelModuleUrl from '#components/geometry/kernel/zoo/zoo.kernel.js?url';
 import parameterCacheUrl from '#components/geometry/kernel/middleware/parameter-cache.middleware.js?url';
 import geometryCacheUrl from '#components/geometry/kernel/middleware/geometry-cache.middleware.js?url';
 import gltfCoordinateTransformUrl from '#components/geometry/kernel/middleware/gltf-coordinate-transform.middleware.js?url';
@@ -26,23 +26,35 @@ import { ENV } from '#environment.config.js';
  *
  * const extendedConfig: KernelConfig = [
  *   ...defaultKernelConfig,
- *   { id: 'manifold', url: manifoldWorkerUrl },
+ *   { id: 'manifold', kernelModuleUrl: manifoldKernelUrl },
  * ];
  * ```
  */
 export const defaultKernelConfig: KernelConfig = [
-  { id: 'openscad', url: openscadWorkerUrl },
-  { id: 'zoo', url: zooWorkerUrl, options: { baseUrl: `${ENV.TAU_WEBSOCKET_URL}/v1/kernels/zoo` } },
+  { id: 'openscad', extensions: ['scad'], kernelModuleUrl: openscadKernelModuleUrl },
+  {
+    id: 'zoo',
+    extensions: ['kcl'],
+    options: { baseUrl: `${ENV.TAU_WEBSOCKET_URL}/v1/kernels/zoo` },
+    kernelModuleUrl: zooKernelModuleUrl,
+  },
   {
     id: 'replicad',
-    url: replicadWorkerUrl,
+    extensions: ['ts', 'js'],
+    detectImport: /import.*from\s+['"]replicad['"]/s,
     options: {
       withExceptions: false,
       meshConfiguration: { linearTolerance: 0.1, angularTolerance: 0.1 },
     },
+    kernelModuleUrl: replicadKernelModuleUrl,
   },
-  { id: 'jscad', url: jscadWorkerUrl },
-  { id: 'tau', url: tauWorkerUrl },
+  {
+    id: 'jscad',
+    extensions: ['ts', 'js'],
+    detectImport: /import\s+.*from\s+['"]@jscad\/modeling(\/[^'"]*)?['"]/,
+    kernelModuleUrl: jscadKernelModuleUrl,
+  },
+  { id: 'tau', extensions: ['*'], kernelModuleUrl: tauKernelModuleUrl },
 ];
 
 /**

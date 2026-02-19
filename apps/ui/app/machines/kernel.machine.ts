@@ -1,24 +1,27 @@
-import { assign, assertEvent, setup, sendTo, fromPromise, waitFor } from 'xstate';
-import deepmerge from 'deepmerge';
+import { assign, assertEvent, setup, sendTo, fromPromise, fromCallback, waitFor } from 'xstate';
 import type { Snapshot, ActorRef, OutputFrom, DoneActorEvent, ActorRefFrom } from 'xstate';
-import { proxy, wrap, transfer, createEndpoint } from 'comlink';
-import type { Remote } from 'comlink';
 import type {
   Geometry,
   ExportFormat,
   KernelIssue,
   GeometryFile,
+  GetParametersResult,
   LogLevel,
   LogOrigin,
-  OnWorkerLog,
   KernelConfig,
-  KernelWorkerInterface,
   MiddlewareConfig,
+  MountConfig,
+  PerformanceEntryData,
+  RenderPhase,
 } from '@taucad/types';
 import { isKernelSuccess } from '@taucad/types/guards';
 import type { JSONSchema7 } from 'json-schema';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
+import { KernelWorkerClient } from '#components/geometry/kernel/utils/kernel-worker-client.js';
+import type { OnLogCallback, OnTelemetryCallback } from '#components/geometry/kernel/utils/kernel-worker-client.js';
+import { createFileManagerPort } from '#components/geometry/kernel/utils/kernel-worker-filemanager-bridge.js';
+import runtimeWorkerUrl from '#components/geometry/kernel/kernel-runtime-worker.js?url';
 
 const determineWorkerActor = fromPromise<
   | {
@@ -33,32 +36,20 @@ const determineWorkerActor = fromPromise<
   const { context, event } = input;
   const cacheKey = event.file.filename;
 
-  // Check cache -- but only if the cached worker is still available
+  // Fast path: check worker selection cache
   const cached = context.workerSelectionCache.get(cacheKey);
-  if (cached && context.wrappedWorkers.has(cached)) {
+  if (cached && context.workerClients.has(cached)) {
     return { type: 'workerDetermined', worker: cached, parameters: event.parameters, file: event.file };
   }
 
-  // Query workers in config-defined priority order (array position = priority)
-  for (const entry of context.kernelConfig) {
-    const worker = context.wrappedWorkers.get(entry.id);
-    if (!worker) {
-      continue;
-    }
-
-    try {
-      // eslint-disable-next-line no-await-in-loop -- Need to check workers sequentially
-      const canHandle = await worker.canHandleEntry(event.file);
-      if (canHandle) {
-        context.workerSelectionCache.set(cacheKey, entry.id);
-        return { type: 'workerDetermined', worker: entry.id, parameters: event.parameters, file: event.file };
-      }
-    } catch (error) {
-      console.warn(`Worker ${entry.id} canHandle error:`, error);
-    }
+  const client = await ensureRuntimeWorkerClient(context);
+  const canHandle = await client.canHandle(event.file);
+  if (canHandle) {
+    context.workerSelectionCache.set(cacheKey, '__runtime__');
+    context.workerClients.set('__runtime__', client);
+    return { type: 'workerDetermined', worker: '__runtime__', parameters: event.parameters, file: event.file };
   }
 
-  // No worker found
   return {
     type: 'kernelIssue',
     errors: [
@@ -72,25 +63,99 @@ const determineWorkerActor = fromPromise<
   };
 });
 
+/**
+ * Correlate worker performance entries with the main-thread timeline.
+ * Converts worker-relative timestamps to main-thread-relative timestamps
+ * and re-creates them as performance.measure() entries visible in DevTools.
+ */
+function createTelemetryAggregator(workerId: string, context: KernelContext): OnTelemetryCallback {
+  return (entries: PerformanceEntryData[]) => {
+    const mainTimeOrigin = performance.timeOrigin;
+    for (const entry of entries) {
+      const offsetMs = entry.workerTimeOrigin - mainTimeOrigin;
+      const adjustedStart = entry.startTime + offsetMs;
+      try {
+        performance.measure(`[${workerId}] ${entry.name}`, {
+          start: Math.max(0, adjustedStart),
+          duration: entry.duration,
+          detail: entry.detail,
+        });
+      } catch {
+        // Silently skip entries that can't be measured (e.g. negative start)
+      }
+    }
+
+    context.parentRef?.send({ type: 'kernelTelemetry', entries });
+  };
+}
+
+/**
+ * Lazily create and initialize the single runtime worker for the CU.
+ * The runtime worker dynamically loads kernel modules and handles selection internally.
+ * No-op if the runtime worker already exists.
+ */
+async function ensureRuntimeWorkerClient(context: KernelContext): Promise<KernelWorkerClient> {
+  if (context.runtimeWorkerClient) {
+    return context.runtimeWorkerClient;
+  }
+
+  if (!context.fileManagerRef) {
+    throw new Error('File manager not initialized');
+  }
+
+  const snapshot = context.fileManagerRef.getSnapshot();
+  if (!snapshot.matches('ready') || !snapshot.context.wrappedWorker) {
+    throw new Error('File manager not ready');
+  }
+
+  const wrappedFileManager = snapshot.context.wrappedWorker;
+
+  const onLog: OnLogCallback = (log) => {
+    if (context.parentRef) {
+      context.parentRef.send({
+        type: 'kernelLog',
+        level: log.level as LogLevel,
+        message: log.message,
+        origin: log.origin,
+        data: log.data,
+      });
+    }
+  };
+
+  const rawWorker = new Worker(runtimeWorkerUrl, { type: 'module' });
+  const onTelemetry = createTelemetryAggregator('runtime', context);
+  const client = new KernelWorkerClient(rawWorker, onLog, onTelemetry);
+  context.runtimeWorkerClient = client;
+
+  const kernelModules = context.kernelConfig.map((entry) => ({
+    id: entry.id,
+    moduleUrl: entry.kernelModuleUrl,
+    extensions: entry.extensions,
+    detectImport: entry.detectImport?.source,
+    options: entry.options,
+  }));
+
+  const port = createFileManagerPort(wrappedFileManager);
+  await client.initialize({ kernelModules }, port, context.middlewareConfig);
+
+  return client;
+}
+
 const createWorkersActor = fromPromise<
   { type: 'kernelInitialized' } | { type: 'kernelIssue'; errors: KernelIssue[] },
   { context: KernelContext }
 >(async ({ input }) => {
   const { context } = input;
-  const { kernelConfig } = context;
 
-  // Clean up any existing workers (cleanup before terminate, mirroring destroyWorkers)
-  for (const [id, rawWorker] of context.workers) {
-    // eslint-disable-next-line no-await-in-loop -- Sequential cleanup avoids race conditions
-    await context.wrappedWorkers.get(id)?.cleanupEntry();
-    rawWorker.terminate();
+  // Clean up any existing worker clients
+  for (const client of context.workerClients.values()) {
+    client.cleanup();
+    client.terminate();
   }
 
-  context.workers.clear();
-  context.wrappedWorkers.clear();
+  context.workerClients.clear();
 
   try {
-    // Wait for file manager to be ready and extract the wrapped worker
     if (!context.fileManagerRef) {
       return {
         type: 'kernelIssue',
@@ -104,190 +169,40 @@ const createWorkersActor = fromPromise<
       };
     }
 
-    // Wait for file manager to be ready OR error state (prevents infinite hang)
+    // Wait for file manager to be ready -- workers are created lazily on first use
     const snapshot = await waitFor(context.fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
 
-    // Handle file manager error state
     if (snapshot.matches('error')) {
       const errorMessage = snapshot.context.error?.message ?? 'File manager initialization failed';
       return {
         type: 'kernelIssue',
-        errors: [
-          {
-            message: errorMessage,
-            type: 'runtime',
-            severity: 'error',
-          },
-        ],
+        errors: [{ message: errorMessage, type: 'runtime', severity: 'error' as const }],
       };
     }
 
-    const fileManagerContext = snapshot.context;
-    const wrappedFileManager = fileManagerContext.wrappedWorker;
-
-    if (!wrappedFileManager) {
+    if (!snapshot.context.wrappedWorker) {
       return {
         type: 'kernelIssue',
-        errors: [
-          {
-            message: 'File manager worker not initialized',
-            type: 'runtime',
-            severity: 'error' as const,
-          },
-        ],
+        errors: [{ message: 'File manager worker not initialized', type: 'runtime', severity: 'error' as const }],
       };
     }
 
-    const onLog: OnWorkerLog = (log) => {
-      if (context.parentRef) {
-        context.parentRef.send({
-          type: 'kernelLog',
-          level: log.level,
-          message: log.message,
-          origin: log.origin,
-          data: log.data,
-        });
-      }
-    };
-
-    // Initialize workers dynamically from the config array
-    const initPromises: Array<Promise<void>> = [];
-
-    for (const entry of kernelConfig) {
-      const worker = new Worker(entry.url, { type: 'module' });
-      context.workers.set(entry.id, worker);
-
-      const wrappedWorker = wrap<KernelWorkerInterface>(worker);
-      context.wrappedWorkers.set(entry.id, wrappedWorker);
-
-      // eslint-disable-next-line no-await-in-loop -- Sequential port creation is required
-      const port = await wrappedFileManager[createEndpoint]();
-
-      initPromises.push(
-        wrappedWorker.initializeEntry(
-          proxy({ onLog }),
-          transfer({ fileManagerPort: port }, [port]),
-          entry.options ?? {},
-          context.middlewareConfig,
-        ),
-      );
-    }
-
-    await Promise.all(initPromises);
-
-    // Return success result
     return { type: 'kernelInitialized' };
   } catch (error) {
-    // Handle initialization errors
     const errorMessage = error instanceof Error ? error.message : 'Failed to initialize workers';
     return {
       type: 'kernelIssue',
-      errors: [
-        {
-          message: errorMessage,
-          type: 'kernel',
-          severity: 'error' as const,
-        },
-      ],
+      errors: [{ message: errorMessage, type: 'kernel', severity: 'error' as const }],
     };
   }
 });
 
-const parseParametersActor = fromPromise<
+type RenderEvent =
   | {
       type: 'parametersParsed';
       defaultParameters: Record<string, unknown>;
-      file: GeometryFile;
-      parameters: Record<string, unknown>;
       jsonSchema: JSONSchema7;
     }
-  | {
-      type: 'kernelIssue';
-      errors: KernelIssue[];
-    },
-  {
-    context: KernelContext;
-    event: { file: GeometryFile; parameters: Record<string, unknown> };
-  }
->(async ({ input }) => {
-  const { context, event } = input;
-  const { selectedWorker } = context;
-  const { file } = event;
-
-  // Get the correct worker based on selected worker
-  if (!selectedWorker) {
-    return {
-      type: 'kernelIssue',
-      errors: [
-        {
-          message: 'No worker selected',
-          location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-          type: 'compilation',
-          severity: 'error' as const,
-        },
-      ],
-    };
-  }
-
-  const wrappedWorker = context.wrappedWorkers.get(selectedWorker);
-
-  if (!wrappedWorker) {
-    return {
-      type: 'kernelIssue',
-      errors: [
-        {
-          message: `${selectedWorker} worker not initialized`,
-          location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-          type: 'compilation',
-          severity: 'error' as const,
-        },
-      ],
-    };
-  }
-
-  try {
-    const parametersResult = await wrappedWorker.getParametersEntry(file);
-
-    if (isKernelSuccess(parametersResult)) {
-      const { defaultParameters, jsonSchema } = parametersResult.data as {
-        defaultParameters: Record<string, unknown>;
-        jsonSchema: JSONSchema7;
-      };
-
-      return {
-        type: 'parametersParsed',
-        defaultParameters,
-        file,
-        parameters: event.parameters,
-        jsonSchema,
-      };
-    }
-
-    // If extraction fails, return error from the worker
-    return {
-      type: 'kernelIssue',
-      errors: parametersResult.issues,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Error extracting parameters';
-    console.error('Error extracting parameters:', errorMessage);
-
-    // Return the error as a kernel issue so it's displayed in the UI
-    return {
-      type: 'kernelIssue',
-      errors: [
-        {
-          message: errorMessage,
-          location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-          type: 'runtime',
-          severity: 'error' as const,
-        },
-      ],
-    };
-  }
-});
-
-const evaluateCodeActor = fromPromise<
   | {
       type: 'geometryComputed';
       geometries: Geometry[];
@@ -296,23 +211,31 @@ const evaluateCodeActor = fromPromise<
   | {
       type: 'kernelIssue';
       errors: KernelIssue[];
-    },
-  {
-    context: KernelContext;
-    event: {
-      defaultParameters: Record<string, unknown>;
-      parameters: Record<string, unknown>;
-      file: GeometryFile;
+    }
+  | {
+      type: 'kernelProgress';
+      phase: RenderPhase;
+    }
+  | {
+      type: 'kernelTelemetry';
+      entries: PerformanceEntryData[];
     };
-  }
->(async ({ input }) => {
+
+type RenderInput = {
+  context: KernelContext;
+  event: {
+    file: GeometryFile;
+    parameters: Record<string, unknown>;
+  };
+};
+
+const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack }) => {
   const { context, event } = input;
   const { selectedWorker } = context;
-  const { file, defaultParameters, parameters } = event;
+  const { file, parameters } = event;
 
-  // Get the correct worker based on selected worker
   if (!selectedWorker) {
-    return {
+    sendBack({
       type: 'kernelIssue',
       errors: [
         {
@@ -322,13 +245,14 @@ const evaluateCodeActor = fromPromise<
           severity: 'error' as const,
         },
       ],
-    };
+    });
+    return;
   }
 
-  const wrappedWorker = context.wrappedWorkers.get(selectedWorker);
+  const client = context.workerClients.get(selectedWorker);
 
-  if (!wrappedWorker) {
-    return {
+  if (!client) {
+    sendBack({
       type: 'kernelIssue',
       errors: [
         {
@@ -338,40 +262,61 @@ const evaluateCodeActor = fromPromise<
           severity: 'error' as const,
         },
       ],
-    };
+    });
+    return;
   }
 
-  // Merge default parameters with provided parameters
-  const mergedParameters = deepmerge(defaultParameters, parameters);
+  if (context.changedPaths.length > 0) {
+    client.notifyFileChanged(context.changedPaths);
+  }
 
-  try {
-    const result = await wrappedWorker.createGeometryEntry(file, mergedParameters);
-
-    // Handle the result pattern
-    if (isKernelSuccess(result)) {
-      // Return geometries with any warnings from the success result
-      return { type: 'geometryComputed', geometries: result.data, issues: result.issues };
-    }
-
-    return {
-      type: 'kernelIssue',
-      errors: result.issues,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Error evaluating code';
-
-    return {
-      type: 'kernelIssue',
-      errors: [
-        {
-          message: errorMessage,
-          location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-          type: 'runtime',
-          severity: 'error' as const,
+  void (async () => {
+    try {
+      const result = await client.render(
+        file,
+        parameters,
+        (parametersResult: GetParametersResult) => {
+          if (isKernelSuccess(parametersResult)) {
+            const data = parametersResult.data as {
+              defaultParameters: Record<string, unknown>;
+              jsonSchema: JSONSchema7;
+            };
+            sendBack({
+              type: 'parametersParsed',
+              defaultParameters: data.defaultParameters,
+              jsonSchema: data.jsonSchema,
+            });
+          }
         },
-      ],
-    };
-  }
+        (phase: RenderPhase) => {
+          sendBack({ type: 'kernelProgress', phase });
+        },
+      );
+
+      if (isKernelSuccess(result)) {
+        sendBack({
+          type: 'geometryComputed',
+          geometries: result.data,
+          issues: result.issues,
+        });
+      } else {
+        sendBack({ type: 'kernelIssue', errors: result.issues });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Error rendering geometry';
+      sendBack({
+        type: 'kernelIssue',
+        errors: [
+          {
+            message: errorMessage,
+            location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
+            type: 'runtime',
+            severity: 'error' as const,
+          },
+        ],
+      });
+    }
+  })();
 });
 
 const exportGeometryActor = fromPromise<
@@ -397,9 +342,9 @@ const exportGeometryActor = fromPromise<
     };
   }
 
-  const wrappedWorker = context.wrappedWorkers.get(selectedWorker);
+  const client = context.workerClients.get(selectedWorker);
 
-  if (!wrappedWorker) {
+  if (!client) {
     return {
       type: 'geometryExportFailed',
       errors: [
@@ -413,22 +358,7 @@ const exportGeometryActor = fromPromise<
   }
 
   try {
-    const supportedFormats = await wrappedWorker.getExportFormats();
-    if (!supportedFormats.includes(format)) {
-      return {
-        type: 'geometryExportFailed',
-        errors: [
-          {
-            message: `Unsupported export format: ${format}`,
-            type: 'runtime',
-            severity: 'error' as const,
-          },
-        ],
-      };
-    }
-
-    // TODO: add a proper type guard for the export format
-    const result = await wrappedWorker.exportGeometryEntry(format as never);
+    const result = await client.exportGeometry(format);
 
     if (isKernelSuccess(result)) {
       const { data } = result;
@@ -474,8 +404,7 @@ export type CadActor = ActorRef<Snapshot<unknown>, KernelEventExternal>;
 const kernelActors = {
   createWorkersActor,
   determineWorkerActor,
-  parseParametersActor,
-  evaluateCodeActor,
+  renderActor,
   exportGeometryActor,
 } as const;
 type KernelActorNames = keyof typeof kernelActors;
@@ -483,7 +412,7 @@ type KernelActorNames = keyof typeof kernelActors;
 // Define the types of events the machine can receive
 type KernelEventInternal =
   | { type: 'initializeKernel'; parentRef: CadActor }
-  | { type: 'createGeometry'; file: GeometryFile; parameters: Record<string, unknown> }
+  | { type: 'createGeometry'; file: GeometryFile; parameters: Record<string, unknown>; changedPaths?: string[] }
   | { type: 'exportGeometry'; format: ExportFormat }
   | { type: 'configureMiddleware'; middlewareConfig: MiddlewareConfig };
 
@@ -496,39 +425,48 @@ type KernelEventWorker = {
   data?: unknown;
 };
 
-// The kernel machine simply sends the output of the actors to the parent machine.
-export type KernelEventExternal = OutputFrom<(typeof kernelActors)[KernelActorNames]> | KernelEventWorker;
+// Actors that produce OutputFrom (fromPromise actors)
+type PromiseActorNames = Exclude<KernelActorNames, 'renderActor'>;
+
+// The kernel machine sends the output of promise actors and render streaming events to the parent.
+export type KernelEventExternal =
+  | OutputFrom<(typeof kernelActors)[PromiseActorNames]>
+  | RenderEvent
+  | KernelEventWorker;
 type KernelEventExternalDone = DoneActorEvent<KernelEventExternal, KernelActorNames>;
 
-type KernelEvent = KernelEventExternalDone | KernelEventInternal;
+type KernelEvent = KernelEventExternalDone | KernelEventInternal | RenderEvent;
 
 // Interface defining the context for the Kernel machine
 type KernelContext = {
   kernelConfig: KernelConfig;
   middlewareConfig: MiddlewareConfig;
-  workers: Map<string, Worker>;
-  wrappedWorkers: Map<string, Remote<KernelWorkerInterface>>;
+  workerClients: Map<string, KernelWorkerClient>;
   workerSelectionCache: Map<string, string>;
+  /** Single runtime worker client (used in single-worker-per-CU mode) */
+  runtimeWorkerClient?: KernelWorkerClient;
   parentRef?: CadActor;
   selectedWorker?: string;
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
+  changedPaths: string[];
 };
 
 type KernelInput = {
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
   kernelConfig: KernelConfig;
   middlewareConfig: MiddlewareConfig;
+  mountConfig?: MountConfig;
 };
 
 /**
  * Kernel Machine
  *
- * This machine manages the WebWorkers that run the CAD operations:
- * - Dynamically creates workers from injected URLs (KernelConfig)
- * - Handles communication with the correct worker based on kernel type
+ * This machine manages the single runtime WebWorker that runs CAD operations:
+ * - Lazily creates a runtime worker that dynamically loads kernel modules
+ * - Routes files to the correct kernel via the runtime worker's canHandle check
  * - Processes results from CAD operations
  *
- * The machine is agnostic to which kernels exist -- worker URLs, priority,
+ * The machine is agnostic to which kernels exist -- kernel module URLs, priority,
  * and options are injected via KernelConfig at spawn time.
  * The parent machine is responsible for the state of the CAD operations.
  */
@@ -561,15 +499,19 @@ export const kernelMachine = setup({
         return undefined;
       },
     }),
-    async destroyWorkers({ context }) {
-      for (const [id, worker] of context.workers) {
-        // eslint-disable-next-line no-await-in-loop -- Sequential cleanup avoids race conditions
-        await context.wrappedWorkers.get(id)?.cleanupEntry();
-        worker.terminate();
+    destroyWorkers({ context }) {
+      for (const client of context.workerClients.values()) {
+        client.cleanup();
+        client.terminate();
       }
 
-      context.workers.clear();
-      context.wrappedWorkers.clear();
+      context.workerClients.clear();
+
+      if (context.runtimeWorkerClient) {
+        context.runtimeWorkerClient.cleanup();
+        context.runtimeWorkerClient.terminate();
+        context.runtimeWorkerClient = undefined;
+      }
     },
   },
   guards: {
@@ -584,12 +526,13 @@ export const kernelMachine = setup({
   context: ({ input }) => ({
     kernelConfig: input.kernelConfig,
     middlewareConfig: input.middlewareConfig,
-    workers: new Map(),
-    wrappedWorkers: new Map(),
+    workerClients: new Map(),
     workerSelectionCache: new Map(),
+    runtimeWorkerClient: undefined,
     parentRef: undefined,
     selectedWorker: undefined,
     fileManagerRef: input.fileManagerRef,
+    changedPaths: [],
   }),
   initial: 'initializing',
   exit: ['destroyWorkers'],
@@ -640,6 +583,12 @@ export const kernelMachine = setup({
       on: {
         createGeometry: {
           target: 'determiningWorker',
+          actions: assign({
+            changedPaths({ event }) {
+              assertEvent(event, 'createGeometry');
+              return event.changedPaths ?? [];
+            },
+          }),
         },
         exportGeometry: {
           target: 'exporting',
@@ -654,8 +603,8 @@ export const kernelMachine = setup({
             }),
             ({ context, event }) => {
               assertEvent(event, 'configureMiddleware');
-              for (const wrappedWorker of context.wrappedWorkers.values()) {
-                void wrappedWorker.configureMiddleware(event.middlewareConfig);
+              for (const client of context.workerClients.values()) {
+                client.configureMiddleware(event.middlewareConfig);
               }
             },
           ],
@@ -693,7 +642,7 @@ export const kernelMachine = setup({
             ),
           },
           {
-            target: 'parsing',
+            target: 'rendering',
             actions: 'setSelectedWorker',
           },
         ],
@@ -716,19 +665,71 @@ export const kernelMachine = setup({
       },
     },
 
-    parsing: {
-      // Allow cancelling inflight operations
+    rendering: {
       on: {
         createGeometry: {
           target: 'determiningWorker',
+          actions: assign({
+            changedPaths({ event }) {
+              assertEvent(event, 'createGeometry');
+              return event.changedPaths ?? [];
+            },
+          }),
         },
         exportGeometry: {
           target: 'exporting',
         },
+        parametersParsed: {
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => {
+              assertEvent(event, 'parametersParsed');
+              return event;
+            },
+          ),
+        },
+        geometryComputed: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => {
+              assertEvent(event, 'geometryComputed');
+              return event;
+            },
+          ),
+        },
+        kernelIssue: {
+          target: 'ready',
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => {
+              assertEvent(event, 'kernelIssue');
+              return event;
+            },
+          ),
+        },
+        kernelProgress: {
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => {
+              assertEvent(event, 'kernelProgress');
+              return event;
+            },
+          ),
+        },
+        kernelTelemetry: {
+          actions: sendTo(
+            ({ context }) => context.parentRef!,
+            ({ event }) => {
+              assertEvent(event, 'kernelTelemetry');
+              return event;
+            },
+          ),
+        },
       },
       invoke: {
-        id: 'parseParametersActor',
-        src: 'parseParametersActor',
+        id: 'renderActor',
+        src: 'renderActor',
         input({ context, event }) {
           assertEvent(event, 'xstate.done.actor.determineWorkerActor');
           assertEvent(event.output, 'workerDetermined');
@@ -739,86 +740,6 @@ export const kernelMachine = setup({
               parameters: event.output.parameters,
             },
           };
-        },
-        onDone: [
-          {
-            target: 'ready',
-            guard: 'isKernelIssue',
-            actions: sendTo(
-              ({ context }) => context.parentRef!,
-              ({ event }) => event.output,
-            ),
-          },
-          {
-            target: 'evaluating',
-            actions: sendTo(
-              ({ context }) => context.parentRef!,
-              ({ event }) => event.output,
-            ),
-          },
-        ],
-        onError: {
-          target: 'ready',
-          actions: sendTo(
-            ({ context }) => context.parentRef!,
-            ({ event }) => ({
-              type: 'kernelIssue' as const,
-              errors: [
-                {
-                  message: event.error instanceof Error ? event.error.message : 'Failed to parse parameters',
-                  type: 'runtime' as const,
-                  severity: 'error' as const,
-                },
-              ],
-            }),
-          ),
-        },
-      },
-    },
-
-    evaluating: {
-      // Allow cancelling inflight operations
-      on: {
-        createGeometry: {
-          target: 'determiningWorker',
-        },
-        exportGeometry: {
-          target: 'exporting',
-        },
-      },
-      invoke: {
-        id: 'evaluateCodeActor',
-        src: 'evaluateCodeActor',
-        input({ context, event }) {
-          assertEvent(event, 'xstate.done.actor.parseParametersActor');
-          assertEvent(event.output, 'parametersParsed');
-          return {
-            context,
-            event: event.output,
-          };
-        },
-        onDone: {
-          target: 'ready',
-          actions: sendTo(
-            ({ context }) => context.parentRef!,
-            ({ event }) => event.output,
-          ),
-        },
-        onError: {
-          target: 'ready',
-          actions: sendTo(
-            ({ context }) => context.parentRef!,
-            ({ event }) => ({
-              type: 'kernelIssue' as const,
-              errors: [
-                {
-                  message: event.error instanceof Error ? event.error.message : 'Failed to evaluate code',
-                  type: 'runtime' as const,
-                  severity: 'error' as const,
-                },
-              ],
-            }),
-          ),
         },
       },
     },

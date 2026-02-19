@@ -4,7 +4,7 @@
  * Tests:
  * 1. Asset fetch failure returns unique UUID each time (not cached)
  * 2. Asset fetch success caches the content hash
- * 3. Geometry content hash is full 64 characters
+ * 3. Geometry hash format: ${dependencyHash}-${index}
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -18,8 +18,8 @@ describe('kernel-worker hashing', () => {
     onLog = vi.fn();
   });
 
-  describe('geometry content hash', () => {
-    it('should return full 129-character content hash in geometry.hash', async () => {
+  describe('geometry hash', () => {
+    it('should return dependencyHash-index format in geometry.hash', async () => {
       const successResult: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([1, 2, 3, 4, 5]) }],
@@ -37,12 +37,11 @@ describe('kernel-worker hashing', () => {
       expect(result.success).toBe(true);
       if (result.success && result.data[0]) {
         const geometryHash = result.data[0].hash;
-        // Format: ${dependencyHash}-${index}-${contentHash} = 64 + 1 + N + 1 + 64 chars
-        expect(geometryHash).toMatch(/^[a-f\d]{64}-\d+-[a-f\d]{64}$/);
+        expect(geometryHash).toMatch(/^[a-f\d]{64}-\d+$/);
       }
     });
 
-    it('should generate different content hashes for different geometry content', async () => {
+    it('should generate same dependency hash for same inputs regardless of geometry content', async () => {
       const result1: CreateGeometryResult = {
         success: true,
         data: [{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }],
@@ -74,15 +73,13 @@ describe('kernel-worker hashing', () => {
       expect(output2.success).toBe(true);
 
       if (output1.success && output2.success && output1.data[0] && output2.data[0]) {
-        // The content hash portion (third part after splitting by dash) should differ
-        // Format: ${dependencyHash}-${index}-${contentHash}
-        const contentHash1 = output1.data[0].hash.split('-')[2];
-        const contentHash2 = output2.data[0].hash.split('-')[2];
-        expect(contentHash1).not.toBe(contentHash2);
+        const depHash1 = output1.data[0].hash.split('-')[0];
+        const depHash2 = output2.data[0].hash.split('-')[0];
+        expect(depHash1).toBe(depHash2);
       }
     });
 
-    it('should generate unique hashes for multiple geometries in same result', async () => {
+    it('should generate unique hashes for multiple geometries in same result via index', async () => {
       const multiGeometryResult: CreateGeometryResult = {
         success: true,
         data: [
@@ -104,13 +101,11 @@ describe('kernel-worker hashing', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         const hashes = result.data.map((g) => g.hash);
-        // All hashes should be unique
         const uniqueHashes = new Set(hashes);
         expect(uniqueHashes.size).toBe(hashes.length);
 
-        // All should have the format: dependencyHash-index-contentHash
         for (const hash of hashes) {
-          expect(hash).toMatch(/^[a-f\d]{64}-\d+-[a-f\d]{64}$/);
+          expect(hash).toMatch(/^[a-f\d]{64}-\d+$/);
         }
       }
     });

@@ -40,3 +40,9 @@ export const getMiddleware: unique symbol = Symbol('getMiddleware');
 
 /** Symbol for the configureMiddleware method - called by framework to reconfigure middleware at runtime */
 export const configureMiddleware: unique symbol = Symbol('configureMiddleware');
+
+/** Symbol for the notifyFileChanged method - called by framework to invalidate file caches */
+export const notifyFileChanged: unique symbol = Symbol('notifyFileChanged');
+
+/** Symbol for the renderEntry method - unified getParameters + createGeometry in a single call */
+export const renderEntry: unique symbol = Symbol('renderEntry');

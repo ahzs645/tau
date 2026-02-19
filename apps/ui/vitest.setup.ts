@@ -84,3 +84,28 @@ globalThis.ResizeObserver = class ResizeObserver {
     // No-op
   }
 };
+
+// Polyfill User Timing API Level 3 for jsdom.
+// jsdom's performance.measure() doesn't support the options-object form
+// (PerformanceMeasureOptions with { start, detail }), which causes
+// "Invalid target origin '[object Object]'" errors. Replace with no-op stubs
+// that return minimal PerformanceEntry-shaped objects.
+const stubEntry = { name: '', startTime: 0, duration: 0, entryType: '', detail: undefined, toJSON: () => ({}) };
+globalThis.performance.mark = (() => stubEntry) as typeof globalThis.performance.mark;
+globalThis.performance.measure = (() => stubEntry) as typeof globalThis.performance.measure;
+
+// PerformanceObserver is not available in jsdom -- stub it for telemetry code
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- jsdom doesn't provide PerformanceObserver despite type declarations
+globalThis.PerformanceObserver ??= class PerformanceObserver {
+  public observe() {
+    // No-op
+  }
+
+  public disconnect() {
+    // No-op
+  }
+
+  public takeRecords() {
+    return [];
+  }
+} as unknown as typeof globalThis.PerformanceObserver;

@@ -2,7 +2,7 @@
 /* eslint-disable max-lines -- comprehensive kernel test suite */
 import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
-import { JscadWorker } from '#components/geometry/kernel/jscad/jscad.worker.js';
+import jscadKernel from '#components/geometry/kernel/jscad/jscad.kernel.js';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
 import {
   createGeometryFile,
@@ -17,23 +17,23 @@ import {
 // Test Utilities
 // =============================================================================
 
-/** Create a JscadWorker for testing with the provided files. */
-const createWorker = async (files: Record<string, string>): Promise<JscadWorker> =>
-  createTestWorker(JscadWorker, files);
+/** Create a runtime worker for testing with the provided files. */
+const createWorker = async (files: Record<string, string>): ReturnType<typeof createTestWorker> =>
+  createTestWorker(jscadKernel, files);
 
 /** Helper to extract parameters and assert success. */
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(JscadWorker, files, mainFile);
+  getTestParameters(jscadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
 const createGeometry = async (
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
-): ReturnType<typeof createTestGeometry> => createTestGeometry(JscadWorker, files, mainFile, parameters);
+): ReturnType<typeof createTestGeometry> => createTestGeometry(jscadKernel, files, mainFile, parameters);
 
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
@@ -449,7 +449,7 @@ describe('JscadWorker', () => {
         // Geometry quality assertions (10x10x10 cube)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should compute geometry with parameters', async () => {
@@ -474,7 +474,7 @@ describe('JscadWorker', () => {
         // Geometry should use parameter value (30x30x30 cube)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 30], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.03, 0.03, 0.03], 0.0005);
       });
 
       it('should handle JSCAD minimal starter pattern with destructured primitives', async () => {
@@ -505,7 +505,7 @@ describe('JscadWorker', () => {
         // Geometry should use default parameter value (20x20x20 cube)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
 
       it('should compute geometry for a cylinder', async () => {
@@ -527,7 +527,7 @@ describe('JscadWorker', () => {
         // Cylinder: radius 5 (diameter 10), height 20
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.02, 0.01], 0.0005);
       });
 
       it('should compute geometry for a sphere', async () => {
@@ -549,7 +549,7 @@ describe('JscadWorker', () => {
         // Sphere: radius 10 (diameter 20)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
 
       it('should handle multiple shapes returned as array', async () => {
@@ -598,7 +598,7 @@ describe('JscadWorker', () => {
         // Geometry quality assertions (10x10x10 cube)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should handle CommonJS with "use strict" and multiple destructured requires', async () => {
@@ -671,7 +671,7 @@ module.exports = { main, getParameterDefinitions }
         // Geometry should use parameter value (20x20x20 cube)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
     });
 
@@ -693,7 +693,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should support CJS require of @jscad/modeling/primitives submodule', async () => {
@@ -715,7 +715,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should support mixed root and submodule imports', async () => {
@@ -785,7 +785,7 @@ module.exports = { main, getParameterDefinitions }
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Bounding box is determined by larger cube (10x10x10)
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should handle boolean operations (subtract)', async () => {
@@ -810,7 +810,7 @@ module.exports = { main, getParameterDefinitions }
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Outer dimensions remain 20x20x20
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
 
       it('should handle boolean operations (intersect)', async () => {
@@ -835,7 +835,7 @@ module.exports = { main, getParameterDefinitions }
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Bounding box is constrained by cube (10x10x10)
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should handle transformations (translate, rotate, scale)', async () => {
@@ -882,7 +882,7 @@ module.exports = { main, getParameterDefinitions }
         // Extrusion produces 1 mesh (20x10x15 box)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 10, 15], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.015, 0.01], 0.0005);
       });
 
       it('should handle hull operations', async () => {
@@ -907,7 +907,7 @@ module.exports = { main, getParameterDefinitions }
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Two spheres at radius 5, 20 apart: total width ~30, height/depth ~10
-        await geometryHelpers.expectBoundingBoxSize(result, [30, 10, 10], 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.03, 0.01, 0.01], 0.001);
       });
 
       it('should handle torus geometry', async () => {
@@ -1250,7 +1250,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
 
       it('should bundle code with type assertions (as)', async () => {
@@ -1297,7 +1297,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [15, 15, 15], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.015, 0.015, 0.015], 0.0005);
       });
     });
 
@@ -1321,7 +1321,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should strip inline type imports (import { type X })', async () => {
@@ -1364,7 +1364,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should handle Geom3 type import from root with submodule value imports', async () => {
@@ -1388,7 +1388,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
 
       it('should handle Geom3 type with multiple submodule value imports', async () => {
@@ -1435,7 +1435,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
     });
 
@@ -1504,7 +1504,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
     });
 
@@ -1536,7 +1536,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.0005);
       });
 
       it('should bundle code with enums', async () => {
@@ -1565,7 +1565,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [10, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.01, 0.01], 0.0005);
       });
 
       it('should bundle code with optional chaining and nullish coalescing', async () => {
@@ -1596,7 +1596,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [15, 15, 15], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.015, 0.015, 0.015], 0.0005);
       });
     });
 
@@ -1694,7 +1694,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [30, 20, 15], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.03, 0.015, 0.02], 0.0005);
       });
     });
 
@@ -1762,7 +1762,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [40, 30, 5], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.04, 0.005, 0.03], 0.0005);
       });
 
       it('should bundle a multi-file parametric assembly with TypeScript', async () => {

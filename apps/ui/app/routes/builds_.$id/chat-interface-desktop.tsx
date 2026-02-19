@@ -8,6 +8,7 @@ import { ChatParameters, ChatParametersTrigger } from '#routes/builds_.$id/chat-
 import { ViewerDockview } from '#routes/builds_.$id/chat-viewer-dockview.js';
 import { ChatEditorLayout, ChatEditorLayoutTrigger } from '#routes/builds_.$id/chat-editor-layout.js';
 import { ChatExplorerTree, ChatExplorerTrigger } from '#routes/builds_.$id/chat-explorer.js';
+import { ChatKernel, ChatKernelTrigger } from '#routes/builds_.$id/chat-kernel.js';
 import { ChatDetails, ChatDetailsTrigger } from '#routes/builds_.$id/chat-details.js';
 import { ChatConverter, ChatConverterTrigger } from '#routes/builds_.$id/chat-converter.js';
 import { BuildNotFound } from '#routes/builds_.$id/build-not-found.js';
@@ -36,6 +37,8 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     setIsEditorOpen,
     isExplorerOpen,
     setIsExplorerOpen,
+    isKernelOpen,
+    setIsKernelOpen,
     isConverterOpen,
     setIsConverterOpen,
     isGitOpen,
@@ -59,7 +62,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   }, []);
 
   // Determine if any left/right panels are open for center pane edge treatment
-  const isAnyLeftPanelOpen = isChatOpen || isFileTreeOpen || isExplorerOpen;
+  const isAnyLeftPanelOpen = isChatOpen || isFileTreeOpen || isExplorerOpen || isKernelOpen;
   const isAnyRightPanelOpen = isParametersOpen || isEditorOpen || isConverterOpen || isDetailsOpen;
 
   // Map panel IDs to their visibility states
@@ -68,6 +71,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     chat: isChatOpen,
     files: isFileTreeOpen,
     explorer: isExplorerOpen,
+    kernel: isKernelOpen,
     viewer: true, // Always visible
     parameters: isParametersOpen,
     editor: isEditorOpen,
@@ -144,6 +148,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isChatOpen,
     isFileTreeOpen,
     isExplorerOpen,
+    isKernelOpen,
     isParametersOpen,
     isEditorOpen,
     isConverterOpen,
@@ -159,6 +164,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isParametersOpen,
     isEditorOpen,
     isExplorerOpen,
+    isKernelOpen,
     isConverterOpen,
     isGitOpen,
     isDetailsOpen,
@@ -259,6 +265,16 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
             <ChatExplorerTree isExpanded={isExplorerOpen} setIsExpanded={setIsExplorerOpen} />
           </Allotment.Pane>
 
+          <Allotment.Pane
+            className="rs-left z-10"
+            minSize={panelMinSizeStandard}
+            preferredSize={panelSizes.kernel}
+            priority={LayoutPriority.Low}
+            visible={isKernelOpen}
+          >
+            <ChatKernel isExpanded={isKernelOpen} setIsExpanded={setIsKernelOpen} />
+          </Allotment.Pane>
+
           {/* Center viewer - High priority so it absorbs all extra space from collapsed panels */}
           <Allotment.Pane
             className="rs-center"
@@ -284,6 +300,12 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
                 isOpen={isExplorerOpen}
                 onToggle={() => {
                   setIsExplorerOpen((previous) => !previous);
+                }}
+              />
+              <ChatKernelTrigger
+                isOpen={isKernelOpen}
+                onToggle={() => {
+                  setIsKernelOpen((previous) => !previous);
                 }}
               />
             </div>

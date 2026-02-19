@@ -26,7 +26,7 @@ import {
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, configHash: 'mock-config-hash' },
+    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, config: {} },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -469,7 +469,7 @@ describe('geometryCacheMiddleware', () => {
         filesystemOverrides: {
           existsResult: false,
         },
-        dependencies: createMockDependencies([{ type: 'parameter', parametersHash: 'newParams123' }]),
+        dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'newParams123' } }]),
         dependencyHash,
         config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
@@ -497,7 +497,7 @@ describe('geometryCacheMiddleware', () => {
           existsResult: true,
           readFileResult: serializedContent,
         },
-        dependencies: createMockDependencies([{ type: 'parameter', parametersHash: 'sameParams' }]),
+        dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'sameParams' } }]),
         dependencyHash,
         config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });

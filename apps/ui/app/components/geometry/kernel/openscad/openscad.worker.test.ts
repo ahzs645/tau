@@ -1,8 +1,8 @@
 /* eslint-disable max-lines -- comprehensive kernel test suite */
 import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
+import openscadKernel from '#components/geometry/kernel/openscad/openscad.kernel.js';
 import { createGeometryTestHelpers } from '#components/geometry/kernel/utils/kernel-geometry-testing.utils.js';
-import { OpenScadWorker } from '#components/geometry/kernel/openscad/openscad.worker.js';
 import {
   createGeometryFile,
   createTestWorker,
@@ -16,23 +16,23 @@ import {
 // Test Utilities
 // =============================================================================
 
-/** Create an OpenScadWorker for testing with the provided files. */
-const createWorker = async (files: Record<string, string>): Promise<OpenScadWorker> =>
-  createTestWorker(OpenScadWorker, files);
+/** Create a runtime worker for testing with the provided files. */
+const createWorker = async (files: Record<string, string>): ReturnType<typeof createTestWorker> =>
+  createTestWorker(openscadKernel, files);
 
 /** Helper to extract parameters and assert success. */
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(OpenScadWorker, files, mainFile);
+  getTestParameters(openscadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
 const createGeometry = async (
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
-): ReturnType<typeof createTestGeometry> => createTestGeometry(OpenScadWorker, files, mainFile, parameters);
+): ReturnType<typeof createTestGeometry> => createTestGeometry(openscadKernel, files, mainFile, parameters);
 
 /**
  * Helper to compute geometry and get OFF data for analysis.
@@ -46,8 +46,11 @@ async function createGeometryAndGetOffData(
   const geometryFile = createGeometryFile(mainFile);
   const result = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
 
+  // nativeHandle is protected on KernelWorker; for OpenSCAD it holds the raw OFF string
+  const offData = (worker as unknown as { nativeHandle: string | undefined }).nativeHandle;
+
   return {
-    offData: worker.getOffData(),
+    offData,
     success: result.success,
   };
 }
@@ -871,7 +874,7 @@ describe('OpenScadWorker', () => {
         // Geometry quality assertions (20x15x10 box)
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 15, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.01, 0.015], 0.001);
       });
 
       it('should produce valid GLTF for a sphere with correct dimensions', async () => {
@@ -882,7 +885,7 @@ describe('OpenScadWorker', () => {
         // Sphere radius 10, diameter 20
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.001);
       });
 
       it('should produce valid GLTF for a cylinder with correct dimensions', async () => {
@@ -893,7 +896,7 @@ describe('OpenScadWorker', () => {
         // Cylinder: radius 8 (diameter 16), height 30
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [16, 16, 30], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.016, 0.03, 0.016], 0.001);
       });
 
       it('should produce valid GLTF for translated geometry', async () => {
@@ -907,9 +910,9 @@ describe('OpenScadWorker', () => {
         // Translated cube should have correct size
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 20, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.02, 0.02], 0.001);
         // Center should be at [50+10, 25+10, 10+10] = [60, 35, 20]
-        await geometryHelpers.expectBoundingBoxCenter(result, [60, 35, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxCenter(result, [0.06, 0.02, -0.035], 0.001);
       });
 
       it('should produce valid GLTF for boolean difference', async () => {
@@ -928,7 +931,7 @@ describe('OpenScadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Outer dimensions are 30x30x30 (sphere removes interior)
-        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 30], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.03, 0.03, 0.03], 0.001);
       });
 
       it('should produce valid GLTF for boolean union', async () => {
@@ -946,7 +949,7 @@ describe('OpenScadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Bounding box spans both cubes: 0 to 30 in X/Y, 0 to 40 in Z
-        await geometryHelpers.expectBoundingBoxSize(result, [30, 30, 40], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.03, 0.04, 0.03], 0.001);
       });
 
       it('should produce valid GLTF for hull operation', async () => {
@@ -965,7 +968,7 @@ describe('OpenScadWorker', () => {
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
         // Two spheres at radius 5, 30 apart: total width 40, height/depth 10
-        await geometryHelpers.expectBoundingBoxSize(result, [40, 10, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.04, 0.01, 0.01], 0.001);
       });
 
       it('should produce valid GLTF for linear extrude', async () => {
@@ -980,7 +983,7 @@ describe('OpenScadWorker', () => {
         // Extruded rectangle: 15x10 base, height 25
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [15, 10, 25], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.015, 0.025, 0.01], 0.001);
       });
 
       it('should produce valid GLTF for rotate extrude', async () => {
@@ -998,7 +1001,7 @@ describe('OpenScadWorker', () => {
         // Total diameter: (20+5)*2 = 50, height: 10
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 50, 10], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.05], 0.001);
       });
 
       it('should produce valid GLTF for scaled geometry', async () => {
@@ -1009,7 +1012,7 @@ describe('OpenScadWorker', () => {
         // Scaled cube: 10*2=20, 10*3=30, 10*4=40
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [20, 30, 40], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.02, 0.04, 0.03], 0.001);
       });
 
       it('should produce valid GLTF with parameterized geometry', async () => {
@@ -1026,7 +1029,7 @@ describe('OpenScadWorker', () => {
         // Cube with parameters: 50x30x20
         await geometryHelpers.expectValidGltf(result);
         await geometryHelpers.expectMeshCount(result, 1);
-        await geometryHelpers.expectBoundingBoxSize(result, [50, 30, 20], 0.5);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.02, 0.03], 0.001);
       });
     });
 

@@ -94,13 +94,21 @@ export type KernelProviderId = KnownKernelProvider | (string & {});
 
 /**
  * A single kernel worker registration.
- * Bundles the worker URL and initialization options together.
+ * Bundles the kernel module URL and initialization options together.
  * Array position in `KernelConfig` determines `canHandle` priority.
  */
 export type KernelWorkerEntry = {
   id: KernelProviderId;
-  url: string;
   options?: Record<string, unknown>;
+  /** File extensions this kernel handles (e.g. ['scad'], ['ts', 'js']). '*' is a catch-all. */
+  extensions?: string[];
+  /** For JS/TS kernels: regex to match against file content to determine if this kernel handles it. */
+  detectImport?: RegExp;
+  /**
+   * URL of the defineKernel module for this kernel (e.g. replicad.kernel.js).
+   * The runtime worker dynamically imports this module to load the kernel.
+   */
+  kernelModuleUrl: string;
 };
 
 /**
@@ -110,8 +118,8 @@ export type KernelWorkerEntry = {
  * @example First-party defaults
  * ```ts
  * const config: KernelConfig = [
- *   { id: 'openscad', url: openscadUrl },
- *   { id: 'replicad', url: replicadUrl, options: { withExceptions: true } },
+ *   { id: 'openscad', extensions: ['scad'], kernelModuleUrl: openscadKernelModuleUrl },
+ *   { id: 'replicad', extensions: ['ts', 'js'], kernelModuleUrl: replicadKernelModuleUrl, options: { withExceptions: true } },
  * ];
  * ```
  *
@@ -119,7 +127,7 @@ export type KernelWorkerEntry = {
  * ```ts
  * const config: KernelConfig = [
  *   ...defaultKernelConfig,
- *   { id: 'manifold', url: manifoldWorkerUrl },
+ *   { id: 'manifold', extensions: ['*'], kernelModuleUrl: manifoldKernelModuleUrl },
  * ];
  * ```
  */

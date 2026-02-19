@@ -27,6 +27,7 @@ type MockFilesystem = {
 function createMockFilesystem(): MockFilesystem {
   return {
     readFile: vi.fn<KernelFilesystem['readFile']>().mockRejectedValue(new Error('File not found')),
+    readFiles: vi.fn<KernelFilesystem['readFiles']>().mockResolvedValue({}),
     exists: vi.fn<KernelFilesystem['exists']>().mockResolvedValue(false),
     readdir: vi.fn<KernelFilesystem['readdir']>().mockResolvedValue([]),
     writeFile: vi.fn<KernelFilesystem['writeFile']>().mockResolvedValue(undefined),

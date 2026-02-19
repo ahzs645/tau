@@ -1,3 +1,4 @@
+import deepmerge from 'deepmerge';
 import type {
   CreateGeometryResultCompleted,
   CreateGeometryResult,
@@ -7,11 +8,14 @@ import type {
   GetParametersResult,
   GetParametersHandler,
   GeometryFile,
-  GeometryResponse,
   KernelMiddlewareRuntime,
   KernelFilesystem,
   KernelRuntime,
+  KernelBundler,
+  BuiltinModuleEntry,
   KernelLogger,
+  BundleResult,
+  ExecuteResult,
   InitializeInput,
   GetParametersInput,
   CreateGeometryInput,
@@ -27,17 +31,53 @@ import type {
   AssetDependency,
   OnWorkerLog,
   MiddlewareConfig,
+  PerformanceEntryData,
+  RenderPhase,
 } from '@taucad/types';
 import * as kernelSymbols from '@taucad/types/symbols';
-import { wrap, transfer } from 'comlink';
-import type { Remote } from 'comlink';
 import { version as TAU_VERSION } from 'package.json';
 import { logLevels } from '@taucad/types/constants';
 import type { FileManager } from '#machines/file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
+import { createFileManagerProxy } from '#components/geometry/kernel/utils/kernel-worker-filemanager-bridge.js';
 import type { KernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { createMiddlewareRuntime } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 import { createKernelError } from '#components/geometry/kernel/utils/kernel-helpers.js';
+import { WorkerTelemetryCollector } from '#components/geometry/kernel/utils/worker-telemetry.js';
+import type { EsbuildBundler } from '#components/geometry/kernel/utils/esbuild-bundler.js';
+import type { BuiltinModule } from '#components/geometry/kernel/utils/module-manager.js';
+
+// =============================================================================
+// Module-level utilities (avoid per-call allocations)
+// =============================================================================
+
+const textEncoder = new TextEncoder();
+
+const hexChars = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+
+function bufferToHex(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let hex = '';
+  for (const b of bytes) {
+    hex += hexChars[b]!;
+  }
+
+  return hex;
+}
+
+async function mapBounded<T, R>(items: T[], function_: (item: T) => Promise<R>, limit: number): Promise<R[]> {
+  const results: R[] = Array.from<R>({ length: items.length });
+  let index = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const i = index++;
+      // eslint-disable-next-line no-await-in-loop -- intentional bounded concurrency
+      results[i] = await function_(items[i]!);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
 
 /**
  * A resolved middleware instance paired with its parsed config.
@@ -113,6 +153,13 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
+   * Framework-managed native geometry handle from the last successful createGeometry call.
+   * Opaque to the framework -- typed by each kernel subclass.
+   * Passed to exportGeometry so exports work regardless of cache state.
+   */
+  protected nativeHandle: unknown;
+
+  /**
    * The name of the worker.
    *
    * @example ReplicadWorker, TauWorker, ZooWorker.
@@ -150,7 +197,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * This is a Remote proxy to the file-manager worker.
    * Private - use the filesystem property for all filesystem operations.
    */
-  private fileManager: Remote<FileManager> | undefined;
+  private fileManager: FileManager | undefined;
 
   /**
    * Internal filesystem instance.
@@ -170,6 +217,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private readonly assetHashCache = new Map<string, string>();
 
+  private readonly fileHashCache = new Map<string, string>();
+  private readonly fileContentCache = new Map<string, Uint8Array<ArrayBuffer> | string>();
+
   /**
    * Dynamically loaded middleware instances with their resolved configs.
    * Populated during initializeEntry() and updated via configureMiddleware().
@@ -181,6 +231,39 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Prevents redundant network requests when reconfiguring middleware.
    */
   private readonly middlewareModuleCache = new Map<string, KernelMiddleware>();
+
+  /**
+   * Cached middleware loggers, keyed by middleware name.
+   * Loggers are stateless closures -- safe to reuse across operations.
+   */
+  private readonly middlewareLoggerCache = new Map<string, KernelLogger>();
+
+  /** Cached KernelRuntime instance -- invalidated on setBasePath */
+  private cachedRuntime: KernelRuntime | undefined;
+
+  /** Cached project root path -- invalidated on setBasePath */
+  private cachedProjectRoot: string | undefined;
+
+  /** Telemetry collector instance -- created on first use when setTelemetrySend is called */
+  private telemetryCollector?: WorkerTelemetryCollector;
+
+  /** Progress callback set during renderEntry, used by entry methods to emit phase transitions */
+  private onProgress?: (phase: RenderPhase) => void;
+
+  /** Per-render bundle result cache. Cleared at the start of each render cycle. */
+  private bundleResultCache = new Map<string, BundleResult>();
+
+  /** Per-render dependency computation cache. Cleared at the start of each render cycle. */
+  private renderDependencyCache?: { hash: string; dependencies: Dependency[] };
+
+  /** Lazily initialised esbuild bundler instance */
+  private _bundler: EsbuildBundler | undefined;
+
+  /** Cached KernelBundler facade exposed via KernelRuntime */
+  private cachedBundlerFacade: KernelBundler | undefined;
+
+  /** Pending built-in module registrations queued before the bundler is initialised */
+  private readonly pendingBuiltinModules = new Map<string, BuiltinModule>();
 
   /**
    * Unified filesystem interface for kernel workers.
@@ -250,15 +333,18 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Register file manager and create filesystem if port is provided
     if (transferables.fileManagerPort) {
-      this.fileManager = wrap<FileManager>(transferables.fileManagerPort);
+      this.fileManager = createFileManagerProxy(transferables.fileManagerPort);
       this._filesystem = this.createFilesystem();
     }
 
-    // Load middleware from URLs
     await this.loadMiddleware(middlewareConfig);
 
-    // Call worker-specific initialization
+    performance.mark('tau:kernel:init:start');
     await this.initialize({ options: this.options }, this.createRuntime());
+    performance.measure('tau:kernel:init', {
+      start: 'tau:kernel:init:start',
+      detail: { kernel: this.constructor.name },
+    });
   }
 
   /**
@@ -280,8 +366,19 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Symbol-keyed to hide from kernel developer autocomplete. Framework code imports
    * the symbol from @taucad/types/symbols to access this method.
    */
+  /**
+   * Set the telemetry send callback. Called by the dispatcher to wire up
+   * telemetry before initialization. Creates the PerformanceObserver-based collector.
+   */
+  public setTelemetrySend(send: (entries: PerformanceEntryData[]) => void): void {
+    this.telemetryCollector = new WorkerTelemetryCollector(send);
+  }
+
   public async [kernelSymbols.cleanupEntry](): Promise<void> {
     this.assetHashCache.clear();
+    this.nativeHandle = undefined;
+    this.telemetryCollector?.dispose();
+    this.telemetryCollector = undefined;
     await this.cleanup();
   }
 
@@ -327,61 +424,63 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       basePath: this.getProjectRootPath(),
     };
 
-    // Compute all dependencies and their hash for cache key computation
-    const basename = KernelWorker.getBasename(file.filename);
-    const dependencies = await this.computeDependencies(basename);
-    const dependencyHash = await this.computeDependencyHash(dependencies);
-
-    // Get resolved middleware array (overridable for testing)
     const resolvedArray = this[kernelSymbols.getMiddleware]();
 
-    // Create runtimes map - one per middleware for the duration of this operation
+    this.onProgress?.('resolvingDeps');
+    performance.mark('tau:kernel:deps:start');
+    const basename = KernelWorker.getBasename(file.filename);
+    const dependencies = await this.computeDependencies(basename, undefined, resolvedArray);
+    const dependencyHash = await this.computeDependencyHash(dependencies);
+    performance.measure('tau:kernel:deps', { start: 'tau:kernel:deps:start' });
+
     const runtimes = new Map<string, KernelMiddlewareRuntime>();
-    for (const { middleware, config } of resolvedArray) {
-      runtimes.set(
-        middleware.name,
-        createMiddlewareRuntime({
-          onLog: this.onLog,
-          middlewareName: middleware.name,
-          filesystem: this.filesystem,
-          dependencies,
-          dependencyHash,
-          stateSchema: middleware.stateSchema,
-          config,
-        }),
-      );
+    for (const { middleware, config, enabled } of resolvedArray) {
+      if (enabled && middleware.wrapGetParameters) {
+        runtimes.set(
+          middleware.name,
+          createMiddlewareRuntime({
+            onLog: this.onLog,
+            middlewareName: middleware.name,
+            filesystem: this.filesystem,
+            dependencies,
+            dependencyHash,
+            stateSchema: middleware.stateSchema,
+            config,
+            logger: this.getMiddlewareLogger(middleware.name),
+          }),
+        );
+      }
     }
 
-    // Build onion chain: start with innermost (main operation)
-    // Handler only takes input - runtime is captured in closure
+    this.onProgress?.('extractingParams');
     let chain: GetParametersHandler = async (handlerInput: GetParametersInput) => {
-      const mainStart = performance.now();
+      performance.mark('tau:kernel:params:start');
       const result = await this.getParameters(handlerInput, this.createRuntime());
-      const mainDuration = performance.now() - mainStart;
-      this.logger.trace(`Main getParameters completed (${mainDuration.toFixed(2)}ms)`);
+      performance.measure('tau:kernel:params', { start: 'tau:kernel:params:start' });
       return result;
     };
 
-    // Wrap each middleware from last to first (reverse order builds onion correctly)
-    for (const { middleware, enabled } of [...resolvedArray].reverse()) {
+    for (let i = resolvedArray.length - 1; i >= 0; i--) {
+      const { middleware, enabled } = resolvedArray[i]!;
       if (enabled && middleware.wrapGetParameters) {
         const inner = chain;
         const runtime = runtimes.get(middleware.name)!;
         const middlewareName = middleware.name;
         const wrapHook = middleware.wrapGetParameters;
 
-        // New chain captures runtime and creates a handler that only takes input
         chain = async (handlerInput: GetParametersInput) => {
+          const markName = `tau:middleware:wrap:${middlewareName}:start`;
           try {
-            const middlewareStart = performance.now();
-            // Hook receives (input, handler, runtime) - handler only takes input
+            performance.mark(markName);
             const result = await wrapHook(handlerInput, inner, runtime);
-            const middlewareDuration = performance.now() - middlewareStart;
-            this.logger.trace(`Middleware ${middlewareName} completed (${middlewareDuration.toFixed(2)}ms)`);
+            performance.measure('tau:middleware:wrap', {
+              start: markName,
+              detail: { name: middlewareName, phase: 'getParameters' },
+            });
             return result;
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`Middleware ${middlewareName} failed: ${errorMessage}`);
+            this.logger.error('Middleware failed', { data: { name: middlewareName, error: errorMessage } });
             return createKernelError([
               {
                 message: `Middleware error in ${middlewareName}: ${errorMessage}`,
@@ -394,11 +493,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }
     }
 
-    // Execute chain with input directly
     const result = await chain(input);
 
-    const duration = performance.now() - start;
-    this.logger.debug(`getParameters completed (${duration.toFixed(2)}ms)`);
+    this.logger.debug('getParameters completed', { data: { ms: performance.now() - start } });
 
     return result;
   }
@@ -433,64 +530,62 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       parameters,
     };
 
-    // Compute all dependencies and their hash for cache key computation
-    // Pass parameters to include them in the cache key for geometry computation
-    const basename = KernelWorker.getBasename(file.filename);
-    const dependencies = await this.computeDependencies(basename, parameters);
-    const dependencyHash = await this.computeDependencyHash(dependencies);
-
-    // Get resolved middleware array (overridable for testing)
     const resolvedArray = this[kernelSymbols.getMiddleware]();
 
-    // Create runtimes map - one per middleware for the duration of this operation.
-    // This ensures the state is shared across the entire wrap hook execution.
+    performance.mark('tau:kernel:deps:start');
+    const basename = KernelWorker.getBasename(file.filename);
+    const dependencies = await this.computeDependencies(basename, parameters, resolvedArray);
+    const dependencyHash = await this.computeDependencyHash(dependencies);
+    performance.measure('tau:kernel:deps', { start: 'tau:kernel:deps:start' });
+
     const runtimes = new Map<string, KernelMiddlewareRuntime>();
-    for (const { middleware, config } of resolvedArray) {
-      runtimes.set(
-        middleware.name,
-        createMiddlewareRuntime({
-          onLog: this.onLog,
-          middlewareName: middleware.name,
-          filesystem: this.filesystem,
-          dependencies,
-          dependencyHash,
-          stateSchema: middleware.stateSchema,
-          config,
-        }),
-      );
+    for (const { middleware, config, enabled } of resolvedArray) {
+      if (enabled && middleware.wrapCreateGeometry) {
+        runtimes.set(
+          middleware.name,
+          createMiddlewareRuntime({
+            onLog: this.onLog,
+            middlewareName: middleware.name,
+            filesystem: this.filesystem,
+            dependencies,
+            dependencyHash,
+            stateSchema: middleware.stateSchema,
+            config,
+            logger: this.getMiddlewareLogger(middleware.name),
+          }),
+        );
+      }
     }
 
-    // Build onion chain: start with innermost (main operation)
-    // Handler only takes input - runtime is captured in closure
+    this.onProgress?.('computingGeometry');
     let chain: CreateGeometryHandler = async (handlerInput: CreateGeometryInput) => {
-      const mainStart = performance.now();
+      performance.mark('tau:kernel:compute:start');
       const result = await this.createGeometry(handlerInput, this.createRuntime());
-      const mainDuration = performance.now() - mainStart;
-      this.logger.trace(`Main createGeometry completed (${mainDuration.toFixed(2)}ms)`);
+      performance.measure('tau:kernel:compute', { start: 'tau:kernel:compute:start' });
       return result;
     };
 
-    // Wrap each middleware from last to first (reverse order builds onion correctly)
-    // After wrapping: middleware[0] is outermost, middleware[n-1] is closest to main operation
-    for (const { middleware, enabled } of [...resolvedArray].reverse()) {
+    for (let i = resolvedArray.length - 1; i >= 0; i--) {
+      const { middleware, enabled } = resolvedArray[i]!;
       if (enabled && middleware.wrapCreateGeometry) {
         const inner = chain;
         const runtime = runtimes.get(middleware.name)!;
         const middlewareName = middleware.name;
         const wrapHook = middleware.wrapCreateGeometry;
 
-        // New chain captures runtime and creates a handler that only takes input
         chain = async (handlerInput: CreateGeometryInput) => {
+          const markName = `tau:middleware:wrap:${middlewareName}:start`;
           try {
-            const middlewareStart = performance.now();
-            // Hook receives (input, handler, runtime) - handler only takes input
+            performance.mark(markName);
             const result = await wrapHook(handlerInput, inner, runtime);
-            const middlewareDuration = performance.now() - middlewareStart;
-            this.logger.trace(`Middleware ${middlewareName} completed (${middlewareDuration.toFixed(2)}ms)`);
+            performance.measure('tau:middleware:wrap', {
+              start: markName,
+              detail: { name: middlewareName, phase: 'createGeometry' },
+            });
             return result;
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`Middleware ${middlewareName} failed: ${errorMessage}`);
+            this.logger.error('Middleware failed', { data: { name: middlewareName, error: errorMessage } });
             return createKernelError([
               {
                 message: `Middleware error in ${middlewareName}: ${errorMessage}`,
@@ -503,42 +598,24 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }
     }
 
-    // Execute chain with input directly
     const internalResult = await chain(input);
 
-    // Transform internal result to external result by adding hash to each geometry
-    // Each geometry gets a unique hash by combining the dependencyHash with a content hash
-    // This ensures unique React keys when multiple geometries are returned
+    this.onProgress?.('postProcessing');
+    // Dependency hash + index is sufficient for unique React keys
     const result: CreateGeometryResultCompleted = internalResult.success
       ? {
           ...internalResult,
-          data: await Promise.all(
-            internalResult.data.map(async (geometry, index) => {
-              const contentHash = await this.hashGeometryContent(geometry);
-              return { ...geometry, hash: `${dependencyHash}-${index}-${contentHash}` };
-            }),
-          ),
+          data: internalResult.data.map((geometry, index) => ({
+            ...geometry,
+            hash: `${dependencyHash}-${index}`,
+          })),
         }
       : internalResult;
 
-    const duration = performance.now() - start;
-    this.logger.debug(`createGeometry completed (${duration.toFixed(2)}ms)`);
+    this.logger.debug('createGeometry completed', { data: { ms: performance.now() - start } });
 
-    // Collect transferable ArrayBuffers from GLTF geometries for zero-copy transfer.
-    // Using Comlink's transfer() moves ownership of the buffers to the main thread
-    // instead of copying them, improving rendering pipeline performance for large models.
-    // After transfer, the original Uint8Array becomes detached (unusable) in this worker,
-    // which is fine since we don't need it after returning.
-    const transferables: ArrayBuffer[] = [];
-    if (result.success) {
-      for (const geometry of result.data) {
-        if (geometry.format === 'gltf') {
-          transferables.push(geometry.content.buffer);
-        }
-      }
-    }
-
-    return transfer(result, transferables);
+    // Transferable extraction is handled by the dispatcher (extractGltfTransferables)
+    return result;
   }
 
   /**
@@ -557,18 +634,16 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     fileType: ExportFormat,
     meshConfig?: { linearTolerance: number; angularTolerance: number },
   ): Promise<ExportGeometryResult> {
-    // No setBasePath - export doesn't need file context
-    const start = performance.now();
+    performance.mark('tau:kernel:export:start');
 
     const input: ExportGeometryInput = {
       fileType,
       meshConfig,
     };
 
-    const result = await this.exportGeometry(input, this.createRuntime());
+    const result = await this.exportGeometry(input, this.createRuntime(), this.nativeHandle);
 
-    const duration = performance.now() - start;
-    this.logger.debug(`exportGeometry completed (${duration.toFixed(2)}ms)`);
+    performance.measure('tau:kernel:export', { start: 'tau:kernel:export:start' });
 
     return result;
   }
@@ -597,7 +672,65 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   public async [kernelSymbols.configureMiddleware](config: MiddlewareConfig): Promise<void> {
     await this.loadMiddleware(config);
-    this.logger.debug(`Middleware reconfigured: ${this.resolvedMiddleware.length} active`);
+    this.logger.debug('Middleware reconfigured', { data: { count: this.resolvedMiddleware.length } });
+  }
+
+  /**
+   * Unified render entry point that combines parameter extraction and geometry computation
+   * in a single call. This eliminates redundant dependency computation, bundling, and hashing
+   * between the two operations.
+   *
+   * @param file - The geometry file to render
+   * @param parameters - User-provided parameters
+   * @param onParametersResolved - Optional callback to stream parameters back while geometry computes
+   * @returns The computed geometry
+   */
+  public async [kernelSymbols.renderEntry](
+    file: GeometryFile,
+    parameters: Record<string, unknown>,
+    onParametersResolved?: (result: GetParametersResult) => void,
+    onProgress?: (phase: RenderPhase) => void,
+  ): Promise<CreateGeometryResultCompleted> {
+    performance.mark('tau:kernel:render:start');
+    this.onProgress = onProgress;
+    this.bundleResultCache.clear();
+    this.renderDependencyCache = undefined;
+    this.setBasePath(file);
+
+    const parametersResult = await this[kernelSymbols.getParametersEntry](file);
+    onParametersResolved?.(parametersResult);
+
+    let mergedParameters = parameters;
+    if (parametersResult.success) {
+      const extracted = parametersResult.data as { defaultParameters?: Record<string, unknown> };
+      if (extracted.defaultParameters) {
+        mergedParameters = deepmerge(extracted.defaultParameters, parameters);
+      }
+    }
+
+    const result = await this[kernelSymbols.createGeometryEntry](file, mergedParameters);
+    this.onProgress = undefined;
+    performance.measure('tau:kernel:render', {
+      start: 'tau:kernel:render:start',
+      detail: { file: file.filename, success: result.success },
+    });
+    return result;
+  }
+
+  /**
+   * Selectively invalidate file caches for changed paths.
+   * Called by the kernel machine before render operations when files have changed.
+   *
+   * @param changedPaths - Absolute paths of files that changed
+   */
+  public async [kernelSymbols.notifyFileChanged](changedPaths: string[]): Promise<void> {
+    for (const path of changedPaths) {
+      this.fileHashCache.delete(path);
+      this.fileContentCache.delete(path);
+      this.fileContentCache.delete(`utf8:${path}`);
+    }
+
+    this.bundleResultCache.clear();
   }
 
   /**
@@ -643,6 +776,46 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
+   * Built-in modules for the bundler. Override in subclasses to register
+   * kernel-specific modules (replicad, @jscad/modeling).
+   * The base implementation merges any modules registered via runtime.bundler.registerModule().
+   */
+  protected getBuiltinModules(): Map<string, BuiltinModule> {
+    return new Map(this.pendingBuiltinModules);
+  }
+
+  /**
+   * Auto-export names for the bundler. Override in subclasses to specify
+   * which names should be auto-exported from CommonJS-style entry files.
+   */
+  protected getAutoExportNames(): string[] {
+    return ['main', 'defaultParams', 'getParameterDefinitions'];
+  }
+
+  /**
+   * Get the project root path by stripping the subdirectory from basePath.
+   * For basePath '/builds/test/site' with activeFilePath 'site/main.scad',
+   * returns '/builds/test'.
+   *
+   * @returns The project root path
+   */
+  protected getProjectRootPath(): string {
+    if (this.cachedProjectRoot !== undefined) {
+      return this.cachedProjectRoot;
+    }
+
+    const lastSlash = this.activeFilePath.lastIndexOf('/');
+    const subDirectory = lastSlash === -1 ? '' : this.activeFilePath.slice(0, lastSlash);
+
+    this.cachedProjectRoot =
+      subDirectory && this.basePath.endsWith(`/${subDirectory}`)
+        ? this.basePath.slice(0, -(subDirectory.length + 1))
+        : this.basePath;
+
+    return this.cachedProjectRoot;
+  }
+
+  /**
    * Check if this kernel can handle a file.
    *
    * @param input - Input containing file path, project root, and extension
@@ -670,13 +843,18 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected abstract createGeometry(input: CreateGeometryInput, runtime: KernelRuntime): Promise<CreateGeometryResult>;
 
   /**
-   * Export geometry.
+   * Export geometry using the framework-stored native handle from the last createGeometry call.
    *
-   * @param input - Input containing file type, geometry ID, and mesh config
+   * @param input - Input containing file type and mesh config
    * @param runtime - Runtime services (filesystem, logger)
+   * @param nativeHandle - Opaque native geometry data stored by the framework after createGeometry
    * @returns The exported geometry.
    */
-  protected abstract exportGeometry(input: ExportGeometryInput, runtime: KernelRuntime): Promise<ExportGeometryResult>;
+  protected abstract exportGeometry(
+    input: ExportGeometryInput,
+    runtime: KernelRuntime,
+    nativeHandle: unknown,
+  ): Promise<ExportGeometryResult>;
 
   /**
    * Discover all file dependencies for the given entry file.
@@ -763,39 +941,41 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private createFilesystem(): KernelFilesystem {
     const fileManager = this.fileManager!;
-    // eslint-disable-next-line unicorn/no-this-assignment, @typescript-eslint/no-this-alias -- required for overloads.
-    const worker = this;
 
-    // Define readFile with proper overload signatures
     function readFile(path: string, encoding: 'utf8'): Promise<string>;
     function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
     async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
-      const start = performance.now();
-      worker.logger.trace(`Reading file: ${path}`);
+      const markName = `tau:fs:read:${path}`;
+      performance.mark(markName);
       const data = await fileManager.readFile(path, encoding);
-      const duration = performance.now() - start;
-      worker.logger.trace(`Read ${path} (${duration.toFixed(2)}ms)`);
+      performance.measure('tau:fs:read', { start: markName, detail: { path, binary: encoding !== 'utf8' } });
       return data;
     }
 
     return {
       readFile,
 
+      async readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
+        const markName = 'tau:fs:readBatch:start';
+        performance.mark(markName);
+        const result = await fileManager.readFiles(paths);
+        performance.measure('tau:fs:readBatch', { start: markName, detail: { fileCount: paths.length } });
+        return result;
+      },
+
       async exists(path: string): Promise<boolean> {
-        const start = performance.now();
-        worker.logger.trace(`Checking file exists: ${path}`);
+        const markName = `tau:fs:exists:${path}`;
+        performance.mark(markName);
         const fileExists = await fileManager.exists(path);
-        const duration = performance.now() - start;
-        worker.logger.trace(`File ${fileExists ? 'exists' : 'does not exist'}: ${path} (${duration.toFixed(2)}ms)`);
+        performance.measure('tau:fs:exists', { start: markName, detail: { path, exists: fileExists } });
         return fileExists;
       },
 
       async readdir(path: string): Promise<string[]> {
-        const start = performance.now();
-        worker.logger.trace(`Reading directory: ${path}`);
+        const markName = `tau:fs:readdir:${path}`;
+        performance.mark(markName);
         const entries = await fileManager.readdir(path);
-        const duration = performance.now() - start;
-        worker.logger.trace(`Read directory ${path}: ${entries.length} entries (${duration.toFixed(2)}ms)`);
+        performance.measure('tau:fs:readdir', { start: markName, detail: { path, entryCount: entries.length } });
         return entries;
       },
 
@@ -818,37 +998,76 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param parameters - Optional parameters (included for geometry computation, omitted for parameter extraction)
    * @returns Array of all dependencies
    */
-  private async computeDependencies(_filename: string, parameters?: Record<string, unknown>): Promise<Dependency[]> {
+  private async computeDependencies(
+    _filename: string,
+    parameters?: Record<string, unknown>,
+    resolvedMiddleware?: ResolvedMiddleware[],
+  ): Promise<Dependency[]> {
+    // Use cached base deps within a render cycle (file discovery + hashing is expensive)
+    let baseDeps: Dependency[];
+    if (this.renderDependencyCache) {
+      baseDeps = this.renderDependencyCache.dependencies;
+    } else {
+      baseDeps = await this.computeBaseDependencies(resolvedMiddleware);
+      // Cache for reuse by createGeometryEntry within the same render cycle
+      this.renderDependencyCache = { hash: '', dependencies: baseDeps };
+    }
+
+    if (parameters === undefined) {
+      return baseDeps;
+    }
+
+    // Add parameter dependency for geometry computation
+    const parameterDep: ParameterDependency = { type: 'parameter' as const, parameters };
+    return [...baseDeps, parameterDep];
+  }
+
+  /**
+   * Compute all non-parameter dependencies. Factored out so the result
+   * can be cached for the duration of a render cycle (shared between
+   * getParametersEntry and createGeometryEntry).
+   */
+  private async computeBaseDependencies(resolvedMiddleware?: ResolvedMiddleware[]): Promise<Dependency[]> {
     // 1. Gather file dependencies from worker (includes source files)
     const discoverInput: GetDependenciesInput = {
       filePath: this.activeFileAbsolutePath,
       basePath: this.getProjectRootPath(),
     };
     const absolutePaths = await this.getDependencies(discoverInput, this.createRuntime());
-    const fileDeps: FileDependency[] = await Promise.all(
-      absolutePaths.map(async (absolutePath) => {
-        // DiscoverDependencies returns absolute paths, use directly
-        const content = await this.filesystem.readFile(absolutePath);
-        const contentHash = await this.hashContent(content);
-        return {
-          type: 'file' as const,
-          path: absolutePath,
-          contentHash,
-        };
-      }),
-    );
 
-    // 2. Middleware dependencies (only enabled middleware, index preserves chain order)
-    const enabledMiddleware = this[kernelSymbols.getMiddleware]().filter(({ enabled }) => enabled);
-    const middlewareDeps: MiddlewareDependency[] = await Promise.all(
-      enabledMiddleware.map(async ({ middleware, config }, index) => ({
+    // Determine which files need reading (not in hash cache)
+    const uncachedPaths = absolutePaths.filter((p) => !this.fileHashCache.has(p));
+    if (uncachedPaths.length > 0) {
+      const contentMap = await this.filesystem.readFiles(uncachedPaths);
+      await mapBounded(
+        Object.entries(contentMap),
+        async ([path, content]) => {
+          const hash = await this.hashContent(content);
+          this.fileHashCache.set(path, hash);
+          this.fileContentCache.set(path, content);
+        },
+        8,
+      );
+    }
+
+    // Contract: getDependencies() must return paths in deterministic order.
+    const fileDeps: FileDependency[] = absolutePaths.map((absolutePath) => ({
+      type: 'file' as const,
+      path: absolutePath,
+      contentHash: this.fileHashCache.get(absolutePath)!,
+    }));
+
+    // 2. Middleware dependencies (only enabled, index preserves chain order)
+    const middleware = resolvedMiddleware ?? this[kernelSymbols.getMiddleware]();
+    const middlewareDeps: MiddlewareDependency[] = middleware
+      .filter(({ enabled }) => enabled)
+      .map(({ middleware: mw, config }, index) => ({
         type: 'middleware' as const,
-        name: middleware.name,
-        version: middleware.version ?? '1',
+        name: mw.name,
+        version: mw.version ?? '1',
         index,
-        configHash: await this.hashContent(new TextEncoder().encode(JSON.stringify(config))),
-      })),
-    );
+        config,
+      }));
 
     // 3. Framework dependency
     const frameworkDep: FrameworkDependency = {
@@ -857,26 +1076,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       version: TAU_VERSION,
     };
 
-    // 4. Options dependencies (from worker options)
+    // 4. Options dependencies (options are stable between renders, no sort needed)
     const optionDeps: OptionDependency[] = Object.entries(this.options).map(([key, value]) => ({
       type: 'option' as const,
       key,
       value,
     }));
 
-    // 5. Parameter dependency (only for geometry computation, not parameter extraction)
-    const parameterDeps: ParameterDependency[] = [];
-    if (parameters !== undefined) {
-      const parametersJson = JSON.stringify(parameters);
-      const encoder = new TextEncoder();
-      const parametersHash = await this.hashContent(encoder.encode(parametersJson));
-      parameterDeps.push({
-        type: 'parameter' as const,
-        parametersHash,
-      });
-    }
-
-    // 6. Asset dependencies (fonts, WASM, etc.)
+    // 5. Asset dependencies (fonts, WASM, etc.)
     const assetUrls = this.getAssetUrls();
     const assetDeps: AssetDependency[] = await Promise.all(
       assetUrls.map(async (urlOrVersion, index) => {
@@ -889,7 +1096,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }),
     );
 
-    return [...fileDeps, ...middlewareDeps, frameworkDep, ...optionDeps, ...parameterDeps, ...assetDeps];
+    return [...fileDeps, ...middlewareDeps, frameworkDep, ...optionDeps, ...assetDeps];
   }
 
   /**
@@ -952,16 +1159,163 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
+   * Get or create the lazily initialised esbuild bundler.
+   * The bundler is re-created when the project path changes.
+   */
+  private async ensureBundler(): Promise<EsbuildBundler> {
+    const projectPath = this.getProjectRootPath();
+    if (!this._bundler || this._bundler.getProjectPath() !== projectPath) {
+      this._bundler?.dispose();
+      const mod = await import('#components/geometry/kernel/utils/esbuild-bundler.js');
+      this._bundler = new mod.EsbuildBundler({
+        filesystem: this.filesystem,
+        projectPath,
+        builtinModules: this.getBuiltinModules(),
+        autoExportNames: this.getAutoExportNames(),
+      });
+      await this._bundler.initialize();
+    }
+
+    return this._bundler;
+  }
+
+  /**
+   * Create a lazy KernelBundler facade that initialises esbuild on first call.
+   */
+  private createBundlerFacade(): KernelBundler {
+    if (this.cachedBundlerFacade) {
+      return this.cachedBundlerFacade;
+    }
+
+    this.cachedBundlerFacade = {
+      bundle: async (entryPath: string): Promise<BundleResult> => {
+        const cached = this.bundleResultCache.get(entryPath);
+        if (cached) {
+          return cached;
+        }
+
+        this.onProgress?.('bundling');
+        performance.mark('tau:kernel:bundle:start');
+        const bundler = await this.ensureBundler();
+        const bundleResult = await bundler.bundle(entryPath);
+        performance.measure('tau:kernel:bundle', {
+          start: 'tau:kernel:bundle:start',
+          detail: { entryPath, deps: bundleResult.dependencies.length },
+        });
+        this.bundleResultCache.set(entryPath, bundleResult);
+        return bundleResult;
+      },
+      resolveDependencies: async (entryPath: string): Promise<string[]> => {
+        const bundler = await this.ensureBundler();
+        const result = await bundler.bundle(entryPath);
+        return result.dependencies;
+      },
+      registerModule: (name: string, entry: BuiltinModuleEntry): void => {
+        this.pendingBuiltinModules.set(name, {
+          code: entry.code,
+          version: entry.version,
+          globalName: entry.globalName,
+        });
+      },
+    };
+
+    return this.cachedBundlerFacade;
+  }
+
+  /**
+   * Execute bundled JS/TS code via dynamic import.
+   * Browser uses Blob URL, Node.js uses data URL.
+   */
+  private async executeCode(code: string): Promise<ExecuteResult> {
+    // eslint-disable-next-line n/prefer-global/process, @typescript-eslint/no-unnecessary-condition -- process may be undefined in browser
+    const isNodejs = typeof process !== 'undefined' && Boolean(process.versions?.node);
+
+    try {
+      let url: string;
+      let shouldRevoke = false;
+
+      if (isNodejs) {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- class
+        const { Buffer: NodeBuffer } = await import('node:buffer');
+        const base64Code = NodeBuffer.from(code).toString('base64');
+        url = `data:application/javascript;base64,${base64Code}`;
+      } else {
+        const blob = new Blob([code], { type: 'application/javascript' });
+        url = URL.createObjectURL(blob);
+        shouldRevoke = true;
+      }
+
+      try {
+        const module: unknown = await import(/* @vite-ignore */ url);
+        return { success: true, value: module };
+      } finally {
+        if (shouldRevoke) {
+          URL.revokeObjectURL(url);
+        }
+      }
+    } catch (error) {
+      return {
+        success: false,
+        issues: [
+          {
+            message: error instanceof Error ? error.message : String(error),
+            type: 'runtime' as const,
+            severity: 'error' as const,
+          },
+        ],
+      };
+    }
+  }
+
+  /**
    * Create a KernelRuntime for use in kernel methods.
-   * Provides filesystem and logger with kernel name pre-configured.
+   * Provides filesystem, logger, bundler, and execute services.
+   * The bundler is lazily initialised -- kernels that never call it pay zero cost.
    *
    * @returns KernelRuntime instance
    */
   private createRuntime(): KernelRuntime {
-    return {
+    this.cachedRuntime ??= {
       filesystem: this.filesystem,
       logger: this.logger,
+      fileContentCache: this.fileContentCache,
+      bundler: this.createBundlerFacade(),
+      execute: async (code: string) => this.executeCode(code),
     };
+
+    return this.cachedRuntime;
+  }
+
+  /**
+   * Get or create a cached logger for a middleware by name.
+   */
+  private getMiddlewareLogger(middlewareName: string): KernelLogger {
+    let logger = this.middlewareLoggerCache.get(middlewareName);
+    if (!logger) {
+      logger = {
+        log: (message, options) => {
+          this.onLog({ level: logLevels.info, message, origin: { component: middlewareName }, data: options?.data });
+        },
+        debug: (message, options) => {
+          this.onLog({ level: logLevels.debug, message, origin: { component: middlewareName }, data: options?.data });
+        },
+        trace: (message, options) => {
+          this.onLog({ level: logLevels.trace, message, origin: { component: middlewareName }, data: options?.data });
+        },
+        warn: (message, options) => {
+          this.onLog({ level: logLevels.warn, message, origin: { component: middlewareName }, data: options?.data });
+        },
+        error: (message, options) => {
+          this.onLog({ level: logLevels.error, message, origin: { component: middlewareName }, data: options?.data });
+        },
+        custom: (level, message, options) => {
+          this.onLog({ level, message, origin: { component: middlewareName }, data: options?.data });
+        },
+      };
+      this.middlewareLoggerCache.set(middlewareName, logger);
+    }
+
+    return logger;
   }
 
   /**
@@ -972,70 +1326,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private async hashContent(content: Uint8Array<ArrayBuffer>): Promise<string> {
     const hashBuffer = await crypto.subtle.digest('SHA-256', content);
-    const hashArray = [...new Uint8Array(hashBuffer)];
-    return hashArray.map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  /**
-   * Get the project root path by stripping the subdirectory from basePath.
-   * For basePath '/builds/test/site' with activeFilePath 'site/main.scad',
-   * returns '/builds/test'.
-   *
-   * @returns The project root path
-   */
-  private getProjectRootPath(): string {
-    const lastSlash = this.activeFilePath.lastIndexOf('/');
-    const subDirectory = lastSlash === -1 ? '' : this.activeFilePath.slice(0, lastSlash);
-
-    if (subDirectory && this.basePath.endsWith(`/${subDirectory}`)) {
-      return this.basePath.slice(0, -(subDirectory.length + 1));
-    }
-
-    return this.basePath;
-  }
-
-  /**
-   * Hash geometry content to create a unique identifier.
-   * Used to ensure each geometry in an array has a unique hash for React keys.
-   *
-   * @param geometry - The geometry response to hash
-   * @returns A 64-character SHA-256 hash of the geometry content
-   */
-  private async hashGeometryContent(geometry: GeometryResponse): Promise<string> {
-    const encoder = new TextEncoder();
-    let data: Uint8Array<ArrayBuffer>;
-
-    switch (geometry.format) {
-      case 'gltf': {
-        // GLTF content is already Uint8Array
-        data = geometry.content;
-        break;
-      }
-
-      case 'svg': {
-        // SVG: hash the paths and viewbox
-        const svgContent = JSON.stringify({
-          paths: geometry.paths,
-          viewbox: geometry.viewbox,
-          name: geometry.name,
-        });
-        data = encoder.encode(svgContent);
-        break;
-      }
-
-      case 'webrtc': {
-        // WebRTC: use a random ID since streams aren't hashable. This ensures each geometry has a unique hash.
-        data = encoder.encode(crypto.randomUUID());
-        break;
-      }
-
-      default: {
-        const _exhaustiveCheck: never = geometry;
-        throw new Error(`Unexpected geometry format: ${String(_exhaustiveCheck)}`);
-      }
-    }
-
-    return this.hashContent(data);
+    return bufferToHex(hashBuffer);
   }
 
   /**
@@ -1051,26 +1342,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       return cached;
     }
 
-    try {
-      const response = await fetch(url, { cache: 'force-cache' });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const buffer = await response.arrayBuffer();
-      const hash = await this.hashContent(new Uint8Array(buffer));
-
-      // Only cache successful fetches
-      this.assetHashCache.set(url, hash);
-      return hash;
-    } catch (error) {
-      // Fallback: generate unique UUID to prevent cache poisoning
-      // DO NOT cache - next attempt should retry the fetch
-      this.logger.warn(`Failed to fetch asset for hashing, using UUID fallback: ${url}`, {
-        data: error,
-      });
-      return crypto.randomUUID();
-    }
+    // Vite ?url imports include a content hash in the URL (production) or a
+    // cache-busted path (dev). Hashing the URL string itself is sufficient for
+    // cache invalidation and avoids fetching multi-MB WASM/font binaries.
+    const hash = await this.hashContent(textEncoder.encode(url));
+    this.assetHashCache.set(url, hash);
+    return hash;
   }
 
   /**
@@ -1090,9 +1367,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     // Combine path with directory to get the full base path
     this.basePath = directory ? joinPath(file.path, directory) : file.path;
 
-    // Log with just the relative part (strip builds/id prefix for readability)
+    // Invalidate caches that depend on basePath
+    this.cachedRuntime = undefined;
+    this.cachedProjectRoot = undefined;
+
     const displayPath = directory || file.filename;
-    this.logger.debug(`Base path set to: ${displayPath}`);
+    this.logger.debug('Base path set', { data: { path: displayPath } });
   }
 
   /**
@@ -1103,21 +1383,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @returns A 64-character hex string hash (full SHA-256)
    */
   private async computeDependencyHash(dependencies: readonly Dependency[]): Promise<string> {
-    // Sort dependencies for determinism (file discovery order may vary)
-    // Middleware order is preserved via the `index` field
-    const sorted = [...dependencies].sort((a, b) =>
-      `${a.type}:${JSON.stringify(a)}`.localeCompare(`${b.type}:${JSON.stringify(b)}`),
-    );
-
-    const input = JSON.stringify(sorted);
-
-    // Compute SHA-256 hash
-    const encoder = new TextEncoder();
-    const data = encoder.encode(input);
+    performance.mark('tau:hash:dep:start');
+    const data = textEncoder.encode(JSON.stringify(dependencies));
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-
-    // Convert to full hex string (64 characters)
-    const hashArray = [...new Uint8Array(hashBuffer)];
-    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    const hex = bufferToHex(hashBuffer);
+    performance.measure('tau:hash:dep', { start: 'tau:hash:dep:start' });
+    return hex;
   }
 }

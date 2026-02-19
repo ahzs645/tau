@@ -8,6 +8,8 @@ import type {
   GeometryFile,
   KernelConfig,
   MiddlewareConfig,
+  RenderPhase,
+  PerformanceEntryData,
 } from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
@@ -39,14 +41,19 @@ export type CadContext = {
   logActorRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   jsonSchema?: JSONSchema7;
-  renderTimeout: number; // Timeout in milliseconds for render operations (0 = disabled)
+  renderTimeout: number;
+  changedPaths: string[];
+  renderPhase: RenderPhase | undefined;
+  renderPhaseTimestamps: Map<RenderPhase, number>;
+  renderPhaseDurations: Map<string, number>;
+  telemetryEntries: PerformanceEntryData[];
 };
 
 // Define the types of events the machine can receive
 type CadEvent =
   | { type: 'initializeKernel' }
   | { type: 'initializeModel'; file: GeometryFile; parameters: Record<string, unknown> }
-  | { type: 'setFile'; file: GeometryFile }
+  | { type: 'setFile'; file: GeometryFile; changedPath?: string }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
   | { type: 'setCodeIssues'; errors: CadContext['codeIssues'] }
   | { type: 'exportGeometry'; format: ExportFormat }
@@ -89,20 +96,19 @@ export const cadMachine = setup({
     emitted: {} as CadEmitted,
   },
   actions: {
-    createGeometry: sendTo(
-      ({ context }) => context.kernelRef,
-      ({ context }) => {
-        if (!context.file) {
-          throw new Error('Cannot compute geometry without a file');
-        }
+    createGeometry: enqueueActions(({ enqueue, context }) => {
+      if (!context.file) {
+        throw new Error('Cannot compute geometry without a file');
+      }
 
-        return {
-          type: 'createGeometry',
-          file: context.file,
-          parameters: context.parameters,
-        };
-      },
-    ),
+      enqueue.sendTo(context.kernelRef, {
+        type: 'createGeometry',
+        file: context.file,
+        parameters: context.parameters,
+        changedPaths: context.changedPaths,
+      });
+      enqueue.assign({ changedPaths: [] });
+    }),
     exportGeometry: sendTo(
       ({ context }) => context.kernelRef,
       ({ event }) => {
@@ -137,14 +143,66 @@ export const cadMachine = setup({
         });
       }
     }),
+    trackProgress: assign({
+      renderPhase({ event }) {
+        assertEvent(event, 'kernelProgress');
+        return event.phase;
+      },
+      renderPhaseTimestamps({ context, event }) {
+        assertEvent(event, 'kernelProgress');
+        const timestamps = new Map(context.renderPhaseTimestamps);
+        timestamps.set(event.phase, performance.now());
+        return timestamps;
+      },
+      renderPhaseDurations({ context, event }) {
+        assertEvent(event, 'kernelProgress');
+        if (context.renderPhase && context.renderPhaseTimestamps.has(context.renderPhase)) {
+          const durations = new Map(context.renderPhaseDurations);
+          const startTime = context.renderPhaseTimestamps.get(context.renderPhase)!;
+          durations.set(context.renderPhase, performance.now() - startTime);
+          return durations;
+        }
+
+        return context.renderPhaseDurations;
+      },
+    }),
+    clearProgress: assign({
+      renderPhase: undefined as RenderPhase | undefined,
+      renderPhaseTimestamps: () => new Map<RenderPhase, number>(),
+      renderPhaseDurations: () => new Map<string, number>(),
+    }),
+    finalizeProgress: assign({
+      renderPhase: undefined as RenderPhase | undefined,
+      renderPhaseDurations({ context }) {
+        if (context.renderPhase && context.renderPhaseTimestamps.has(context.renderPhase)) {
+          const durations = new Map(context.renderPhaseDurations);
+          const startTime = context.renderPhaseTimestamps.get(context.renderPhase)!;
+          durations.set(context.renderPhase, performance.now() - startTime);
+          return durations;
+        }
+
+        return context.renderPhaseDurations;
+      },
+    }),
+    storeTelemetry: assign({
+      telemetryEntries({ event }) {
+        assertEvent(event, 'kernelTelemetry');
+        return event.entries;
+      },
+    }),
     setFile: assign({
       file({ event }) {
         assertEvent(event, 'setFile');
         return event.file;
       },
-      // Clear stale errors atomically when file changes.
-      // Old errors become invalid when content changes, and new errors
-      // will be set by kernel processing or Monaco validation.
+      changedPaths({ context, event }) {
+        assertEvent(event, 'setFile');
+        if (event.changedPath) {
+          return [...context.changedPaths, event.changedPath];
+        }
+
+        return context.changedPaths;
+      },
       codeIssues: () => [],
       kernelIssues({ context, event }) {
         assertEvent(event, 'setFile');
@@ -162,11 +220,18 @@ export const cadMachine = setup({
     setGeometries: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryComputed');
 
-      // Handle warnings from successful computation
       const currentFileName = context.file?.filename;
 
       enqueue.assign({
         geometries: event.geometries,
+        defaultParameters({ context }) {
+          return 'defaultParameters' in event
+            ? (event.defaultParameters as Record<string, unknown>)
+            : context.defaultParameters;
+        },
+        jsonSchema({ context }) {
+          return 'jsonSchema' in event ? (event.jsonSchema as JSONSchema7) : context.jsonSchema;
+        },
         kernelIssues({ context }) {
           if (!currentFileName) {
             return context.kernelIssues;
@@ -351,10 +416,11 @@ export const cadMachine = setup({
       input: {
         fileManagerRef: input.fileManagerRef,
         kernelConfig: input.kernelConfig,
-        middlewareConfig: input.middlewareConfig,
+        middlewareConfig: input.middlewareConfig ?? [],
       },
     }),
     exportedBlob: undefined,
+    changedPaths: [],
     shouldInitializeKernelOnStart: input.shouldInitializeKernelOnStart,
     isKernelInitializing: false,
     isKernelInitialized: false,
@@ -362,6 +428,10 @@ export const cadMachine = setup({
     fileManagerRef: input.fileManagerRef,
     jsonSchema: undefined,
     renderTimeout: defaultRenderTimeout,
+    renderPhase: undefined,
+    renderPhaseTimestamps: new Map(),
+    renderPhaseDurations: new Map(),
+    telemetryEntries: [],
   }),
   on: {
     configureMiddleware: {
@@ -413,6 +483,12 @@ export const cadMachine = setup({
         kernelLog: {
           actions: 'sendKernelLogs',
         },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
+        },
         // Allow file edits during booting - store them for when kernel is ready
         setFile: {
           actions: 'setFile',
@@ -425,7 +501,7 @@ export const cadMachine = setup({
 
     // The initialization state is used when a new model is loaded.
     initializing: {
-      entry: 'createGeometry',
+      entry: ['clearProgress', 'createGeometry'],
       after: {
         renderTimeout: {
           target: 'error',
@@ -444,13 +520,19 @@ export const cadMachine = setup({
         },
         geometryComputed: {
           target: 'ready',
-          actions: 'setGeometries',
+          actions: ['setGeometries', 'finalizeProgress'],
         },
         parametersParsed: {
           actions: 'setDefaultParameters',
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
         },
         // Allow file edits during initialization - cancels current computation
         setFile: [
@@ -509,6 +591,12 @@ export const cadMachine = setup({
         kernelLog: {
           actions: 'sendKernelLogs',
         },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
+        },
         setRenderTimeout: {
           actions: 'setRenderTimeout',
         },
@@ -555,6 +643,12 @@ export const cadMachine = setup({
         kernelLog: {
           actions: 'sendKernelLogs',
         },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
+        },
         setRenderTimeout: {
           actions: 'setRenderTimeout',
         },
@@ -593,13 +687,19 @@ export const cadMachine = setup({
         kernelLog: {
           actions: 'sendKernelLogs',
         },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
+        },
         setRenderTimeout: {
           actions: 'setRenderTimeout',
         },
       },
     },
     rendering: {
-      entry: 'createGeometry',
+      entry: ['clearProgress', 'createGeometry'],
       after: {
         renderTimeout: {
           target: 'error',
@@ -613,7 +713,7 @@ export const cadMachine = setup({
         },
         geometryComputed: {
           target: 'ready',
-          actions: 'setGeometries',
+          actions: ['setGeometries', 'finalizeProgress'],
         },
         parametersParsed: {
           actions: 'setDefaultParameters',
@@ -651,6 +751,12 @@ export const cadMachine = setup({
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
         },
         setRenderTimeout: {
           actions: 'setRenderTimeout',
@@ -694,6 +800,12 @@ export const cadMachine = setup({
         },
         kernelLog: {
           actions: 'sendKernelLogs',
+        },
+        kernelProgress: {
+          actions: 'trackProgress',
+        },
+        kernelTelemetry: {
+          actions: 'storeTelemetry',
         },
         setRenderTimeout: {
           actions: 'setRenderTimeout',

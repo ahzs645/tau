@@ -153,13 +153,14 @@ export function BuildProvider({
     // When any file is written, re-trigger ALL compilation units with their own entry file.
     // Each unit re-compiles its entry point, picking up any changed imports from the written file.
     // No distinction between machine/user writes -- all writes are treated identically.
-    const fileWrittenSub = fileManager.fileManagerRef.on('fileWritten', () => {
+    const fileWrittenSub = fileManager.fileManagerRef.on('fileWritten', (event) => {
       const snapshot = actorRef.getSnapshot();
       const units = snapshot.context.compilationUnits;
       for (const [entryFile, unit] of units) {
         unit.send({
           type: 'setFile',
           file: { path: `/builds/${buildId}`, filename: entryFile },
+          changedPath: `/builds/${buildId}/${event.path}`,
         });
       }
     });

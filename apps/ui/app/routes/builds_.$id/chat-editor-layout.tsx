@@ -1,9 +1,6 @@
 import type { ClassValue } from 'clsx';
 import { XIcon, Code2 } from 'lucide-react';
-import { useRef, useCallback } from 'react';
-import type { ImperativePanelHandle } from 'react-resizable-panels';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '#components/ui/resizable.js';
 import {
   FloatingPanel,
   FloatingPanelClose,
@@ -13,11 +10,8 @@ import {
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { cookieName } from '#constants/cookie.constants.js';
-import { useCookie } from '#hooks/use-cookie.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { EditorDockview } from '#routes/builds_.$id/chat-editor-dockview.js';
-import { ChatConsole, collapsedConsoleSize } from '#routes/builds_.$id/chat-console.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
@@ -27,13 +21,6 @@ export const keyCombinationEditor = {
   ctrlKey: true,
 } as const satisfies KeyCombination;
 
-const toggleConsoleKeyCombination = {
-  key: 'l',
-  ctrlKey: true,
-  requireAllModifiers: true,
-} satisfies KeyCombination;
-
-// Editor Trigger Component
 export function ChatEditorLayoutTrigger({
   isOpen,
   onToggle,
@@ -66,38 +53,15 @@ export function ChatEditorLayout({
   readonly isExpanded?: boolean;
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }): React.JSX.Element {
-  const [consoleSize, setConsoleSize] = useCookie(cookieName.chatRsEditor, [
-    100 - collapsedConsoleSize,
-    collapsedConsoleSize,
-  ]);
-
-  const consolePanelReference = useRef<ImperativePanelHandle>(null);
-
-  const toggleEditor = () => {
+  const toggleEditor = (): void => {
     setIsExpanded?.((current) => !current);
   };
 
-  const toggleConsolePanel = useCallback(() => {
-    const panel = consolePanelReference.current;
-    if (panel) {
-      if (panel.isCollapsed()) {
-        panel.expand();
-      } else {
-        panel.collapse();
-      }
-    }
-  }, [consolePanelReference]);
-
   const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleEditor);
-  const { formattedKeyCombination: formattedToggleConsoleKeyCombination } = useKeybinding(
-    toggleConsoleKeyCombination,
-    toggleConsolePanel,
-  );
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
-        {/* Mobile-only header with inline close button */}
         <FloatingPanelContentHeader className="md:hidden">
           <FloatingPanelContentTitle>Editor</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
@@ -112,42 +76,9 @@ export function ChatEditorLayout({
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <ResizablePanelGroup
-          direction="vertical"
-          autoSaveId={cookieName.chatRsEditor}
-          className={cn('h-full', className)}
-          onLayout={setConsoleSize}
-        >
-          {/* Editor Panel - DockviewReact handles tabs + splitting */}
-          <ResizablePanel order={1} defaultSize={consoleSize[0]} minSize={5} id="chat-editor" className="size-full">
-            <EditorDockview />
-          </ResizablePanel>
-
-          <ResizableHandle />
-
-          {/* Console Panel */}
-          <ResizablePanel
-            ref={consolePanelReference}
-            collapsible
-            order={2}
-            defaultSize={consoleSize[1]}
-            minSize={15}
-            collapsedSize={collapsedConsoleSize}
-            id="chat-console"
-            className="group/console-resizable min-h-11"
-          >
-            <ChatConsole
-              keyCombination={formattedToggleConsoleKeyCombination}
-              onButtonClick={toggleConsolePanel}
-              onFilterChange={(event) => {
-                const panel = consolePanelReference.current;
-                if (event.target.value.length > 0) {
-                  panel?.expand();
-                }
-              }}
-            />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        <div className={cn('h-full', className)}>
+          <EditorDockview />
+        </div>
       </FloatingPanelContent>
     </FloatingPanel>
   );
