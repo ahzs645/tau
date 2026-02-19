@@ -8,13 +8,15 @@
  * detection in React selectors without comparing array contents.
  */
 export class LogRingBuffer<T> {
+  // eslint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
+  private readonly capacity: number;
   private readonly items: Array<T | undefined>;
   private head = 0;
   private _size = 0;
   private _version = 0;
 
-  // @ts-expect-error -- TypeScript erasableSyntaxOnly doesn't support parameter properties, but ESLint requires them
-  public constructor(private readonly capacity: number) {
+  public constructor(capacity: number) {
+    this.capacity = capacity;
     this.items = Array.from<T | undefined>({ length: capacity }).fill(undefined);
   }
 
