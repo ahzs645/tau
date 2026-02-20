@@ -43,9 +43,7 @@
     }
   },
   "imports": {
-    "#*": [
-      "./src/*"
-    ]
+    "#*": "./src/*"
   },
   "dependencies": {
     "xstate": "catalog:"

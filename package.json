@@ -29,7 +29,8 @@
     "db:studio": "nx run api:db-studio",
     "db:push": "nx run api:db-push",
     "db:drop": "nx run api:db-drop",
-    "update-license-deps": "node --import tsx scripts/update-license-deps.mts"
+    "update-license-deps": "node --import tsx scripts/update-license-deps.mts",
+    "pkgcheck": "nx run-many -t pkgcheck"
   },
   "dependencies": {
     "@ai-sdk/cerebras": "^2.0.31",
@@ -95,6 +96,7 @@
     "@tanstack/react-virtual": "^3.13.18",
     "@taucad/json-schema": "workspace:*",
     "@taucad/kcl-wasm-lib": "catalog:",
+    "@types/madge": "catalog:",
     "@types/pg": "^8.15.4",
     "@types/pluralize": "^0.0.33",
     "@types/safe-regex": "^1.1.6",
@@ -192,6 +194,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
     "@nestjs/schematics": "^11.0.5",
     "@nestjs/testing": "^11.1.5",
     "@netlify/vite-plugin-react-router": "^2.1.2",
@@ -245,9 +248,11 @@
     "happy-dom": "^16.8.1",
     "jsdom": "~26.0.0",
     "ky": "^1.8.2",
+    "madge": "catalog:",
     "nx": "catalog:",
     "prettier": "catalog:",
     "prettier-plugin-tailwindcss": "^0.6.14",
+    "publint": "catalog:",
     "rollup-plugin-visualizer": "^6.0.3",
     "tailwind-scrollbar": "^4.0.2",
     "tailwindcss": "^4.1.17",

@@ -56,9 +56,7 @@
     }
   },
   "imports": {
-    "#*": [
-      "./src/*"
-    ]
+    "#*": "./src/*"
   },
   "dependencies": {
     "@gltf-transform/core": "catalog:",

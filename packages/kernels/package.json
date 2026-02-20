@@ -111,9 +111,7 @@
     }
   },
   "imports": {
-    "#*": [
-      "./src/*"
-    ]
+    "#*": "./src/*"
   },
   "dependencies": {
     "@taucad/types": "workspace:*",

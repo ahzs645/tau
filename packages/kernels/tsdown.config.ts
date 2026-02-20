@@ -10,6 +10,7 @@ const baseConfig: Options = {
     'src/kernels/jscad/jscad.kernel.ts',
     'src/kernels/openscad/openscad.kernel.ts',
     'src/kernels/zoo/zoo.kernel.ts',
+    'src/kernels/zoo/engine-connection.ts',
     'src/kernels/tau/tau.kernel.ts',
     'src/bundler/esbuild.bundler.ts',
     'src/middleware/parameter-cache.middleware.ts',

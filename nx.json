@@ -9,6 +9,12 @@
       "plugin": "./tools/copy-files-from-to.plugin.ts"
     },
     {
+      "plugin": "./tools/generate-cjs-dts.plugin.ts"
+    },
+    {
+      "plugin": "./tools/pkgcheck.plugin.ts"
+    },
+    {
       "plugin": "@nx/react/router-plugin",
       "options": {
         "buildTargetName": "build",

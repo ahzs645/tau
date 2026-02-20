@@ -8,6 +8,7 @@ const baseConfig: Options = {
   dts: true,
   minify: true,
   tsconfig: 'tsconfig.build.json',
+  unbundle: true,
 };
 
 const cjsConfig: Options = {

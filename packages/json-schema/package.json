@@ -45,9 +45,7 @@
     }
   },
   "imports": {
-    "#*": [
-      "./src/*"
-    ]
+    "#*": "./src/*"
   },
   "devDependencies": {
     "@types/json-schema": "catalog:"
