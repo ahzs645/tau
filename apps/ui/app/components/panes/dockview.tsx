@@ -124,11 +124,17 @@ const dockviewTailwindOverrides = cn(
   '[&_.dv-tab]:border-b',
   '[&_.dv-tab]:border-b-border',
 
-  // ── Tab focus outline ──
-  // Dockview's defaultTab.scss adds an ::after outline on :focus/:focus-within
-  // with !important. Override to remove the extra border on click.
-  // Uses arbitrary variant (not Tailwind's built-in after:) to avoid injecting
-  // default content on the pseudo-element.
+  // ── Tab focus overlay ──
+  // Dockview's core CSS (un-layered) creates a full-size ::after on
+  // :focus/:focus-within with width/height 100%, z-index 5, and outline
+  // !important. Because our Tailwind utilities live inside @layer utilities,
+  // normal declarations lose to un-layered ones regardless of specificity.
+  // On `:last-child` tabs the divider's background-color still applies while
+  // dockview's width:100% wins, turning the 1px divider into a full grey
+  // overlay. Using !important reverses the cascade (layered !important >
+  // un-layered normal), fully preventing the pseudo-element from rendering.
+  '[&_.dv-tab:focus::after]:![content:none]',
+  '[&_.dv-tab:focus-within::after]:![content:none]',
   '[&_.dv-tab:focus::after]:![outline:none]',
   '[&_.dv-tab:focus-within::after]:![outline:none]',
 
