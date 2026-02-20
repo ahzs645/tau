@@ -300,8 +300,11 @@ describe('parameterCacheMiddleware', () => {
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
 
-        // Verify that exists was called with a path containing the dependency hash
-        expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
+        // Verify that readFile was called with a path containing the dependency hash
+        expect(runtime.filesystem.mocks.readFile).toHaveBeenCalledWith(
+          expect.stringContaining(dependencyHash),
+          'utf8',
+        );
       });
 
       it('should result in cache miss when dependencyHash differs', async () => {
@@ -348,7 +351,7 @@ describe('parameterCacheMiddleware', () => {
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
 
-        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('cache read error'));
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('Read error'));
       });
 
       it('should handle file write errors gracefully', async () => {
@@ -397,8 +400,9 @@ describe('parameterCacheMiddleware', () => {
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
 
-        expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(
+        expect(runtime.filesystem.mocks.readFile).toHaveBeenCalledWith(
           `/test/project/.tau/cache/parameters/${dependencyHash}.json`,
+          'utf8',
         );
       });
     });

@@ -54,22 +54,16 @@ export const parameterCacheMiddleware = createKernelMiddleware({
     const cacheKey = dependencyHash;
     const cachePath = getCachePath(basePath, cacheKey);
 
-    // 2. Check if cache exists
+    // 2. Try reading cache directly (single round-trip instead of exists + readFile)
     try {
-      const cacheExists = await filesystem.exists(cachePath);
+      const cachedData = await filesystem.readFile(cachePath, 'utf8');
+      logger.debug(`Parameter cache hit for ${cacheKey}`);
 
-      if (cacheExists) {
-        // Cache hit - read and return cached result
-        logger.debug(`Parameter cache hit for ${cacheKey}`);
-
-        const cachedData = await filesystem.readFile(cachePath, 'utf8');
-        const cachedResult = JSON.parse(cachedData) as GetParametersResult;
-
-        return cachedResult;
-      }
+      const cachedResult = JSON.parse(cachedData) as GetParametersResult;
+      return cachedResult;
     } catch (error) {
-      // Cache read error - treat as cache miss
-      logger.debug(`Parameter cache read error for ${cacheKey}: ${String(error)}`);
+      // Cache miss or read error - proceed to compute
+      logger.debug(`Parameter cache miss for ${cacheKey}: ${String(error)}`);
     }
 
     // 3. Cache miss - execute downstream

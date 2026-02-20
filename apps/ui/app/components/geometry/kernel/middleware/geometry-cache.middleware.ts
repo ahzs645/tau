@@ -279,25 +279,16 @@ export const geometryCacheMiddleware = createKernelMiddleware({
     const cacheKey = dependencyHash;
     const cachePath = getCachePath(basePath, cacheKey);
 
-    // 1. Check if cache exists
+    // 1. Try reading cache directly (single round-trip instead of exists + readFile)
     try {
-      const cacheExists = await filesystem.exists(cachePath);
+      const cachedData = await filesystem.readFile(cachePath);
+      logger.debug(`Cache hit for ${cacheKey}`);
 
-      if (cacheExists) {
-        // Cache hit - read and return cached result
-        logger.debug(`Cache hit for ${cacheKey}`);
-
-        // Read and deserialize all geometry types from MessagePack binary
-        const cachedData = await filesystem.readFile(cachePath);
-        const geometries = deserializeGeometries(cachedData);
-
-        // Short-circuit: return cached result
-        // This still flows through upstream middleware on the "return journey"
-        return createKernelSuccess(geometries);
-      }
+      const geometries = deserializeGeometries(cachedData);
+      return createKernelSuccess(geometries);
     } catch (error) {
-      // Cache read error - treat as cache miss
-      logger.debug(`Cache read error for ${cacheKey}: ${String(error)}`);
+      // Cache miss or read error - proceed to compute
+      logger.debug(`Cache miss for ${cacheKey}: ${String(error)}`);
     }
 
     // 2. Cache miss - execute downstream

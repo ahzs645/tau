@@ -254,8 +254,11 @@ describe('geometryCacheMiddleware', () => {
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
-        // Verify that exists was called with a path containing the dependency hash
-        expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
+        // Verify that readFile was called with a path containing the dependency hash
+        expect(runtime.filesystem.mocks.readFile).toHaveBeenCalledWith(
+          expect.stringContaining(dependencyHash),
+          undefined,
+        );
       });
     });
 
@@ -457,7 +460,10 @@ describe('geometryCacheMiddleware', () => {
       await wrapCreateGeometry!(input, handler, runtime);
 
       // Verify cache was checked at the correct path using the dependency hash
-      expect(runtime.filesystem.mocks.exists).toHaveBeenCalledWith(expect.stringContaining(dependencyHash));
+      expect(runtime.filesystem.mocks.readFile).toHaveBeenCalledWith(
+        expect.stringContaining(dependencyHash),
+        undefined,
+      );
     });
 
     it('should result in cache miss when dependencyHash differs (simulating parameter change)', async () => {
