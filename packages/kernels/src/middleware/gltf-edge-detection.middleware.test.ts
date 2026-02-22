@@ -7,7 +7,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Document, NodeIO, Accessor } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
-import type { CreateGeometryHandler, GeometryGltf, GeometrySvg, KernelMiddlewareRuntime } from '@taucad/types';
+import type { GeometryGltf, GeometrySvg } from '@taucad/types';
+import type { CreateGeometryHandler, KernelMiddlewareRuntime } from '#types/kernel-middleware.types.js';
 import { gltfEdgeDetectionMiddleware } from '#middleware/gltf-edge-detection.middleware.js';
 import {
   createMockRuntime,
@@ -305,17 +306,17 @@ async function analyzeGltfPrimitives(gltfContent: Uint8Array<ArrayBuffer>): Prom
 // Test Context Helpers
 // =============================================================================
 
-type EdgeDetectionConfig = { thresholdDegrees: number };
+type EdgeDetectionOptions = { thresholdDegrees: number };
 
-function createEdgeDetectionContext(config?: EdgeDetectionConfig): {
+function createEdgeDetectionContext(config?: EdgeDetectionOptions): {
   input: ReturnType<typeof createMockInput>;
-  runtime: KernelMiddlewareRuntime<Record<string, never>, EdgeDetectionConfig> &
-    ReturnType<typeof createMockRuntime<Record<string, never>, EdgeDetectionConfig>>;
+  runtime: KernelMiddlewareRuntime<Record<string, never>, EdgeDetectionOptions> &
+    ReturnType<typeof createMockRuntime<Record<string, never>, EdgeDetectionOptions>>;
 } {
   return {
     input: createMockInput(),
-    runtime: createMockRuntime<Record<string, never>, EdgeDetectionConfig>({
-      config: config ?? { thresholdDegrees: 30 },
+    runtime: createMockRuntime<Record<string, never>, EdgeDetectionOptions>({
+      options: config ?? { thresholdDegrees: 30 },
     }),
   };
 }

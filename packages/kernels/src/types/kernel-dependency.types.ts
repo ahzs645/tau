@@ -29,8 +29,8 @@ export type MiddlewareDependency = {
   version: string;
   /** Position in the middleware chain (0-indexed) */
   index: number;
-  /** Raw config object -- serialized in the final dependency hash pass */
-  config: Record<string, unknown>;
+  /** Raw options object -- serialized in the final dependency hash pass */
+  options: Record<string, unknown>;
 };
 
 /**
@@ -50,7 +50,7 @@ export type FrameworkDependency = {
  */
 export type OptionDependency = {
   type: 'option';
-  /** Option key (e.g., 'meshConfiguration', 'arguments') */
+  /** Option key (e.g., 'tessellation', 'arguments') */
   key: string;
   /** Option value (serialized to JSON for hashing) */
   value: unknown;

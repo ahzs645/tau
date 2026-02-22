@@ -13,9 +13,11 @@
 
 import * as esbuild from 'esbuild-wasm';
 import type { Plugin, BuildOptions, Message, Metafile } from 'esbuild-wasm';
-import type { ExecuteResult, KernelFilesystem, KernelIssue } from '@taucad/types';
 import { isBareSpecifier, parsePackageSpecifier, getCdnCachePath, resolveRelativePath } from '@taucad/utils/import';
 import { base64ToString } from 'uint8array-extras';
+import type { KernelIssue } from '#types/kernel.types.js';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
+import type { ExecuteResult } from '#types/kernel-bundler.types.js';
 import type { BuiltinModule } from '#bundler/module-manager.js';
 import { ModuleManager } from '#bundler/module-manager.js';
 
@@ -23,6 +25,9 @@ import { ModuleManager } from '#bundler/module-manager.js';
 // Types
 // =============================================================================
 
+/**
+ *
+ */
 export type BundleResult = {
   /** The bundled code as a string */
   code: string;
@@ -36,9 +41,12 @@ export type BundleResult = {
   dependencies: string[];
 };
 
+/**
+ *
+ */
 export type BundlerOptions = {
   /** Filesystem interface for reading/writing files */
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   /** Base path for the project (e.g., /builds/project) */
   projectPath: string;
   /** Built-in modules to use as fallback */
@@ -134,7 +142,7 @@ const defaultAutoExportNames = ['main', 'defaultParams'];
  * Resolve file extension for imports without extension.
  * Needs filesystem access, so it lives inside the plugin scope.
  */
-async function resolveFileExtension(filesystem: KernelFilesystem, path: string): Promise<string> {
+async function resolveFileExtension(filesystem: KernelFileSystem, path: string): Promise<string> {
   // If already has extension, return as-is
   if (/\.[jt]sx?$/.test(path)) {
     return path;
@@ -279,8 +287,11 @@ function resolveEsbuildFilePath(filePath: string): string {
 // Production ZenFS Plugin
 // =============================================================================
 
+/**
+ *
+ */
 export type ZenFsPluginOptions = {
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   moduleManager: ModuleManager;
   builtinModules: Map<string, BuiltinModule>;
   projectPath: string;
@@ -550,8 +561,11 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
 // EsbuildBundler Class
 // =============================================================================
 
+/**
+ *
+ */
 export class EsbuildBundler {
-  private readonly filesystem: KernelFilesystem;
+  private readonly filesystem: KernelFileSystem;
   private readonly projectPath: string;
   private readonly builtinModules: Map<string, BuiltinModule>;
   private readonly moduleManager: ModuleManager;
@@ -786,8 +800,11 @@ const module = { exports };
 // Detection Plugin
 // =============================================================================
 
+/**
+ *
+ */
 export type DetectionPluginOptions = {
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   projectPath: string;
 };
 
@@ -972,9 +989,12 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
 // Bundler Context
 // =============================================================================
 
+/**
+ *
+ */
 export type EsbuildBundlerContext = {
   bundler: EsbuildBundler;
   builtinModules: Map<string, BuiltinModule>;
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   projectPath: string;
 };

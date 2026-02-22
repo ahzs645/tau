@@ -1,8 +1,11 @@
 import type { SourceRange } from '@taucad/kcl-wasm-lib/bindings/SourceRange';
 import type { KclError as WasmKclError } from '@taucad/kcl-wasm-lib/bindings/KclError';
-import type { KernelStackFrame } from '@taucad/types';
+import type { KernelStackFrame } from '#types/kernel.types.js';
 import { sourceRangeToLineColumn } from '#kernels/zoo/source-range-utils.js';
 
+/**
+ *
+ */
 export type WasmFileInfo = {
   type: string;
   value: string;
@@ -17,6 +20,9 @@ export type ExtendedWasmKclError = WasmKclError & {
 };
 
 // Simplified error kinds that map to KernelIssue types
+/**
+ *
+ */
 export type KclErrorKind =
   | 'lexical'
   | 'syntax'
@@ -32,6 +38,9 @@ export type KclErrorKind =
   | 'connection'
   | 'unknown';
 
+/**
+ *
+ */
 export class KclError extends Error {
   /**
    * Create a simple error with minimal information
@@ -54,6 +63,9 @@ export class KclError extends Error {
 }
 
 // Special auth error with status code
+/**
+ *
+ */
 export class KclAuthError extends KclError {
   public readonly statusCode?: number;
 
@@ -65,6 +77,9 @@ export class KclAuthError extends KclError {
 }
 
 // Special export error with export type
+/**
+ *
+ */
 export class KclExportError extends KclError {
   public readonly exportType?: string;
 
@@ -76,6 +91,9 @@ export class KclExportError extends KclError {
 }
 
 // Connection error for WebSocket/API availability issues
+/**
+ *
+ */
 export class KclConnectionError extends KclError {
   /**
    * Create an error for when the Zoo API is unavailable
@@ -108,6 +126,9 @@ export class KclConnectionError extends KclError {
 }
 
 // WASM KclError wrapper that preserves original error structure
+/**
+ *
+ */
 export class KclWasmError extends KclError {
   public readonly wasmError: WasmKclError;
 
@@ -211,6 +232,9 @@ export const extractWasmKclError = (error: unknown): WasmKclError | undefined =>
 };
 
 // Helper function to extract error information from execution results
+/**
+ *
+ */
 export function extractExecutionError(
   errors: unknown[],
   code: string,

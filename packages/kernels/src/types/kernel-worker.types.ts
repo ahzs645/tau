@@ -11,10 +11,9 @@
  * For shared result/error types used across the codebase, see kernel.types.ts.
  */
 
-import type { ExportFormat, FileStat } from '#types/file.types.js';
-import type { LogLevel } from '#types/logger.types.js';
+import type { z } from 'zod';
+import type { ExportFormat, LogLevel, GeometryResponse } from '@taucad/types';
 import type { ExportGeometryResult, GetParametersResult, KernelIssue } from '#types/kernel.types.js';
-import type { GeometryResponse } from '#types/cad.types.js';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import type { ExecuteResult, KernelBundler } from '#types/kernel-bundler.types.js';
 
@@ -57,37 +56,32 @@ export type KernelLogger = {
 // =============================================================================
 
 /**
- * Unified filesystem interface for kernel workers.
- * All paths are absolute - callers use helper methods to construct paths.
+ * Node.js-compatible filesystem interface for kernel workers.
+ * 8 required methods matching `fs.promises.*`. All paths are absolute.
+ *
+ * The framework builds higher-level operations from these primitives:
+ * - `ensureDirectoryExists(path)` via `mkdir(path, { recursive: true })`
+ * - `readFiles(paths)` via `Promise.all(paths.map(readFile))`
+ * - `getDirectoryContents(dir)` via `readdir(dir)` + `Promise.all(names.map(readFile))`
+ * - `getDirectoryStat(dir)` via `readdir(dir)` + `Promise.all(names.map(stat))`
  */
-export type KernelFilesystem = {
-  // ---- Read operations (all absolute paths) ----
-  /** Read file as text */
+export type KernelFileSystem = {
+  /** Read file as text. */
   readFile(path: string, encoding: 'utf8'): Promise<string>;
-  /** Read file as binary */
+  /** Read file as binary. */
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
-  /** Batch read multiple files as binary (single RPC round-trip) */
-  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
-  /** Check if path exists */
-  exists(path: string): Promise<boolean>;
-  /** List directory entries */
-  readdir(path: string): Promise<string[]>;
-
-  // ---- Write operations (all absolute paths) ----
-  /** Write file */
+  /** Write file (text or binary). */
   writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
-  /** Create directory */
+  /** Create directory, optionally recursive. */
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
-  /** Delete file */
+  /** List directory entries (file/dir names). */
+  readdir(path: string): Promise<string[]>;
+  /** Delete file. */
   unlink(path: string): Promise<void>;
-  /** Ensure directory exists, creating parents as needed */
-  ensureDirectoryExists(path: string): Promise<void>;
-
-  // ---- Directory operations (all absolute paths) ----
-  /** Get directory contents as map of relative paths to content */
-  getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
-  /** Get file stats for directory recursively */
-  getDirectoryStat(path: string): Promise<FileStat[]>;
+  /** Get file or directory metadata. */
+  stat(path: string): Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>;
+  /** Check if path exists. */
+  exists(path: string): Promise<boolean>;
 };
 
 // =============================================================================
@@ -101,7 +95,7 @@ export type KernelFilesystem = {
  */
 export type KernelRuntime = {
   /** Filesystem interface (all paths are absolute) */
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   /** Logger with kernel name pre-configured */
   logger: KernelLogger;
   /** Read-only view of cached file contents (absolute paths), populated during dependency computation */
@@ -115,6 +109,26 @@ export type KernelRuntime = {
    * Browser uses Blob URL, Node.js uses data URL.
    */
   execute(code: string): Promise<ExecuteResult>;
+};
+
+// =============================================================================
+// Tessellation
+// =============================================================================
+
+/**
+ * Universal tessellation quality descriptor for geometry meshing.
+ * Controls the fidelity of triangulated mesh output from CAD kernels.
+ *
+ * Each kernel interprets these values according to its meshing algorithm:
+ * - Replicad: post-computation mesh tolerance (shape.mesh / shape.meshEdges)
+ * - OpenSCAD: mapped to $fs (linearTolerance) and $fa (angularTolerance)
+ * - Zoo/JSCAD/Tau: ignored (tessellation controlled externally)
+ */
+export type Tessellation = {
+  /** Maximum deviation between the mesh and the true geometry surface, in model units. */
+  linearTolerance: number;
+  /** Maximum angular deviation between adjacent mesh facets, in degrees. */
+  angularTolerance: number;
 };
 
 // =============================================================================
@@ -141,6 +155,8 @@ export type CreateGeometryInput = {
   basePath: string;
   /** User-provided parameters */
   parameters: Record<string, unknown>;
+  /** Optional tessellation quality for preview rendering. Kernel applies its own default when undefined. */
+  tessellation?: Tessellation;
 };
 
 /**
@@ -179,8 +195,8 @@ export type InitializeInput<Options = Record<string, unknown>> = {
 export type ExportGeometryInput = {
   /** Export file format */
   fileType: ExportFormat;
-  /** Optional mesh configuration for tessellation */
-  meshConfig?: { linearTolerance: number; angularTolerance: number };
+  /** Optional tessellation quality for export. Kernel applies its own default when undefined. */
+  tessellation?: Tessellation;
 };
 
 // =============================================================================
@@ -206,14 +222,26 @@ export type CreateGeometryOutput<NativeHandle = unknown> = {
  * The API is designed to be simple (no class inheritance, no `this` binding)
  * with all state managed through the typed context returned by initialize().
  *
+ * When `optionsSchema` is provided, TypeScript infers `Options` from the schema,
+ * giving the `initialize` callback type-safe access to validated options.
+ *
  * @template Context - Kernel-specific context type returned by initialize()
  * @template NativeHandle - Kernel-specific type for native geometry representation
+ * @template Options - Type of validated options, inferred from optionsSchema when provided
  */
-export type KernelDefinition<Context = unknown, NativeHandle = unknown> = {
+export type KernelDefinition<
+  Context = unknown,
+  NativeHandle = unknown,
+  Options extends Record<string, unknown> = Record<string, unknown>,
+> = {
   name: string;
   version: string;
 
-  initialize(options: Record<string, unknown>, runtime: KernelRuntime): Promise<Context>;
+  /** Zod schema for validating and typing kernel options. Options type is inferred from this schema. */
+  optionsSchema?: z.ZodType<Options>;
+
+  /** Initialize kernel with typed options. Options type is inferred from optionsSchema. */
+  initialize(options: Options, runtime: KernelRuntime): Promise<Context>;
 
   canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
 
@@ -261,8 +289,8 @@ export type KernelDefinition<Context = unknown, NativeHandle = unknown> = {
  * });
  * ```
  */
-export function defineKernel<Ctx, NativeHandle>(
-  definition: KernelDefinition<Ctx, NativeHandle>,
-): KernelDefinition<Ctx, NativeHandle> {
+export function defineKernel<Ctx, NativeHandle, Options extends Record<string, unknown> = Record<string, unknown>>(
+  definition: KernelDefinition<Ctx, NativeHandle, Options>,
+): KernelDefinition<Ctx, NativeHandle, Options> {
   return definition;
 }

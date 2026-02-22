@@ -10,9 +10,10 @@
  * 3. Write result to cache on the way back up
  */
 
-import type { GetParametersResult } from '@taucad/types';
 import { joinPath } from '@taucad/utils/path';
-import { createKernelMiddleware } from '#middleware/kernel-middleware.js';
+import type { GetParametersResult } from '#types/kernel.types.js';
+import { defineMiddleware } from '#middleware/kernel-middleware.js';
+import { ensureDirectoryExists } from '#framework/filesystem-helpers.js';
 
 /**
  * Get the cache file path for a given cache key.
@@ -43,7 +44,7 @@ function getCacheDir(basePath: string): string {
  * - Check cache before calling handler()
  * - Write to cache after handler() returns (on cache miss)
  */
-export const parameterCacheMiddleware = createKernelMiddleware({
+export const parameterCacheMiddleware = defineMiddleware({
   name: 'ParameterCache',
   version: '1.0.0',
 
@@ -75,7 +76,7 @@ export const parameterCacheMiddleware = createKernelMiddleware({
       try {
         // Ensure cache directory exists
         const cacheDir = getCacheDir(basePath);
-        await filesystem.ensureDirectoryExists(cacheDir);
+        await ensureDirectoryExists(filesystem, cacheDir);
 
         await filesystem.writeFile(cachePath, JSON.stringify(result));
         logger.debug(`Cached parameters at ${cacheKey}`);

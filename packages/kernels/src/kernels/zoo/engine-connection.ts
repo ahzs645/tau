@@ -7,10 +7,19 @@ import { KclError, KclAuthError, KclConnectionError } from '#kernels/zoo/kcl-err
 import type { FileSystemManager } from '#kernels/zoo/filesystem-manager.js';
 import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports -- required
+/**
+ *
+ */
+// eslint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() required for module type
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
 
+/**
+ *
+ */
 export type WebSocketRequest = Models['WebSocketRequest_type'];
+/**
+ *
+ */
 export type WebSocketResponse = Models['WebSocketResponse_type'];
 
 type PendingCommand = {
@@ -48,21 +57,36 @@ const getWebSocket = async (): Promise<typeof WebSocket> => {
 };
 
 // Mock engine connection for local operations that don't need websocket
+/**
+ *
+ */
 export class MockEngineConnection {
+  /**
+   *
+   */
   public async sendModelingCommandFromWasm(): Promise<Uint8Array<ArrayBuffer>> {
     throw KclError.simple('engine', 'Mock execution should not require websocket commands');
   }
 
+  /**
+   *
+   */
   public async startNewSession(): Promise<void> {
     // NO-OP for mock
   }
 
+  /**
+   *
+   */
   public async startFromWasm(): Promise<boolean> {
     return true;
   }
 }
 
 // Standalone WebSocket engine connection
+/**
+ *
+ */
 export class EngineConnection {
   public context: Context | undefined;
   private websocket: WebSocket | undefined;
@@ -82,6 +106,9 @@ export class EngineConnection {
     this.fileSystemManager = fileSystemManager;
   }
 
+  /**
+   *
+   */
   public async initialize(): Promise<void> {
     return new Promise((resolve, reject) => {
       let resolved = false;
@@ -137,6 +164,9 @@ export class EngineConnection {
   }
 
   // Send a modeling command from WASM. This method is called by the WASM context.
+  /**
+   *
+   */
   public async sendModelingCommandFromWasm(
     _commandString: string,
     _id: string,
@@ -163,17 +193,26 @@ export class EngineConnection {
     }
   }
 
+  /**
+   *
+   */
   public async startNewSession(): Promise<void> {
     // This is called by the WASM context to start a new session.
     // WASM requires it to be present.
     // NO-OP for now.
   }
 
+  /**
+   *
+   */
   public async startFromWasm(_token: string): Promise<boolean> {
     // This is called by the WASM context to start the engine connection
     return this.isConnected;
   }
 
+  /**
+   *
+   */
   public async cleanup(): Promise<void> {
     // Clear ping interval
     if (this.pingIntervalId) {

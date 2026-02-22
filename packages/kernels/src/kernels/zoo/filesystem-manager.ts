@@ -1,14 +1,17 @@
 /* eslint-disable @typescript-eslint/parameter-properties -- parameter properties are non-erasable TypeScript */
-import type { KernelFilesystem } from '@taucad/types';
 import { joinPath } from '@taucad/utils/path';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 
 /// FileSystemManager is a stateless adapter that provides filesystem operations
 /// to the WASM context. It resolves relative paths to absolute using the provided basePath.
+/**
+ *
+ */
 export class FileSystemManager {
-  private readonly filesystem: KernelFilesystem;
+  private readonly filesystem: KernelFileSystem;
   private readonly basePath: string;
 
-  public constructor(filesystem: KernelFilesystem, basePath: string) {
+  public constructor(filesystem: KernelFileSystem, basePath: string) {
     this.filesystem = filesystem;
     this.basePath = basePath;
   }

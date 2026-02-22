@@ -15,18 +15,20 @@
  */
 
 import type {
+  CreateGeometryResult,
+  ExportGeometryResult,
+  GetParametersResult,
+  KernelIssue,
+} from '#types/kernel.types.js';
+import type {
   CanHandleInput,
   CreateGeometryInput,
-  CreateGeometryResult,
   ExportGeometryInput,
-  ExportGeometryResult,
   GetDependenciesInput,
   GetParametersInput,
-  GetParametersResult,
   KernelDefinition,
-  KernelIssue,
   KernelRuntime,
-} from '@taucad/types';
+} from '#types/kernel-worker.types.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
 import { isWorkerContext, getWorkerMessagePort } from '#framework/kernel-message-adapter.js';
 import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
@@ -35,7 +37,7 @@ import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
  * Configuration for a kernel module within the runtime worker.
  * Mirrors KernelWorkerEntry but without the worker URL (since we ARE the worker).
  */
-type KernelModuleConfig = {
+type KernelModuleEntry = {
   id: string;
   moduleUrl: string;
   extensions?: string[];
@@ -47,14 +49,14 @@ type KernelModuleConfig = {
 };
 
 type LoadedKernel = {
-  config: KernelModuleConfig;
+  entry: KernelModuleEntry;
   definition: KernelDefinition;
   ctx: unknown;
   initialized: boolean;
 };
 
 type RuntimeWorkerOptions = {
-  kernelModules: KernelModuleConfig[];
+  kernelModules: KernelModuleEntry[];
 };
 
 /**
@@ -69,13 +71,14 @@ type KernelSelection = {
   method: SelectionMethod;
 };
 
+/** Multi-kernel runtime worker that dynamically selects and delegates to loaded kernel definitions. */
 class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   protected override readonly name = 'KernelRuntimeWorker';
 
   private readonly loadedKernels = new Map<string, LoadedKernel>();
   private activeKernelId: string | undefined;
   private readonly selectionCache = new Map<string, { id: string; method: SelectionMethod }>();
-  private kernelModules: KernelModuleConfig[] = [];
+  private kernelModules: KernelModuleEntry[] = [];
   private cachedDetectionDeps?: string[];
 
   // =====================================================================
@@ -95,7 +98,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       return false;
     }
 
-    this.activeKernelId = selection.kernel.config.id;
+    this.activeKernelId = selection.kernel.entry.id;
 
     // When selected via bundler detection (transitive import analysis),
     // the framework's detection is authoritative — skip kernel-level canHandle
@@ -200,12 +203,12 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       throw new Error(`No kernel can handle file: ${filePath}`);
     }
 
-    this.activeKernelId = selection.kernel.config.id;
+    this.activeKernelId = selection.kernel.entry.id;
     span.end();
     return selection.kernel;
   }
 
-  private async loadKernelModule(config: KernelModuleConfig): Promise<LoadedKernel> {
+  private async loadKernelModule(config: KernelModuleEntry): Promise<LoadedKernel> {
     const existing = this.loadedKernels.get(config.id);
     if (existing) {
       return existing;
@@ -226,7 +229,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     const loaded: LoadedKernel = {
-      config,
+      entry: config,
       definition,
       ctx: undefined,
       initialized: false,
@@ -241,8 +244,14 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       return;
     }
 
-    this.logger.debug(`Initializing kernel: ${kernel.config.id}`);
-    kernel.ctx = await kernel.definition.initialize(kernel.config.options ?? {}, runtime);
+    this.logger.debug(`Initializing kernel: ${kernel.entry.id}`);
+
+    const rawOptions = kernel.entry.options ?? {};
+    const validatedOptions = kernel.definition.optionsSchema
+      ? kernel.definition.optionsSchema.parse(rawOptions)
+      : rawOptions;
+
+    kernel.ctx = await kernel.definition.initialize(validatedOptions, runtime);
     kernel.initialized = true;
   }
 
@@ -269,7 +278,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     const extension = filePath.split('.').pop()?.toLowerCase() ?? '';
-    let catchAllConfig: KernelModuleConfig | undefined;
+    let catchAllEntry: KernelModuleEntry | undefined;
     const hasBundlerKernels = this.kernelModules.some((c) => c.builtinModuleNames && c.builtinModuleNames.length > 0);
 
     /* eslint-disable no-await-in-loop -- Sequential kernel selection: try each config in priority order */
@@ -287,7 +296,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       }
 
       if (isCatchAll && hasBundlerKernels) {
-        catchAllConfig = config;
+        catchAllEntry = config;
         continue;
       }
 
@@ -315,17 +324,18 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     // Pass 2: Bundler-assisted detection via detectImports
-    if (this.hasBundlerAvailable) {
+    const fileExt = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.') + 1) : '';
+    if (this.hasBundlerForExtension(fileExt)) {
       const configsWithBuiltins = this.kernelModules.filter(
         (c) => c.builtinModuleNames && c.builtinModuleNames.length > 0,
       );
 
       if (configsWithBuiltins.length > 0) {
-        await this.ensureBundlerContext();
+        const bundler = await this.ensureBundlerForExtension(fileExt);
         const detectSpan = runtime.tracer.startSpan('kernel.detect-bundle', { file: filePath });
-        const { detectedModules, dependencies } = await this.loadedBundler!.definition.detectImports(
+        const { detectedModules, dependencies } = await bundler.definition.detectImports(
           { entryPath: filePath },
-          this.loadedBundler!.ctx,
+          bundler.ctx,
         );
         detectSpan.end();
 
@@ -356,10 +366,10 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     /* eslint-enable no-await-in-loop -- End sequential kernel selection */
 
     // Pass 3: Catch-all fallback
-    if (catchAllConfig) {
-      const kernel = await this.loadKernelModule(catchAllConfig);
+    if (catchAllEntry) {
+      const kernel = await this.loadKernelModule(catchAllEntry);
       await this.ensureKernelInitialized(kernel, runtime);
-      this.selectionCache.set(filePath, { id: catchAllConfig.id, method: 'catchall' });
+      this.selectionCache.set(filePath, { id: catchAllEntry.id, method: 'catchall' });
       return { kernel, method: 'catchall' };
     }
 

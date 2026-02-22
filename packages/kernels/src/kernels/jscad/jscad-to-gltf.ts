@@ -186,6 +186,10 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
  *
  * @param document - glTF Document to create mesh components within
  * @param meshData - Object containing mesh data and optional color
+ * @param meshData.vertices - Vertex position data
+ * @param meshData.normals - Vertex normal data
+ * @param meshData.indices - Triangle index data
+ * @param meshData.color - Optional RGBA color tuple
  * @returns Configured glTF Primitive ready to be added to a Mesh
  *
  * @internal This is a helper function. For public API, see jscadToGltf().

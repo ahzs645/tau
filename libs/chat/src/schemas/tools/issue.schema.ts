@@ -2,7 +2,8 @@
  * Shared error schemas used across multiple tool definitions.
  * These schemas are registered with unique IDs in Zod's registry.
  */
-import type { CodeIssue, KernelIssue } from '@taucad/types';
+import type { CodeIssue } from '@taucad/types';
+import type { KernelIssue } from '@taucad/kernels';
 import { z } from 'zod';
 
 export const codeIssueSchema: z.ZodType<CodeIssue> = z

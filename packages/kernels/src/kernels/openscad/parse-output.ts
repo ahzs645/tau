@@ -1,4 +1,4 @@
-import type { ErrorLocation, KernelIssue, KernelStackFrame } from '@taucad/types';
+import type { ErrorLocation, KernelIssue, KernelStackFrame } from '#types/kernel.types.js';
 
 /**
  * Callback function type for adding parsed errors.

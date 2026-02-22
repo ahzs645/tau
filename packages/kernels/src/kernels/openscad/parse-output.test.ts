@@ -1,5 +1,5 @@
-import type { KernelIssue } from '@taucad/types';
 import { describe, it, expect } from 'vitest';
+import type { KernelIssue } from '#types/kernel.types.js';
 import type { GetFileContentsFn } from '#kernels/openscad/parse-output.js';
 import { parseStderrLine, OpenScadStderrParser } from '#kernels/openscad/parse-output.js';
 

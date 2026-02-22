@@ -19,7 +19,7 @@ describe('Browser compatibility (jsdom)', () => {
 
   it('should import the middleware entry point without errors', async () => {
     const mod = await import('#middleware/kernel-middleware.js');
-    expect(mod.createKernelMiddleware).toBeTypeOf('function');
+    expect(mod.defineMiddleware).toBeTypeOf('function');
     expect(mod.createMiddlewareRuntime).toBeTypeOf('function');
   });
 
@@ -33,10 +33,10 @@ describe('Browser compatibility (jsdom)', () => {
     const config = createDefaultConfig();
 
     expect(config.workerUrl).toBeTypeOf('string');
-    expect(config.kernelConfig).toBeInstanceOf(Array);
-    expect(config.middlewareConfig).toBeInstanceOf(Array);
-    expect(config.bundlerConfig).toBeInstanceOf(Array);
-    expect(config.kernelConfig.length).toBeGreaterThan(0);
+    expect(config.kernelModules).toBeInstanceOf(Array);
+    expect(config.middlewareEntries).toBeInstanceOf(Array);
+    expect(config.bundlerEntries).toBeInstanceOf(Array);
+    expect(config.kernelModules.length).toBeGreaterThan(0);
   });
 
   it('createDefaultConfig should support disabling kernels', async () => {
@@ -45,7 +45,7 @@ describe('Browser compatibility (jsdom)', () => {
       kernels: { zoo: { enabled: false } },
     });
 
-    const zooKernel = config.kernelConfig.find((k) => k.id === 'zoo');
+    const zooKernel = config.kernelModules.find((k) => k.id === 'zoo');
     expect(zooKernel).toBeUndefined();
   });
 });

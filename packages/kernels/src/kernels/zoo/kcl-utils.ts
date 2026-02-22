@@ -1,4 +1,3 @@
-import type { KernelSpanTracer } from '@taucad/types';
 import type { PartialDeep, SetRequired } from 'type-fest';
 import type { Node } from '@taucad/kcl-wasm-lib/bindings/Node';
 import type { Program } from '@taucad/kcl-wasm-lib/bindings/Program';
@@ -12,6 +11,7 @@ import type { Configuration } from '@taucad/kcl-wasm-lib/bindings/Configuration'
 import type { System } from '@taucad/kcl-wasm-lib/bindings/ModelingCmd';
 import type { Context } from '@taucad/kcl-wasm-lib';
 import type { Models } from '@kittycad/lib';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { EngineConnection, MockEngineConnection } from '#kernels/zoo/engine-connection.js';
 import type { WasmModule } from '#kernels/zoo/engine-connection.js';
 import type { FileSystemManager } from '#kernels/zoo/filesystem-manager.js';
@@ -29,12 +29,18 @@ const log = createZooLogger('KclUtils');
 type OutputFormat3d = Models['OutputFormat3d_type'];
 
 // KCL and WASM types
+/**
+ *
+ */
 export type KclParseResult = {
   program: Node<Program>;
   errors: CompilationError[];
   warnings: CompilationError[];
 };
 
+/**
+ *
+ */
 export type KclExecutionResult = {
   variables: Partial<Record<string, KclValue>>;
   operations: Operation[];
@@ -44,15 +50,24 @@ export type KclExecutionResult = {
   defaultPlanes: DefaultPlanes | undefined;
 };
 
+/**
+ *
+ */
 export type ExportOptions = SetRequired<Partial<OutputFormat3d>, 'type'> & {
   deterministic?: boolean;
 };
 
+/**
+ *
+ */
 export type ExportedFile = {
   name: string;
   contents: Uint8Array<ArrayBuffer>;
 };
 
+/**
+ *
+ */
 export type KclExportResult = {
   success: boolean;
   files: ExportedFile[];
@@ -103,6 +118,9 @@ async function loadWasmModule(tracer?: KernelSpanTracer): Promise<WasmModule> {
   }
 }
 
+/**
+ *
+ */
 export class KclUtils {
   /**
    * Inject parameters into KCL program JSON by modifying variable declarations.

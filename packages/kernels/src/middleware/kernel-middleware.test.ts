@@ -4,9 +4,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import type { Dependency, OnWorkerLog } from '@taucad/types';
+import type { OnWorkerLog } from '@taucad/types';
+import type { Dependency } from '#types/kernel-dependency.types.js';
 import {
-  createKernelMiddleware,
+  defineMiddleware,
   createMiddlewareLogger,
   createMiddlewareState,
   createMiddlewareRuntime,
@@ -16,13 +17,13 @@ import { createMockFilesystem } from '#testing/kernel-testing.utils.js';
 // Mock dependencies for testing
 const mockDependencies: readonly Dependency[] = [
   { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-  { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, config: {} },
+  { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, options: {} },
   { type: 'framework', name: 'tau', version: '0.0.1' },
 ];
 
-describe('createKernelMiddleware', () => {
+describe('defineMiddleware', () => {
   it('should create a middleware with the provided name', () => {
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'TestMiddleware',
     });
 
@@ -34,7 +35,7 @@ describe('createKernelMiddleware', () => {
     const wrapExportGeometry = vi.fn();
     const wrapGetParameters = vi.fn();
 
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'TestMiddleware',
       wrapCreateGeometry,
       wrapExportGeometry,
@@ -52,7 +53,7 @@ describe('createKernelMiddleware', () => {
       message: z.string(),
     });
 
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'TestMiddleware',
       stateSchema,
     });
@@ -61,7 +62,7 @@ describe('createKernelMiddleware', () => {
   });
 
   it('should allow middleware without a state schema', () => {
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'NoStateMiddleware',
     });
 
@@ -304,7 +305,7 @@ describe('createMiddlewareRuntime', () => {
 
 describe('wrap hook behavior', () => {
   it('should allow wrap hooks to call handler and transform result', async () => {
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'TransformMiddleware',
       async wrapCreateGeometry(input, handler, _runtime) {
         const result = await handler(input);
@@ -358,7 +359,7 @@ describe('wrap hook behavior', () => {
       issues: [],
     };
 
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'CacheMiddleware',
       // Intentionally not calling handler to test short-circuit
       async wrapCreateGeometry(_input, _handler, _runtime) {
@@ -397,7 +398,7 @@ describe('wrap hook behavior', () => {
 
     type TestState = z.infer<typeof stateSchema>;
 
-    const middleware = createKernelMiddleware({
+    const middleware = defineMiddleware({
       name: 'StatefulMiddleware',
       stateSchema,
       async wrapCreateGeometry(input, handler, { state }) {

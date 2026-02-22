@@ -1,5 +1,8 @@
 import type { SourceRange } from '@taucad/kcl-wasm-lib/bindings/SourceRange';
 
+/**
+ *
+ */
 export type LineColumnPosition = {
   line: number;
   column: number;
@@ -44,7 +47,8 @@ export function sourceRangeToLineColumn(sourceRange: SourceRange, sourceCode: st
 
 /**
  * Extract error position information from CompilationError with source code context
- * @param error - CompilationError from KCL parser
+ * @param error - Object with sourceRange from KCL parser
+ * @param error.sourceRange - Source range array from the compilation error
  * @param sourceCode - The source code string that was parsed
  * @returns Object with line/column position
  */

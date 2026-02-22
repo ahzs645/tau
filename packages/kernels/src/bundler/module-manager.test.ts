@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { KernelFilesystem } from '@taucad/types';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 import { ModuleManager } from '#bundler/module-manager.js';
 
 // =============================================================================
@@ -21,21 +21,18 @@ import { ModuleManager } from '#bundler/module-manager.js';
 // =============================================================================
 
 type MockFilesystem = {
-  [K in keyof KernelFilesystem]: ReturnType<typeof vi.fn>;
+  [K in keyof KernelFileSystem]: ReturnType<typeof vi.fn>;
 };
 
 function createMockFilesystem(): MockFilesystem {
   return {
-    readFile: vi.fn<KernelFilesystem['readFile']>().mockRejectedValue(new Error('File not found')),
-    readFiles: vi.fn<KernelFilesystem['readFiles']>().mockResolvedValue({}),
-    exists: vi.fn<KernelFilesystem['exists']>().mockResolvedValue(false),
-    readdir: vi.fn<KernelFilesystem['readdir']>().mockResolvedValue([]),
-    writeFile: vi.fn<KernelFilesystem['writeFile']>().mockResolvedValue(undefined),
-    mkdir: vi.fn<KernelFilesystem['mkdir']>().mockResolvedValue(undefined),
-    unlink: vi.fn<KernelFilesystem['unlink']>().mockResolvedValue(undefined),
-    ensureDirectoryExists: vi.fn<KernelFilesystem['ensureDirectoryExists']>().mockResolvedValue(undefined),
-    getDirectoryContents: vi.fn<KernelFilesystem['getDirectoryContents']>().mockResolvedValue({}),
-    getDirectoryStat: vi.fn<KernelFilesystem['getDirectoryStat']>().mockResolvedValue([]),
+    readFile: vi.fn<KernelFileSystem['readFile']>().mockRejectedValue(new Error('File not found')),
+    exists: vi.fn<KernelFileSystem['exists']>().mockResolvedValue(false),
+    readdir: vi.fn<KernelFileSystem['readdir']>().mockResolvedValue([]),
+    writeFile: vi.fn<KernelFileSystem['writeFile']>().mockResolvedValue(undefined),
+    mkdir: vi.fn<KernelFileSystem['mkdir']>().mockResolvedValue(undefined),
+    unlink: vi.fn<KernelFileSystem['unlink']>().mockResolvedValue(undefined),
+    stat: vi.fn<KernelFileSystem['stat']>().mockRejectedValue(new Error('Not found')),
   };
 }
 
@@ -79,7 +76,7 @@ describe('ModuleManager', () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', mockFetch);
     filesystem = createMockFilesystem();
-    manager = new ModuleManager(filesystem as unknown as KernelFilesystem);
+    manager = new ModuleManager(filesystem as unknown as KernelFileSystem);
   });
 
   afterEach(() => {
@@ -184,8 +181,8 @@ describe('ModuleManager', () => {
 
       await manager.ensureCdnModule('three', 'examples/jsm/controls/OrbitControls');
 
-      // Should ensure the nested subdirectory exists
-      expect(filesystem.ensureDirectoryExists).toHaveBeenCalledWith('/node_modules/three/examples/jsm/controls');
+      // Should ensure the nested subdirectory exists via mkdir with recursive
+      expect(filesystem.mkdir).toHaveBeenCalledWith('/node_modules/three/examples/jsm/controls', { recursive: true });
 
       expect(filesystem.writeFile).toHaveBeenCalledWith(
         '/node_modules/three/examples/jsm/controls/OrbitControls.js',

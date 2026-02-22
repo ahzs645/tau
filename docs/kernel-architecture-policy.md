@@ -14,21 +14,77 @@ Route (builds_.$id)
        └─ CompilationUnits: Map<entryFile, CadMachine>
             └─ CadMachine (1 per entry file, headless computation)
                  └─ KernelMachine (1 per CadMachine)
-                      └─ KernelRuntimeWorker (1 Web Worker per KernelMachine)
-                           ├─ Loaded kernel module (via defineKernel)
-                           ├─ Loaded bundler module (via defineBundler)
-                           └─ Middleware chain (via defineMiddleware)
+                      └─ KernelClient → KernelTransport → Worker
+                           └─ KernelRuntimeWorker (1 Web Worker per KernelMachine)
+                                ├─ Loaded kernel modules (via defineKernel)
+                                ├─ Loaded bundler modules (via defineBundler, routed by extension)
+                                └─ Middleware chain (via defineMiddleware)
 ```
 
-### Three-Pillar Plugin Model
+## Layered Architecture
+
+The kernel API follows a three-layer design. Each layer has a distinct audience and abstraction level:
+
+```
+┌────────────────────────────────────────────────────────┐
+│  KernelClient (consumer-facing)                        │
+│  Promise-based, lazy initialization, event subscription│
+├────────────────────────────────────────────────────────┤
+│  KernelTransport (framework-level)                     │
+│  Event-driven, transport-agnostic, zero Promises       │
+├────────────────────────────────────────────────────────┤
+│  KernelCommand / KernelResponse (protocol)             │
+│  Typed discriminated unions, requestId correlation      │
+└────────────────────────────────────────────────────────┘
+```
+
+**Why both Client and Transport?** Transport is the primitive -- pure messages with zero abstraction overhead. Client adds Promise correlation (~1μs overhead vs 100ms–10s render times). Both are exposed: consumers use `KernelClient`, framework authors use `KernelTransport` directly.
+
+## Entity Model
+
+| Entity | Purpose | Layer |
+|--------|---------|-------|
+| **KernelClient** | High-level facade. Lazy, Promise-based, event-subscribable. Created by `createKernelClient()`. | Consumer |
+| **KernelTransport** | Event-driven message channel between realms. Default: `createWorkerTransport()`. | Framework |
+| **KernelWorkerClient** | Protocol client wrapping a Transport with request/response correlation and typed callbacks. | Framework |
+| **KernelRuntimeWorker** | Worker-side orchestrator. Manages kernel selection, middleware chain, bundler routing. | Worker |
+| **KernelFileSystem** | 8-method Node.js `fs.promises`-compatible interface. Bridged from main thread → worker via MessagePort. | Consumer |
+| **KernelDefinition** | Kernel plugin contract (author API, via `defineKernel`). Runs in worker. | Plugin Author |
+| **BundlerDefinition** | Bundler plugin contract (author API, via `defineBundler`). Declares supported `extensions`. | Plugin Author |
+| **KernelMiddleware** | Middleware plugin contract (author API, via `defineMiddleware`). Wraps kernel operations. | Plugin Author |
+| **KernelPlugin** | Registration object returned by consumer factory functions like `replicad()`. Runs on main thread. | Consumer |
+| **MiddlewarePlugin** | Registration object returned by consumer factory functions like `parameterCache()`. | Consumer |
+| **BundlerPlugin** | Registration object returned by consumer factory functions like `esbuild()`. | Consumer |
+| **KernelRuntime** | Services injected into kernel methods: filesystem, logger, bundler, tracer. | Plugin Author |
+| **Realm** | Execution environment: main thread, Web Worker, Node.js `worker_threads`, remote server. | Conceptual |
+
+## API Audiences
+
+Two distinct "define" patterns serve different audiences:
+
+| Audience | Pattern | Example | Runs In |
+|----------|---------|---------|---------|
+| **Plugin author** | `defineKernel()`, `defineBundler()`, `defineMiddleware()` | Implement a new CAD kernel | Worker realm |
+| **Consumer** | `replicad()`, `esbuild()`, `parameterCache()` | Select and configure plugins | Main thread |
+
+## Three-Pillar Plugin Model
 
 All non-generic capabilities are provided by injectable plugins, not hardcoded in the framework:
 
-| Plugin Type | API | Purpose | Example |
-|-------------|-----|---------|---------|
-| `defineKernel` | `KernelDefinition` | Geometry computation, parameter extraction, export | replicad, jscad, openscad, zoo, tau |
-| `defineBundler` | `BundlerDefinition` | File bundling, code execution, module registry, import detection | esbuild bundler |
-| `defineMiddleware` | `KernelMiddleware` | Operation wrapping (caching, transforms, edge detection) | geometry-cache, edge-detection |
+| Plugin Type | Author API | Consumer API | Purpose | Example |
+|-------------|-----------|-------------|---------|---------|
+| Kernel | `defineKernel` → `KernelDefinition` | `replicad()` → `KernelPlugin` | Geometry computation, parameter extraction, export | replicad, jscad, openscad, zoo, tau |
+| Bundler | `defineBundler` → `BundlerDefinition` | `esbuild()` → `BundlerPlugin` | File bundling, code execution, module registry, import detection | esbuild bundler |
+| Middleware | `defineMiddleware` → `KernelMiddleware` | `parameterCache()` → `MiddlewarePlugin` | Operation wrapping (caching, transforms, edge detection) | geometry-cache, parameter-cache |
+
+### Multi-Bundler Support
+
+Multiple bundlers can be registered simultaneously. Each bundler declares the file extensions it handles via `extensions: string[]` in its `BundlerDefinition`. The framework routes operations to the correct bundler by file extension:
+
+- `registerModule` calls are broadcast to all loaded bundlers
+- `bundle`, `detectImports`, `resolveDependencies` are routed to the bundler matching the file extension
+- Bundlers are lazily loaded -- only initialized when a file with a matching extension is encountered
+- Managed internally via `Map<extension, BundlerDefinition>` and `Map<extension, LoadedBundler>`
 
 ### Machine Multiplicity
 
@@ -38,7 +94,8 @@ All non-generic capabilities are provided by injectable plugins, not hardcoded i
 | FileManagerMachine | 1 | -- | Shared across all units |
 | CadMachine | 1 per unique entry file | -- | Shared when multiple panels view the same file |
 | KernelMachine | 1 per CadMachine | -- | Always 1:1 with CadMachine |
-| KernelRuntimeWorker | 1 per KernelMachine | -- | Single worker, loads kernel on demand |
+| KernelClient | 1 per KernelMachine | -- | Manages Worker lifecycle |
+| KernelRuntimeWorker | 1 per KernelClient | -- | Single worker, loads kernel on demand |
 | GraphicsMachine | -- | 1 | WebGL renderer per panel |
 
 ### Memory Impact
@@ -52,6 +109,52 @@ With the single-worker-per-CU architecture, only the WASM runtime for the select
 - STEP/STL file: ~5 MB (converter)
 
 Previously, all 5 kernels were loaded eagerly (~90 MB per CadMachine).
+
+## KernelClient Lifecycle
+
+```
+1. createKernelClient(options)     → KernelClient created, no Worker yet
+2. client.connect({ fileSystem })  → Worker + Transport created, protocol initialized
+3. client.render(file, params)     → Auto-connects if not yet connected (lazy)
+4. client.on('event', handler)     → Subscribable at any time during lifecycle
+5. client.terminate()              → Worker terminated, resources cleaned up
+```
+
+## KernelFileSystem
+
+8 required methods matching Node.js `fs.promises.*`. All paths are absolute.
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `readFile` | `(path, encoding?) → Promise<string \| Uint8Array>` | Read file as text or binary |
+| `writeFile` | `(path, data) → Promise<void>` | Write text or binary file |
+| `mkdir` | `(path, options?) → Promise<void>` | Create directory (optionally recursive) |
+| `readdir` | `(path) → Promise<string[]>` | List directory entries |
+| `unlink` | `(path) → Promise<void>` | Delete file |
+| `stat` | `(path) → Promise<{ type, size, mtimeMs }>` | Get file/directory metadata |
+| `exists` | `(path) → Promise<boolean>` | Check if path exists |
+
+The framework builds higher-level operations from these primitives internally:
+- `ensureDirectoryExists(path)` via `mkdir(path, { recursive: true })`
+- `readFiles(paths)` via `Promise.all(paths.map(readFile))`
+- `getDirectoryContents(dir)` via `readdir(dir)` + `Promise.all(names.map(readFile))`
+- `getDirectoryStat(dir)` via `readdir(dir)` + `Promise.all(names.map(stat))`
+
+Convenience constructors: `fromNodeFS(fs)`, `fromMemoryFS()`.
+
+## Transport Abstraction
+
+```typescript
+type KernelTransport = {
+  send(message: KernelCommand, transferables?: Transferable[]): void;
+  onMessage(handler: (message: KernelResponse) => void): void;
+  close(): void;
+};
+```
+
+**Built-in:** `createWorkerTransport(workerUrl)` wraps a Web Worker as a `KernelTransport`.
+
+**Future transports:** WebSocket (remote kernel server), HTTP + SSE (serverless endpoints), `worker_threads` (Node.js).
 
 ## Data Flow: File Edit to Geometry Display
 
@@ -69,10 +172,11 @@ Previously, all 5 kernels were loaded eagerly (~90 MB per CadMachine).
 5. CadMachine enters rendering state → sends createGeometry to KernelMachine
    │
 6. KernelMachine pipeline:
-   │  ├─ Lazily creates the runtime worker (ensureRuntimeWorkerClient)
+   │  ├─ Lazily creates KernelClient (ensureKernelClient)
+   │  ├─ KernelClient creates Worker + Transport on first connect
    │  ├─ Worker selects kernel via three-pass detection
    │  ├─ renderEntry: unified pipeline (deps → params → geometry)
-   │  └─ Streams progress events back to CadMachine
+   │  └─ Streams progress events back via client.on('progress', ...)
    │
 7. CadMachine receives geometryComputed → updates context.geometries
    │
@@ -93,12 +197,13 @@ Previously, all 5 kernels were loaded eagerly (~90 MB per CadMachine).
 
 ### Lazy Initialization
 
-The single KernelRuntimeWorker is created lazily on first render:
+The KernelClient creates the Worker lazily on first `connect()` or `render()`:
 
-1. `new Worker(runtimeWorkerUrl, { type: 'module' })`
-2. `client.initialize()` sends kernel config, middleware config, and bundler config
-3. Worker loads bundler module via `import(bundlerModuleUrl)`
-4. Kernel module loading is deferred until `selectKernel()` determines which kernel is needed
+1. `createKernelClient(options)` — returns client, no Worker yet
+2. `client.connect({ fileSystem })` — creates Worker via `createWorkerTransport(workerUrl)`
+3. `KernelWorkerClient.initialize()` sends kernel config, middleware config, and bundler config
+4. Worker loads bundler modules via `import(bundlerModuleUrl)` for matching extensions
+5. Kernel module loading is deferred until `selectKernel()` determines which kernel is needed
 
 Only the WASM runtime for the selected kernel is ever loaded.
 
@@ -109,8 +214,9 @@ BuildMachine.stopStatefulActors()
   → enqueue.stopChild(cadMachine)
     → CadMachine stops
       → KernelMachine exit action: destroyWorkers()
-        → runtimeWorkerClient.cleanup()
-        → runtimeWorkerClient.terminate()
+        → kernelClient.terminate()
+          → workerClient.cleanup()
+          → transport.close()
 ```
 
 ## Kernel Selection (Three-Pass Detection)
@@ -126,7 +232,8 @@ BuildMachine.stopStatefulActors()
    - Regex kernels (replicad, jscad) test entry file content
 
 3. Pass 2: Bundler-assisted detection (transitive)
-   - If no kernel matched AND a bundler handles this extension:
+   - If no kernel matched AND a bundler handles this file's extension:
+   - Route to the correct bundler via extension matching
    - Call bundler.detectImports(entryPath) — no modules need to be registered
    - detectImports marks bare specifiers as external, walks the full import tree
    - Returns { detectedModules: ['replicad'], dependencies: [...] }
@@ -170,6 +277,15 @@ The selection cache is invalidated when `notifyFileChanged` is called, since cha
 
 Bundler plugins handle file bundling, code execution, and module registry. The esbuild bundler (`esbuild.bundler.ts`) is the default implementation.
 
+Each bundler declares which file extensions it handles via `extensions: string[]`:
+
+```typescript
+export default defineBundler({
+  extensions: ['ts', 'js', 'tsx', 'jsx'],
+  // ...methods
+});
+```
+
 Key methods:
 - `detectImports(input)` — lightweight pass that discovers bare-specifier imports transitively using esbuild externals mode. No modules need to be registered. Used for kernel selection.
 - `bundle(input)` — full production bundle with all registered modules resolved. Called after kernel selection and initialization.
@@ -181,19 +297,18 @@ Key methods:
 
 Kernel modules define geometry computation logic. Each kernel is an ES module loaded via `import(kernelModuleUrl)`:
 
-- `initialize(options, runtime)` — load WASM, register builtin modules
-- `canHandle(input, runtime, ctx)` — optional domain-specific check
+- `initialize(options, runtime)` — load WASM, register builtin modules. `options` is type-safe via the `Options` generic inferred from `optionsSchema`
 - `getDependencies(input, runtime, ctx)` — return file dependencies
 - `getParameters(input, runtime, ctx)` — extract parameters from code
-- `createGeometry(input, runtime, ctx)` — compute geometry + return nativeHandle
-- `exportGeometry(input, runtime, ctx, nativeHandle)` — export using stored handle
+- `createGeometry(input, runtime, ctx)` — compute geometry + return nativeHandle. `input.tessellation` provides preview quality when specified
+- `exportGeometry(input, runtime, ctx, nativeHandle)` — export using stored handle. `input.tessellation` provides export quality when specified
 
 ### MessagePort Protocol
 
-The kernel machine communicates with the worker via typed MessagePort events:
+The kernel machine communicates with the worker via typed MessagePort events through the `KernelTransport` interface:
 
 - All request/response commands carry a `requestId` for correlation
-- Fire-and-forget commands (`fileChanged`, `configureMiddleware`) have no requestId
+- Fire-and-forget commands (`fileChanged`) have no requestId
 - `cancel` command allows in-flight operations to be stopped
 - `progress` events stream render phase transitions to the UI
 - `telemetry` events batch performance entries for the kernel panel
@@ -210,6 +325,99 @@ The bundler produces a metafile with all resolved module paths:
 | `http-url:` | `http-url:https://esm.sh/...` | HTTP-fetched module |
 
 During detection, bare specifiers appear as external imports in `metafile.outputs[chunk].imports` rather than in `metafile.inputs`, since they are not resolved.
+
+## Package Exports
+
+```
+@taucad/kernels          → createKernelClient, types, presets, fromNodeFS, fromMemoryFS
+@taucad/kernels/kernels  → replicad(), zoo(), openscad(), jscad(), tau()
+@taucad/kernels/middleware → parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()
+@taucad/kernels/bundler  → esbuild()
+@taucad/kernels/transport → KernelTransport, createWorkerTransport()
+@taucad/kernels/testing  → Testing utilities (createTestFilesystem, mocks)
+```
+
+Individual plugin subpaths are also maintained for direct imports (e.g., `@taucad/kernels/kernels/replicad`).
+
+## Tessellation
+
+Tessellation controls the quality of geometry meshing across the render and export pipelines. It is a first-class, cross-cutting concern formalized as a shared type in `@taucad/types`.
+
+### Shared Type
+
+```typescript
+type Tessellation = {
+  linearTolerance: number;   // Maximum chord deviation (mm)
+  angularTolerance: number;  // Maximum angle between face normals (degrees)
+};
+```
+
+### Configuration Levels
+
+Tessellation can be configured at two levels, with per-call overrides taking precedence:
+
+1. **Client-level defaults** — set once in `createKernelClient(options)`:
+
+```typescript
+createKernelClient({
+  tessellation: {
+    preview: { linearTolerance: 0.1, angularTolerance: 30 },   // Faster, lower quality
+    export:  { linearTolerance: 0.01, angularTolerance: 30 },  // Slower, higher quality
+  },
+  // ...
+});
+```
+
+Two explicit slots (`preview` and `export`) make the quality distinction visible and intentional. Preview tessellation is used by `render()`, export tessellation is used by `export()`.
+
+2. **Per-call overrides** — passed as `callOptions` to individual methods:
+
+```typescript
+client.render(file, params, { tessellation: { linearTolerance: 0.05, angularTolerance: 15 } });
+client.export('stl', { tessellation: { linearTolerance: 0.005, angularTolerance: 10 } });
+```
+
+### Resolution Order
+
+For both `render` and `export`: `callOptions.tessellation > client option (preview/export) > kernel default`.
+
+If no tessellation is specified at any level, each kernel applies its own internal defaults.
+
+### Per-Kernel Interpretation
+
+| Kernel | Preview Default | Export Default | Mechanism |
+|--------|----------------|----------------|-----------|
+| **Replicad** | `0.1 / 30°` | `0.01 / 30°` | Passed to `.mesh()` and `.meshEdges()` |
+| **OpenSCAD** | none | n/a | Injected as `$fs` (linear) and `$fa` (angular) CLI arguments at render time. Export reuses baked geometry — override logged as warning |
+| **Zoo/KCL** | ignored | ignored | Tessellation is server-side; future integration point |
+| **JSCAD** | ignored | ignored | Uses fixed internal tessellation |
+
+### Threading Path
+
+```
+KernelClient.render(file, params, callOptions?)
+  → resolves: callOptions.tessellation ?? options.tessellation.preview
+    → KernelWorkerClient.render(..., tessellation?)
+      → KernelCommand { type: 'render', tessellation? }
+        → dispatcher → KernelWorker.renderEntry(..., tessellation?)
+          → KernelWorker.createGeometryEntry(..., tessellation?)
+            → CreateGeometryInput { tessellation? }
+              → KernelDefinition.createGeometry(input, runtime, ctx)
+```
+
+Export follows the same pattern via `exportGeometryEntry` → `ExportGeometryInput { tessellation? }`.
+
+## Plugin Options & Validation
+
+All plugins use Zod schemas for option validation via a common `optionsSchema` pattern:
+
+| Plugin Type | Schema Property | Validated At |
+|-------------|----------------|-------------|
+| Kernel | `KernelDefinition.optionsSchema` | `ensureKernelInitialized()` before `initialize()` |
+| Bundler | `BundlerDefinition.optionsSchema` | `ensureBundlerForExtension()` before `initialize()` |
+| Middleware | `KernelMiddleware.optionsSchema` | `loadMiddleware()` during middleware resolution |
+
+Consumer-facing input uses `options` naming; validated output uses `config` internally within `defineX` implementations. The `Options` generic type is inferred from the Zod schema, giving plugin authors type-safe access in their callbacks without manual casting.
 
 ## Caching Strategy
 

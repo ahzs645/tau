@@ -1,5 +1,8 @@
-import type { KernelConfig, MiddlewareConfig, BundlerConfig } from '@taucad/types';
+import type { KernelModules, MiddlewareEntries, BundlerEntries } from '#types/kernel.types.js';
 
+/**
+ *
+ */
 export type DefaultConfigOptions = {
   kernels?: {
     replicad?: { enabled?: boolean; options?: Record<string, unknown> };
@@ -16,11 +19,14 @@ export type DefaultConfigOptions = {
   };
 };
 
+/**
+ *
+ */
 export type DefaultConfigResult = {
   workerUrl: string;
-  kernelConfig: KernelConfig;
-  middlewareConfig: MiddlewareConfig;
-  bundlerConfig: BundlerConfig;
+  kernelModules: KernelModules;
+  middlewareEntries: MiddlewareEntries;
+  bundlerEntries: BundlerEntries;
 };
 
 /**
@@ -79,12 +85,12 @@ export function createDefaultConfig(options?: DefaultConfigOptions): DefaultConf
     },
   ];
 
-  const kernelConfig: KernelConfig = allKernels.filter(
+  const kernelModules: KernelModules = allKernels.filter(
     (entry) => options?.kernels?.[entry.id as keyof NonNullable<DefaultConfigOptions['kernels']>]?.enabled !== false,
   );
 
-  type MiddlewareEntry = { id: string; url: string };
-  const allMiddleware: MiddlewareEntry[] = [
+  type MiddlewareModuleEntry = { id: string; url: string };
+  const allMiddleware: MiddlewareModuleEntry[] = [
     { id: 'parameterCache', url: new URL('middleware/parameter-cache.middleware.js', import.meta.url).href },
     { id: 'geometryCache', url: new URL('middleware/geometry-cache.middleware.js', import.meta.url).href },
     {
@@ -94,19 +100,19 @@ export function createDefaultConfig(options?: DefaultConfigOptions): DefaultConf
     { id: 'gltfEdgeDetection', url: new URL('middleware/gltf-edge-detection.middleware.js', import.meta.url).href },
   ];
 
-  const middlewareConfig: MiddlewareConfig = allMiddleware
+  const middlewareEntries: MiddlewareEntries = allMiddleware
     .filter(
       (entry) =>
         options?.middleware?.[entry.id as keyof NonNullable<DefaultConfigOptions['middleware']>]?.enabled !== false,
     )
     .map(({ url }) => ({ url }));
 
-  const bundlerConfig: BundlerConfig = [
+  const bundlerEntries: BundlerEntries = [
     {
       bundlerModuleUrl: new URL('bundler/esbuild.bundler.js', import.meta.url).href,
       extensions: ['ts', 'js', 'tsx', 'jsx'],
     },
   ];
 
-  return { workerUrl, kernelConfig, middlewareConfig, bundlerConfig };
+  return { workerUrl, kernelModules, middlewareEntries, bundlerEntries };
 }

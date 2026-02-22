@@ -21,7 +21,7 @@ describe('ESM import smoke tests', () => {
   it('should resolve the middleware entry point', async () => {
     const mod = await import('#middleware/kernel-middleware.js');
     expect(mod).toBeDefined();
-    expect(mod.createKernelMiddleware).toBeTypeOf('function');
+    expect(mod.defineMiddleware).toBeTypeOf('function');
     expect(mod.createMiddlewareRuntime).toBeTypeOf('function');
   });
 

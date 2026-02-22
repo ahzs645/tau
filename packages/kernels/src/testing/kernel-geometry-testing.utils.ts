@@ -11,7 +11,8 @@ import type { InspectReport } from '@gltf-transform/functions';
 import { inspect } from '@gltf-transform/functions';
 import type { PartialDeep } from 'type-fest';
 import { expect } from 'vitest';
-import type { CreateGeometryResult, GeometryResponse } from '@taucad/types';
+import type { GeometryResponse } from '@taucad/types';
+import type { CreateGeometryResult } from '#types/kernel.types.js';
 
 // =============================================================================
 // Types

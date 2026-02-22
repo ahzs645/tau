@@ -4,17 +4,26 @@
  */
 import type { JSONSchema7, JSONSchema7Definition } from 'json-schema';
 
+/**
+ *
+ */
 export type ParameterOption = {
   name: string;
   value: number | string;
 };
 
+/**
+ *
+ */
 export type BaseParameter = {
   caption?: string;
   group: string;
   name: string;
 };
 
+/**
+ *
+ */
 export type NumberParameter = BaseParameter & {
   type: 'number';
   initial: number;
@@ -24,17 +33,26 @@ export type NumberParameter = BaseParameter & {
   options?: ParameterOption[];
 };
 
+/**
+ *
+ */
 export type StringParameter = BaseParameter & {
   type: 'string';
   initial: string;
   options?: ParameterOption[];
 };
 
+/**
+ *
+ */
 export type BooleanParameter = BaseParameter & {
   type: 'boolean';
   initial: boolean;
 };
 
+/**
+ *
+ */
 export type VectorParameter = BaseParameter & {
   type: 'number';
   initial: number[];
@@ -43,13 +61,22 @@ export type VectorParameter = BaseParameter & {
   step?: number;
 };
 
+/**
+ *
+ */
 export type Parameter = NumberParameter | StringParameter | BooleanParameter | VectorParameter;
 
+/**
+ *
+ */
 export type ParameterSet = {
   parameters: Parameter[];
   title: string;
 };
 
+/**
+ *
+ */
 export type OpenScadParameter = {
   group: string;
   initial: string | number | boolean | number[];
@@ -62,6 +89,9 @@ export type OpenScadParameter = {
   options?: Array<{ name: string; value: string | number }>;
 };
 
+/**
+ *
+ */
 export type OpenScadParameterExport = {
   parameters: OpenScadParameter[];
   title: string;

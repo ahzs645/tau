@@ -5,13 +5,10 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
-import type {
-  CreateGeometryResult,
-  CreateGeometryHandler,
-  Dependency,
-  CreateGeometryInput,
-  KernelMiddlewareRuntime,
-} from '@taucad/types';
+import type { CreateGeometryResult } from '#types/kernel.types.js';
+import type { CreateGeometryHandler, KernelMiddlewareRuntime } from '#types/kernel-middleware.types.js';
+import type { Dependency } from '#types/kernel-dependency.types.js';
+import type { CreateGeometryInput } from '#types/kernel-worker.types.js';
 import { geometryCacheMiddleware } from '#middleware/geometry-cache.middleware.js';
 import {
   createMockRuntime,
@@ -26,7 +23,7 @@ import {
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, config: {} },
+    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, options: {} },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -52,7 +49,7 @@ function createSerializedCacheContent(content: Uint8Array<ArrayBuffer>): Uint8Ar
  * Create input and runtime for cache testing.
  */
 
-type GeometryCacheConfig = { maxEntries: number; maxAgeMs: number };
+type GeometryCacheOptions = { maxEntries: number; maxAgeMs: number };
 
 function createCacheTestContext(options?: {
   cacheExists?: boolean;
@@ -60,26 +57,26 @@ function createCacheTestContext(options?: {
   input?: Parameters<typeof createMockInput>[0];
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-  config?: GeometryCacheConfig;
+  cacheOptions?: GeometryCacheOptions;
 }): {
   input: CreateGeometryInput;
 
-  runtime: KernelMiddlewareRuntime<Record<string, never>, GeometryCacheConfig> &
-    ReturnType<typeof createMockRuntime<Record<string, never>, GeometryCacheConfig>>;
+  runtime: KernelMiddlewareRuntime<Record<string, never>, GeometryCacheOptions> &
+    ReturnType<typeof createMockRuntime<Record<string, never>, GeometryCacheOptions>>;
 } {
   // Create serialized content if cachedContent is provided (MessagePack binary format)
   const serializedContent = options?.cachedContent
     ? createSerializedCacheContent(options.cachedContent)
     : new Uint8Array();
 
-  const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
+  const runtime = createMockRuntime<Record<string, never>, GeometryCacheOptions>({
     filesystemOverrides: {
       existsResult: options?.cacheExists ?? false,
       readFileResult: serializedContent,
     },
     dependencies: options?.dependencies ?? createMockDependencies(),
     dependencyHash: options?.dependencyHash ?? 'a'.repeat(64),
-    config: options?.config ?? { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+    options: options?.cacheOptions ?? { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
   });
 
   return {
@@ -193,9 +190,9 @@ describe('geometryCacheMiddleware', () => {
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(runtime.filesystem.mocks.ensureDirectoryExists).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.mkdir).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = runtime.filesystem.mocks.ensureDirectoryExists.mock.calls[0]?.[0];
+        const dirPath = runtime.filesystem.mocks.mkdir.mock.calls[0]?.[0];
         expect(dirPath).toContain('.tau/cache/geometry');
       });
 
@@ -365,8 +362,8 @@ describe('geometryCacheMiddleware', () => {
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
-        // GetDirectoryStat should be called for cleanup
-        expect(runtime.filesystem.mocks.getDirectoryStat).toHaveBeenCalled();
+        // Readdir should be called for cleanup (getDirectoryStat calls readdir + stat)
+        expect(runtime.filesystem.mocks.readdir).toHaveBeenCalled();
       });
 
       it('should delete old cache entries', async () => {
@@ -374,10 +371,9 @@ describe('geometryCacheMiddleware', () => {
         const oldMtimeMs = now - 8 * 24 * 60 * 60 * 1000; // 8 days ago (older than 7 day max age)
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
-        // Mock getDirectoryStat to return old cache files
-        runtime.filesystem.mocks.getDirectoryStat.mockResolvedValue([
-          { path: 'old-cache.bin', name: 'old-cache.bin', type: 'file', size: 100, mtimeMs: oldMtimeMs },
-        ]);
+        // Mock readdir + stat to return old cache files (getDirectoryStat uses these primitives)
+        runtime.filesystem.mocks.readdir.mockResolvedValue(['old-cache.bin']);
+        runtime.filesystem.mocks.stat.mockResolvedValue({ type: 'file', size: 100, mtimeMs: oldMtimeMs });
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
@@ -394,17 +390,16 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
         // Create 102 files (2 over the 100 max)
+        const fileNames = Array.from({ length: 102 }, (_, index) => `cache-${index}.bin`);
+        runtime.filesystem.mocks.readdir.mockResolvedValue(fileNames);
 
-        const manyFiles = Array.from({ length: 102 }, (_, index) => ({
-          path: `cache-${index}.bin`,
-          name: `cache-${index}.bin`,
+        // Stagger mtimeMs so we can predict which get deleted (oldest first)
+        let callIndex = 0;
+        runtime.filesystem.mocks.stat.mockImplementation(async () => ({
           type: 'file' as const,
           size: 100,
-          // Stagger mtimeMs so we can predict which get deleted (oldest first)
-          mtimeMs: now - index * 1000,
+          mtimeMs: now - callIndex++ * 1000,
         }));
-
-        runtime.filesystem.mocks.getDirectoryStat.mockResolvedValue(manyFiles);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
@@ -419,8 +414,8 @@ describe('geometryCacheMiddleware', () => {
       it('should handle cleanup errors gracefully', async () => {
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
-        // Make getDirectoryStat throw an error
-        runtime.filesystem.mocks.getDirectoryStat.mockRejectedValue(new Error('Stat error'));
+        // Make readdir throw an error (getDirectoryStat calls readdir internally)
+        runtime.filesystem.mocks.readdir.mockRejectedValue(new Error('Readdir error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
@@ -442,14 +437,14 @@ describe('geometryCacheMiddleware', () => {
       const cachedContent = new Uint8Array([1, 2, 3]);
       const serializedContent = createSerializedCacheContent(cachedContent);
 
-      const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
+      const runtime = createMockRuntime<Record<string, never>, GeometryCacheOptions>({
         filesystemOverrides: {
           existsResult: true,
           readFileResult: serializedContent,
         },
         dependencies: createMockDependencies(),
         dependencyHash,
-        config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -471,13 +466,13 @@ describe('geometryCacheMiddleware', () => {
       const dependencyHash = 'hash2'.repeat(13).slice(0, 64);
 
       // Cache doesn't exist for this new hash
-      const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
+      const runtime = createMockRuntime<Record<string, never>, GeometryCacheOptions>({
         filesystemOverrides: {
           existsResult: false,
         },
         dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'newParams123' } }]),
         dependencyHash,
-        config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -498,14 +493,14 @@ describe('geometryCacheMiddleware', () => {
       const cachedContent = new Uint8Array([1, 2, 3]);
       const serializedContent = createSerializedCacheContent(cachedContent);
 
-      const runtime = createMockRuntime<Record<string, never>, GeometryCacheConfig>({
+      const runtime = createMockRuntime<Record<string, never>, GeometryCacheOptions>({
         filesystemOverrides: {
           existsResult: true,
           readFileResult: serializedContent,
         },
         dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'sameParams' } }]),
         dependencyHash,
-        config: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();

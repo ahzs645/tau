@@ -22,7 +22,8 @@
     }
   },
   "dependencies": {
-    "@taucad/types": "workspace:*"
+    "@taucad/types": "workspace:*",
+    "@taucad/kernels": "workspace:*"
   },
   "imports": {
     "#*": "./src/*"

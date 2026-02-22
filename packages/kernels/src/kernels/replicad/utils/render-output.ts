@@ -1,6 +1,7 @@
 import type { AnyShape, Drawing } from 'replicad';
 import type { SetRequired } from 'type-fest';
 import type { GeometrySvg } from '@taucad/types';
+import type { Tessellation } from '#types/kernel-worker.types.js';
 import { normalizeColor } from '#kernels/replicad/utils/normalize-color.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
 
@@ -8,6 +9,7 @@ type Meshable = SetRequired<AnyShape, 'mesh' | 'meshEdges'>;
 
 type Svgable = SetRequired<Drawing, 'toSVGPaths' | 'toSVGViewBox'>;
 
+/** A shape with optional display metadata for rendering. */
 export type InputShape = {
   shape: AnyShape;
   name?: string;
@@ -31,6 +33,7 @@ type MeshableConfiguration = {
   opacity?: number;
 };
 
+/** Union of all valid return types from a Replicad model's main function. */
 export type MainResultShapes = AnyShape | AnyShape[] | InputShape | InputShape[] | undefined;
 
 const isSvgable = (shape: unknown): shape is Svgable => {
@@ -117,7 +120,9 @@ function renderSvg(shapeConfig: SvgShapeConfiguration): GeometrySvg {
   };
 }
 
-function renderMesh(shapeConfig: MeshableConfiguration) {
+const defaultPreviewTessellation: Tessellation = { linearTolerance: 0.1, angularTolerance: 30 };
+
+function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellation) {
   const { name, shape, color, opacity } = shapeConfig;
   const geometry: GeometryReplicad = {
     format: 'replicad',
@@ -137,18 +142,20 @@ function renderMesh(shapeConfig: MeshableConfiguration) {
   };
 
   geometry.faces = shape.mesh({
-    tolerance: 0.1,
-    angularTolerance: 30,
+    tolerance: tessellation.linearTolerance,
+    angularTolerance: tessellation.angularTolerance,
   });
   geometry.edges = shape.meshEdges({
-    tolerance: 0.1,
-    angularTolerance: 30,
+    tolerance: tessellation.linearTolerance,
+    angularTolerance: tessellation.angularTolerance,
   });
 
   return geometry;
 }
 
-export function render(shapes: InputShape[]): Array<GeometrySvg | GeometryReplicad> {
+/** Render an array of input shapes into geometry representations using the given tessellation quality. */
+export function render(shapes: InputShape[], tessellation?: Tessellation): Array<GeometrySvg | GeometryReplicad> {
+  const tess = tessellation ?? defaultPreviewTessellation;
   return shapes.map((shapeConfig) => {
     if (isSvgable(shapeConfig.shape)) {
       // TODO: fix this type
@@ -157,21 +164,23 @@ export function render(shapes: InputShape[]): Array<GeometrySvg | GeometryReplic
 
     if (isMeshable(shapeConfig.shape)) {
       // TODO: fix this type
-      return renderMesh(shapeConfig as unknown as MeshableConfiguration);
+      return renderMesh(shapeConfig as unknown as MeshableConfiguration, tess);
     }
 
     throw new Error('Invalid shape');
   });
 }
 
+/** Normalize, optionally transform, and render shapes from a model's output. */
 export function renderOutput(
   shapes: MainResultShapes,
   beforeRender?: (shapes: InputShape[]) => InputShape[],
   defaultName = 'AnyShape',
+  tessellation?: Tessellation,
 ): Array<GeometrySvg | GeometryReplicad> {
   const baseShape = createBasicShapeConfig(shapes, defaultName).map((element) => normalizeColorAndOpacity(element));
 
   const config = beforeRender ? beforeRender(baseShape) : baseShape;
 
-  return render(config);
+  return render(config, tessellation);
 }

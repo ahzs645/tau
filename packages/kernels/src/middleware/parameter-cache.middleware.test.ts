@@ -4,7 +4,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type { GetParametersResult, GetParametersHandler, Dependency } from '@taucad/types';
+import type { GetParametersResult } from '#types/kernel.types.js';
+import type { GetParametersHandler } from '#types/kernel-middleware.types.js';
+import type { Dependency } from '#types/kernel-dependency.types.js';
 import { parameterCacheMiddleware } from '#middleware/parameter-cache.middleware.js';
 import { createMockRuntime, createMockInput } from '#testing/kernel-testing.utils.js';
 
@@ -14,7 +16,7 @@ import { createMockRuntime, createMockInput } from '#testing/kernel-testing.util
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, config: {} },
+    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, options: {} },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -239,9 +241,9 @@ describe('parameterCacheMiddleware', () => {
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
 
-        expect(runtime.filesystem.mocks.ensureDirectoryExists).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.mkdir).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = runtime.filesystem.mocks.ensureDirectoryExists.mock.calls[0]?.[0];
+        const dirPath = runtime.filesystem.mocks.mkdir.mock.calls[0]?.[0];
         expect(dirPath).toContain('.tau/cache/parameters');
       });
 

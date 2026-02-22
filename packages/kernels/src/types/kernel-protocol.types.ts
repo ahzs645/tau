@@ -9,17 +9,16 @@
  * commands (fileChanged, configureMiddleware, cleanup) do not require a requestId.
  */
 
+import type { GeometryFile, ExportFormat, LogLevel, LogOrigin } from '@taucad/types';
 import type {
-  GeometryFile,
-  ExportFormat,
   CreateGeometryResultCompleted,
   GetParametersResult,
   ExportGeometryResult,
   KernelIssue,
-  MiddlewareConfig,
-  BundlerConfig,
-} from '#types/index.js';
-import type { LogLevel, LogOrigin } from '#types/logger.types.js';
+  MiddlewareEntries,
+  BundlerEntries,
+} from '#types/kernel.types.js';
+import type { Tessellation } from '#types/kernel-worker.types.js';
 
 /**
  * Commands sent from the kernel machine (main thread) to the kernel worker.
@@ -30,21 +29,26 @@ export type KernelCommand =
       type: 'initialize';
       requestId: string;
       options: Record<string, unknown>;
-      middlewareConfig: MiddlewareConfig;
-      bundlerConfig?: BundlerConfig;
+      middlewareEntries: MiddlewareEntries;
+      bundlerEntries?: BundlerEntries;
       fileManagerPort?: MessagePort;
     }
-  | { type: 'render'; requestId: string; file: GeometryFile; params: Record<string, unknown> }
-  | { type: 'canHandle'; requestId: string; file: GeometryFile }
+  | {
+      type: 'render';
+      requestId: string;
+      file: GeometryFile;
+      params: Record<string, unknown>;
+      tessellation?: Tessellation;
+    }
   | {
       type: 'export';
       requestId: string;
       format: ExportFormat;
-      meshConfig?: { linearTolerance: number; angularTolerance: number };
+      tessellation?: Tessellation;
     }
   | { type: 'cancel'; requestId: string }
   | { type: 'fileChanged'; paths: string[] }
-  | { type: 'configureMiddleware'; config: MiddlewareConfig }
+  | { type: 'configureMiddleware'; entries: MiddlewareEntries }
   | { type: 'cleanup' };
 
 /**
@@ -72,7 +76,6 @@ export type RenderPhase = string;
  */
 export type KernelResponse =
   | { type: 'initialized'; requestId: string }
-  | { type: 'canHandleResult'; requestId: string; result: boolean }
   | { type: 'parametersResolved'; requestId: string; result: GetParametersResult }
   | { type: 'geometryComputed'; requestId: string; result: CreateGeometryResultCompleted }
   | { type: 'exported'; requestId: string; result: ExportGeometryResult }

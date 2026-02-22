@@ -1,6 +1,5 @@
 // @vitest-environment node
 /* eslint-disable max-lines -- comprehensive kernel test suite */
-import * as kernelSymbols from '@taucad/types/symbols';
 import { describe, it, expect } from 'vitest';
 import jscadKernel from '#kernels/jscad/jscad.kernel.js';
 import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
@@ -54,7 +53,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -67,7 +66,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -80,7 +79,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -95,7 +94,7 @@ describe('JscadWorker', () => {
             module.exports = { main };
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -109,7 +108,7 @@ describe('JscadWorker', () => {
             module.exports = { main };
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
     });
@@ -125,7 +124,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -146,7 +145,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('main.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
         expect(result).toBe(true);
       });
 
@@ -163,7 +162,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -179,7 +178,7 @@ describe('JscadWorker', () => {
             module.exports = { main };
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('cube.js'));
+        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
     });
@@ -194,7 +193,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('component.tsx'));
+        const result = await worker.canHandleEntry(createGeometryFile('component.tsx'));
         expect(result).toBe(false);
       });
 
@@ -207,7 +206,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('component.jsx'));
+        const result = await worker.canHandleEntry(createGeometryFile('component.jsx'));
         expect(result).toBe(false);
       });
 
@@ -217,7 +216,7 @@ describe('JscadWorker', () => {
             export function add(a: number, b: number) { return a + b; }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('utils.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('utils.ts'));
         expect(result).toBe(false);
       });
 
@@ -227,7 +226,7 @@ describe('JscadWorker', () => {
             cube([10, 10, 10]);
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('model.scad'));
+        const result = await worker.canHandleEntry(createGeometryFile('model.scad'));
         expect(result).toBe(false);
       });
 
@@ -237,7 +236,7 @@ describe('JscadWorker', () => {
             box = cube([10, 10, 10])
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('model.kcl'));
+        const result = await worker.canHandleEntry(createGeometryFile('model.kcl'));
         expect(result).toBe(false);
       });
 
@@ -250,7 +249,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker[kernelSymbols.canHandleEntry](createGeometryFile('box.ts'));
+        const result = await worker.canHandleEntry(createGeometryFile('box.ts'));
         expect(result).toBe(false);
       });
     });
@@ -1147,11 +1146,11 @@ module.exports = { main, getParameterDefinitions }
 
       // First create geometry
       const geometryFile = createGeometryFile('cube.ts');
-      const createResult = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      const createResult = await worker.createGeometryEntry(geometryFile, {});
       expect(createResult.success).toBe(true);
 
       // Then export
-      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('gltf');
+      const exportResult = await worker.exportGeometryEntry('gltf');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data).toBeDefined();
@@ -1173,10 +1172,10 @@ module.exports = { main, getParameterDefinitions }
       });
 
       const geometryFile = createGeometryFile('glb_cube.ts');
-      const createResult = await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      const createResult = await worker.createGeometryEntry(geometryFile, {});
       expect(createResult.success).toBe(true);
 
-      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('glb');
+      const exportResult = await worker.exportGeometryEntry('glb');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data.length).toBeGreaterThan(0);
@@ -1195,7 +1194,7 @@ module.exports = { main, getParameterDefinitions }
       });
 
       // Don't create geometry, just try to export
-      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('gltf');
+      const exportResult = await worker.exportGeometryEntry('gltf');
       expect(exportResult.success).toBe(false);
     });
 
@@ -1211,10 +1210,10 @@ module.exports = { main, getParameterDefinitions }
       });
 
       const geometryFile = createGeometryFile('cube.ts');
-      await worker[kernelSymbols.createGeometryEntry](geometryFile, {});
+      await worker.createGeometryEntry(geometryFile, {});
 
       // JSCAD only supports gltf/glb
-      const exportResult = await worker[kernelSymbols.exportGeometryEntry]('step');
+      const exportResult = await worker.exportGeometryEntry('step');
       expect(exportResult.success).toBe(false);
     });
   });

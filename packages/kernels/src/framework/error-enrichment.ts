@@ -8,8 +8,8 @@
  * and new defineKernel modules.
  */
 
-import type { KernelStackFrame, FrameContext, ErrorLocation } from '@taucad/types';
 import { SourceMapConsumer } from 'source-map-js';
+import type { KernelStackFrame, FrameContext, ErrorLocation } from '#types/kernel.types.js';
 
 // =============================================================================
 // Stack Trace Parsing

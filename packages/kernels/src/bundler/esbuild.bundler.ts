@@ -15,16 +15,8 @@
 
 import * as esbuild from 'esbuild-wasm';
 import type { BuildOptions } from 'esbuild-wasm';
-import type {
-  BundleInput,
-  BundlerInitOptions,
-  BundleResult as TypesBundleResult,
-  ExecuteResult,
-  BuiltinModuleEntry,
-  DetectImportsResult,
-  KernelIssue,
-} from '@taucad/types';
-import { defineBundler } from '@taucad/types';
+import type { KernelIssue } from '#types/kernel.types.js';
+import { defineBundler } from '#types/kernel-bundler.types.js';
 import type { BuiltinModule } from '#bundler/module-manager.js';
 import {
   EsbuildBundler,
@@ -41,8 +33,9 @@ const autoExportNames = ['main', 'defaultParams', 'getParameterDefinitions'];
 export default defineBundler<EsbuildBundlerContext>({
   name: 'EsbuildBundler',
   version: '1.0.0',
+  extensions: ['ts', 'js', 'tsx', 'jsx'],
 
-  async initialize({ filesystem, projectPath }: BundlerInitOptions): Promise<EsbuildBundlerContext> {
+  async initialize({ filesystem, projectPath }, _options) {
     const builtinModules = new Map<string, BuiltinModule>();
     await initializeEsbuild();
     const bundler = new EsbuildBundler({
@@ -55,7 +48,7 @@ export default defineBundler<EsbuildBundlerContext>({
     return { bundler, builtinModules, filesystem, projectPath };
   },
 
-  async detectImports({ entryPath }: BundleInput, ctx: EsbuildBundlerContext): Promise<DetectImportsResult> {
+  async detectImports({ entryPath }, ctx) {
     const buildOptions: BuildOptions = {
       entryPoints: [entryPath],
       bundle: true,
@@ -88,15 +81,15 @@ export default defineBundler<EsbuildBundlerContext>({
     }
   },
 
-  async bundle({ entryPath }: BundleInput, ctx: EsbuildBundlerContext): Promise<TypesBundleResult> {
+  async bundle({ entryPath }, ctx) {
     return ctx.bundler.bundle(entryPath);
   },
 
-  async execute(code: string, _ctx: EsbuildBundlerContext): Promise<ExecuteResult> {
+  async execute(code, _ctx) {
     return executeCode(code);
   },
 
-  registerModule(name: string, builtinModule: BuiltinModuleEntry, ctx: EsbuildBundlerContext): void {
+  registerModule(name, builtinModule, ctx) {
     const entry: BuiltinModule = {
       code: builtinModule.code,
       version: builtinModule.version,
@@ -106,12 +99,12 @@ export default defineBundler<EsbuildBundlerContext>({
     ctx.bundler.registerModule(name, entry);
   },
 
-  async resolveDependencies({ entryPath }: BundleInput, ctx: EsbuildBundlerContext): Promise<string[]> {
+  async resolveDependencies({ entryPath }, ctx) {
     const result = await ctx.bundler.bundle(entryPath);
     return result.dependencies;
   },
 
-  async cleanup(_ctx: EsbuildBundlerContext): Promise<void> {
+  async cleanup(_ctx) {
     _ctx.bundler.dispose();
   },
 });

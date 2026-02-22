@@ -8,7 +8,7 @@
  */
 
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
-import type { KernelIssue, KernelStackFrame, ErrorLocation } from '@taucad/types';
+import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/kernel.types.js';
 
 // =============================================================================
 // OC Exception Error Class

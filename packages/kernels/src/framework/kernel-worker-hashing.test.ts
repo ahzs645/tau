@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { CreateGeometryResult, OnWorkerLog } from '@taucad/types';
+import type { OnWorkerLog } from '@taucad/types';
+import type { CreateGeometryResult } from '#types/kernel.types.js';
 import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 
 describe('kernel-worker hashing', () => {

@@ -1,7 +1,6 @@
 import { NodeIO } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import { describe, it, expect } from 'vitest';
-import * as kernelSymbols from '@taucad/types/symbols';
 import { detectEdges } from '#utils/edge-detection.js';
 import openscadKernel from '#kernels/openscad/openscad.kernel.js';
 import { createGeometryFile, createTestWorker } from '#testing/kernel-testing.utils.js';
@@ -241,7 +240,7 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker[kernelSymbols.createGeometryEntry](createGeometryFile('cube.scad'), {});
+      const result = await worker.createGeometryEntry(createGeometryFile('cube.scad'), {});
 
       expect(result.success).toBe(true);
 
@@ -267,7 +266,7 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker[kernelSymbols.createGeometryEntry](createGeometryFile('cube.scad'), {});
+      const result = await worker.createGeometryEntry(createGeometryFile('cube.scad'), {});
 
       expect(result.success).toBe(true);
 
@@ -312,7 +311,7 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker[kernelSymbols.createGeometryEntry](createGeometryFile('cube.scad'), {});
+      const result = await worker.createGeometryEntry(createGeometryFile('cube.scad'), {});
 
       expect(result.success).toBe(true);
 
@@ -371,7 +370,7 @@ describe.skip('Edge Detection Middleware', () => {
         'sphere.scad': '$fn=16; sphere(r=5);',
       });
 
-      const result = await worker[kernelSymbols.createGeometryEntry](createGeometryFile('sphere.scad'), {});
+      const result = await worker.createGeometryEntry(createGeometryFile('sphere.scad'), {});
 
       expect(result.success).toBe(true);
 

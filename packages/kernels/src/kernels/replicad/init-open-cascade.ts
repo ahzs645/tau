@@ -1,11 +1,11 @@
 // eslint-disable-next-line @typescript-eslint/triple-slash-reference -- emscripten types are not available as a module
 /// <reference types="emscripten" />
 
-import type { KernelSpanTracer } from '@taucad/types';
 import opencascade from 'replicad-opencascadejs/src/replicad_single.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
 import opencascadeWithExceptions from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { compileWasmStreaming } from '#framework/wasm-loader.js';
 
 // WASM URLs using universal pattern for browsers and bundlers

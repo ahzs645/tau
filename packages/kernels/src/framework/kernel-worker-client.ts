@@ -1,33 +1,37 @@
 /**
- * Main-thread client for communicating with kernel workers via the MessagePort protocol.
- * Replaces Comlink's Remote<KernelWorkerInterface> for the kernel hot path.
+ * Main-thread client for communicating with kernel workers via the KernelTransport protocol.
+ * Wraps a KernelTransport with request/response correlation and Promise-based methods.
  */
 
+import type { GeometryFile, ExportFormat, LogOrigin } from '@taucad/types';
 import type {
   CreateGeometryResultCompleted,
   ExportGeometryResult,
   GetParametersResult,
-  GeometryFile,
-  ExportFormat,
   KernelIssue,
-  LogOrigin,
-  MiddlewareConfig,
-  BundlerConfig,
-  KernelResponse,
-  KernelCommand,
-  PerformanceEntryData,
-  RenderPhase,
-} from '@taucad/types';
+  MiddlewareEntries,
+  BundlerEntries,
+} from '#types/kernel.types.js';
+import type { Tessellation } from '#types/kernel-worker.types.js';
+import type { KernelResponse, KernelCommand, PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
+import type { KernelTransport } from '#transport/kernel-transport.js';
 
+/** Callback for worker log events. */
 export type OnLogCallback = (log: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => void;
 
+/** Callback for worker telemetry events. */
 export type OnTelemetryCallback = (entries: PerformanceEntryData[]) => void;
 
+/** Callback for render progress phase transitions. */
 export type OnProgressCallback = (phase: RenderPhase, detail?: Record<string, unknown>) => void;
 
+/**
+ * Main-thread client for communicating with kernel workers via the KernelTransport protocol.
+ * Wraps a KernelTransport with request/response correlation and Promise-based methods.
+ */
 export class KernelWorkerClient {
   /* eslint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
-  public readonly worker: Worker;
+  private readonly transport: KernelTransport;
   private readonly onLog: OnLogCallback;
   private readonly onTelemetry?: OnTelemetryCallback;
   /* eslint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
@@ -36,7 +40,6 @@ export class KernelWorkerClient {
   private lastRenderRequestId?: string;
 
   private pendingInit?: { resolve: () => void; reject: (error: Error) => void };
-  private pendingCanHandle?: { resolve: (result: boolean) => void; reject: (error: Error) => void };
   private pendingRender?: {
     resolve: (result: CreateGeometryResultCompleted) => void;
     reject: (error: Error) => void;
@@ -49,21 +52,23 @@ export class KernelWorkerClient {
     reject: (error: Error) => void;
   };
 
-  public constructor(worker: Worker, onLog: OnLogCallback, onTelemetry?: OnTelemetryCallback) {
-    this.worker = worker;
+  /** Create a new kernel worker client wrapping the given transport. */
+  public constructor(transport: KernelTransport, onLog: OnLogCallback, onTelemetry?: OnTelemetryCallback) {
+    this.transport = transport;
     this.onLog = onLog;
     this.onTelemetry = onTelemetry;
 
-    worker.addEventListener('message', (event: MessageEvent<KernelResponse>) => {
-      this.handleMessage(event.data);
+    transport.onMessage((response: KernelResponse) => {
+      this.handleMessage(response);
     });
   }
 
+  /** Send an initialize command to the worker with options, file manager port, and plugin configs. */
   public async initialize(
     options: Record<string, unknown>,
     fileManagerPort: MessagePort,
-    middlewareConfig: MiddlewareConfig,
-    bundlerConfig?: BundlerConfig,
+    middlewareEntries: MiddlewareEntries,
+    bundlerEntries?: BundlerEntries,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.pendingInit = { resolve, reject };
@@ -71,27 +76,30 @@ export class KernelWorkerClient {
         type: 'initialize',
         requestId: String(this.nextRequestId++),
         options,
-        middlewareConfig,
-        bundlerConfig,
+        middlewareEntries,
+        bundlerEntries,
         fileManagerPort,
       };
-      this.worker.postMessage(command, [fileManagerPort]);
+      this.transport.send(command, [fileManagerPort]);
     });
   }
 
-  public async canHandle(file: GeometryFile): Promise<boolean> {
-    return new Promise<boolean>((resolve, reject) => {
-      this.pendingCanHandle = { resolve, reject };
-      const command: KernelCommand = { type: 'canHandle', requestId: String(this.nextRequestId++), file };
-      this.worker.postMessage(command);
-    });
-  }
-
+  /**
+   * Send a render command to the worker.
+   *
+   * @param file - The geometry file to render
+   * @param parameters - User-provided parameters
+   * @param onParametersResolved - Callback for streamed parameter results
+   * @param onProgress - Callback for render phase progress
+   * @param tessellation - Optional tessellation quality for preview rendering
+   * @returns Completed geometry result
+   */
   public async render(
     file: GeometryFile,
     parameters: Record<string, unknown>,
     onParametersResolved?: (result: GetParametersResult) => void,
     onProgress?: OnProgressCallback,
+    tessellation?: Tessellation,
   ): Promise<CreateGeometryResultCompleted> {
     return new Promise<CreateGeometryResultCompleted>((resolve, reject) => {
       this.pendingRender = { resolve, reject, onParametersResolved, onProgress };
@@ -102,54 +110,64 @@ export class KernelWorkerClient {
         requestId,
         file,
         params: parameters,
+        tessellation,
       };
-      this.worker.postMessage(command);
+      this.transport.send(command);
     });
   }
 
+  /** Cancel any pending render operation. */
   public cancelPendingRender(): void {
     if (this.pendingRender && this.lastRenderRequestId) {
       const command: KernelCommand = { type: 'cancel', requestId: this.lastRenderRequestId };
-      this.worker.postMessage(command);
+      this.transport.send(command);
       this.pendingRender.reject(new Error('Render cancelled'));
       this.pendingRender = undefined;
       this.lastRenderRequestId = undefined;
     }
   }
 
+  /** Notify the worker that files have changed for cache invalidation. */
   public notifyFileChanged(paths: string[]): void {
     const command: KernelCommand = { type: 'fileChanged', paths };
-    this.worker.postMessage(command);
+    this.transport.send(command);
   }
 
-  public configureMiddleware(config: MiddlewareConfig): void {
-    const command: KernelCommand = { type: 'configureMiddleware', config };
-    this.worker.postMessage(command);
+  /** Send a middleware reconfiguration command to the worker. */
+  public configureMiddleware(entries: MiddlewareEntries): void {
+    const command: KernelCommand = { type: 'configureMiddleware', entries };
+    this.transport.send(command);
   }
 
-  public async exportGeometry(
-    format: ExportFormat,
-    meshConfig?: { linearTolerance: number; angularTolerance: number },
-  ): Promise<ExportGeometryResult> {
+  /**
+   * Send an export command to the worker.
+   *
+   * @param format - Export file format
+   * @param tessellation - Optional tessellation quality for export meshing
+   * @returns Export result with blob data
+   */
+  public async exportGeometry(format: ExportFormat, tessellation?: Tessellation): Promise<ExportGeometryResult> {
     return new Promise<ExportGeometryResult>((resolve, reject) => {
       this.pendingExport = { resolve, reject };
       const command: KernelCommand = {
         type: 'export',
         requestId: String(this.nextRequestId++),
         format,
-        meshConfig,
+        tessellation,
       };
-      this.worker.postMessage(command);
+      this.transport.send(command);
     });
   }
 
+  /** Send a cleanup command to the worker. */
   public cleanup(): void {
     const command: KernelCommand = { type: 'cleanup' };
-    this.worker.postMessage(command);
+    this.transport.send(command);
   }
 
+  /** Terminate the transport connection. */
   public terminate(): void {
-    this.worker.terminate();
+    this.transport.close();
   }
 
   private handleMessage(response: KernelResponse): void {
@@ -157,12 +175,6 @@ export class KernelWorkerClient {
       case 'initialized': {
         this.pendingInit?.resolve();
         this.pendingInit = undefined;
-        break;
-      }
-
-      case 'canHandleResult': {
-        this.pendingCanHandle?.resolve(response.result);
-        this.pendingCanHandle = undefined;
         break;
       }
 
@@ -218,9 +230,6 @@ export class KernelWorkerClient {
         if (this.pendingInit) {
           this.pendingInit.reject(error);
           this.pendingInit = undefined;
-        } else if (this.pendingCanHandle) {
-          this.pendingCanHandle.reject(error);
-          this.pendingCanHandle = undefined;
         } else if (this.pendingRender) {
           this.pendingRender.reject(error);
           this.pendingRender = undefined;

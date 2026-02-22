@@ -14,29 +14,19 @@ import { createOpenSCAD } from 'openscad-wasm-prebuilt';
 import type { OpenSCAD } from 'openscad-wasm-prebuilt';
 import { jsonDefault } from 'json-schema-default';
 import type { JSONSchema7 } from 'json-schema';
-import type {
-  CreateGeometryInput,
-  ExportGeometryInput,
-  ExportGeometryResult,
-  GetDependenciesInput,
-  GetParametersInput,
-  GetParametersResult,
-  GeometryGltf,
-  KernelFilesystem,
-  KernelIssue,
-  KernelLogger,
-  KernelRuntime,
-  LogLevel,
-} from '@taucad/types';
-import { defineKernel } from '@taucad/types';
+import type { GeometryGltf, LogLevel } from '@taucad/types';
 import { logLevels } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
+import type { KernelIssue } from '#types/kernel.types.js';
+import type { KernelFileSystem, KernelLogger } from '#types/kernel-worker.types.js';
+import { defineKernel } from '#types/kernel-worker.types.js';
 import type { OpenScadParameterExport } from '#kernels/openscad/parse-parameters.js';
 import { processOpenScadParameters, flattenParametersForInjection } from '#kernels/openscad/parse-parameters.js';
 import { convertOffToGltf } from '#utils/off-to-gltf.js';
 import { convertOffToStl } from '#utils/off-to-stl.js';
 import { convertOffTo3mf } from '#utils/off-to-3mf.js';
+import { readFiles } from '#framework/filesystem-helpers.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import type { AddErrorFn, GetFileContentsFn } from '#kernels/openscad/parse-output.js';
 import { OpenScadStderrParser } from '#kernels/openscad/parse-output.js';
@@ -126,7 +116,7 @@ function resolveIncludePath(baseFilePath: string, relativePath: string): string 
 async function getReferencedScadFiles(
   mainFile: string,
   basePath: string,
-  filesystem: KernelFilesystem,
+  filesystem: KernelFileSystem,
   logger: KernelLogger,
 ): Promise<string[]> {
   const visited = new Set<string>();
@@ -234,7 +224,7 @@ async function mountFilesystem(
   options: {
     mainFile: string;
     basePath: string;
-    filesystem: KernelFilesystem;
+    filesystem: KernelFileSystem;
     logger: KernelLogger;
     fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
     fileContentsCache?: Map<string, string>;
@@ -254,7 +244,7 @@ async function mountFilesystem(
 
   if (uncachedAbsolutePaths.length > 0) {
     logger.debug(`Batch-reading ${uncachedAbsolutePaths.length} uncached files`);
-    await filesystem.readFiles(uncachedAbsolutePaths);
+    await readFiles(filesystem, uncachedAbsolutePaths);
   }
 
   for (const relativePath of referencedFiles) {
@@ -319,7 +309,7 @@ async function getParametersFromFile(
   filePath: string,
   options: {
     basePath: string;
-    filesystem: KernelFilesystem;
+    filesystem: KernelFileSystem;
     logger: KernelLogger;
     fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
     fontCache: Map<string, Uint8Array<ArrayBuffer>>;
@@ -383,20 +373,13 @@ export default defineKernel<OpenScadContext, string>({
     return extension === 'scad';
   },
 
-  async getDependencies(
-    { filePath, basePath }: GetDependenciesInput,
-    { filesystem, logger }: KernelRuntime,
-  ): Promise<string[]> {
+  async getDependencies({ filePath, basePath }, { filesystem, logger }) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const relativePaths = await getReferencedScadFiles(relativeFilePath, basePath, filesystem, logger);
     return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
   },
 
-  async getParameters(
-    { filePath, basePath }: GetParametersInput,
-    { filesystem, logger, fileContentCache }: KernelRuntime,
-    ctx: OpenScadContext,
-  ): Promise<GetParametersResult> {
+  async getParameters({ filePath, basePath }, { filesystem, logger, fileContentCache }, ctx) {
     try {
       const mainFilePath = resolveToRelative(filePath, basePath);
       const referencedFiles = await getReferencedScadFiles(mainFilePath, basePath, filesystem, logger);
@@ -461,9 +444,9 @@ export default defineKernel<OpenScadContext, string>({
   },
 
   async createGeometry(
-    { filePath, basePath, parameters }: CreateGeometryInput,
-    { filesystem, logger, fileContentCache, tracer }: KernelRuntime,
-    ctx: OpenScadContext,
+    { filePath, basePath, parameters, tessellation },
+    { filesystem, logger, fileContentCache, tracer },
+    ctx,
   ) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const fileContentsCache = new Map<string, string>();
@@ -500,6 +483,11 @@ export default defineKernel<OpenScadContext, string>({
       instance.FS.writeFile(relativeFilePath, code);
 
       const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
+
+      if (tessellation) {
+        args.push(`-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
+      }
+
       const flattenedParameters = flattenParametersForInjection(parameters);
       for (const [key, value] of Object.entries(flattenedParameters)) {
         args.push(`-D${key}=${formatValue(value)}`);
@@ -543,12 +531,13 @@ export default defineKernel<OpenScadContext, string>({
     }
   },
 
-  async exportGeometry(
-    { fileType }: ExportGeometryInput,
-    _runtime: KernelRuntime,
-    _ctx: OpenScadContext,
-    nativeHandle: string,
-  ): Promise<ExportGeometryResult> {
+  async exportGeometry({ fileType, tessellation }, { logger }, _ctx, nativeHandle) {
+    if (tessellation) {
+      logger.warn(
+        'OpenSCAD tessellation is baked at render time via $fa/$fs. Export tessellation override is ignored.',
+      );
+    }
+
     if (!nativeHandle) {
       return createKernelError([
         { message: 'No geometry available for export. Please build geometries before exporting.', severity: 'error' },

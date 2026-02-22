@@ -6,16 +6,9 @@
  * kernel worker hot path.
  */
 
-import type {
-  KernelCommand,
-  KernelResponse,
-  OnWorkerLog,
-  CreateGeometryResultCompleted,
-  PerformanceEntryData,
-  LogLevel,
-  LogOrigin,
-} from '@taucad/types';
-import * as kernelSymbols from '@taucad/types/symbols';
+import type { OnWorkerLog, LogLevel, LogOrigin } from '@taucad/types';
+import type { CreateGeometryResultCompleted } from '#types/kernel.types.js';
+import type { KernelCommand, KernelResponse, PerformanceEntryData } from '#types/kernel-protocol.types.js';
 import type { KernelWorker } from '#framework/kernel-worker.js';
 import type { KernelMessagePort } from '#framework/kernel-message-adapter.js';
 
@@ -78,15 +71,10 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
             fileManagerPort = message.fileManagerPort;
           }
 
-          await worker[kernelSymbols.initializeEntry](
-            { onLog },
-            { fileManagerPort },
-            message.options,
-            message.middlewareConfig,
-          );
+          await worker.initializeEntry({ onLog }, { fileManagerPort }, message.options, message.middlewareEntries);
 
-          if (message.bundlerConfig) {
-            for (const entry of message.bundlerConfig) {
+          if (message.bundlerEntries) {
+            for (const entry of message.bundlerEntries) {
               // eslint-disable-next-line no-await-in-loop -- Sequential: bundlers must be loaded before use
               await worker.ensureLoadedBundler(entry);
             }
@@ -97,7 +85,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
         }
 
         case 'render': {
-          const result = await worker[kernelSymbols.renderEntry](
+          const result = await worker.renderEntry(
             message.file,
             message.params,
             (parametersResult) => {
@@ -106,6 +94,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
             (phase) => {
               respond({ type: 'progress', requestId, phase });
             },
+            message.tessellation,
           );
           const transferables = extractGltfTransferables(result);
 
@@ -115,24 +104,18 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
           break;
         }
 
-        case 'canHandle': {
-          const canHandle = await worker[kernelSymbols.canHandleEntry](message.file);
-          respond({ type: 'canHandleResult', requestId, result: canHandle });
-          break;
-        }
-
         case 'fileChanged': {
-          await worker[kernelSymbols.notifyFileChanged](message.paths);
+          await worker.notifyFileChanged(message.paths);
           break;
         }
 
         case 'configureMiddleware': {
-          await worker[kernelSymbols.configureMiddleware](message.config);
+          await worker.configureMiddleware(message.entries);
           break;
         }
 
         case 'export': {
-          const exportResult = await worker[kernelSymbols.exportGeometryEntry](message.format, message.meshConfig);
+          const exportResult = await worker.exportGeometryEntry(message.format, message.tessellation);
           respond({ type: 'exported', requestId, result: exportResult });
           break;
         }
@@ -142,7 +125,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
         }
 
         case 'cleanup': {
-          await worker[kernelSymbols.cleanupEntry]();
+          await worker.cleanupEntry();
           break;
         }
       }

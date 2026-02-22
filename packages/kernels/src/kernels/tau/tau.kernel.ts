@@ -7,11 +7,13 @@
  * This is the reference implementation of the defineKernel pattern.
  */
 
-import type { KernelIssue } from '@taucad/types';
-import { defineKernel } from '@taucad/types';
+// eslint-disable-next-line import-x/no-extraneous-dependencies -- listed as workspace:* dependency
 import { importToGlb, exportFromGlb, supportedImportFormats } from '@taucad/converter';
+// eslint-disable-next-line import-x/no-extraneous-dependencies -- listed as workspace:* dependency
 import type { InputFormat, OutputFormat } from '@taucad/converter';
 import { asBuffer } from '@taucad/utils/file';
+import { defineKernel } from '#types/kernel-worker.types.js';
+import type { KernelIssue } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 
 type TauContext = Record<string, never>;

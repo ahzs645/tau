@@ -2,10 +2,10 @@ import type { Document, Primitive } from '@gltf-transform/core';
 import { NodeIO } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import type { GeometryGltf } from '@taucad/types';
-import { isKernelSuccess } from '@taucad/types/guards';
 import { z } from 'zod';
+import { isKernelSuccess } from '#framework/kernel-helpers.js';
 import { detectEdges } from '#utils/edge-detection.js';
-import { createKernelMiddleware } from '#middleware/kernel-middleware.js';
+import { defineMiddleware } from '#middleware/kernel-middleware.js';
 
 /**
  * Edge color in RGBA format (normalized 0-1).
@@ -179,14 +179,14 @@ async function addEdgePrimitivesToGltf(geometry: GeometryGltf, thresholdDegrees:
  * - Mesh objects are surfaces (matcap applied, visibility toggleable)
  * - LineSegments objects are edges (converted to LineSegments2 for fat line rendering)
  */
-export const gltfEdgeDetectionMiddleware = createKernelMiddleware({
+export const gltfEdgeDetectionMiddleware = defineMiddleware({
   name: 'GltfEdgeDetection',
 
-  configSchema: z.object({
+  optionsSchema: z.object({
     thresholdDegrees: z.number().default(30),
   }),
 
-  async wrapCreateGeometry(input, handler, { logger, config }) {
+  async wrapCreateGeometry(input, handler, { logger, options }) {
     // Execute downstream (no pre-processing needed)
     const result = await handler(input);
 
@@ -202,7 +202,7 @@ export const gltfEdgeDetectionMiddleware = createKernelMiddleware({
       result.data.map(async (geometry) => {
         // Only process GLTF format geometries
         if (geometry.format === 'gltf') {
-          return addEdgePrimitivesToGltf(geometry, config.thresholdDegrees);
+          return addEdgePrimitivesToGltf(geometry, options.thresholdDegrees);
         }
 
         // Return other formats unchanged (e.g., SVG)

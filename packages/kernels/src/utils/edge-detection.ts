@@ -83,7 +83,10 @@ type Vertex3 = [number, number, number];
  * Compute the normal of a triangle defined by three vertices.
  * Uses cross product of two edge vectors.
  *
- * @param vertices - Object containing three vertices (a, b, c) of the triangle
+ * @param vertices - Object containing three vertices of the triangle
+ * @param vertices.a - First vertex of the triangle
+ * @param vertices.b - Second vertex of the triangle
+ * @param vertices.c - Third vertex of the triangle
  * @returns Normalized normal vector [nx, ny, nz]
  */
 function computeNormal(vertices: { a: Vertex3; b: Vertex3; c: Vertex3 }): Vertex3 {

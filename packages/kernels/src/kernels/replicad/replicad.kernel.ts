@@ -13,24 +13,14 @@
 import * as replicad from 'replicad';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
-import type {
-  CreateGeometryInput,
-  ExportGeometryInput,
-  ExportGeometryResult,
-  GetDependenciesInput,
-  GetParametersInput,
-  GetParametersResult,
-  GeometryGltf,
-  GeometrySvg,
-  KernelIssue,
-  KernelRuntime,
-  KernelStackFrame,
-  ErrorLocation,
-} from '@taucad/types';
-import { defineKernel } from '@taucad/types';
+import type { GeometryGltf, GeometrySvg } from '@taucad/types';
+import { z } from 'zod';
 import type { SourceMapConsumer } from 'source-map-js';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
+import { defineKernel } from '#types/kernel-worker.types.js';
+import type { KernelRuntime } from '#types/kernel-worker.types.js';
+import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import { initOpenCascade, initOpenCascadeWithExceptions } from '#kernels/replicad/init-open-cascade.js';
 import { wrapOcInstance, formatRuntimeErrorWithOc } from '#kernels/replicad/oc-exceptions.js';
@@ -240,16 +230,27 @@ function enrichIssueLocation(
 }
 
 // =============================================================================
+// Options schema
+// =============================================================================
+
+const replicadOptionsSchema = z.object({
+  withExceptions: z.boolean().optional().default(false),
+});
+
+type ReplicadOptions = z.infer<typeof replicadOptionsSchema>;
+
+// =============================================================================
 // Kernel module definition
 // =============================================================================
 
-export default defineKernel<ReplicadContext, InputShape[]>({
+export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
   name: 'ReplicadKernel',
   version: '1.0.0',
+  optionsSchema: replicadOptionsSchema,
 
   async initialize(options, runtime) {
     const { logger, tracer } = runtime;
-    const withExceptions = (options as { withExceptions?: boolean }).withExceptions === true;
+    const { withExceptions } = options;
 
     logger.debug(`Initializing OpenCASCADE WASM (withExceptions: ${withExceptions})`);
 
@@ -307,15 +308,11 @@ export default defineKernel<ReplicadContext, InputShape[]>({
     return hasImport || hasRequire || hasDestructure || hasTypedef || hasCdnImport;
   },
 
-  async getDependencies({ filePath }: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]> {
+  async getDependencies({ filePath }, runtime) {
     return runtime.bundler.resolveDependencies(filePath);
   },
 
-  async getParameters(
-    { filePath, basePath }: GetParametersInput,
-    runtime: KernelRuntime,
-    ctx: ReplicadContext,
-  ): Promise<GetParametersResult> {
+  async getParameters({ filePath, basePath }, runtime, ctx) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
@@ -344,11 +341,7 @@ export default defineKernel<ReplicadContext, InputShape[]>({
     }
   },
 
-  async createGeometry(
-    { filePath, basePath, parameters }: CreateGeometryInput,
-    runtime: KernelRuntime,
-    ctx: ReplicadContext,
-  ) {
+  async createGeometry({ filePath, basePath, parameters, tessellation }, runtime, ctx) {
     const { tracer } = runtime;
     const relativeFilePath = resolveToRelative(filePath, basePath);
 
@@ -398,6 +391,7 @@ export default defineKernel<ReplicadContext, InputShape[]>({
         return shapesArray;
       },
       defaultName,
+      tessellation,
     );
 
     const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');
@@ -421,13 +415,8 @@ export default defineKernel<ReplicadContext, InputShape[]>({
     return { geometry: [...gltfShapes, ...shapes2d], nativeHandle };
   },
 
-  async exportGeometry(
-    { fileType, meshConfig }: ExportGeometryInput,
-    _runtime: KernelRuntime,
-    _ctx: ReplicadContext,
-    nativeHandle: InputShape[],
-  ): Promise<ExportGeometryResult> {
-    const config = meshConfig ?? { linearTolerance: 0.01, angularTolerance: 30 };
+  async exportGeometry({ fileType, tessellation }, _runtime, _ctx, nativeHandle) {
+    const tess = tessellation ?? { linearTolerance: 0.01, angularTolerance: 30 };
 
     if (nativeHandle.length === 0) {
       return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
@@ -437,8 +426,8 @@ export default defineKernel<ReplicadContext, InputShape[]>({
       const temporaryShapes = nativeHandle.map((shapeConfig) => {
         const { shape } = shapeConfig;
         const faces = shape.mesh({
-          tolerance: config.linearTolerance,
-          angularTolerance: config.angularTolerance,
+          tolerance: tess.linearTolerance,
+          angularTolerance: tess.angularTolerance,
         });
         return {
           format: 'replicad',
@@ -462,8 +451,8 @@ export default defineKernel<ReplicadContext, InputShape[]>({
 
     const result = nativeHandle.map(({ shape, name }) => ({
       blob: buildBlob(shape, fileType, {
-        tolerance: config.linearTolerance,
-        angularTolerance: config.angularTolerance,
+        tolerance: tess.linearTolerance,
+        angularTolerance: tess.angularTolerance,
       }),
       name: name ?? 'Geometry',
     }));
@@ -475,14 +464,14 @@ export default defineKernel<ReplicadContext, InputShape[]>({
 function buildBlob(
   shape: replicad.AnyShape,
   fileType: string,
-  meshConfig: { tolerance: number; angularTolerance: number },
+  tessConfig: { tolerance: number; angularTolerance: number },
 ): Blob {
   if (fileType === 'stl') {
-    return shape.blobSTL(meshConfig);
+    return shape.blobSTL(tessConfig);
   }
 
   if (fileType === 'stl-binary') {
-    return shape.blobSTL({ ...meshConfig, binary: true });
+    return shape.blobSTL({ ...tessConfig, binary: true });
   }
 
   if (fileType === 'step') {

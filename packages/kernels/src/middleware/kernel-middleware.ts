@@ -1,18 +1,16 @@
 import type { z } from 'zod';
 import type { PartialDeep } from 'type-fest';
 import deepmerge from 'deepmerge';
+import type { LogLevel, OnWorkerLog } from '@taucad/types';
 import type {
   WrapCreateGeometryHook,
   WrapExportGeometryHook,
   WrapGetParametersHook,
-  KernelLogger,
   KernelMiddlewareRuntime,
   MiddlewareState,
-  KernelFilesystem,
-  Dependency,
-  LogLevel,
-  OnWorkerLog,
-} from '@taucad/types';
+} from '#types/kernel-middleware.types.js';
+import type { KernelLogger, KernelFileSystem } from '#types/kernel-worker.types.js';
+import type { Dependency } from '#types/kernel-dependency.types.js';
 
 /**
  * Type alias for an empty Zod object schema.
@@ -35,12 +33,12 @@ type EmptyState = {};
  *
  * @template StateSchema - Optional Zod object schema for the middleware state.
  *   Defaults to an empty object schema when no state is needed.
- * @template ConfigSchema - Optional Zod object schema for the middleware config.
- *   Defaults to an empty object schema when no config is needed.
+ * @template OptionsSchema - Optional Zod object schema for the middleware options.
+ *   Defaults to an empty object schema when no options are needed.
  */
-export type KernelMiddlewareConfig<
+export type KernelMiddlewareOptions<
   StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
-  ConfigSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+  OptionsSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
 > = {
   /** Name of the middleware for debugging and logging */
   name: string;
@@ -50,14 +48,14 @@ export type KernelMiddlewareConfig<
   enabled?: boolean;
   /** Optional Zod schema for type-safe state. Must be a z.object() schema. */
   stateSchema?: StateSchema;
-  /** Optional Zod schema for middleware config with .default() values for each field. */
-  configSchema?: ConfigSchema;
+  /** Optional Zod schema for middleware options with .default() values for each field. */
+  optionsSchema?: OptionsSchema;
   /** Wrap-style hook for createGeometry with onion model execution */
-  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
+  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
-  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
+  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
   /** Wrap-style hook for getParameters with onion model execution */
-  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
+  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
 };
 
 /**
@@ -66,12 +64,12 @@ export type KernelMiddlewareConfig<
  * @template StateSchema - The Zod schema type for the state.
  *   Keeping the schema type (not inferred type) allows proper type flow from config to middleware.
  *   Defaults to an empty object schema when no state is needed.
- * @template ConfigSchema - The Zod schema type for the config.
- *   Defaults to an empty object schema when no config is needed.
+ * @template OptionsSchema - The Zod schema type for the options.
+ *   Defaults to an empty object schema when no options are needed.
  */
 export type KernelMiddleware<
   StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
-  ConfigSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+  OptionsSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
 > = {
   /** Name of the middleware */
   name: string;
@@ -81,14 +79,14 @@ export type KernelMiddleware<
   enabled?: boolean;
   /** Zod schema for validating state updates (if provided) */
   stateSchema?: StateSchema;
-  /** Zod schema for validating and defaulting config (if provided) */
-  configSchema?: ConfigSchema;
+  /** Zod schema for validating and defaulting options (if provided) */
+  optionsSchema?: OptionsSchema;
   /** Wrap-style hook for createGeometry with onion model execution */
-  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
+  wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
-  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
+  wrapExportGeometry?: WrapExportGeometryHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
   /** Wrap-style hook for getParameters with onion model execution */
-  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>, z.infer<ConfigSchema>>;
+  wrapGetParameters?: WrapGetParametersHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
 };
 
 /**
@@ -98,13 +96,13 @@ export type KernelMiddleware<
  * using an onion model where code after handler() runs on the "return journey".
  * This pattern is inspired by LangChain's wrap-style middleware hooks.
  *
- * @param config - Middleware configuration with wrap hooks and optional state schema
+ * @param options - Middleware configuration with wrap hooks and optional state schema
  * @returns A middleware instance that can be applied to kernel workers
  *
  * @example
  * ```typescript
  * // Simple logging middleware - destructure what you need
- * const loggingMiddleware = createKernelMiddleware({
+ * const loggingMiddleware = defineMiddleware({
  *   name: 'Logging',
  *   async wrapCreateGeometry(input, handler, { logger }) {
  *     logger.debug('Computing geometry...');
@@ -115,7 +113,7 @@ export type KernelMiddleware<
  * });
  *
  * // Caching middleware with type-safe state
- * const cacheMiddleware = createKernelMiddleware({
+ * const cacheMiddleware = defineMiddleware({
  *   name: 'GeometryCache',
  *   stateSchema: z.object({
  *     cacheKey: z.string(),
@@ -142,19 +140,19 @@ export type KernelMiddleware<
  * });
  * ```
  */
-export function createKernelMiddleware<
+export function defineMiddleware<
   StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
-  ConfigSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
->(config: KernelMiddlewareConfig<StateSchema, ConfigSchema>): KernelMiddleware<StateSchema, ConfigSchema> {
+  OptionsSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
+>(options: KernelMiddlewareOptions<StateSchema, OptionsSchema>): KernelMiddleware<StateSchema, OptionsSchema> {
   return {
-    name: config.name,
-    version: config.version ?? '1',
-    enabled: config.enabled,
-    stateSchema: config.stateSchema,
-    configSchema: config.configSchema,
-    wrapCreateGeometry: config.wrapCreateGeometry,
-    wrapExportGeometry: config.wrapExportGeometry,
-    wrapGetParameters: config.wrapGetParameters,
+    name: options.name,
+    version: options.version ?? '1',
+    enabled: options.enabled,
+    stateSchema: options.stateSchema,
+    optionsSchema: options.optionsSchema,
+    wrapCreateGeometry: options.wrapCreateGeometry,
+    wrapExportGeometry: options.wrapExportGeometry,
+    wrapGetParameters: options.wrapGetParameters,
   };
 }
 
@@ -261,37 +259,38 @@ export type CreateMiddlewareRuntimeOptions = {
   /** Name of the middleware */
   middlewareName: string;
   /** Filesystem for all file operations */
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   /** Array of dependencies for cache key computation */
   dependencies: readonly Dependency[];
   /** Pre-computed SHA-256 hash of all dependencies */
   dependencyHash: string;
   /** Optional Zod object schema for the state */
   stateSchema?: z.ZodObject<z.ZodRawShape>;
-  /** Resolved config values (schema defaults merged with caller overrides) */
-  config?: Record<string, unknown>;
+  /** Resolved options values (schema defaults merged with caller overrides) */
+  options?: Record<string, unknown>;
   /** Pre-created logger to avoid closure allocation per operation */
   logger?: KernelLogger;
 };
 
 /**
- * Create a middleware runtime with logger, filesystem, state, config, and dependencies.
+ * Create a middleware runtime with logger, filesystem, state, options, and dependencies.
  *
- * @param options - Runtime configuration options
+ * @param runtimeOptions - Runtime configuration options
  * @returns Runtime instance for middleware wrap hooks
  */
 export function createMiddlewareRuntime<
   State extends Record<string, unknown> = EmptyState,
-  Config extends Record<string, unknown> = EmptyState,
->(options: CreateMiddlewareRuntimeOptions): KernelMiddlewareRuntime<State, Config> {
-  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema, config, logger } = options;
+  Options extends Record<string, unknown> = EmptyState,
+>(runtimeOptions: CreateMiddlewareRuntimeOptions): KernelMiddlewareRuntime<State, Options> {
+  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema, options, logger } =
+    runtimeOptions;
 
   return {
     logger: logger ?? createMiddlewareLogger(onLog, middlewareName),
     filesystem,
     state: createMiddlewareState<State>(stateSchema),
 
-    config: (config ?? {}) as Config,
+    options: (options ?? {}) as Options,
     dependencies,
     dependencyHash,
   };

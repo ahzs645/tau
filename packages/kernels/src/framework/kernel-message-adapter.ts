@@ -5,7 +5,7 @@
  * Abstracts browser/Node.js worker context differences for the MessagePort protocol.
  */
 
-import type { KernelCommand, KernelResponse } from '@taucad/types';
+import type { KernelCommand, KernelResponse } from '#types/kernel-protocol.types.js';
 
 /**
  * Unified message port interface for kernel worker communication.

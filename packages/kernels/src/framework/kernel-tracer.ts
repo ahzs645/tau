@@ -1,4 +1,4 @@
-import type { SpanHandle, KernelSpanTracer } from '@taucad/types';
+import type { SpanHandle, KernelSpanTracer } from '#types/kernel-tracer.types.js';
 
 type SpanAttributes = Record<string, string | number | boolean>;
 
@@ -17,6 +17,9 @@ export class KernelTracer implements KernelSpanTracer {
   private nextId = 0;
   private activeSpanId: string | undefined;
 
+  /**
+   *
+   */
   public startSpan(name: string, attributes?: SpanAttributes): SpanHandle {
     const id = String(this.nextId++);
     const parentId = this.activeSpanId;
@@ -44,6 +47,9 @@ export class KernelTracer implements KernelSpanTracer {
     };
   }
 
+  /**
+   *
+   */
   public reset(): void {
     this.nextId = 0;
     this.activeSpanId = undefined;

@@ -11,8 +11,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import type { CreateGeometryResult, GeometryGltf, OnWorkerLog } from '@taucad/types';
-import { createKernelMiddleware } from '#middleware/kernel-middleware.js';
+import type { GeometryGltf, OnWorkerLog } from '@taucad/types';
+import type { CreateGeometryResult } from '#types/kernel.types.js';
+import { defineMiddleware } from '#middleware/kernel-middleware.js';
 import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 
 describe('kernel-worker middleware onion chain', () => {
@@ -33,7 +34,7 @@ describe('kernel-worker middleware onion chain', () => {
    * Helper to create a tracking middleware that records execution order.
    */
   function createTrackingMiddleware(name: string, executionOrder: string[]) {
-    return createKernelMiddleware({
+    return defineMiddleware({
       name,
       async wrapCreateGeometry(request, handler) {
         executionOrder.push(`${name}-before`);
@@ -89,7 +90,7 @@ describe('kernel-worker middleware onion chain', () => {
       const middleware1 = createTrackingMiddleware('M1', executionOrder);
 
       // Middleware without wrap hook
-      const middleware2 = createKernelMiddleware({
+      const middleware2 = defineMiddleware({
         name: 'NoHookMiddleware',
       });
 
@@ -126,7 +127,7 @@ describe('kernel-worker middleware onion chain', () => {
       const executionOrder: string[] = [];
 
       // Cache middleware that short-circuits
-      const cacheMiddleware = createKernelMiddleware({
+      const cacheMiddleware = defineMiddleware({
         name: 'CacheMiddleware',
         async wrapCreateGeometry(_request, _handler) {
           executionOrder.push('cache-check');
@@ -175,7 +176,7 @@ describe('kernel-worker middleware onion chain', () => {
       const executionOrder: string[] = [];
 
       // Outer middleware (transform) - wraps everything
-      const transformMiddleware = createKernelMiddleware({
+      const transformMiddleware = defineMiddleware({
         name: 'TransformMiddleware',
         async wrapCreateGeometry(request, handler) {
           executionOrder.push('transform-before');
@@ -200,7 +201,7 @@ describe('kernel-worker middleware onion chain', () => {
       });
 
       // Inner middleware (cache) - short-circuits
-      const cacheMiddleware = createKernelMiddleware({
+      const cacheMiddleware = defineMiddleware({
         name: 'CacheMiddleware',
         async wrapCreateGeometry(_request, _handler) {
           executionOrder.push('cache-hit');
@@ -255,7 +256,7 @@ describe('kernel-worker middleware onion chain', () => {
 
       let capturedState: Partial<TestState> = {};
 
-      const statefulMiddleware = createKernelMiddleware({
+      const statefulMiddleware = defineMiddleware({
         name: 'StatefulMiddleware',
         stateSchema,
         async wrapCreateGeometry(input, handler, { state }) {
@@ -296,7 +297,7 @@ describe('kernel-worker middleware onion chain', () => {
 
       const capturedStates: Record<string, string | undefined> = {};
 
-      const middleware1 = createKernelMiddleware({
+      const middleware1 = defineMiddleware({
         name: 'Middleware1',
         stateSchema,
         async wrapCreateGeometry(input, handler, { state }) {
@@ -307,7 +308,7 @@ describe('kernel-worker middleware onion chain', () => {
         },
       });
 
-      const middleware2 = createKernelMiddleware({
+      const middleware2 = defineMiddleware({
         name: 'Middleware2',
         stateSchema,
         async wrapCreateGeometry(input, handler, { state }) {
@@ -334,7 +335,7 @@ describe('kernel-worker middleware onion chain', () => {
 
   describe('result transformation', () => {
     it('should allow multiple middleware to transform results', async () => {
-      const middleware1 = createKernelMiddleware({
+      const middleware1 = defineMiddleware({
         name: 'AddSuffix1',
         async wrapCreateGeometry(request, handler) {
           const result = await handler(request);
@@ -351,7 +352,7 @@ describe('kernel-worker middleware onion chain', () => {
         },
       });
 
-      const middleware2 = createKernelMiddleware({
+      const middleware2 = defineMiddleware({
         name: 'AddSuffix2',
         async wrapCreateGeometry(request, handler) {
           const result = await handler(request);
@@ -429,7 +430,7 @@ describe('kernel-worker middleware onion chain', () => {
     it('should respect middleware-level enabled=false default', async () => {
       const executionOrder: string[] = [];
 
-      const disabledMiddleware = createKernelMiddleware({
+      const disabledMiddleware = defineMiddleware({
         name: 'DisabledByDefault',
         enabled: false,
         async wrapCreateGeometry(request, handler) {
@@ -461,7 +462,7 @@ describe('kernel-worker middleware onion chain', () => {
     it('should allow entry-level enabled to override middleware default', async () => {
       const executionOrder: string[] = [];
 
-      const disabledMiddleware = createKernelMiddleware({
+      const disabledMiddleware = defineMiddleware({
         name: 'DisabledByDefault',
         enabled: false,
         async wrapCreateGeometry(request, handler) {
@@ -494,7 +495,7 @@ describe('kernel-worker middleware onion chain', () => {
 
   describe('error handling', () => {
     it('should propagate errors from main operation', async () => {
-      const middleware = createKernelMiddleware({
+      const middleware = defineMiddleware({
         name: 'PassthroughMiddleware',
         async wrapCreateGeometry(request, handler) {
           return handler(request);
@@ -518,7 +519,7 @@ describe('kernel-worker middleware onion chain', () => {
     });
 
     it('should catch errors from middleware and return error result', async () => {
-      const middleware = createKernelMiddleware({
+      const middleware = defineMiddleware({
         name: 'ErrorMiddleware',
         async wrapCreateGeometry(_request, _handler) {
           throw new Error('Middleware error');

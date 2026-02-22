@@ -1,5 +1,5 @@
-import type { KernelSpanTracer } from '@taucad/types';
 import { asBuffer } from '@taucad/utils/file';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 
 /**
  * Compile a WASM module from a URL using streaming compilation when possible.

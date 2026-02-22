@@ -21,13 +21,17 @@
  * IntelliSense is managed by the TypeAcquisitionService on the main thread.
  */
 
-import type { KernelFilesystem } from '@taucad/types';
 import { getCdnCachePath, getNodeModulesPath } from '@taucad/utils/import';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
+import { ensureDirectoryExists } from '#framework/filesystem-helpers.js';
 
 // =============================================================================
 // Types
 // =============================================================================
 
+/**
+ *
+ */
 export type BuiltinModule = {
   /** Pre-bundled ESM code */
   code: string;
@@ -39,6 +43,9 @@ export type BuiltinModule = {
   globalName?: string;
 };
 
+/**
+ *
+ */
 export type FetchedModule = {
   /** Module source code */
   code: string;
@@ -72,9 +79,12 @@ const retryDelayMs = 60_000;
 // Module Manager Class
 // =============================================================================
 
+/**
+ * Minimal CDN Cache Manager for kernel workers.
+ */
 export class ModuleManager {
   // eslint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
-  private readonly filesystem: KernelFilesystem;
+  private readonly filesystem: KernelFileSystem;
 
   /** Dedup concurrent fetches for the same cache key */
   private readonly pendingFetches = new Map<string, Promise<void>>();
@@ -82,7 +92,7 @@ export class ModuleManager {
   /** Track failed fetches with timestamp for retry backoff */
   private readonly failedPackages = new Map<string, number>();
 
-  public constructor(filesystem: KernelFilesystem) {
+  public constructor(filesystem: KernelFileSystem) {
     this.filesystem = filesystem;
   }
 
@@ -254,12 +264,12 @@ export class ModuleManager {
     const packageDir = getNodeModulesPath(name);
 
     // Ensure directory exists
-    await this.filesystem.ensureDirectoryExists(packageDir);
+    await ensureDirectoryExists(this.filesystem, packageDir);
 
     // If subpath has nested directories (e.g., 'utils/debounce'), ensure parent dirs
     if (subpath?.includes('/')) {
       const subpathDir = `${packageDir}/${subpath.slice(0, subpath.lastIndexOf('/'))}`;
-      await this.filesystem.ensureDirectoryExists(subpathDir);
+      await ensureDirectoryExists(this.filesystem, subpathDir);
     }
 
     // Write code file FIRST

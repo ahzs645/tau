@@ -5,7 +5,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { Document, NodeIO, Accessor } from '@gltf-transform/core';
-import type { CreateGeometryHandler, GeometryGltf, GeometrySvg } from '@taucad/types';
+import type { GeometryGltf, GeometrySvg } from '@taucad/types';
+import type { CreateGeometryHandler } from '#types/kernel-middleware.types.js';
 import { gltfCoordinateTransformMiddleware } from '#middleware/gltf-coordinate-transform.middleware.js';
 import {
   createMockRuntime,

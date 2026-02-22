@@ -7,38 +7,35 @@
 
 import deepmerge from 'deepmerge';
 import type { PartialDeep } from 'type-fest';
-import type {
-  CreateGeometryResult,
-  CreateGeometryResultCompleted,
-  GeometryResponse,
-  KernelMiddlewareRuntime,
-  KernelLogger,
-  KernelRuntime,
-  KernelDefinition,
-  BundlerDefinition,
-  MiddlewareState,
-  KernelFilesystem,
-  FileStat,
-  KernelIssue,
-  Dependency,
-  GetParametersResult,
-  ExportGeometryResult,
-  GeometryFile,
-  CanHandleInput,
-  GetDependenciesInput,
-  GetParametersInput,
-  CreateGeometryInput,
-  ExportGeometryInput,
-  OnWorkerLog,
-  MiddlewareConfig,
-  BundlerConfig,
-} from '@taucad/types';
-import * as kernelSymbols from '@taucad/types/symbols';
+import type { GeometryResponse, GeometryFile, OnWorkerLog } from '@taucad/types';
 import { dirname } from '@zenfs/core/path';
 import { vi } from 'vitest';
 import { configure, fs } from '@zenfs/core';
 import { InMemory } from '@zenfs/core/backends/memory.js';
 import { joinPath } from '@taucad/utils/path';
+import type {
+  CreateGeometryResult,
+  CreateGeometryResultCompleted,
+  KernelIssue,
+  GetParametersResult,
+  ExportGeometryResult,
+  MiddlewareEntries,
+  BundlerEntries,
+} from '#types/kernel.types.js';
+import type {
+  KernelLogger,
+  KernelRuntime,
+  KernelDefinition,
+  KernelFileSystem,
+  CanHandleInput,
+  GetDependenciesInput,
+  GetParametersInput,
+  CreateGeometryInput,
+  ExportGeometryInput,
+} from '#types/kernel-worker.types.js';
+import type { BundlerDefinition } from '#types/kernel-bundler.types.js';
+import type { KernelMiddlewareRuntime, MiddlewareState } from '#types/kernel-middleware.types.js';
+import type { Dependency } from '#types/kernel-dependency.types.js';
 import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#framework/kernel-worker.js';
@@ -64,14 +61,6 @@ function createTestFileManager(): KernelFileManager {
 
   return {
     readFile,
-    async readFiles(paths: string[]) {
-      const result: Record<string, Uint8Array<ArrayBuffer>> = {};
-      for (const p of paths) {
-        result[p] = (await fs.promises.readFile(p)) as Uint8Array<ArrayBuffer>;
-      }
-
-      return result;
-    },
     async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string) {
       const parentDir = path.slice(0, path.lastIndexOf('/'));
       if (parentDir && parentDir !== '/') {
@@ -80,17 +69,7 @@ function createTestFileManager(): KernelFileManager {
 
       await fs.promises.writeFile(path, data);
     },
-    async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>) {
-      for (const [path, { content }] of Object.entries(files)) {
-        const parentDir = path.slice(0, path.lastIndexOf('/'));
-        if (parentDir && parentDir !== '/') {
-          await fs.promises.mkdir(parentDir, { recursive: true });
-        }
-
-        await fs.promises.writeFile(path, content);
-      }
-    },
-    async mkdir(path: string, options?: { mode?: number; recursive?: boolean }) {
+    async mkdir(path: string, options?: { recursive?: boolean }) {
       await fs.promises.mkdir(path, { recursive: options?.recursive });
     },
     async readdir(path: string) {
@@ -99,19 +78,13 @@ function createTestFileManager(): KernelFileManager {
     async stat(path: string) {
       const stats = await fs.promises.stat(path);
       return {
-        type: stats.isDirectory() ? 'dir' : 'file',
+        type: stats.isDirectory() ? ('dir' as const) : ('file' as const),
         size: stats.size,
         mtimeMs: stats.mtimeMs,
       };
     },
-    async rename(oldPath: string, newPath: string) {
-      await fs.promises.rename(oldPath, newPath);
-    },
     async unlink(path: string) {
       await fs.promises.unlink(path);
-    },
-    async rmdir(path: string) {
-      await fs.promises.rmdir(path);
     },
     async exists(path: string) {
       try {
@@ -120,71 +93,6 @@ function createTestFileManager(): KernelFileManager {
       } catch {
         return false;
       }
-    },
-    async batchExists(paths: string[]) {
-      const result: Record<string, boolean> = {};
-      for (const p of paths) {
-        try {
-          await fs.promises.stat(p);
-          result[p] = true;
-        } catch {
-          result[p] = false;
-        }
-      }
-
-      return result;
-    },
-    async ensureDirectoryExists(path: string) {
-      await fs.promises.mkdir(path, { recursive: true });
-    },
-    async getDirectoryStat(path: string) {
-      const stats: Array<{ path: string; name: string; type: 'file' | 'dir'; size: number; mtimeMs: number }> = [];
-      const entries = await fs.promises.readdir(path);
-      for (const entry of entries) {
-        const fullPath = joinPath(path, entry);
-        const stat = await fs.promises.stat(fullPath);
-        stats.push({
-          path: fullPath,
-          name: entry,
-          type: stat.isDirectory() ? 'dir' : 'file',
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-        });
-      }
-
-      return stats;
-    },
-    async getDirectoryContents(path: string) {
-      const result: Record<string, Uint8Array<ArrayBuffer>> = {};
-      const entries = await fs.promises.readdir(path);
-      for (const entry of entries) {
-        const fullPath = joinPath(path, entry);
-        const stat = await fs.promises.stat(fullPath);
-        if (!stat.isDirectory()) {
-          result[fullPath] = (await fs.promises.readFile(fullPath)) as Uint8Array<ArrayBuffer>;
-        }
-      }
-
-      return result;
-    },
-    async duplicateFile(src: string, dst: string) {
-      const content = await fs.promises.readFile(src);
-      await fs.promises.writeFile(dst, content);
-    },
-    async copyDirectory(_src: string, _dst: string) {
-      /* Noop in tests */
-    },
-    async getZippedDirectory(_path: string) {
-      return new Blob([]);
-    },
-    async reconfigure(_backend: string) {
-      await resetFilesystem();
-    },
-    setDirectoryHandle(_handle: FileSystemDirectoryHandle) {
-      /* Noop */
-    },
-    async readBackendFileTree(_backend: string, _handle?: FileSystemDirectoryHandle) {
-      return [];
     },
   };
 }
@@ -240,7 +148,7 @@ export type InitializeWorkerOptions = {
   /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
   workerOptions?: Record<string, unknown>;
   /** Middleware configuration (defaults to empty array for tests that bypass dynamic loading) */
-  middlewareConfig?: MiddlewareConfig;
+  middlewareEntries?: MiddlewareEntries;
 };
 
 /**
@@ -262,7 +170,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
 ): Promise<T> {
   const port = createFileManagerPort(createTestFileManager());
 
-  await worker[kernelSymbols.initializeEntry](
+  await worker.initializeEntry(
     {
       onLog:
         options?.onLog ??
@@ -272,7 +180,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
     },
     { fileManagerPort: port },
     options?.workerOptions ?? {},
-    options?.middlewareConfig ?? [],
+    options?.middlewareEntries ?? [],
   );
 
   return worker;
@@ -311,8 +219,6 @@ export type MockFilesystemOptions = {
     | string
     | Uint8Array<ArrayBuffer>
     | ((path: string) => string | Uint8Array<ArrayBuffer> | Promise<string | Uint8Array<ArrayBuffer>>);
-  /** Result for getDirectoryStat calls */
-  getDirectoryStatResult?: FileStat[];
 };
 
 /**
@@ -324,17 +230,15 @@ export type MockFilesystemMocks = {
   readdir: ReturnType<typeof vi.fn>;
   writeFile: ReturnType<typeof vi.fn>;
   mkdir: ReturnType<typeof vi.fn>;
-  ensureDirectoryExists: ReturnType<typeof vi.fn>;
-  getDirectoryStat: ReturnType<typeof vi.fn>;
-  getDirectoryContents: ReturnType<typeof vi.fn>;
   unlink: ReturnType<typeof vi.fn>;
+  stat: ReturnType<typeof vi.fn>;
 };
 
 /**
- * A mock KernelFilesystem with vitest mock functions for verification.
+ * A mock KernelFileSystem with vitest mock functions for verification.
  * Use the `mocks` property to access mock functions for test setup.
  */
-export type MockFilesystem = KernelFilesystem & {
+export type MockFilesystem = KernelFileSystem & {
   /** Access underlying mock functions for test assertions and setup */
   mocks: MockFilesystemMocks;
 };
@@ -372,11 +276,9 @@ export function createMockFilesystem(options?: MockFilesystemOptions): MockFiles
   // Create base mock functions
   const writeFileFn = vi.fn().mockResolvedValue(undefined);
   const mkdirFn = vi.fn().mockResolvedValue(undefined);
-  const ensureDirectoryExistsFn = vi.fn().mockResolvedValue(undefined);
-  const getDirectoryStatFn = vi.fn().mockResolvedValue(options?.getDirectoryStatResult ?? []);
-  const getDirectoryContentsFn = vi.fn().mockResolvedValue({});
   const unlinkFn = vi.fn().mockResolvedValue(undefined);
   const readdirFn = vi.fn().mockResolvedValue([]);
+  const statFn = vi.fn().mockRejectedValue(new Error('Not found'));
 
   // Define readFile with overload signatures - delegates to mock
   function readFile(path: string, encoding: 'utf8'): Promise<string>;
@@ -392,35 +294,18 @@ export function createMockFilesystem(options?: MockFilesystemOptions): MockFiles
     readdir: readdirFn,
     writeFile: writeFileFn,
     mkdir: mkdirFn,
-    ensureDirectoryExists: ensureDirectoryExistsFn,
-    getDirectoryStat: getDirectoryStatFn,
-    getDirectoryContents: getDirectoryContentsFn,
     unlink: unlinkFn,
+    stat: statFn,
   };
 
   return {
-    // Properly typed overloaded function
     readFile,
-
-    async readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
-      const result: Record<string, Uint8Array<ArrayBuffer>> = {};
-      for (const path of paths) {
-        const content = (await readFileFn(path)) as Uint8Array<ArrayBuffer>;
-        result[path] = content;
-      }
-
-      return result;
-    },
-
     exists: async (path: string) => existsFn(path) as Promise<boolean>,
     readdir: async (path: string) => readdirFn(path) as Promise<string[]>,
     writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data) as Promise<void>,
     mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFn(path, options_) as Promise<void>,
-    ensureDirectoryExists: async (path: string) => ensureDirectoryExistsFn(path) as Promise<void>,
-    getDirectoryStat: async (path: string) => getDirectoryStatFn(path) as Promise<FileStat[]>,
-    getDirectoryContents: async (path: string) =>
-      getDirectoryContentsFn(path) as Promise<Record<string, Uint8Array<ArrayBuffer>>>,
     unlink: async (path: string) => unlinkFn(path) as Promise<void>,
+    stat: async (path: string) => statFn(path) as Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>,
 
     // Expose mocks for test assertions
     mocks,
@@ -461,29 +346,30 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
 /** Default mock dependency hash for testing */
 const defaultMockDependencyHash = 'a'.repeat(64);
 
+/** Create a mock KernelMiddlewareRuntime for unit testing middleware hooks. */
 export function createMockRuntime<
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-  Config extends Record<string, unknown> = {},
->(options?: {
+  Options extends Record<string, unknown> = {},
+>(mockOptions?: {
   filesystemOverrides?: MockFilesystemOptions;
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
-  config?: Config;
-}): KernelMiddlewareRuntime<State, Config> & {
+  options?: Options;
+}): KernelMiddlewareRuntime<State, Options> & {
   logger: ReturnType<typeof createMockLogger>;
   filesystem: MockFilesystem;
   state: ReturnType<typeof createMockState<State>>;
 } {
   return {
     logger: createMockLogger(),
-    filesystem: createMockFilesystem(options?.filesystemOverrides),
+    filesystem: createMockFilesystem(mockOptions?.filesystemOverrides),
     state: createMockState<State>(),
 
-    config: (options?.config ?? {}) as Config,
-    dependencies: options?.dependencies ?? [],
-    dependencyHash: options?.dependencyHash ?? defaultMockDependencyHash,
+    options: (mockOptions?.options ?? {}) as Options,
+    dependencies: mockOptions?.dependencies ?? [],
+    dependencyHash: mockOptions?.dependencyHash ?? defaultMockDependencyHash,
   };
 }
 
@@ -569,7 +455,7 @@ export type CreateTestWorkerOptions = {
   /** Builtin module names this kernel provides (e.g., ['replicad']) */
   builtinModuleNames?: string[];
   /** Bundler config to load (enables detectImports-based transitive detection in tests) */
-  bundlerConfig?: BundlerConfig;
+  bundlerEntries?: BundlerEntries;
   /** Pre-loaded bundler definition (bypasses dynamic import; auto-loaded for JS/TS kernels if not provided) */
   bundlerDefinition?: BundlerDefinition;
   /** Skip automatic bundler loading for JS/TS kernels (default: false) */
@@ -666,8 +552,8 @@ export async function createTestWorker(
     await worker.ensureLoadedBundler(dummyConfig, bundlerDef);
   }
 
-  if (options?.bundlerConfig) {
-    for (const entry of options.bundlerConfig) {
+  if (options?.bundlerEntries) {
+    for (const entry of options.bundlerEntries) {
       await worker.ensureLoadedBundler(entry);
     }
   }
@@ -691,7 +577,7 @@ export async function getTestParameters(
   const { expect } = await import('vitest');
 
   const worker = await createTestWorker(definition, files);
-  const result = await worker[kernelSymbols.getParametersEntry](createGeometryFile(mainFile));
+  const result = await worker.getParametersEntry(createGeometryFile(mainFile));
 
   expect(result.success).toBe(true);
 
@@ -722,7 +608,7 @@ export async function createTestGeometry(
 ): Promise<CreateGeometryResult> {
   const worker = await createTestWorker(definition, files, options);
   const geometryFile = createGeometryFile(mainFile);
-  return worker[kernelSymbols.createGeometryEntry](geometryFile, parameters);
+  return worker.createGeometryEntry(geometryFile, parameters);
 }
 
 /**
@@ -780,7 +666,7 @@ export type MockKernelWorkerOptions = {
   /** Custom onLog handler */
   onLog?: OnWorkerLog;
   /** Mock filesystem for middleware operations */
-  filesystem?: KernelFilesystem;
+  filesystem?: KernelFileSystem;
 };
 
 /**
@@ -797,7 +683,7 @@ export class MockKernelWorker extends KernelWorker {
     super();
     this.testResolvedMiddleware = options.middleware.map((middleware, index) => ({
       middleware,
-      config: options.middlewareConfigs?.[index] ?? {},
+      options: options.middlewareConfigs?.[index] ?? {},
       url: `mock://${middleware.name}`,
       enabled: options.middlewareEnabled?.[index] ?? middleware.enabled ?? true,
     }));
@@ -826,13 +712,13 @@ export class MockKernelWorker extends KernelWorker {
     parameters: Record<string, unknown> = {},
   ): Promise<CreateGeometryResultCompleted> {
     const mockFile: GeometryFile = { filename, path: filename };
-    return this[kernelSymbols.createGeometryEntry](mockFile, parameters);
+    return this.createGeometryEntry(mockFile, parameters);
   }
 
   /**
    * Override getMiddleware to return test middleware with resolved configs.
    */
-  public override [kernelSymbols.getMiddleware](): ResolvedMiddleware[] {
+  public override getMiddleware(): ResolvedMiddleware[] {
     return this.testResolvedMiddleware;
   }
 

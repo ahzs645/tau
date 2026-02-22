@@ -18,11 +18,13 @@
  */
 
 import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
-import type { GeometryResponse, KernelFilesystem } from '@taucad/types';
+import type { GeometryResponse } from '@taucad/types';
 import { z } from 'zod';
 import { joinPath } from '@taucad/utils/path';
-import { createKernelMiddleware } from '#middleware/kernel-middleware.js';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
+import { defineMiddleware } from '#middleware/kernel-middleware.js';
 import { createKernelSuccess } from '#framework/kernel-helpers.js';
+import { getDirectoryStat, ensureDirectoryExists } from '#framework/filesystem-helpers.js';
 
 /**
  * Serialized geometry format for cache storage.
@@ -199,13 +201,13 @@ function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolea
  * @param maxEntries - Maximum number of cache entries to keep
  */
 async function cleanupOldCacheEntries(
-  filesystem: KernelFilesystem,
+  filesystem: KernelFileSystem,
   cacheDir: string,
   maxAgeMs: number,
   maxEntries: number,
 ): Promise<void> {
   try {
-    const files = await filesystem.getDirectoryStat(cacheDir);
+    const files = await getDirectoryStat(filesystem, cacheDir);
 
     // Filter to only .bin cache files (MessagePack binary format)
     const cacheFiles = files.filter((file) => file.type === 'file' && file.name.endsWith('.bin'));
@@ -264,16 +266,16 @@ async function cleanupOldCacheEntries(
  * Export operations are not cached - they are delegated to kernel workers
  * which handle format-specific conversion (e.g., GLTF JSON vs GLB binary).
  */
-export const geometryCacheMiddleware = createKernelMiddleware({
+export const geometryCacheMiddleware = defineMiddleware({
   name: 'GeometryCache',
   version: '1.0.0',
 
-  configSchema: z.object({
+  optionsSchema: z.object({
     maxEntries: z.number().default(100),
     maxAgeMs: z.number().default(7 * 24 * 60 * 60 * 1000),
   }),
 
-  async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash, config }) {
+  async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash, options }) {
     const { basePath } = input;
     // Use pre-computed dependency hash as cache key
     const cacheKey = dependencyHash;
@@ -305,7 +307,7 @@ export const geometryCacheMiddleware = createKernelMiddleware({
         try {
           // Ensure cache directory exists
           const cacheDir = getCacheDir(basePath);
-          await filesystem.ensureDirectoryExists(cacheDir);
+          await ensureDirectoryExists(filesystem, cacheDir);
 
           // Serialize all geometries to MessagePack binary (handles GLTF, SVG)
           const serialized = serializeGeometries(result.data);
@@ -313,7 +315,7 @@ export const geometryCacheMiddleware = createKernelMiddleware({
           logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
 
           // Cleanup old cache entries to prevent unbounded growth
-          await cleanupOldCacheEntries(filesystem, cacheDir, config.maxAgeMs, config.maxEntries);
+          await cleanupOldCacheEntries(filesystem, cacheDir, options.maxAgeMs, options.maxEntries);
         } catch (error) {
           // Cache write error - log and continue
           logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);

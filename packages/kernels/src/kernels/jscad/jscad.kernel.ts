@@ -7,20 +7,12 @@
  */
 
 import * as jscadModeling from '@jscad/modeling';
-import type {
-  CreateGeometryInput,
-  ExportGeometryInput,
-  ExportGeometryResult,
-  GetDependenciesInput,
-  GetParametersInput,
-  GetParametersResult,
-  GeometryResponse,
-  KernelIssue,
-  KernelRuntime,
-} from '@taucad/types';
-import { defineKernel } from '@taucad/types';
+import type { GeometryResponse } from '@taucad/types';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
+import type { KernelIssue } from '#types/kernel.types.js';
+import type { KernelRuntime } from '#types/kernel-worker.types.js';
+import { defineKernel } from '#types/kernel-worker.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#framework/error-enrichment.js';
 import { jscadToGltf } from '#kernels/jscad/jscad-to-gltf.js';
@@ -211,14 +203,11 @@ export default defineKernel<JscadContext, unknown[]>({
     return hasEsmImport || hasRequire;
   },
 
-  async getDependencies({ filePath }: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]> {
+  async getDependencies({ filePath }, runtime) {
     return runtime.bundler.resolveDependencies(filePath);
   },
 
-  async getParameters(
-    { filePath, basePath }: GetParametersInput,
-    runtime: KernelRuntime,
-  ): Promise<GetParametersResult> {
+  async getParameters({ filePath, basePath }, runtime) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
@@ -261,7 +250,7 @@ export default defineKernel<JscadContext, unknown[]>({
     }
   },
 
-  async createGeometry({ filePath, basePath, parameters }: CreateGeometryInput, runtime: KernelRuntime) {
+  async createGeometry({ filePath, basePath, parameters }, runtime) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const { logger } = runtime;
 
@@ -336,12 +325,7 @@ export default defineKernel<JscadContext, unknown[]>({
     return { geometry: geometries, nativeHandle: filteredShapes };
   },
 
-  async exportGeometry(
-    { fileType }: ExportGeometryInput,
-    _runtime: KernelRuntime,
-    _ctx: JscadContext,
-    nativeHandle: unknown[],
-  ): Promise<ExportGeometryResult> {
+  async exportGeometry({ fileType }, _runtime, _ctx, nativeHandle) {
     if (nativeHandle.length === 0) {
       return createKernelError([{ message: 'No geometry available for export.', type: 'runtime', severity: 'error' }]);
     }

@@ -10,25 +10,15 @@
  * - Full engine (for geometry computation and export, requires WebSocket)
  */
 
-import type {
-  CreateGeometryInput,
-  ExportGeometryInput,
-  ExportGeometryResult,
-  GetDependenciesInput,
-  GetParametersInput,
-  GetParametersResult,
-  GeometryGltf,
-  KernelErrorResult,
-  KernelFilesystem,
-  KernelIssue,
-  KernelLogger,
-  KernelRuntime,
-  KernelSpanTracer,
-} from '@taucad/types';
-import { defineKernel } from '@taucad/types';
+import type { GeometryGltf } from '@taucad/types';
+import { z } from 'zod';
 import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
 import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
+import type { KernelErrorResult, KernelIssue } from '#types/kernel.types.js';
+import type { KernelFileSystem, KernelLogger } from '#types/kernel-worker.types.js';
+import { defineKernel } from '#types/kernel-worker.types.js';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import { KclUtils } from '#kernels/zoo/kcl-utils.js';
 import { isKclError } from '#kernels/zoo/kcl-errors.js';
@@ -107,7 +97,7 @@ function logKernelIssues(errors: KernelIssue[], logger: KernelLogger): void {
 // KCL Utils management
 // =============================================================================
 
-function ensureFileSystemManager(ctx: ZooContext, basePath: string, filesystem: KernelFilesystem): FileSystemManager {
+function ensureFileSystemManager(ctx: ZooContext, basePath: string, filesystem: KernelFileSystem): FileSystemManager {
   ctx.fileSystemManager = new FileSystemManager(filesystem, basePath);
   return ctx.fileSystemManager;
 }
@@ -141,16 +131,27 @@ async function getKclUtilsWithEngine(ctx: ZooContext): Promise<KclUtils> {
 }
 
 // =============================================================================
+// Options schema
+// =============================================================================
+
+const zooOptionsSchema = z.object({
+  baseUrl: z.string().default(''),
+});
+
+type ZooOptions = z.infer<typeof zooOptionsSchema>;
+
+// =============================================================================
 // Kernel module definition
 // =============================================================================
 
-export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>>({
+export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>, ZooOptions>({
   name: 'ZooKernel',
   version: '1.0.0',
+  optionsSchema: zooOptionsSchema,
 
   async initialize(options) {
     return {
-      baseUrl: (options['baseUrl'] as string | undefined) ?? '',
+      baseUrl: options.baseUrl,
       kclUtils: undefined,
       fileSystemManager: undefined,
     };
@@ -160,11 +161,7 @@ export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>>({
     return extension === 'kcl';
   },
 
-  async getDependencies(
-    { filePath, basePath }: GetDependenciesInput,
-    { filesystem }: KernelRuntime,
-    ctx: ZooContext,
-  ): Promise<string[]> {
+  async getDependencies({ filePath, basePath }, { filesystem }, ctx) {
     ensureFileSystemManager(ctx, basePath, filesystem);
     const utils = await getKclUtils(ctx);
     const relativeFilePath = resolveToRelative(filePath, basePath);
@@ -176,11 +173,7 @@ export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>>({
     return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
   },
 
-  async getParameters(
-    { filePath, basePath }: GetParametersInput,
-    { filesystem, logger }: KernelRuntime,
-    ctx: ZooContext,
-  ): Promise<GetParametersResult> {
+  async getParameters({ filePath, basePath }, { filesystem, logger }, ctx) {
     ensureFileSystemManager(ctx, basePath, filesystem);
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const code = await filesystem.readFile(filePath, 'utf8');
@@ -209,11 +202,7 @@ export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>>({
     }
   },
 
-  async createGeometry(
-    { filePath, basePath, parameters }: CreateGeometryInput,
-    { filesystem, logger }: KernelRuntime,
-    ctx: ZooContext,
-  ) {
+  async createGeometry({ filePath, basePath, parameters }, { filesystem, logger }, ctx) {
     ensureFileSystemManager(ctx, basePath, filesystem);
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const code = await filesystem.readFile(filePath, 'utf8');
@@ -265,12 +254,7 @@ export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>>({
     }
   },
 
-  async exportGeometry(
-    { fileType }: ExportGeometryInput,
-    { logger }: KernelRuntime,
-    ctx: ZooContext,
-    nativeHandle: Uint8Array<ArrayBuffer>,
-  ): Promise<ExportGeometryResult> {
+  async exportGeometry({ fileType }, { logger }, ctx, nativeHandle) {
     if (nativeHandle.length === 0) {
       return createKernelError([
         { message: 'No geometry available for export. Please build geometries before exporting.', severity: 'error' },
@@ -343,7 +327,7 @@ export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>>({
     }
   },
 
-  async cleanup(ctx: ZooContext) {
+  async cleanup(ctx) {
     await ctx.kclUtils?.cleanup();
     ctx.kclUtils = undefined;
   },

@@ -7,10 +7,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-// eslint-disable-next-line import-x/order -- must mock esbuild-wasm before importing the bundler
-import type { KernelFilesystem } from '@taucad/types';
-
 import type { PluginBuild } from 'esbuild-wasm';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 import { createZenFsPlugin, httpFetchMaxSizeBytes } from '#bundler/esbuild-core.js';
 import { ModuleManager } from '#bundler/module-manager.js';
 
@@ -25,21 +23,18 @@ vi.mock('esbuild-wasm', () => ({
 // =============================================================================
 
 type MockFilesystem = {
-  [K in keyof KernelFilesystem]: ReturnType<typeof vi.fn>;
+  [K in keyof KernelFileSystem]: ReturnType<typeof vi.fn>;
 };
 
 function createMockFilesystem(): MockFilesystem {
   return {
-    readFile: vi.fn<KernelFilesystem['readFile']>().mockRejectedValue(new Error('File not found')),
-    readFiles: vi.fn<KernelFilesystem['readFiles']>().mockResolvedValue({}),
-    exists: vi.fn<KernelFilesystem['exists']>().mockResolvedValue(false),
-    readdir: vi.fn<KernelFilesystem['readdir']>().mockResolvedValue([]),
-    writeFile: vi.fn<KernelFilesystem['writeFile']>().mockResolvedValue(undefined),
-    mkdir: vi.fn<KernelFilesystem['mkdir']>().mockResolvedValue(undefined),
-    unlink: vi.fn<KernelFilesystem['unlink']>().mockResolvedValue(undefined),
-    ensureDirectoryExists: vi.fn<KernelFilesystem['ensureDirectoryExists']>().mockResolvedValue(undefined),
-    getDirectoryContents: vi.fn<KernelFilesystem['getDirectoryContents']>().mockResolvedValue({}),
-    getDirectoryStat: vi.fn<KernelFilesystem['getDirectoryStat']>().mockResolvedValue([]),
+    readFile: vi.fn<KernelFileSystem['readFile']>().mockRejectedValue(new Error('File not found')),
+    exists: vi.fn<KernelFileSystem['exists']>().mockResolvedValue(false),
+    readdir: vi.fn<KernelFileSystem['readdir']>().mockResolvedValue([]),
+    writeFile: vi.fn<KernelFileSystem['writeFile']>().mockResolvedValue(undefined),
+    mkdir: vi.fn<KernelFileSystem['mkdir']>().mockResolvedValue(undefined),
+    unlink: vi.fn<KernelFileSystem['unlink']>().mockResolvedValue(undefined),
+    stat: vi.fn<KernelFileSystem['stat']>().mockRejectedValue(new Error('Not found')),
   };
 }
 
@@ -108,8 +103,8 @@ function captureHttpUrlOnLoadHandler(filesystem: MockFilesystem): CapturedHandle
   };
 
   const plugin = createZenFsPlugin({
-    filesystem: filesystem as unknown as KernelFilesystem,
-    moduleManager: new ModuleManager(filesystem as unknown as KernelFilesystem),
+    filesystem: filesystem as unknown as KernelFileSystem,
+    moduleManager: new ModuleManager(filesystem as unknown as KernelFileSystem),
     builtinModules: new Map(),
     projectPath: '/project',
     entryPath: '/project/main.ts',

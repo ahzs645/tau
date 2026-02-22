@@ -19,7 +19,7 @@
  * Kernel-authored:     {kernelName}.{operation} (e.g., replicad.wasm-init, replicad.run-main, openscad.call-main)
  */
 
-import type { PerformanceEntryData } from '@taucad/types';
+import type { PerformanceEntryData } from '#types/kernel-protocol.types.js';
 
 const defaultFlushIntervalMs = 100;
 
@@ -56,6 +56,9 @@ export class WorkerTelemetryCollector {
     }, flushIntervalMs);
   }
 
+  /**
+   *
+   */
   public flush(): void {
     if (this.pending.length === 0) {
       return;
@@ -65,6 +68,9 @@ export class WorkerTelemetryCollector {
     this.send(batch);
   }
 
+  /**
+   *
+   */
   public dispose(): void {
     this.observer.disconnect();
     if (this.flushTimer) {

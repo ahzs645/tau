@@ -8,10 +8,8 @@
  * see kernel-worker.types.ts.
  */
 
-import type { backendProviders, kernelProviders } from '#constants/kernel.constants.js';
-import type { Geometry, GeometryResponse } from '#types/cad.types.js';
-import type { ExportFormat, GeometryFile } from '#types/file.types.js';
-import type { OnWorkerLog } from '#types/logger.types.js';
+import type { backendProviders, kernelProviders } from '@taucad/types/constants';
+import type { Geometry, GeometryResponse, ExportFormat, GeometryFile, OnWorkerLog } from '@taucad/types';
 
 // =============================================================================
 // Error Types
@@ -26,6 +24,9 @@ import type { OnWorkerLog } from '#types/logger.types.js';
  */
 export type FrameContext = 'user' | 'library' | 'framework' | 'runtime';
 
+/**
+ *
+ */
 export type KernelStackFrame = {
   fileName?: string;
   functionName?: string;
@@ -36,7 +37,9 @@ export type KernelStackFrame = {
   context?: FrameContext;
 };
 
-// Location information for errors that can point to a specific code location
+/**
+ *
+ */
 export type ErrorLocation = {
   fileName: string;
   startLineNumber: number;
@@ -45,10 +48,19 @@ export type ErrorLocation = {
   endColumn?: number;
 };
 
+/**
+ *
+ */
 export type KernelIssueType = 'compilation' | 'runtime' | 'kernel' | 'connection' | 'unknown';
 
+/**
+ *
+ */
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
+/**
+ *
+ */
 export type KernelIssue = {
   message: string;
   location?: ErrorLocation;
@@ -62,24 +74,39 @@ export type KernelIssue = {
 // Result Types
 // =============================================================================
 
+/**
+ *
+ */
 export type KernelSuccessResult<T> = {
   success: true;
   data: T;
   issues: KernelIssue[];
 };
 
+/**
+ *
+ */
 export type KernelErrorResult = {
   success: false;
   issues: KernelIssue[];
 };
 
+/**
+ *
+ */
 export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 
 // =============================================================================
 // Provider Types
 // =============================================================================
 
+/**
+ *
+ */
 export type KernelProvider = (typeof kernelProviders)[number];
+/**
+ *
+ */
 export type BackendProvider = (typeof backendProviders)[number];
 
 /** All first-party kernel IDs including internal-only kernels. */
@@ -95,7 +122,7 @@ export type KernelProviderId = KnownKernelProvider | (string & {});
 /**
  * A single kernel worker registration.
  * Bundles the kernel module URL and initialization options together.
- * Array position in `KernelConfig` determines `canHandle` priority.
+ * Array position in `KernelModules` determines `canHandle` priority.
  */
 export type KernelWorkerEntry = {
   id: KernelProviderId;
@@ -124,7 +151,7 @@ export type KernelWorkerEntry = {
  *
  * @example First-party defaults
  * ```ts
- * const config: KernelConfig = [
+ * const modules: KernelModules = [
  *   { id: 'openscad', extensions: ['scad'], kernelModuleUrl: openscadKernelModuleUrl },
  *   { id: 'replicad', extensions: ['ts', 'js'], kernelModuleUrl: replicadKernelModuleUrl, options: { withExceptions: true } },
  * ];
@@ -132,27 +159,27 @@ export type KernelWorkerEntry = {
  *
  * @example Adding a third-party kernel
  * ```ts
- * const config: KernelConfig = [
- *   ...defaultKernelConfig,
+ * const modules: KernelModules = [
+ *   ...defaultKernelModules,
  *   { id: 'manifold', extensions: ['*'], kernelModuleUrl: manifoldKernelModuleUrl },
  * ];
  * ```
  */
-export type KernelConfig = KernelWorkerEntry[];
+export type KernelModules = KernelWorkerEntry[];
 
 // =============================================================================
-// Middleware Configuration Types
+// Middleware Options Types
 // =============================================================================
 
 /**
  * A single middleware registration.
  * The worker dynamically imports the module at `url` and resolves it
- * as a KernelMiddleware. Config is validated against the middleware's
- * configSchema, with the schema providing defaults for missing fields.
+ * as a KernelMiddleware. Options are validated against the middleware's
+ * optionsSchema, with the schema providing defaults for missing fields.
  *
  * @example
  * ```ts
- * { url: edgeDetectionUrl, config: { thresholdDegrees: 45 } }
+ * { url: edgeDetectionUrl, options: { thresholdDegrees: 45 } }
  * ```
  */
 export type MiddlewareEntry = {
@@ -160,8 +187,8 @@ export type MiddlewareEntry = {
   url: string;
   /** Whether this middleware is active. Defaults to `true`. */
   enabled?: boolean;
-  /** Config values validated against the middleware's configSchema */
-  config?: Record<string, unknown>;
+  /** Options validated against the middleware's optionsSchema */
+  options?: Record<string, unknown>;
 };
 
 /**
@@ -170,17 +197,17 @@ export type MiddlewareEntry = {
  *
  * @example
  * ```ts
- * const config: MiddlewareConfig = [
+ * const middleware: MiddlewareEntries = [
  *   { url: parameterCacheUrl },
  *   { url: geometryCacheUrl },
- *   { url: edgeDetectionUrl, config: { thresholdDegrees: 45 } },
+ *   { url: edgeDetectionUrl, options: { thresholdDegrees: 45 } },
  * ];
  * ```
  */
-export type MiddlewareConfig = MiddlewareEntry[];
+export type MiddlewareEntries = MiddlewareEntry[];
 
 // =============================================================================
-// Bundler Configuration Types
+// Bundler Options Types
 // =============================================================================
 
 /**
@@ -199,6 +226,8 @@ export type BundlerEntry = {
   bundlerModuleUrl: string;
   /** File extensions this bundler handles */
   extensions: string[];
+  /** Bundler-specific options passed to initialize() */
+  options?: Record<string, unknown>;
 };
 
 /**
@@ -207,12 +236,12 @@ export type BundlerEntry = {
  *
  * @example
  * ```ts
- * const config: BundlerConfig = [
+ * const bundlers: BundlerEntries = [
  *   { bundlerModuleUrl: esbuildBundlerUrl, extensions: ['ts', 'js', 'tsx', 'jsx'] },
  * ];
  * ```
  */
-export type BundlerConfig = BundlerEntry[];
+export type BundlerEntries = BundlerEntry[];
 
 /**
  * Public interface for kernel workers as exposed via Comlink.
@@ -227,18 +256,17 @@ export type KernelWorkerInterface = {
     callbacks: { onLog: OnWorkerLog },
     transferables: { fileManagerPort?: MessagePort },
     options: Record<string, unknown>,
-    middlewareConfig: MiddlewareConfig,
+    middlewareEntries: MiddlewareEntries,
   ): Promise<void>;
   cleanupEntry(): Promise<void>;
-  canHandleEntry(file: GeometryFile): Promise<boolean>;
   getParametersEntry(file: GeometryFile): Promise<GetParametersResult>;
   createGeometryEntry(file: GeometryFile, parameters: Record<string, unknown>): Promise<CreateGeometryResultCompleted>;
   exportGeometryEntry(
     fileType: ExportFormat,
-    meshConfig?: { linearTolerance: number; angularTolerance: number },
+    tessellation?: { linearTolerance: number; angularTolerance: number },
   ): Promise<ExportGeometryResult>;
   getExportFormats(): ExportFormat[];
-  configureMiddleware(config: MiddlewareConfig): Promise<void>;
+  configureMiddleware(entries: MiddlewareEntries): Promise<void>;
 };
 
 // =============================================================================
@@ -258,11 +286,20 @@ export type CreateGeometryResult = KernelResult<GeometryResponse[]>;
  */
 export type CreateGeometryResultCompleted = KernelResult<Geometry[]>;
 
+/**
+ *
+ */
 export type GetParametersResult = KernelResult<{
   defaultParameters: Record<string, unknown>;
   jsonSchema: unknown;
 }>;
 
+/**
+ *
+ */
 export type ExtractNameResult = KernelResult<string | undefined>;
 
+/**
+ *
+ */
 export type ExportGeometryResult = KernelResult<Array<{ blob: Blob; name: string }>>;

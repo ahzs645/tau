@@ -1,8 +1,8 @@
 import type { Document } from '@gltf-transform/core';
 import { NodeIO } from '@gltf-transform/core';
 import type { GeometryGltf } from '@taucad/types';
-import { isKernelSuccess } from '@taucad/types/guards';
-import { createKernelMiddleware } from '#middleware/kernel-middleware.js';
+import { isKernelSuccess } from '#framework/kernel-helpers.js';
+import { defineMiddleware } from '#middleware/kernel-middleware.js';
 
 /**
  * Scale factor for converting meters to millimeters.
@@ -127,7 +127,7 @@ async function transformGltfGeometry(geometry: GeometryGltf): Promise<GeometryGl
  * - Middleware handles UI-specific transformations
  * - Exports bypass the middleware and return valid GLTF files
  */
-export const gltfCoordinateTransformMiddleware = createKernelMiddleware({
+export const gltfCoordinateTransformMiddleware = defineMiddleware({
   name: 'GltfCoordinateTransform',
 
   async wrapCreateGeometry(input, handler, { logger }) {

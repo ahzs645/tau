@@ -5,8 +5,9 @@
  * and the defineBundler() plugin API for kernel framework extensibility.
  */
 
+import type { z } from 'zod';
 import type { KernelIssue } from '#types/kernel.types.js';
-import type { KernelFilesystem } from '#types/kernel-worker.types.js';
+import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 
 // =============================================================================
 // Bundler Result Types
@@ -78,7 +79,7 @@ export type KernelBundler = {
  */
 export type BundlerInitOptions = {
   /** Filesystem interface for reading project files */
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   /** Base path for the project (e.g., /builds/project) */
   projectPath: string;
 };
@@ -117,13 +118,19 @@ export type DetectImportsResult = {
  * the kernel (which registers real modules), then bundle() produces code.
  *
  * @template Context - Bundler-specific context type returned by initialize()
+ * @template Options - Type of validated options, inferred from optionsSchema when provided
  */
-export type BundlerDefinition<Context = unknown> = {
+export type BundlerDefinition<Context = unknown, Options extends Record<string, unknown> = Record<string, unknown>> = {
   name: string;
   version: string;
+  /** File extensions this bundler handles (e.g., ['ts', 'js', 'tsx', 'jsx']). */
+  extensions: string[];
 
-  /** Initialize the bundler (e.g., load esbuild-wasm). */
-  initialize(options: BundlerInitOptions): Promise<Context>;
+  /** Zod schema for validating and typing bundler options. Options type is inferred from this schema. */
+  optionsSchema?: z.ZodType<Options>;
+
+  /** Initialize the bundler. Receives framework init options plus user-provided options. */
+  initialize(initOptions: BundlerInitOptions, options: Options): Promise<Context>;
 
   /**
    * Detect which bare-specifier modules are imported transitively.
@@ -171,6 +178,8 @@ export type BundlerDefinition<Context = unknown> = {
  * });
  * ```
  */
-export function defineBundler<Ctx>(definition: BundlerDefinition<Ctx>): BundlerDefinition<Ctx> {
+export function defineBundler<Ctx, Options extends Record<string, unknown> = Record<string, unknown>>(
+  definition: BundlerDefinition<Ctx, Options>,
+): BundlerDefinition<Ctx, Options> {
   return definition;
 }

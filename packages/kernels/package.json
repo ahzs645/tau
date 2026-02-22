@@ -30,8 +30,13 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
+    "./types": "./src/types/index.ts",
+    "./kernels": "./src/plugins/kernels-entry.ts",
+    "./middleware": "./src/plugins/middleware-entry.ts",
+    "./bundler": "./src/plugins/bundler-entry.ts",
+    "./transport": "./src/transport/index.ts",
+    "./testing": "./src/testing/index.ts",
     "./worker": "./src/framework/kernel-runtime-worker.ts",
-    "./middleware": "./src/middleware/kernel-middleware.ts",
     "./kernels/replicad": "./src/kernels/replicad/replicad.kernel.ts",
     "./kernels/jscad": "./src/kernels/jscad/jscad.kernel.ts",
     "./kernels/openscad": "./src/kernels/openscad/openscad.kernel.ts",
@@ -39,11 +44,11 @@
     "./kernels/zoo/engine-connection": "./src/kernels/zoo/engine-connection.ts",
     "./kernels/tau": "./src/kernels/tau/tau.kernel.ts",
     "./bundler/esbuild": "./src/bundler/esbuild.bundler.ts",
+    "./middleware/kernel-middleware": "./src/middleware/kernel-middleware.ts",
     "./middleware/parameter-cache": "./src/middleware/parameter-cache.middleware.ts",
     "./middleware/geometry-cache": "./src/middleware/geometry-cache.middleware.ts",
     "./middleware/gltf-coordinate-transform": "./src/middleware/gltf-coordinate-transform.middleware.ts",
-    "./middleware/gltf-edge-detection": "./src/middleware/gltf-edge-detection.middleware.ts",
-    "./testing": "./src/testing/index.ts"
+    "./middleware/gltf-edge-detection": "./src/middleware/gltf-edge-detection.middleware.ts"
   },
   "publishConfig": {
     "access": "public",
