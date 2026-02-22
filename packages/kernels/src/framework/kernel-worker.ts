@@ -42,44 +42,13 @@ import { joinPath } from '@taucad/utils/path';
 import type { KernelFileManager } from '#framework/kernel-worker-filemanager-bridge.js';
 import { createFileManagerProxy } from '#framework/kernel-worker-filemanager-bridge.js';
 import { createKernelError } from '#framework/kernel-helpers.js';
+import { hashBytes, hashString } from '#utils/hash.utils.js';
 import { KernelTracer } from '#framework/kernel-tracer.js';
 import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
 import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
 import { createMiddlewareRuntime } from '#middleware/kernel-middleware.js';
 
 const tauVersion = '0.1.0';
-
-// =============================================================================
-// Module-level utilities (avoid per-call allocations)
-// =============================================================================
-
-const textEncoder = new TextEncoder();
-
-const hexChars = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
-
-function bufferToHex(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let hex = '';
-  for (const b of bytes) {
-    hex += hexChars[b]!;
-  }
-
-  return hex;
-}
-
-async function mapBounded<T, R>(items: T[], function_: (item: T) => Promise<R>, limit: number): Promise<R[]> {
-  const results: R[] = Array.from<R>({ length: items.length });
-  let index = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (index < items.length) {
-      const i = index++;
-      // eslint-disable-next-line no-await-in-loop -- intentional bounded concurrency
-      results[i] = await function_(items[i]!);
-    }
-  });
-  await Promise.all(runners);
-  return results;
-}
 
 /**
  * A resolved middleware instance paired with its parsed config.
@@ -449,7 +418,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const depsSpan = this.tracer.startSpan('kernel.resolve-deps', { phase: 'resolvingDeps' });
     const basename = KernelWorker.getBasename(file.filename);
     const dependencies = await this.computeDependencies(basename, undefined, resolvedArray);
-    const dependencyHash = await this.computeDependencyHash(dependencies);
+    const dependencyHash = this.computeDependencyHash(dependencies);
     depsSpan.end();
 
     const runtimes = new Map<string, KernelMiddlewareRuntime>();
@@ -554,7 +523,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const geoDepsSpan = this.tracer.startSpan('kernel.resolve-deps', { phase: 'resolvingDeps' });
     const basename = KernelWorker.getBasename(file.filename);
     const dependencies = await this.computeDependencies(basename, parameters, resolvedArray);
-    const dependencyHash = await this.computeDependencyHash(dependencies);
+    const dependencyHash = this.computeDependencyHash(dependencies);
     geoDepsSpan.end();
 
     const runtimes = new Map<string, KernelMiddlewareRuntime>();
@@ -1130,17 +1099,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       const contentMap = await this.filesystem.readFiles(uncachedPaths);
       readSpan.end();
 
-      // 3. Hash file contents
       const hashSpan = this.tracer.startSpan('deps.hash', { fileCount: uncachedPaths.length });
-      await mapBounded(
-        Object.entries(contentMap),
-        async ([path, content]) => {
-          const hash = await this.hashContent(content);
-          this.fileHashCache.set(path, hash);
-          this.fileContentCache.set(path, content);
-        },
-        8,
-      );
+      for (const [path, content] of Object.entries(contentMap)) {
+        this.fileHashCache.set(path, this.hashContent(content));
+        this.fileContentCache.set(path, content);
+      }
+
       hashSpan.end();
     }
 
@@ -1179,16 +1143,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // 5. Asset dependencies (fonts, WASM, etc.)
     const assetUrls = this.getAssetUrls();
-    const assetDeps: AssetDependency[] = await Promise.all(
-      assetUrls.map(async (urlOrVersion, index) => {
-        const contentHash = await this.hashAssetUrl(urlOrVersion);
-        return {
-          type: 'asset' as const,
-          name: `asset-${index}`,
-          contentHash,
-        };
-      }),
-    );
+    const assetDeps: AssetDependency[] = assetUrls.map((urlOrVersion, index) => ({
+      type: 'asset' as const,
+      name: `asset-${index}`,
+      contentHash: this.hashAssetUrl(urlOrVersion),
+    }));
 
     return [...fileDeps, ...middlewareDeps, frameworkDep, ...optionDeps, ...assetDeps];
   }
@@ -1367,25 +1326,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     return logger;
   }
 
-  /**
-   * Hash file content using SHA-256.
-   *
-   * @param content - The file content as Uint8Array
-   * @returns Full SHA-256 hash as hex string (64 characters)
-   */
-  private async hashContent(content: Uint8Array<ArrayBuffer>): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest('SHA-256', content);
-    return bufferToHex(hashBuffer);
+  private hashContent(content: Uint8Array<ArrayBuffer>): string {
+    return hashBytes(content);
   }
 
-  /**
-   * Hash an asset URL by fetching and hashing its content.
-   * Results are cached in memory to avoid repeated network requests.
-   *
-   * @param url - Asset URL (from Vite ?url import)
-   * @returns SHA-256 hash of the asset content
-   */
-  private async hashAssetUrl(url: string): Promise<string> {
+  private hashAssetUrl(url: string): string {
     const cached = this.assetHashCache.get(url);
     if (cached) {
       return cached;
@@ -1394,7 +1339,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     // Vite ?url imports include a content hash in the URL (production) or a
     // cache-busted path (dev). Hashing the URL string itself is sufficient for
     // cache invalidation and avoids fetching multi-MB WASM/font binaries.
-    const hash = await this.hashContent(textEncoder.encode(url));
+    const hash = hashString(url);
     this.assetHashCache.set(url, hash);
     return hash;
   }
@@ -1421,18 +1366,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     this.cachedProjectRoot = undefined;
   }
 
-  /**
-   * Compute a SHA-256 hash from all dependencies.
-   * This hash is used as a cache key, unique geometry identifier, and React key.
-   *
-   * @param dependencies - Array of all dependencies
-   * @returns A 64-character hex string hash (full SHA-256)
-   */
-  private async computeDependencyHash(dependencies: readonly Dependency[]): Promise<string> {
+  private computeDependencyHash(dependencies: readonly Dependency[]): string {
     const contentHashSpan = this.tracer.startSpan('deps.content-hash');
-    const data = textEncoder.encode(JSON.stringify(dependencies));
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hex = bufferToHex(hashBuffer);
+    const hex = hashString(JSON.stringify(dependencies));
     contentHashSpan.end();
     return hex;
   }

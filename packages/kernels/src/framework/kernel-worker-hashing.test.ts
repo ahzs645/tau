@@ -37,7 +37,7 @@ describe('kernel-worker hashing', () => {
       expect(result.success).toBe(true);
       if (result.success && result.data[0]) {
         const geometryHash = result.data[0].hash;
-        expect(geometryHash).toMatch(/^[a-f\d]{64}-\d+$/);
+        expect(geometryHash).toMatch(/^[a-f\d]{8}-\d+$/);
       }
     });
 
@@ -105,7 +105,7 @@ describe('kernel-worker hashing', () => {
         expect(uniqueHashes.size).toBe(hashes.length);
 
         for (const hash of hashes) {
-          expect(hash).toMatch(/^[a-f\d]{64}-\d+$/);
+          expect(hash).toMatch(/^[a-f\d]{8}-\d+$/);
         }
       }
     });
