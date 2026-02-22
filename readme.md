@@ -41,7 +41,7 @@ Tau's multi-kernel architecture lets you choose the best engine for your needs. 
 
 | Category | Type | Implemented | Planned |
 | --- | --- | --- | --- |
-| **Mechanical** | CAD | • [OpenSCAD](https://openscad.org/)<br>• [Replicad](https://replicad.xyz/)<br>• [Zoo (KCL)](https://zoo.dev/)<br>• [JSCAD](https://openjscad.xyz/) | • [OnShape](https://www.onshape.com/)<br>• [Fusion360](https://www.autodesk.com/products/fusion-360)<br>• [Build123D](https://github.com/gumyr/build123d)<br>• [ManifoldCAD](https://github.com/elalish/manifold)<br>• [Curv](https://github.com/curv3d/curv) |
+| **Mechanical** | CAD | • [OpenSCAD](https://openscad.org/)<br>• [Replicad](https://replicad.xyz/)<br>• [Zoo (KCL)](https://zoo.dev/)<br>• [JSCAD](https://openjscad.xyz/) | • [OnShape](https://www.onshape.com/)<br>• [Fusion360](https://www.autodesk.com/products/fusion-360)<br>• [Build123D](https://github.com/gumyr/build123d)<br>• [ManifoldCAD](https://github.com/elalish/manifold)<br>• [Curv](https://github.com/curv3d/curv)<br>• [PicoGK](https://github.com/leap71/PicoGK) ([ShapeKernel](https://github.com/leap71/LEAP71_ShapeKernel))<br>• [Buerli](https://buerli.io/) ([ClassCAD](https://classcad.ch/)) |
 | | Sim | — | • [FEAScript](https://feascript.com/) |
 | **Electrical** | CAD | — | • [TSCircuit](https://tscircuit.com/)<br>• [Atopile](https://atopile.io/) |
 | | Sim | — | • [ngspice](https://ngspice.sourceforge.io/)<br>• [CircuitJS](https://www.falstad.com/circuit/) |

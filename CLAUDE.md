@@ -8,7 +8,7 @@ Tau is an AI-powered CAD platform built as a monorepo using Nx with the followin
 
 - **Frontend**: React Router v7 app with React 19, TypeScript, and Tailwind CSS
 - **Backend**: NestJS API with Fastify, PostgreSQL database via Drizzle ORM
-- **CAD Engine**: Integration with ReplicaD (OpenCASCADE) and KCL WASM
+- **CAD Engine**: Integration with Replicad (OpenCASCADE) and KCL WASM
 - **AI Integration**: LangGraph for agent orchestration, supporting multiple LLM providers (OpenAI, Anthropic, Ollama)
 - **Package Manager**: pnpm with workspace configuration
 - **Build System**: Nx monorepo with Vite for frontend and TypeScript compilation
@@ -121,7 +121,7 @@ Uses PostgreSQL with Drizzle ORM:
 
 - **Frontend**: React 19, React Router v7, Tailwind CSS, Radix UI
 - **Backend**: NestJS, Fastify, Drizzle ORM, PostgreSQL
-- **CAD**: ReplicaD, OpenCASCADE, KCL WASM, Three.js
+- **CAD**: Replicad, OpenCASCADE, KCL WASM, Three.js
 - **AI**: LangChain, LangGraph, OpenAI SDK, Anthropic SDK
 - **Development**: Nx, Vite, TypeScript, pnpm, Docker
 - **Testing**: Vitest, Playwright, Testing Library

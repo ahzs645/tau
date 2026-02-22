@@ -4,7 +4,7 @@ import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { useModels } from '#hooks/use-models.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 
 /**
  * IMPORTANT NOTE:
@@ -69,7 +69,7 @@ export type ChatTextareaProperties = {
 // Define the key combination for cancelling the stream
 export const cancelChatStreamKeyCombination = {
   key: 'Backspace',
-  metaKey: true,
+  modKey: true,
   shiftKey: true,
   requireAllModifiers: true,
 } satisfies KeyCombination;
@@ -224,11 +224,14 @@ export function useChatTextareaLogic({
   };
 
   // Register keyboard shortcut for cancellation
-  const { formattedKeyCombination: formattedCancelKeyCombination } = useKeydown(cancelChatStreamKeyCombination, () => {
-    if (status === 'streaming') {
-      stop();
-    }
-  });
+  const { formattedKeyCombination: formattedCancelKeyCombination } = useKeybinding(
+    cancelChatStreamKeyCombination,
+    () => {
+      if (status === 'streaming') {
+        stop();
+      }
+    },
+  );
 
   const handleTextareaKeyDown = (event: React.KeyboardEvent): void => {
     if (showContextMenu && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter')) {

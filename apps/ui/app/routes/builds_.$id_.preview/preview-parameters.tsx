@@ -1,18 +1,16 @@
 import { useState, useCallback } from 'react';
 import { useSelector } from '@xstate/react';
 import { RefreshCcw, ChevronRight, Search } from 'lucide-react';
+import { hasJsonSchemaObjectProperties } from '@taucad/utils/schema';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import { cn } from '#utils/ui.utils.js';
-import { hasJsonSchemaObjectProperties } from '#utils/schema.utils.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useCadPreview } from '#hooks/use-cad-preview.js';
 
 export function PreviewParameters(): React.JSX.Element {
-  const { cadRef, graphicsRef } = useBuild();
-  const parameters = useSelector(cadRef, (state) => state.context.parameters);
-  const defaultParameters = useSelector(cadRef, (state) => state.context.defaultParameters);
-  const jsonSchema = useSelector(cadRef, (state) => state.context.jsonSchema);
+  const { cadRef, graphicsRef, defaultParameters, jsonSchema, setParameters } = useCadPreview();
+  const parameters = useSelector(cadRef, (snapshot) => snapshot.context.parameters);
   const units = useSelector(graphicsRef, (state) => state.context.units);
 
   const [isSearchVisible, setIsSearchVisible] = useState(false);
@@ -20,9 +18,9 @@ export function PreviewParameters(): React.JSX.Element {
 
   const handleParametersChange = useCallback(
     (newParameters: Record<string, unknown>) => {
-      cadRef.send({ type: 'setParameters', parameters: newParameters });
+      setParameters(newParameters);
     },
-    [cadRef],
+    [setParameters],
   );
 
   const toggleSearch = useCallback(() => {
@@ -34,8 +32,8 @@ export function PreviewParameters(): React.JSX.Element {
   }, []);
 
   const resetAllParameters = useCallback(() => {
-    cadRef.send({ type: 'setParameters', parameters: {} });
-  }, [cadRef]);
+    setParameters({});
+  }, [setParameters]);
 
   const hasModifiedParameters = Object.keys(parameters).length > 0;
 

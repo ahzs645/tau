@@ -407,7 +407,7 @@ const exportTestCases: ExportTestCase[] = [
         meshCountTolerance: 15, // CAD formats often subdivide geometry into multiple meshes
       },
       materials: {
-        expectedMaterialCount: 0, // STP doesn't preserve or create materials
+        expectedMaterialCount: 12, // STP meshes get fallback default materials on re-import
         expectedTextureCount: 0, // STP doesn't preserve textures
       },
     },

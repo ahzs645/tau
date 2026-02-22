@@ -3,10 +3,51 @@ import type { CloudProviderId } from '#api/models/model.service.js';
 
 export const modelList: Record<CloudProviderId, Record<string, Model>> = {
   anthropic: {
+    'claude-4.6-opus': {
+      id: 'anthropic-claude-opus-4.6',
+      name: 'Opus 4.6',
+      slug: 'claude-opus-4.6',
+      description:
+        "Anthropic's most powerful model with adaptive reasoning, great for designing complex multi-part assemblies.",
+      provider: {
+        id: 'anthropic',
+        name: 'Anthropic',
+      },
+      model: 'claude-opus-4-6',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'claude',
+        families: ['claude'],
+        contextWindow: 200_000,
+        maxTokens: 128_000,
+        cost: {
+          inputTokens: 5,
+          outputTokens: 25,
+          cacheReadTokens: 0.5,
+          cacheWriteTokens: 6.25,
+        },
+      },
+      configuration: {
+        streaming: true,
+        maxTokens: 20_000,
+        // @ts-expect-error: FIXME - some models use camelCase
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
+        max_tokens: 20_000,
+        thinking: {
+          type: 'adaptive',
+        },
+        outputConfig: {
+          effort: 'medium',
+        },
+      },
+    },
     'claude-4.5-opus': {
       id: 'anthropic-claude-opus-4.5',
       name: 'Opus 4.5',
       slug: 'claude-opus-4.5',
+      description: 'Previous Anthropic flagship with extended thinking capabilities.',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
@@ -17,7 +58,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
       details: {
         family: 'claude',
-        families: ['Claude'],
+        families: ['claude'],
         contextWindow: 200_000,
         maxTokens: 32_000,
         cost: {
@@ -40,23 +81,23 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         },
       },
     },
-    'claude-sonnet-4.5': {
-      id: 'anthropic-claude-sonnet-4.5',
-      name: 'Sonnet 4.5',
-      slug: 'claude-sonnet-4.5',
+    'claude-sonnet-4.6': {
+      id: 'anthropic-claude-sonnet-4.6',
+      name: 'Sonnet 4.6',
+      slug: 'claude-sonnet-4.6',
+      description: 'Best combination of speed and intelligence, great for most design tasks.',
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
       },
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-4-6',
       support: {
         toolChoice: false,
       },
       details: {
         family: 'claude',
-        families: ['Claude'],
+        families: ['claude'],
         contextWindow: 200_000,
-        // Extended thinking mode supports up to 64000 tokens
         maxTokens: 64_000,
         cost: {
           inputTokens: 3,
@@ -72,9 +113,48 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
         max_tokens: 20_000,
         thinking: {
+          type: 'adaptive',
+        },
+        outputConfig: {
+          effort: 'medium',
+        },
+      },
+    },
+    'claude-haiku-4.5': {
+      id: 'anthropic-claude-haiku-4.5',
+      name: 'Haiku 4.5',
+      slug: 'claude-haiku-4.5',
+      description: 'Fastest Claude model, ideal for quick design tasks or small changes.',
+      provider: {
+        id: 'anthropic',
+        name: 'Anthropic',
+      },
+      model: 'claude-haiku-4-5-20251001',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'claude',
+        families: ['claude'],
+        contextWindow: 200_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 1,
+          outputTokens: 5,
+          cacheReadTokens: 0.1,
+          cacheWriteTokens: 1.25,
+        },
+      },
+      configuration: {
+        streaming: true,
+        maxTokens: 16_000,
+        // @ts-expect-error: FIXME - some models use camelCase
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
+        max_tokens: 16_000,
+        thinking: {
           type: 'enabled',
           // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-          budget_tokens: 10_000,
+          budget_tokens: 4000,
         },
       },
     },
@@ -84,6 +164,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-5.2',
       name: 'GPT-5.2',
       slug: 'gpt-5.2',
+      description:
+        "OpenAI's most capable model with advanced reasoning, great for design tasks that require complex reasoning.",
       provider: {
         id: 'openai',
         name: 'OpenAI',
@@ -114,6 +196,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-5.2-codex',
       name: 'GPT-5.2 Codex',
       slug: 'gpt-5.2-codex',
+      description: 'Specialized for code generation and programming tasks.',
       provider: {
         id: 'openai',
         name: 'OpenAI',
@@ -144,6 +227,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-4.1',
       name: 'GPT-4.1',
       slug: 'gpt-4.1',
+      description: 'Reliable and cost-effective for general-purpose design tasks.',
       provider: {
         id: 'openai',
         name: 'OpenAI',
@@ -172,6 +256,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'google-gemini-3-pro',
       name: 'Gemini 3 Pro',
       slug: 'gemini-3-pro',
+      description: "Google's most capable model with a large context window, great for complex design tasks.",
       provider: {
         id: 'vertexai',
         name: 'Google',
@@ -179,21 +264,61 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       model: 'gemini-3-pro-preview',
       details: {
         family: 'gemini',
-        families: ['Gemini'],
+        families: ['gemini'],
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         cost: {
           inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
           outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
-          cacheReadTokens: 0,
+          cacheReadTokens: 0.2, // $0.2 / 1M cached input tokens
           cacheWriteTokens: 0,
         },
       },
       configuration: {
         streaming: true,
-        temperature: 0,
-        // Note: This is the non-thinking config. For extended thinking, create a
-        // separate model entry with thinkingLevel: 'high' (requires temperature: 1).
+        // Thinking requires temperature: 1 for Gemini 3 models
+        temperature: 1,
+        // Gemini 3 Pro thinking config - HIGH is default, supports: LOW, HIGH
+        // Thinking cannot be turned off for Gemini 3 Pro
+        // @ts-expect-error: thinkingConfig not in typed schema yet
+        thinkingConfig: {
+          thinkingLevel: 'HIGH',
+          includeThoughts: true,
+        },
+      },
+    },
+    'gemini-3-flash': {
+      id: 'google-gemini-3-flash',
+      name: 'Gemini 3 Flash',
+      slug: 'gemini-3-flash',
+      description: 'Fast and efficient, great for quick design tasks or small changes.',
+      provider: {
+        id: 'vertexai',
+        name: 'Google',
+      },
+      model: 'gemini-3-flash-preview',
+      details: {
+        family: 'gemini',
+        families: ['gemini'],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        cost: {
+          inputTokens: 0.5, // $0.5 / 1M input tokens (Vertex AI pricing)
+          outputTokens: 3, // $3 / 1M output tokens (Vertex AI pricing)
+          cacheReadTokens: 0.05, // $0.05 / 1M cached input tokens
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+        // Thinking requires temperature: 1 for Gemini 3 models
+        temperature: 1,
+        // Gemini 3 Flash thinking config - HIGH is default, supports: MINIMAL, LOW, MEDIUM, HIGH
+        // @ts-expect-error: thinkingConfig not in typed schema yet
+        thinkingConfig: {
+          thinkingLevel: 'HIGH',
+          includeThoughts: true,
+        },
       },
     },
   },

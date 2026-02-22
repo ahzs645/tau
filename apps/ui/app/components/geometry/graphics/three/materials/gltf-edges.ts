@@ -7,7 +7,7 @@ import { LineSegments2, LineSegmentsGeometry, LineMaterial } from 'three/addons'
  * Default line width in pixels for edge rendering.
  * This is screen-space width, not world units.
  */
-const defaultLineWidth = 0.75;
+const defaultLineWidth = 1;
 
 /**
  * Edge color for fat line materials.

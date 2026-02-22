@@ -1,8 +1,14 @@
 import * as THREE from 'three';
 import { Line2, LineGeometry, LineMaterial } from 'three/addons';
+import { gizmoBaseDistance } from '#components/geometry/graphics/three/utils/math.utils.js';
 
 export type ViewportGizmoCubeAxesProps = {
   readonly axesSize?: number;
+  /**
+   * The gizmo canvas size in CSS pixels. Used to set the correct
+   * `LineMaterial.resolution` so line widths render at the intended pixel size.
+   */
+  readonly rendererSize?: number;
   readonly xAxisColor?: string;
   readonly yAxisColor?: string;
   readonly zAxisColor?: string;
@@ -15,6 +21,7 @@ export type ViewportGizmoCubeAxesProps = {
 
 export const createViewportGizmoCubeAxes = ({
   axesSize = 2.1,
+  rendererSize = 96,
   xAxisColor = 'red',
   yAxisColor = 'green',
   zAxisColor = 'blue',
@@ -63,7 +70,7 @@ export const createViewportGizmoCubeAxes = ({
       color: line.lineColor,
       linewidth: lineWidth,
       opacity: lineOpacity,
-      resolution: new THREE.Vector2(axesSize, axesSize),
+      resolution: new THREE.Vector2(rendererSize, rendererSize),
     });
 
     const lineObject = new Line2(geometry, material);
@@ -95,10 +102,15 @@ export const createViewportGizmoCubeAxes = ({
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
 
-    // Create a sprite with the texture
+    // Create a sprite with the texture.
+    // sizeAttenuation: true makes the sprite size proportional to
+    // 1 / (distance * tan(fov/2)). Because our FOV-sync distance compensation
+    // keeps distance * tan(fov/2) constant, the labels maintain a fixed visual
+    // size regardless of FOV. The scale values are multiplied by
+    // GIZMO_BASE_DISTANCE to preserve the same appearance at the default FOV.
     const spriteMaterial = new THREE.SpriteMaterial({
       map: texture,
-      sizeAttenuation: false,
+      sizeAttenuation: true,
       depthTest: true,
       transparent: true,
     });
@@ -107,7 +119,7 @@ export const createViewportGizmoCubeAxes = ({
     const sprite = new THREE.Sprite(spriteMaterial);
     sprite.renderOrder = 3;
     sprite.position.copy(endPoint);
-    sprite.scale.set(0.08, 0.06, 1); // Reduced vertical scale from 0.1 to 0.06
+    sprite.scale.set(0.08 * gizmoBaseDistance, 0.06 * gizmoBaseDistance, 1);
 
     // Add increased offset to move labels further from line ends
     const direction = new THREE.Vector3().subVectors(endPoint, new THREE.Vector3(0, 0, 0)).normalize();

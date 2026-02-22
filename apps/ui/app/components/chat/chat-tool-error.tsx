@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock, Unplug, WifiOff, ChevronRight, TriangleAlert } from 'lucide-react';
+import { Clock, Unplug, WifiOff, ChevronRight, TriangleAlert, CircleStop } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ToolExecutionError } from '@taucad/chat';
 import { getToolErrorTitle, getToolErrorDescription, parseToolErrorText } from '@taucad/chat/utils';
@@ -30,6 +30,8 @@ const errorIcons = {
   TOOL_OUTPUT_VALIDATION_FAILED: TriangleAlert,
   // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
   TOOL_EXECUTION_ERROR: TriangleAlert,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
+  USER_INTERRUPTED: CircleStop,
 } as const;
 
 /**
@@ -92,13 +94,17 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
     (error.errorCode === 'TOOL_INPUT_VALIDATION_FAILED' || error.errorCode === 'TOOL_OUTPUT_VALIDATION_FAILED') &&
     (error.validationErrors.length > 0 || error.rawOutput !== undefined);
 
+  // User interruptions are not errors — use muted styling instead of destructive red
+  const isInterrupted = error.errorCode === 'USER_INTERRUPTED';
+  const accentColor = isInterrupted ? 'text-muted-foreground' : 'text-destructive';
+
   if (!hasDetails) {
     // Simple non-expandable error display - single line layout
     return (
       <div className={cn('@container/error overflow-hidden rounded-md border bg-neutral/10', className)}>
         <div className="flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs">
-          <Icon className="size-3 shrink-0 text-destructive" />
-          <span className="shrink-0 font-medium whitespace-nowrap text-destructive">{title}</span>
+          <Icon className={cn('size-3 shrink-0', accentColor)} />
+          <span className={cn('shrink-0 font-medium whitespace-nowrap', accentColor)}>{title}</span>
           <span className="text-muted-foreground/50">·</span>
           <code className="text-muted-foreground">{toolName}</code>
           <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>

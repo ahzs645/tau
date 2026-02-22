@@ -23,6 +23,7 @@ import type { Attribute, Decoder, DecoderBuffer, DecoderModule, DracoArray, Mesh
 import draco3d from 'draco3dgltf';
 import type { Accessor, Buffer as GltfBuffer } from '@gltf-transform/core';
 import { Document } from '@gltf-transform/core';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 
 type AttributeTypeConstructor =
   | Float32ArrayConstructor
@@ -34,7 +35,13 @@ type AttributeTypeConstructor =
   | Int32ArrayConstructor;
 
 // Gltf-transform doesn't support Int32Array
-type TypedArray = Float32Array | Uint32Array | Uint16Array | Uint8Array<ArrayBuffer> | Int16Array | Int8Array;
+type TypedArray =
+  | Float32Array<ArrayBuffer>
+  | Uint32Array<ArrayBuffer>
+  | Uint16Array<ArrayBuffer>
+  | Uint8Array<ArrayBuffer>
+  | Int16Array<ArrayBuffer>
+  | Int8Array<ArrayBuffer>;
 
 type AccessorType = 'SCALAR' | 'VEC2' | 'VEC3' | 'VEC4' | 'MAT2' | 'MAT3' | 'MAT4';
 
@@ -46,7 +53,7 @@ type AttributeData = {
 
 type DecodedDracoData = {
   attributes: Map<string, AttributeData>;
-  indices?: Uint32Array;
+  indices?: Uint32Array<ArrayBuffer>;
   isPointCloud: boolean;
 };
 
@@ -155,7 +162,7 @@ export class GltfDracoDecoder {
     }
 
     // Create basic material appropriate for the geometry type
-    const material = document.createMaterial();
+    const material = document.createMaterial().setDoubleSided(true);
     if (decodedData.isPointCloud) {
       // Point cloud material
       material.setBaseColorFactor([1, 1, 1, 1]);
@@ -165,9 +172,9 @@ export class GltfDracoDecoder {
       }
     } else {
       // Mesh material
-      material.setBaseColorFactor([0.8, 0.8, 0.8, 1]);
-      material.setMetallicFactor(0.1);
-      material.setRoughnessFactor(0.9);
+      material.setBaseColorFactor([...cadMaterialDefaults.baseColorFactor]);
+      material.setMetallicFactor(cadMaterialDefaults.metallicFactor);
+      material.setRoughnessFactor(cadMaterialDefaults.roughnessFactor);
     }
 
     primitive.setMaterial(material);
@@ -361,7 +368,7 @@ export class GltfDracoDecoder {
       attributes.set(attributeName, attributeData);
     }
 
-    let indices: Uint32Array | undefined;
+    let indices: Uint32Array<ArrayBuffer> | undefined;
     if (geometryType === this.decoderModule.TRIANGULAR_MESH) {
       const numberIndices = numberFaces * 3;
       indices = new Uint32Array(numberIndices);
@@ -506,12 +513,13 @@ export class GltfDracoDecoder {
   private createIndexAccessor(
     document: Document,
     buffer: GltfBuffer,
-    indices: Uint32Array,
+    indices: Uint32Array<ArrayBuffer>,
     _bufferOffset: number,
   ): Accessor {
-    // Use the most appropriate index type - Uint32 for large meshes, Uint16 for smaller ones
     const useShort = indices.every((index) => index < 65_536);
-    const typedIndices = useShort ? new Uint16Array(indices) : indices;
+    const typedIndices: Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer> = useShort
+      ? new Uint16Array(indices)
+      : indices;
 
     const accessor = document.createAccessor().setBuffer(buffer).setArray(typedIndices).setType('SCALAR');
 

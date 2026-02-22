@@ -1,16 +1,9 @@
 import { Link, NavLink, useNavigate } from 'react-router';
 import { useCallback } from 'react';
-import { messageRole, messageStatus } from '@taucad/chat/constants';
-import { idPrefix } from '@taucad/types/constants';
-import { generatePrefixedId } from '@taucad/utils/id';
-import { createInitialBuild } from '#constants/build.constants.js';
 import type { ChatTextareaProperties } from '#components/chat/chat-textarea-types.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { Button } from '#components/ui/button.js';
-import { createMessage } from '#utils/chat.utils.js';
-import { getMainFile, getEmptyCode } from '#utils/kernel.utils.js';
-import { encodeTextFile } from '#utils/filesystem.utils.js';
 import { CommunityBuildGrid } from '#components/project-grid.js';
 import { sampleBuilds } from '#constants/build-examples.js';
 import { HeroViewer } from '#routes/_index/hero-viewer.js';
@@ -19,17 +12,13 @@ import { KernelsSection } from '#routes/_index/kernels-section.js';
 import { IntegrationSection } from '#routes/_index/integration-section.js';
 import { ComingSoonSection } from '#routes/_index/coming-soon-section.js';
 import { CtaSection } from '#routes/_index/cta-section.js';
-import { defaultBuildName } from '#constants/build-names.js';
 import { ChatProvider } from '#hooks/use-chat.js';
 import { Separator } from '#components/ui/separator.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';
 import { toast } from '#components/ui/sonner.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { useChatManager } from '#hooks/use-chat-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
 export const handle: Handle = {
@@ -40,48 +29,17 @@ export const handle: Handle = {
 export default function ChatStart(): React.JSX.Element {
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
-  const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const buildManager = useBuildManager();
-  const chatManager = useChatManager();
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
     async ({ content, model, metadata, imageUrls }) => {
       try {
-        const mainFileName = getMainFile(kernel);
-        const emptyCode = getEmptyCode(kernel);
-
-        // Create the initial message as pending
-        const userMessage = createMessage({
-          content,
-          role: messageRole.user,
-          metadata: { ...metadata, kernel, model, status: messageStatus.pending },
-          imageUrls,
+        const createdBuild = await buildManager.createBuild({
+          kernel,
+          initialMessage: { content, model, metadata, imageUrls },
+          // Set initial panel state: chat open
+          editorState: { panelState: { openPanels: { chat: true } } },
         });
-
-        // Pre-generate the chat ID
-        const chatId = generatePrefixedId(idPrefix.chat);
-
-        // Create initial build using factory function with the pre-generated chatId
-        const { buildData, files } = createInitialBuild({
-          buildName: defaultBuildName,
-          chatId,
-          initialMessage: userMessage,
-          mainFileName,
-          emptyCodeContent: encodeTextFile(emptyCode),
-        });
-
-        // Create the build with lastChatId already set
-        const createdBuild = await buildManager.createBuild(buildData, files);
-
-        // Create the chat with the same pre-generated ID
-        await chatManager.createChat(createdBuild.id, {
-          id: chatId,
-          name: 'Initial design',
-          messages: [userMessage],
-        });
-
-        // Ensure chat is open when navigating to the build page
-        setIsChatOpen(true);
 
         // Navigate immediately - the build page will handle the streaming
         await navigate(`/builds/${createdBuild.id}`);
@@ -90,7 +48,7 @@ export default function ChatStart(): React.JSX.Element {
         toast.error('Failed to create build');
       }
     },
-    [kernel, buildManager, chatManager, setIsChatOpen, navigate],
+    [kernel, buildManager, navigate],
   );
 
   return (
@@ -124,7 +82,7 @@ export default function ChatStart(): React.JSX.Element {
             <div className="flex justify-center">
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
-                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
+                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1">
                     {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}

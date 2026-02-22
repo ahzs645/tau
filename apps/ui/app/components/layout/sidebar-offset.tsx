@@ -1,4 +1,4 @@
-import { Slot } from '@radix-ui/react-slot';
+import { Slot as SlotPrimitive } from 'radix-ui';
 import { cn } from '#utils/ui.utils.js';
 
 /**
@@ -41,7 +41,7 @@ type SidebarOffsetProps = {
  * </SidebarOffset>
  */
 export function SidebarOffset({ via, asChild = false, className, children }: SidebarOffsetProps): React.JSX.Element {
-  const Component = asChild ? Slot : 'div';
+  const Component = asChild ? SlotPrimitive.Slot : 'div';
 
   const offsetClass = {
     padding: sidebarOffsetPadding,

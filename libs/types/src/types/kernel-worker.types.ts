@@ -1,107 +1,25 @@
 /**
  * Kernel Worker Types
  *
- * Types specific to kernel worker implementation, middleware, and internal operations.
- * These types are used by kernel developers and middleware authors.
+ * Core types for the kernel definition API (defineKernel), runtime services,
+ * filesystem, logging, and method input/output shapes.
  *
+ * For bundler types, see kernel-bundler.types.ts.
+ * For dependency types, see kernel-dependency.types.ts.
+ * For middleware types, see kernel-middleware.types.ts.
+ * For tracer types, see kernel-tracer.types.ts.
  * For shared result/error types used across the codebase, see kernel.types.ts.
  */
 
-import type { PartialDeep } from 'type-fest';
 import type { ExportFormat, FileStat } from '#types/file.types.js';
 import type { LogLevel } from '#types/logger.types.js';
-import type { CreateGeometryResult, ExportGeometryResult, GetParametersResult } from '#types/kernel.types.js';
+import type { ExportGeometryResult, GetParametersResult, KernelIssue } from '#types/kernel.types.js';
+import type { GeometryResponse } from '#types/cad.types.js';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
+import type { ExecuteResult, KernelBundler } from '#types/kernel-bundler.types.js';
 
 // =============================================================================
-// Dependency Types
-// =============================================================================
-
-/**
- * A file dependency representing a source file or font file.
- * The contentHash is a SHA-256 hash of the file's contents.
- */
-export type FileDependency = {
-  type: 'file';
-  /** Path to the file relative to the build directory */
-  path: string;
-  /** SHA-256 hash of the file contents */
-  contentHash: string;
-};
-
-/**
- * A middleware dependency representing a middleware in the chain.
- * The index preserves the execution order in the chain.
- */
-export type MiddlewareDependency = {
-  type: 'middleware';
-  /** Name of the middleware */
-  name: string;
-  /** Version of the middleware */
-  version: string;
-  /** Position in the middleware chain (0-indexed) */
-  index: number;
-};
-
-/**
- * A framework dependency representing the Tau framework version.
- */
-export type FrameworkDependency = {
-  type: 'framework';
-  /** Framework name (always 'tau') */
-  name: 'tau';
-  /** Version string from package.json */
-  version: string;
-};
-
-/**
- * An option dependency representing a kernel configuration option.
- * Used to track mesh tolerances, backend arguments, etc.
- */
-export type OptionDependency = {
-  type: 'option';
-  /** Option key (e.g., 'meshConfiguration', 'arguments') */
-  key: string;
-  /** Option value (serialized to JSON for hashing) */
-  value: unknown;
-};
-
-/**
- * A parameter dependency representing user-provided parameter values.
- * Used to invalidate cache when parameter values change.
- */
-export type ParameterDependency = {
-  type: 'parameter';
-  /** SHA-256 hash of serialized parameters */
-  parametersHash: string;
-};
-
-/**
- * An asset dependency representing a bundled asset (font, WASM, etc.).
- * Used to invalidate cache when assets change between deployments.
- */
-export type AssetDependency = {
-  type: 'asset';
-  /** Asset identifier (e.g., 'font:Geist-Regular.ttf', 'wasm:opencascade') */
-  name: string;
-  /** SHA-256 hash of the asset content */
-  contentHash: string;
-};
-
-/**
- * Discriminated union of all dependency types.
- * Used for cache key computation to ensure all factors affecting
- * the output are captured.
- */
-export type Dependency =
-  | FileDependency
-  | MiddlewareDependency
-  | FrameworkDependency
-  | OptionDependency
-  | ParameterDependency
-  | AssetDependency;
-
-// =============================================================================
-// Kernel Method Types
+// Kernel Logging
 // =============================================================================
 
 /**
@@ -134,6 +52,10 @@ export type KernelLogger = {
   custom: (level: LogLevel, message: string, options?: KernelLogOptions) => void;
 };
 
+// =============================================================================
+// Kernel Filesystem
+// =============================================================================
+
 /**
  * Unified filesystem interface for kernel workers.
  * All paths are absolute - callers use helper methods to construct paths.
@@ -144,6 +66,8 @@ export type KernelFilesystem = {
   readFile(path: string, encoding: 'utf8'): Promise<string>;
   /** Read file as binary */
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  /** Batch read multiple files as binary (single RPC round-trip) */
+  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   /** Check if path exists */
   exists(path: string): Promise<boolean>;
   /** List directory entries */
@@ -166,15 +90,36 @@ export type KernelFilesystem = {
   getDirectoryStat(path: string): Promise<FileStat[]>;
 };
 
+// =============================================================================
+// Kernel Runtime
+// =============================================================================
+
 /**
  * Runtime services provided to kernel methods.
+ * The bundler and execute services are lazily initialised -- kernels that
+ * never call them (OpenSCAD, Tau) pay zero cost.
  */
 export type KernelRuntime = {
   /** Filesystem interface (all paths are absolute) */
   filesystem: KernelFilesystem;
   /** Logger with kernel name pre-configured */
   logger: KernelLogger;
+  /** Read-only view of cached file contents (absolute paths), populated during dependency computation */
+  fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
+  /** Esbuild bundler for JS/TS kernels. Lazily initialised on first access. */
+  bundler: KernelBundler;
+  /** Span tracer for kernel-authored performance instrumentation */
+  tracer: KernelSpanTracer;
+  /**
+   * Execute bundled JS/TS code via dynamic import and return the module exports.
+   * Browser uses Blob URL, Node.js uses data URL.
+   */
+  execute(code: string): Promise<ExecuteResult>;
 };
+
+// =============================================================================
+// Kernel Method Input Types
+// =============================================================================
 
 /**
  * Input for kernel getParameters method.
@@ -238,147 +183,86 @@ export type ExportGeometryInput = {
   meshConfig?: { linearTolerance: number; angularTolerance: number };
 };
 
-/**
- * Type-safe state for middleware to persist data during an operation.
- *
- * The state is scoped to a single middleware and persists for the duration of
- * one operation (e.g., one createGeometry call). In wrap-style hooks, state
- * can be updated before calling handler() and read after it returns.
- *
- * @template T - The state schema type inferred from Zod. Must be an object type.
- */
-export type MiddlewareState<T extends Record<string, unknown>> = {
-  /**
-   * Current state value.
-   * Type is PartialDeep<T> since update() may be called with partial data
-   * or not called at all.
-   */
-  readonly value: PartialDeep<T>;
+// =============================================================================
+// defineKernel API Types
+// =============================================================================
 
-  /**
-   * Update the state with partial data.
-   * Values are validated against the Zod schema before being merged.
-   *
-   * @param partial - Partial data to merge into the state
-   */
-  update: (partial: Partial<T>) => void;
+/**
+ * Output from a kernel's createGeometry method.
+ * Includes both the display geometry (transferred to main thread) and an opaque
+ * native handle that the framework stores for export operations.
+ *
+ * @template NativeHandle - Kernel-specific type for the native geometry representation
+ */
+export type CreateGeometryOutput<NativeHandle = unknown> = {
+  geometry: GeometryResponse[];
+  nativeHandle: NativeHandle;
+  issues?: KernelIssue[];
 };
 
 /**
- * Runtime context provided to middleware wrap hooks.
- * Contains services and utilities available during hook execution.
+ * Definition for a kernel module loaded via defineKernel().
+ * Kernel modules are ES modules dynamically imported by the worker runtime.
+ * The API is designed to be simple (no class inheritance, no `this` binding)
+ * with all state managed through the typed context returned by initialize().
  *
- * @template State - The state type inferred from the middleware's stateSchema. Must be an object type.
+ * @template Context - Kernel-specific context type returned by initialize()
+ * @template NativeHandle - Kernel-specific type for native geometry representation
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type KernelMiddlewareRuntime<State extends Record<string, unknown> = {}> = {
-  /** Logger with middleware name pre-configured as the component */
-  logger: KernelLogger;
-  /** Filesystem for all file operations (uses absolute path methods for middleware) */
-  filesystem: KernelFilesystem;
-  /** Type-safe state for persisting data during the wrap hook execution */
-  state: MiddlewareState<State>;
-  /**
-   * Dependencies for cache key computation.
-   * Includes file dependencies (source files, fonts), middleware signatures,
-   * framework version, and kernel options.
-   */
-  dependencies: readonly Dependency[];
-  /**
-   * Pre-computed SHA-256 hash of all dependencies.
-   * Can be used as a cache key or unique geometry identifier.
-   * This is a 64-character hex string.
-   */
-  dependencyHash: string;
+export type KernelDefinition<Context = unknown, NativeHandle = unknown> = {
+  name: string;
+  version: string;
+
+  initialize(options: Record<string, unknown>, runtime: KernelRuntime): Promise<Context>;
+
+  canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
+
+  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: Context): Promise<string[]>;
+  getParameters(input: GetParametersInput, runtime: KernelRuntime, context: Context): Promise<GetParametersResult>;
+  createGeometry(
+    input: CreateGeometryInput,
+    runtime: KernelRuntime,
+    context: Context,
+  ): Promise<CreateGeometryOutput<NativeHandle>>;
+  exportGeometry(
+    input: ExportGeometryInput,
+    runtime: KernelRuntime,
+    context: Context,
+    nativeHandle: NativeHandle,
+  ): Promise<ExportGeometryResult>;
+
+  cleanup?(context: Context): Promise<void>;
 };
 
-// =============================================================================
-// Middleware Handler Types (Wrap-Style Hooks)
-// =============================================================================
-
 /**
- * Handler function for createGeometry.
- * Called by wrap hooks to continue the middleware chain or execute the main operation.
- * Runtime is captured in the handler's closure, so middleware only passes input.
- * Uses internal geometry types (without hash) - hash is added by kernel-worker.ts.
- */
-export type CreateGeometryHandler = (input: CreateGeometryInput) => Promise<CreateGeometryResult>;
-
-/**
- * Handler function for exportGeometry.
- * Called by wrap hooks to continue the middleware chain or execute the main operation.
- * Runtime is captured in the handler's closure, so middleware only passes input.
- */
-export type ExportGeometryHandler = (input: ExportGeometryInput) => Promise<ExportGeometryResult>;
-
-/**
- * Handler function for getParameters.
- * Called by wrap hooks to continue the middleware chain or execute the main operation.
- * Runtime is captured in the handler's closure, so middleware only passes input.
- */
-export type GetParametersHandler = (input: GetParametersInput) => Promise<GetParametersResult>;
-
-// =============================================================================
-// Middleware Wrap Hook Types
-// =============================================================================
-
-/**
- * Wrap-style hook for createGeometry.
- * Provides full control over execution: can short-circuit, transform input/output,
- * or add pre/post processing. Code after handler() runs on the "return journey"
- * (onion model), so short-circuited results still flow through upstream middleware.
- *
- * Arguments: (input, handler, runtime)
- * - input: what to process (destructure what you need)
- * - handler: call to continue the chain (always used)
- * - runtime: services like logger/filesystem (only destructure if needed)
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
+ * Helper function to define a kernel module with proper type inference.
+ * This is the primary API for kernel authors.
  *
  * @example
  * ```typescript
- * async wrapCreateGeometry({ basePath }, handler, { logger, filesystem, dependencyHash }) {
- *   // PRE: Check cache
- *   const cached = await checkCache(basePath, dependencyHash);
- *   if (cached) return cached;  // Short-circuit
- *
- *   // EXECUTE: Call downstream (just pass input)
- *   const result = await handler(input);
- *
- *   // POST: Transform result (runs even if upstream short-circuited)
- *   return transform(result);
- * }
+ * export default defineKernel({
+ *   name: 'MyKernel',
+ *   version: '1.0.0',
+ *   async initialize(options, runtime) {
+ *     return { myContext: true };
+ *   },
+ *   async getDependencies(input, runtime, context) {
+ *     return [input.filePath];
+ *   },
+ *   async getParameters(input, runtime, context) {
+ *     return { success: true, data: { defaultParameters: {}, jsonSchema: {} } };
+ *   },
+ *   async createGeometry(input, runtime, context) {
+ *     return { geometry: [...], nativeHandle: myShapes };
+ *   },
+ *   async exportGeometry(input, runtime, context, nativeHandle) {
+ *     return { success: true, data: [{ blob: ... }] };
+ *   },
+ * });
  * ```
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapCreateGeometryHook<State extends Record<string, unknown> = {}> = (
-  input: CreateGeometryInput,
-  handler: CreateGeometryHandler,
-  runtime: KernelMiddlewareRuntime<State>,
-) => Promise<CreateGeometryResult>;
-
-/**
- * Wrap-style hook for exportGeometry.
- * Provides full control over execution with onion model semantics.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapExportGeometryHook<State extends Record<string, unknown> = {}> = (
-  input: ExportGeometryInput,
-  handler: ExportGeometryHandler,
-  runtime: KernelMiddlewareRuntime<State>,
-) => Promise<ExportGeometryResult>;
-
-/**
- * Wrap-style hook for getParameters.
- * Provides full control over execution with onion model semantics.
- *
- * @template State - The state type from the middleware's stateSchema. Must be an object type.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
-export type WrapGetParametersHook<State extends Record<string, unknown> = {}> = (
-  input: GetParametersInput,
-  handler: GetParametersHandler,
-  runtime: KernelMiddlewareRuntime<State>,
-) => Promise<GetParametersResult>;
+export function defineKernel<Ctx, NativeHandle>(
+  definition: KernelDefinition<Ctx, NativeHandle>,
+): KernelDefinition<Ctx, NativeHandle> {
+  return definition;
+}

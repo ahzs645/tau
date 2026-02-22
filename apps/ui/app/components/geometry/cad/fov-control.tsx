@@ -1,59 +1,41 @@
-import { useEffect } from 'react';
 import { Info } from 'lucide-react';
 import { Slider } from '#components/ui/slider.js';
 import { buttonVariants } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useBuild } from '#hooks/use-build.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useModifiers } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
-type CameraControlProps = {
+type FovControlProps = {
   /**
-   * Default field of view angle in degrees (0 = orthographic, 90 = perspective)
-   */
-  readonly defaultAngle: number;
-  /**
-   * Callback when field of view angle changes
-   */
-  readonly onChange?: (angle: number) => void;
-  /**
-   * Class name for the slider container
+   * Class name for the slider container (used to set width)
    */
   readonly className?: string;
+  /**
+   * When true, shows abbreviated labels (Orth. / Persp.) instead of full text.
+   * Controlled by the parent toolbar overflow system.
+   */
+  readonly isCompact?: boolean;
 };
 
 /**
  * External UI component that provides a slider to transition between
- * orthographic (0°) and perspective (90°) camera views.
+ * orthographic (0deg) and perspective (90deg) camera views.
  *
- * Note: This component DOES NOT directly use Three.js hooks.
- * You must use CameraHandler inside the Canvas separately.
+ * Reads the current FOV from the per-view GraphicsMachine state via GraphicsProvider.
  */
-export function FovControl({ defaultAngle, className }: Omit<CameraControlProps, 'onChange'>): React.JSX.Element {
-  const [fovAngle, setFovAngle] = useCookie<number>(cookieName.fovAngle, defaultAngle);
+export function FovControl({ className, isCompact = false }: FovControlProps): React.JSX.Element {
+  const graphicsRef = useGraphics();
+  const fovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
 
   // Track Shift key state for changing slider step
-  const { isKeyPressed: isShiftHeld } = useKeydown(
-    { key: 'Shift' },
-    () => {
-      // No-op callback, we just use the returned isKeyPressed state
-    },
-    {
-      preventDefault: false,
-      stopPropagation: false,
-    },
-  );
+  const { shift: isShiftHeld } = useModifiers();
 
-  const { graphicsRef: graphicsActor } = useBuild();
-
-  // Synchronize fov angle to the Graphics context when angle changes
-  useEffect(() => {
-    graphicsActor.send({ type: 'setFovAngle', payload: fovAngle });
-  }, [fovAngle, graphicsActor]);
+  const handleFovChange = (value: number[]): void => {
+    graphicsRef.send({ type: 'setFovAngle', payload: value[0]! });
+  };
 
   return (
     <Tooltip>
@@ -64,7 +46,7 @@ export function FovControl({ defaultAngle, className }: Omit<CameraControlProps,
               variant: 'overlay',
               size: 'sm',
               className: cn(
-                'group relative gap-0 overflow-hidden p-0 transition-[box-shadow] duration-300 max-md:w-30 md:w-50',
+                'group relative gap-0 overflow-hidden p-0 transition-[box-shadow] duration-300',
                 'flex items-center',
                 'hover:cursor-pointer',
                 '[&:focus-within]:border-primary',
@@ -96,9 +78,7 @@ export function FovControl({ defaultAngle, className }: Omit<CameraControlProps,
               '[&_[data-slot=slider-track]]:bg-transparent',
               '[&_[data-slot=slider-track]]:ring-0',
             )}
-            onValueChange={(value) => {
-              setFovAngle(value[0]!);
-            }}
+            onValueChange={handleFovChange}
           />
           {/* Text labels that will move up on hover */}
           <div
@@ -107,11 +87,9 @@ export function FovControl({ defaultAngle, className }: Omit<CameraControlProps,
               'text-xs leading-none text-foreground transition-all duration-300 select-none',
             )}
           >
-            <span className="hidden md:block">Orthographic</span>
-            <span className="md:hidden">Orth.</span>
-            <div className="w-[3ch] text-center font-bold">{fovAngle}°</div>
-            <span className="hidden md:block">Perspective</span>
-            <span className="md:hidden">Persp.</span>
+            <span>{isCompact ? 'Orth.' : 'Orthographic'}</span>
+            <div className="w-[3ch] text-center font-bold">{fovAngle}&deg;</div>
+            <span>{isCompact ? 'Persp.' : 'Perspective'}</span>
           </div>
         </div>
       </TooltipTrigger>
@@ -119,13 +97,13 @@ export function FovControl({ defaultAngle, className }: Omit<CameraControlProps,
         <span>Change field of view angle</span>
         <br />
         <span className="inline-flex items-center gap-1 text-neutral-foreground/60 dark:text-foreground/50">
-          <Info className="size-3 stroke-2" /> Set to 0° for orthographic view
+          <Info className="size-3 stroke-2" /> Set to 0&deg; for orthographic view
         </span>
         {/* Desktop only - shift key is usually not available on mobile */}
         <br className="max-md:hidden" />
         <span className="inline-flex items-center gap-1 text-neutral-foreground/60 max-md:hidden dark:text-foreground/50">
           <Info className="size-3 stroke-2" /> Hold{' '}
-          <KeyShortcut variant="tooltip">{formatKeyCombination({ key: 'Shift' })}</KeyShortcut> for 5° steps
+          <KeyShortcut variant="tooltip">{formatKeyCombination({ key: 'Shift' })}</KeyShortcut> for 5&deg; steps
         </span>
       </TooltipContent>
     </Tooltip>

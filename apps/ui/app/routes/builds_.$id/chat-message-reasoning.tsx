@@ -1,5 +1,5 @@
 import type { ReasoningUIPart } from 'ai';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Brain } from 'lucide-react';
 import { MarkdownViewerChat } from '#components/markdown/markdown-viewer-chat.js';
 import { useChatSelector } from '#hooks/use-chat.js';
@@ -24,6 +24,12 @@ type ChatMessageReasoningProperties = {
 export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningProperties): React.JSX.Element {
   const isStreaming = useChatSelector((state) => state.status === 'streaming');
   const [isOpen, setIsOpen] = useState(false);
+  const hasUserToggled = useRef(false);
+
+  const handleOpenChange = (open: boolean): void => {
+    hasUserToggled.current = true;
+    setIsOpen(open);
+  };
 
   const hasReasoningText = part.text.trim() !== '';
 
@@ -38,11 +44,13 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
     );
   }
 
-  // Force open if content is empty (still generating), otherwise let state handle it
-  const shouldBeOpen = hasContent ? isOpen : true;
+  // When message has text content after reasoning: respect user toggle (collapsed by default).
+  // When no text content (still streaming or interrupted): open by default, but allow
+  // user to collapse once they explicitly toggle.
+  const shouldBeOpen = hasContent ? isOpen : !hasUserToggled.current || isOpen;
 
   return (
-    <ChatToolCard variant="minimal" status="ready" isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
+    <ChatToolCard variant="minimal" status="ready" isOpen={shouldBeOpen} onOpenChange={handleOpenChange}>
       <ChatToolCardHeader>
         <ChatToolCardIcon icon={Brain} />
         <ChatToolCardTitle>Thought process</ChatToolCardTitle>

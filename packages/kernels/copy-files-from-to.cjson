@@ -1,5 +1,39 @@
 {
-  "copyFiles": [],
+  "copyFiles": [
+    // esbuild WASM for in-browser bundling
+    {
+      "from": "./node_modules/esbuild-wasm/esbuild.wasm",
+      "to": "src/bundler/wasm/esbuild.wasm"
+    },
+    // OpenCascade WASM files for Replicad kernel
+    {
+      "from": "./node_modules/replicad-opencascadejs/src/replicad_single.wasm",
+      "to": "src/kernels/replicad/wasm/replicad_single.wasm"
+    },
+    {
+      "from": "./node_modules/replicad-opencascadejs/src/replicad_with_exceptions.wasm",
+      "to": "src/kernels/replicad/wasm/replicad_with_exceptions.wasm"
+    },
+    // KCL WASM file for Zoo kernel
+    {
+      "from": "./node_modules/@taucad/kcl-wasm-lib/kcl_wasm_lib_bg.wasm",
+      "to": "src/kernels/zoo/wasm/kcl_wasm_lib_bg.wasm"
+    },
+    // Geist Sans TTF fonts for OpenSCAD text() rendering
+    {
+      "from": "./node_modules/geist/dist/fonts/geist-sans/Geist-Regular.ttf",
+      "to": "src/kernels/openscad/fonts/Geist-Regular.ttf"
+    },
+    {
+      "from": "./node_modules/geist/dist/fonts/geist-sans/Geist-Bold.ttf",
+      "to": "src/kernels/openscad/fonts/Geist-Bold.ttf"
+    },
+    // Geist Sans TTF font for Replicad textBlueprints() rendering
+    {
+      "from": "./node_modules/geist/dist/fonts/geist-sans/Geist-Regular.ttf",
+      "to": "src/kernels/replicad/fonts/Geist-Regular.ttf"
+    }
+  ],
   // Always overwrite files
   "whenFileExists": "overwrite"
 }

@@ -1,6 +1,5 @@
-import { AuthUIContext, SignedIn, SignedOut, UserAvatar, UserButton } from '@daveyplate/better-auth-ui';
-import type { UserButtonProps } from '@daveyplate/better-auth-ui';
-import { CreditCard, LogIn, Settings, Sparkles } from 'lucide-react';
+import { AuthUIContext, SignedIn, SignedOut, UserAvatar } from '@daveyplate/better-auth-ui';
+import { CreditCard, LogIn, LogOut, Settings, Sparkles } from 'lucide-react';
 import { useContext } from 'react';
 import { NavLink } from 'react-router';
 import { Button } from '#components/ui/button.js';
@@ -8,32 +7,20 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { Loader } from '#components/ui/loader.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
-
-const additionalUserButtonLinks: UserButtonProps['additionalLinks'] = [
-  {
-    href: '/settings/billing',
-    label: 'Upgrade to Pro',
-    icon: <Sparkles />,
-    signedIn: true,
-  },
-  {
-    href: '/settings/billing',
-    label: 'Billing',
-    icon: <CreditCard />,
-    signedIn: true,
-  },
-  {
-    href: '/settings/general',
-    label: 'Settings',
-    icon: <Settings />,
-    signedIn: true,
-  },
-];
+import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '#components/ui/dropdown-menu.js';
 
 export function NavUser(): React.JSX.Element {
   const { hooks } = useContext(AuthUIContext);
   const { data: session } = hooks.useSession();
-  const { signIn, signUp } = useAuthLinks();
+  const { signIn, signUp, signOut } = useAuthLinks();
 
   return (
     <ClientOnly>
@@ -55,22 +42,58 @@ export function NavUser(): React.JSX.Element {
         </Button>
       </SignedOut>
       <SignedIn>
-        <Tooltip>
-          <UserButton
-            disableDefaultLinks
-            trigger={
-              <TooltipTrigger asChild>
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="select-none">
                   <UserAvatar className="size-8 rounded-md" user={session?.user} />
                 </Button>
-              </TooltipTrigger>
-            }
-            size="icon"
-            classNames={{ content: { menuItem: 'cursor-pointer' } }}
-            additionalLinks={additionalUserButtonLinks}
-          />
-          <TooltipContent>Profile</TooltipContent>
-        </Tooltip>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>Profile</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" sideOffset={8} className="w-48">
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                className="cursor-pointer"
+                onSelect={() => {
+                  openSettingsDialog('billing');
+                }}
+              >
+                <Sparkles />
+                Upgrade to Pro
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer"
+                onSelect={() => {
+                  openSettingsDialog('billing');
+                }}
+              >
+                <CreditCard />
+                Billing
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer"
+                onSelect={() => {
+                  openSettingsDialog('general');
+                }}
+              >
+                <Settings />
+                Settings
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <NavLink to={signOut}>
+                  <LogOut />
+                  Sign Out
+                </NavLink>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </SignedIn>
     </ClientOnly>
   );

@@ -1,5 +1,6 @@
 import type { LinkDescriptor } from 'react-router';
 import allotmentStylesUrl from 'allotment/dist/style.css?url';
+import dockviewStylesUrl from 'dockview-react/dist/styles/dockview.css?url';
 import globalStylesUrl from '#styles/global.css?url';
 
 const fonts: LinkDescriptor[] = [
@@ -22,11 +23,15 @@ const fonts: LinkDescriptor[] = [
 const styleSheets: LinkDescriptor[] = [
   {
     rel: 'stylesheet',
-    href: globalStylesUrl,
+    href: allotmentStylesUrl,
   },
   {
     rel: 'stylesheet',
-    href: allotmentStylesUrl,
+    href: dockviewStylesUrl,
+  },
+  {
+    rel: 'stylesheet',
+    href: globalStylesUrl,
   },
 ];
 

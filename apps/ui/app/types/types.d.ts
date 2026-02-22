@@ -14,4 +14,30 @@ declare global {
       [key: `--${string}`]: string | number;
     }
   }
+
+  // ============ File System Access API Extensions ============
+  // These APIs are available in Chrome/Edge but not yet in TypeScript's lib.dom.d.ts.
+  // @see https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API
+
+  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- Extending global interface
+  interface FileSystemDirectoryHandle {
+    queryPermission(descriptor?: FileSystemHandlePermissionDescriptor): Promise<PermissionState>;
+    requestPermission(descriptor?: FileSystemHandlePermissionDescriptor): Promise<PermissionState>;
+    values(): AsyncIterableIterator<FileSystemFileHandle | FileSystemDirectoryHandle>;
+  }
+
+  type FileSystemHandlePermissionDescriptor = {
+    mode?: 'read' | 'readwrite';
+  };
+
+  type DirectoryPickerOptions = {
+    id?: string;
+    mode?: 'read' | 'readwrite';
+    startIn?: FileSystemHandle | 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos';
+  };
+
+  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions -- Extending global interface
+  interface Window {
+    showDirectoryPicker(options?: DirectoryPickerOptions): Promise<FileSystemDirectoryHandle>;
+  }
 }

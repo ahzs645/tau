@@ -15,6 +15,11 @@ export const highlighter = await createHighlighterCore({
     import('#lib/openscad-language/openscad-shiki-precompiled.js'),
     // @ts-expect-error -- TODO: migrate the precompiled grammar to the Shiki project.
     import('#lib/kcl-language/kcl-shiki-precompiled.js'),
+    // @ts-expect-error -- TODO: migrate the precompiled grammar to the Shiki project.
+    import('#lib/stepfile-language/stepfile-shiki-precompiled.js'),
+    import('#lib/stl-language/stl-shiki-precompiled.js'),
+    // @ts-expect-error -- TODO: migrate the precompiled grammar to the Shiki project.
+    import('#lib/usd-language/usd-shiki-precompiled.js'),
   ],
   engine: createJavaScriptRawEngine(),
 });

@@ -21,7 +21,7 @@ import {
   FloatingPanelErrorContent,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
@@ -37,7 +37,7 @@ const toggleChatHistoryKeyCombination = {
 // Memoized individual message item component to prevent re-renders
 const MessageItem = memo(function ({ messageId }: { readonly messageId: string }) {
   return (
-    <div className="py-2">
+    <div className="py-1">
       <ChatMessage messageId={messageId} />
     </div>
   );
@@ -83,7 +83,7 @@ export const ChatHistory = memo(function (props: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination } = useKeydown(toggleChatHistoryKeyCombination, toggleChatHistory);
+  const { formattedKeyCombination } = useKeybinding(toggleChatHistoryKeyCombination, toggleChatHistory);
 
   // State to trigger focus on the textarea when a new chat is created
   const [shouldFocusTextarea, setShouldFocusTextarea] = useState(false);
@@ -151,15 +151,6 @@ export const ChatHistory = memo(function (props: {
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Chat
-            <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent
         className={cn(!isExpanded && 'hidden')}
         errorFallback={(errorProps) => (
@@ -172,7 +163,20 @@ export const ChatHistory = memo(function (props: {
       >
         {/* Header with chat selector */}
         <FloatingPanelContentHeader>
-          <ChatHistorySelector onNewChat={handleNewChat} />
+          <ChatHistorySelector
+            closeButton={
+              <FloatingPanelClose
+                icon={XIcon}
+                tooltipContent={(isOpen) => (
+                  <div className="flex items-center gap-2">
+                    {isOpen ? 'Close' : 'Open'} Chat
+                    <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
+                  </div>
+                )}
+              />
+            }
+            onNewChat={handleNewChat}
+          />
         </FloatingPanelContentHeader>
 
         {/* Sticky status bar - last activity, model, cost */}
@@ -184,12 +188,12 @@ export const ChatHistory = memo(function (props: {
           totalCount={messageIds.length}
           itemContent={renderItem}
           followOutput="smooth"
-          className="h-full"
+          className="mt-1 h-full"
           atBottomStateChange={handleAtBottomStateChange}
           components={{
             Header: () => null,
             EmptyPlaceholder: () => (
-              <div className="-mb-12 h-full p-2">
+              <div className="-mb-12 h-full p-2 pt-1">
                 <ChatHistoryEmpty className="m-0 flex-1 justify-end" />
               </div>
             ),

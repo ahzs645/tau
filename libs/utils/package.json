@@ -9,10 +9,35 @@
       "types": "./src/id.utils.ts",
       "import": "./src/id.utils.ts",
       "default": "./src/id.utils.ts"
+    },
+    "./path": {
+      "types": "./src/path.utils.ts",
+      "import": "./src/path.utils.ts",
+      "default": "./src/path.utils.ts"
+    },
+    "./file": {
+      "types": "./src/file.utils.ts",
+      "import": "./src/file.utils.ts",
+      "default": "./src/file.utils.ts"
+    },
+    "./import": {
+      "types": "./src/import.utils.ts",
+      "import": "./src/import.utils.ts",
+      "default": "./src/import.utils.ts"
+    },
+    "./schema": {
+      "types": "./src/schema.utils.ts",
+      "import": "./src/schema.utils.ts",
+      "default": "./src/schema.utils.ts"
     }
   },
   "dependencies": {
-    "@taucad/types": "workspace:*"
+    "@taucad/types": "workspace:*",
+    "@taucad/json-schema": "workspace:*",
+    "cdn-resolve": "catalog:"
+  },
+  "devDependencies": {
+    "@types/json-schema": "catalog:"
   },
   "imports": {
     "#*": "./src/*"

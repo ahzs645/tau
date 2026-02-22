@@ -9,6 +9,11 @@ import { FontGeometry } from '#components/geometry/graphics/three/geometries/fon
 import { RoundedRectangleGeometry } from '#components/geometry/graphics/three/geometries/rounded-rectangle-geometry.js';
 import { adjustHexColorBrightness } from '#utils/color.utils.js';
 
+// Module-scope scratch vectors for PlaneSelector useFrame (avoids per-frame allocations)
+const _normalizedDir = new THREE.Vector3();
+const _baseOffset = new THREE.Vector3();
+const _depthOffset = new THREE.Vector3();
+
 export type PlaneId = 'xy' | 'xz' | 'yz';
 export type PlaneSelectorId = 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy';
 export type UpDirection = 'x' | 'y' | 'z';
@@ -275,19 +280,21 @@ function PlaneSelector({
     currentGroup.scale.set(scale, scale, scale);
 
     if (baseDirection.lengthSq() > 0) {
-      const normalizedDir = baseDirection.clone().normalize();
-      const baseOffset = normalizedDir.clone().multiplyScalar(desiredWorldOffset);
+      _normalizedDir.copy(baseDirection).normalize();
+      _baseOffset.copy(_normalizedDir).multiplyScalar(desiredWorldOffset);
 
       // For inverse faces, add an additional offset to account for label depth
       // so they're truly back-to-back without overlapping
-      const depthOffset = isInverse
-        ? normalizedDir.clone().multiplyScalar(-labelDepth * scale)
-        : new THREE.Vector3(0, 0, 0);
+      if (isInverse) {
+        _depthOffset.copy(_normalizedDir).multiplyScalar(-labelDepth * scale);
+      } else {
+        _depthOffset.set(0, 0, 0);
+      }
 
       if (planeId === 'xz' || planeId === 'zx') {
-        currentGroup.position.copy(baseOffset.sub(depthOffset));
+        currentGroup.position.copy(_baseOffset.sub(_depthOffset));
       } else {
-        currentGroup.position.copy(baseOffset.add(depthOffset));
+        currentGroup.position.copy(_baseOffset.add(_depthOffset));
       }
     }
   });

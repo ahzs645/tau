@@ -1,19 +1,18 @@
 import { Ruler } from 'lucide-react';
-import { useSelector } from '@xstate/react';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useBuild } from '#hooks/use-build.js';
 import { cn } from '#utils/ui.utils.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export function MeasureControl(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const isMeasureActive = useSelector(graphicsActor, (state) => state.matches({ operational: 'measure' }));
-  const is2dGeometry = useSelector(graphicsActor, (state) =>
+  const graphicsRef = useGraphics();
+  const isMeasureActive = useGraphicsSelector((state) => state.matches({ operational: 'measure' }));
+  const is2dGeometry = useGraphicsSelector((state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
 
   const handleClick = (): void => {
-    graphicsActor.send({
+    graphicsRef.send({
       type: 'setMeasureActive',
       payload: !isMeasureActive,
     });

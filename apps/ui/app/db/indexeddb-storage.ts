@@ -5,6 +5,7 @@ import type { Chat } from '@taucad/chat';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import type { StorageProvider } from '#types/storage.types.js';
+import type { EditorState, EditorStateInput } from '#types/editor.types.js';
 import { metaConfig } from '#constants/meta.constants.js';
 
 export class IndexedDbStorageProvider implements StorageProvider {
@@ -20,8 +21,12 @@ export class IndexedDbStorageProvider implements StorageProvider {
     return 'chats';
   }
 
+  private get editorStoreName(): string {
+    return 'editor';
+  }
+
   private get version(): number {
-    return 3;
+    return 4;
   }
 
   public async createBuild(build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>): Promise<Build> {
@@ -402,6 +407,83 @@ export class IndexedDbStorageProvider implements StorageProvider {
   }
 
   // ============================================================================
+  // Editor State Methods
+  // ============================================================================
+
+  public async getEditorState(buildId: string): Promise<EditorState | undefined> {
+    const db = await this.getDb();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(this.editorStoreName, 'readonly');
+      const store = transaction.objectStore(this.editorStoreName);
+      const request = store.get(buildId);
+
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      request.onerror = () => {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(request.error);
+      };
+
+      request.onsuccess = () => {
+        resolve(request.result as EditorState | undefined);
+      };
+
+      transaction.oncomplete = () => {
+        db.close();
+      };
+    });
+  }
+
+  public async updateEditorState(editorState: EditorStateInput): Promise<EditorState> {
+    const db = await this.getDb();
+    const stateWithTimestamp = { ...editorState, updatedAt: Date.now() };
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(this.editorStoreName, 'readwrite');
+      const store = transaction.objectStore(this.editorStoreName);
+      const request = store.put(stateWithTimestamp);
+
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      request.onerror = () => {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(request.error);
+      };
+
+      request.onsuccess = () => {
+        resolve(stateWithTimestamp);
+      };
+
+      transaction.oncomplete = () => {
+        db.close();
+      };
+    });
+  }
+
+  public async deleteEditorState(buildId: string): Promise<void> {
+    const db = await this.getDb();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(this.editorStoreName, 'readwrite');
+      const store = transaction.objectStore(this.editorStoreName);
+      const request = store.delete(buildId);
+
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      request.onerror = () => {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(request.error);
+      };
+
+      request.onsuccess = () => {
+        resolve();
+      };
+
+      transaction.oncomplete = () => {
+        db.close();
+      };
+    });
+  }
+
+  // ============================================================================
   // Database Management
   // ============================================================================
 
@@ -432,6 +514,13 @@ export class IndexedDbStorageProvider implements StorageProvider {
         if (oldVersion < 2 && !db.objectStoreNames.contains(this.chatsStoreName)) {
           const chatsStore = db.createObjectStore(this.chatsStoreName, { keyPath: 'id' });
           chatsStore.createIndex('resourceId', 'resourceId', { unique: false });
+        }
+
+        // Version 3 was skipped for no good reason.
+
+        // Version 4+: Create editor store for transient Editor state
+        if (oldVersion < 4 && !db.objectStoreNames.contains(this.editorStoreName)) {
+          db.createObjectStore(this.editorStoreName, { keyPath: 'buildId' });
         }
       };
     });

@@ -1,16 +1,19 @@
 import { useCallback, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Folder, Files, Upload, Download } from 'lucide-react';
+import { Folder, Files, FolderOpen, Upload, Download } from 'lucide-react';
 import { importFileAcceptString } from '#routes/import.$/import.utils.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { isZipFile } from '#utils/file-reader.utils.js';
+import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 
 type UploadCardProperties = {
   readonly onFilesSelected: (files: FileList | File[]) => void;
   readonly onFolderSelected: (files: FileList) => void;
   readonly onZipSelected: (file: File) => void;
   readonly onDataTransfer: (items: DataTransferItemList) => void;
+  /** Called when the user selects a directory via File System Access API. */
+  readonly onDirectoryHandleSelected?: (handle: FileSystemDirectoryHandle) => void;
   readonly isDisabled?: boolean;
   readonly className?: string;
 };
@@ -20,6 +23,7 @@ export function UploadCard({
   onFolderSelected,
   onZipSelected,
   onDataTransfer,
+  onDirectoryHandleSelected,
   isDisabled = false,
   className,
 }: UploadCardProperties): React.JSX.Element {
@@ -78,6 +82,24 @@ export function UploadCard({
   const handleFileClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  const handleDirectoryPick = useCallback(async () => {
+    if (!onDirectoryHandleSelected) {
+      return;
+    }
+
+    try {
+      const handle = await globalThis.window.showDirectoryPicker({ mode: 'read' });
+      onDirectoryHandleSelected(handle);
+    } catch (error: unknown) {
+      // User cancelled the directory picker
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
+
+      throw error;
+    }
+  }, [onDirectoryHandleSelected]);
 
   const handleFolderChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -181,18 +203,33 @@ export function UploadCard({
           isDropping ? 'pointer-events-none h-0 opacity-0' : 'opacity-100',
         )}
       >
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="flex-1"
-          disabled={isDisabled}
-          onClick={handleFolderClick}
-        >
-          <Folder className="mr-1.5 size-4" />
-          <span className="hidden sm:inline">Select Folder</span>
-          <span className="sm:hidden">Folder</span>
-        </Button>
+        {isFileSystemAccessSupported ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            disabled={isDisabled}
+            onClick={handleDirectoryPick}
+          >
+            <FolderOpen className="mr-1.5 size-4" />
+            <span className="hidden sm:inline">Open Directory</span>
+            <span className="sm:hidden">Directory</span>
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            disabled={isDisabled}
+            onClick={handleFolderClick}
+          >
+            <Folder className="mr-1.5 size-4" />
+            <span className="hidden sm:inline">Select Folder</span>
+            <span className="sm:hidden">Folder</span>
+          </Button>
+        )}
         <Button
           type="button"
           variant="outline"

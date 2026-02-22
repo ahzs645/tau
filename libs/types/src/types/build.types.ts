@@ -26,7 +26,6 @@ export type Build = {
   };
   tags: string[];
   thumbnail: string;
-  lastChatId?: string; // Reference to the last active chat
   createdAt: number;
   updatedAt: number;
   forkedFrom?: string;

@@ -160,7 +160,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
       return (
         <div
           className={cn(
-            '-ml-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted-foreground',
+            '-ml-2 inline-flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden px-2 py-1 text-xs font-medium text-muted-foreground',
             className,
           )}
         >
@@ -175,7 +175,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
           variant="ghost"
           size="xs"
           className={cn(
-            '-ml-2 gap-1.5 font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
+            '-ml-2 max-w-full min-w-0 gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
             className,
           )}
         >

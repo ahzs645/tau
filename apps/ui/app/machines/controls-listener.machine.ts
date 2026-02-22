@@ -12,8 +12,16 @@ type ControlsListenerInput = {
 type ControlsListenerEvent =
   | { type: 'stopListening' }
   | { type: 'controlsInteractionStart' }
-  | { type: 'controlsInteractionEnd' }
-  | { type: 'controlsChanged'; zoom: number; position: number; fov: number };
+  | {
+      type: 'controlsInteractionEnd';
+      zoom: number;
+    }
+  | {
+      type: 'controlsChanged';
+      zoom: number;
+      position: number;
+      fov: number;
+    };
 
 const controlsListenerLogic = fromCallback<ControlsListenerEvent, ControlsListenerInput>(
   ({ input, sendBack, receive }) => {
@@ -95,7 +103,9 @@ const controlsListenerLogic = fromCallback<ControlsListenerEvent, ControlsListen
         return;
       }
 
-      sendBack({ type: 'controlsInteractionEnd' });
+      const zoom = calculateZoom();
+
+      sendBack({ type: 'controlsInteractionEnd', zoom });
     };
 
     const removeListeners = () => {
@@ -149,7 +159,16 @@ export const controlsListenerMachine = setup({
     sendControlsInteractionStart: sendTo(({ context }) => context.graphicsActorRef, {
       type: 'controlsInteractionStart',
     }),
-    sendControlsInteractionEnd: sendTo(({ context }) => context.graphicsActorRef, { type: 'controlsInteractionEnd' }),
+    sendControlsInteractionEnd: sendTo(
+      ({ context }) => context.graphicsActorRef,
+      ({ event }) => {
+        assertEvent(event, 'controlsInteractionEnd');
+        return {
+          type: 'controlsInteractionEnd',
+          zoom: event.zoom,
+        };
+      },
+    ),
     sendControlsChanged: sendTo(
       ({ context }) => context.graphicsActorRef,
       ({ event }) => {

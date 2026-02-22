@@ -104,4 +104,8 @@ export const idPrefix = {
    * A data part ID.
    */
   data: 'data',
+  /**
+   * A view ID
+   */
+  view: 'view',
 } as const satisfies Record<string, string>;

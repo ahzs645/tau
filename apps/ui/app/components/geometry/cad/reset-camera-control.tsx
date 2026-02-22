@@ -1,15 +1,17 @@
 import { Focus } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useGraphics } from '#hooks/use-graphics.js';
 
 /**
- * Reset camera control button
+ * Reset camera control button.
+ * Uses the per-view graphics actor from GraphicsProvider.
  */
 export function ResetCameraControl(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const handleReset = () => {
-    graphicsActor.send({ type: 'resetCamera' });
+  const graphicsRef = useGraphics();
+
+  const handleReset = (): void => {
+    graphicsRef.send({ type: 'resetCamera' });
   };
 
   return (
@@ -19,7 +21,7 @@ export function ResetCameraControl(): React.JSX.Element {
           <Focus className="size-4" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>Reset camera zoom</TooltipContent>
+      <TooltipContent>Reset camera</TooltipContent>
     </Tooltip>
   );
 }

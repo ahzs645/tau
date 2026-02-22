@@ -1,6 +1,10 @@
 import { test, expect } from 'vitest';
-import { hello } from '#index.js';
+import { createDefaultConfig } from '#config.js';
 
-test('hello', () => {
-  expect(hello).toBe('world');
+test('createDefaultConfig returns expected structure', () => {
+  const config = createDefaultConfig();
+  expect(config).toHaveProperty('workerUrl');
+  expect(config).toHaveProperty('kernelConfig');
+  expect(config).toHaveProperty('middlewareConfig');
+  expect(config).toHaveProperty('bundlerConfig');
 });

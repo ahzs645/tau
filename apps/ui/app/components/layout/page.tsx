@@ -20,12 +20,12 @@ import { useNetworkConnectivity } from '#hooks/use-network-connectivity.js';
 import { useTypedMatches } from '#hooks/use-typed-matches.js';
 import { NavUser } from '#components/nav/nav-user.js';
 import { cn } from '#utils/ui.utils.js';
-import { Tau } from '#components/icons/tau.js';
 import { Compose } from '#components/ui/utils/compose.js';
 import { Commands } from '#components/layout/command-palette.js';
 import { PageFooter } from '#components/layout/page-footer.js';
 import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 import { CookieConsent } from '#components/cookie-consent.js';
+import { SettingsDialog } from '#components/settings/settings-dialog.js';
 
 export const headerHeight = 'calc(var(--spacing) * 12)';
 
@@ -146,8 +146,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
           <header className="pointer-events-none absolute top-0 z-20 flex h-(--header-height) w-full shrink-0 items-center justify-between gap-2">
             <div className="pointer-events-auto ml-2 flex h-8 items-center gap-0.25 rounded-md border bg-sidebar p-0.25 pl-2.75 transition-[margin] duration-200 ease-linear md:ml-(--sidebar-width-current) md:gap-1">
               <SidebarTrigger className="group/sidebar-trigger -ml-2.5 rounded-sm">
-                <Tau className="size-5 text-primary group-hover/sidebar-trigger:hidden group-data-[open=true]/sidebar-trigger:hidden max-md:hidden" />
-                <PanelLeftIcon className="size-4 group-hover/sidebar-trigger:block group-data-[open=true]/sidebar-trigger:block md:hidden" />
+                <PanelLeftIcon className="size-4 group-data-[open=true]/sidebar-trigger:block" />
               </SidebarTrigger>
               {hasBreadcrumbItems ? (
                 <span className="h-4">
@@ -223,6 +222,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
           </section>
         </SidebarInset>
         <CookieConsent />
+        <SettingsDialog />
       </SidebarProvider>
     </Compose>
   );

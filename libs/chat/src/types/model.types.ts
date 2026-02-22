@@ -14,9 +14,16 @@ export type Model = {
     id: ModelProvider;
     name: string;
   };
-  contextLength: number;
+  contextLength?: number;
   details: {
     family: ModelFamily;
-    parameterSize: string;
+    parameterSize?: string;
+    contextWindow?: number;
+    cost?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+    };
   };
 };

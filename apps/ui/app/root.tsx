@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Model } from '@taucad/chat';
+import { throwRedirectIfSubdomain } from '#lib/react-router.lib.js';
 import { useTheme } from '#hooks/use-theme.js';
 import type { ThemeWithSystem } from '#hooks/use-theme.js';
 import { getEnvironment } from '#environment.config.js';
@@ -24,10 +25,11 @@ import { globalStylesLinks } from '#styles/global.styles.js';
 import type { Handle } from '#types/matches.types.js';
 import { RootCommandPaletteItems } from '#root-command-items.js';
 import { BuildManagerProvider } from '#hooks/use-build-manager.js';
-import { ChatManagerProvider } from '#hooks/use-chat-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { AnalyticsProvider } from '#hooks/use-analytics.js';
 import { ChatRpcSocketProvider } from '#hooks/use-chat-rpc-socket.js';
+import { KeyboardProvider } from '#hooks/use-keyboard.js';
+import { UnloadProvider } from '#hooks/use-flush-on-close.js';
 
 export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
 
@@ -52,6 +54,9 @@ export const handle: Handle = {
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders require type inference
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Redirect www to apex domain (e.g., www.example.new -> example.new)
+  throwRedirectIfSubdomain(request, 'www');
+
   const { getTheme } = await themeSessionResolver(request);
   const cookie = request.headers.get('Cookie') ?? '';
 
@@ -92,19 +97,21 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
         <AnalyticsProvider>
           <FileManagerProvider rootDirectory="/">
             <BuildManagerProvider>
-              <ChatManagerProvider>
-                <ChatRpcSocketProvider>
-                  <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
-                    <ColorProvider>
-                      <TooltipProvider>
-                        <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
-                          {children}
-                        </LayoutDocument>
-                      </TooltipProvider>
-                    </ColorProvider>
-                  </ThemeProvider>
-                </ChatRpcSocketProvider>
-              </ChatManagerProvider>
+              <ChatRpcSocketProvider>
+                <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
+                  <ColorProvider>
+                    <TooltipProvider>
+                      <KeyboardProvider>
+                        <UnloadProvider>
+                          <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
+                            {children}
+                          </LayoutDocument>
+                        </UnloadProvider>
+                      </KeyboardProvider>
+                    </TooltipProvider>
+                  </ColorProvider>
+                </ThemeProvider>
+              </ChatRpcSocketProvider>
             </BuildManagerProvider>
           </FileManagerProvider>
         </AnalyticsProvider>
@@ -122,7 +129,11 @@ function LayoutDocument({
   readonly env: Record<string, string>;
   readonly ssrTheme: ThemeWithSystem;
 }): React.JSX.Element {
-  const { theme } = useTheme();
+  // Use ssrTheme (the raw resolved theme) for the HTML className.
+  // This is null during SSR when no theme preference is stored (system theme mode),
+  // which allows PreventFlashOnWrongTheme's script to correctly detect and apply the
+  // system preference before the page renders (prevents light mode flash on dark systems).
+  const { ssrTheme: resolvedTheme } = useTheme();
   const color = useColor();
   const { setFaviconColor } = useFavicon();
 
@@ -131,7 +142,16 @@ function LayoutDocument({
   }, [setFaviconColor, color]);
 
   return (
-    <html lang="en" className={cn(theme, '[--spacing:0.275rem] md:[--spacing:0.25rem]')} style={color.rootStyles}>
+    <html
+      lang="en"
+      className={cn(
+        '[--spacing:0.275rem] md:[--spacing:0.25rem]',
+        // Leave this class last as the `PreventFlashOnWrongTheme` script will
+        // append the theme last when needed to prevent light mode flash on dark systems.
+        resolvedTheme,
+      )}
+      style={color.rootStyles}
+    >
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

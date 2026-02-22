@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import type { PartialDeep } from 'type-fest';
 import type { Chat } from '@taucad/chat';
-import { useChatManager } from '#hooks/use-chat-manager.js';
+import { useBuildManager } from '#hooks/use-build-manager.js';
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- let types be inferred
 export function useChats(resourceId: string, options?: { includeDeleted?: boolean }) {
@@ -16,7 +16,7 @@ export function useChats(resourceId: string, options?: { includeDeleted?: boolea
     deleteChat: deleteChatInManager,
     duplicateChat: duplicateChatInManager,
     isLoading: isWorkerLoading,
-  } = useChatManager();
+  } = useBuildManager();
 
   const {
     data: chats = [],

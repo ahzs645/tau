@@ -9,10 +9,11 @@ import {
   FloatingPanelContent,
   FloatingPanelContentBody,
   FloatingPanelContentHeader,
+  FloatingPanelContentHeaderActions,
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useBuild } from '#hooks/use-build.js';
@@ -65,9 +66,10 @@ export const ChatConverter = memo(function (properties: {
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
   const { className, isExpanded = true, setIsExpanded } = properties;
-  const { buildRef, cadRef: cadActor } = useBuild();
+  const { buildRef, compilationUnits, mainEntryFile } = useBuild();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const buildName = useSelector(buildRef, (state) => state.context.build?.name) ?? 'model';
-  const geometries = useSelector(cadActor, (state) => state.context.geometries);
+  const geometries = useSelector(cadActor, (state) => state?.context.geometries ?? []);
   const fileManager = useFileManager();
 
   // State for GLB data (lazy-loaded)
@@ -153,25 +155,27 @@ export const ChatConverter = memo(function (properties: {
     setIsExpanded?.((current) => !current);
   }, [setIsExpanded]);
 
-  const { formattedKeyCombination: formattedConverterKeyCombination } = useKeydown(
+  const { formattedKeyCombination: formattedConverterKeyCombination } = useKeybinding(
     toggleConverterKeyCombination,
     toggleConverterOpen,
   );
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Exporter
-            <KeyShortcut variant="tooltip">{formattedConverterKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Exporter</FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Exporter
+                  <KeyShortcut variant="tooltip">{formattedConverterKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
+          </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
         <FloatingPanelContentBody className="p-2">

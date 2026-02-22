@@ -1,9 +1,13 @@
-import type { ReactNode } from 'react';
 import { FileText } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
 import { FileLink } from '#components/files/file-link.js';
-import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+} from '#components/chat/chat-tool-card.js';
 import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
@@ -26,7 +30,7 @@ export function ChatMessageToolReadFile({
   part,
 }: {
   readonly part: ToolInvocation<typeof toolName.readFile>;
-}): ReactNode {
+}): React.JSX.Element {
   const { input } = part;
   const targetFile = input?.targetFile ?? 'file';
   const lineRange = formatLineRange(input?.offset, input?.limit);
@@ -35,13 +39,18 @@ export function ChatMessageToolReadFile({
     case 'input-streaming':
     case 'input-available': {
       return (
-        <ChatToolInlineLink status="loading">
-          <ChatToolAction>Reading</ChatToolAction>{' '}
-          <ChatToolDescription>
-            {targetFile}
-            {lineRange}...
-          </ChatToolDescription>
-        </ChatToolInlineLink>
+        <ChatToolCard variant="minimal" status="loading" isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={FileText} />
+            <ChatToolCardTitle>
+              <ChatToolAction>Reading</ChatToolAction>{' '}
+              <ChatToolDescription>
+                {targetFile}
+                {lineRange}...
+              </ChatToolDescription>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 
@@ -52,13 +61,18 @@ export function ChatMessageToolReadFile({
       const startLine = input.offset ?? 1;
 
       return (
-        <ChatToolInlineLink status="ready">
-          <ChatToolAction>Read</ChatToolAction>{' '}
-          <FileLink path={targetFile} lineNumber={startLine} className="text-foreground/50">
-            {targetFile}
-            {lineRange}
-          </FileLink>
-        </ChatToolInlineLink>
+        <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={FileText} />
+            <ChatToolCardTitle>
+              <ChatToolAction>Read</ChatToolAction>{' '}
+              <FileLink path={targetFile} lineNumber={startLine} className="text-foreground/50">
+                {targetFile}
+                {lineRange}
+              </FileLink>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
       );
     }
 

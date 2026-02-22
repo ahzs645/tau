@@ -1,3 +1,23 @@
+import { format } from 'date-fns';
+
+/**
+ * Format a date in the Cursor-style export format: `M/d/yyyy at HH:mm:ss GMT+N`
+ *
+ * @example formatExportDate(new Date('2026-02-08T10:29:19Z'))
+ * // In NZ (UTC+13): '2/8/2026 at 23:29:19 GMT+13'
+ *
+ * @param date The date to format
+ * @returns Formatted date string with timezone offset
+ */
+export const formatExportDate = (date: Date): string => {
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const hours = Math.floor(Math.abs(offset) / 60);
+  const minutes = Math.abs(offset) % 60;
+  const timezone = minutes > 0 ? `GMT${sign}${hours}:${String(minutes).padStart(2, '0')}` : `GMT${sign}${hours}`;
+  return `${format(date, 'M/d/yyyy')} at ${format(date, 'HH:mm:ss')} ${timezone}`;
+};
+
 type FormatRelativeTimeOptions = {
   /**
    * If true, returns a shortened format (e.g., "2m" instead of "2 minutes ago")

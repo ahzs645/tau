@@ -2,13 +2,13 @@ import { PackagePlus } from 'lucide-react';
 import { NavLink, useMatch, useNavigate } from 'react-router';
 import { SidebarGroup, SidebarMenuButton } from '#components/ui/sidebar.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { Loader } from '#components/ui/loader.js';
 
 export function NavChat(): React.JSX.Element {
   const navigate = useNavigate();
   const isMatch = useMatch('/');
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     {
       key: 'n',
       ctrlKey: true,

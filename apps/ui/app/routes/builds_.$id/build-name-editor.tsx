@@ -4,7 +4,7 @@ import { useSelector } from '@xstate/react';
 import type { MyUIMessage } from '@taucad/chat';
 import { defaultBuildName } from '#constants/build-names.js';
 import { useBuild } from '#hooks/use-build.js';
-import { useChatManager } from '#hooks/use-chat-manager.js';
+import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useChatConstants } from '#utils/chat.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Loader } from '#components/ui/loader.js';
@@ -13,12 +13,12 @@ import { InlineTextEditor } from '#components/inline-text-editor.js';
 const animationDuration = 2000;
 
 export function BuildNameEditor(): React.JSX.Element {
-  const { buildRef, updateName } = useBuild();
+  const { buildRef, editorRef, updateName } = useBuild();
   const buildName = useSelector(buildRef, (state) => state.context.build?.name) ?? '';
   const isLoading = useSelector(buildRef, (state) => state.context.isLoading);
   const isBuildError = useSelector(buildRef, (state) => state.matches('error'));
-  const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId);
-  const { getChat } = useChatManager();
+  const activeChatId = useSelector(editorRef, (state) => state.context.lastChatId);
+  const { getChat } = useBuildManager();
 
   const [displayName, setDisplayName] = useState<string>(buildName);
   const [isNameAnimating, setIsNameAnimating] = useState(false);

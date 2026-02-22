@@ -1,50 +1,28 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router';
-import { createContext, useContext, useEffect, useRef } from 'react';
-import { useSelector } from '@xstate/react';
-import { fromPromise } from 'xstate';
+import type { Build } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
+import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
-import { BuildProvider, useBuild } from '#hooks/use-build.js';
-import { FileManagerProvider, useFileManager } from '#hooks/use-file-manager.js';
+import { FileManagerProvider } from '#hooks/use-file-manager.js';
+import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
+import { useBuildManager } from '#hooks/use-build-manager.js';
 import type { BuildWithFiles } from '#constants/build-examples.js';
 import { sampleBuilds } from '#constants/build-examples.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { PreviewDesktop } from '#routes/builds_.$id_.preview/preview-desktop.js';
 import { PreviewMobile } from '#routes/builds_.$id_.preview/preview-mobile.js';
+import { PreviewBuildContext, usePreviewBuild } from '#routes/builds_.$id_.preview/preview-build-context.js';
+import type { PreviewBuildContextValue } from '#routes/builds_.$id_.preview/preview-build-context.js';
 
-/**
- * Find a static build by ID from the sample builds
- */
 function findStaticBuild(buildId: string): BuildWithFiles | undefined {
   return sampleBuilds.find((build) => build.id === buildId);
 }
 
 /**
- * Context to share static build data (including files) for sample builds
+ * Provider for static builds (from sampleBuilds). Metadata is available immediately.
  */
-const StaticBuildContext = createContext<BuildWithFiles | undefined>(undefined);
-
-/**
- * Hook to access whether the current build is a static build
- */
-function useIsStaticBuild(): boolean {
-  return useContext(StaticBuildContext) !== undefined;
-}
-
-/**
- * Hook to access static build files (for cloning)
- */
-function useStaticBuildFiles(): Record<string, { content: Uint8Array<ArrayBuffer> }> | undefined {
-  const staticBuild = useContext(StaticBuildContext);
-  return staticBuild?.files;
-}
-
-/**
- * Provider that handles both static builds (from sampleBuilds) and dynamic builds (from storage).
- * For static builds, it provides the build data directly and writes files to the filesystem.
- * For dynamic builds, it uses the default loadBuildActor from buildManager.
- */
-function StaticBuildProvider({
+function StaticPreviewProvider({
   children,
   buildId,
   staticBuild,
@@ -53,95 +31,133 @@ function StaticBuildProvider({
   readonly buildId: string;
   readonly staticBuild: BuildWithFiles;
 }): React.JSX.Element {
-  const { writeFiles } = useFileManager();
-  const hasWrittenFilesRef = useRef(false);
+  const { files, ...buildData } = staticBuild;
+  const mainFile = staticBuild.assets.mechanical?.main;
 
-  // Write files to filesystem on mount (same pattern as project-grid.tsx and hero-viewer.tsx)
-  useEffect(() => {
-    async function writeStaticFiles(): Promise<void> {
-      if (hasWrittenFilesRef.current) {
-        return;
-      }
+  const noopUpdate = useCallback(() => {
+    // Static builds are read-only
+  }, []);
 
-      hasWrittenFilesRef.current = true;
-      const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-      for (const [path, file] of Object.entries(staticBuild.files)) {
-        buildFiles[`/builds/${buildId}/${path}`] = file;
-      }
-
-      try {
-        await writeFiles(buildFiles);
-      } catch (error) {
-        // Reset flag on failure to allow retry
-        hasWrittenFilesRef.current = false;
-        console.error('Failed to write static build files:', error);
-      }
-    }
-
-    void writeStaticFiles();
-  }, [buildId, staticBuild.files, writeFiles]);
+  const metadataValue = useMemo<PreviewBuildContextValue>(
+    () => ({
+      build: buildData,
+      isStaticBuild: true,
+      staticBuildFiles: files,
+      updateName: noopUpdate,
+      updateDescription: noopUpdate,
+    }),
+    [buildData, files, noopUpdate],
+  );
 
   return (
-    <BuildProvider
-      buildId={buildId}
-      provide={{
-        actors: {
-          loadBuildActor: fromPromise(async () => {
-            // Return the static build data without the files property
-            const { files, ...buildData } = staticBuild;
-            return buildData;
-          }),
-        },
-      }}
-    >
-      {children}
-    </BuildProvider>
+    <PreviewBuildContext.Provider value={metadataValue}>
+      <CadPreviewProvider buildId={buildId} mainFile={mainFile ?? 'main.ts'} files={files}>
+        {children}
+      </CadPreviewProvider>
+    </PreviewBuildContext.Provider>
   );
 }
 
 /**
- * Provider for dynamic builds that loads from storage
+ * Provider for dynamic builds (from storage). Loads build metadata and defers rendering
+ * until the main file is known.
  */
-function DynamicBuildProvider({
+function DynamicPreviewProvider({
   children,
   buildId,
 }: {
   readonly children?: React.ReactNode;
   readonly buildId: string;
 }): React.JSX.Element {
-  return <BuildProvider buildId={buildId}>{children}</BuildProvider>;
+  const buildManager = useBuildManager();
+  const [build, setBuild] = useState<Build | undefined>();
+
+  useEffect(() => {
+    async function loadBuildMetadata(): Promise<void> {
+      const loaded = await buildManager.getBuild(buildId);
+      setBuild(loaded);
+    }
+
+    void loadBuildMetadata();
+  }, [buildId, buildManager]);
+
+  const updateName = useCallback(
+    (name: string) => {
+      if (!build) {
+        return;
+      }
+
+      setBuild((previous) => (previous ? { ...previous, name } : previous));
+      void buildManager.updateBuild(build.id, { ...build, name });
+    },
+    [build, buildManager],
+  );
+
+  const updateDescription = useCallback(
+    (description: string) => {
+      if (!build) {
+        return;
+      }
+
+      setBuild((previous) => (previous ? { ...previous, description } : previous));
+      void buildManager.updateBuild(build.id, { ...build, description });
+    },
+    [build, buildManager],
+  );
+
+  const metadataValue = useMemo<PreviewBuildContextValue>(
+    () => ({
+      build,
+      isStaticBuild: false,
+      staticBuildFiles: undefined,
+      updateName,
+      updateDescription,
+    }),
+    [build, updateName, updateDescription],
+  );
+
+  const mainFile = build?.assets.mechanical?.main;
+
+  return (
+    <PreviewBuildContext.Provider value={metadataValue}>
+      {mainFile ? (
+        <CadPreviewProvider buildId={buildId} mainFile={mainFile}>
+          {children}
+        </CadPreviewProvider>
+      ) : (
+        <div className="flex h-full items-center justify-center">
+          <Loader className="size-16 text-primary" />
+        </div>
+      )}
+    </PreviewBuildContext.Provider>
+  );
 }
 
-// Define provider component at module level for stable reference across HMR
 function RouteProvider({ children }: { readonly children?: React.ReactNode }): React.JSX.Element {
   const { id } = useParams();
   const staticBuild = findStaticBuild(id!);
 
   return (
-    <StaticBuildContext.Provider value={staticBuild}>
-      <FileManagerProvider rootDirectory={`/builds/${id}`}>
-        {staticBuild ? (
-          <StaticBuildProvider buildId={id!} staticBuild={staticBuild}>
-            {children}
-          </StaticBuildProvider>
-        ) : (
-          <DynamicBuildProvider buildId={id!}>{children}</DynamicBuildProvider>
-        )}
-      </FileManagerProvider>
-    </StaticBuildContext.Provider>
+    <FileManagerProvider buildId={id} rootDirectory={`/builds/${id}`}>
+      {staticBuild ? (
+        <StaticPreviewProvider buildId={id!} staticBuild={staticBuild}>
+          {children}
+        </StaticPreviewProvider>
+      ) : (
+        <DynamicPreviewProvider buildId={id!}>{children}</DynamicPreviewProvider>
+      )}
+    </FileManagerProvider>
   );
 }
 
-/**
- * Breadcrumb component that displays the build name as a link
- */
 function BuildNameBreadcrumb(): React.JSX.Element {
-  const { buildRef, buildId } = useBuild();
-  const name = useSelector(buildRef, (state) => state.context.build?.name) ?? 'Build';
+  const { build } = usePreviewBuild();
+  const { id } = useParams();
+  const name = build?.name ?? 'Build';
 
   return (
     <Button asChild variant="ghost">
-      <Link to={`/builds/${buildId}/preview`}>{name}</Link>
+      <Link to={`/builds/${id}/preview`}>{name}</Link>
     </Button>
   );
 }
@@ -162,14 +178,12 @@ export const handle: Handle = {
 
 function BuildPreviewContent(): React.JSX.Element {
   const isMobile = useIsMobile();
-  const isStaticBuild = useIsStaticBuild();
-  const staticBuildFiles = useStaticBuildFiles();
 
   if (isMobile) {
-    return <PreviewMobile isStaticBuild={isStaticBuild} staticBuildFiles={staticBuildFiles} />;
+    return <PreviewMobile />;
   }
 
-  return <PreviewDesktop isStaticBuild={isStaticBuild} staticBuildFiles={staticBuildFiles} />;
+  return <PreviewDesktop />;
 }
 
 export default function BuildPreview(): React.JSX.Element {

@@ -5,17 +5,24 @@
   "projectType": "library",
   "tags": ["scope:shared", "type:lib"],
   "targets": {
-    "extract": {
+    "extract-replicad": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tsx src/extract-replicad-api.ts",
         "cwd": "libs/api-extractor"
       }
     },
-    "analyze": {
+    "extract-jscad": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "tsx src/use-extracted-api.ts",
+        "command": "tsx src/extract-jscad-types.ts",
+        "cwd": "libs/api-extractor"
+      }
+    },
+    "extract-kcl": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/extract-kcl-api.ts",
         "cwd": "libs/api-extractor"
       }
     }

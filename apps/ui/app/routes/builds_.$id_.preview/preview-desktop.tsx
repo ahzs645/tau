@@ -1,13 +1,9 @@
 import { memo, useCallback, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { useActorRef, useSelector } from '@xstate/react';
 import { Download, FileCode, Eye, Code, ChevronDown, SlidersHorizontal } from 'lucide-react';
-import type { ExportFormat } from '@taucad/types';
-import { fileExtensionFromExportFormat } from '@taucad/types/constants';
 import { Loader } from '#components/ui/loader.js';
 import { Button } from '#components/ui/button.js';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '#components/ui/tabs.js';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Avatar, AvatarImage, AvatarFallback } from '#components/ui/avatar.js';
 import { Separator } from '#components/ui/separator.js';
 import { BuildSettingsDialog } from '#routes/builds_.$id_.preview/build-settings-dialog.js';
@@ -19,111 +15,33 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { downloadBlob } from '#utils/file.utils.js';
 import { toast } from '#components/ui/sonner.js';
-import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
 import { cn } from '#utils/ui.utils.js';
-import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { useChatManager } from '#hooks/use-chat-manager.js';
+import { useCadPreview } from '#hooks/use-cad-preview.js';
+import { useCadExport } from '#hooks/use-cad-export.js';
+import { CadPreviewViewer, CadPreviewStatus } from '#components/cad-preview.js';
+import { usePreviewBuild } from '#routes/builds_.$id_.preview/preview-build-context.js';
 import { PreviewDetails } from '#routes/builds_.$id_.preview/preview-details.js';
 import { PreviewFiles } from '#routes/builds_.$id_.preview/preview-files.js';
 import { PreviewParameters } from '#routes/builds_.$id_.preview/preview-parameters.js';
+import { usePreviewFileList } from '#routes/builds_.$id_.preview/use-preview-file-list.js';
 
-type PreviewDesktopProps = {
-  readonly isStaticBuild: boolean;
-  readonly staticBuildFiles?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
-};
-
-function ViewerStatus({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { cadRef } = useBuild();
-  const state = useSelector(cadRef, (state) => state.value);
-
-  return ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
-    <div
-      {...props}
-      className={cn(
-        'absolute top-4 right-4 z-10 flex items-center gap-2 rounded-md border bg-background/70 px-2 py-1 backdrop-blur-sm',
-        className,
-      )}
-    >
-      <span className="font-mono text-sm text-muted-foreground capitalize">{state}...</span>
-      <Loader className="size-4" />
-    </div>
-  ) : null;
-}
-
-export const PreviewDesktop = memo(function ({
-  isStaticBuild,
-  staticBuildFiles,
-}: PreviewDesktopProps): React.JSX.Element {
+export const PreviewDesktop = memo(function (): React.JSX.Element {
   const navigate = useNavigate();
   const { id } = useParams();
-  const { buildRef, cadRef } = useBuild();
-  const build = useSelector(buildRef, (state) => state.context.build);
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const hasParameters = useSelector(cadRef, (state) => Boolean(state.context.jsonSchema));
+  const { build, isStaticBuild, staticBuildFiles } = usePreviewBuild();
+  const { geometries, jsonSchema } = useCadPreview();
+  const { exportGeometry } = useCadExport(build?.name ?? 'file');
   const fileManager = useFileManager();
   const buildManager = useBuildManager();
-  const chatManager = useChatManager();
+  const files = usePreviewFileList();
+
+  const hasParameters = Boolean(jsonSchema);
 
   const [isCloning, setIsCloning] = useState(false);
-
-  // Get files from file manager
-  const files = useSelector(fileManager.fileManagerRef, (state) => {
-    const fileTreeMap = state.context.fileTree;
-    if (fileTreeMap.size === 0) {
-      return [];
-    }
-
-    return [...fileTreeMap.values()].map((entry) => ({
-      path: entry.path,
-      name: entry.name,
-      size: entry.size,
-    }));
-  });
-
   const [activeTab, setActiveTab] = useState('3d');
   const [showParameters, setShowParameters] = useState(true);
-
-  // Create export geometry machine instance
-  const exportActorRef = useActorRef(exportGeometryMachine, {
-    input: { cadRef },
-  });
-
-  const handleExport = useCallback(
-    (format: ExportFormat) => {
-      const fileExtension = fileExtensionFromExportFormat[format];
-      const filename = `${build?.name ?? 'file'}.${fileExtension}`;
-      toast.promise(
-        new Promise<Blob>((resolve, reject) => {
-          exportActorRef.send({
-            type: 'requestExport',
-            format,
-            onSuccess(blob) {
-              downloadBlob(blob, filename);
-              resolve(blob);
-            },
-            onError(error) {
-              reject(new Error(error));
-            },
-          });
-        }),
-        {
-          loading: `Downloading ${filename}...`,
-          success: `Downloaded ${filename}`,
-          error(error) {
-            let message = `Failed to download ${filename}`;
-            if (error instanceof Error) {
-              message = `${message}: ${error.message}`;
-            }
-
-            return message;
-          },
-        },
-      );
-    },
-    [exportActorRef, build?.name],
-  );
 
   const handleDownloadZip = useCallback(async (): Promise<void> => {
     if (!build) {
@@ -147,13 +65,11 @@ export const PreviewDesktop = memo(function ({
   }, [build, fileManager]);
 
   const handleEditOnline = useCallback(async () => {
-    // For dynamic builds, navigate directly
     if (!isStaticBuild || !staticBuildFiles || !build) {
       void navigate(`/builds/${id}`);
       return;
     }
 
-    // For static builds, clone the build first
     if (isCloning) {
       return;
     }
@@ -161,40 +77,29 @@ export const PreviewDesktop = memo(function ({
     setIsCloning(true);
 
     try {
-      // Create a new build with remixed data
-      const newBuild = {
-        name: `${build.name} (Remixed)`,
-        description: build.description,
-        thumbnail: build.thumbnail,
-        author: {
-          name: 'You',
-          avatar: '/avatar-sample.png',
+      const createdBuild = await buildManager.createBuild({
+        build: {
+          name: `${build.name} (Remixed)`,
+          description: build.description,
+          thumbnail: build.thumbnail,
+          author: {
+            name: 'You',
+            avatar: '/avatar-sample.png',
+          },
+          tags: build.tags,
+          assets: build.assets,
+          forkedFrom: build.id,
         },
-        tags: build.tags,
-        assets: build.assets,
-        forkedFrom: build.id,
-      };
-
-      // Create the build with the files
-      const createdBuild = await buildManager.createBuild(newBuild, staticBuildFiles);
-
-      // Create the chat and get its ID
-      const createdChat = await chatManager.createChat(createdBuild.id, {
-        name: 'Initial chat',
-        messages: [],
+        files: staticBuildFiles,
       });
 
-      // Update the build with the correct lastChatId
-      await buildManager.updateBuild(createdBuild.id, { lastChatId: createdChat.id });
-
-      // Navigate to the new build
       await navigate(`/builds/${createdBuild.id}`);
     } catch (error: unknown) {
       console.error('Failed to remix build:', error);
       toast.error('Failed to remix build');
       setIsCloning(false);
     }
-  }, [isStaticBuild, staticBuildFiles, build, isCloning, id, buildManager, chatManager, navigate]);
+  }, [isStaticBuild, staticBuildFiles, build, isCloning, id, buildManager, navigate]);
 
   const toggleParameters = useCallback(() => {
     setShowParameters((previous) => !previous);
@@ -235,11 +140,11 @@ export const PreviewDesktop = memo(function ({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem disabled={isCloning} onClick={handleEditOnline}>
-                {isCloning ? <Loader className="mr-2 size-4" /> : <FileCode className="mr-2 size-4" />}
+                {isCloning ? <Loader /> : <FileCode />}
                 {isCloning ? 'Remixing...' : 'Remix'}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDownloadZip}>
-                <Download className="mr-2 size-4" />
+                <Download />
                 Download ZIP
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -291,16 +196,10 @@ export const PreviewDesktop = memo(function ({
 
               <TabsContent enableAnimation={false} value="3d" className="h-full data-[state=inactive]:hidden">
                 <div className="flex h-full">
-                  {/* 3D Viewer - min-w-0 is required for proper flex shrinking when Canvas is present */}
+                  {/* 3D Viewer */}
                   <div className="relative min-w-0 flex-1">
-                    <ViewerStatus />
-                    {geometries.length > 0 ? (
-                      <CadViewer enableZoom enablePan geometries={geometries} />
-                    ) : (
-                      <div className="flex h-full items-center justify-center">
-                        <Loader className="size-16 text-primary" />
-                      </div>
-                    )}
+                    <CadPreviewStatus />
+                    <CadPreviewViewer enableZoom enablePan className="h-full" />
                   </div>
                   {/* Parameters Panel */}
                   {hasParameters && showParameters ? (
@@ -314,12 +213,10 @@ export const PreviewDesktop = memo(function ({
 
             {/* Sidebar - About Section */}
             <div className="w-80 border-l bg-sidebar">
-              <PreviewDetails build={build} geometriesCount={geometries.length} onExport={handleExport} />
+              <PreviewDetails build={build} geometriesCount={geometries.length} onExport={exportGeometry} />
               <Separator />
-              {/* Git Integration - disabled until Git integration is implemented */}
               <div className="hidden p-6">
                 <h3 className="mb-3 text-sm font-semibold">Version Control</h3>
-                {/* GitConnector would go here */}
               </div>
             </div>
           </div>

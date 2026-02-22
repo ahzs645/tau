@@ -67,7 +67,7 @@ export function BuildActionDropdown({
                 actions.handleRestore(build);
               }}
             >
-              <ArrowUpRightSquare className="mr-2 size-4" />
+              <ArrowUpRightSquare />
               <span>Restore</span>
             </DropdownMenuItem>
           ) : (
@@ -78,7 +78,7 @@ export function BuildActionDropdown({
                 data-name={build.name}
                 onClick={async () => actions.handleDuplicate(build)}
               >
-                <Copy className="mr-2 size-4" />
+                <Copy />
                 <span>Duplicate</span>
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -90,7 +90,7 @@ export function BuildActionDropdown({
                   setIsRenaming(true);
                 }}
               >
-                <Pencil className="mr-2 size-4" />
+                <Pencil />
                 <span>Rename</span>
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -102,7 +102,7 @@ export function BuildActionDropdown({
                   actions.handleDelete(build);
                 }}
               >
-                <Trash className="mr-2 size-4" />
+                <Trash />
                 <span>Delete</span>
               </DropdownMenuItem>
             </>

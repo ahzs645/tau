@@ -1,5 +1,31 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { formatRelativeTime } from '#utils/date.utils.js';
+import process from 'node:process';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatExportDate, formatRelativeTime } from '#utils/date.utils.js';
+
+describe('formatExportDate', () => {
+  const originalTz = process.env.TZ;
+
+  beforeAll(() => {
+    process.env.TZ = 'Pacific/Auckland';
+  });
+
+  afterAll(() => {
+    process.env.TZ = originalTz;
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-08T10:29:19Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('formats date in human-readable export format', () => {
+    expect(formatExportDate(new Date())).toBe('2/8/2026 at 23:29:19 GMT+13');
+  });
+});
 
 describe('formatRelativeTime', () => {
   beforeEach(() => {

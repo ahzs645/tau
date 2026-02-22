@@ -4,6 +4,18 @@
   "include": [],
   "references": [
     {
+      "path": "../json-schema"
+    },
+    {
+      "path": "../converter"
+    },
+    {
+      "path": "../../libs/utils"
+    },
+    {
+      "path": "../../libs/types"
+    },
+    {
       "path": "./tsconfig.lib.json"
     },
     {

@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@react-router/node": "^7.9.6",
+    "@react-router/node": "catalog:",
     "@taucad/api-extractor": "workspace:*",
     "@taucad/converter": "workspace:*",
     "@taucad/json-schema": "workspace:*",
@@ -13,7 +13,8 @@
     "@taucad/units": "workspace:*",
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*",
-    "isbot": "^5"
+    "@taucad/kernels": "workspace:*",
+    "isbot": "catalog:"
   },
   "imports": {
     "#*": "./app/*"

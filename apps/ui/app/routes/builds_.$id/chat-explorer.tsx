@@ -6,12 +6,13 @@ import {
   FloatingPanelClose,
   FloatingPanelContent,
   FloatingPanelContentHeader,
+  FloatingPanelContentHeaderActions,
   FloatingPanelContentTitle,
   FloatingPanelContentBody,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { ChatEditorExplorerFiles } from '#routes/builds_.$id/chat-explorer-files.js';
@@ -19,6 +20,7 @@ import { ChatEditorExplorerMaterials } from '#routes/builds_.$id/chat-explorer-m
 import { ChatEditorExplorerMeshes } from '#routes/builds_.$id/chat-explorer-meshes.js';
 import { ChatEditorExplorerObjects } from '#routes/builds_.$id/chat-explorer-objects.js';
 import { ChatEditorExplorerAnimations } from '#routes/builds_.$id/chat-explorer-animations.js';
+import { ChatEditorExplorerEnvironment } from '#routes/builds_.$id/chat-explorer-environment.js';
 
 const keyCombinationEditor = {
   key: 'a',
@@ -64,27 +66,30 @@ export function ChatExplorerTree({
   const [isMeshesOpen, setIsMeshesOpen] = useState(false);
   const [isAnimationsOpen, setIsAnimationsOpen] = useState(false);
   const [isObjectsOpen, setIsObjectsOpen] = useState(false);
+  const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(true);
 
   const toggleEditor = () => {
     setIsExpanded?.((current) => !current);
   };
 
-  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeydown(keyCombinationEditor, toggleEditor);
+  const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleEditor);
 
   return (
     <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelClose
-        icon={XIcon}
-        tooltipContent={(isOpen) => (
-          <div className="flex items-center gap-2">
-            {isOpen ? 'Close' : 'Open'} Explorer
-            <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
-          </div>
-        )}
-      />
       <FloatingPanelContent className="text-sm">
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Explorer</FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <FloatingPanelClose
+              icon={XIcon}
+              tooltipContent={(isOpen) => (
+                <div className="flex items-center gap-2">
+                  {isOpen ? 'Close' : 'Open'} Explorer
+                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                </div>
+              )}
+            />
+          </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
         <FloatingPanelContentBody className="flex flex-col px-0 py-0">
           {/* Files Section */}
@@ -120,6 +125,16 @@ export function ChatExplorerTree({
           {/* Objects Section */}
           <ExplorerCollapsibleSection title="Objects" count={10} isOpen={isObjectsOpen} onOpenChange={setIsObjectsOpen}>
             <ChatEditorExplorerObjects />
+          </ExplorerCollapsibleSection>
+
+          {/* Environment Section */}
+          <ExplorerCollapsibleSection
+            title="Environment"
+            count={1}
+            isOpen={isEnvironmentOpen}
+            onOpenChange={setIsEnvironmentOpen}
+          >
+            <ChatEditorExplorerEnvironment />
           </ExplorerCollapsibleSection>
         </FloatingPanelContentBody>
       </FloatingPanelContent>

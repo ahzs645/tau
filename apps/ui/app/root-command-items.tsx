@@ -7,6 +7,7 @@ import { useCommandPaletteItems } from '#components/layout/command-palette.js';
 import type { CommandPaletteItem } from '#components/layout/command-palette.js';
 import { useBuilds } from '#hooks/use-builds.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
+import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
   const { data: authData } = useAuthenticate({ enabled: false });
@@ -61,11 +62,13 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
       })),
       {
         id: 'open-settings',
-        label: 'Open settings',
+        label: 'Settings',
         group: 'Settings',
         icon: <Cog />,
-        link: '/settings',
-        visible: Boolean(authData),
+        action() {
+          openSettingsDialog();
+        },
+        shortcut: '⌘,',
       },
       {
         id: 'sign-in',

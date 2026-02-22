@@ -5,6 +5,7 @@ import type { Model } from '@taucad/chat';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { Badge } from '#components/ui/badge.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useModels } from '#hooks/use-models.js';
 
 type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
@@ -14,6 +15,22 @@ type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'childr
   readonly popoverProperties?: React.ComponentProps<typeof ComboBoxResponsive>['popoverProperties'];
   readonly isNested?: boolean;
 };
+
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    return `${Math.round(tokens / 1_000_000)}M`;
+  }
+
+  return `${Math.round(tokens / 1000)}k`;
+}
+
+function formatCost(costPerMillion: number): string {
+  if (costPerMillion === 0) {
+    return 'Free';
+  }
+
+  return `$${costPerMillion}`;
+}
 
 export const ChatModelSelector = memo(function ({
   onSelect,
@@ -59,20 +76,46 @@ export const ChatModelSelector = memo(function ({
         items: models,
       }))}
       renderLabel={(item, selectedItem) => (
-        <span className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-2">
-            <SvgIcon id={item.details.family} />
-            <span>{item.name}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {item.details.parameterSize ? (
-              <Badge variant="outline" className="bg-background">
-                {item.details.parameterSize}
-              </Badge>
-            ) : null}
-            {selectedItem?.id === item.id ? <Check /> : null}
-          </div>
-        </span>
+        <HoverCard>
+          <HoverCardTrigger asChild>
+            <span className="flex w-full items-center justify-between">
+              <div className="flex items-center gap-2">
+                <SvgIcon id={item.details.family} />
+                <span>{item.name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {item.details.parameterSize ? (
+                  <Badge variant="outline" className="bg-background">
+                    {item.details.parameterSize}
+                  </Badge>
+                ) : null}
+                {selectedItem?.id === item.id ? <Check /> : null}
+              </div>
+            </span>
+          </HoverCardTrigger>
+          <HoverCardContent side="right" align="start" sideOffset={12} alignOffset={-4} className="w-72">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <SvgIcon id={item.details.family} className="size-5 shrink-0" />
+                <h4 className="text-sm font-semibold">
+                  {item.provider.name} {item.name}
+                </h4>
+              </div>
+              {item.description ? <p className="text-sm text-muted-foreground">{item.description}</p> : null}
+              {item.details.contextWindow ? (
+                <p className="text-xs text-muted-foreground">
+                  {formatContextWindow(item.details.contextWindow)} context window
+                </p>
+              ) : null}
+              {item.details.cost ? (
+                <p className="text-xs text-muted-foreground">
+                  Cost: {formatCost(item.details.cost.inputTokens)} input / {formatCost(item.details.cost.outputTokens)}{' '}
+                  output per 1M tokens
+                </p>
+              ) : null}
+            </div>
+          </HoverCardContent>
+        </HoverCard>
       )}
       getValue={(item) => item.id}
       placeholder="Select a model"

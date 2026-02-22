@@ -18,7 +18,7 @@ const mockModels: Model[] = [
     model: 'claude-sonnet-4',
     details: {
       family: 'claude',
-      families: ['Claude'],
+      families: ['claude'],
       contextWindow: 200_000,
       maxTokens: 64_000,
       cost: {

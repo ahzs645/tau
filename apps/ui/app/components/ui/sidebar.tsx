@@ -1,10 +1,10 @@
 import * as React from 'react';
-import { Slot } from '@radix-ui/react-slot';
+import { Slot as SlotPrimitive } from 'radix-ui';
 import type { VariantProps } from 'class-variance-authority';
 import { cva } from 'class-variance-authority';
 import { useLocation } from 'react-router';
 import { useIsMobile } from '#hooks/use-mobile.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
@@ -25,7 +25,7 @@ const sidebarWidthIcon = 'calc(var(--spacing) * 2)';
 
 const sidebarToggleKeyCombo = {
   key: 'b',
-  metaKey: true,
+  modKey: true,
 } as const satisfies KeyCombination;
 
 type SidebarContextProperties = {
@@ -86,7 +86,7 @@ function SidebarProvider({
     }
   }, [isMobile, setOpen, setOpenMobile]);
 
-  useKeydown(sidebarToggleKeyCombo, toggleSidebar, {
+  useKeybinding(sidebarToggleKeyCombo, toggleSidebar, {
     preventDefault: true,
     stopPropagation: true,
   });
@@ -377,7 +377,7 @@ function SidebarGroupLabel({
   asChild = false,
   ...properties
 }: React.ComponentProps<'div'> & { readonly asChild?: boolean }): React.JSX.Element {
-  const Comp = asChild ? Slot : 'div';
+  const Comp = asChild ? SlotPrimitive.Slot : 'div';
 
   return (
     <Comp
@@ -398,7 +398,7 @@ function SidebarGroupAction({
   asChild = false,
   ...properties
 }: React.ComponentProps<'button'> & { readonly asChild?: boolean }): React.JSX.Element {
-  const Comp = asChild ? Slot : 'button';
+  const Comp = asChild ? SlotPrimitive.Slot : 'button';
 
   return (
     <Comp
@@ -485,7 +485,7 @@ function SidebarMenuButton({
   readonly isActive?: boolean;
   readonly tooltip?: string | React.ComponentProps<typeof TooltipContent>;
 } & VariantProps<typeof sidebarMenuButtonVariants>): React.JSX.Element {
-  const Comp = asChild ? Slot : 'button';
+  const Comp = asChild ? SlotPrimitive.Slot : 'button';
   const { isMobile, state } = useSidebar();
 
   const button = (
@@ -527,7 +527,7 @@ function SidebarMenuAction({
   readonly asChild?: boolean;
   readonly shouldShowOnHover?: boolean;
 }): React.JSX.Element {
-  const Comp = asChild ? Slot : 'button';
+  const Comp = asChild ? SlotPrimitive.Slot : 'button';
 
   return (
     <Comp
@@ -631,7 +631,7 @@ function SidebarMenuSubButton({
   readonly size?: 'sm' | 'md';
   readonly isActive?: boolean;
 }): React.JSX.Element {
-  const Comp = asChild ? Slot : 'a';
+  const Comp = asChild ? SlotPrimitive.Slot : 'a';
 
   return (
     <Comp

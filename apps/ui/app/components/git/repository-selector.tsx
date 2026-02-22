@@ -10,6 +10,7 @@ import { toast } from '#components/ui/sonner.js';
 import { getGitHubAccessToken } from '#lib/git-auth.js';
 import { cn } from '#utils/ui.utils.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
 
 type RepositorySelectorProperties = {
@@ -220,8 +221,8 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
             <SelectContent>
               {scopes.map((scope) => (
                 <SelectItem key={scope} value={scope}>
-                  <div className="flex items-center gap-2">
-                    <User className="size-4" />
+                  <div className={menuItemLayoutClass}>
+                    <User />
                     {scope}
                   </div>
                 </SelectItem>

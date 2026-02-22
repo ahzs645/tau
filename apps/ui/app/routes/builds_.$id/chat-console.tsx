@@ -1,5 +1,5 @@
 import { ChevronsDown, Filter, Settings, Trash } from 'lucide-react';
-import { useState, useCallback, memo } from 'react';
+import { useState, useCallback, useMemo, memo } from 'react';
 import { useSelector } from '@xstate/react';
 import type { LogLevel, LogOrigin } from '@taucad/types';
 import { logLevels } from '@taucad/types/constants';
@@ -149,45 +149,42 @@ export const ChatConsole = memo(function ({
   const [enabledLevels, setEnabledLevels] = useCookie(cookieName.consoleLogLevel, defaultLogLevels);
   const [displayConfig, setDisplayConfig] = useCookie(cookieName.consoleDisplayConfig, defaultDisplayConfig);
 
-  // Filter logs based on search text and verbosity levels
-  const filteredLogs = useSelector(logRef, (state) => {
-    const { logs } = state.context;
+  // Track log version for efficient change detection (ring buffer version increments on each push)
+  const logVersion = useSelector(logRef, (state) => state.context.logVersion);
 
-    const filtered = logs.filter((log) => {
-      // Check if log level is enabled
+  // Snapshot logs only when version changes
+  const allLogs = useMemo(
+    () => logRef.getSnapshot().context.logBuffer.toArray(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- logVersion tracks buffer mutations
+    [logRef, logVersion],
+  );
+
+  // Filter logs only when data or filter criteria change
+  const filteredLogs = useMemo(() => {
+    const filterLower = filter ? filter.toLowerCase() : '';
+
+    let infoCount = 0;
+    const result: Array<(typeof allLogs)[number] & { infoIndex: number }> = [];
+
+    for (const log of allLogs) {
       if (!enabledLevels[log.level]) {
-        return false;
+        continue;
       }
 
-      // If there's a text filter, check if any searchable field contains it
-      if (filter) {
-        const filterLower = filter.toLowerCase();
-        const timestampString = formatTimestamp(log.timestamp).toLowerCase();
-        const componentString = log.origin?.component?.toLowerCase() ?? '';
-        const messageString = log.message.toLowerCase();
-        const dataString = log.data === undefined ? '' : JSON.stringify(log.data).toLowerCase();
+      if (filterLower) {
+        const messageMatch = log.message.toLowerCase().includes(filterLower);
+        const componentMatch = log.origin?.component?.toLowerCase().includes(filterLower) ?? false;
 
-        const matches =
-          timestampString.includes(filterLower) ||
-          componentString.includes(filterLower) ||
-          messageString.includes(filterLower) ||
-          dataString.includes(filterLower);
-
-        if (!matches) {
-          return false;
+        if (!messageMatch && !componentMatch) {
+          continue;
         }
       }
 
-      return true;
-    });
+      result.push({ ...log, infoIndex: infoCount++ });
+    }
 
-    let infoCount = 0;
-
-    return filtered.map((log) => ({
-      ...log,
-      infoIndex: infoCount++,
-    }));
-  });
+    return result;
+  }, [allLogs, enabledLevels, filter]);
 
   // Handle filter changes
   const handleFilterChange = useCallback(

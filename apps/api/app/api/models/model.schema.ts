@@ -12,10 +12,20 @@ export const modelConfigurationSchema = z.object({
   maxTokens: z.number().describe('The maximum number of tokens to generate').optional(),
   topP: z.number().describe('The top P of the model').optional(),
   thinking: z
+    .union([
+      z.object({
+        type: z.literal('enabled').describe('Enable thinking with an explicit token budget'),
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Anthropic API uses snake_case
+        budget_tokens: z.number().describe('The maximum budget of tokens for thinking'),
+      }),
+      z.object({
+        type: z.literal('adaptive').describe('Adaptive thinking lets the model decide when to reason'),
+      }),
+    ])
+    .optional(),
+  outputConfig: z
     .object({
-      type: z.enum(['enabled']).describe('A toggle to enable thinking'),
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-      budget_tokens: z.number().describe('The maximum budget of tokens for thinking'),
+      effort: z.enum(['low', 'medium', 'high', 'max']).describe('The effort level for adaptive thinking').optional(),
     })
     .optional(),
 });
@@ -46,6 +56,7 @@ export const modelSchema = z.object({
   id: z.string().describe('The unique identifier of the model'),
   name: z.string().describe('The human readable name of the model'),
   slug: z.string().describe('The slug of the model'),
+  description: z.string().describe('A human-readable description of the model').optional(),
   model: z.string().describe('The identifier of the model for the provider'),
   modifiedAt: z.string().describe('The modified at of the model').optional(),
   size: z.number().describe('The size of the model in bytes').optional(),

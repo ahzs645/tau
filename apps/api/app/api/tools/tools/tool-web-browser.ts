@@ -1,115 +1,73 @@
-import type { BaseLanguageModelInterface } from '@langchain/core/language_models/base';
-import type { EmbeddingsInterface } from '@langchain/core/embeddings';
-import type * as cheerio from 'cheerio';
-import { CheerioWebBaseLoader } from '@langchain/community/document_loaders/web/cheerio';
-import { RunnableSequence } from '@langchain/core/runnables';
-import { StringOutputParser } from '@langchain/core/output_parsers';
-import type { TextSplitter } from '@langchain/classic/text_splitter';
-import { RecursiveCharacterTextSplitter } from '@langchain/classic/text_splitter';
-import { MemoryVectorStore } from '@langchain/classic/vectorstores/memory';
-import { formatDocumentsAsString } from '@langchain/classic/util/document';
-import type { StructuredTool } from '@langchain/core/tools';
-import { tool } from '@langchain/core/tools';
-import { webBrowserInputSchema } from '@taucad/chat';
-import type { WebBrowserInput } from '@taucad/chat';
+import { TavilyExtract } from '@langchain/tavily';
+import type { TavilyExtractResponse } from '@langchain/tavily';
+import { StructuredTool } from '@langchain/core/tools';
+import type { CallbackManagerForToolRun } from '@langchain/core/callbacks/manager';
+import { z } from 'zod';
 import { toolName } from '@taucad/chat/constants';
+import type { WebBrowserOutput } from '@taucad/chat';
 
-// Interface for WebBrowser options
-export type WebBrowserOptions = {
-  model: BaseLanguageModelInterface;
-  embeddings: EmbeddingsInterface;
-  textSplitter?: TextSplitter;
-  forceSummary?: boolean;
-  chunkSize?: number;
-  chunkOverlap?: number;
-  maxChunks?: number;
-  maxResults?: number;
+type CreateWebBrowserToolOptions = {
+  tavilyApiKey: string;
 };
 
 /**
- * Implementation function for the web browser tool
+ * Input schema for the web browser tool.
  */
-const webBrowserImpl = async (input: WebBrowserInput, options: WebBrowserOptions): Promise<string> => {
-  try {
-    // Extract values from input object
-    const baseUrl = input.url;
-    const query = input.query ?? '';
+const webBrowserInputSchema = z.object({
+  urls: z.array(z.string()).min(1).max(5).describe('One or more URLs to extract content from (max 5)'),
+  query: z.string().optional().describe('Optional query to rerank extracted chunks by relevance'),
+});
 
-    const {
-      model,
-      embeddings,
-      textSplitter,
-      forceSummary,
-      chunkSize = 2000,
-      chunkOverlap = 200,
-      maxChunks = 4,
-      maxResults = 4,
-    } = options;
+/**
+ * Custom web browser tool that wraps TavilyExtract and transforms its output.
+ *
+ * The raw Tavily response contains `{ results: [...], failed_results: [...], ... }`,
+ * but we only need the `results` array mapped to `{ url, content }`. This wrapper
+ * uses TavilyExtract internally but returns only the transformed results array.
+ */
+class WebBrowserTool extends StructuredTool {
+  public override name = toolName.webBrowser;
+  public override description =
+    'Extract content from one or more web pages. Accepts an array of URLs (max 5) to batch-extract in a single call. Use after web_search to read full page content from promising results. Optionally pass a query to get only relevant chunks.';
 
-    const splitter = textSplitter ?? new RecursiveCharacterTextSplitter({ chunkSize, chunkOverlap });
+  public override schema = webBrowserInputSchema;
 
-    // Determine if we should summarize
-    const doSummary = forceSummary ?? !query;
+  private readonly tavilyTool: TavilyExtract;
 
-    // Fetch and process HTML content
-
-    // For summaries, we only need the body content
-    const rootElement = doSummary ? 'body ' : '*';
-    const selector = `${rootElement}:not(style):not(script):not(svg)`;
-
-    const loader = new CheerioWebBaseLoader(baseUrl, {
-      selector: selector as cheerio.SelectorType,
-    });
-    const docs = await loader.load();
-
-    // Split text into chunks
-    const texts = await splitter.splitDocuments(docs);
-    let context: string;
-
-    // Process differently based on whether we want a summary or search
-    if (doSummary) {
-      // Take more chunks for better summaries, limited by maxChunks
-      context = texts
-        .slice(0, maxChunks)
-        .map((doc) => doc.pageContent)
-        .join('\n');
-    } else {
-      // For searching, use vector search to find relevant sections
-      const vectorStore = await MemoryVectorStore.fromDocuments(texts, embeddings);
-
-      const results = await vectorStore.similaritySearch(query, maxResults, undefined);
-
-      context = formatDocumentsAsString(results);
-    }
-
-    // Prepare the prompt for the model
-    const modelInput = `Text:${context}\n\nI need ${
-      doSummary ? 'a summary' : query
-    } from the above text, also provide up to 5 markdown links from within that would be of interest (always including URL and text). Links should be provided, if present, in markdown syntax as a list under the heading "Relevant Links:".`;
-
-    // Process with the model
-    const chain = RunnableSequence.from([model, new StringOutputParser()]);
-    const result = await chain.invoke(modelInput);
-    return result;
-  } catch (error) {
-    if (error instanceof Error) {
-      return `Error: ${error.message}`;
-    }
-
-    return 'There was a problem processing the webpage';
+  public constructor(tavilyTool: TavilyExtract) {
+    super();
+    this.tavilyTool = tavilyTool;
   }
-};
 
-const webBrowserToolDefinition = {
-  name: toolName.webBrowser,
-  description: 'Useful for when you need to find something on or summarize a webpage.',
-  schema: webBrowserInputSchema,
-} as const;
+  protected override async _call(
+    input: z.infer<typeof webBrowserInputSchema>,
+    _runManager?: CallbackManagerForToolRun,
+  ): Promise<WebBrowserOutput> {
+    const rawResult = (await this.tavilyTool.invoke({
+      urls: input.urls,
+      ...(input.query ? { query: input.query } : {}),
+    })) as TavilyExtractResponse | { error: string };
 
-/**
- * Creates a web browser tool that fetches and processes web content.
- * This version uses the functional API from LangChain.
- */
-export const createWebBrowserTool = (options: WebBrowserOptions): StructuredTool => {
-  return tool(async (input: WebBrowserInput) => webBrowserImpl(input, options), webBrowserToolDefinition);
+    // Handle error responses
+    if ('error' in rawResult) {
+      throw new Error(String(rawResult.error));
+    }
+
+    // Extract and transform only the results array
+    return rawResult.results.map((result) => ({
+      url: result.url,
+      content: result.raw_content,
+    }));
+  }
+}
+
+export const createWebBrowserTool = ({ tavilyApiKey }: CreateWebBrowserToolOptions): WebBrowserTool => {
+  const tavilyTool = new TavilyExtract({
+    extractDepth: 'basic',
+    includeImages: false,
+    format: 'markdown',
+    tavilyApiKey,
+  });
+
+  return new WebBrowserTool(tavilyTool);
 };

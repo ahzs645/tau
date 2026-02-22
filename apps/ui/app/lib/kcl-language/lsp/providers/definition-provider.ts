@@ -119,6 +119,9 @@ async function resolveImportDefinition(ctx: SymbolLookupContext): Promise<Monaco
   }
 }
 
+/** Callback to ensure a Monaco model exists for a path. */
+export type GetOrEnsureModel = (path: string) => Promise<Monaco.editor.ITextModel | undefined>;
+
 /**
  * Create a Monaco definition provider that uses the LSP client.
  * Falls back to symbol service when LSP returns null.
@@ -127,6 +130,7 @@ export function createDefinitionProvider(
   monaco: typeof Monaco,
   client: KclLspClient,
   symbolService?: KclSymbolService,
+  getOrEnsureModel?: GetOrEnsureModel,
 ): Monaco.languages.DefinitionProvider {
   return {
     async provideDefinition(
@@ -175,7 +179,7 @@ export function createDefinitionProvider(
           log.debug('Resolved import path to URI:', targetUri);
 
           // Ensure target model exists for Monaco to show Cmd+hover underline
-          await ensureModelExists(monaco, targetUri, fileManager);
+          await ensureModelForUri(monaco, targetUri, fileManager, getOrEnsureModel);
 
           return {
             uri: monaco.Uri.parse(targetUri),
@@ -193,7 +197,7 @@ export function createDefinitionProvider(
         log.debug('Resolved import path to URI:', targetUri);
 
         // Ensure target model exists for Monaco to show Cmd+hover underline
-        await ensureModelExists(monaco, targetUri, fileManager);
+        await ensureModelForUri(monaco, targetUri, fileManager, getOrEnsureModel);
 
         return {
           uri: monaco.Uri.parse(targetUri),
@@ -278,17 +282,16 @@ function resolveImportPathToUri(currentFileUri: string, importPath: string): str
 
 /**
  * Extract the file path from a Monaco URI for file reading.
- * Handles build-namespaced URIs like "file:///builds/bld_xxx/main.kcl"
+ * Handles root-level URIs like "file:///main.kcl" → "main.kcl"
  */
 function extractFilePathFromUri(uri: string): string {
   // Remove file:// prefix
   let path = uri.replace(/^file:\/\//, '');
 
-  // Remove build namespace prefix if present
-  // URI path: /builds/bld_xxx/main.kcl -> main.kcl
-  const buildMatch = /^\/builds\/[^/]+\/(.+)$/.exec(path);
-  if (buildMatch?.[1]) {
-    path = buildMatch[1];
+  // Strip leading slash from root-level paths
+  // URI path: /main.kcl -> main.kcl
+  if (path.startsWith('/')) {
+    path = path.slice(1);
   }
 
   return path;
@@ -296,22 +299,31 @@ function extractFilePathFromUri(uri: string): string {
 
 /**
  * Ensure a Monaco model exists for the given URI.
- * If the model doesn't exist, creates it by loading the file content.
+ * Delegates to the centralized model service when available, otherwise
+ * falls back to direct model creation.
+ *
  * This is required for Monaco to show Cmd+hover link underlines.
  */
-async function ensureModelExists(
+async function ensureModelForUri(
   monaco: typeof Monaco,
   targetUri: string,
   fileManager: LspFileManager | undefined,
+  getOrEnsureModelFn?: GetOrEnsureModel,
 ): Promise<void> {
+  // Fast path: model already exists
   const monacoUri = monaco.Uri.parse(targetUri);
-  const existingModel = monaco.editor.getModel(monacoUri);
-
-  if (existingModel) {
-    log.debug('Model already exists for:', targetUri);
+  if (monaco.editor.getModel(monacoUri)) {
     return;
   }
 
+  // Use centralized model service if available
+  if (getOrEnsureModelFn) {
+    const filePath = extractFilePathFromUri(targetUri);
+    await getOrEnsureModelFn(filePath);
+    return;
+  }
+
+  // Fallback: direct model creation (only when model service not yet initialized)
   if (!fileManager) {
     log.debug('No file manager available, cannot create model for:', targetUri);
     return;
@@ -319,17 +331,14 @@ async function ensureModelExists(
 
   try {
     const filePath = extractFilePathFromUri(targetUri);
-    log.debug('Creating model on-demand for:', targetUri, '(path:', filePath, ')');
+    log.debug('Creating model on-demand (fallback) for:', targetUri, '(path:', filePath, ')');
 
     const content = await fileManager.readFile(filePath);
     const textContent = new TextDecoder().decode(content);
 
-    // Create the model with KCL language
     monaco.editor.createModel(textContent, codeLanguages.kcl, monacoUri);
     log.debug('Model created successfully for:', targetUri);
   } catch (error) {
     log.debug('Failed to create model for:', targetUri, error);
-    // Non-fatal: Monaco will show the definition without the model
-    // and the navigation service will create it when the user clicks
   }
 }

@@ -1,8 +1,9 @@
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { messageRole } from '@taucad/chat/constants';
-import type { MyUIMessage, UsageData } from '@taucad/chat';
+import type { UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
+import { serializeMessage } from '#utils/chat.utils.js';
 import { ChatMessageReasoning } from '#routes/builds_.$id/chat-message-reasoning.js';
 import { ChatMessageDataUsage } from '#routes/builds_.$id/chat-message-data-usage.js';
 import { ChatMessageText } from '#routes/builds_.$id/chat-message-text.js';
@@ -10,6 +11,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.
 import { CopyButton } from '#components/copy-button.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemVariants, menuSubTriggerOpenClass } from '#components/ui/menu.variants.js';
 import { When } from '#components/ui/utils/when.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import {
@@ -41,17 +43,6 @@ import { ChatMessagePlanning } from '#routes/builds_.$id/chat-message-planning.j
 
 type ChatMessageProperties = {
   readonly messageId: string;
-};
-
-const getMessageContent = (message: MyUIMessage): string => {
-  const content = [];
-  for (const part of message.parts) {
-    if (part.type === 'text') {
-      content.push(part.text);
-    }
-  }
-
-  return content.join('\n\n');
 };
 
 export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties): React.JSX.Element {
@@ -106,7 +97,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
           'flex flex-col space-y-2 overflow-y-auto',
           'w-full',
           // Vary width for user and assistant messages to achieve visual differentiation
-          isUser ? 'mx-2' : 'mx-6',
+          isUser ? 'mx-2' : 'mx-4',
         )}
       >
         <When shouldRender={isUser ? isEditing : false}>
@@ -182,7 +173,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'dynamic-tool': {
-                  throw new Error('Dynamic tool rendering is not implemented');
+                  return <ChatMessagePartUnknown key={part.toolCallId} part={part} />;
                 }
 
                 case 'source-url': {
@@ -200,7 +191,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'tool-web_browser': {
-                  return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} />;
+                  const hasPartsAfter = index < displayMessage.parts.length - 1;
+                  return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} hasContent={hasPartsAfter} />;
                 }
 
                 case 'tool-edit_file': {
@@ -279,7 +271,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             <CopyButton
               tooltipContentProperties={{ side: 'bottom' }}
               size="icon"
-              getText={() => getMessageContent(displayMessage)}
+              getText={() => serializeMessage(displayMessage)}
               tooltip="Copy message"
               className="size-7"
             />
@@ -297,18 +289,23 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   <DropdownMenuLabel>Switch model</DropdownMenuLabel>
                   <ChatModelSelector
                     popoverProperties={{ side: 'right', align: 'start' }}
-                    className="h-fit w-full p-2"
+                    className="h-fit w-full"
                     onSelect={(modelId) => {
                       retryMessage(messageId, modelId);
                     }}
                   >
                     {({ selectedModel }) => (
-                      <Button variant="ghost" size="sm" className="group w-full justify-start rounded-sm p-2">
-                        <div className="flex w-full flex-row items-center justify-between gap-1 text-sm font-normal">
-                          <span>{selectedModel?.name ?? 'Offline'}</span>
-                          <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90" />
-                        </div>
-                      </Button>
+                      <button
+                        type="button"
+                        className={cn(
+                          menuItemVariants(),
+                          menuSubTriggerOpenClass,
+                          'group w-full hover:bg-neutral/30 hover:text-foreground',
+                        )}
+                      >
+                        <span>{selectedModel?.name ?? 'Offline'}</span>
+                        <ChevronRight className="ml-auto size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90" />
+                      </button>
                     )}
                   </ChatModelSelector>
                   <DropdownMenuSeparator />
@@ -319,7 +316,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                     }}
                   >
                     <p>Try again</p>
-                    <RefreshCw className="size-4 text-muted-foreground" />
+                    <RefreshCw className="text-muted-foreground" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

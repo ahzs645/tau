@@ -101,8 +101,8 @@ export default function ImportRoute(): React.JSX.Element {
             buildFiles[path] = { content: file.content };
           }
 
-          const build = await buildManager.createBuild(
-            {
+          const build = await buildManager.createBuild({
+            build: {
               name: `${input.owner}/${input.repo}`,
               description: `Imported from GitHub: https://github.com/${input.owner}/${input.repo}`,
               author: {
@@ -118,8 +118,8 @@ export default function ImportRoute(): React.JSX.Element {
                 },
               },
             },
-            buildFiles,
-          );
+            files: buildFiles,
+          });
 
           return { type: 'buildCreated', buildId: build.id };
         }),
@@ -146,8 +146,8 @@ export default function ImportRoute(): React.JSX.Element {
             buildFiles[path] = { content: file.content };
           }
 
-          const build = await buildManager.createBuild(
-            {
+          const build = await buildManager.createBuild({
+            build: {
               name: input.importName,
               description: `Imported from disk`,
               author: {
@@ -163,8 +163,8 @@ export default function ImportRoute(): React.JSX.Element {
                 },
               },
             },
-            buildFiles,
-          );
+            files: buildFiles,
+          });
 
           return { type: 'buildCreated', buildId: build.id };
         }),
@@ -337,11 +337,20 @@ export default function ImportRoute(): React.JSX.Element {
     [diskActorRef],
   );
 
+  const handleDirectoryHandleSelected = useCallback(
+    (handle: FileSystemDirectoryHandle) => {
+      setActiveMode('disk');
+      diskActorRef.send({ type: 'processDirectoryHandle', handle });
+    },
+    [diskActorRef],
+  );
+
   // Determine if disk import is active
   const isDiskActive =
     activeMode === 'disk' ||
     diskState.matches('reading') ||
     diskState.matches('readingDataTransfer') ||
+    diskState.matches('readingDirectoryHandle') ||
     diskState.matches('extracting') ||
     diskState.matches('selectingMainFile') ||
     diskState.matches('creating');
@@ -375,10 +384,14 @@ export default function ImportRoute(): React.JSX.Element {
     isDiskActive &&
     (diskState.matches('reading') ||
       diskState.matches('readingDataTransfer') ||
+      diskState.matches('readingDirectoryHandle') ||
       diskState.matches('extracting') ||
       diskState.matches('creating'))
   ) {
-    const isReading = diskState.matches('reading') || diskState.matches('readingDataTransfer');
+    const isReading =
+      diskState.matches('reading') ||
+      diskState.matches('readingDataTransfer') ||
+      diskState.matches('readingDirectoryHandle');
     const isExtracting = diskState.matches('extracting');
     const isCreating = diskState.matches('creating');
 
@@ -657,10 +670,11 @@ export default function ImportRoute(): React.JSX.Element {
 
                   {/* Disk Upload Card */}
                   <UploadCard
+                    onDataTransfer={handleDataTransfer}
+                    onDirectoryHandleSelected={handleDirectoryHandleSelected}
                     onFilesSelected={handleFilesSelected}
                     onFolderSelected={handleFolderSelected}
                     onZipSelected={handleZipSelected}
-                    onDataTransfer={handleDataTransfer}
                   />
                 </div>
 

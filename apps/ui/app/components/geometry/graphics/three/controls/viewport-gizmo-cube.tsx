@@ -1,14 +1,22 @@
 /* eslint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
-import { useThree } from '@react-three/fiber';
+import { useThree, useFrame } from '@react-three/fiber';
 import type { GizmoAxisOptions, GizmoOptions } from 'three-viewport-gizmo';
 import { ViewportGizmo } from 'three-viewport-gizmo';
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
 import { useColor } from '#hooks/use-color.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { createViewportGizmoCubeAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.js';
+import { useGraphicsSelector } from '#hooks/use-graphics.js';
+import {
+  syncGizmoFov,
+  resolveGizmoContainer,
+  createGizmoCanvas,
+  createGizmoRenderer,
+  disposeGizmoResources,
+} from '#components/geometry/graphics/three/utils/gizmo.utils.js';
 
 type ViewportGizmoCubeProps = {
   readonly size?: number;
@@ -35,20 +43,32 @@ const className = 'viewport-gizmo-cube';
 const emptyDependencies: readonly unknown[] = [];
 
 export function ViewportGizmoCube({
-  size = 128,
+  size = 96,
   container,
   dependencies = emptyDependencies,
 }: ViewportGizmoCubeProps): ReactNode {
-  const { camera, gl, controls, scene, invalidate } = useThree((state) => ({
-    camera: state.camera as THREE.PerspectiveCamera,
-    gl: state.gl,
-    controls: state.controls as OrbitControls,
-    scene: state.scene,
-    invalidate: state.invalidate,
-  }));
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
+  const gl = useThree((state) => state.gl);
+  const controls = useThree((state) => state.controls) as OrbitControls;
+  const scene = useThree((state) => state.scene);
+  const invalidate = useThree((state) => state.invalidate);
 
   const { serialized } = useColor();
   const { theme } = useTheme();
+
+  // Subscribe to the viewport FOV from the per-view graphics machine
+  const cameraFovAngle = useGraphicsSelector((state) => state.context.cameraFovAngle);
+
+  // Keep a ref to the current angle so the creation effect can read it without
+  // adding cameraFovAngle as a dependency (which would cause expensive recreation)
+  const cameraFovAngleRef = useRef(cameraFovAngle);
+  cameraFovAngleRef.current = cameraFovAngle;
+
+  // Ref to the live gizmo instance for the FOV sync effect
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  const gizmoRef = useRef<ViewportGizmo | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
 
   const handleChange = useCallback((): void => {
     invalidate();
@@ -61,45 +81,16 @@ export function ViewportGizmoCube({
       return;
     }
 
-    function animation() {
-      // Render the Gizmo
-      renderer.toneMapping = THREE.NoToneMapping;
-      gizmo.render();
-    }
+    const canvas = createGizmoCanvas(className);
 
-    // Create a separate canvas for the gizmo
-    const canvas = document.createElement('canvas');
-    canvas.className = className;
-    canvas.style.position = 'absolute';
-    canvas.style.bottom = '0';
-    canvas.style.right = '0';
-    canvas.style.zIndex = '10';
-
-    // Find the parent container to append our canvas
-    // Use the dedicated gizmo container if available (to support CSS anchor positioning),
-    // otherwise fallback to the renderer's parent (legacy behavior).
-    const containerToUse =
-      typeof container === 'string'
-        ? document.querySelector<HTMLElement>(container)
-        : (container ?? gl.domElement.parentElement);
+    const containerToUse = resolveGizmoContainer(container, gl.domElement);
     if (!containerToUse) {
       return;
     }
 
-    // Append the canvas to the container
     containerToUse.append(canvas);
 
-    // Create a renderer for the gizmo
-    const renderer = new THREE.WebGLRenderer({
-      canvas,
-      alpha: true,
-      antialias: true,
-    });
-    renderer.setSize(size, size);
-    const dpr = Math.min(globalThis.devicePixelRatio, 2);
-    renderer.setPixelRatio(dpr);
-    renderer.setAnimationLoop(animation);
-    renderer.setClearColor(0x00_00_00, 0);
+    const renderer = createGizmoRenderer(canvas, size);
 
     const faceConfig = {
       color: theme === Theme.DARK ? 0x33_33_33 : 0xdd_dd_dd,
@@ -152,6 +143,11 @@ export function ViewportGizmoCube({
 
     // Create the gizmo
     const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
+    gizmoRef.current = gizmo;
+    rendererRef.current = renderer;
+
+    // Synchronize the gizmo's internal camera FOV with the current viewport FOV
+    syncGizmoFov(gizmo, cameraFovAngleRef.current);
 
     // Add event listeners for the gizmo
     gizmo.addEventListener('change', handleChange);
@@ -160,6 +156,7 @@ export function ViewportGizmoCube({
     gizmo.add(
       createViewportGizmoCubeAxes({
         axesSize: 2.1,
+        rendererSize: size,
         xAxisColor: 'red',
         yAxisColor: 'green',
         zAxisColor: 'rgb(37, 78, 136)',
@@ -175,24 +172,30 @@ export function ViewportGizmoCube({
 
     // Cleanup function
     return () => {
-      // Remove event listeners
-      gizmo.removeEventListener('change', handleChange);
+      // Clear refs so the useFrame and FOV sync effect cannot operate on disposed objects
+      gizmoRef.current = null;
+      rendererRef.current = null;
 
-      // Dispose the gizmo
-      gizmo.dispose();
-
-      // Remove the canvas
-      if (canvas.parentElement) {
-        canvas.remove();
-      }
-
-      // Dispose the renderer
-      if (renderer) {
-        renderer.dispose();
-      }
+      disposeGizmoResources(gizmo, renderer, canvas, handleChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
+
+  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation)
+  useFrame(() => {
+    if (rendererRef.current && gizmoRef.current) {
+      rendererRef.current.toneMapping = THREE.NoToneMapping;
+      gizmoRef.current.render();
+    }
+  });
+
+  // Real-time FOV sync: update the gizmo's internal camera when the viewport FOV changes.
+  // This is a separate effect to avoid expensive gizmo recreation on every slider tick.
+  useEffect(() => {
+    if (gizmoRef.current) {
+      syncGizmoFov(gizmoRef.current, cameraFovAngle);
+    }
+  }, [cameraFovAngle]);
 
   return null;
 }

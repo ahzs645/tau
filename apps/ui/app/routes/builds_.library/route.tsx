@@ -6,16 +6,8 @@ import {
   ArrowRight,
   Table as TableIcon,
   Cog,
-  List,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   Trash,
   AlertCircle,
-  ArrowUpDown,
-  ArrowDown,
-  ArrowUp,
   Zap,
   Brain,
   Wrench,
@@ -25,7 +17,6 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { Link, NavLink, useNavigate } from 'react-router';
 import {
-  flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
@@ -33,22 +24,22 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import type { VisibilityState, SortingState } from '@tanstack/react-table';
-import { useSelector } from '@xstate/react';
 import type { EngineeringDiscipline, Build, KernelProvider } from '@taucad/types';
-import { engineeringDisciplines, idPrefix } from '@taucad/types/constants';
-import { messageRole, messageStatus } from '@taucad/chat/constants';
-import { generatePrefixedId } from '@taucad/utils/id';
-import { createInitialBuild } from '#constants/build.constants.js';
+import { engineeringDisciplines } from '@taucad/types/constants';
 import { createColumns } from '#routes/builds_.library/columns.js';
 import { CategoryBadge } from '#components/category-badge.js';
 import { Button, buttonVariants } from '#components/ui/button.js';
-import { SearchInput } from '#components/search-input.js';
 import { Card, CardContent, CardHeader, CardDescription, CardFooter } from '#components/ui/card.js';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
+import {
+  DataTable,
+  DataTableSearch,
+  DataTablePagination,
+  DataTableSortingDropdown,
+  DataTableColumnVisibilityDropdown,
+} from '#components/ui/data-table.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuCheckboxItem,
   DropdownMenuTrigger,
   DropdownMenuLabel,
@@ -56,7 +47,8 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { cn } from '#utils/ui.utils.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#components/ui/tabs.js';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
+import { CadPreviewViewer } from '#components/cad-preview.js';
+import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
 import { useBuilds } from '#hooks/use-builds.js';
 import { toast } from '#components/ui/sonner.js';
 import type { Handle } from '#types/matches.types.js';
@@ -70,13 +62,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '#components/ui/alert-dialog.js';
-import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { BuildActionDropdown } from '#routes/builds_.library/build-action-dropdown.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { formatRelativeTime } from '#utils/date.utils.js';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '#components/ui/table.js';
-import { toTitleCase } from '#utils/string.utils.js';
 import { Loader } from '#components/ui/loader.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { InlineTextEditor } from '#components/inline-text-editor.js';
@@ -86,13 +75,10 @@ import type { ChatTextareaProperties } from '#components/chat/chat-textarea-type
 import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { ChatProvider } from '#hooks/use-chat.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';
-import { createMessage } from '#utils/chat.utils.js';
-import { getMainFile, getEmptyCode } from '#utils/kernel.utils.js';
-import { encodeTextFile } from '#utils/filesystem.utils.js';
-import { defaultBuildName } from '#constants/build-names.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { useChatManager } from '#hooks/use-chat-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
+
+// Note: useCookie is still used for buildViewMode (user preference, not per-build state)
 
 const categoryIconsFromEngineeringDiscipline = {
   mechanical: Wrench,
@@ -126,9 +112,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
   const { builds, deleteBuild, duplicateBuild, restoreBuild, updateName } = useBuilds({ includeDeleted: showDeleted });
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
-  const [, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
   const buildManager = useBuildManager();
-  const chatManager = useChatManager();
 
   const handleToggleDeleted = useCallback((value: boolean) => {
     setShowDeleted(value);
@@ -186,41 +170,12 @@ export default function PersonalCadProjects(): React.JSX.Element {
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
     async ({ content, model, metadata, imageUrls }) => {
       try {
-        const mainFileName = getMainFile(kernel);
-        const emptyCode = getEmptyCode(kernel);
-
-        // Create the initial message as pending
-        const userMessage = createMessage({
-          content,
-          role: messageRole.user,
-          metadata: { ...metadata, kernel, model, status: messageStatus.pending },
-          imageUrls,
+        const createdBuild = await buildManager.createBuild({
+          kernel,
+          initialMessage: { content, model, metadata, imageUrls },
+          // Set initial panel state: chat open
+          editorState: { panelState: { openPanels: { chat: true } } },
         });
-
-        // Pre-generate the chat ID
-        const chatId = generatePrefixedId(idPrefix.chat);
-
-        // Create initial build using factory function with the pre-generated chatId
-        const { buildData, files } = createInitialBuild({
-          buildName: defaultBuildName,
-          chatId,
-          initialMessage: userMessage,
-          mainFileName,
-          emptyCodeContent: encodeTextFile(emptyCode),
-        });
-
-        // Create the build with lastChatId already set
-        const createdBuild = await buildManager.createBuild(buildData, files);
-
-        // Create the chat with the same pre-generated ID
-        await chatManager.createChat(createdBuild.id, {
-          id: chatId,
-          name: 'Initial design',
-          messages: [userMessage],
-        });
-
-        // Ensure chat is open when navigating to the build page
-        setIsChatOpen(true);
 
         // Navigate immediately - the build page will handle the streaming
         await navigate(`/builds/${createdBuild.id}`);
@@ -228,7 +183,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
         toast.error('Failed to create build');
       }
     },
-    [kernel, buildManager, chatManager, setIsChatOpen, navigate],
+    [kernel, buildManager, navigate],
   );
 
   const actions: BuildActions = {
@@ -506,7 +461,7 @@ function UnifiedBuildList({
             <div className="flex justify-center">
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
-                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
+                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1">
                     {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}
@@ -518,261 +473,48 @@ function UnifiedBuildList({
     );
   }
 
+  const columns = createColumns(actions);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <SearchInput
-          autoComplete="off"
-          className="h-8"
-          placeholder="Search builds..."
-          value={globalFilter}
-          containerClassName="grow"
-          onChange={(event) => {
-            setGlobalFilter(event.target.value);
-          }}
-          onClear={() => {
-            setGlobalFilter('');
-          }}
-        />
+        <DataTableSearch table={table} placeholder="Search builds..." containerClassName="grow" />
         <div className="flex items-center gap-2">
           {/* Add bulk actions when rows are selected */}
           {table.getFilteredSelectedRowModel().rows.length > 0 && (
             <BulkActions table={table} deleteBuild={actions.handleDelete} />
           )}
-          <SortingDropdown table={table} />
-          <ViewOptionsDropdown table={table} />
+          <DataTableSortingDropdown table={table} />
+          <DataTableColumnVisibilityDropdown table={table} />
         </div>
       </div>
 
       {viewMode === 'table' ? (
         // Table View
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows.length > 0 ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} className={row.getIsSelected() ? 'bg-muted/50' : undefined}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={table.getAllColumns().length} className="h-24 text-center">
-                  No results.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+        <DataTable table={table} columns={columns} />
       ) : (
         // Grid View
         <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {table.getRowModel().rows.map((row) => (
-            <BuildProvider key={row.original.id} buildId={row.original.id} input={{ shouldLoadModelOnStart: false }}>
-              <BuildLibraryCard
-                build={row.original}
-                actions={actions}
-                isSelected={row.getIsSelected()}
-                onSelect={() => {
-                  row.toggleSelected();
-                }}
-              />
-            </BuildProvider>
+            <BuildLibraryCard
+              key={row.original.id}
+              build={row.original}
+              actions={actions}
+              isSelected={row.getIsSelected()}
+              onSelect={() => {
+                row.toggleSelected();
+              }}
+            />
           ))}
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <div className="flex-1 text-sm text-muted-foreground">
-          {table.getFilteredSelectedRowModel().rows.length} of {table.getFilteredRowModel().rows.length} build(s)
-          selected.
-        </div>
-        <div className="flex items-center space-x-6 lg:space-x-8">
-          <div className="flex items-center space-x-2">
-            <p className="text-sm font-medium">Items per page</p>
-            <Select
-              value={`${table.getState().pagination.pageSize}`}
-              onValueChange={(value) => {
-                table.setPageSize(Number(value));
-              }}
-            >
-              <SelectTrigger className="h-7 w-[70px]">
-                <SelectValue placeholder={table.getState().pagination.pageSize} />
-              </SelectTrigger>
-              <SelectContent side="top">
-                {viewMode === 'grid'
-                  ? [12, 24, 36, 48, 60].map((pageSize) => (
-                      <SelectItem key={pageSize} value={`${pageSize}`}>
-                        {pageSize}
-                      </SelectItem>
-                    ))
-                  : [10, 20, 30, 40, 50].map((pageSize) => (
-                      <SelectItem key={pageSize} value={`${pageSize}`}>
-                        {pageSize}
-                      </SelectItem>
-                    ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex w-[100px] items-center justify-center text-sm font-medium">
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-          </div>
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              className="hidden h-7 w-8 p-0 lg:flex"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => {
-                table.setPageIndex(0);
-              }}
-            >
-              <span className="sr-only">Go to first page</span>
-              <ChevronsLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="h-7 w-8 p-0"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => {
-                table.previousPage();
-              }}
-            >
-              <span className="sr-only">Go to previous page</span>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="h-7 w-8 p-0"
-              disabled={!table.getCanNextPage()}
-              onClick={() => {
-                table.nextPage();
-              }}
-            >
-              <span className="sr-only">Go to next page</span>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              className="hidden h-7 w-8 p-0 lg:flex"
-              disabled={!table.getCanNextPage()}
-              onClick={() => {
-                table.setPageIndex(table.getPageCount() - 1);
-              }}
-            >
-              <span className="sr-only">Go to last page</span>
-              <ChevronsRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
+      <DataTablePagination
+        table={table}
+        pageSizeOptions={viewMode === 'grid' ? gridPageSizes : tablePageSizes}
+        itemName="build"
+      />
     </div>
-  );
-}
-
-function SortingDropdown({ table }: { readonly table: ReturnType<typeof useReactTable<Build>> }) {
-  const sortingState = table.getState().sorting[0];
-
-  // Dynamically get sortable columns from the table
-  const sortFields = table
-    .getAllColumns()
-    .filter((column) => column.getCanSort())
-    .map((column) => ({
-      id: column.id,
-      label: toTitleCase(column.id),
-    }));
-
-  const toggleSorting = (id: string) => {
-    if (sortingState?.id === id) {
-      // Toggle direction if already sorting by this column
-      table.setSorting([{ id, desc: !sortingState.desc }]);
-    } else {
-      // Set to descending order by default on first click
-      table.setSorting([{ id, desc: true }]);
-    }
-  };
-
-  const renderSortIndicator = (fieldId: string) => {
-    if (sortingState?.id !== fieldId) {
-      return null;
-    }
-
-    return sortingState.desc ? <ArrowDown className="ml-auto" /> : <ArrowUp className="ml-auto" />;
-  };
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
-          <ArrowUpDown className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {sortFields.map((field) => (
-          <DropdownMenuItem
-            key={field.id}
-            className="flex w-full items-center"
-            onClick={() => {
-              toggleSorting(field.id);
-            }}
-            onSelect={(event) => {
-              event.preventDefault();
-            }}
-          >
-            {field.label}
-            {renderSortIndicator(field.id)}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function ViewOptionsDropdown({ table }: { readonly table: ReturnType<typeof useReactTable<Build>> }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
-          <List className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {table
-          .getAllColumns()
-          .filter((column) => column.getCanHide())
-          .map((column) => {
-            return (
-              <DropdownMenuCheckboxItem
-                key={column.id}
-                checked={column.getIsVisible()}
-                onCheckedChange={(value) => {
-                  column.toggleVisibility(Boolean(value));
-                }}
-                onSelect={(event) => {
-                  event.preventDefault();
-                }}
-              >
-                {toTitleCase(column.id)}
-              </DropdownMenuCheckboxItem>
-            );
-          })}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -785,25 +527,13 @@ type BuildLibraryCardProps = {
 
 function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibraryCardProps) {
   const [showPreview, setShowPreview] = useState(false);
-  const [hasLoadedModel, setHasLoadedModel] = useState(false);
-
-  // Get actors from BuildProvider context
-  const { cadRef, buildRef } = useBuild();
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const status = useSelector(cadRef, (state) => state.value);
 
   const mechanicalAsset = build.assets.mechanical;
   if (!mechanicalAsset) {
     throw new Error('Mechanical asset not found');
   }
 
-  // Load the CAD model when preview is enabled for the first time
-  useEffect(() => {
-    if (showPreview && !hasLoadedModel) {
-      buildRef.send({ type: 'loadModel' });
-      setHasLoadedModel(true);
-    }
-  }, [showPreview, hasLoadedModel, buildRef]);
+  const mainFile = mechanicalAsset.main;
 
   return (
     <Card className={cn('group relative flex flex-col overflow-hidden pt-0', isSelected && 'ring-3 ring-primary')}>
@@ -827,21 +557,13 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
               event.preventDefault();
             }}
           >
-            {['initializing', 'booting'].includes(status) ? (
-              <div className="flex size-full items-center justify-center">
-                <Loader className="size-10" />
-              </div>
-            ) : null}
-            <CadViewer
-              geometries={geometries}
-              enablePan={false}
-              enableLines={false}
-              enableMatcap={false}
-              className="bg-muted"
-              stageOptions={{
-                zoomLevel: 1.5,
-              }}
-            />
+            <CadPreviewProvider buildId={build.id} mainFile={mainFile} isEnabled={showPreview}>
+              <CadPreviewViewer
+                enablePan={false}
+                stageOptions={{ zoomLevel: 1.5 }}
+                graphicsOptions={{ enableLines: false, viewerClassName: 'bg-muted' }}
+              />
+            </CadPreviewProvider>
           </div>
         ) : null}
         <Button

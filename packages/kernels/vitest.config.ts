@@ -2,7 +2,8 @@ import { defineConfig } from 'vitest/config';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 export default defineConfig({
-  plugins: [nxViteTsPaths()],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- vite type mismatch from pnpm duplicate @types/node resolutions
+  plugins: [nxViteTsPaths() as any],
   test: {
     environment: 'node',
     typecheck: {
@@ -12,6 +13,7 @@ export default defineConfig({
       ignoreSourceErrors: true,
     },
     reporters: ['verbose'],
+    setupFiles: ['vitest.setup.ts'],
     coverage: {
       provider: 'v8',
       reportsDirectory: '../../coverage/packages/kernels',

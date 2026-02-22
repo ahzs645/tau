@@ -1,7 +1,9 @@
 import {
   BookOpen,
   Bot,
+  ChartColumn,
   FileAxis3D,
+  Files,
   Frame,
   Hammer,
   Import,
@@ -9,14 +11,16 @@ import {
   PieChart,
   Settings,
   UsersRound,
-  Workflow,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 type NavRoute = {
   title: string;
   url: string;
   icon: LucideIcon;
+  /** When set, clicking the item calls this instead of navigating to `url`. */
+  action?: () => void;
 };
 
 type NavProject = {
@@ -65,18 +69,28 @@ export const navRoutes: {
       url: '/import',
       icon: Import,
     },
-    {
-      title: 'Workflows',
-      url: '/workflows',
-      icon: Workflow,
-    },
+    // {
+    //   title: 'Workflows',
+    //   url: '/workflows',
+    //   icon: Workflow,
+    // },
     {
       title: 'Models',
       url: '/models',
       icon: Bot,
     },
+    {
+      title: 'Usage',
+      url: '/usage',
+      icon: ChartColumn,
+    },
   ],
   navSecondary: [
+    {
+      title: 'Files',
+      url: '/files',
+      icon: Files,
+    },
     {
       title: 'Documentation',
       url: '/docs',
@@ -86,6 +100,9 @@ export const navRoutes: {
       title: 'Settings',
       url: '/settings',
       icon: Settings,
+      action(): void {
+        openSettingsDialog();
+      },
     },
   ],
   projects: [

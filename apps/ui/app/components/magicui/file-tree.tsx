@@ -1,8 +1,8 @@
-import * as AccordionPrimitive from '@radix-ui/react-accordion';
-import { FileIcon, FolderIcon, FolderOpenIcon } from 'lucide-react';
+import { Accordion as AccordionPrimitive } from 'radix-ui';
+import { FolderIcon, FolderOpenIcon } from 'lucide-react';
 import React, { createContext, useCallback, useContext, useEffect, useState, useMemo } from 'react';
 import { Button } from '#components/ui/button.js';
-import { SidebarMenuButton } from '#components/ui/sidebar.js';
+import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { cn } from '#utils/ui.utils.js';
 
 type TreeViewElement = {
@@ -134,13 +134,13 @@ function Tree({
 
   return (
     <TreeContext.Provider value={contextValue}>
-      <div className={cn('size-full px-2', className)}>
+      <div className={cn('size-full overflow-y-auto p-1', className)}>
         <AccordionPrimitive.Root
           {...props}
           type="multiple"
           defaultValue={expandedItems}
           value={expandedItems}
-          className="flex w-full flex-col gap-1"
+          className="flex w-full flex-col"
           dir={dir as Direction}
           onValueChange={(value) => {
             setExpandedItems((previous) => [...(previous ?? []), value[0]!]);
@@ -172,9 +172,10 @@ type FolderComponentProps = {} & React.ComponentPropsWithoutRef<typeof Accordion
 
 type FolderProps = {
   readonly expandedItems?: string[];
-  readonly element: string;
+  readonly element: React.ReactNode;
   readonly isSelectable?: boolean;
   readonly isSelect?: boolean;
+  readonly actions?: React.ReactNode;
 } & FolderComponentProps;
 
 function Folder({
@@ -183,37 +184,47 @@ function Folder({
   value,
   isSelectable = true,
   isSelect,
+  actions,
   children,
   ...props
 }: FolderProps & React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   const { direction, handleExpand, expandedItems, indicator, setExpandedItems, openIcon, closeIcon } = useTree();
 
   return (
-    <AccordionPrimitive.Item {...props} value={value} className="relative flex h-full flex-col gap-1 overflow-hidden">
-      <SidebarMenuButton asChild className="gap-1">
-        <AccordionPrimitive.Trigger
-          className={cn(`flex items-center rounded-md text-sm`, className, {
-            'rounded-md bg-muted': isSelect && isSelectable,
+    <AccordionPrimitive.Item {...props} value={value} className="relative flex h-full flex-col overflow-hidden">
+      <div
+        className={cn(
+          'group relative flex h-7 w-full items-center justify-between gap-2 px-2 text-sm',
+          'before:pointer-events-none before:absolute before:inset-y-0 before:right-0 before:-left-96 before:-z-10',
+          'hover:before:bg-muted',
+          className,
+          {
+            'before:bg-muted': isSelect && isSelectable,
             'cursor-pointer': isSelectable,
             'cursor-not-allowed opacity-50': !isSelectable,
-          })}
+          },
+        )}
+      >
+        <AccordionPrimitive.Trigger
+          className="flex min-w-0 flex-1 items-center gap-2"
           disabled={!isSelectable}
           onClick={() => {
             handleExpand(value);
           }}
         >
           {expandedItems?.includes(value)
-            ? (openIcon ?? <FolderOpenIcon className="size-4" />)
-            : (closeIcon ?? <FolderIcon className="size-4" />)}
-          <span>{element}</span>
+            ? (openIcon ?? <FolderOpenIcon className="size-4 shrink-0 text-muted-foreground" />)
+            : (closeIcon ?? <FolderIcon className="size-4 shrink-0 text-muted-foreground" />)}
+          <span className="truncate text-muted-foreground group-hover:text-foreground">{element}</span>
         </AccordionPrimitive.Trigger>
-      </SidebarMenuButton>
+        <span className="text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground">{actions}</span>
+      </div>
       <AccordionPrimitive.Content className="relative h-full overflow-hidden text-sm data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
         {element && indicator ? <TreeIndicator aria-hidden="true" /> : undefined}
         <AccordionPrimitive.Root
           dir={direction}
           type="multiple"
-          className="ml-5 flex flex-col gap-1 rtl:mr-5"
+          className="ml-5 flex flex-col rtl:mr-5"
           defaultValue={expandedItems}
           value={expandedItems}
           onValueChange={(value) => {
@@ -234,6 +245,7 @@ function File({
   isSelectable = true,
   isSelect,
   fileIcon,
+  actions,
   children,
   ...props
 }: {
@@ -242,31 +254,43 @@ function File({
   readonly isSelectable?: boolean;
   readonly isSelect?: boolean;
   readonly fileIcon?: React.ReactNode;
+  readonly actions?: React.ReactNode;
   readonly className?: string;
 } & React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
   const { direction, selectedId, selectItem } = useTree();
   const isSelected = isSelect ?? selectedId === value;
+
+  // Extract filename from value (path) for FileExtensionIcon
+  const filename = value.split('/').pop() ?? value;
+
   return (
-    <SidebarMenuButton
-      type="button"
-      disabled={!isSelectable}
+    <div
       className={cn(
-        'flex w-fit items-center gap-1 rounded-md pr-1 text-sm rtl:pr-0 rtl:pl-1',
+        'group relative flex h-7 w-full items-center justify-between gap-2 px-2 text-sm',
+        'before:pointer-events-none before:absolute before:inset-y-0 before:right-0 before:-left-96 before:-z-10',
+        'hover:before:bg-muted',
         {
-          'bg-muted': isSelected && isSelectable,
+          'before:bg-muted': isSelected && isSelectable,
         },
         isSelectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50',
         direction === 'rtl' ? 'rtl' : 'ltr',
         className,
       )}
-      onClick={() => {
-        selectItem(value);
-      }}
-      {...props}
     >
-      {fileIcon ?? <FileIcon className="size-4" />}
-      {children}
-    </SidebarMenuButton>
+      <button
+        type="button"
+        disabled={!isSelectable}
+        className="flex min-w-0 flex-1 items-center gap-2"
+        onClick={() => {
+          selectItem(value);
+        }}
+        {...props}
+      >
+        {fileIcon ?? <FileExtensionIcon filename={filename} className="size-4 shrink-0" />}
+        <span className="truncate text-muted-foreground group-hover:text-foreground">{children}</span>
+      </button>
+      <span className="text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground">{actions}</span>
+    </div>
   );
 }
 

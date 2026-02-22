@@ -1,10 +1,9 @@
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useMemo } from 'react';
 import type { ClassValue } from 'clsx';
-import { Axis3D, Box, Grid3X3, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
-import { useSelector } from '@xstate/react';
+import { Axis3D, Box, Grid3X3, Layers, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useCad, useCadSelector } from '#hooks/use-cad.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,44 +15,12 @@ import {
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
 import { cn } from '#utils/ui.utils.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 // Up direction options
 type UpDirection = 'x' | 'y' | 'z';
-
-type ViewSettings = {
-  surface: boolean;
-  lines: boolean;
-  gizmo: boolean;
-  grid: boolean;
-  axes: boolean;
-  matcap: boolean;
-  upDirection: UpDirection;
-};
-
-// Default settings
-const defaultSettings: ViewSettings = {
-  surface: true,
-  lines: true,
-  gizmo: true,
-  grid: true,
-  axes: true,
-  matcap: false,
-  upDirection: 'z',
-};
-
-type ViewerSettingsProps = {
-  /**
-   * Optional className for styling
-   */
-  readonly className?: ClassValue;
-};
-
-// Default render timeout in seconds (30 seconds)
-const defaultRenderTimeout = 30;
 
 // Timeout option type
 type TimeoutOption = {
@@ -78,109 +45,110 @@ const upDirectionOptions: Array<{ value: UpDirection; label: React.ReactNode; ar
   { value: 'z', label: <span style={{ color: axesColors.z }}>Z</span>, ariaLabel: 'Z-up' },
 ];
 
+type ViewerSettingsProps = {
+  /**
+   * Optional className for styling
+   */
+  readonly className?: ClassValue;
+  /**
+   * Controls that have overflowed from the toolbar, rendered at the top of the dropdown.
+   * When undefined or empty, the dropdown renders exactly as usual.
+   */
+  readonly overflowControls?: React.ReactNode;
+};
+
 /**
- * Component that provides camera and visibility settings for the 3D viewer
+ * Component that provides camera and visibility settings for the 3D viewer.
+ * All settings are per-view, read from the per-view GraphicsMachine state via GraphicsProvider
+ * and the per-view CadMachine state via CadProvider.
  */
-export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactNode {
-  const { graphicsRef: graphicsActor, cadRef } = useBuild();
-  const [viewSettings, setViewSettings] = useCookie<ViewSettings>(cookieName.viewSettings, defaultSettings);
-  const [renderTimeout, setRenderTimeout] = useCookie(cookieName.cadRenderTimeout, defaultRenderTimeout);
+export function ViewerSettings({ className, overflowControls }: ViewerSettingsProps): React.ReactNode {
+  const graphicsRef = useGraphics();
+  const cadActor = useCad();
+
   const [isOpen, setIsOpen] = useState(false);
-  const is2dGeometry = useSelector(graphicsActor, (state) =>
+
+  // Read all settings from per-view graphicsMachine state via context
+  const enableSurfaces = useGraphicsSelector((state) => state.context.enableSurfaces);
+  const enableLines = useGraphicsSelector((state) => state.context.enableLines);
+  const enableGizmo = useGraphicsSelector((state) => state.context.enableGizmo);
+  const enableGrid = useGraphicsSelector((state) => state.context.enableGrid);
+  const enableAxes = useGraphicsSelector((state) => state.context.enableAxes);
+  const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const enablePostProcessing = useGraphicsSelector((state) => state.context.enablePostProcessing);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
+  const is2dGeometry = useGraphicsSelector((state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
 
-  // Synchronize render timeout to CAD machine
-  useEffect(() => {
-    cadRef.send({ type: 'setRenderTimeout', timeout: renderTimeout * 1000 }); // Convert seconds to ms
-  }, [renderTimeout, cadRef]);
-
-  // Synchronize each setting to the Graphics context when settings change
-  useEffect(() => {
-    graphicsActor.send({ type: 'setSurfaceVisibility', payload: viewSettings.surface });
-  }, [viewSettings.surface, graphicsActor]);
-
-  useEffect(() => {
-    graphicsActor.send({ type: 'setLinesVisibility', payload: viewSettings.lines });
-  }, [viewSettings.lines, graphicsActor]);
-
-  useEffect(() => {
-    graphicsActor.send({ type: 'setGizmoVisibility', payload: viewSettings.gizmo });
-  }, [viewSettings.gizmo, graphicsActor]);
-
-  useEffect(() => {
-    graphicsActor.send({ type: 'setGridVisibility', payload: viewSettings.grid });
-  }, [viewSettings.grid, graphicsActor]);
-
-  useEffect(() => {
-    graphicsActor.send({ type: 'setAxesVisibility', payload: viewSettings.axes });
-  }, [viewSettings.axes, graphicsActor]);
-
-  useEffect(() => {
-    graphicsActor.send({ type: 'setMatcapVisibility', payload: viewSettings.matcap });
-  }, [viewSettings.matcap, graphicsActor]);
-
-  useEffect(() => {
-    graphicsActor.send({ type: 'setUpDirection', payload: viewSettings.upDirection });
-  }, [viewSettings.upDirection, graphicsActor]);
+  // Read render timeout from cadActor (in ms), convert to seconds for display
+  const renderTimeoutMs = useCadSelector((state) => state.context.renderTimeout, 30_000);
+  const renderTimeout = Math.round(renderTimeoutMs / 1000);
 
   const handleMeshToggle = useCallback(
     (checked: boolean) => {
-      setViewSettings((previous) => ({ ...previous, surface: checked }));
+      graphicsRef.send({ type: 'setSurfaceVisibility', payload: checked });
     },
-    [setViewSettings],
+    [graphicsRef],
   );
 
   const handleLinesToggle = useCallback(
     (checked: boolean) => {
-      setViewSettings((previous) => ({ ...previous, lines: checked }));
+      graphicsRef.send({ type: 'setLinesVisibility', payload: checked });
     },
-    [setViewSettings],
+    [graphicsRef],
   );
 
   const handleGizmoToggle = useCallback(
     (checked: boolean) => {
-      setViewSettings((previous) => ({ ...previous, gizmo: checked }));
+      graphicsRef.send({ type: 'setGizmoVisibility', payload: checked });
     },
-    [setViewSettings],
+    [graphicsRef],
   );
 
   const handleGridToggle = useCallback(
     (checked: boolean) => {
-      setViewSettings((previous) => ({ ...previous, grid: checked }));
+      graphicsRef.send({ type: 'setGridVisibility', payload: checked });
     },
-    [setViewSettings],
+    [graphicsRef],
   );
 
   const handleAxesHelperToggle = useCallback(
     (checked: boolean) => {
-      setViewSettings((previous) => ({ ...previous, axes: checked }));
+      graphicsRef.send({ type: 'setAxesVisibility', payload: checked });
     },
-    [setViewSettings],
+    [graphicsRef],
   );
 
   const handleMatcapToggle = useCallback(
     (checked: boolean) => {
-      setViewSettings((previous) => ({ ...previous, matcap: checked }));
+      graphicsRef.send({ type: 'setMatcapVisibility', payload: checked });
     },
-    [setViewSettings],
+    [graphicsRef],
+  );
+
+  const handlePostProcessingToggle = useCallback(
+    (checked: boolean) => {
+      graphicsRef.send({ type: 'setPostProcessingVisibility', payload: checked });
+    },
+    [graphicsRef],
   );
 
   const handleUpDirectionChange = useCallback(
     (value: UpDirection) => {
-      setViewSettings((previous) => ({ ...previous, upDirection: value }));
+      graphicsRef.send({ type: 'setUpDirection', payload: value });
     },
-    [setViewSettings],
+    [graphicsRef],
   );
 
   const handleRenderTimeoutChange = useCallback(
     (value: string) => {
       const seconds = Number.parseInt(value, 10);
-      if (!Number.isNaN(seconds)) {
-        setRenderTimeout(seconds);
+      if (!Number.isNaN(seconds) && cadActor) {
+        cadActor.send({ type: 'setRenderTimeout', timeout: seconds * 1000 }); // Convert seconds to ms
       }
     },
-    [setRenderTimeout],
+    [cadActor],
   );
 
   // Get current timeout option for display (default to 30s if not found)
@@ -207,7 +175,7 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
       <DropdownMenuContent
         align="end"
         side="right"
-        className="w-64"
+        className="w-72"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
         }}
@@ -215,19 +183,15 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
         {!is2dGeometry && (
           <>
             <DropdownMenuLabel>Model</DropdownMenuLabel>
-            <DropdownMenuSwitchItem isChecked={viewSettings.surface} onIsCheckedChange={handleMeshToggle}>
+            <DropdownMenuSwitchItem isChecked={enableSurfaces} onIsCheckedChange={handleMeshToggle}>
               <Box />
               Surfaces
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem isChecked={viewSettings.lines} onIsCheckedChange={handleLinesToggle}>
+            <DropdownMenuSwitchItem isChecked={enableLines} onIsCheckedChange={handleLinesToggle}>
               <PenLine />
               Lines
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem
-              className="h-10"
-              isChecked={viewSettings.matcap}
-              onIsCheckedChange={handleMatcapToggle}
-            >
+            <DropdownMenuSwitchItem className="h-10" isChecked={enableMatcap} onIsCheckedChange={handleMatcapToggle}>
               <Sparkles />
               <div className="flex flex-col">
                 <span className="flex items-center gap-1">
@@ -238,7 +202,25 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
                   </InfoTooltip>
                 </span>
                 <span className="text-xs font-medium text-muted-foreground/80">
-                  Lighting effects are {viewSettings.matcap ? 'inactive' : 'active'}
+                  Lighting effects are {enableMatcap ? 'inactive' : 'active'}
+                </span>
+              </div>
+            </DropdownMenuSwitchItem>
+            <DropdownMenuSwitchItem
+              className="h-10"
+              isChecked={enablePostProcessing}
+              onIsCheckedChange={handlePostProcessingToggle}
+            >
+              <Layers />
+              <div className="flex flex-col">
+                <span className="flex items-center gap-1">
+                  Post-processing{' '}
+                  <InfoTooltip>
+                    Enables screen-space ambient occlusion for more realistic depth and contact shadows.
+                  </InfoTooltip>
+                </span>
+                <span className="text-xs font-medium text-muted-foreground/80">
+                  Ambient occlusion is {enablePostProcessing ? 'active' : 'inactive'}
                 </span>
               </div>
             </DropdownMenuSwitchItem>
@@ -248,23 +230,23 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
         <DropdownMenuLabel>Viewport</DropdownMenuLabel>
         <DropdownMenuSwitchItem
           className={cn(is2dGeometry && 'hidden')}
-          isChecked={viewSettings.gizmo}
+          isChecked={enableGizmo}
           onIsCheckedChange={handleGizmoToggle}
         >
           <Rotate3D />
           Gizmo
         </DropdownMenuSwitchItem>
-        <DropdownMenuSwitchItem isChecked={viewSettings.grid} onIsCheckedChange={handleGridToggle}>
+        <DropdownMenuSwitchItem isChecked={enableGrid} onIsCheckedChange={handleGridToggle}>
           <Grid3X3 />
           Grid
         </DropdownMenuSwitchItem>
-        <DropdownMenuSwitchItem isChecked={viewSettings.axes} onIsCheckedChange={handleAxesHelperToggle}>
+        <DropdownMenuSwitchItem isChecked={enableAxes} onIsCheckedChange={handleAxesHelperToggle}>
           <Axis3D />
           Axes
         </DropdownMenuSwitchItem>
         {!is2dGeometry && (
           <DropdownMenuToggleGroupItem
-            value={viewSettings.upDirection}
+            value={upDirection}
             options={upDirectionOptions}
             onValueChange={handleUpDirectionChange}
           >
@@ -290,6 +272,13 @@ export function ViewerSettings({ className }: ViewerSettingsProps): React.ReactN
           <Timer />
           Timeout
         </DropdownMenuSelectItem>
+        {overflowControls !== undefined && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Controls</DropdownMenuLabel>
+            {overflowControls}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

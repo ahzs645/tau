@@ -278,21 +278,23 @@ function NavHistoryItem({
     <SidebarMenuItem key={build.id}>
       {isEditing ? (
         // Show editing state without NavLink to prevent drag issues
-        <SidebarMenuButton className="bg-sidebar-accent">
-          <History className="size-4 shrink-0" />
-          <input
-            autoFocus
-            type="text"
-            value={editValue}
-            className="flex-1 border-none bg-transparent text-sidebar-foreground outline-none"
-            onChange={(event) => {
-              setEditValue(event.target.value);
-            }}
-            onKeyDown={handleKeyDown}
-            onBlur={handleBlur}
-            onFocus={handleInputFocus}
-            onClick={handleInputClick}
-          />
+        <SidebarMenuButton asChild className="bg-sidebar-accent">
+          <span>
+            <History className="size-4 shrink-0" />
+            <input
+              autoFocus
+              type="text"
+              value={editValue}
+              className="flex-1 border-none bg-transparent text-sidebar-foreground outline-none"
+              onChange={(event) => {
+                setEditValue(event.target.value);
+              }}
+              onKeyDown={handleKeyDown}
+              onBlur={handleBlur}
+              onFocus={handleInputFocus}
+              onClick={handleInputClick}
+            />
+          </span>
         </SidebarMenuButton>
       ) : (
         <NavLink to={`/builds/${build.id}`}>
@@ -320,19 +322,16 @@ function NavHistoryItem({
             align={isMobile ? 'end' : 'start'}
           >
             <DropdownMenuItem onClick={handleRenameClick}>
-              <Edit className="text-muted-foreground" />
+              <Edit />
               <span>Rename</span>
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleDuplicateClick}>
-              <Copy className="text-muted-foreground" />
+              <Copy />
               <span>Duplicate</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="hover:text-destructive [&:hover>svg]:text-destructive"
-              onClick={handleDeleteClick}
-            >
-              <Trash2 className="text-muted-foreground" />
+            <DropdownMenuItem variant="destructive" onClick={handleDeleteClick}>
+              <Trash2 />
               <span>Delete</span>
             </DropdownMenuItem>
           </DropdownMenuContent>

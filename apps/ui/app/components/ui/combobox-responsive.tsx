@@ -324,7 +324,7 @@ function ItemList<T>({
               endReached={onLoadMore}
               // Virtuoso's List component doesn't handle vertical padding correctly due to
               // absolute positioning used for virtualization. Use Header/Footer for vertical
-              // spacing and px-1 on List for horizontal padding.
+              // spacing instead.
               components={{
                 List: (properties) => <div {...properties} className="px-1" />,
                 Header: () => <div className="h-1" />,

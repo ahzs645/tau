@@ -20,8 +20,8 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
   const { data: models } = useModels();
 
   // Get active chat info
-  const { buildRef, buildId } = useBuild();
-  const activeChatId = useSelector(buildRef, (state) => state.context.build?.lastChatId);
+  const { editorRef, buildId } = useBuild();
+  const activeChatId = useSelector(editorRef, (state) => state.context.lastChatId);
   const { chats } = useChats(buildId);
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [chats, activeChatId]);
   const updatedAt = activeChat?.updatedAt;

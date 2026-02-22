@@ -1,10 +1,11 @@
 import { Clipboard, Download, GalleryThumbnails, ImageDown } from 'lucide-react';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useSelector, useActorRef } from '@xstate/react';
+import { createActor } from 'xstate';
 import type { UIMatch } from 'react-router';
 import type { ExportFormat } from '@taucad/types';
 import { fileExtensionFromExportFormat } from '@taucad/types/constants';
-import { useBuild } from '#hooks/use-build.js';
+import { useBuild, useMainGraphics } from '#hooks/use-build.js';
 import { toast } from '#components/ui/sonner.js';
 import { downloadBlob } from '#utils/file.utils.js';
 import { screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
@@ -16,23 +17,35 @@ import type { CommandPaletteItem } from '#components/layout/command-palette.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 
 export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
-  const { cadRef: cadActor, graphicsRef: graphicsActor, updateThumbnail, buildRef } = useBuild();
+  const { compilationUnits, mainEntryFile, updateThumbnail, buildRef } = useBuild();
+  const mainGraphicsRef = useMainGraphics();
+  const cadActor = compilationUnits.get(mainEntryFile);
   const fileManager = useFileManager();
-  const geometries = useSelector(cadActor, (state) => state.context.geometries);
+  const geometries = useSelector(cadActor, (state) => state?.context.geometries ?? []);
   const build = useSelector(buildRef, (state) => state.context.build);
   const buildName = useSelector(buildRef, (state) => state.context.build?.name) ?? 'file';
-  const isScreenshotReady = useSelector(graphicsActor, (state) => state.context.isScreenshotReady);
-  const fileCount = useSelector(fileManager.fileManagerRef, (state) => state.context.fileTree.size);
 
-  // Create screenshot request machine instance
-  const screenshotActorRef = useActorRef(screenshotRequestMachine, {
-    input: { graphicsRef: graphicsActor },
-  });
+  const isScreenshotReady = useSelector(mainGraphicsRef, (state) => state?.context.isScreenshotReady ?? false);
+  const fileCount = useSelector(fileManager.fileManagerRef, (state) => state.context.fileTree.size);
 
   // Create export geometry machine instance
   const exportActorRef = useActorRef(exportGeometryMachine, {
     input: { cadRef: cadActor },
   });
+
+  // Track active screenshot actors for lifecycle cleanup
+  const activeScreenshotActorsRef = useRef(new Set<{ stop: () => void }>());
+
+  useEffect(() => {
+    const actors = activeScreenshotActorsRef;
+    return () => {
+      for (const actor of actors.current) {
+        actor.stop();
+      }
+
+      actors.current.clear();
+    };
+  }, []);
 
   const handleExport = useCallback(
     async (filename: string, format: ExportFormat) => {
@@ -91,11 +104,42 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
     );
   }, [build, buildName, fileManager]);
 
+  // Helper: create a screenshot actor on-demand with the current mainGraphicsRef
+  const sendScreenshotRequest = useCallback(
+    (event: Parameters<ReturnType<typeof createActor<typeof screenshotRequestMachine>>['send']>[0]) => {
+      if (!mainGraphicsRef) {
+        return;
+      }
+
+      const actor = createActor(screenshotRequestMachine, {
+        input: { graphicsRef: mainGraphicsRef },
+      });
+      const actors = activeScreenshotActorsRef.current;
+      actors.add(actor);
+
+      // Auto-stop actor once the screenshot request completes (returns to idle after requesting)
+      let sawRequesting = false;
+      const subscription = actor.subscribe((snapshot) => {
+        if (snapshot.value === 'requesting') {
+          sawRequesting = true;
+        } else if (sawRequesting) {
+          subscription.unsubscribe();
+          actor.stop();
+          actors.delete(actor);
+        }
+      });
+
+      actor.start();
+      actor.send(event);
+    },
+    [mainGraphicsRef],
+  );
+
   const handleDownloadPng = useCallback(
     async (filename: string) => {
       toast.promise(
         new Promise<Blob>((resolve, reject) => {
-          screenshotActorRef.send({
+          sendScreenshotRequest({
             type: 'requestScreenshot',
             options: {
               output: {
@@ -139,11 +183,11 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
         },
       );
     },
-    [screenshotActorRef],
+    [sendScreenshotRequest],
   );
 
   const updateThumbnailScreenshot = useCallback(() => {
-    screenshotActorRef.send({
+    sendScreenshotRequest({
       type: 'requestScreenshot',
       options: {
         output: {
@@ -163,7 +207,7 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
         console.error('Thumbnail screenshot failed:', error);
       },
     });
-  }, [updateThumbnail, screenshotActorRef]);
+  }, [updateThumbnail, sendScreenshotRequest]);
 
   const handleUpdateThumbnail = useCallback(() => {
     toast.promise(
@@ -182,7 +226,7 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
     toast.promise(
       async () => {
         return new Promise<void>((resolve, reject) => {
-          screenshotActorRef.send({
+          sendScreenshotRequest({
             type: 'requestScreenshot',
             options: {
               output: {
@@ -225,10 +269,14 @@ export function BuildCommandPaletteItems({ match }: { readonly match: UIMatch })
         error: `Failed to copy ${buildName}.png to clipboard`,
       },
     );
-  }, [buildName, screenshotActorRef]);
+  }, [buildName, sendScreenshotRequest]);
 
   // Subscribe to the cadActor to update the thumbnail when the geometries change
   useEffect(() => {
+    if (!cadActor) {
+      return;
+    }
+
     const subscription = cadActor.on('geometryEvaluated', (event) => {
       if (event.geometries.length > 0) {
         updateThumbnailScreenshot();

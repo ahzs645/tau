@@ -1,5 +1,5 @@
 import type { JSONSchema7 } from 'json-schema';
-import { hasJsonSchemaObjectProperties, jsonSchemaFromJson } from '#utils/schema.utils.js';
+import { hasJsonSchemaObjectProperties, jsonSchemaFromJson } from '@taucad/utils/schema';
 
 describe('jsonSchemaFromJson', () => {
   it('should return a valid JSON schema', async () => {

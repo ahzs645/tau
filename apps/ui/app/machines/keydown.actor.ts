@@ -41,13 +41,37 @@ export const keydownListener = fromCallback<
     }
   };
 
+  /**
+   * Handle blur: reset key state when window loses focus (fixes stuck keys on alt-tab).
+   */
+  const handleBlur = (): void => {
+    if (isPressed) {
+      isPressed = false;
+      sendBack({ type: 'keyStateChanged', key, isPressed: false });
+    }
+  };
+
+  /**
+   * Handle visibility change: reset key state when tab becomes hidden.
+   */
+  const handleVisibilityChange = (): void => {
+    if (document.hidden && isPressed) {
+      isPressed = false;
+      sendBack({ type: 'keyStateChanged', key, isPressed: false });
+    }
+  };
+
   // Add event listeners
   globalThis.addEventListener('keydown', handleKeyDown);
   globalThis.addEventListener('keyup', handleKeyUp);
+  globalThis.addEventListener('blur', handleBlur);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   // Cleanup function - remove listeners when actor stops
   return () => {
     globalThis.removeEventListener('keydown', handleKeyDown);
     globalThis.removeEventListener('keyup', handleKeyUp);
+    globalThis.removeEventListener('blur', handleBlur);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
   };
 });

@@ -13,6 +13,7 @@ export const toolErrorCodes = [
   'TOOL_INPUT_VALIDATION_FAILED',
   'TOOL_OUTPUT_VALIDATION_FAILED',
   'TOOL_EXECUTION_ERROR',
+  'USER_INTERRUPTED',
 ] as const;
 
 export type ToolErrorCode = (typeof toolErrorCodes)[number];
@@ -78,9 +79,7 @@ export function rpcErrorToToolError(
     case 'NO_CONNECTION': {
       return {
         errorCode: 'NO_CLIENT_CONNECTION',
-        message:
-          'No WebSocket connection to the browser. The user has likely closed or navigated away from the page. ' +
-          'DO NOT RETRY this or any other tool - inform the user that you cannot proceed because they are no longer connected.',
+        message: 'Unable to connect to the client.',
         toolName,
         toolCallId,
       };
@@ -149,6 +148,10 @@ export function getToolErrorTitle(errorCode: ToolErrorCode): string {
     case 'TOOL_EXECUTION_ERROR': {
       return 'Tool Error';
     }
+
+    case 'USER_INTERRUPTED': {
+      return 'Interrupted';
+    }
   }
 }
 
@@ -179,6 +182,10 @@ export function getToolErrorDescription(errorCode: ToolErrorCode): string {
 
     case 'TOOL_EXECUTION_ERROR': {
       return 'An error occurred while executing the tool.';
+    }
+
+    case 'USER_INTERRUPTED': {
+      return 'Tool execution was interrupted by user.';
     }
   }
 }

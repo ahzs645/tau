@@ -20,16 +20,16 @@ import { cookieName } from '#constants/cookie.constants.js';
  * @returns ChatSnapshot object or undefined if no context is enabled/available
  */
 export function useChatSnapshot(): ChatSnapshot | undefined {
-  // Get the file explorer ref from build context (may not be available outside build pages)
+  // Get the editor ref from build context (may not be available outside build pages)
   const buildContext = useBuild({ enableNoContext: true });
-  const fileExplorerRef = buildContext?.fileExplorerRef;
+  const editorRef = buildContext?.editorRef;
 
   // Get file tree data
   const fileTree = useFileTree();
 
-  // Get editor state from file explorer
+  // Get editor state from editor machine
   const editorState = useSelector(
-    fileExplorerRef,
+    editorRef,
     (state) => {
       if (!state) {
         return { activeFilePath: undefined, openFiles: [] };

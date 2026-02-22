@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import {
   Settings,
   DollarSign,
+  Download,
   File,
   Code,
   FolderTree,
@@ -11,12 +12,12 @@ import {
   ScanEye,
   Image,
 } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { Button } from '#components/ui/button.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
+import { FloatingPanelMenuButton } from '#components/ui/floating-panel.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSwitchItem,
   DropdownMenuSliderItem,
@@ -26,14 +27,21 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '#components/ui/dropdown-menu.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
+import { useChatSelector } from '#hooks/use-chat.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 import { cookieName } from '#constants/cookie.constants.js';
+import { downloadBlob } from '#utils/file.utils.js';
+import { serializeTranscript } from '#utils/chat.utils.js';
+import { toSnakeCase } from '#utils/string.utils.js';
 
 /**
  * Component that provides settings for the chat history panel
  */
 export function ChatHistorySettings(): React.ReactNode {
+  const messages = useChatSelector((state) => state.messages);
+  const chatName = useChatSelector((state) => state.chatName);
   const [showModelCost, setShowModelCost] = useCookie(cookieName.chatModelCost, true);
   const [showCodePreview, setShowCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
   const [showAnalysisImages, setShowAnalysisImages] = useCookie(cookieName.chatToolAnalysisImages, true);
@@ -96,18 +104,21 @@ export function ChatHistorySettings(): React.ReactNode {
     return `${Math.round(value * 100)}%`;
   }, []);
 
+  const handleExport = useCallback(() => {
+    const transcript = serializeTranscript(messages, chatName);
+    const blob = new Blob([transcript], { type: 'text/markdown;charset=utf-8' });
+    const timestamp = new Date().toISOString().slice(0, 16).replaceAll(':', '-');
+    const snakeName = toSnakeCase(chatName) || 'chat_transcript';
+    downloadBlob(blob, `${snakeName}_${timestamp}.md`);
+  }, [messages, chatName]);
+
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-6 rounded-sm">
-              <Settings className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top">Chat settings</TooltipContent>
-      </Tooltip>
+      <FloatingPanelMenuButton asChild tooltip="Chat settings" aria-label="Chat settings">
+        <DropdownMenuTrigger>
+          <Settings className="size-4" />
+        </DropdownMenuTrigger>
+      </FloatingPanelMenuButton>
       <DropdownMenuContent
         align="end"
         side="bottom"
@@ -118,7 +129,7 @@ export function ChatHistorySettings(): React.ReactNode {
       >
         <DropdownMenuLabel>Metadata Display</DropdownMenuLabel>
         <DropdownMenuSwitchItem isChecked={showModelCost} onIsCheckedChange={handleShowModelCostToggle}>
-          <DollarSign className="size-4 stroke-2" />
+          <DollarSign className="stroke-2" />
           Show Model Cost
         </DropdownMenuSwitchItem>
 
@@ -129,22 +140,22 @@ export function ChatHistorySettings(): React.ReactNode {
         {/* Context Settings Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <span className="flex items-center gap-2">
-              <Layers className="size-4" />
+            <span className={menuItemLayoutClass}>
+              <Layers />
               Editor Context
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuSwitchItem isChecked={includeFilesystem} onIsCheckedChange={handleIncludeFilesystemToggle}>
-              <FolderTree className="size-4" />
+              <FolderTree />
               Filesystem
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem isChecked={includeActiveFile} onIsCheckedChange={handleIncludeActiveFileToggle}>
-              <FileCode className="size-4" />
+              <FileCode />
               Active File
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem isChecked={includeOpenFiles} onIsCheckedChange={handleIncludeOpenFilesToggle}>
-              <File className="size-4" />
+              <File />
               Open Tabs
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
@@ -157,14 +168,14 @@ export function ChatHistorySettings(): React.ReactNode {
         {/* File Operations Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <span className="flex items-center gap-2">
-              <File className="size-4" />
+            <span className={menuItemLayoutClass}>
+              <File />
               File Operations
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuSwitchItem isChecked={showCodePreview} onIsCheckedChange={handleShowCodePreviewToggle}>
-              <Code className="size-4" />
+              <Code />
               Preview
             </DropdownMenuSwitchItem>
           </DropdownMenuSubContent>
@@ -173,15 +184,15 @@ export function ChatHistorySettings(): React.ReactNode {
         {/* Analysis Sub-menu */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <span className="flex items-center gap-2">
-              <ScanEye className="size-4" />
+            <span className={menuItemLayoutClass}>
+              <ScanEye />
               Analysis
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
             <DropdownMenuLabel>Image Analysis</DropdownMenuLabel>
             <DropdownMenuSwitchItem isChecked={showAnalysisImages} onIsCheckedChange={handleShowAnalysisImagesToggle}>
-              <Image className="size-4" />
+              <Image />
               Preview
             </DropdownMenuSwitchItem>
             <DropdownMenuSliderItem
@@ -205,6 +216,13 @@ export function ChatHistorySettings(): React.ReactNode {
             </DropdownMenuSliderItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Export</DropdownMenuLabel>
+        <DropdownMenuItem disabled={messages.length === 0} onSelect={handleExport}>
+          <Download />
+          Export Transcript
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

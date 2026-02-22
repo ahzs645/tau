@@ -1,7 +1,12 @@
+import { Sparkles } from 'lucide-react';
 import { messageRole } from '@taucad/chat/constants';
 import { useChatSelector } from '#hooks/use-chat.js';
-import { ChatToolInlineLink } from '#components/chat/chat-tool-inline.js';
-import { cn } from '#utils/ui.utils.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+} from '#components/chat/chat-tool-card.js';
 
 type ChatMessagePlanningProperties = {
   readonly messageId: string;
@@ -80,9 +85,17 @@ export function ChatMessagePlanning({ messageId }: ChatMessagePlanningProperties
     return undefined;
   }
 
+  // Add ml-2 for user messages to compensate for parent's mx-2 vs mx-4 for assistant messages
+  // This ensures the planning indicator aligns with tools that appear in assistant messages
+  // The parent's space-y-2 provides consistent vertical spacing for both cases
   return (
-    <div className={cn(isUser && 'mt-1 ml-4')}>
-      <ChatToolInlineLink status="loading">Planning next moves...</ChatToolInlineLink>
+    <div className={isUser ? 'ml-2' : undefined}>
+      <ChatToolCard variant="minimal" status="loading" isCollapsible={false}>
+        <ChatToolCardHeader>
+          <ChatToolCardIcon icon={Sparkles} />
+          <ChatToolCardTitle>Planning next moves...</ChatToolCardTitle>
+        </ChatToolCardHeader>
+      </ChatToolCard>
     </div>
   );
 }

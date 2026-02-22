@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Brain } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
@@ -20,6 +20,12 @@ export function ChatMessageToolReasoning({
 }): React.JSX.Element {
   const isStreaming = useChatSelector((state) => state.status === 'streaming');
   const [isOpen, setIsOpen] = useState(false);
+  const hasUserToggled = useRef(false);
+
+  const handleOpenChange = (open: boolean): void => {
+    hasUserToggled.current = true;
+    setIsOpen(open);
+  };
 
   const isThinking = part.state === 'input-streaming' || part.state === 'input-available';
   const thinking = part.input?.thinking ?? '';
@@ -34,14 +40,16 @@ export function ChatMessageToolReasoning({
 
   // Determine if content should be visible
   const hasContent = thinking.trim() !== '';
-  const shouldBeOpen = isThinking ? hasContent : isOpen;
+  // When thinking: open if has content and user hasn't explicitly toggled.
+  // When done: user-controlled (collapsed by default).
+  const shouldBeOpen = isThinking ? hasContent && (!hasUserToggled.current || isOpen) : isOpen;
 
   return (
     <ChatToolCard
       variant="minimal"
       status={isThinking ? 'loading' : 'ready'}
       isOpen={shouldBeOpen}
-      onOpenChange={setIsOpen}
+      onOpenChange={handleOpenChange}
     >
       <ChatToolCardHeader>
         <ChatToolCardIcon icon={Brain} />

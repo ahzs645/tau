@@ -19,7 +19,7 @@ import { ChatRpcSocketService } from '#services/chat-rpc-socket.service.js';
 import type { ConnectionStatus, RpcRequestHandler } from '#services/chat-rpc-socket.service.js';
 import { createRpcHandlers } from '#hooks/rpc-handlers.js';
 import type { RpcHandlerDependencies, RpcCallInput } from '#hooks/rpc-handlers.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useBuild, useMainGraphics } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 
@@ -132,7 +132,8 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
   const { status, error } = useChatRpcStatus();
 
   // Get dependencies for RPC handlers
-  const { graphicsRef: graphicsActor, cadRef: cadActor } = useBuild();
+  const { buildRef } = useBuild();
+  const mainGraphicsRef = useMainGraphics();
   const fileManager = useFileManager();
   const { fileManagerRef } = fileManager;
   const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
@@ -143,8 +144,8 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
   const depsRef = useRef<RpcHandlerDependencies | undefined>(undefined);
   depsRef.current = {
     fileManager,
-    graphicsRef: graphicsActor,
-    cadRef: cadActor,
+    graphicsRef: mainGraphicsRef,
+    buildRef,
     fileTree,
     screenshotQuality,
   };

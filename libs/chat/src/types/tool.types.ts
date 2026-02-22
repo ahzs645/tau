@@ -108,6 +108,17 @@ export type ToolGenericExecutionError = {
 };
 
 /**
+ * Structured error for when the user interrupts a tool mid-execution.
+ * Used on both client (finalizeInterruptedToolParts) and server (orphaned tool call sanitizer).
+ */
+export type ToolUserInterruptedError = {
+  errorCode: 'USER_INTERRUPTED';
+  message: string;
+  toolName: string;
+  toolCallId: string;
+};
+
+/**
  * All possible structured tool errors including validation errors.
  * These are returned to the LLM so it can reason about errors.
  */
@@ -116,7 +127,8 @@ export type ToolExecutionError =
   | ToolDisconnectedError
   | ToolNoConnectionError
   | ToolValidationError
-  | ToolGenericExecutionError;
+  | ToolGenericExecutionError
+  | ToolUserInterruptedError;
 
 // =============================================================================
 // Tool Name Types

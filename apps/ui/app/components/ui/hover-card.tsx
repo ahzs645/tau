@@ -1,9 +1,9 @@
 import * as React from 'react';
-import * as HoverCardPrimitive from '@radix-ui/react-hover-card';
+import { HoverCard as HoverCardPrimitive } from 'radix-ui';
 import { cn } from '#utils/ui.utils.js';
 
 function HoverCard({ ...properties }: React.ComponentProps<typeof HoverCardPrimitive.Root>): React.JSX.Element {
-  return <HoverCardPrimitive.Root data-slot="hover-card" {...properties} />;
+  return <HoverCardPrimitive.Root openDelay={0} closeDelay={0} data-slot="hover-card" {...properties} />;
 }
 
 function HoverCardTrigger({
@@ -25,7 +25,7 @@ function HoverCardContent({
         align={align}
         sideOffset={sideOffset}
         className={cn(
-          'z-50 w-64 origin-(--radix-hover-card-content-transform-origin) rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-hidden data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+          'z-50 w-64 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-hidden',
           className,
         )}
         {...properties}

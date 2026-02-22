@@ -39,11 +39,11 @@ This document describes the XState-based filesystem and Git integration system i
 - Coordinates storage operations
 - Chat management integration
 
-**File Explorer Machine** (`apps/ui/app/machines/file-explorer.machine.ts`)
-- Purpose: UI state for file tree and open files
-- Tracks dirty files from filesystem
-- Displays Git status indicators
-- Events: `updateDirtyFiles`, `updateGitStatuses`
+**Editor Machine** (`apps/ui/app/machines/editor.machine.ts`)
+- Purpose: Editor state for open files, active file, and persistence
+- Manages open file tabs and active file path
+- Persists editor state to IndexedDB
+- Events: `openFile`, `closeFile`, `setActiveFile`, `fileOpened`
 
 ### State Machine Interactions
 
@@ -51,19 +51,18 @@ This document describes the XState-based filesystem and Git integration system i
 build.machine
   ├─> spawns filesystem.machine (per build)
   │     └─> refreshes Git status via isomorphic-git
-  │           └─> updates file-explorer.machine
   │
   └─> communicates with storage.machine for metadata
 
 git.machine
   ├─> uses LightningFS for Git operations
   ├─> listens to filesystem changes
-  └─> emits status updates to file-explorer
+  └─> emits status updates for UI display
 
-file-explorer.machine
-  ├─> receives dirty file updates from filesystem
-  ├─> receives Git status from git.machine
-  └─> displays indicators in UI
+editor.machine
+  ├─> manages open files and active file path
+  ├─> persists editor state to IndexedDB
+  └─> emits fileOpened events for CAD coordination
 
 cad.machine
   └─> receives code updates when active file changes

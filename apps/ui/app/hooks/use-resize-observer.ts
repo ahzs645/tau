@@ -11,7 +11,8 @@ type Size = {
 };
 
 type UseResizeObserverOptions<T extends HTMLElement = HTMLElement> = {
-  ref: RefObject<T | undefined>;
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref requires null
+  ref: RefObject<T | null | undefined>;
   onResize?: (size: Size) => void;
   box?: 'border-box' | 'content-box' | 'device-pixel-content-box';
 };

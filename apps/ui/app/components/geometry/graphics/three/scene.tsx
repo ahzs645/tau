@@ -10,8 +10,6 @@ type SceneProperties = {
   readonly enableDamping?: boolean;
   readonly enableZoom?: boolean;
   readonly enablePan?: boolean;
-  readonly enableGrid?: boolean;
-  readonly enableAxes?: boolean;
   readonly upDirection?: 'x' | 'y' | 'z';
   readonly stageOptions?: StageOptions;
   readonly enableCentering?: boolean;
@@ -25,11 +23,9 @@ export function Scene({
   enableDamping = false,
   enableZoom = false,
   enablePan = false,
-  enableGrid = false,
-  enableAxes = false,
   upDirection = 'z',
   stageOptions,
-  enableCentering = true,
+  enableCentering = false,
   zoomSpeed,
   gizmoContainer,
 }: SceneProperties): React.JSX.Element {
@@ -44,12 +40,7 @@ export function Scene({
         zoomSpeed={zoomSpeed}
         gizmoContainer={gizmoContainer}
       />
-      <Stage
-        stageOptions={stageOptions}
-        enableCentering={enableCentering}
-        enableGrid={enableGrid}
-        enableAxes={enableAxes}
-      >
+      <Stage stageOptions={stageOptions} enableCentering={enableCentering}>
         {children}
       </Stage>
     </>

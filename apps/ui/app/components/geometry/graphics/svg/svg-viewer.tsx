@@ -1,15 +1,15 @@
 import React, { useEffect, useState, useRef, useId, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import { useSelector } from '@xstate/react';
 import type { GeometrySvg } from '@taucad/types';
 // @ts-expect-error - no types available
 import panzoom from '@panzoom/panzoom/dist/panzoom.es.js';
 import type { PanzoomObject } from '@panzoom/panzoom';
-import { useBuild } from '#hooks/use-build.js';
 import { usePanzoomReset } from '#components/geometry/graphics/svg/use-panzoom-reset.js';
+import { SvgActorBridge } from '#components/geometry/graphics/svg/svg-actor-bridge.js';
 import { axesColors } from '#constants/color.constants.js';
 import { SvgInvalidError } from '#components/geometry/graphics/svg/svg-invalid-error.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 type Viewbox = {
   xMin: number;
@@ -31,8 +31,7 @@ const gridStep = 0.1;
 
 function SvgGrid({ viewbox, transform }: SvgGridProps): React.ReactElement {
   const { xMin, yMin, width, height } = viewbox;
-  const { graphicsRef: graphicsActor } = useBuild();
-  const gridSizes = useSelector(graphicsActor, (state) => state.context.gridSizes);
+  const gridSizes = useGraphicsSelector((state) => state.context.gridSizes);
   const { theme } = useTheme();
   const id = useId();
 
@@ -308,14 +307,23 @@ type SvgWindowProps = {
   readonly enableAxes?: boolean;
   readonly defaultColor?: string;
   readonly children?: ReactNode;
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
+  readonly svgRef?: React.RefObject<SVGSVGElement | null>;
 };
 
-function SvgWindow({ viewbox, enableGrid, enableAxes, defaultColor, children }: SvgWindowProps): React.ReactElement {
+function SvgWindow({
+  viewbox,
+  enableGrid,
+  enableAxes,
+  defaultColor,
+  children,
+  svgRef,
+}: SvgWindowProps): React.ReactElement {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [clientRect, setClientRect] = useState<DOMRect | undefined>(undefined);
   const [adaptedViewbox, setAdaptedViewbox] = useState<Viewbox>(viewbox);
   const panzoomRef = useRef<PanzoomObject>(null);
-  const { graphicsRef: graphicsActor } = useBuild();
+  const graphicsActor = useGraphics();
   const [transform, setTransform] = useState<{ scale: number; x: number; y: number }>({ scale: 1, x: 0, y: 0 });
 
   // Use ResizeObserver instead of window resize event
@@ -526,6 +534,7 @@ function SvgWindow({ viewbox, enableGrid, enableAxes, defaultColor, children }: 
         enableAxes={enableAxes}
         defaultColor={defaultColor}
         transform={transform}
+        svgRef={svgRef}
       >
         {children}
       </RawCanvas>
@@ -540,6 +549,8 @@ type RawCanvasProps = {
   readonly defaultColor?: string;
   readonly children?: ReactNode;
   readonly transform?: { scale: number; x: number; y: number };
+  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
+  readonly svgRef?: React.RefObject<SVGSVGElement | null>;
 };
 
 function RawCanvas({
@@ -549,11 +560,13 @@ function RawCanvas({
   defaultColor,
   transform,
   children,
+  svgRef,
 }: RawCanvasProps): React.ReactElement {
   const safeTransform = transform ?? { scale: 1, x: 0, y: 0 };
 
   return (
     <svg
+      ref={svgRef}
       viewBox={stringifyViewbox(viewbox)}
       width="100%"
       height="100%"
@@ -613,6 +626,7 @@ export function SvgViewer({
   defaultColor,
 }: SvgViewerProps): ReactNode {
   const Viewer2D = enableRawWindow ? RawCanvas : SvgWindow;
+  const svgRef = useRef<SVGSVGElement>(null);
 
   // Check for invalid geometries
   const invalidGeometries = geometries.filter((geometry) => {
@@ -625,11 +639,18 @@ export function SvgViewer({
 
   return (
     <div className="relative h-full w-full">
-      <Viewer2D viewbox={viewbox} enableGrid={enableGrid} enableAxes={enableAxes} defaultColor={defaultColor}>
+      <Viewer2D
+        viewbox={viewbox}
+        enableGrid={enableGrid}
+        enableAxes={enableAxes}
+        defaultColor={defaultColor}
+        svgRef={svgRef}
+      >
         {geometries.map((s) => {
           return <GeometryPath key={s.name} geometry={s} />;
         })}
       </Viewer2D>
+      <SvgActorBridge svgRef={svgRef} />
       {hasInvalidGeometries ? (
         <SvgInvalidError invalidGeometries={invalidGeometries} totalGeometries={geometries.length} />
       ) : null}

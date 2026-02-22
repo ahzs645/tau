@@ -8,8 +8,7 @@
     "vite-environment.d.ts",
     ".react-router/types/**/*",
     ".source/**/*", // Fumadocs collections
-    "package.json",
-    "../../libs/utils/src/id.utils.ts"
+    "package.json"
   ],
   "compilerOptions": {
     "outDir": "./out-tsc/lib",
@@ -46,13 +45,16 @@
   ],
   "references": [
     {
-      "path": "../../libs/utils/tsconfig.lib.json"
-    },
-    {
       "path": "../../packages/json-schema/tsconfig.lib.json"
     },
     {
       "path": "../../libs/api-extractor/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/utils/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/kernels/tsconfig.lib.json"
     },
     {
       "path": "../../libs/tau-examples/tsconfig.lib.json"

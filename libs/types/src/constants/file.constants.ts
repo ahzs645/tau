@@ -1,4 +1,10 @@
 /**
+ * MIME type for file drags originating from the headless-tree file explorer.
+ * Used by Dockview drop handlers to identify internal file drag-and-drop.
+ */
+export const tauFileDragMime = 'application/x-tau-file';
+
+/**
  * The export formats.
  */
 export const exportFormats = [

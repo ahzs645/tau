@@ -41,7 +41,7 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
 
       if (binary) {
         // GLB format - write transformed document as GLB
-        const transformedGlb = (await this.io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+        const transformedGlb = await this.io.writeBinary(document);
         return [this.createOutputFile('model', 'glb', transformedGlb)];
       }
 
@@ -61,7 +61,7 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
           // Use the URI directly as the filename to ensure consistency
           outputFiles.push({
             name: uri,
-            data: data as Uint8Array<ArrayBuffer>,
+            data,
           });
         }
       }

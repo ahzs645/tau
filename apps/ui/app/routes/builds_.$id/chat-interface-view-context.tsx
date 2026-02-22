@@ -1,6 +1,6 @@
-import { createContext, useContext, useMemo } from 'react';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import { createContext, useContext, useMemo, useCallback } from 'react';
+import { useSelector } from '@xstate/react';
+import { useBuild } from '#hooks/use-build.js';
 
 type ViewContextType = {
   isChatOpen: boolean;
@@ -13,6 +13,8 @@ type ViewContextType = {
   setIsEditorOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isExplorerOpen: boolean;
   setIsExplorerOpen: (value: boolean | ((current: boolean) => boolean)) => void;
+  isKernelOpen: boolean;
+  setIsKernelOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isConverterOpen: boolean;
   setIsConverterOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isGitOpen: boolean;
@@ -33,50 +35,117 @@ export const useViewContext = (): ViewContextType => {
 };
 
 export function ViewContextProvider({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
-  const [isChatOpen, setIsChatOpen] = useCookie(cookieName.chatOpHistory, true);
-  const [isFileTreeOpen, setIsFileTreeOpen] = useCookie(cookieName.chatOpFileExplorer, false);
-  const [isParametersOpen, setIsParametersOpen] = useCookie(cookieName.chatOpParameters, true);
-  const [isEditorOpen, setIsEditorOpen] = useCookie(cookieName.chatOpEditor, false);
-  const [isExplorerOpen, setIsExplorerOpen] = useCookie(cookieName.chatOpModelExplorer, false);
-  const [isConverterOpen, setIsConverterOpen] = useCookie(cookieName.chatOpConverter, false);
-  const [isGitOpen, setIsGitOpen] = useCookie(cookieName.chatOpGit, false);
-  const [isDetailsOpen, setIsDetailsOpen] = useCookie(cookieName.chatOpDetails, false);
+  const { editorRef } = useBuild();
 
+  // Read panel open states from machine
+  // (panelState is always initialized with defaultPanelState in the machine context)
+  const openPanels = useSelector(editorRef, (state) => state.context.panelState.openPanels);
+
+  // Create setters that dispatch to machine
+  const setIsChatOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.chat) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { chat: newValue } } });
+    },
+    [editorRef, openPanels.chat],
+  );
+
+  const setIsFileTreeOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.files) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { files: newValue } } });
+    },
+    [editorRef, openPanels.files],
+  );
+
+  const setIsParametersOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.parameters) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { parameters: newValue } } });
+    },
+    [editorRef, openPanels.parameters],
+  );
+
+  const setIsEditorOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.editor) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { editor: newValue } } });
+    },
+    [editorRef, openPanels.editor],
+  );
+
+  const setIsExplorerOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.explorer) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { explorer: newValue } } });
+    },
+    [editorRef, openPanels.explorer],
+  );
+
+  const setIsKernelOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.kernel) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { kernel: newValue } } });
+    },
+    [editorRef, openPanels.kernel],
+  );
+
+  const setIsConverterOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.converter) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { converter: newValue } } });
+    },
+    [editorRef, openPanels.converter],
+  );
+
+  const setIsGitOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.git) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { git: newValue } } });
+    },
+    [editorRef, openPanels.git],
+  );
+
+  const setIsDetailsOpen = useCallback(
+    (value: boolean | ((current: boolean) => boolean)) => {
+      const newValue = typeof value === 'function' ? value(openPanels.details) : value;
+      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { details: newValue } } });
+    },
+    [editorRef, openPanels.details],
+  );
+
+  // Context value maintains same API for consumers
   const value = useMemo(
     () => ({
-      isChatOpen,
+      isChatOpen: openPanels.chat,
       setIsChatOpen,
-      isFileTreeOpen,
+      isFileTreeOpen: openPanels.files,
       setIsFileTreeOpen,
-      isParametersOpen,
+      isParametersOpen: openPanels.parameters,
       setIsParametersOpen,
-      isEditorOpen,
+      isEditorOpen: openPanels.editor,
       setIsEditorOpen,
-      isExplorerOpen,
+      isExplorerOpen: openPanels.explorer,
       setIsExplorerOpen,
-      isConverterOpen,
+      isKernelOpen: openPanels.kernel,
+      setIsKernelOpen,
+      isConverterOpen: openPanels.converter,
       setIsConverterOpen,
-      isGitOpen,
+      isGitOpen: openPanels.git,
       setIsGitOpen,
-      isDetailsOpen,
+      isDetailsOpen: openPanels.details,
       setIsDetailsOpen,
     }),
     [
-      isChatOpen,
+      openPanels,
       setIsChatOpen,
-      isFileTreeOpen,
       setIsFileTreeOpen,
-      isParametersOpen,
       setIsParametersOpen,
-      isEditorOpen,
       setIsEditorOpen,
-      isExplorerOpen,
       setIsExplorerOpen,
-      isConverterOpen,
+      setIsKernelOpen,
       setIsConverterOpen,
-      isGitOpen,
       setIsGitOpen,
-      isDetailsOpen,
       setIsDetailsOpen,
     ],
   );

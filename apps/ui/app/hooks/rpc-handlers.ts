@@ -39,7 +39,7 @@ import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { screenshotRequestMachine, orthographicViews } from '#machines/screenshot-request.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
-import type { cadMachine } from '#machines/cad.machine.js';
+import type { buildMachine } from '#machines/build.machine.js';
 import { decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 
 /** Source of file write operations */
@@ -55,10 +55,10 @@ export type RpcHandlerDependencies = {
     writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: { source: FileWriteSource }) => Promise<void>;
     deleteFile: (path: string, options: { source: FileWriteSource }) => Promise<void>;
   };
-  /** Graphics actor ref for screenshots */
-  graphicsRef: ActorRefFrom<typeof graphicsMachine>;
-  /** CAD actor ref for kernel status */
-  cadRef: ActorRefFrom<typeof cadMachine>;
+  /** Graphics actor ref for screenshots (undefined when no view is mounted) */
+  graphicsRef: ActorRefFrom<typeof graphicsMachine> | undefined;
+  /** Build actor ref for compilation units */
+  buildRef: ActorRefFrom<typeof buildMachine>;
   /** File tree for grep/glob operations */
   fileTree: Map<string, FileEntry>;
   /** Screenshot quality setting */
@@ -124,12 +124,20 @@ export type RpcHandlers = {
  * Returns an object with handler functions for each RPC operation.
  */
 export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
-  const { fileManager, graphicsRef, cadRef, fileTree, screenshotQuality } = deps;
+  const { fileManager, graphicsRef, buildRef, fileTree, screenshotQuality } = deps;
 
   // Handler for capture observations RPC - captures screenshots from all orthographic views
   const handleCaptureObservations = async (
     _input: CaptureObservationsRpcInput,
   ): Promise<CaptureObservationsRpcResult> => {
+    if (!graphicsRef) {
+      return {
+        success: false,
+        errorCode: 'UNKNOWN',
+        message: 'No graphics view is currently mounted for screenshots',
+      };
+    }
+
     try {
       const viewSides: ViewSide[] = ['front', 'back', 'right', 'left', 'top', 'bottom'];
       const viewAngles = orthographicViews.slice(0, 6);
@@ -413,12 +421,31 @@ export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
   };
 
   // Handler for get kernel result RPC
+  // Uses the compilation unit for the target file only. Creates on-demand if not found.
   const handleGetKernelResult = async (input: GetKernelResultRpcInput): Promise<GetKernelResultRpcResult> => {
     try {
-      const cadSnapshot = await waitFor(cadRef, (state) => state.value === 'ready' || state.value === 'error');
+      // 1. Find the compilation unit for the target file
+      const buildSnapshot = buildRef.getSnapshot();
+      const { compilationUnits } = buildSnapshot.context;
+      let cadUnit = compilationUnits.get(input.targetFile);
 
+      // 2. Create on-demand headless compilation if not found
+      if (!cadUnit) {
+        buildRef.send({ type: 'createCompilationUnit', entryFile: input.targetFile });
+        // Re-read after creation (synchronous assign in the machine)
+        const refreshed = buildRef.getSnapshot();
+        cadUnit = refreshed.context.compilationUnits.get(input.targetFile);
+      }
+
+      if (!cadUnit) {
+        return { success: false, errorCode: 'UNKNOWN', message: 'Failed to create compilation unit' };
+      }
+
+      // 3. Wait for compilation to complete
+      const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'ready' || state.value === 'error');
+
+      // 4. Return issues for the target file specifically
       const kernelIssues = cadSnapshot.context.kernelIssues.get(input.targetFile);
-
       const hasErrors = kernelIssues?.some((issue) => issue.severity === 'error') ?? false;
       const status = cadSnapshot.value === 'error' || hasErrors ? 'error' : 'ready';
 

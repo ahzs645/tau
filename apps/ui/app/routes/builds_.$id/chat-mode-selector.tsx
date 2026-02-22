@@ -82,7 +82,7 @@ export const ChatModeSelector = memo(function ({
                 className="h-10 pl-2 data-[state=checked]:bg-accent data-[state=checked]:text-primary [&_[data-slot='dropdown-menu-radio-item-indicator']]:hidden"
                 value={mode.id}
               >
-                <Icon className="size-4" />
+                <Icon />
                 <div className="flex flex-col">
                   <span className="font-medium">{mode.label}</span>
                   <span className="text-xs text-muted-foreground">{mode.description}</span>

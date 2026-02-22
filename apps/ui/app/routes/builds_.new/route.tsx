@@ -17,11 +17,8 @@ import { toast } from '#components/ui/sonner.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import type { Handle } from '#types/matches.types.js';
 import { cn } from '#utils/ui.utils.js';
-import { useKeydown } from '#hooks/use-keydown.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { useChatManager } from '#hooks/use-chat-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
 export const handle: Handle = {
@@ -79,9 +76,7 @@ function useBuildCreation() {
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
   const { user } = useAuthenticate({ enabled: false });
-  const [, setIsEditorOpen] = useCookie(cookieName.chatOpEditor, false);
   const buildManager = useBuildManager();
-  const chatManager = useChatManager();
 
   const createBuild = useCallback(
     async (buildData: { name: string; description: string; kernel: KernelProvider }) => {
@@ -89,45 +84,32 @@ function useBuildCreation() {
       try {
         const selectedOption = getKernelOption(buildData.kernel);
 
-        // Prepare build data without lastChatId (will be set after chat creation)
-        const newBuild = {
-          name: buildData.name.trim(),
-          description: buildData.description.trim(),
-          author: {
-            name: user?.name ?? 'You',
-            avatar: user?.image ?? '/avatar-sample.png',
-          },
-          tags: [],
-          thumbnail: '',
-          assets: {
-            mechanical: {
-              main: selectedOption.mainFile,
-              parameters: {},
+        const createdBuild = await buildManager.createBuild({
+          build: {
+            name: buildData.name.trim(),
+            description: buildData.description.trim(),
+            author: {
+              name: user?.name ?? 'You',
+              avatar: user?.image ?? '/avatar-sample.png',
+            },
+            tags: [],
+            thumbnail: '',
+            assets: {
+              mechanical: {
+                main: selectedOption.mainFile,
+                parameters: {},
+              },
             },
           },
-        };
-
-        // Prepare files separately
-        const files = {
-          [selectedOption.mainFile]: {
-            content: encodeTextFile(selectedOption.emptyCode),
+          files: {
+            [selectedOption.mainFile]: {
+              content: encodeTextFile(selectedOption.emptyCode),
+            },
           },
-        };
-
-        // Create the build first (without lastChatId)
-        const createdBuild = await buildManager.createBuild(newBuild, files);
-
-        // Create the chat and get its ID
-        const createdChat = await chatManager.createChat(createdBuild.id, {
-          name: 'Initial design',
-          messages: [],
+          chatName: 'Initial design',
+          // Set initial panel state: editor open
+          editorState: { panelState: { openPanels: { editor: true, files: true } } },
         });
-
-        // Update the build with the correct lastChatId
-        await buildManager.updateBuild(createdBuild.id, { lastChatId: createdChat.id });
-
-        // Ensure editor is open when navigating to the build page
-        setIsEditorOpen(true);
 
         void navigate(`/builds/${createdBuild.id}`);
       } catch (error) {
@@ -137,7 +119,7 @@ function useBuildCreation() {
         setIsCreating(false);
       }
     },
-    [user?.name, user?.image, buildManager, chatManager, setIsEditorOpen, navigate],
+    [user?.name, user?.image, buildManager, navigate],
   );
 
   return { createBuild, isCreating };
@@ -170,7 +152,7 @@ export default function BuildsNew(): React.JSX.Element {
   const isCreateButtonDisabled = !buildName.trim() || isCreating;
 
   // Add keyboard shortcut for Enter to submit
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     { key: 'Enter' },
     useCallback(() => {
       if (isCreateButtonDisabled) {

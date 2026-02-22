@@ -64,7 +64,7 @@ export const MarkdownViewerChat = memo(function ({
       className={className}
       isStreaming={isStreaming}
       components={memoizedComponents}
-      controls={{ ...defaultMarkdownControls, table: true }}
+      controls={{ ...defaultMarkdownControls, table: false }}
     >
       {children}
     </MarkdownViewer>

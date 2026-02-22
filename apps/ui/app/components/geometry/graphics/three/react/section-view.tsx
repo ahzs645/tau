@@ -9,6 +9,11 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Plane } from '@react-three/drei';
 
+// Reusable temporaries for per-frame plane positioning (avoids GC pressure)
+const _defaultNormal = new THREE.Vector3(0, 0, 1);
+const _quaternion = new THREE.Quaternion();
+const _worldPosition = new THREE.Vector3();
+
 export type CutterProperties = {
   readonly children: React.ReactNode;
   readonly plane: THREE.Plane;
@@ -34,6 +39,9 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
 
     const [meshList, setMeshList] = React.useState<THREE.Mesh[]>([]);
     const [planeSize, setPlaneSize] = React.useState(10);
+    // Track the previous set of mesh IDs to avoid unnecessary setMeshList calls
+    // when only clipping plane values changed (the mesh list itself is stable).
+    const previousMeshIdsRef = React.useRef<string>('');
 
     const update: () => void = React.useCallback(() => {
       // Early return if cutting is disabled
@@ -118,18 +126,24 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
           }
         });
 
-        const bbox = new THREE.Box3();
-        bbox.setFromObject(rootGroup);
+        // Only update the mesh list and recompute bounds when the set of meshes
+        // actually changed (not on every plane drag). The mesh list is stable during
+        // plane manipulation -- only clipping plane values on materials change.
+        const meshIdsKey = meshChildren.map((m) => m.id).join(',');
+        if (meshIdsKey !== previousMeshIdsRef.current) {
+          previousMeshIdsRef.current = meshIdsKey;
 
-        const boxSize = new THREE.Vector3();
-        bbox.getSize(boxSize);
+          const bbox = new THREE.Box3();
+          bbox.setFromObject(rootGroup);
 
-        const calculatedPlaneSize = 2 * boxSize.length();
-        setPlaneSize(calculatedPlaneSize);
+          const boxSize = new THREE.Vector3();
+          bbox.getSize(boxSize);
+
+          const calculatedPlaneSize = 2 * boxSize.length();
+          setPlaneSize(calculatedPlaneSize);
+          setMeshList(meshChildren);
+        }
       }
-
-      // Update the list of children that are meshes
-      setMeshList(meshChildren);
       // Depend on primitive values instead of plane object to avoid infinite loop
       // eslint-disable-next-line react-hooks/exhaustive-deps -- plane.normal and plane.constant are extracted below
     }, [
@@ -154,26 +168,24 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
 
     useFrame(() => {
       if (enableSection && planeListRef.current && rootGroupRef.current) {
-        // Create a quaternion to rotate from default plane normal (0,0,1) to clipping plane normal
-        const defaultNormal = new THREE.Vector3(0, 0, 1);
-        const quaternion = new THREE.Quaternion();
-        quaternion.setFromUnitVectors(defaultNormal, plane.normal);
+        // Reuse module-scoped temporaries to avoid per-frame allocations
+        _defaultNormal.set(0, 0, 1);
+        _quaternion.setFromUnitVectors(_defaultNormal, plane.normal);
 
         for (const [, planeObject] of planeListRef.current) {
           // Get a point on the clipping plane in world space
-          const worldPosition = new THREE.Vector3();
-          plane.coplanarPoint(worldPosition);
+          plane.coplanarPoint(_worldPosition);
 
           // Offset slightly opposite to the plane normal to prevent z-fighting with the mesh surface
           const zFightingOffset = 0.1;
-          worldPosition.addScaledVector(plane.normal, -zFightingOffset);
+          _worldPosition.addScaledVector(plane.normal, -zFightingOffset);
 
           // Transform the world position to the local space of the root group
           // This accounts for any centering or translation applied to the parent group
-          rootGroupRef.current.worldToLocal(planeObject.position.copy(worldPosition));
+          rootGroupRef.current.worldToLocal(planeObject.position.copy(_worldPosition));
 
           // Orient the plane to match the clipping plane's normal
-          planeObject.quaternion.copy(quaternion);
+          planeObject.quaternion.copy(_quaternion);
         }
       }
     });

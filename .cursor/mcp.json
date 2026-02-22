@@ -50,6 +50,17 @@
     },
     "ai-sdk-5-migration": {
       "url": "https://ai-sdk-5-migration-mcp-server.vercel.app/api/mcp"
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--browser-url=http://127.0.0.1:9222",
+        "--isolated=true",
+        "--categoryPerformance=true",
+        "--categoryNetwork=true"
+      ]
     }
   }
 }
