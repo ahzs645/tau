@@ -17,9 +17,7 @@ export class KernelTracer implements KernelSpanTracer {
   private nextId = 0;
   private activeSpanId: string | undefined;
 
-  /**
-   *
-   */
+  /** Starts a new tracing span, optionally nested under the currently active span. */
   public startSpan(name: string, attributes?: SpanAttributes): SpanHandle {
     const id = String(this.nextId++);
     const parentId = this.activeSpanId;
@@ -47,9 +45,7 @@ export class KernelTracer implements KernelSpanTracer {
     };
   }
 
-  /**
-   *
-   */
+  /** Resets all tracer state and clears associated performance marks and measures. */
   public reset(): void {
     this.nextId = 0;
     this.activeSpanId = undefined;

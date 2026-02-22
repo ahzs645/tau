@@ -139,10 +139,6 @@ export type GetParametersHandler = (input: GetParametersInput) => Promise<GetPar
  * }
  * ```
  */
-
-/**
- *
- */
 export type WrapCreateGeometryHook<
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
@@ -160,10 +156,6 @@ export type WrapCreateGeometryHook<
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
-
-/**
- *
- */
 export type WrapExportGeometryHook<
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
@@ -180,10 +172,6 @@ export type WrapExportGeometryHook<
  * Provides full control over execution with onion model semantics.
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
- */
-
-/**
- *
  */
 export type WrapGetParametersHook<
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>

@@ -1,8 +1,6 @@
 import type { KernelModules, MiddlewareEntries, BundlerEntries } from '#types/kernel.types.js';
 
-/**
- *
- */
+/** Options for {@link createDefaultConfig} to selectively enable/disable kernels and middleware. */
 export type DefaultConfigOptions = {
   kernels?: {
     replicad?: { enabled?: boolean; options?: Record<string, unknown> };
@@ -19,9 +17,7 @@ export type DefaultConfigOptions = {
   };
 };
 
-/**
- *
- */
+/** Return type of {@link createDefaultConfig}, containing resolved worker URL and module registries. */
 export type DefaultConfigResult = {
   workerUrl: string;
   kernelModules: KernelModules;

@@ -1,8 +1,6 @@
 import type { SourceRange } from '@taucad/kcl-wasm-lib/bindings/SourceRange';
 
-/**
- *
- */
+/** Represents a position within source code as a 1-based line and 0-based column number. */
 export type LineColumnPosition = {
   line: number;
   column: number;
