@@ -277,7 +277,8 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       }
     }
 
-    const extension = filePath.split('.').pop()?.toLowerCase() ?? '';
+    const dotIndex = filePath.lastIndexOf('.');
+    const extension = dotIndex > 0 && dotIndex < filePath.length - 1 ? filePath.slice(dotIndex + 1).toLowerCase() : '';
     let catchAllEntry: KernelModuleEntry | undefined;
     const hasBundlerKernels = this.kernelModules.some((c) => c.builtinModuleNames && c.builtinModuleNames.length > 0);
 
@@ -324,7 +325,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     // Pass 2: Bundler-assisted detection via detectImports
-    const fileExt = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.') + 1) : '';
+    const fileExt = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase() : '';
     if (this.hasBundlerForExtension(fileExt)) {
       const configsWithBuiltins = this.kernelModules.filter(
         (c) => c.builtinModuleNames && c.builtinModuleNames.length > 0,
