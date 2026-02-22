@@ -1,17 +1,7 @@
 import { assign, assertEvent, setup, sendTo, enqueueActions } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type {
-  CodeIssue,
-  Geometry,
-  ExportFormat,
-  KernelIssue,
-  GeometryFile,
-  KernelConfig,
-  MiddlewareConfig,
-  BundlerConfig,
-  RenderPhase,
-  PerformanceEntryData,
-} from '@taucad/types';
+import type { CodeIssue, Geometry, ExportFormat, GeometryFile } from '@taucad/types';
+import type { KernelClientOptions, KernelIssue, RenderPhase, PerformanceEntryData } from '@taucad/kernels';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { kernelMachine } from '#machines/kernel.machine.js';
@@ -57,7 +47,6 @@ type CadEvent =
   | { type: 'setCodeIssues'; errors: CadContext['codeIssues'] }
   | { type: 'exportGeometry'; format: ExportFormat }
   | { type: 'setRenderTimeout'; timeout: number }
-  | { type: 'configureMiddleware'; middlewareConfig: MiddlewareConfig }
   | KernelEventExternal;
 
 type CadEmitted =
@@ -69,9 +58,7 @@ type CadInput = {
   shouldInitializeKernelOnStart: boolean;
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
-  kernelConfig: KernelConfig;
-  middlewareConfig: MiddlewareConfig;
-  bundlerConfig?: BundlerConfig;
+  kernelOptions: KernelClientOptions;
 };
 
 /**
@@ -116,16 +103,6 @@ export const cadMachine = setup({
         return {
           type: 'exportGeometry',
           format: event.format,
-        };
-      },
-    ),
-    forwardConfigureMiddleware: sendTo(
-      ({ context }) => context.kernelRef,
-      ({ event }) => {
-        assertEvent(event, 'configureMiddleware');
-        return {
-          type: 'configureMiddleware',
-          middlewareConfig: event.middlewareConfig,
         };
       },
     ),
@@ -389,9 +366,7 @@ export const cadMachine = setup({
     kernelRef: spawn(kernelMachine, {
       input: {
         fileManagerRef: input.fileManagerRef,
-        kernelConfig: input.kernelConfig,
-        middlewareConfig: input.middlewareConfig,
-        bundlerConfig: input.bundlerConfig,
+        kernelOptions: input.kernelOptions,
       },
     }),
     exportedBlob: undefined,
@@ -406,11 +381,7 @@ export const cadMachine = setup({
     renderPhase: undefined,
     telemetryEntries: [],
   }),
-  on: {
-    configureMiddleware: {
-      actions: 'forwardConfigureMiddleware',
-    },
-  },
+  on: {},
   initial: 'booting',
   states: {
     // The booting state is used when booting the kernel.

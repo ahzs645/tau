@@ -1,7 +1,7 @@
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import type { IssueSeverity, KernelIssue } from '@taucad/types';
+import type { IssueSeverity, KernelIssue } from '@taucad/kernels';
 import {
   ChatToolCard,
   ChatToolCardHeader,

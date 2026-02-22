@@ -12,7 +12,8 @@ import {
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
-import type { RenderPhase, LogEntry, PerformanceEntryData } from '@taucad/types';
+import type { LogEntry } from '@taucad/types';
+import type { RenderPhase, PerformanceEntryData } from '@taucad/kernels';
 import { logLevels } from '@taucad/types/constants';
 import {
   FloatingPanel,

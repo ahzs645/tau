@@ -1,43 +1,27 @@
 import { assign, assertEvent, setup, sendTo, fromPromise, fromCallback, waitFor } from 'xstate';
 import type { Snapshot, ActorRef, OutputFrom, DoneActorEvent, ActorRefFrom } from 'xstate';
+import type { Geometry, ExportFormat, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
+import type { JSONSchema7 } from 'json-schema';
+import { createKernelClient, isKernelSuccess } from '@taucad/kernels';
 import type {
-  Geometry,
-  ExportFormat,
+  KernelClient,
+  KernelClientOptions,
   KernelIssue,
-  GeometryFile,
   GetParametersResult,
-  LogLevel,
-  LogOrigin,
-  KernelConfig,
-  MiddlewareConfig,
-  BundlerConfig,
+  KernelFileSystem,
   PerformanceEntryData,
   RenderPhase,
-} from '@taucad/types';
-import { isKernelSuccess } from '@taucad/types/guards';
-import type { JSONSchema7 } from 'json-schema';
-import { KernelWorkerClient, createFileManagerPort } from '@taucad/kernels';
-import type { OnLogCallback, OnTelemetryCallback } from '@taucad/kernels';
+} from '@taucad/kernels';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
-import { runtimeWorkerUrl } from '#constants/kernel-worker.constants.js';
 
 /**
- * Forward worker telemetry entries to the CAD machine for UI display.
+ * Lazily create and connect the KernelClient for this CU.
+ * Uses the v2 createKernelClient factory with plugin factories.
+ * No-op if the client already exists and is connected.
  */
-function createTelemetryAggregator(_workerId: string, context: KernelContext): OnTelemetryCallback {
-  return (entries: PerformanceEntryData[]) => {
-    context.parentRef?.send({ type: 'kernelTelemetry', entries });
-  };
-}
-
-/**
- * Lazily create and initialize the single runtime worker for the CU.
- * The runtime worker dynamically loads kernel modules and handles selection internally.
- * No-op if the runtime worker already exists.
- */
-async function ensureRuntimeWorkerClient(context: KernelContext): Promise<KernelWorkerClient> {
-  if (context.runtimeWorkerClient) {
-    return context.runtimeWorkerClient;
+async function ensureKernelClient(context: KernelContext): Promise<KernelClient> {
+  if (context.kernelClient) {
+    return context.kernelClient;
   }
 
   if (!context.fileManagerRef) {
@@ -49,41 +33,45 @@ async function ensureRuntimeWorkerClient(context: KernelContext): Promise<Kernel
     throw new Error('File manager worker not available');
   }
 
-  const wrappedFileManager = snapshot.context.wrappedWorker;
+  const fm = snapshot.context.wrappedWorker;
+  const client = createKernelClient(context.kernelOptions);
+  context.kernelClient = client;
 
-  const onLog: OnLogCallback = (log) => {
-    if (context.parentRef) {
-      context.parentRef.send({
-        type: 'kernelLog',
-        level: log.level as LogLevel,
-        message: log.message,
-        origin: log.origin,
-        data: log.data,
-      });
-    }
-  };
+  // Subscribe to events and forward to parent machine
+  if (context.parentRef) {
+    const { parentRef } = context;
 
-  const rawWorker = new Worker(runtimeWorkerUrl, { type: 'module' });
-  const onTelemetry = createTelemetryAggregator('runtime', context);
-  const client = new KernelWorkerClient(rawWorker, onLog, onTelemetry);
-  context.runtimeWorkerClient = client;
+    context.eventCleanups.push(
+      client.on('log', (entry) => {
+        parentRef.send({
+          type: 'kernelLog',
+          level: entry.level as LogLevel,
+          message: entry.message,
+          origin: entry.origin,
+          data: entry.data,
+        });
+      }),
+      client.on('telemetry', (entries) => {
+        parentRef.send({ type: 'kernelTelemetry', entries });
+      }),
+    );
+  }
 
-  const kernelModules = context.kernelConfig.map((entry) => ({
-    id: entry.id,
-    moduleUrl: entry.kernelModuleUrl,
-    extensions: entry.extensions,
-    detectImport: entry.detectImport?.source,
-    builtinModuleNames: entry.builtinModuleNames,
-    options: entry.options,
-  }));
-
-  const port = createFileManagerPort(wrappedFileManager);
-  await client.initialize(
-    { kernelModules, bundlerConfig: context.bundlerConfig },
-    port,
-    context.middlewareConfig,
-    context.bundlerConfig,
-  );
+  // Adapt the Comlink Remote<FileManager> to the KernelFileSystem interface.
+  // All methods use arrow functions to avoid Comlink Proxy traps intercepting
+  // .apply/.bind calls when the bridge dispatches via fn(...args).
+  await client.connect({
+    fileSystem: {
+      readFile: (async (path: string, encoding?: 'utf8') =>
+        encoding ? fm.readFile(path, encoding) : fm.readFile(path)) as KernelFileSystem['readFile'],
+      writeFile: async (path, data) => fm.writeFile(path, data),
+      mkdir: async (path, options) => fm.mkdir(path, options),
+      readdir: async (path) => fm.readdir(path),
+      unlink: async (path) => fm.unlink(path),
+      stat: async (path) => fm.stat(path),
+      exists: async (path) => fm.exists(path),
+    },
+  });
 
   return client;
 }
@@ -126,49 +114,35 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
 
   void (async () => {
     try {
-      const client = await ensureRuntimeWorkerClient(context);
+      const client = await ensureKernelClient(context);
 
       if (context.changedPaths.length > 0) {
         client.notifyFileChanged(context.changedPaths);
       }
 
-      const canHandle = await client.canHandle(file);
+      // Subscribe to per-render events
+      const offProgress = client.on('progress', (phase: RenderPhase) => {
+        sendBack({ type: 'kernelProgress', phase });
+      });
 
-      if (!canHandle) {
-        sendBack({
-          type: 'kernelIssue',
-          errors: [
-            {
-              message: `No kernel can handle file: ${file.filename}`,
-              location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-              type: 'runtime',
-              severity: 'warning' as const,
-            },
-          ],
-        });
-        return;
-      }
+      const offParameters = client.on('parametersResolved', (parametersResult: GetParametersResult) => {
+        if (isKernelSuccess(parametersResult)) {
+          const data = parametersResult.data as {
+            defaultParameters: Record<string, unknown>;
+            jsonSchema: JSONSchema7;
+          };
+          sendBack({
+            type: 'parametersParsed',
+            defaultParameters: data.defaultParameters,
+            jsonSchema: data.jsonSchema,
+          });
+        }
+      });
 
-      const result = await client.render(
-        file,
-        parameters,
-        (parametersResult: GetParametersResult) => {
-          if (isKernelSuccess(parametersResult)) {
-            const data = parametersResult.data as {
-              defaultParameters: Record<string, unknown>;
-              jsonSchema: JSONSchema7;
-            };
-            sendBack({
-              type: 'parametersParsed',
-              defaultParameters: data.defaultParameters,
-              jsonSchema: data.jsonSchema,
-            });
-          }
-        },
-        (phase: RenderPhase) => {
-          sendBack({ type: 'kernelProgress', phase });
-        },
-      );
+      const result = await client.render(file, parameters);
+
+      offProgress();
+      offParameters();
 
       if (isKernelSuccess(result)) {
         sendBack({
@@ -180,14 +154,14 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
         sendBack({ type: 'kernelIssue', errors: result.issues });
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Error rendering geometry';
+      const errorMessage = error instanceof Error ? error.message : 'error rendering geometry';
       sendBack({
         type: 'kernelIssue',
         errors: [
           {
             message: errorMessage,
             location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-            type: 'runtime',
+            type: 'runtime' as const,
             severity: 'error' as const,
           },
         ],
@@ -204,12 +178,12 @@ const exportGeometryActor = fromPromise<
   const { context, event } = input;
   const { format } = event;
 
-  if (!context.runtimeWorkerClient) {
+  if (!context.kernelClient) {
     return {
       type: 'geometryExportFailed',
       errors: [
         {
-          message: 'Runtime worker not initialized',
+          message: 'Kernel client not initialized',
           type: 'runtime',
           severity: 'error' as const,
         },
@@ -218,12 +192,11 @@ const exportGeometryActor = fromPromise<
   }
 
   try {
-    const result = await context.runtimeWorkerClient.exportGeometry(format);
+    const result = await context.kernelClient.export(format);
 
     if (isKernelSuccess(result)) {
       const { data } = result;
       if (Array.isArray(data) && data.length > 0 && data[0]?.blob) {
-        // TODO: Handle multiple blobs during export
         return { type: 'geometryExported', blob: data[0].blob, format };
       }
 
@@ -260,21 +233,17 @@ const exportGeometryActor = fromPromise<
 
 export type CadActor = ActorRef<Snapshot<unknown>, KernelEventExternal>;
 
-// Define the actors that the machine can invoke
 const kernelActors = {
   renderActor,
   exportGeometryActor,
 } as const;
 type KernelActorNames = keyof typeof kernelActors;
 
-// Define the types of events the machine can receive
 type KernelEventInternal =
   | { type: 'initializeKernel'; parentRef: CadActor }
   | { type: 'createGeometry'; file: GeometryFile; parameters: Record<string, unknown>; changedPaths?: string[] }
-  | { type: 'exportGeometry'; format: ExportFormat }
-  | { type: 'configureMiddleware'; middlewareConfig: MiddlewareConfig };
+  | { type: 'exportGeometry'; format: ExportFormat };
 
-// Define the events that the workers can send to the kernel machine
 type KernelEventWorker = {
   type: 'kernelLog';
   level: LogLevel;
@@ -283,10 +252,8 @@ type KernelEventWorker = {
   data?: unknown;
 };
 
-// Actors that produce OutputFrom (fromPromise actors)
 type PromiseActorNames = Exclude<KernelActorNames, 'renderActor'>;
 
-// The kernel machine sends the output of promise actors and render streaming events to the parent.
 export type KernelEventExternal =
   | OutputFrom<(typeof kernelActors)[PromiseActorNames]>
   | RenderEvent
@@ -296,35 +263,30 @@ type KernelEventExternalDone = DoneActorEvent<KernelEventExternal, KernelActorNa
 
 type KernelEvent = KernelEventExternalDone | KernelEventInternal | RenderEvent;
 
-// Interface defining the context for the Kernel machine
 type KernelContext = {
-  kernelConfig: KernelConfig;
-  middlewareConfig: MiddlewareConfig;
-  bundlerConfig?: BundlerConfig;
-  runtimeWorkerClient?: KernelWorkerClient;
+  kernelOptions: KernelClientOptions;
+  kernelClient?: KernelClient;
   parentRef?: CadActor;
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
   changedPaths: string[];
+  eventCleanups: Array<() => void>;
 };
 
 type KernelInput = {
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
-  kernelConfig: KernelConfig;
-  middlewareConfig: MiddlewareConfig;
-  bundlerConfig?: BundlerConfig;
+  kernelOptions: KernelClientOptions;
 };
 
 /**
  * Kernel Machine
  *
- * This machine manages the single runtime WebWorker that runs CAD operations:
- * - Lazily creates a runtime worker that dynamically loads kernel modules
- * - Routes files to the correct kernel via the runtime worker's canHandle check
- * - Processes results from CAD operations
+ * This machine manages the KernelClient for CAD operations:
+ * - Lazily creates a KernelClient that manages Worker lifecycle internally
+ * - Routes files to the correct kernel via the worker's internal selection
+ * - Processes results from CAD operations via event subscription
  *
- * The machine is agnostic to which kernels exist -- kernel module URLs, priority,
- * and options are injected via KernelConfig at spawn time.
- * The parent machine is responsible for the state of the CAD operations.
+ * The machine is agnostic to which kernels exist -- kernel plugins, middleware,
+ * and bundlers are injected via KernelClientOptions at spawn time.
  */
 export const kernelMachine = setup({
   types: {
@@ -345,24 +307,27 @@ export const kernelMachine = setup({
     }),
 
     destroyWorkers({ context }) {
-      if (context.runtimeWorkerClient) {
-        context.runtimeWorkerClient.cleanup();
-        context.runtimeWorkerClient.terminate();
-        context.runtimeWorkerClient = undefined;
+      for (const cleanup of context.eventCleanups) {
+        cleanup();
+      }
+
+      context.eventCleanups = [];
+
+      if (context.kernelClient) {
+        context.kernelClient.terminate();
+        context.kernelClient = undefined;
       }
     },
   },
 }).createMachine({
-  /** @xstate-layout N4IgpgJg5mDOIC5QGswCcB2YA2A6AlhvgC74CG2+AXoVAMSEnmVWQDaADALqKgAOAe1hMBGXiAAeiAEwA2AJy4AzBwCMqgCwrZ0gByzVSgDQgAnogCsujbmnyOG1bvlKlegOy6Avl5OpMOAREpBTUtHToaAJonDxIIILCpKLiUgiyWsrSSupy8hYq7u4m5ghu0riq7vIZ8qoc2dIWFj5+6Fh4aGBkEKZ0AMYCALZ8AK7EYADiYMNgxGimseKJImLxafIaFfYcsrsaGrLuByWILu64W1VFug1uukqtIP4duF09fWASgmjE07PzRbcZZCVapRCqbIWXAFSEaXSqfLVdyyU4IaqyGG6awWVR7QzHeRPF6BL4-UgYegwAELACi32iEwgS3iK2Sa1AaU0Gg4uGRSns0k08jkxjMiHuuBFNQFKg48ncSlkxPapIZv3CkWiLP4oPZ4IQ9QyuH0+gO6luejRTmhRQFegF+SVmxVATwZMZkDoElgxDIE1wZAAZhM0AAKDgASjoJPd6qZOoSevwKXWEKs0Ic5Q4uIs0hRxXFCHyFQFDwK0gO8qVrtefDIaGElLo9bQZCGc3QsAACg3YOxgazk6nORLeSjnSKlMdXEp9GihZjdO4OBwlXj4dda4FW036FqYoPdUkUxzJIhbhc4Qr5ccGhZUUWRSbCc55c5ZJ-vL5nqr3QA3ChRn9cJqQ7QEAGFhjGBMjyTE8R3PMpblwPYlFhDR3DzEVKzRZcLg4Fc8ycHMDAsDRtwAoCQObA9EzZU8DT2aE5AaWQrEaGU0S2RQLEIrCFB0AoOAeSjcDAQDsGAplvV9f0wEDEN0AjaNY3EyTpIHOJjzBNMEF0SspUVSFBUOeVpDwzwYSIppPE8GUxIPAZoPGKYZnAhZ6OHM80gnSpywsGo+OCsVSnhJQYWkOQEQRJoHFkR4fzUpyPV+f4PKBbT4N00dDQaGwinqfjFXI0KJSiyoMTnAyDgKb82jdcS0CiNAGGCZhqDALyEJ8yxAtQix3EhbQUUvBc8RfVcH3caRSPqb8fwwAQIDgcRYxBHqDQAWkRbZMMcQ4US2B40WhacNHkewtAUET9jExgQhYWgNpypCmgqG5mnxOpDmaBd8lsA59ErHQqk-MT3l6F79T0+oAcwlcXAUREGjwxEYXYtQeSiiikr-cT42eodNthuQl3Q-IFT2TZdjRdDVClXZZqqIVLt0QbHPjSBocY2GOJhWVVFxaqql0NFPwuZoHhmxVqluRKGrrPsiZ0mHcp2g4pX2zQjgyB1rSVE0Es8diLv0PZlTxxqJOoikoB5xC0kcXRKkRKp1GOOx2O4vNLmsFQ6lI6xDEcjT5IgB3evSVwjJcL6DDxZc0R2XAHBXawos-HkFd-a3muiSODQRaEJZlPZl3kE6iyUDRoSFnQ1Erci7PcHwfCAA */
   id: 'kernel',
   context: ({ input }) => ({
-    kernelConfig: input.kernelConfig,
-    middlewareConfig: input.middlewareConfig,
-    bundlerConfig: input.bundlerConfig,
-    runtimeWorkerClient: undefined,
+    kernelOptions: input.kernelOptions,
+    kernelClient: undefined,
     parentRef: undefined,
     fileManagerRef: input.fileManagerRef,
     changedPaths: [],
+    eventCleanups: [],
   }),
   initial: 'initializing',
   exit: ['destroyWorkers'],
@@ -398,20 +363,6 @@ export const kernelMachine = setup({
         },
         exportGeometry: {
           target: 'exporting',
-        },
-        configureMiddleware: {
-          actions: [
-            assign({
-              middlewareConfig({ event }) {
-                assertEvent(event, 'configureMiddleware');
-                return event.middlewareConfig;
-              },
-            }),
-            ({ context, event }) => {
-              assertEvent(event, 'configureMiddleware');
-              context.runtimeWorkerClient?.configureMiddleware(event.middlewareConfig);
-            },
-          ],
         },
       },
     },
@@ -495,7 +446,6 @@ export const kernelMachine = setup({
     },
 
     exporting: {
-      // Allow cancelling inflight operations
       on: {
         createGeometry: {
           target: 'rendering',

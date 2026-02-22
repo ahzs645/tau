@@ -24,7 +24,8 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import type { VisibilityState, SortingState } from '@tanstack/react-table';
-import type { EngineeringDiscipline, Build, KernelProvider } from '@taucad/types';
+import type { EngineeringDiscipline, Build } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import { engineeringDisciplines } from '@taucad/types/constants';
 import { createColumns } from '#routes/builds_.library/columns.js';
 import { CategoryBadge } from '#components/category-badge.js';

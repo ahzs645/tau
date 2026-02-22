@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { ChevronRight, Sparkles } from 'lucide-react';
-import type { KernelProvider, KernelIssue, KernelStackFrame, IssueSeverity } from '@taucad/types';
+import type { KernelProvider, KernelIssue, KernelStackFrame, IssueSeverity } from '@taucad/kernels';
 import { languageFromKernel } from '@taucad/types/constants';
 import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { Button } from '#components/ui/button.js';

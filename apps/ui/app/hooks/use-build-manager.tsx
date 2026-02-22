@@ -4,7 +4,8 @@ import { createContext, useContext, useMemo, useCallback, useEffect } from 'reac
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { Build, FilesystemBackend, KernelProvider } from '@taucad/types';
+import type { Build, FilesystemBackend } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import type { Chat } from '@taucad/chat';
 import type { Remote } from 'comlink';
 import { messageRole, messageStatus } from '@taucad/chat/constants';

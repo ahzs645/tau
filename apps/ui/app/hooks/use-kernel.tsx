@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 

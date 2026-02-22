@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMachine, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
-import type { KernelConfig, MiddlewareConfig } from '@taucad/types';
-import { createDefaultConfig } from '@taucad/kernels';
+import { jscad } from '@taucad/kernels/kernels';
+import { parameterCache, geometryCache, gltfCoordinateTransform } from '@taucad/kernels/middleware';
+import type { KernelClientOptions } from '@taucad/kernels';
 import { authSplashbackMachine, timing as machineTiming } from '#routes/auth.$/splashback/auth-splashback.machine.js';
 import { UnifiedSplashbackViewer } from '#routes/auth.$/splashback/unified-splashback-viewer.js';
 import type { SplashbackPhase } from '#routes/auth.$/splashback/unified-splashback-viewer.js';
@@ -17,21 +18,10 @@ import {
   assemblySplitRatio as defaultAssemblySplitRatio,
 } from '#routes/auth.$/splashback/auth-splashback.constants.js';
 
-const splashbackConfig = createDefaultConfig({
-  kernels: {
-    replicad: { enabled: false },
-    openscad: { enabled: false },
-    zoo: { enabled: false },
-    tau: { enabled: false },
-  },
-  middleware: {
-    gltfEdgeDetection: { enabled: false },
-  },
-});
-
-const jscadOnlyKernelConfig: KernelConfig = splashbackConfig.kernelConfig;
-
-const splashbackMiddlewareConfig: MiddlewareConfig = splashbackConfig.middlewareConfig;
+const splashbackKernelOptions: KernelClientOptions = {
+  kernels: [jscad()],
+  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform()],
+};
 
 const prompt1Text = 'Create a gear with 12 teeth';
 const prompt2Text = 'Change it to 8 teeth';
@@ -780,8 +770,7 @@ export function AuthSplashback(): React.JSX.Element {
       mainFile="main.js"
       files={gearFiles}
       isEnabled={derivedState.showContainer}
-      kernelConfig={jscadOnlyKernelConfig}
-      middlewareConfig={splashbackMiddlewareConfig}
+      kernelOptions={splashbackKernelOptions}
     >
       <AuthSplashbackContent state={state} send={send} derivedState={derivedState} />
     </CadPreviewProvider>

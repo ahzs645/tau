@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, NavLink } from 'react-router';
 import { Code2, SlidersHorizontal } from 'lucide-react';
-import type { KernelProvider } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import { kernelProviders } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { SearchInput } from '#components/search-input.js';

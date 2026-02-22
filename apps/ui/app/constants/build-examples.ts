@@ -1,5 +1,6 @@
 import { mockBuilds, jscadExamples } from '@taucad/tau-examples';
-import type { Build, KernelProvider } from '@taucad/types';
+import type { Build } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 
 // Sample data

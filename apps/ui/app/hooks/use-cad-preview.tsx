@@ -3,7 +3,8 @@ import { createContext, useContext, useEffect, useMemo, useCallback } from 'reac
 import { useActorRef, useSelector } from '@xstate/react';
 import { fromPromise } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { Geometry, KernelConfig, BundlerConfig, MiddlewareConfig } from '@taucad/types';
+import type { Geometry } from '@taucad/types';
+import type { KernelClientOptions } from '@taucad/kernels';
 import type { JSONSchema7 } from 'json-schema';
 import { cadMachine } from '#machines/cad.machine.js';
 import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
@@ -11,11 +12,7 @@ import type { PrepareFilesInput } from '#machines/cad-preview.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { joinPath } from '#utils/path.utils.js';
-import {
-  defaultKernelConfig,
-  defaultMiddlewareConfig,
-  defaultBundlerConfig,
-} from '#constants/kernel-worker.constants.js';
+import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 
 /**
@@ -50,9 +47,7 @@ export type CadPreviewProviderProps = {
   readonly parameters?: Record<string, unknown>;
   /** Whether the build should be triggered (default: true) */
   readonly isEnabled?: boolean;
-  readonly kernelConfig?: KernelConfig;
-  readonly middlewareConfig?: MiddlewareConfig;
-  readonly bundlerConfig?: BundlerConfig;
+  readonly kernelOptions?: KernelClientOptions;
   readonly children: ReactNode;
 };
 
@@ -107,9 +102,7 @@ export function CadPreviewProvider({
   files,
   parameters,
   isEnabled = true,
-  kernelConfig,
-  middlewareConfig,
-  bundlerConfig,
+  kernelOptions,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
   const { writeFiles, exists, fileManagerRef } = useFileManager();
@@ -118,9 +111,7 @@ export function CadPreviewProvider({
     input: {
       shouldInitializeKernelOnStart: false,
       fileManagerRef,
-      kernelConfig: kernelConfig ?? defaultKernelConfig,
-      middlewareConfig: middlewareConfig ?? defaultMiddlewareConfig,
-      bundlerConfig: bundlerConfig ?? defaultBundlerConfig,
+      kernelOptions: kernelOptions ?? defaultKernelOptions,
     },
   });
 
