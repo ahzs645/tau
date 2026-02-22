@@ -33,7 +33,7 @@ Import and extend the base `KernelWorker` class:
 ```typescript
 import { expose } from 'comlink';
 import type { ExportFormat } from '@taucad/types';
-import type { CreateGeometryResult, ExportGeometryResult, GetParametersResult } from '@taucad/kernels';
+import type { CreateGeometryResult, ExportGeometryResult, GetParametersResult, Tessellation } from '@taucad/kernels';
 import { createKernelSuccess, createKernelError } from '@taucad/kernels';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 
@@ -175,7 +175,7 @@ const extendedModules: KernelModules = [
 ];
 
 // Pass to BuildProvider
-<BuildProvider buildId={id} kernelOptions={extendedConfig}>
+<BuildProvider buildId={id} kernelOptions={extendedModules}>
 ```
 
 The `id` field accepts any string -- known kernel names get autocomplete, but arbitrary third-party IDs work without type errors.
@@ -249,7 +249,7 @@ import { myKernelExamples } from '@taucad/tau-examples';
 
 Edit `apps/api/app/api/chat/prompts/chat-prompt-cad.ts`:
 
-Add a `KernelModules` entry to `cadKernelConfigs` with:
+Add an entry to `cadKernelConfigs` with:
 
 - `fileExtension` — File extension (e.g., `.ts`, `.scad`)
 - `languageName` — Human-readable name
