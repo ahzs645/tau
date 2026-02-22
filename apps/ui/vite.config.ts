@@ -54,17 +54,15 @@ function tsModuleUrlPlugin(): Plugin {
       const dir = path.dirname(id);
 
       type UrlMatch = { full: string; relPath: string; hasHref: boolean; idx: number };
-      const matches: UrlMatch[] = [];
 
-      let m: ReturnType<typeof urlPattern.exec>;
-
-      while ((m = urlPattern.exec(code)) !== null) {
-        const relPath = m[1]!;
-        const tsPath = path.resolve(dir, relPath.replace(/\.js$/, '.ts'));
-        if (fs.existsSync(tsPath)) {
-          matches.push({ full: m[0], relPath, hasHref: Boolean(m[2]), idx: m.index });
-        }
-      }
+      const matches: UrlMatch[] = [...code.matchAll(urlPattern)]
+        .map((m) => ({
+          full: m[0],
+          relPath: m[1]!,
+          hasHref: Boolean(m[2]),
+          idx: m.index,
+        }))
+        .filter(({ relPath }) => fs.existsSync(path.resolve(dir, relPath.replace(/\.js$/, '.ts'))));
 
       if (matches.length === 0) {
         return;
@@ -72,13 +70,13 @@ function tsModuleUrlPlugin(): Plugin {
 
       let result = code;
 
-      for (const match of matches.reverse()) {
+      for (const match of [...matches].reverse()) {
         const tsPath = path.resolve(dir, match.relPath.replace(/\.js$/, '.ts'));
         const refId = this.emitFile({ type: 'chunk', id: tsPath });
 
         const replacement = match.hasHref
           ? `import.meta.ROLLUP_FILE_URL_${refId}`
-          : `import.meta.ROLLUP_FILE_URL_OBJ_${refId}`;
+          : `new URL(import.meta.ROLLUP_FILE_URL_${refId})`;
 
         result = result.slice(0, match.idx) + replacement + result.slice(match.idx + match.full.length);
       }
