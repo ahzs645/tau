@@ -82,7 +82,7 @@ export default function ChatStart(): React.JSX.Element {
             <div className="flex justify-center">
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
-                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
+                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1">
                     {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}

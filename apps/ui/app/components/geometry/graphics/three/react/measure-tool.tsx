@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
-import { useSelector } from '@xstate/react';
 import {
   LabelTextGeometry,
   LabelBackgroundGeometry,
@@ -14,7 +13,7 @@ import {
 import type { SnapPoint } from '#components/geometry/graphics/three/utils/snap-detection.utils.js';
 import { computeAxisRotationForCamera } from '#components/geometry/graphics/three/utils/rotation.utils.js';
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 function calculateScaleFromCamera(position: THREE.Vector3, camera: THREE.Camera): number {
   const distanceToCamera = camera.position.distanceTo(position);
@@ -35,21 +34,51 @@ function calculateScaleFromCamera(position: THREE.Vector3, camera: THREE.Camera)
   return (factor * size) / 4000;
 }
 
+// ── Module-scope scratch objects for useFrame callbacks (avoids per-frame GC pressure) ──
+
+// SnapPointIndicator scratch
+const _snapDirection = new THREE.Vector3();
+const _snapQuaternion = new THREE.Quaternion();
+const _snapUp = new THREE.Vector3(0, 1, 0);
+
+// MeasurementLine scratch
+const _baseQuat = new THREE.Quaternion();
+const _currentNormal = new THREE.Vector3();
+const _axisRotation = new THREE.Quaternion();
+const _finalQuat = new THREE.Quaternion();
+const _flipQuat = new THREE.Quaternion();
+const _labelNormal = new THREE.Vector3();
+const _labelUp = new THREE.Vector3();
+const _cameraUp = new THREE.Vector3();
+const _cameraUpProjected = new THREE.Vector3();
+const _lineDir = new THREE.Vector3();
+const _coneOffset = new THREE.Vector3();
+
 export function MeasureTool(): React.JSX.Element {
   const { camera, gl, scene } = useThree();
-  const { graphicsRef: graphicsActor } = useBuild();
-  const measurements = useSelector(graphicsActor, (state) => state.context.measurements);
-  const currentStart = useSelector(graphicsActor, (state) => state.context.currentMeasurementStart);
-  const snapDistance = useSelector(graphicsActor, (state) => state.context.measureSnapDistance);
-  const lengthFactor = useSelector(graphicsActor, (state) => state.context.units.length.factor);
-  const lengthSymbol = useSelector(graphicsActor, (state) => state.context.units.length.symbol);
-  const hoveredMeasurementId = useSelector(graphicsActor, (state) => state.context.hoveredMeasurementId);
-  const isMeasureActive = useSelector(graphicsActor, (state) => state.context.isMeasureActive);
+  const graphicsActor = useGraphics();
+  const geometryKey = useGraphicsSelector((state) => state.context.geometryKey);
+  const measurements = useGraphicsSelector((state) => state.context.measurements);
+  const currentStart = useGraphicsSelector((state) => state.context.currentMeasurementStart);
+  const snapDistance = useGraphicsSelector((state) => state.context.measureSnapDistance);
+  const lengthFactor = useGraphicsSelector((state) => state.context.units.length.factor);
+  const lengthSymbol = useGraphicsSelector((state) => state.context.units.length.symbol);
+  const hoveredMeasurementId = useGraphicsSelector((state) => state.context.hoveredMeasurementId);
+  const isMeasureActive = useGraphicsSelector((state) => state.context.isMeasureActive);
 
   const [hoveredSnapPoints, setHoveredSnapPoints] = useState<SnapPoint[]>([]);
   const [activeSnapPoint, setActiveSnapPoint] = useState<SnapPoint | undefined>();
   const [mousePosition, setMousePosition] = useState<THREE.Vector3 | undefined>();
   const lastSnapPointsRef = useRef<SnapPoint[] | undefined>(undefined);
+
+  // Refs for values that change rapidly (every mouse move) so the event-listener
+  // effect doesn't tear down and re-add 4 DOM listeners per mouse event.
+  const activeSnapPointRef = useRef(activeSnapPoint);
+  activeSnapPointRef.current = activeSnapPoint;
+  const mousePositionRef = useRef(mousePosition);
+  mousePositionRef.current = mousePosition;
+  const currentStartRef = useRef(currentStart);
+  currentStartRef.current = currentStart;
 
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
@@ -57,6 +86,39 @@ export function MeasureTool(): React.JSX.Element {
   const mouseIsDownRef = useRef(false);
   const startCameraQuatRef = useRef(new THREE.Quaternion());
   const startCameraPosRef = useRef(new THREE.Vector3());
+
+  // Cache mesh list to avoid expensive scene.traverse() on every mouse event.
+  // Invalidated when geometryKey changes (new geometry loaded/unloaded).
+  const cachedMeshesRef = useRef<THREE.Mesh[]>([]);
+  const cachedMeshKeyRef = useRef<string | undefined>(undefined);
+  // Keep scene ref in sync for getCachedMeshes (stable callback reference)
+  const sceneRef = useRef(scene);
+  sceneRef.current = scene;
+  const geometryKeyRef = useRef(geometryKey);
+  geometryKeyRef.current = geometryKey;
+
+  // Cache detectSnapPoints results keyed by (mesh.id, faceIndex) to avoid
+  // running the expensive geometry pipeline on every mouse move over the same face.
+  const snapCacheRef = useRef(new Map<string, SnapPoint[]>());
+
+  const getCachedMeshes = useRef((): THREE.Mesh[] => {
+    const currentKey = geometryKeyRef.current;
+    if (currentKey === cachedMeshKeyRef.current) {
+      return cachedMeshesRef.current;
+    }
+
+    const meshes: THREE.Mesh[] = [];
+    sceneRef.current.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.visible && !object.userData['isMeasurementUi']) {
+        meshes.push(object as THREE.Mesh);
+      }
+    });
+    cachedMeshesRef.current = meshes;
+    cachedMeshKeyRef.current = currentKey;
+    // Invalidate snap point cache when geometry changes
+    snapCacheRef.current.clear();
+    return meshes;
+  }).current;
 
   // Handle mouse move for snapping
   useEffect(() => {
@@ -72,14 +134,8 @@ export function MeasureTool(): React.JSX.Element {
 
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
-      // Get all meshes in scene (recursively traverse scene graph)
-      // Exclude measurement UI elements to prevent feedback loops
-      const meshes: THREE.Mesh[] = [];
-      scene.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.visible && !object.userData['isMeasurementUi']) {
-          meshes.push(object as THREE.Mesh);
-        }
-      });
+      // Get all meshes in scene, using cached list when geometry hasn't changed
+      const meshes = getCachedMeshes();
 
       // Find the closest intersected mesh (top-most object)
       const intersects = raycasterRef.current.intersectObjects(meshes, true);
@@ -90,7 +146,17 @@ export function MeasureTool(): React.JSX.Element {
       let allSnapPoints: SnapPoint[] = [];
       if (firstIntersection?.object) {
         const topMesh = firstIntersection.object as THREE.Mesh;
-        allSnapPoints = detectSnapPoints(topMesh, raycasterRef.current);
+        // Cache by mesh ID + face index to avoid re-running the expensive geometry
+        // pipeline when hovering over the same face on consecutive mouse moves.
+        const cacheKey = `${topMesh.id}:${firstIntersection.faceIndex ?? -1}`;
+        const cached = snapCacheRef.current.get(cacheKey);
+        if (cached) {
+          allSnapPoints = cached;
+        } else {
+          allSnapPoints = detectSnapPoints(topMesh, raycasterRef.current);
+          snapCacheRef.current.set(cacheKey, allSnapPoints);
+        }
+
         lastSnapPointsRef.current = allSnapPoints;
       } else if (lastSnapPointsRef.current?.length) {
         allSnapPoints = lastSnapPointsRef.current;
@@ -134,17 +200,10 @@ export function MeasureTool(): React.JSX.Element {
       // Track if pointerdown happens on a mesh
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
-      // Exclude measurement UI elements to prevent feedback loops
-      const meshes: THREE.Mesh[] = [];
-      scene.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.visible && !object.userData['isMeasurementUi']) {
-          meshes.push(object as THREE.Mesh);
-        }
-      });
-
+      const meshes = getCachedMeshes();
       const intersects = raycasterRef.current.intersectObjects(meshes, true);
       // Consider a valid pointerdown when either on a mesh or over a valid snap indicator
-      pointerDownOnMeshRef.current = intersects.length > 0 || Boolean(activeSnapPoint);
+      pointerDownOnMeshRef.current = intersects.length > 0 || Boolean(activeSnapPointRef.current);
     };
 
     const handlePointerUp = (event: MouseEvent): void => {
@@ -158,7 +217,7 @@ export function MeasureTool(): React.JSX.Element {
           const rotated = angle > 0.01; // ~0.57°
           const translated = startCameraPosRef.current.distanceTo(endPos) > 1e-3;
 
-          if (!rotated && !translated && currentStart) {
+          if (!rotated && !translated && currentStartRef.current) {
             // No camera movement: treat as explicit cancel
             graphicsActor.send({ type: 'cancelCurrentMeasurement' });
           }
@@ -194,7 +253,7 @@ export function MeasureTool(): React.JSX.Element {
       }
 
       // Only process if interaction started on mesh OR we still have a valid snap indicator
-      if (!pointerDownOnMeshRef.current && !activeSnapPoint) {
+      if (!pointerDownOnMeshRef.current && !activeSnapPointRef.current) {
         pointerDownOnMeshRef.current = false;
         return;
       }
@@ -202,23 +261,16 @@ export function MeasureTool(): React.JSX.Element {
       // Verify pointerup is also on a mesh by performing a fresh raycast
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
-      // Exclude measurement UI elements to prevent feedback loops
-      const meshes: THREE.Mesh[] = [];
-      scene.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.visible && !object.userData['isMeasurementUi']) {
-          meshes.push(object as THREE.Mesh);
-        }
-      });
-
+      const meshes = getCachedMeshes();
       const intersects = raycasterRef.current.intersectObjects(meshes, true);
-      if (intersects.length === 0 && !activeSnapPoint) {
+      if (intersects.length === 0 && !activeSnapPointRef.current) {
         // No intersection and no active snap target, ignore
         pointerDownOnMeshRef.current = false;
         return;
       }
 
       // Use snap point if available, otherwise use intersection point
-      const point = activeSnapPoint?.position ?? intersects[0]?.point;
+      const point = activeSnapPointRef.current?.position ?? intersects[0]?.point;
       if (!point) {
         pointerDownOnMeshRef.current = false;
         return;
@@ -226,10 +278,10 @@ export function MeasureTool(): React.JSX.Element {
 
       const pointArray: [number, number, number] = [point.x, point.y, point.z];
 
-      if (currentStart) {
+      if (currentStartRef.current) {
         // Disallow 0-length measurements by ignoring a completion click
         // that lands effectively on the start point (within a small epsilon)
-        const startVec = new THREE.Vector3(...currentStart);
+        const startVec = new THREE.Vector3(...currentStartRef.current);
         const endVec = new THREE.Vector3(...pointArray);
         const zeroLengthEpsilon = 1e-4; // Scene units
         if (startVec.distanceTo(endVec) <= zeroLengthEpsilon) {
@@ -264,10 +316,16 @@ export function MeasureTool(): React.JSX.Element {
       gl.domElement.removeEventListener('pointerup', handlePointerUp);
       gl.domElement.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [camera, gl, scene, snapDistance, currentStart, activeSnapPoint, mousePosition, isMeasureActive, graphicsActor]);
+  }, [camera, gl, scene, snapDistance, isMeasureActive, graphicsActor, getCachedMeshes]);
 
   // Choose which measurements to display: all during measure mode, otherwise only pinned
   const visibleMeasurements = isMeasureActive ? measurements : measurements.filter((m) => m.isPinned);
+
+  // Memoize currentStart Vector3 to avoid per-render allocation
+  const currentStartVec3 = useMemo(
+    () => (currentStart ? new THREE.Vector3(...currentStart) : undefined),
+    [currentStart],
+  );
 
   return (
     <group>
@@ -287,13 +345,13 @@ export function MeasureTool(): React.JSX.Element {
         : null}
 
       {/* Persistent indicator for the selected start point */}
-      {isMeasureActive && currentStart ? (
-        <SnapPointIndicator isActive position={new THREE.Vector3(...currentStart)} camera={camera} />
+      {isMeasureActive && currentStartVec3 ? (
+        <SnapPointIndicator isActive position={currentStartVec3} camera={camera} />
       ) : null}
 
       {/* Render preview line */}
-      {isMeasureActive && currentStart && mousePosition ? (
-        <MeasurementLine isPreview start={new THREE.Vector3(...currentStart)} end={mousePosition} />
+      {isMeasureActive && currentStartVec3 && mousePosition ? (
+        <MeasurementLine isPreview start={currentStartVec3} end={mousePosition} />
       ) : null}
 
       {/* Render completed measurements */}
@@ -301,8 +359,8 @@ export function MeasureTool(): React.JSX.Element {
         <MeasurementLine
           key={measurement.id}
           id={measurement.id}
-          start={new THREE.Vector3(...measurement.startPoint)}
-          end={new THREE.Vector3(...measurement.endPoint)}
+          start={measurement.startPoint}
+          end={measurement.endPoint}
           distance={measurement.distance}
           lengthFactor={lengthFactor}
           lengthSymbol={lengthSymbol}
@@ -333,19 +391,17 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
   useFrame(() => {
     const scale = calculateScaleFromCamera(position, camera);
 
-    // Face camera
-    const direction = new THREE.Vector3();
-    direction.subVectors(camera.position, position).normalize();
-    const quaternion = new THREE.Quaternion();
-    quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+    // Face camera -- reuse module-scope scratch objects
+    _snapDirection.subVectors(camera.position, position).normalize();
+    _snapQuaternion.setFromUnitVectors(_snapUp.set(0, 1, 0), _snapDirection);
 
     if (outerRef.current) {
-      outerRef.current.quaternion.copy(quaternion);
+      outerRef.current.quaternion.copy(_snapQuaternion);
       outerRef.current.scale.set(scale * 500, scale * 500, scale * 500);
     }
 
     if (innerRef.current) {
-      innerRef.current.quaternion.copy(quaternion);
+      innerRef.current.quaternion.copy(_snapQuaternion);
       innerRef.current.scale.set(scale * 500, scale * 500, scale * 500);
     }
   });
@@ -390,8 +446,8 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
 
 type MeasurementLineProps = {
   readonly id?: string;
-  readonly start: THREE.Vector3;
-  readonly end: THREE.Vector3;
+  readonly start: THREE.Vector3 | readonly [number, number, number];
+  readonly end: THREE.Vector3 | readonly [number, number, number];
   readonly distance?: number;
   readonly lengthFactor?: number;
   readonly lengthSymbol?: string;
@@ -451,6 +507,11 @@ function MeasurementLine({
   materials,
 }: MeasurementLineProps): React.JSX.Element {
   const { camera } = useThree();
+
+  // Memoize Vector3 conversion so tuples from state don't allocate per render
+  const startVec = useMemo(() => (start instanceof THREE.Vector3 ? start : new THREE.Vector3(...start)), [start]);
+  const endVec = useMemo(() => (end instanceof THREE.Vector3 ? end : new THREE.Vector3(...end)), [end]);
+
   const labelGroupRef = useRef<THREE.Group>(null);
   const lineGroupRef = useRef<THREE.Group>(null);
   const cylinderMeshRef = useRef<THREE.Mesh>(null);
@@ -458,9 +519,10 @@ function MeasurementLine({
   const endConeMeshRef = useRef<THREE.Mesh>(null);
   const [isLabelHovered, setIsLabelHovered] = useState(false);
   const isHovered = isLabelHovered || isExternallyHovered;
-  const { graphicsRef: graphicsActor } = useBuild();
+  const graphicsActor = useGraphics();
 
-  // Create matcap materials following transform-controls pattern
+  // Create matcap materials following transform-controls pattern.
+  // Split into base materials (created once) and hover color update (cheap, per-hover).
   const derivedMaterials = useMemo(() => {
     if (materials && 'backgroundMaterial' in materials && 'textMaterial' in materials && 'coneMaterial' in materials) {
       return {
@@ -498,17 +560,32 @@ function MeasurementLine({
     textMaterial.color.set(materials?.textColor ?? 0x00_00_00); // Black
 
     const coneMaterial = baseMaterial.clone();
-    // Highlight line and arrows when hovered (from UI or viewport)
-    coneMaterial.color.set(isHovered ? 0x00_ff_00 : (materials?.coneColor ?? 0x00_00_00));
+    coneMaterial.color.set(materials?.coneColor ?? 0x00_00_00);
 
     return { backgroundMaterial, textMaterial, coneMaterial };
-  }, [materials, isHovered]);
+  }, [materials]);
+
+  // Memoize pin button matcap texture to avoid per-render texture creation
+  const pinMatcapTexture = useMemo(() => matcapMaterial(), []);
+
+  // Update cone color on hover without recreating all materials
+  useEffect(() => {
+    if (materials && 'coneMaterial' in materials) {
+      return; // Externally provided materials manage their own color
+    }
+
+    const coneColor = isHovered ? 0x00_ff_00 : materials && 'coneColor' in materials ? materials.coneColor : 0x00_00_00;
+    (derivedMaterials.coneMaterial as THREE.MeshMatcapMaterial).color.set(coneColor);
+  }, [isHovered, derivedMaterials, materials]);
 
   // Calculate label position (midpoint)
-  const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+  const midpoint = useMemo(
+    () => new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5),
+    [startVec, endVec],
+  );
 
   // Calculate distance if not provided
-  const calculatedDistance = distance ?? start.distanceTo(end);
+  const calculatedDistance = distance ?? startVec.distanceTo(endVec);
   const distanceInMm = calculatedDistance / lengthFactor;
   const numericText = distanceInMm.toFixed(decimals);
   const unitsText = enableUnits ? lengthSymbol : '';
@@ -558,10 +635,11 @@ function MeasurementLine({
   // Track current scale for UI sizing
   const scaleRef = useRef<number>(1);
 
-  // Calculate measurement line direction (axis of rotation for label)
-  const lineDirection = new THREE.Vector3().subVectors(end, start).normalize();
+  // Memoize measurement line direction and quaternions to avoid per-render allocations
+  const lineDirection = useMemo(() => new THREE.Vector3().subVectors(endVec, startVec).normalize(), [startVec, endVec]);
 
   // Billboard behavior - rotate around line axis to face camera
+  // All scratch objects are module-scoped to avoid per-frame GC pressure.
   useFrame(() => {
     const scale = calculateScaleFromCamera(midpoint, camera);
     scaleRef.current = scale;
@@ -569,48 +647,36 @@ function MeasurementLine({
     // Scale and orient label group
     if (labelGroupRef.current) {
       // 1) Establish base orientation: align X-axis with the measurement line
-      //    This makes the label plane (YZ) contain the line, and its normal (Z) be
-      //    perpendicular to the line so it can rotate around the line and face the camera.
-      const baseQuaternion = new THREE.Quaternion();
-      baseQuaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), lineDirection);
+      _baseQuat.setFromUnitVectors(_currentNormal.set(1, 0, 0), lineDirection);
 
-      // 2) Compute rotation around the line axis so the label's normal (local Z after base)
-      //    faces the camera. We pass the current normal (Z transformed by base) as the
-      //    reference vector to rotate from.
-      const currentNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(baseQuaternion);
-      const axisRotation = computeAxisRotationForCamera(lineDirection, midpoint, camera, currentNormal);
+      // 2) Compute rotation around the line axis so the label's normal faces the camera
+      _currentNormal.set(0, 0, 1).applyQuaternion(_baseQuat);
+      const axisRotation = computeAxisRotationForCamera(lineDirection, midpoint, camera, _currentNormal);
 
-      // 3) Combine rotations: apply base alignment, then rotate around the world line axis.
-      //    Quaternion multiplication order matters: q = axisRotation * baseQuaternion
-      //    applies the base first, then the axis rotation in world space.
-      let finalQuaternion = new THREE.Quaternion().multiplyQuaternions(axisRotation, baseQuaternion);
+      // 3) Combine rotations: base alignment then axis rotation in world space
+      _finalQuat.multiplyQuaternions(axisRotation, _baseQuat);
 
-      // 4) Ensure text is upright relative to the camera. If the label's up vector
-      //    points opposite to the camera's up (projected onto the label plane), flip
-      //    180° around the measurement line axis.
-      const labelNormalWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(finalQuaternion).normalize();
-      const labelUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(finalQuaternion).normalize();
+      // 4) Ensure text is upright relative to the camera
+      _labelNormal.set(0, 0, 1).applyQuaternion(_finalQuat).normalize();
+      _labelUp.set(0, 1, 0).applyQuaternion(_finalQuat).normalize();
 
-      const cameraUpWorld = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
-      const cameraUpProjected = new THREE.Vector3()
-        .copy(cameraUpWorld)
-        .addScaledVector(labelNormalWorld, -cameraUpWorld.dot(labelNormalWorld))
-        .normalize();
+      _cameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+      _cameraUpProjected.copy(_cameraUp).addScaledVector(_labelNormal, -_cameraUp.dot(_labelNormal)).normalize();
 
-      if (labelUpWorld.dot(cameraUpProjected) < 0) {
+      if (_labelUp.dot(_cameraUpProjected) < 0) {
         // Flip around the label's normal so it stays facing the camera
-        const flipQuaternion = new THREE.Quaternion().setFromAxisAngle(labelNormalWorld, Math.PI);
-        finalQuaternion = new THREE.Quaternion().multiplyQuaternions(flipQuaternion, finalQuaternion);
+        _flipQuat.setFromAxisAngle(_labelNormal, Math.PI);
+        _finalQuat.copy(_axisRotation.multiplyQuaternions(_flipQuat, _finalQuat));
       }
 
-      labelGroupRef.current.quaternion.copy(finalQuaternion);
+      labelGroupRef.current.quaternion.copy(_finalQuat);
       // Enlarge label by 20% when hovered (from UI or viewport)
       labelGroupRef.current.scale.setScalar(scale * (isHovered ? 1.2 : 1));
       labelGroupRef.current.position.copy(midpoint);
     }
 
     // Dynamically size cylinder and cones using transform scaling with unit geometries
-    const direction = new THREE.Vector3().subVectors(end, start).normalize();
+    _lineDir.subVectors(endVec, startVec).normalize();
 
     // Derive UI dimensions from scale using component props
     const coneHeightScaled = coneHeight * scale; // Height of arrow heads
@@ -624,27 +690,27 @@ function MeasurementLine({
       cylinderMeshRef.current.scale.set(cylinderRadiusScaled, cylinderHeight, cylinderRadiusScaled);
     }
 
-    const coneOffset = direction.clone().multiplyScalar(coneHeightScaled / 2);
+    _coneOffset.copy(_lineDir).multiplyScalar(coneHeightScaled / 2);
     if (startConeMeshRef.current) {
       startConeMeshRef.current.scale.set(coneRadiusScaled, coneHeightScaled, coneRadiusScaled);
-      startConeMeshRef.current.position.copy(start.clone().add(coneOffset));
+      startConeMeshRef.current.position.copy(startVec).add(_coneOffset);
     }
 
     if (endConeMeshRef.current) {
       endConeMeshRef.current.scale.set(coneRadiusScaled, coneHeightScaled, coneRadiusScaled);
-      endConeMeshRef.current.position.copy(end.clone().sub(coneOffset));
+      endConeMeshRef.current.position.copy(endVec).sub(_coneOffset);
     }
   });
 
-  // Calculate direction and distance for cylinder and cone rotation
-  const lineDistance = start.distanceTo(end);
-  const startQuaternion = new THREE.Quaternion();
-  const endQuaternion = new THREE.Quaternion();
-  const cylinderQuaternion = new THREE.Quaternion();
-
-  startQuaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), lineDirection.clone().negate());
-  endQuaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), lineDirection);
-  cylinderQuaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), lineDirection);
+  // Memoize direction, distance, and quaternions for cylinder/cone rotation
+  const lineDistance = useMemo(() => startVec.distanceTo(endVec), [startVec, endVec]);
+  const { startQuaternion, endQuaternion, cylinderQuaternion } = useMemo(() => {
+    const up = new THREE.Vector3(0, 1, 0);
+    const startQ = new THREE.Quaternion().setFromUnitVectors(up, lineDirection.clone().negate());
+    const endQ = new THREE.Quaternion().setFromUnitVectors(up, lineDirection);
+    const cylinderQ = new THREE.Quaternion().setFromUnitVectors(up, lineDirection);
+    return { startQuaternion: startQ, endQuaternion: endQ, cylinderQuaternion: cylinderQ };
+  }, [lineDirection]);
 
   return (
     <group>
@@ -789,7 +855,7 @@ function MeasurementLine({
                   side={THREE.DoubleSide}
                   fog={false}
                   toneMapped={false}
-                  matcap={matcapMaterial()}
+                  matcap={pinMatcapTexture}
                   transparent={false}
                 />
               </mesh>

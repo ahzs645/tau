@@ -23,8 +23,11 @@ import { useChats } from '#hooks/use-chats.js';
 import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
 import { parseErrorForPersistence } from '#utils/error.utils.js';
+import { finalizeInterruptedToolParts } from '#utils/chat.utils.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
+
+type PendingMessage = Parameters<UseChatReturn['sendMessage']>[0];
 
 // Single context for all chat state
 type ChatContextValue = {
@@ -34,6 +37,7 @@ type ChatContextValue = {
   chatName: string;
   isLoadingChat: boolean;
   queuePersist: (messages: MyUIMessage[]) => void;
+  pendingMessageRef: React.RefObject<PendingMessage | undefined>;
   draftActorRef: ReturnType<typeof useActorRef<typeof draftMachine>>;
   persistenceActorRef: ReturnType<typeof useActorRef<typeof chatPersistenceMachine>>;
 };
@@ -58,6 +62,11 @@ export function ChatProvider({
   const initializeDraftRef = useRef<((chat: NonNullable<Awaited<ReturnType<typeof getChat>>>) => void) | undefined>(
     undefined,
   );
+
+  // Pending message ref for interrupt-then-send flow.
+  // When user sends while streaming/submitted, the message is queued here
+  // and processed in onFinish after the old request fully completes.
+  const pendingMessageRef = useRef<PendingMessage | undefined>(undefined);
 
   // Create draft machine with provided actors (like use-build.tsx pattern)
   const draftActorRef = useActorRef(
@@ -112,6 +121,11 @@ export function ChatProvider({
             const lastMessage = loadedChat.messages.at(-1);
             if (lastMessage?.role === 'user' && lastMessage.metadata?.status === 'pending') {
               void regenerateRef.current?.();
+
+              // Strip stale error — we're auto-regenerating so the previous error is
+              // outdated. A fresh error will be set if regeneration fails; cleared on
+              // success via onFinish. This prevents a UI flash of the old error.
+              return { ...loadedChat, error: undefined };
             }
           } else {
             // New chat - clear messages
@@ -153,9 +167,63 @@ export function ChatProvider({
       credentials: 'include',
     }),
     generateId: () => generatePrefixedId(idPrefix.message),
-    onFinish({ messages }) {
-      // Persist when AI finishes - machine guards against persisting during load
+    onFinish({ messages, isAbort, isError }) {
+      if (isAbort) {
+        // If a message is queued (user sent while streaming/submitted),
+        // finalize interrupted tool parts and trigger the new request.
+        const pendingMessage = pendingMessageRef.current;
+        if (pendingMessage) {
+          pendingMessageRef.current = undefined;
+
+          const sanitizedMessages = finalizeInterruptedToolParts(messages);
+          const newMessages = [...sanitizedMessages, pendingMessage as MyUIMessage];
+
+          setMessagesRef.current?.(newMessages);
+          persistenceActorRef.send({ type: 'queuePersist', messages: newMessages });
+
+          // Defer to next microtask so the old makeRequest's finally block
+          // (which nulls activeResponse) completes before we start a new one.
+          queueMicrotask(() => {
+            void regenerateRef.current?.();
+          });
+        } else {
+          // Pure stop (no follow-up message).
+          // Finalize any interrupted tool parts and persist current state.
+          let sanitizedMessages = finalizeInterruptedToolParts(messages);
+
+          // If stopped before any AI response, the last message is the user's
+          // pending message. Mark it as cancelled to prevent auto-regeneration
+          // on page reload (loadChatActor checks for pending user messages).
+          const lastMessage = sanitizedMessages.at(-1);
+          if (lastMessage?.role === 'user' && lastMessage.metadata?.status === 'pending') {
+            sanitizedMessages = sanitizedMessages.with(-1, {
+              ...lastMessage,
+              metadata: { ...lastMessage.metadata, status: 'cancelled' },
+            });
+          }
+
+          setMessagesRef.current?.(sanitizedMessages);
+          persistenceActorRef.send({ type: 'queuePersist', messages: sanitizedMessages });
+        }
+
+        return;
+      }
+
+      if (isError) {
+        // Error mid-stream: finalize any interrupted tool parts and persist messages
+        // so partial AI output survives reload and is available on retry.
+        const sanitizedMessages = finalizeInterruptedToolParts(messages);
+        setMessagesRef.current?.(sanitizedMessages);
+        persistenceActorRef.send({ type: 'queuePersist', messages: sanitizedMessages });
+        // Error itself is already persisted via the onError callback
+        return;
+      }
+
+      // Success: persist messages and clear any stale persisted error.
+      // clearPersistedError acts as a safety net for cases where the error
+      // was not cleared before the request (e.g. auto-regeneration on load).
       persistenceActorRef.send({ type: 'queuePersist', messages });
+      persistenceActorRef.send({ type: 'clearPersistedError' });
     },
     onError(error) {
       persistenceActorRef.send({ type: 'handleError', error });
@@ -208,6 +276,7 @@ export function ChatProvider({
       chatName,
       isLoadingChat,
       queuePersist,
+      pendingMessageRef,
       draftActorRef,
       persistenceActorRef,
     }),
@@ -327,7 +396,7 @@ export function useChatActions(): {
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
 } {
-  const { chat, queuePersist, draftActorRef, persistenceActorRef } = useChatContext();
+  const { chat, queuePersist, pendingMessageRef, draftActorRef, persistenceActorRef } = useChatContext();
 
   return useMemo(
     () => ({
@@ -339,9 +408,17 @@ export function useChatActions(): {
         // Clear any persisted error when starting a new request
         persistenceActorRef.send({ type: 'clearPersistedError' });
 
-        // Persist immediately with user message included
-        queuePersist([...chat.messages, message as MyUIMessage]);
+        // If currently streaming or submitted, queue the message and stop.
+        // The pending message will be processed in onFinish(isAbort) after
+        // the old makeRequest fully completes, avoiding concurrent requests.
+        if (chat.status === 'streaming' || chat.status === 'submitted') {
+          pendingMessageRef.current = message;
+          void chat.stop();
+          return;
+        }
 
+        // Normal path: no request in progress
+        queuePersist([...chat.messages, message as MyUIMessage]);
         void chat.sendMessage(message);
       },
       regenerate() {
@@ -451,6 +528,6 @@ export function useChatActions(): {
         void chat.regenerate();
       },
     }),
-    [chat, draftActorRef, persistenceActorRef, queuePersist],
+    [chat, pendingMessageRef, draftActorRef, persistenceActorRef, queuePersist],
   );
 }

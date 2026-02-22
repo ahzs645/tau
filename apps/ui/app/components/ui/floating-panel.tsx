@@ -3,10 +3,9 @@ import type { ErrorInfo, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { AlertCircle, RefreshCcw, RotateCcw } from 'lucide-react';
 import { cva } from 'class-variance-authority';
-import type { VariantProps } from 'class-variance-authority';
-import { Slot } from '@radix-ui/react-slot';
 import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
+import { PaneButton } from '#components/ui/pane-button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { DrawerClose, DrawerHandle } from '#components/ui/drawer.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
@@ -18,75 +17,18 @@ type Side = 'left' | 'right';
 type TooltipSide = 'left' | 'right' | 'top' | 'bottom';
 type Align = 'start' | 'end';
 
-const floatingPanelTriggerButtonVariants = cva(cn('text-muted-foreground'), {
-  variants: {
-    variant: {
-      absolute: cn(
-        'absolute group-data-[state=open]/floating-panel:z-10',
-        'rounded-md group-data-[state=open]/floating-panel:rounded-sm',
-        'size-8 group-data-[state=open]/floating-panel:size-6',
-        'md:opacity-0 md:group-hover/floating-panel:opacity-100',
-        'max-md:size-6 max-md:items-center max-md:justify-center max-md:border',
-      ),
-      static: '',
-    },
-    side: {
-      left: '',
-      right: '',
-    },
-    align: {
-      start: '',
-      center: '',
-      end: '',
-    },
-  },
-  compoundVariants: [
-    // Left side positions
-    {
-      variant: 'absolute',
-      side: 'left',
-      align: 'start',
-      class: 'top-0 ml-0.75 mt-0.75 left-0 max-md:ml-2',
-    },
-    {
-      variant: 'absolute',
-      side: 'left',
-      align: 'end',
-      class: 'bottom-0 ml-0.75 mb-0.75 left-0 max-md:ml-2',
-    },
-    // Right side positions
-    {
-      variant: 'absolute',
-      side: 'right',
-      align: 'start',
-      class: 'top-0 mr-0.75 mt-0.75 right-0 max-md:mr-2',
-    },
-    {
-      variant: 'absolute',
-      side: 'right',
-      align: 'end',
-      class: 'bottom-0 mr-0.75 mb-0.75 right-0 max-md:mr-2',
-    },
-  ],
-  defaultVariants: {
-    variant: 'absolute',
-    side: 'right',
-    align: 'start',
-  },
-});
-
 const floatingPanelContentHeaderVariants = cva(
   cn(
     'group/floating-panel-content-header',
-    'flex h-7.75 items-center justify-between',
+    'flex h-7.75 max-md:h-10 items-center justify-between',
     'border-b bg-sidebar py-0.5',
     'text-sm font-medium text-muted-foreground',
   ),
   {
     variants: {
       side: {
-        left: 'pr-0.75 md:pl-8 pl-12',
-        right: 'pr-7 pl-2 max-md:pr-10',
+        left: 'pr-0.75 pl-2',
+        right: 'pl-2 pr-1 max-md:pr-2',
       },
     },
     defaultVariants: {
@@ -194,7 +136,6 @@ type FloatingPanelTriggerButtonProps = {
   readonly children?: React.ReactNode;
   readonly tooltipContent: React.ReactNode;
   readonly onClick: () => void;
-  readonly variant?: VariantProps<typeof floatingPanelTriggerButtonVariants>['variant'];
 };
 
 function FloatingPanelTriggerButton({
@@ -204,12 +145,10 @@ function FloatingPanelTriggerButton({
   children,
   tooltipContent,
   onClick,
-  variant = 'absolute',
 }: FloatingPanelTriggerButtonProps): React.JSX.Element {
   // Get context values
   const context = React.useContext(FloatingPanelContext);
   const side = context?.side ?? 'right';
-  const align = context?.align ?? 'start';
 
   const defaultTooltipSide = React.useMemo(() => {
     return tooltipSide ?? side;
@@ -231,8 +170,8 @@ function FloatingPanelTriggerButton({
       <TooltipTrigger asChild>
         <Button
           size="icon"
-          variant={variant === 'static' ? 'overlay' : 'ghost'}
-          className={cn(floatingPanelTriggerButtonVariants({ variant, side, align }), className)}
+          variant="overlay"
+          className={cn('text-muted-foreground', className)}
           data-slot="floating-panel-trigger"
           onClick={onClick}
         >
@@ -257,23 +196,39 @@ function FloatingPanelClose({ icon, className, children, tooltipContent }: Float
 
   const isMobile = useIsMobile();
 
-  // Only use DrawerClose on mobile to ensure it's wrapped with a `Dialog` from `<Drawer />`
-  const Comp = isMobile ? DrawerClose : Slot;
+  const renderIcon = (): React.ReactNode => {
+    if (React.isValidElement(icon)) {
+      return icon;
+    }
 
-  return (
-    <Comp asChild>
-      <FloatingPanelTriggerButton
-        icon={icon}
-        tooltipSide="top"
-        className={className}
-        tooltipContent={tooltipContent(isOpen)}
-        variant="absolute"
-        onClick={close}
-      >
-        {children}
-      </FloatingPanelTriggerButton>
-    </Comp>
+    const IconComponent = icon as LucideIcon;
+    return <IconComponent />;
+  };
+
+  // Inline close button -- rendered directly on desktop, wrapped with
+  // DrawerClose on mobile so the drawer dismiss gesture works.
+  const button = (
+    <FloatingPanelMenuButton
+      tooltip={tooltipContent(isOpen)}
+      tooltipSide="top"
+      className={cn(
+        'text-muted-foreground',
+        'max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
+        className,
+      )}
+      aria-label="Close panel"
+      onClick={close}
+    >
+      {renderIcon()}
+      {children}
+    </FloatingPanelMenuButton>
   );
+
+  if (isMobile) {
+    return <DrawerClose asChild>{button}</DrawerClose>;
+  }
+
+  return button;
 }
 
 type FloatingPanelTriggerProps = {
@@ -283,7 +238,6 @@ type FloatingPanelTriggerProps = {
   readonly onClick: () => void;
   readonly children?: React.ReactNode;
   readonly tooltipSide?: TooltipSide;
-  readonly variant?: VariantProps<typeof floatingPanelTriggerButtonVariants>['variant'];
 };
 
 function FloatingPanelTrigger({
@@ -293,53 +247,14 @@ function FloatingPanelTrigger({
   onClick,
   children,
   tooltipSide,
-  variant = 'static',
 }: FloatingPanelTriggerProps): React.JSX.Element {
   return (
     <FloatingPanelTriggerButton
       icon={icon}
       tooltipContent={tooltipContent}
       className={cn(className)}
-      variant={variant}
       tooltipSide={tooltipSide}
       onClick={onClick}
-    >
-      {children}
-    </FloatingPanelTriggerButton>
-  );
-}
-
-type FloatingPanelToggleProps = {
-  readonly openIcon: LucideIcon | React.ReactNode;
-  readonly closeIcon: LucideIcon | React.ReactNode;
-  readonly openTooltip: React.ReactNode;
-  readonly closeTooltip: React.ReactNode;
-  readonly className?: string;
-  readonly children?: React.ReactNode;
-  readonly tooltipSide?: TooltipSide;
-  readonly variant?: VariantProps<typeof floatingPanelTriggerButtonVariants>['variant'];
-};
-
-function FloatingPanelToggle({
-  openIcon,
-  closeIcon,
-  openTooltip,
-  closeTooltip,
-  className,
-  children,
-  tooltipSide,
-  variant = 'absolute',
-}: FloatingPanelToggleProps): React.JSX.Element {
-  const { isOpen, toggle } = useFloatingPanel();
-
-  return (
-    <FloatingPanelTriggerButton
-      icon={isOpen ? closeIcon : openIcon}
-      tooltipContent={isOpen ? closeTooltip : openTooltip}
-      className={className}
-      variant={variant}
-      tooltipSide={tooltipSide}
-      onClick={toggle}
     >
       {children}
     </FloatingPanelTriggerButton>
@@ -433,18 +348,50 @@ function FloatingPanelContent({ children, className, errorFallback }: FloatingPa
   );
 }
 
+/**
+ * Override vaul's `[data-vaul-handle]` base CSS which forces the Handle into a
+ * tiny 32 x 5 px gray drag-indicator pill.  Vaul injects these styles outside
+ * Tailwind's `@layer`, so they beat layered utilities -- we must use
+ * `!important` to win.
+ *
+ * The inner `<span data-vaul-handle-hitarea>` is also reset from its default
+ * absolute-centered positioning to a normal flex wrapper so that header
+ * children (title + actions) lay out properly.
+ */
+const drawerHandleOverrides = cn(
+  // Reset the outer handle div to a full-width flex row.
+  'flex! w-full! h-10! rounded-none! opacity-100! mx-0! bg-sidebar!',
+  // Reset the hitarea <span> from absolute-centered to a static flex wrapper.
+  '[&>[data-vaul-handle-hitarea]]:static!',
+  '[&>[data-vaul-handle-hitarea]]:inset-auto!',
+  '[&>[data-vaul-handle-hitarea]]:transform-none!',
+  '[&>[data-vaul-handle-hitarea]]:size-full!',
+  '[&>[data-vaul-handle-hitarea]]:flex',
+  '[&>[data-vaul-handle-hitarea]]:items-center',
+  '[&>[data-vaul-handle-hitarea]]:justify-between',
+);
+
 function FloatingPanelContentHeader({ children, className }: FloatingPanelContentHeaderProps): React.JSX.Element {
   const { side } = useFloatingPanel();
+  const isMobile = useIsMobile();
+
+  // On mobile the header is a DrawerHandle so the entire bar responds to
+  // drag-to-close gestures (the parent Drawer uses `handleOnly`).
+  // Button taps still work because vaul distinguishes taps from drags.
+  const Comp = isMobile ? DrawerHandle : 'div';
 
   return (
-    <div
-      className={cn('relative', floatingPanelContentHeaderVariants({ side }), className)}
+    <Comp
+      className={cn(
+        'relative',
+        floatingPanelContentHeaderVariants({ side }),
+        isMobile && drawerHandleOverrides,
+        className,
+      )}
       data-slot="floating-panel-content-header"
     >
-      {/* Mobile drawer handle area */}
-      <DrawerHandle className="absolute! inset-0! -z-10 m-auto! size-full! opacity-0!" />
       {children}
-    </div>
+    </Comp>
   );
 }
 
@@ -460,11 +407,56 @@ function FloatingPanelContentHeaderActions({
   return (
     <div
       className={cn(
-        'flex items-center pl-1 max-md:gap-0.5',
+        'flex items-center pl-1 max-md:gap-1.5',
         'group-hover/floating-panel:opacity-100 md:opacity-0',
         className,
       )}
       data-slot="floating-panel-content-header-actions"
+    >
+      {children}
+    </div>
+  );
+}
+
+type FloatingPanelMenuButtonProps = React.ComponentProps<typeof PaneButton>;
+
+/**
+ * Styled icon button for floating panel headers.
+ *
+ * Thin wrapper around the shared `PaneButton` that adds mobile-responsive
+ * sizing (`max-md:size-8 max-md:rounded-md`) and the
+ * `floating-panel-menu-button` data-slot for styling hooks.
+ */
+function FloatingPanelMenuButton({ className, ...properties }: FloatingPanelMenuButtonProps): React.JSX.Element {
+  return (
+    <PaneButton
+      data-slot="floating-panel-menu-button"
+      className={cn('max-md:size-8 max-md:rounded-md', className)}
+      {...properties}
+    />
+  );
+}
+
+type FloatingPanelButtonGroupProps = {
+  readonly children: React.ReactNode;
+  readonly className?: string;
+};
+
+/**
+ * Groups action buttons into a pill-shaped bar with iOS glass styling on mobile.
+ * On desktop the group is visually transparent (ghost buttons remain individually styled).
+ * On mobile it renders as a frosted-glass pill.
+ */
+function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGroupProps): React.JSX.Element {
+  return (
+    <div
+      role="group"
+      data-slot="floating-panel-button-group"
+      className={cn(
+        'flex items-center',
+        'max-md:overflow-hidden max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
+        className,
+      )}
     >
       {children}
     </div>
@@ -563,10 +555,11 @@ export {
   FloatingPanel,
   FloatingPanelClose,
   FloatingPanelTrigger,
-  FloatingPanelToggle,
   FloatingPanelContent,
   FloatingPanelContentHeader,
   FloatingPanelContentHeaderActions,
+  FloatingPanelMenuButton,
+  FloatingPanelButtonGroup,
   FloatingPanelContentTitle,
   FloatingPanelContentBody,
   FloatingPanelErrorContent,

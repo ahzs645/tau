@@ -87,6 +87,9 @@ const objectStoreWorker = {
         activeFilePath,
         lastChatId: chat.id,
         panelState: mergedPanelState,
+        editorLayout: undefined,
+        viewerLayout: undefined,
+        viewSettings: {},
       });
     } catch (editorStateError) {
       // Rollback: delete chat and build since editor state update failed
@@ -133,6 +136,9 @@ const objectStoreWorker = {
         activeFilePath: sourceEditorState.activeFilePath,
         lastChatId: newLastChatId,
         panelState: sourceEditorState.panelState,
+        editorLayout: sourceEditorState.editorLayout,
+        viewerLayout: sourceEditorState.viewerLayout,
+        viewSettings: sourceEditorState.viewSettings,
       });
     }
 

@@ -1,12 +1,11 @@
 import React, { useMemo } from 'react';
-import { useSelector } from '@xstate/react';
 import { Box, PenLine, Ruler } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { Tabs, TabsList, TabsTrigger } from '#components/ui/tabs.js';
 import { Switch } from '#components/ui/switch.js';
 import { ParametersNumber } from '#components/geometry/parameters/parameters-number.js';
-import { useBuild } from '#hooks/use-build.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 function toDegrees(radians: number): number {
   const degrees = (radians * 180) / Math.PI;
@@ -72,7 +71,7 @@ function getPlaneButtonsForUpDirection(upDirection: 'x' | 'y' | 'z'): PlaneButto
 }
 
 export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
+  const graphicsActor = useGraphics();
   const {
     selectedSectionViewId,
     sectionViewTranslation,
@@ -85,7 +84,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     sceneRadius,
     units,
     upDirection,
-  } = useSelector(graphicsActor, (s) => ({
+  } = useGraphicsSelector((s) => ({
     selectedSectionViewId: s.context.selectedSectionViewId,
     sectionViewTranslation: s.context.sectionViewTranslation,
     sectionViewRotation: s.context.sectionViewRotation,
@@ -165,7 +164,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     <div className="flex h-full flex-col gap-3">
       {selectedSectionViewId ? (
         <div className="grid gap-3">
-          <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-1 px-1 text-xs text-muted-foreground">
             <div>
               Plane: <span className="font-medium text-foreground">{getSelectedHeader()}</span>
             </div>
@@ -316,7 +315,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
       ) : (
         <div className="grid gap-2">
           <div className="px-1 text-xs text-muted-foreground">Select a plane</div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {getPlaneButtonsForUpDirection(upDirection).map((item) => (
               <Button
                 key={`${item.id}`}
@@ -342,7 +341,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
               </Button>
             ))}
           </div>
-          <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex flex-wrap items-center justify-between gap-1 px-1">
             <span className="text-xs text-muted-foreground">Plane naming</span>
             <Tabs
               value={planeName}

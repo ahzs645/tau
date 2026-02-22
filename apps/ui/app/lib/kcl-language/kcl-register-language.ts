@@ -7,7 +7,7 @@ import type { KclValue } from '@taucad/kcl-wasm-lib/bindings/KclValue';
 import { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
-import { createDiagnosticsHandler } from '#lib/kcl-language/lsp/providers/diagnostics-handler.js';
+import { createDiagnosticsHandler, kclMarkerOwner } from '#lib/kcl-language/lsp/providers/diagnostics-handler.js';
 import { createCompletionProvider } from '#lib/kcl-language/lsp/providers/completion-provider.js';
 import { createHoverProvider } from '#lib/kcl-language/lsp/providers/hover-provider.js';
 import { createSignatureHelpProvider } from '#lib/kcl-language/lsp/providers/signature-provider.js';
@@ -19,6 +19,9 @@ import { createDefinitionProvider } from '#lib/kcl-language/lsp/providers/defini
 import { createCodeActionProvider } from '#lib/kcl-language/lsp/providers/code-action-provider.js';
 import { getKclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import type { KclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
+import type { LanguageContribution, ActivationContext, ActivationResult } from '#lib/monaco-language-registry.js';
+import type { MonacoMarkerService } from '#lib/monaco-marker-service.js';
+import type { GetOrEnsureModel } from '#lib/kcl-language/lsp/providers/definition-provider.js';
 
 const log = createKclLogger('Register');
 
@@ -30,6 +33,12 @@ let symbolService: KclSymbolService | undefined;
 
 /** Track if already registered to prevent duplicate registration */
 let isRegistered = false;
+
+/** Global marker service reference (injected by activation) */
+let globalMarkerService: MonacoMarkerService | undefined;
+
+/** Global getOrEnsureModel callback (injected by activation) */
+let globalGetOrEnsureModel: GetOrEnsureModel | undefined;
 
 /** Map of document URIs to their version numbers */
 const documentVersions = new Map<string, number>();
@@ -406,8 +415,8 @@ export function registerKclLanguage(monaco: typeof Monaco): void {
  * Initialize the LSP client and register all Monaco providers.
  */
 async function initializeLsp(monaco: typeof Monaco): Promise<void> {
-  // Create diagnostics handler
-  const diagnosticsHandler = createDiagnosticsHandler(monaco);
+  // Create diagnostics handler (uses marker service if available)
+  const diagnosticsHandler = createDiagnosticsHandler(monaco, globalMarkerService);
 
   // Initialize symbol service
   symbolService = getKclSymbolService();
@@ -464,8 +473,11 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
   // Rename provider
   monaco.languages.registerRenameProvider(languageId, createRenameProvider(monaco, lspClient));
 
-  // Definition provider (with symbol service for go-to-definition)
-  monaco.languages.registerDefinitionProvider(languageId, createDefinitionProvider(monaco, lspClient, symbolService));
+  // Definition provider (with symbol service for go-to-definition, and model service for on-demand loading)
+  monaco.languages.registerDefinitionProvider(
+    languageId,
+    createDefinitionProvider(monaco, lspClient, symbolService, globalGetOrEnsureModel),
+  );
 
   // Code action provider
   monaco.languages.registerCodeActionProvider(languageId, createCodeActionProvider(monaco, lspClient));
@@ -490,7 +502,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
     const [wasmModule, wasmPathModule, engineModule] = await Promise.all([
       import('@taucad/kcl-wasm-lib'),
       import('@taucad/kcl-wasm-lib/kcl.wasm?url'),
-      import('#components/geometry/kernel/zoo/engine-connection.js'),
+      import('@taucad/kernels/kernels/zoo/engine-connection'),
     ]);
 
     // Initialize WASM
@@ -777,4 +789,93 @@ export function disposeKclLsp(): void {
 
   // Reset registration flag to allow re-registration
   isRegistered = false;
+
+  // Clear global service references
+  globalMarkerService = undefined;
+  globalGetOrEnsureModel = undefined;
 }
+
+// ============================================================================
+// Language Contribution (for LanguageContributionRegistry)
+// ============================================================================
+
+/** Provider disposables from activation */
+let activationDisposables: Monaco.IDisposable[] = [];
+
+/** Stored marker service reference for cleanup */
+let activationMarkerService: ActivationContext['markerService'] | undefined;
+
+/**
+ * KCL Language Contribution
+ *
+ * Conforms to the LanguageContribution interface for uniform lifecycle management.
+ * - register: Language metadata and configuration
+ * - activate: LSP client, providers, document sync, marker service injection
+ * - onBuildSessionChange: Reset document tracking and caches
+ * - dispose: Full cleanup including LSP client, workers, markers
+ */
+export const kclContribution: LanguageContribution = {
+  languageId: codeLanguages.kcl,
+
+  register(monaco: typeof Monaco): void {
+    registerKclLanguage(monaco);
+  },
+
+  activate(context: ActivationContext): ActivationResult {
+    const { markerService, modelService } = context;
+
+    activationMarkerService = markerService;
+
+    // Store marker service globally so diagnostics handler can access it
+    globalMarkerService = markerService;
+
+    // Set up file manager for KCL LSP import resolution
+    setKclLspFileManager({
+      readFile: async (path: string) => context.fileManager.readFile(path),
+      exists: async (path: string) => context.fileManager.exists(path),
+      readdir: async (path: string) => context.fileManager.readdir(path),
+    });
+
+    // Navigation handler for KCL files
+    const navigationHandler = {
+      canHandle(path: string): boolean {
+        return path.endsWith('.kcl');
+      },
+    };
+
+    // The definition provider was already registered during initializeLsp.
+    // Store getOrEnsureModel for future definition provider use.
+    // Since initializeLsp is async and may complete after activate,
+    // the getOrEnsureModel reference is stored module-level.
+    globalGetOrEnsureModel = async (path: string): ReturnType<typeof modelService.getOrEnsureModel> =>
+      modelService.getOrEnsureModel(path);
+
+    return {
+      disposables: activationDisposables,
+      navigationHandler,
+    };
+  },
+
+  onBuildSessionChange(_buildId: string): void {
+    // Clear document tracking for new session
+    openedDocuments.clear();
+    documentVersions.clear();
+    symbolService?.clear();
+  },
+
+  dispose(): void {
+    // Dispose activation-specific disposables
+    for (const disposable of activationDisposables) {
+      disposable.dispose();
+    }
+
+    activationDisposables = [];
+
+    // Full KCL LSP cleanup
+    disposeKclLsp();
+
+    // Clear KCL markers via marker service
+    activationMarkerService?.clearOwnerEverywhere(kclMarkerOwner);
+    activationMarkerService = undefined;
+  },
+};

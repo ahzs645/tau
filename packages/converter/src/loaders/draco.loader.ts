@@ -31,7 +31,7 @@ export class DracoLoader extends BaseLoader<Document> {
     const io = await createNodeIo();
 
     // Export to GLB
-    const glb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    const glb = await io.writeBinary(document);
     return glb;
   }
 }

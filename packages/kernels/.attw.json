@@ -1,0 +1,6 @@
+{
+  "profile": "node16",
+  "ignoreRules": [
+    "false-export-default"
+  ]
+}

@@ -81,7 +81,7 @@ You also have access to web research tools for gathering information:
 
 - **\`${toolName.webSearch}\`**: Search the web for current information, documentation, tutorials, or any external knowledge needed to complete your task. Use this when you need to look up technical details, find examples, or research best practices.
 
-- **\`${toolName.webBrowser}\`**: Browse specific web pages to extract detailed information. Use this only when the web search results are insufficient and you need to dive deeper into a specific URL.
+- **\`${toolName.webBrowser}\`**: Extract content from one or more URLs. Use after \`${toolName.webSearch}\` to read full page content from promising results.
 
 **When to use research tools:**
 - When you need current information about libraries, APIs, or techniques

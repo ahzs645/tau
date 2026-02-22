@@ -29,12 +29,6 @@ export const cookieName = {
   /* CAD */
   // The last selected kernel.
   cadKernel: 'cad-kernel',
-  // The last selected grid unit.
-  cadUnit: 'cad-unit',
-  // Whether to enable file preview (send file content to CAD when switching files).
-  cadFilePreview: 'cad-file-preview',
-  // Render timeout in seconds (0 = disabled).
-  cadRenderTimeout: 'cad-render-timeout',
 
   /* Chat */
   // Whether to enable web search in the chat.
@@ -65,14 +59,10 @@ export const cookieName = {
   buildViewMode: 'build-view-mode',
 
   /* Graphics */
-  // The last selected field of view angle.
-  fovAngle: 'fov-angle',
-  // The last selected view settings.
-  viewSettings: 'view-settings',
-  // Section view settings
-  sectionViewSettings: 'section-view-settings',
   // Whether the section view status is open.
   viewOpStatus: 'view-op-status',
+  // The user's preferred environment lighting preset.
+  viewerEnvironment: 'viewer-environment',
 
   /* Console */
   // The last selected log level.

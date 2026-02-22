@@ -25,6 +25,7 @@ import { Commands } from '#components/layout/command-palette.js';
 import { PageFooter } from '#components/layout/page-footer.js';
 import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 import { CookieConsent } from '#components/cookie-consent.js';
+import { SettingsDialog } from '#components/settings/settings-dialog.js';
 
 export const headerHeight = 'calc(var(--spacing) * 12)';
 
@@ -221,6 +222,7 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
           </section>
         </SidebarInset>
         <CookieConsent />
+        <SettingsDialog />
       </SidebarProvider>
     </Compose>
   );

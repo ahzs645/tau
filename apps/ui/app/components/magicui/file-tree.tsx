@@ -1,4 +1,4 @@
-import * as AccordionPrimitive from '@radix-ui/react-accordion';
+import { Accordion as AccordionPrimitive } from 'radix-ui';
 import { FolderIcon, FolderOpenIcon } from 'lucide-react';
 import React, { createContext, useCallback, useContext, useEffect, useState, useMemo } from 'react';
 import { Button } from '#components/ui/button.js';

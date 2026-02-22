@@ -13,6 +13,7 @@ export const toolErrorCodes = [
   'TOOL_INPUT_VALIDATION_FAILED',
   'TOOL_OUTPUT_VALIDATION_FAILED',
   'TOOL_EXECUTION_ERROR',
+  'USER_INTERRUPTED',
 ] as const;
 
 export type ToolErrorCode = (typeof toolErrorCodes)[number];
@@ -147,6 +148,10 @@ export function getToolErrorTitle(errorCode: ToolErrorCode): string {
     case 'TOOL_EXECUTION_ERROR': {
       return 'Tool Error';
     }
+
+    case 'USER_INTERRUPTED': {
+      return 'Interrupted';
+    }
   }
 }
 
@@ -177,6 +182,10 @@ export function getToolErrorDescription(errorCode: ToolErrorCode): string {
 
     case 'TOOL_EXECUTION_ERROR': {
       return 'An error occurred while executing the tool.';
+    }
+
+    case 'USER_INTERRUPTED': {
+      return 'Tool execution was interrupted by user.';
     }
   }
 }

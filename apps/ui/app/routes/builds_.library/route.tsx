@@ -24,7 +24,6 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import type { VisibilityState, SortingState } from '@tanstack/react-table';
-import { useSelector } from '@xstate/react';
 import type { EngineeringDiscipline, Build, KernelProvider } from '@taucad/types';
 import { engineeringDisciplines } from '@taucad/types/constants';
 import { createColumns } from '#routes/builds_.library/columns.js';
@@ -48,7 +47,8 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { cn } from '#utils/ui.utils.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#components/ui/tabs.js';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
+import { CadPreviewViewer } from '#components/cad-preview.js';
+import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
 import { useBuilds } from '#hooks/use-builds.js';
 import { toast } from '#components/ui/sonner.js';
 import type { Handle } from '#types/matches.types.js';
@@ -62,7 +62,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '#components/ui/alert-dialog.js';
-import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { BuildActionDropdown } from '#routes/builds_.library/build-action-dropdown.js';
 import { Checkbox } from '#components/ui/checkbox.js';
@@ -462,7 +461,7 @@ function UnifiedBuildList({
             <div className="flex justify-center">
               <NavLink to="/builds/new" tabIndex={-1}>
                 {({ isPending }) => (
-                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-6 [&_svg]:stroke-1">
+                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1">
                     {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}
@@ -497,16 +496,15 @@ function UnifiedBuildList({
         // Grid View
         <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {table.getRowModel().rows.map((row) => (
-            <BuildProvider key={row.original.id} buildId={row.original.id} input={{ shouldLoadModelOnStart: false }}>
-              <BuildLibraryCard
-                build={row.original}
-                actions={actions}
-                isSelected={row.getIsSelected()}
-                onSelect={() => {
-                  row.toggleSelected();
-                }}
-              />
-            </BuildProvider>
+            <BuildLibraryCard
+              key={row.original.id}
+              build={row.original}
+              actions={actions}
+              isSelected={row.getIsSelected()}
+              onSelect={() => {
+                row.toggleSelected();
+              }}
+            />
           ))}
         </div>
       )}
@@ -529,25 +527,13 @@ type BuildLibraryCardProps = {
 
 function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibraryCardProps) {
   const [showPreview, setShowPreview] = useState(false);
-  const [hasLoadedModel, setHasLoadedModel] = useState(false);
-
-  // Get actors from BuildProvider context
-  const { cadRef, buildRef } = useBuild();
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const status = useSelector(cadRef, (state) => state.value);
 
   const mechanicalAsset = build.assets.mechanical;
   if (!mechanicalAsset) {
     throw new Error('Mechanical asset not found');
   }
 
-  // Load the CAD model when preview is enabled for the first time
-  useEffect(() => {
-    if (showPreview && !hasLoadedModel) {
-      buildRef.send({ type: 'loadModel' });
-      setHasLoadedModel(true);
-    }
-  }, [showPreview, hasLoadedModel, buildRef]);
+  const mainFile = mechanicalAsset.main;
 
   return (
     <Card className={cn('group relative flex flex-col overflow-hidden pt-0', isSelected && 'ring-3 ring-primary')}>
@@ -571,21 +557,13 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
               event.preventDefault();
             }}
           >
-            {['initializing', 'booting'].includes(status) ? (
-              <div className="flex size-full items-center justify-center">
-                <Loader className="size-10" />
-              </div>
-            ) : null}
-            <CadViewer
-              geometries={geometries}
-              enablePan={false}
-              enableLines={false}
-              enableMatcap={false}
-              className="bg-muted"
-              stageOptions={{
-                zoomLevel: 1.5,
-              }}
-            />
+            <CadPreviewProvider buildId={build.id} mainFile={mainFile} isEnabled={showPreview}>
+              <CadPreviewViewer
+                enablePan={false}
+                stageOptions={{ zoomLevel: 1.5 }}
+                graphicsOptions={{ enableLines: false, viewerClassName: 'bg-muted' }}
+              />
+            </CadPreviewProvider>
           </div>
         ) : null}
         <Button

@@ -1,0 +1,34 @@
+diff --git a/dist/backends/store/fs.js b/dist/backends/store/fs.js
+index 569be1bf064fec217da8a51873bb0b1257482afc..b745dd8840e5e3a398387694761cc53ac11ad1cd 100644
+--- a/dist/backends/store/fs.js
++++ b/dist/backends/store/fs.js
+@@ -822,9 +822,11 @@ export class StoreFS extends FileSystem {
+         if (this.attributes.has('no_id_tables'))
+             return await this._findInode(tx, path);
+         const ino = this._ids.get(path);
+-        if (ino === undefined)
+-            throw withErrno('ENOENT');
+-        return new Inode((await tx.get(ino)) ?? _throw(withErrno('ENOENT')));
++        if (ino !== undefined)
++            return new Inode((await tx.get(ino)) ?? _throw(withErrno('ENOENT')));
++        const inode = await this._findInode(tx, path);
++        this._add(inode.ino, path);
++        return inode;
+     }
+     /**
+      * Finds the Inode of `path`.
+@@ -836,9 +838,11 @@ export class StoreFS extends FileSystem {
+         if (this.attributes.has('no_id_tables'))
+             return this._findInodeSync(tx, path);
+         const ino = this._ids.get(path);
+-        if (ino === undefined)
+-            throw withErrno('ENOENT');
+-        return new Inode(tx.getSync(ino) ?? _throw(withErrno('ENOENT')));
++        if (ino !== undefined)
++            return new Inode(tx.getSync(ino) ?? _throw(withErrno('ENOENT')));
++        const inode = this._findInodeSync(tx, path);
++        this._add(inode.ino, path);
++        return inode;
+     }
+     _lastID;
+     /** Allocates a new ID and adds the ID/path */

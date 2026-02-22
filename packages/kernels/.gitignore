@@ -1,0 +1,3 @@
+# Binary assets copied from node_modules via copy-files-from-to
+src/**/wasm/
+src/**/fonts/*.ttf

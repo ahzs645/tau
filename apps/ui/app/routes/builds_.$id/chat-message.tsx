@@ -11,6 +11,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.
 import { CopyButton } from '#components/copy-button.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemVariants, menuSubTriggerOpenClass } from '#components/ui/menu.variants.js';
 import { When } from '#components/ui/utils/when.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import {
@@ -190,7 +191,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }
 
                 case 'tool-web_browser': {
-                  return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} />;
+                  const hasPartsAfter = index < displayMessage.parts.length - 1;
+                  return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} hasContent={hasPartsAfter} />;
                 }
 
                 case 'tool-edit_file': {
@@ -287,18 +289,23 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   <DropdownMenuLabel>Switch model</DropdownMenuLabel>
                   <ChatModelSelector
                     popoverProperties={{ side: 'right', align: 'start' }}
-                    className="h-fit w-full p-2"
+                    className="h-fit w-full"
                     onSelect={(modelId) => {
                       retryMessage(messageId, modelId);
                     }}
                   >
                     {({ selectedModel }) => (
-                      <Button variant="ghost" size="sm" className="group w-full justify-start rounded-sm p-2">
-                        <div className="flex w-full flex-row items-center justify-between gap-1 text-sm font-normal">
-                          <span>{selectedModel?.name ?? 'Offline'}</span>
-                          <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90" />
-                        </div>
-                      </Button>
+                      <button
+                        type="button"
+                        className={cn(
+                          menuItemVariants(),
+                          menuSubTriggerOpenClass,
+                          'group w-full hover:bg-neutral/30 hover:text-foreground',
+                        )}
+                      >
+                        <span>{selectedModel?.name ?? 'Offline'}</span>
+                        <ChevronRight className="ml-auto size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90" />
+                      </button>
                     )}
                   </ChatModelSelector>
                   <DropdownMenuSeparator />
@@ -309,7 +316,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                     }}
                   >
                     <p>Try again</p>
-                    <RefreshCw className="size-4 text-muted-foreground" />
+                    <RefreshCw className="text-muted-foreground" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

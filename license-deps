@@ -15,7 +15,7 @@ the combined work is subject to GPL-2.0-or-later terms.
 
 By using Tau, you agree to comply with the license terms of all included dependencies.
 
-*Generated on 2026-01-28*
+*Generated on 2026-02-20*
 
 ## Summary
 
@@ -24,17 +24,17 @@ By using Tau, you agree to comply with the license terms of all included depende
 | (MIT OR GPL-3.0-or-later) | 1 |
 | GPL-2.0-or-later | 1 |
 | LGPL-3.0-or-later | 2 |
-| Apache-2.0 | 21 |
+| Apache-2.0 | 22 |
 | (MIT OR CC0-1.0) | 1 |
 | 0BSD | 1 |
 | BlueOak-1.0.0 | 1 |
-| BSD-3-Clause | 1 |
+| BSD-3-Clause | 2 |
 | ISC | 3 |
 | SEE LICENSE IN LICENSE | 1 |
 | SIL OPEN FONT LICENSE | 1 |
 | UNKNOWN | 1 |
 | Unlicense | 2 |
-| MIT | 208 |
+| MIT | 200 |
 
 ## (MIT OR GPL-3.0-or-later)
 
@@ -74,7 +74,8 @@ By using Tau, you agree to comply with the license terms of all included depende
 
 > Apache-2.0 licensed packages require preservation of copyright notices and disclaimers.
 
-- **@ai-sdk/langchain** v2.0.42 — [Repository](https://github.com/vercel/ai)
+- **@ai-sdk/cerebras** v2.0.31 — [Repository](https://github.com/vercel/ai)
+- **@ai-sdk/langchain** v2.0.75 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/openai** v3.0.11 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/react** v3.0.39 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/ui-utils** v1.2.11 — [Repository](https://github.com/vercel/ai)
@@ -113,6 +114,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 ## BSD-3-Clause
 
 - **diff** v8.0.2 — [Repository](https://github.com/kpdecker/jsdiff)
+- **source-map-js** v1.2.1 — [Repository](https://github.com/7rulnik/source-map-js)
 
 ## ISC
 
@@ -122,7 +124,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 
 ## SEE LICENSE IN LICENSE
 
-- **posthog-js** v1.309.1 — [Repository](https://github.com/PostHog/posthog-js)
+- **posthog-js** v1.345.5 — [Repository](https://github.com/PostHog/posthog-js)
 
 ## SIL OPEN FONT LICENSE
 
@@ -139,6 +141,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 
 ## MIT
 
+- **@arethetypeswrong/cli** v0.18.2 — [Repository](https://github.com/arethetypeswrong/arethetypeswrong.github.io)
 - **@daveyplate/better-auth-ui** v3.2.6
 - **@fastify/cors** v11.0.1 — [Repository](https://github.com/fastify/fastify-cors)
 - **@fastify/helmet** v13.0.1 — [Repository](https://github.com/fastify/fastify-helmet)
@@ -150,16 +153,16 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@hookform/resolvers** v5.1.1 — [Repository](https://github.com/react-hook-form/resolvers)
 - **@jscad/modeling** v2.12.6 — [Repository](https://github.com/jscad/OpenJSCAD.org)
 - **@kittycad/lib** v2.0.46 — [Repository](https://github.com/KittyCAD/kittycad.ts)
-- **@langchain/anthropic** v1.3.10 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/anthropic** v1.3.15 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/cerebras** v1.0.1 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/classic** v1.0.9 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/community** v1.1.4 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/core** v1.1.15 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/google-vertexai** v2.1.10 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/langgraph** v1.0.15 — [Repository](https://github.com/langchain-ai/langgraphjs)
+- **@langchain/classic** v1.0.14 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/community** v1.1.11 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/core** v1.1.19 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/google-vertexai** v2.1.15 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/langgraph** v1.1.3 — [Repository](https://github.com/langchain-ai/langgraphjs)
 - **@langchain/langgraph-checkpoint-postgres** v1.0.0 — [Repository](https://github.com/langchain-ai/langgraphjs)
-- **@langchain/ollama** v1.2.0 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/openai** v1.2.2 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/ollama** v1.2.2 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/openai** v1.2.4 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/tavily** v1.2.0 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@monaco-editor/react** v4.7.0 — [Repository](https://github.com/suren-atoyan/monaco-react)
 - **@morphllm/morphsdk** v0.2.55
@@ -187,36 +190,13 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@octokit/rest** v22.0.1 — [Repository](https://github.com/octokit/rest.js)
 - **@panzoom/panzoom** v4.6.0 — [Repository](https://github.com/timmywil/panzoom)
 - **@protontech/eslint-plugin-enforce-uint8array-arraybuffer** v2.0.0 — [Repository](https://github.com/ProtonMail/eslint-plugin-enforce-uint8array-arraybuffer)
-- **@radix-ui/react-accordion** v1.2.11 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-alert-dialog** v1.1.14 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-avatar** v1.1.10 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-checkbox** v1.3.2 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-collapsible** v1.1.11 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-context-menu** v2.2.16 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-dialog** v1.1.14 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-dropdown-menu** v2.1.15 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-hover-card** v1.1.14 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-label** v2.1.7 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-navigation-menu** v1.2.13 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-popover** v1.1.14 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-progress** v1.1.7 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-radio-group** v1.3.7 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-scroll-area** v1.2.9 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-select** v2.1.6 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-separator** v1.1.7 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-slider** v1.2.3 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-slot** v1.2.3 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-switch** v1.1.3 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-tabs** v1.1.12 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-toggle** v1.1.10 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-toggle-group** v1.1.11 — [Repository](https://github.com/radix-ui/primitives)
-- **@radix-ui/react-tooltip** v1.2.7 — [Repository](https://github.com/radix-ui/primitives)
 - **@react-router/dev** v7.9.6 — [Repository](https://github.com/remix-run/react-router)
 - **@react-router/fs-routes** v7.9.6 — [Repository](https://github.com/remix-run/react-router)
 - **@react-router/node** v7.9.6 — [Repository](https://github.com/remix-run/react-router)
 - **@react-router/serve** v7.9.6 — [Repository](https://github.com/remix-run/react-router)
 - **@react-three/drei** v10.6.1 — [Repository](https://github.com/pmndrs/drei)
 - **@react-three/fiber** v9.3.0 — [Repository](https://github.com/pmndrs/react-three-fiber)
+- **@react-three/postprocessing** v3.0.4 — [Repository](https://github.com/pmndrs/react-postprocessing)
 - **@remix-pwa/client** v3.0.7 — [Repository](https://github.com/remix-pwa/monorepo)
 - **@remix-pwa/dev** v3.1.0 — [Repository](https://github.com/remix-pwa/monorepo)
 - **@remix-pwa/sw** v3.0.10 — [Repository](https://github.com/remix-pwa/monorepo)
@@ -232,6 +212,8 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@tailwindcss/vite** v4.0.6 — [Repository](https://github.com/tailwindlabs/tailwindcss)
 - **@tanstack/react-query** v4.36.1 — [Repository](https://github.com/TanStack/query)
 - **@tanstack/react-table** v8.21.3 — [Repository](https://github.com/TanStack/table)
+- **@tanstack/react-virtual** v3.13.18 — [Repository](https://github.com/TanStack/virtual)
+- **@taucad/json-schema** v0.1.0 — [Repository](https://github.com/taucad/tau)
 - **@testing-library/jest-dom** v6.6.3 — [Repository](https://github.com/testing-library/jest-dom)
 - **@testing-library/react** v16.2.0 — [Repository](https://github.com/testing-library/react-testing-library)
 - **@testing-library/user-event** v14.6.1 — [Repository](https://github.com/testing-library/user-event)
@@ -241,6 +223,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@types/hast** v3.0.4 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/jsdom** v21.1.7 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/json-schema** v7.0.15 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
+- **@types/madge** v5.0.3 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/mdx** v2.0.13 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/node** v24.0.15 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/pg** v8.15.4 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
@@ -254,21 +237,26 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@vitest/coverage-v8** v3.2.4 — [Repository](https://github.com/vitest-dev/vitest)
 - **@vitest/ui** v3.2.4 — [Repository](https://github.com/vitest-dev/vitest)
 - **@xstate/react** v5.0.4 — [Repository](https://github.com/statelyai/xstate)
-- **allotment** v1.20.4 — [Repository](https://github.com/johnwalley/allotment)
+- **allotment** v1.20.5 — [Repository](https://github.com/johnwalley/allotment)
 - **autoprefixer** v10.4.21 — [Repository](https://github.com/postcss/autoprefixer)
 - **better-auth** v1.3.27 — [Repository](https://github.com/better-auth/better-auth)
 - **canvas** v3.1.2 — [Repository](https://github.com/Automattic/node-canvas)
+- **cdn-resolve** v2.1.2 — [Repository](https://github.com/luxass/cdn-resolve)
 - **cheerio** v1.0.0 — [Repository](https://github.com/cheeriojs/cheerio)
 - **clsx** v2.1.1 — [Repository](https://github.com/lukeed/clsx)
 - **cmdk** v1.0.4 — [Repository](https://github.com/pacocoursey/cmdk)
 - **copy-files-from-to** v3.12.1 — [Repository](https://github.com/webextensions/copy-files-from-to)
 - **culori** v4.0.2 — [Repository](https://github.com/Evercoder/culori)
+- **date-fns** v4.1.0 — [Repository](https://github.com/date-fns/date-fns)
 - **deepmerge** v4.3.1 — [Repository](https://github.com/TehShrike/deepmerge)
+- **dockview-react** v4.13.1 — [Repository](https://github.com/mathuo/dockview)
 - **drizzle-kit** v0.31.4 — [Repository](https://github.com/drizzle-team/drizzle-orm)
 - **embla-carousel-react** v8.6.0 — [Repository](https://github.com/davidjerleke/embla-carousel)
 - **error-stack-parser** v2.1.4 — [Repository](https://github.com/stacktracejs/error-stack-parser)
 - **es-cookie** v1.5.0 — [Repository](https://github.com/theodorejb/es-cookie)
-- **es-module-lexer** v1.7.0 — [Repository](https://github.com/guybedford/es-module-lexer)
+- **es-module-lexer** v2.0.0 — [Repository](https://github.com/guybedford/es-module-lexer)
+- **esbuild** v0.27.2 — [Repository](https://github.com/evanw/esbuild)
+- **esbuild-wasm** v0.27.2 — [Repository](https://github.com/evanw/esbuild)
 - **eslint** v9.32.0 — [Repository](https://github.com/eslint/eslint)
 - **eslint-config-prettier** v10.1.8 — [Repository](https://github.com/prettier/eslint-config-prettier)
 - **eslint-plugin-prettier** v5.5.3 — [Repository](https://github.com/prettier/eslint-plugin-prettier)
@@ -285,7 +273,8 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **json-rpc-2.0** v1.7.1 — [Repository](https://github.com/shogowada/json-rpc-2.0)
 - **json-schema-default** v1.0.2 — [Repository](https://github.com/mdornseif/json-schema-default)
 - **ky** v1.8.2 — [Repository](https://github.com/sindresorhus/ky)
-- **langchain** v1.2.8 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **langchain** v1.2.17 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **madge** v8.0.0 — [Repository](https://github.com/pahen/madge)
 - **monaco-editor** v0.55.1 — [Repository](https://github.com/microsoft/monaco-editor)
 - **monacopilot** v1.2.9 — [Repository](https://github.com/arshad-yaseen/monacopilot)
 - **motion** v12.11.3 — [Repository](https://github.com/motiondivision/motion)
@@ -300,8 +289,11 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **pluralize** v8.0.0 — [Repository](https://github.com/blakeembrey/pluralize)
 - **prettier** v3.4.2 — [Repository](https://github.com/prettier/prettier)
 - **prettier-plugin-tailwindcss** v0.6.14 — [Repository](https://github.com/tailwindlabs/prettier-plugin-tailwindcss)
+- **publint** v0.3.17 — [Repository](https://github.com/publint/publint)
+- **radix-ui** v1.4.3 — [Repository](https://github.com/radix-ui/primitives)
 - **react** v19.2.0 — [Repository](https://github.com/facebook/react)
 - **react-colorful** v5.6.1 — [Repository](https://github.com/omgovich/react-colorful)
+- **react-day-picker** v9.13.0 — [Repository](https://github.com/gpbl/react-day-picker)
 - **react-dom** v19.2.0 — [Repository](https://github.com/facebook/react)
 - **react-dropzone** v14.3.8 — [Repository](https://github.com/react-dropzone/react-dropzone)
 - **react-hook-form** v7.60.0 — [Repository](https://github.com/react-hook-form/react-hook-form)
@@ -310,6 +302,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **react-router** v7.9.6 — [Repository](https://github.com/remix-run/react-router)
 - **react-shiki** v0.7.2 — [Repository](https://github.com/avgvstvs96/react-shiki)
 - **react-virtuoso** v4.13.0 — [Repository](https://github.com/petyosi/react-virtuoso)
+- **recharts** v3.7.0 — [Repository](https://github.com/recharts/recharts)
 - **remix-themes** v2.0.4 — [Repository](https://github.com/abereghici/remix-themes)
 - **replicad** v0.19.1
 - **replicad-opencascadejs** v0.19.0
@@ -323,6 +316,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **tailwind-scrollbar** v4.0.2 — [Repository](https://github.com/adoxography/tailwind-scrollbar)
 - **tailwindcss** v4.1.17 — [Repository](https://github.com/tailwindlabs/tailwindcss)
 - **three** v0.179.0 — [Repository](https://github.com/mrdoob/three.js)
+- **three-mesh-bvh** v0.9.8 — [Repository](https://github.com/gkjohnson/three-mesh-bvh)
 - **three-viewport-gizmo** v2.2.0 — [Repository](https://github.com/Fennec-hub/three-viewport-gizmo)
 - **ts-node** v10.9.2 — [Repository](https://github.com/TypeStrong/ts-node)
 - **tsdown** v0.15.7 — [Repository](https://github.com/rolldown/tsdown)
@@ -345,7 +339,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **webpack-cli** v6.0.1 — [Repository](https://github.com/webpack/webpack-cli)
 - **ws** v8.18.3 — [Repository](https://github.com/websockets/ws)
 - **xo** v0.61.0-2 — [Repository](https://github.com/xojs/xo)
-- **xstate** v5.19.3 — [Repository](https://github.com/statelyai/xstate)
+- **xstate** v5.24.0 — [Repository](https://github.com/statelyai/xstate)
 - **zod** v4.1.13 — [Repository](https://github.com/colinhacks/zod)
 
 ---

@@ -201,7 +201,7 @@ export type TagsGroupProps = ComponentProps<typeof CommandGroup>;
 
 export type TagsItemProps = ComponentProps<typeof CommandItem>;
 export function TagsItem({ className, ...props }: TagsItemProps): React.JSX.Element {
-  return <CommandItem className={cn('cursor-pointer items-center justify-between', className)} {...props} />;
+  return <CommandItem className={cn('items-center justify-between', className)} {...props} />;
 }
 
 // eslint-disable-next-line no-barrel-files/no-barrel-files -- allowed for component reuse.

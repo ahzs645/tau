@@ -1,13 +1,18 @@
-import { useCallback, useMemo, useEffect } from 'react';
+import { useCallback, useMemo, useEffect, useState, useRef } from 'react';
 import { AtSign, Image, AlertTriangle, AlertCircle, Camera } from 'lucide-react';
-import { useSelector, useActorRef } from '@xstate/react';
+import { useSelector } from '@xstate/react';
+import { createActor } from 'xstate';
+import type { ActorRefFrom } from 'xstate';
+import type { CodeIssue, KernelIssue } from '@taucad/types';
 import { TooltipTrigger, TooltipContent, Tooltip } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useBuild, useMainGraphics } from '#hooks/use-build.js';
 import { toast } from '#components/ui/sonner.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { orthographicViews, screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
+import type { graphicsMachine } from '#machines/graphics.machine.js';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 
 type ChatContextActionsProperties = {
@@ -43,44 +48,193 @@ export function ChatContextActions({
   className,
   ...properties
 }: ChatContextActionsProperties): React.JSX.Element {
-  const { cadRef: cadActor, graphicsRef: graphicsActor, editorRef } = useBuild();
-  // Get the active file path from editor
-  const activeFilePath = useSelector(editorRef, (state) => state.context.activeFilePath);
-  // Get the kernel error for the active file
+  const { compilationUnits, mainEntryFile, viewGraphics, editorRef } = useBuild();
+  const mainGraphicsRef = useMainGraphics();
+  const cadActor = compilationUnits.get(mainEntryFile);
+
+  const isScreenshotReady = useSelector(mainGraphicsRef, (state) => state?.context.isScreenshotReady ?? false);
+  const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
+
+  // Get the kernel error for the main entry file from its compilation unit
   const kernelIssue = useSelector(cadActor, (state) => {
-    if (!activeFilePath) {
+    if (!state || !mainEntryFile) {
       return undefined;
     }
 
-    return state.context.kernelIssues.get(activeFilePath);
+    return state.context.kernelIssues.get(mainEntryFile);
   });
 
-  const codeIssues = useSelector(cadActor, (state) => state.context.codeIssues);
-  const isScreenshotReady = useSelector(graphicsActor, (state) => state.context.isScreenshotReady);
+  const codeIssues = useSelector(cadActor, (state) => state?.context.codeIssues ?? []);
   const { quality: screenshotQuality } = useImageQuality();
 
-  // Create screenshot request machine instance
-  const screenshotActorRef = useActorRef(screenshotRequestMachine, {
-    input: { graphicsRef: graphicsActor },
-  });
+  // Reactively track isScreenshotReady for all view graphics actors.
+  // getSnapshot() inside useMemo is a one-time read; we need subscriptions so that
+  // when a view's capability registers asynchronously, the menu item updates.
+  const [viewReadiness, setViewReadiness] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    // Seed initial state from current snapshots
+    const initial: Record<string, boolean> = {};
+    for (const [viewId, graphicsRef] of viewGraphics) {
+      initial[viewId] = graphicsRef.getSnapshot().context.isScreenshotReady;
+    }
+
+    setViewReadiness(initial);
+
+    // Subscribe to future changes
+    const subscriptions: Array<{ unsubscribe: () => void }> = [];
+    for (const [viewId, graphicsRef] of viewGraphics) {
+      const subscription = graphicsRef.subscribe((snapshot) => {
+        setViewReadiness((previous) => {
+          const ready = snapshot.context.isScreenshotReady;
+          if (previous[viewId] === ready) {
+            return previous;
+          }
+
+          return { ...previous, [viewId]: ready };
+        });
+      });
+      subscriptions.push(subscription);
+    }
+
+    return () => {
+      for (const subscription of subscriptions) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [viewGraphics]);
+
+  // Track active screenshot actors for lifecycle cleanup
+  const activeScreenshotActorsRef = useRef(new Set<{ stop: () => void }>());
+
+  useEffect(() => {
+    const actors = activeScreenshotActorsRef;
+    return () => {
+      for (const actor of actors.current) {
+        actor.stop();
+      }
+
+      actors.current.clear();
+    };
+  }, []);
+
+  // Helper to take a screenshot of a specific view's graphicsRef (creates actor on-demand)
+  const takeScreenshot = useCallback(
+    (
+      graphicsRef: ActorRefFrom<typeof graphicsMachine>,
+      options: {
+        type: 'single' | 'composite';
+        onSuccess: (dataUrls: string[]) => void;
+        onError: (error: unknown) => void;
+      },
+    ) => {
+      const actor = createActor(screenshotRequestMachine, {
+        input: { graphicsRef },
+      });
+      const actors = activeScreenshotActorsRef.current;
+      actors.add(actor);
+      actor.start();
+
+      const cleanup = () => {
+        actor.stop();
+        actors.delete(actor);
+      };
+
+      if (options.type === 'single') {
+        actor.send({
+          type: 'requestScreenshot',
+          options: {
+            output: {
+              format: 'image/webp',
+              quality: screenshotQuality,
+            },
+            aspectRatio: 16 / 9,
+            maxResolution: 1200,
+            zoomLevel: 1.4,
+          },
+          onSuccess(dataUrls) {
+            cleanup();
+            options.onSuccess(dataUrls);
+          },
+          onError(error) {
+            cleanup();
+            options.onError(error);
+          },
+        });
+      } else {
+        actor.send({
+          type: 'requestCompositeScreenshot',
+          options: {
+            output: {
+              format: 'image/webp',
+              quality: screenshotQuality,
+              isPreview: true,
+            },
+            cameraAngles: orthographicViews.slice(0, 6),
+            aspectRatio: 1,
+            maxResolution: 800,
+            zoomLevel: 1.2,
+            composite: {
+              enabled: true,
+              preferredRatio: { columns: 3, rows: 2 },
+              showLabels: true,
+              padding: 12,
+              labelHeight: 24,
+              backgroundColor: 'transparent',
+              dividerColor: '#666666',
+              dividerWidth: 1,
+            },
+          },
+          onSuccess(dataUrls) {
+            cleanup();
+            options.onSuccess(dataUrls);
+          },
+          onError(error) {
+            cleanup();
+            options.onError(error);
+          },
+        });
+      }
+    },
+    [screenshotQuality],
+  );
+
+  const handleViewScreenshot = useCallback(
+    (graphicsRef: ActorRefFrom<typeof graphicsMachine>) => {
+      if (asPopoverMenu) {
+        onClose?.();
+      }
+
+      takeScreenshot(graphicsRef, {
+        type: 'single',
+        onSuccess(dataUrls) {
+          const dataUrl = dataUrls[0];
+          if (dataUrl) {
+            addImage(dataUrl);
+          } else {
+            console.error('No screenshot data received');
+            toast.error('Failed to capture view screenshot');
+          }
+        },
+        onError(error) {
+          console.error('View screenshot failed:', error);
+          toast.error(`View screenshot failed: ${error instanceof Error ? error.message : String(error)}`);
+        },
+      });
+    },
+    [addImage, asPopoverMenu, onClose, takeScreenshot],
+  );
 
   const handleAddModelScreenshot = useCallback(() => {
+    if (!mainGraphicsRef) {
+      return;
+    }
+
     if (asPopoverMenu) {
       onClose?.();
     }
 
-    // Use the screenshot machine for simplified request handling
-    screenshotActorRef.send({
-      type: 'requestScreenshot',
-      options: {
-        output: {
-          format: 'image/webp', // Use WebP for consistency and performance
-          quality: screenshotQuality, // User-configurable quality via chat settings
-        },
-        aspectRatio: 16 / 9, // Standard widescreen ratio for model shots
-        maxResolution: 1200, // Good balance of quality and performance for single shots
-        zoomLevel: 1.4, // Optimized zoom level
-      },
+    takeScreenshot(mainGraphicsRef, {
+      type: 'single',
       onSuccess(dataUrls) {
         const dataUrl = dataUrls[0];
         if (dataUrl) {
@@ -92,40 +246,22 @@ export function ChatContextActions({
       },
       onError(error) {
         console.error('Screenshot failed:', error);
-        toast.error(`Screenshot failed: ${error}`);
+        toast.error(`Screenshot failed: ${error instanceof Error ? error.message : String(error)}`);
       },
     });
-  }, [addImage, asPopoverMenu, onClose, screenshotActorRef, screenshotQuality]);
+  }, [addImage, asPopoverMenu, onClose, takeScreenshot, mainGraphicsRef]);
 
   const handleAddAllViewsScreenshots = useCallback(() => {
+    if (!mainGraphicsRef) {
+      return;
+    }
+
     if (asPopoverMenu) {
       onClose?.();
     }
 
-    // Use the screenshot machine for efficient multi-angle capture
-    screenshotActorRef.send({
-      type: 'requestCompositeScreenshot',
-      options: {
-        output: {
-          format: 'image/webp', // Use WebP for consistency and performance
-          quality: screenshotQuality, // User-configurable quality via chat settings
-          isPreview: true,
-        },
-        cameraAngles: orthographicViews.slice(0, 6),
-        aspectRatio: 1, // Square images for better grid layout
-        maxResolution: 800, // Reduced from 1000 for faster generation
-        zoomLevel: 1.2, // Slightly lower zoom for smaller images
-        composite: {
-          enabled: true,
-          preferredRatio: { columns: 3, rows: 2 }, // Prefer 3x2 grid as requested
-          showLabels: true,
-          padding: 12, // Increase padding for better visual separation
-          labelHeight: 24,
-          backgroundColor: 'transparent',
-          dividerColor: '#666666', // Dark dividers for visibility on transparent background
-          dividerWidth: 1,
-        },
-      },
+    takeScreenshot(mainGraphicsRef, {
+      type: 'composite',
       onSuccess(dataUrls) {
         const compositeDataUrl = dataUrls[0];
         if (compositeDataUrl) {
@@ -137,13 +273,15 @@ export function ChatContextActions({
       },
       onError(error) {
         console.error('All views screenshot failed:', error);
-        toast.error(`All views screenshot failed: ${error}`);
+        toast.error(`All views screenshot failed: ${error instanceof Error ? error.message : String(error)}`);
       },
     });
-  }, [addImage, asPopoverMenu, onClose, screenshotActorRef, screenshotQuality]);
+  }, [addImage, asPopoverMenu, onClose, takeScreenshot, mainGraphicsRef]);
 
   const handleAddCodeIssues = useCallback(() => {
-    const errors = codeIssues.map((error) => `- (${error.startLineNumber}:${error.startColumn}): ${error.message}`);
+    const errors = codeIssues.map(
+      (error: CodeIssue) => `- (${error.startLineNumber}:${error.startColumn}): ${error.message}`,
+    );
 
     const markdownErrors = `
 # Code errors
@@ -162,7 +300,7 @@ ${errors.join('\n')}
 
     // Format all kernel issues
     const errorsMarkdown = kernelIssue
-      .map((error, index) => {
+      .map((error: KernelIssue, index: number) => {
         const locationInfo = error.location
           ? ` (Line ${error.location.startLineNumber}:${error.location.startColumn})`
           : '';
@@ -183,13 +321,13 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
     }
   }, [addText, kernelIssue, asPopoverMenu, onClose]);
 
-  const contextItems = useMemo(
-    (): ContextActionItem[] => [
+  const contextItems = useMemo((): ContextActionItem[] => {
+    const items: ContextActionItem[] = [
       {
         id: 'add-model-screenshot',
         label: 'Model screenshot',
         group: 'Visual',
-        icon: <Image className="mr-2 size-4" />,
+        icon: <Image />,
         action: handleAddModelScreenshot,
         disabled: !isScreenshotReady,
       },
@@ -197,15 +335,42 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         id: 'add-all-views-screenshots',
         label: 'All views screenshots',
         group: 'Visual',
-        icon: <Camera className="mr-2 size-4" />,
+        icon: <Camera />,
         action: handleAddAllViewsScreenshots,
         disabled: !isScreenshotReady,
       },
+    ];
+
+    // Add per-view screenshot items for non-main views when there are 2+ views
+    if (viewGraphics.size >= 2) {
+      for (const [viewId, graphicsRef] of viewGraphics) {
+        const settings = viewSettings[viewId];
+        // Skip the main entry file view (already covered by "Model screenshot")
+        if (settings?.entryFile === mainEntryFile) {
+          continue;
+        }
+
+        const fileName = settings?.entryFile?.split('/').pop() ?? 'Untitled';
+        const isReady = viewReadiness[viewId] ?? false;
+        items.push({
+          id: `view-screenshot-${viewId}`,
+          label: fileName,
+          group: 'View Screenshots',
+          icon: <Image />,
+          action() {
+            handleViewScreenshot(graphicsRef);
+          },
+          disabled: !isReady,
+        });
+      }
+    }
+
+    items.push(
       {
         id: 'add-code-errors',
         label: 'Code errors',
         group: 'Code',
-        icon: <AlertTriangle className="mr-2 size-4" />,
+        icon: <AlertTriangle />,
         action: handleAddCodeIssues,
         disabled: codeIssues.length === 0,
       },
@@ -213,21 +378,27 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         id: 'add-kernel-error',
         label: kernelIssue && kernelIssue.length > 1 ? `Kernel issues (${kernelIssue.length})` : 'Kernel error',
         group: 'Code',
-        icon: <AlertCircle className="mr-2 size-4" />,
+        icon: <AlertCircle />,
         action: handleAddKernelIssue,
         disabled: !kernelIssue || kernelIssue.length === 0,
       },
-    ],
-    [
-      handleAddModelScreenshot,
-      isScreenshotReady,
-      handleAddAllViewsScreenshots,
-      handleAddCodeIssues,
-      codeIssues.length,
-      handleAddKernelIssue,
-      kernelIssue,
-    ],
-  );
+    );
+
+    return items;
+  }, [
+    handleAddModelScreenshot,
+    isScreenshotReady,
+    handleAddAllViewsScreenshots,
+    handleAddCodeIssues,
+    codeIssues.length,
+    handleAddKernelIssue,
+    kernelIssue,
+    viewGraphics,
+    viewSettings,
+    viewReadiness,
+    mainEntryFile,
+    handleViewScreenshot,
+  ]);
 
   const groupedContextItems = useMemo(() => {
     const groupedContextItemsMap: Record<string, { name: string; items: ContextActionItem[] }> = {};
@@ -248,7 +419,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
   }, [contextItems]);
 
   const renderContextItemLabel = (item: ContextActionItem, _selectedItem: ContextActionItem | undefined) => (
-    <div className="flex items-center">
+    <div className={menuItemLayoutClass}>
       {item.icon}
       {item.label}
     </div>

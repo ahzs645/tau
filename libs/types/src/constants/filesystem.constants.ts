@@ -7,7 +7,7 @@
 /**
  * Available filesystem backend names.
  */
-export const filesystemBackends = ['indexeddb', 'opfs', 'memory'] as const;
+export const filesystemBackends = ['indexeddb', 'opfs', 'webaccess', 'memory'] as const;
 
 /**
  * Filesystem backend metadata.
@@ -21,6 +21,10 @@ export const filesystemBackendMeta = {
   opfs: {
     label: 'OPFS',
     description: 'Origin Private File System. Faster performance, requires modern browser.',
+  },
+  webaccess: {
+    label: 'File System',
+    description: 'Access a local folder directly. Files are visible in your OS file explorer.',
   },
   memory: {
     label: 'Memory',

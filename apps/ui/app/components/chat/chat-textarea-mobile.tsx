@@ -6,6 +6,7 @@ import { Button } from '#components/ui/button.js';
 import { Textarea } from '#components/ui/textarea.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { cn } from '#utils/ui.utils.js';
+import { menuItemVariants } from '#components/ui/menu.variants.js';
 import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
@@ -18,9 +19,12 @@ import { Drawer, DrawerContent, DrawerDescription, DrawerTitle, DrawerTrigger } 
 import { Command, CommandGroup, CommandItem, CommandList } from '#components/ui/command.js';
 import type { useModels } from '#hooks/use-models.js';
 
-// Styled div that looks like CommandItem but works as a trigger for nested drawers
-const menuItemClassName =
-  "relative flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-5 [&_svg:not([class*='text-'])]:text-muted-foreground";
+// Styled div that looks like CommandItem but works as a trigger for nested drawers.
+// Uses menuItemVariants with mobile-specific size overrides (gap-1, px-2, py-1.5, text-sm, size-5 icons).
+const menuItemClassName = cn(
+  menuItemVariants({ highlight: 'selected' }),
+  "gap-1 px-2 py-1.5 text-sm [&_svg:not([class*='size-'])]:size-5",
+);
 
 type ChatTextareaMobileProperties = {
   readonly className?: string;
@@ -279,7 +283,7 @@ export const ChatTextareaMobile = memo(function ({
               {/* Actions Group */}
               <CommandGroup heading="Actions">
                 {/* Upload Image */}
-                <CommandItem className="cursor-pointer" value="upload-image" onSelect={handleDrawerFileSelect}>
+                <CommandItem value="upload-image" onSelect={handleDrawerFileSelect}>
                   <span className="flex w-full items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Paperclip className="size-4" />

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowRight } from 'lucide-react';
-import { Slot } from '@radix-ui/react-slot';
+import { Slot as SlotPrimitive } from 'radix-ui';
 import { cn } from '#utils/ui.utils.js';
 
 type InteractiveHoverButtonProps = {
@@ -14,7 +14,7 @@ export function InteractiveHoverButton({
   asChild,
   ...props
 }: InteractiveHoverButtonProps): React.JSX.Element {
-  const Comp = asChild ? Slot : 'button';
+  const Comp = asChild ? SlotPrimitive.Slot : 'button';
 
   return (
     <Comp

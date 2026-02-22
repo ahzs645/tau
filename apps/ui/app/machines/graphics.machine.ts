@@ -5,6 +5,7 @@ import { idPrefix } from '@taucad/types/constants';
 import type { LengthSymbol, UnitSystem } from '@taucad/units';
 import { standardInternationalBaseUnits } from '@taucad/units/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
+import type { EnvironmentPreset, PinnedMeasurement } from '#constants/editor.constants.js';
 
 // Context type definition
 export type GraphicsContext = {
@@ -62,7 +63,9 @@ export type GraphicsContext = {
   enableGrid: boolean;
   enableAxes: boolean;
   enableMatcap: boolean;
+  enablePostProcessing: boolean;
   upDirection: 'x' | 'y' | 'z';
+  environmentPreset: EnvironmentPreset;
 
   // Clipping plane state
   isSectionViewActive: boolean;
@@ -119,6 +122,8 @@ export type GraphicsContext = {
 
   // Geometry data from CAD
   geometries: Geometry[];
+  /** Deterministic key derived from geometry content hashes. Used for skip-when-unchanged optimizations. */
+  geometryKey: string;
 };
 
 // Event types
@@ -138,7 +143,9 @@ export type GraphicsEvent =
   | { type: 'setGridVisibility'; payload: boolean }
   | { type: 'setAxesVisibility'; payload: boolean }
   | { type: 'setMatcapVisibility'; payload: boolean }
+  | { type: 'setPostProcessingVisibility'; payload: boolean }
   | { type: 'setUpDirection'; payload: 'x' | 'y' | 'z' }
+  | { type: 'setEnvironmentPreset'; payload: EnvironmentPreset }
   // Clipping plane events
   | { type: 'setSectionViewActive'; payload: boolean }
   | { type: 'selectSectionView'; payload: 'xy' | 'xz' | 'yz' | undefined }
@@ -168,8 +175,16 @@ export type GraphicsEvent =
   | { type: 'toggleMeasurementPinned'; id: string }
   // Controls events
   | { type: 'controlsInteractionStart' }
-  | { type: 'controlsChanged'; zoom: number; position: number; fov: number }
-  | { type: 'controlsInteractionEnd' }
+  | {
+      type: 'controlsChanged';
+      zoom: number;
+      position: number;
+      fov: number;
+    }
+  | {
+      type: 'controlsInteractionEnd';
+      zoom: number;
+    }
   // Screenshot events
   | { type: 'takeScreenshot'; options: ScreenshotOptions; requestId: string }
   | {
@@ -185,7 +200,9 @@ export type GraphicsEvent =
   | { type: 'unregisterScreenshotCapability' }
   | { type: 'unregisterCameraCapability' }
   // Geometry updates from CAD
-  | { type: 'updateGeometries'; geometries: Geometry[]; units: { length: LengthSymbol } };
+  | { type: 'updateGeometries'; geometries: Geometry[]; units: { length: LengthSymbol } }
+  // Scene radius update from Three.js bounding sphere (sent by Stage)
+  | { type: 'sceneRadiusUpdated'; radius: number };
 
 // Emitted events
 export type GraphicsEmitted =
@@ -199,6 +216,18 @@ export type GraphicsEmitted =
 export type GraphicsInput = {
   defaultCameraFovAngle?: number;
   measureSnapDistance?: number; // Default 20px
+  // Per-view initial settings (from persisted GraphicsViewSettings)
+  enableSurfaces?: boolean;
+  enableLines?: boolean;
+  enableGizmo?: boolean;
+  enableGrid?: boolean;
+  enableAxes?: boolean;
+  enableMatcap?: boolean;
+  enablePostProcessing?: boolean;
+  upDirection?: 'x' | 'y' | 'z';
+  environmentPreset?: EnvironmentPreset;
+  /** Saved pinned measurements to restore */
+  pinnedMeasurements?: PinnedMeasurement[];
 };
 
 type LengthUnitData = {
@@ -296,13 +325,6 @@ function calculateGridSizes(
     baseSize: cameraPosition,
     fov: cameraFov,
   };
-}
-
-// Calculate geometry radius from geometries
-function calculateGeometryRadius(geometries: Geometry[]): number {
-  // This is a placeholder - in reality, this would use Three.js to calculate bounding sphere
-  // For now, return a default value
-  return geometries.length > 0 ? 100 : 0;
 }
 
 // Clamp a radian angle to the nearest whole degree and return radians
@@ -539,14 +561,16 @@ export const graphicsMachine = setup({
       // Could add loading state or disable certain actions during interaction
     },
 
-    handleControlsInteractionEnd() {
-      // Could emit completion events or re-enable actions after interaction
-    },
+    handleControlsInteractionEnd: assign({
+      currentZoom({ event }) {
+        assertEvent(event, 'controlsInteractionEnd');
+        return event.zoom;
+      },
+    }),
 
     updateGeometries: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'updateGeometries');
 
-      const geometryRadius = calculateGeometryRadius(event.geometries);
       const cadUnitData = getLengthUnitData(event.units.length);
 
       // Calculate relative factor for display (displayFactor / cadFactor)
@@ -554,7 +578,7 @@ export const graphicsMachine = setup({
 
       enqueue.assign({
         geometries: event.geometries,
-        geometryRadius,
+        geometryKey: event.geometries.map((g) => g.hash).join(','),
         cadUnits: {
           length: {
             symbol: event.units.length,
@@ -569,10 +593,14 @@ export const graphicsMachine = setup({
           },
         },
       });
+    }),
 
+    updateSceneRadius: enqueueActions(({ enqueue, event }) => {
+      assertEvent(event, 'sceneRadiusUpdated');
+      enqueue.assign({ geometryRadius: event.radius });
       enqueue.emit({
         type: 'geometryRadiusCalculated' as const,
-        radius: geometryRadius,
+        radius: event.radius,
       });
     }),
 
@@ -739,9 +767,23 @@ export const graphicsMachine = setup({
       },
     }),
 
+    setPostProcessingVisibility: assign({
+      enablePostProcessing({ event }) {
+        assertEvent(event, 'setPostProcessingVisibility');
+        return event.payload;
+      },
+    }),
+
     setUpDirection: assign({
       upDirection({ event }) {
         assertEvent(event, 'setUpDirection');
+        return event.payload;
+      },
+    }),
+
+    setEnvironmentPreset: assign({
+      environmentPreset({ event }) {
+        assertEvent(event, 'setEnvironmentPreset');
         return event.payload;
       },
     }),
@@ -1059,14 +1101,16 @@ export const graphicsMachine = setup({
     geometryRadius: 0,
     sceneRadius: undefined,
 
-    // Visibility state
-    enableSurfaces: true,
-    enableLines: true,
-    enableGizmo: true,
-    enableGrid: true,
-    enableAxes: true,
-    enableMatcap: false,
-    upDirection: 'z',
+    // Visibility state (from per-view settings or defaults)
+    enableSurfaces: input.enableSurfaces ?? true,
+    enableLines: input.enableLines ?? true,
+    enableGizmo: input.enableGizmo ?? true,
+    enableGrid: input.enableGrid ?? true,
+    enableAxes: input.enableAxes ?? true,
+    enableMatcap: input.enableMatcap ?? false,
+    enablePostProcessing: input.enablePostProcessing ?? true,
+    upDirection: input.upDirection ?? 'z',
+    environmentPreset: input.environmentPreset ?? 'studio',
 
     // Clipping plane state
     isSectionViewActive: false,
@@ -1092,7 +1136,10 @@ export const graphicsMachine = setup({
 
     // Measure state
     isMeasureActive: false,
-    measurements: [],
+    measurements: (input.pinnedMeasurements ?? []).map((m) => ({
+      ...m,
+      isPinned: true,
+    })),
     currentMeasurementStart: undefined,
     measureSnapDistance: input.measureSnapDistance ?? 40,
     hoveredMeasurementId: undefined,
@@ -1110,6 +1157,7 @@ export const graphicsMachine = setup({
 
     // Shapes
     geometries: [],
+    geometryKey: '',
   }),
   initial: 'operational',
   states: {
@@ -1157,8 +1205,14 @@ export const graphicsMachine = setup({
         setMatcapVisibility: {
           actions: 'setMatcapVisibility',
         },
+        setPostProcessingVisibility: {
+          actions: 'setPostProcessingVisibility',
+        },
         setUpDirection: {
           actions: 'setUpDirection',
+        },
+        setEnvironmentPreset: {
+          actions: 'setEnvironmentPreset',
         },
 
         // Plane naming and hover are global in operational state
@@ -1211,6 +1265,9 @@ export const graphicsMachine = setup({
         // Geometry updates
         updateGeometries: {
           actions: 'updateGeometries',
+        },
+        sceneRadiusUpdated: {
+          actions: 'updateSceneRadius',
         },
 
         // Section view pivot updates (world-space anchor)

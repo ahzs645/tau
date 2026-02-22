@@ -1,10 +1,9 @@
 import { memo } from 'react';
 import type React from 'react';
 import { CreditCard } from 'lucide-react';
-import { NavLink } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
-import { Loader } from '#components/ui/loader.js';
+import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 export const ChatErrorCredits = memo(function ({ className }: { readonly className?: string }): React.JSX.Element {
   return (
@@ -16,19 +15,15 @@ export const ChatErrorCredits = memo(function ({ className }: { readonly classNa
         </p>
       </div>
       <div className="flex justify-end">
-        <Button asChild variant="default" size="sm">
-          <NavLink to="/settings/billing" tabIndex={-1}>
-            {({ isPending }) =>
-              isPending ? (
-                <Loader />
-              ) : (
-                <>
-                  <CreditCard className="size-4" />
-                  Add Credits
-                </>
-              )
-            }
-          </NavLink>
+        <Button
+          variant="default"
+          size="sm"
+          onClick={() => {
+            openSettingsDialog('billing');
+          }}
+        >
+          <CreditCard className="size-4" />
+          Add Credits
         </Button>
       </div>
     </div>

@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
-import { useSelector } from '@xstate/react';
 import { Trash2, Settings } from 'lucide-react';
-import { useBuild } from '#hooks/use-build.js';
+import { usePreviewBuild } from '#routes/builds_.$id_.preview/preview-build-context.js';
 import {
   Dialog,
   DialogContent,
@@ -19,8 +18,7 @@ import { Separator } from '#components/ui/separator.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
 
 export function BuildSettingsDialog(): React.JSX.Element {
-  const { buildRef, updateName, updateDescription } = useBuild();
-  const build = useSelector(buildRef, (state) => state.context.build);
+  const { build, updateName, updateDescription } = usePreviewBuild();
 
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);

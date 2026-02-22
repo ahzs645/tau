@@ -119,8 +119,10 @@ export function createStripedMaterial(properties?: StripedMaterialProperties): T
         vec2 rotated = rotation2D(uStripeAngle) * vSurfacePos;
         float pattern = mod(rotated.y, uStripeFrequency);
         
-        // Determine if this pixel should be a stripe
-        vec3 finalColor = pattern < uStripeWidth ? uStripeColor : uBaseColor;
+        // Antialiased stripe edge using screen-space derivatives
+        float aa = fwidth(pattern) * 1.5;
+        float stripeMask = smoothstep(uStripeWidth - aa, uStripeWidth + aa, pattern);
+        vec3 finalColor = mix(uStripeColor, uBaseColor, stripeMask);
         
         gl_FragColor = vec4(finalColor, 1.0);
       }

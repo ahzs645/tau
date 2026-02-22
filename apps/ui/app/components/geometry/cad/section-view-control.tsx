@@ -1,47 +1,18 @@
-import { useEffect } from 'react';
 import { FlipHorizontal } from 'lucide-react';
-import { useSelector } from '@xstate/react';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
-import { useBuild } from '#hooks/use-build.js';
 import { cn } from '#utils/ui.utils.js';
-
-type SectionViewSettings = {
-  stripeColor: string;
-  stripeSpacing: number;
-  stripeWidth: number;
-};
-
-const defaultSectionViewSettings: SectionViewSettings = {
-  stripeColor: '#00ff00',
-  stripeSpacing: 10,
-  stripeWidth: 1,
-};
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export function SectionViewControl(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const isSectionViewActive = useSelector(graphicsActor, (state) => state.context.isSectionViewActive);
-  const is2dGeometry = useSelector(graphicsActor, (state) =>
+  const graphicsRef = useGraphics();
+  const isSectionViewActive = useGraphicsSelector((state) => state.context.isSectionViewActive);
+  const is2dGeometry = useGraphicsSelector((state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
 
-  const [sectionViewSettings] = useCookie<SectionViewSettings>(
-    cookieName.sectionViewSettings,
-    defaultSectionViewSettings,
-  );
-
-  // Sync cookie with graphics machine on mount/change
-  useEffect(() => {
-    graphicsActor.send({
-      type: 'setSectionViewVisualization',
-      payload: sectionViewSettings,
-    });
-  }, [sectionViewSettings, graphicsActor]);
-
   const handleClick = (): void => {
-    graphicsActor.send({
+    graphicsRef.send({
       type: 'setSectionViewActive',
       payload: !isSectionViewActive,
     });

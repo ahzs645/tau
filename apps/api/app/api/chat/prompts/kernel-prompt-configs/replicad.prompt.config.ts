@@ -1,15 +1,15 @@
-import { replicadTypesCleanJsDoc } from '@taucad/api-extractor';
+import { replicadTypesOriginal } from '@taucad/api-extractor';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
-import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/replicad.prompt.example.js?raw';
+import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/replicad.prompt.example.ts?raw';
 
 export const replicadConfig: KernelConfig = {
   fileExtension: '.ts',
   languageName: 'Replicad',
 
-  codeStandards: `Output plain JavaScript (no TypeScript annotations). Use camelCase for variables. Export \`defaultParams\` object and default \`main(params)\` function returning geometry.
+  codeStandards: `Output TypeScript with ES module imports. Use camelCase for variables. Export \`defaultParams\` object and default \`main(params)\` function returning geometry.
 
 <replicad_api>
-${replicadTypesCleanJsDoc}
+${replicadTypesOriginal}
 </replicad_api>`,
 
   commonErrorPatterns:

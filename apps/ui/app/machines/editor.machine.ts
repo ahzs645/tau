@@ -1,7 +1,16 @@
 import { assign, assertEvent, setup, fromPromise, enqueueActions, emit } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { PartialDeep } from 'type-fest';
-import type { EditorState, EditorStateInput, OpenFile, FileOpenSource, PanelState } from '#types/editor.types.js';
+import type { SerializedDockview } from 'dockview-react';
+import type {
+  EditorState,
+  EditorStateInput,
+  OpenFile,
+  FileOpenSource,
+  PanelState,
+  ViewState,
+} from '#types/editor.types.js';
+import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultPanelState } from '#constants/editor.constants.js';
 
 /**
@@ -32,6 +41,12 @@ export type EditorStateContext = {
   lastChatId: string | undefined;
   /** Panel layout state (open/close, sizes, mobile tab) */
   panelState: PanelState;
+  /** Serialized DockviewReact layout for the code editor area */
+  editorLayout: SerializedDockview | undefined;
+  /** Serialized DockviewReact layout for the geometry viewer area */
+  viewerLayout: SerializedDockview | undefined;
+  /** Per-viewer-panel state, keyed by Dockview panel ID */
+  viewSettings: Record<string, ViewState>;
   isLoading: boolean;
   error: Error | undefined;
   /** Flag indicating changes occurred during a write operation that need persisting */
@@ -55,19 +70,30 @@ type EditorStateEvent =
   | { type: 'openFile'; path: string; source: FileOpenSource; lineNumber?: number; column?: number }
   | { type: 'closeFile'; path: string }
   | { type: 'setActiveFile'; path: string }
+  | { type: 'revealFileInTree'; path: string }
   | { type: 'renameFile'; oldPath: string; newPath: string }
   | { type: 'closeAll' }
   // Chat operations
   | { type: 'setLastChatId'; chatId: string }
   // Panel operations
-  | { type: 'setPanelState'; panelState: PartialDeep<PanelState> };
+  | { type: 'setPanelState'; panelState: PartialDeep<PanelState> }
+  // Dockview layout operations
+  | { type: 'setEditorLayout'; layout: SerializedDockview }
+  | { type: 'setViewerLayout'; layout: SerializedDockview }
+  // View settings operations
+  | { type: 'setViewSettings'; viewId: string; viewState: ViewState }
+  | { type: 'updateViewSettings'; viewId: string; settings: Partial<GraphicsViewSettings> }
+  | { type: 'removeViewSettings'; viewId: string }
+  // Flush pending state immediately (bypasses debounce, used on tab close)
+  | { type: 'flushNow' };
 
 /**
  * Editor state Machine Emitted Events
  */
 type EditorStateEmitted =
   | { type: 'editorStateLoaded'; editorState: EditorState | undefined }
-  | { type: 'fileOpened'; path: string; lineNumber?: number; column?: number; source?: FileOpenSource };
+  | { type: 'fileOpened'; path: string; lineNumber?: number; column?: number; source?: FileOpenSource }
+  | { type: 'fileRevealRequested'; path: string };
 
 // Actors to be provided by the consumer
 const loadEditorStateActor = fromPromise<EditorState | undefined, { buildId: string }>(async () => {
@@ -131,11 +157,31 @@ export const editorMachine = setup({
         ? deepMergePanelState(defaultPanelState, loadedState.panelState)
         : defaultPanelState;
 
+      // Safe loading for Dockview layout fields -- older persisted data may not have these
+      let editorLayout: SerializedDockview | undefined;
+      let viewerLayout: SerializedDockview | undefined;
+      let viewSettings: Record<string, ViewState> = {};
+      try {
+        editorLayout = loadedState?.editorLayout;
+
+        viewerLayout = loadedState?.viewerLayout;
+
+        viewSettings = loadedState?.viewSettings ?? {};
+      } catch {
+        // Corrupt/incompatible persisted data -- silently default
+        editorLayout = undefined;
+        viewerLayout = undefined;
+        viewSettings = {};
+      }
+
       enqueue.assign({
         openFiles: loadedState?.openFiles ?? [],
         activeFilePath: loadedState?.activeFilePath,
         lastChatId: loadedState?.lastChatId,
         panelState: mergedPanelState,
+        editorLayout,
+        viewerLayout,
+        viewSettings,
         isLoading: false,
       });
 
@@ -163,6 +209,9 @@ export const editorMachine = setup({
         activeFilePath: undefined,
         lastChatId: undefined,
         panelState: defaultPanelState,
+        editorLayout: undefined,
+        viewerLayout: undefined,
+        viewSettings: {},
       };
     }),
 
@@ -269,6 +318,15 @@ export const editorMachine = setup({
       });
     }),
 
+    revealFileInTree: enqueueActions(({ enqueue, event }) => {
+      assertEvent(event, 'revealFileInTree');
+
+      enqueue.emit({
+        type: 'fileRevealRequested' as const,
+        path: event.path,
+      });
+    }),
+
     closeAll: enqueueActions(({ enqueue }) => {
       enqueue.assign({
         openFiles: [],
@@ -350,6 +408,53 @@ export const editorMachine = setup({
     }),
 
     // ============================================================================
+    // Dockview layout operations
+    // ============================================================================
+    setEditorLayoutInContext: assign(({ event }) => {
+      assertEvent(event, 'setEditorLayout');
+      return { editorLayout: event.layout };
+    }),
+
+    setViewerLayoutInContext: assign(({ event }) => {
+      assertEvent(event, 'setViewerLayout');
+      return { viewerLayout: event.layout };
+    }),
+
+    // ============================================================================
+    // View settings operations
+    // ============================================================================
+    setViewSettingsInContext: assign(({ event, context }) => {
+      assertEvent(event, 'setViewSettings');
+      return {
+        viewSettings: { ...context.viewSettings, [event.viewId]: event.viewState },
+      };
+    }),
+
+    updateViewSettingsInContext: assign(({ event, context }) => {
+      assertEvent(event, 'updateViewSettings');
+      const existing = context.viewSettings[event.viewId];
+      if (!existing) {
+        return {};
+      }
+
+      return {
+        viewSettings: {
+          ...context.viewSettings,
+          [event.viewId]: {
+            ...existing,
+            graphicsSettings: { ...existing.graphicsSettings, ...event.settings },
+          },
+        },
+      };
+    }),
+
+    removeViewSettingsInContext: assign(({ event, context }) => {
+      assertEvent(event, 'removeViewSettings');
+      const { [event.viewId]: _, ...rest } = context.viewSettings;
+      return { viewSettings: rest };
+    }),
+
+    // ============================================================================
     // Persistence tracking
     // ============================================================================
     setPendingChanges: assign({ hasPendingChanges: true }),
@@ -376,6 +481,9 @@ export const editorMachine = setup({
       activeFilePath: undefined,
       lastChatId: undefined,
       panelState: defaultPanelState,
+      editorLayout: undefined,
+      viewerLayout: undefined,
+      viewSettings: {},
       isLoading: false,
       error: undefined,
       hasPendingChanges: false,
@@ -436,6 +544,9 @@ export const editorMachine = setup({
             setActiveFile: {
               actions: 'setActiveFile',
             },
+            revealFileInTree: {
+              actions: 'revealFileInTree',
+            },
             renameFile: {
               actions: 'renameFile',
             },
@@ -449,6 +560,23 @@ export const editorMachine = setup({
             // Panel operations
             setPanelState: {
               actions: 'setPanelStateInContext',
+            },
+            // Dockview layout operations
+            setEditorLayout: {
+              actions: 'setEditorLayoutInContext',
+            },
+            setViewerLayout: {
+              actions: 'setViewerLayoutInContext',
+            },
+            // View settings operations
+            setViewSettings: {
+              actions: 'setViewSettingsInContext',
+            },
+            updateViewSettings: {
+              actions: 'updateViewSettingsInContext',
+            },
+            removeViewSettings: {
+              actions: 'removeViewSettingsInContext',
             },
             // Reload
             reload: {
@@ -468,6 +596,11 @@ export const editorMachine = setup({
                 renameFile: { target: 'pending' },
                 setLastChatId: { target: 'pending' },
                 setPanelState: { target: 'pending' },
+                setEditorLayout: { target: 'pending' },
+                setViewerLayout: { target: 'pending' },
+                setViewSettings: { target: 'pending' },
+                updateViewSettings: { target: 'pending' },
+                removeViewSettings: { target: 'pending' },
               },
             },
             pending: {
@@ -481,6 +614,13 @@ export const editorMachine = setup({
                 renameFile: { target: 'pending', reenter: true },
                 setLastChatId: { target: 'pending', reenter: true },
                 setPanelState: { target: 'pending', reenter: true },
+                setEditorLayout: { target: 'pending', reenter: true },
+                setViewerLayout: { target: 'pending', reenter: true },
+                setViewSettings: { target: 'pending', reenter: true },
+                updateViewSettings: { target: 'pending', reenter: true },
+                removeViewSettings: { target: 'pending', reenter: true },
+                // Immediately bypass debounce and write
+                flushNow: { target: 'writing' },
               },
             },
             writing: {
@@ -494,6 +634,9 @@ export const editorMachine = setup({
                       activeFilePath: context.activeFilePath,
                       lastChatId: context.lastChatId,
                       panelState: context.panelState,
+                      editorLayout: context.editorLayout,
+                      viewerLayout: context.viewerLayout,
+                      viewSettings: context.viewSettings,
                     },
                   };
                 },
@@ -515,6 +658,11 @@ export const editorMachine = setup({
                 renameFile: { actions: 'setPendingChanges' },
                 setLastChatId: { actions: 'setPendingChanges' },
                 setPanelState: { actions: 'setPendingChanges' },
+                setEditorLayout: { actions: 'setPendingChanges' },
+                setViewerLayout: { actions: 'setPendingChanges' },
+                setViewSettings: { actions: 'setPendingChanges' },
+                updateViewSettings: { actions: 'setPendingChanges' },
+                removeViewSettings: { actions: 'setPendingChanges' },
               },
             },
           },

@@ -86,6 +86,125 @@ describe('formatNumberEngineeringNotation', () => {
     });
   });
 
+  describe('engineering notation (small values)', () => {
+    describe('with 3 digits', () => {
+      it('should format 0.001 as 1e-3', () => {
+        expect(formatNumberEngineeringNotation(0.001, 3)).toBe('1e-3');
+      });
+
+      it('should format 0.005 as 5e-3', () => {
+        expect(formatNumberEngineeringNotation(0.005, 3)).toBe('5e-3');
+      });
+
+      it('should format 0.0056 as 5.6e-3', () => {
+        expect(formatNumberEngineeringNotation(0.0056, 3)).toBe('5.6e-3');
+      });
+
+      it('should format 0.0001 as 100e-6', () => {
+        expect(formatNumberEngineeringNotation(0.0001, 3)).toBe('100e-6');
+      });
+
+      it('should format 0.00001 as 10e-6', () => {
+        expect(formatNumberEngineeringNotation(0.000_01, 3)).toBe('10e-6');
+      });
+
+      it('should format 0.000001 as 1e-6', () => {
+        expect(formatNumberEngineeringNotation(0.000_001, 3)).toBe('1e-6');
+      });
+
+      it('should format 0.0000001 as 100e-9', () => {
+        expect(formatNumberEngineeringNotation(0.000_000_1, 3)).toBe('100e-9');
+      });
+
+      it('should format 0.000_005_6 as 5.6e-6', () => {
+        expect(formatNumberEngineeringNotation(0.000_005_6, 3)).toBe('5.6e-6');
+      });
+    });
+
+    describe('with 1 digit', () => {
+      it('should format 0.1 as 100e-3', () => {
+        expect(formatNumberEngineeringNotation(0.1, 1)).toBe('100e-3');
+      });
+
+      it('should format 0.001 as 1e-3', () => {
+        expect(formatNumberEngineeringNotation(0.001, 1)).toBe('1e-3');
+      });
+
+      it('should format 0.005 as 5e-3', () => {
+        expect(formatNumberEngineeringNotation(0.005, 1)).toBe('5e-3');
+      });
+
+      it('should format 0.0056 as 6e-3', () => {
+        expect(formatNumberEngineeringNotation(0.0056, 1)).toBe('6e-3');
+      });
+    });
+
+    describe('with 5 digits', () => {
+      it('should format 0.00001 as 10e-6', () => {
+        expect(formatNumberEngineeringNotation(0.000_01, 5)).toBe('10e-6');
+      });
+
+      it('should format 0.00001234 as 12.34e-6', () => {
+        expect(formatNumberEngineeringNotation(0.000_012_34, 5)).toBe('12.34e-6');
+      });
+
+      it('should format 0.000001234 as 1.234e-6', () => {
+        expect(formatNumberEngineeringNotation(0.000_001_234, 5)).toBe('1.234e-6');
+      });
+
+      it('should format values above threshold normally', () => {
+        expect(formatNumberEngineeringNotation(0.001_234, 5)).toBe('0.0012');
+        expect(formatNumberEngineeringNotation(0.000_123_4, 5)).toBe('0.0001');
+      });
+    });
+
+    describe('boundary between normal and engineering notation', () => {
+      it('should format 0.01 normally with 3 digits', () => {
+        expect(formatNumberEngineeringNotation(0.01, 3)).toBe('0.01');
+      });
+
+      it('should format 0.1 normally with 3 digits', () => {
+        expect(formatNumberEngineeringNotation(0.1, 3)).toBe('0.1');
+      });
+
+      it('should format 0.5 normally with 3 digits', () => {
+        expect(formatNumberEngineeringNotation(0.5, 3)).toBe('0.5');
+      });
+
+      it('should format 0.99 normally with 3 digits', () => {
+        expect(formatNumberEngineeringNotation(0.99, 3)).toBe('0.99');
+      });
+
+      it('should not return "0" for any non-zero small value', () => {
+        const smallValues = [0.001, 0.0001, 0.000_01, 0.000_001, 0.000_000_1];
+        for (const smallValue of smallValues) {
+          expect(formatNumberEngineeringNotation(smallValue, 3)).not.toBe('0');
+        }
+      });
+    });
+
+    describe('exponent multiples of 3 (negative)', () => {
+      it('should use e-3 for thousandths', () => {
+        expect(formatNumberEngineeringNotation(0.005, 3)).toBe('5e-3');
+      });
+
+      it('should use e-6 for millionths', () => {
+        expect(formatNumberEngineeringNotation(0.000_005, 3)).toBe('5e-6');
+      });
+
+      it('should use e-9 for billionths', () => {
+        expect(formatNumberEngineeringNotation(0.000_000_005, 3)).toBe('5e-9');
+      });
+
+      it('should not use e-4 or e-5 (should jump from e-3 to e-6)', () => {
+        const result = formatNumberEngineeringNotation(0.000_05, 3);
+        expect(result).toBe('50e-6');
+        expect(result).not.toContain('e-4');
+        expect(result).not.toContain('e-5');
+      });
+    });
+  });
+
   describe('engineering notation (values >= 1000)', () => {
     describe('with 3 digits', () => {
       it('should format 1000 as 1e3', () => {

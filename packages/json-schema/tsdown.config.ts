@@ -8,12 +8,14 @@ const baseConfig: Options = {
   dts: true,
   minify: true,
   tsconfig: 'tsconfig.build.json',
+  unbundle: true,
 };
 
 const cjsConfig: Options = {
   ...baseConfig,
   format: 'cjs',
   outDir: 'dist/cjs',
+  dts: false,
 };
 
 const esmConfig: Options = {

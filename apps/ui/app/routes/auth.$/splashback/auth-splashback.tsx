@@ -2,18 +2,36 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMachine, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
+import type { KernelConfig, MiddlewareConfig } from '@taucad/types';
+import { createDefaultConfig } from '@taucad/kernels';
 import { authSplashbackMachine, timing as machineTiming } from '#routes/auth.$/splashback/auth-splashback.machine.js';
 import { UnifiedSplashbackViewer } from '#routes/auth.$/splashback/unified-splashback-viewer.js';
 import type { SplashbackPhase } from '#routes/auth.$/splashback/unified-splashback-viewer.js';
 import { useSampledPoints } from '#routes/auth.$/splashback/use-sampled-points.js';
 import { Loader } from '#components/ui/loader.js';
-import { useCadFiles } from '#hooks/use-cad-files.js';
+import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import gearJscad from '#routes/auth.$/splashback/gear.jscad.js?raw';
 import {
   morphPointCount,
   assemblySplitRatio as defaultAssemblySplitRatio,
 } from '#routes/auth.$/splashback/auth-splashback.constants.js';
+
+const splashbackConfig = createDefaultConfig({
+  kernels: {
+    replicad: { enabled: false },
+    openscad: { enabled: false },
+    zoo: { enabled: false },
+    tau: { enabled: false },
+  },
+  middleware: {
+    gltfEdgeDetection: { enabled: false },
+  },
+});
+
+const jscadOnlyKernelConfig: KernelConfig = splashbackConfig.kernelConfig;
+
+const splashbackMiddlewareConfig: MiddlewareConfig = splashbackConfig.middlewareConfig;
 
 const prompt1Text = 'Create a gear with 12 teeth';
 const prompt2Text = 'Change it to 8 teeth';
@@ -493,18 +511,22 @@ function deriveCurrentPhase(flags: PhaseFlags): SplashbackPhase {
   return 'loading';
 }
 
-export function AuthSplashback(): React.JSX.Element {
-  const [state, send, actorRef] = useMachine(authSplashbackMachine);
+type AuthSplashbackSend = ReturnType<typeof useMachine<typeof authSplashbackMachine>>[1];
 
-  // Derive all visibility state from machine state
-  const derivedState = useSelector(actorRef, deriveVisibilityState);
+type AuthSplashbackContentProperties = {
+  readonly state: ReturnType<typeof authSplashbackMachine.transition>;
+  readonly send: AuthSplashbackSend;
+  readonly derivedState: DerivedState;
+};
+
+function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackContentProperties): React.JSX.Element {
+  const { geometries, status: cadStatus } = useCadPreview();
+
   const {
     showPrompt1,
     showPrompt2,
     showPrompt3,
     showLoading,
-    showGear8,
-    showAssembly,
     isFading,
     showContainer,
     isPrompt1Typing,
@@ -525,30 +547,23 @@ export function AuthSplashback(): React.JSX.Element {
     isPreparingMorph2,
     isMorphingToAssembly,
     isAssemblyWaitingForMesh,
+    showGear8,
+    showAssembly,
     currentPhase,
   } = derivedState;
 
-  // Event handlers
-  const handleTypingComplete = useCallback(() => {
-    send({ type: 'typingComplete' });
-  }, [send]);
+  const gear12Geometry = geometries[0];
+  const gear8Geometry = geometries[1];
 
-  const handleEnterComplete = useCallback(() => {
-    send({ type: 'enterComplete' });
-  }, [send]);
+  const { gear12Points, gear8Points, assemblyGear12Points, assemblyGear8Points, assemblySplitRatio } = useSampledPoints(
+    {
+      gear12Geometry,
+      gear8Geometry,
+      pointCount: morphPointCount,
+      assemblySplitRatio: defaultAssemblySplitRatio,
+    },
+  );
 
-  const handleInteraction = useCallback(() => {
-    send({ type: 'userInteraction' });
-  }, [send]);
-
-  // Memoize files to avoid recreating on every render
-  const gearFiles = useMemo(() => {
-    const mainFileName = 'main.js';
-    return { [mainFileName]: { content: encodeTextFile(gearJscad) } };
-  }, []);
-
-  // Determine the current tagline based on stage
-  // Include morph phases so tagline doesn't jump back during transitions
   const isMorphingToAssemblyPhase = isPreparingMorph2 || isMorphingToAssembly || isAssemblyWaitingForMesh;
   const isMorphingToGear8Phase = isPreparingMorph || isMorphingToGear8 || isGear8WaitingForMesh;
   const isAssemblyMode = showAssembly || isFading;
@@ -562,50 +577,34 @@ export function AuthSplashback(): React.JSX.Element {
         ? tagline1Text
         : tagline1Text;
 
-  // Use the useCadFiles hook to load both gears in a single build
-  // Returns [gear12, gear8] geometries
-  const { geometries, status: cadStatus } = useCadFiles({
-    buildId: 'auth-gears',
-    mainFile: 'main.js',
-    files: gearFiles,
-    parameters: {},
-    enabled: showContainer,
-  });
+  const handleTypingComplete = useCallback(() => {
+    send({ type: 'typingComplete' });
+  }, [send]);
 
-  // Extract individual geometries
-  const gear12Geometry = geometries[0];
-  const gear8Geometry = geometries[1];
+  const handleEnterComplete = useCallback(() => {
+    send({ type: 'enterComplete' });
+  }, [send]);
 
-  // Sample points from geometries for morphing animations
-  const { gear12Points, gear8Points, assemblyGear12Points, assemblyGear8Points, assemblySplitRatio } = useSampledPoints(
-    {
-      gear12Geometry,
-      gear8Geometry,
-      pointCount: morphPointCount,
-      assemblySplitRatio: defaultAssemblySplitRatio,
-    },
-  );
+  const handleInteraction = useCallback(() => {
+    send({ type: 'userInteraction' });
+  }, [send]);
 
-  // When preparing morph (gear12 -> gear8), check if both geometries are ready
   useEffect(() => {
     if (isPreparingMorph && gear12Points && gear8Points) {
       send({ type: 'geometriesReady' });
     }
   }, [isPreparingMorph, gear12Points, gear8Points, send]);
 
-  // When preparing morph2 (gear8 -> assembly), check if gear8Points and assembly points are ready
   useEffect(() => {
     if (isPreparingMorph2 && gear8Points && assemblyGear12Points && assemblyGear8Points) {
       send({ type: 'geometriesReady' });
     }
   }, [isPreparingMorph2, gear8Points, assemblyGear12Points, assemblyGear8Points, send]);
 
-  // Handle morph complete from UnifiedSplashbackViewer
   const handleMorphComplete = useCallback(() => {
     send({ type: 'morphComplete' });
   }, [send]);
 
-  // Handle crossfade complete from UnifiedSplashbackViewer
   const handleCrossfadeComplete = useCallback(
     (_finalRotationY: number) => {
       send({ type: 'gear8MeshReady' });
@@ -613,12 +612,10 @@ export function AuthSplashback(): React.JSX.Element {
     [send],
   );
 
-  // Handle morph2 complete from UnifiedSplashbackViewer (gear8 -> assembly)
   const handleMorph2Complete = useCallback(() => {
     send({ type: 'morph2Complete' });
   }, [send]);
 
-  // Handle phase transition complete (e.g., assembly crossfade)
   const handlePhaseTransitionComplete = useCallback(() => {
     if (isAssemblyWaitingForMesh) {
       send({ type: 'assemblyMeshReady' });
@@ -700,7 +697,7 @@ export function AuthSplashback(): React.JSX.Element {
           </AnimatePresence>
         </div>
 
-        {/* Visualization Container - always mounted, visibility controlled by CSS */}
+        {/* Visualization Container */}
         <motion.div
           className={`flex items-center justify-center overflow-hidden rounded-xl border bg-background/90 backdrop-blur-sm transition-opacity duration-400 ${
             showContainer ? 'opacity-100' : 'pointer-events-none opacity-0'
@@ -708,9 +705,7 @@ export function AuthSplashback(): React.JSX.Element {
           animate={{ opacity: isFading ? 0 : showContainer ? 1 : 0 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
         >
-          {/* 3D Object Area - explicit dimensions */}
           <div className="relative size-72 md:size-80 lg:size-128">
-            {/* Loading overlay - shows during initial CAD build */}
             <AnimatePresence>
               {showLoading || cadStatus === 'loading' ? (
                 <motion.div
@@ -726,7 +721,6 @@ export function AuthSplashback(): React.JSX.Element {
               ) : undefined}
             </AnimatePresence>
 
-            {/* Unified Splashback Viewer - single Canvas for all phases */}
             {showContainer && gear12Geometry && gear8Geometry ? (
               <UnifiedSplashbackViewer
                 phase={currentPhase}
@@ -749,7 +743,7 @@ export function AuthSplashback(): React.JSX.Element {
           </div>
         </motion.div>
 
-        {/* Tagline - animates between stages */}
+        {/* Tagline */}
         <div className="relative flex h-6 w-full items-center justify-center">
           <AnimatePresence mode="wait">
             {showContainer && !isFading ? (
@@ -768,5 +762,28 @@ export function AuthSplashback(): React.JSX.Element {
         </div>
       </motion.div>
     </div>
+  );
+}
+
+export function AuthSplashback(): React.JSX.Element {
+  const [state, send, actorRef] = useMachine(authSplashbackMachine);
+  const derivedState = useSelector(actorRef, deriveVisibilityState);
+
+  const gearFiles = useMemo(() => {
+    const mainFileName = 'main.js';
+    return { [mainFileName]: { content: encodeTextFile(gearJscad) } };
+  }, []);
+
+  return (
+    <CadPreviewProvider
+      buildId="auth-gears"
+      mainFile="main.js"
+      files={gearFiles}
+      isEnabled={derivedState.showContainer}
+      kernelConfig={jscadOnlyKernelConfig}
+      middlewareConfig={splashbackMiddlewareConfig}
+    >
+      <AuthSplashbackContent state={state} send={send} derivedState={derivedState} />
+    </CadPreviewProvider>
   );
 }

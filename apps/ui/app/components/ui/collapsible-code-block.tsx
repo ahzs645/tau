@@ -34,7 +34,6 @@ type CollapsibleContainerProps = {
 /**
  * A generic collapsible container that wraps any content with expand/collapse functionality.
  * Shows a toggle button when content exceeds the collapsed line count.
- * The toggle button is overlaid on top of the content with a gradient fade effect.
  */
 export function CollapsibleContainer({
   children,
@@ -47,32 +46,30 @@ export function CollapsibleContainer({
   const shouldShowToggle = lineCount > collapsedLineCount;
 
   return (
-    <div className={cn('relative leading-0', className)}>
-      {/* Scrollable content area - scrollbar hidden via webkit styling */}
+    <div className={cn('flex flex-col leading-0', className)}>
+      {/* Scrollable content area */}
       <div
         className={cn(
-          'w-full overflow-x-auto overflow-y-hidden',
-          shouldShowToggle && !isExpanded && collapsedMaxHeight,
+          'w-full overflow-x-auto',
+          shouldShowToggle && !isExpanded ? `${collapsedMaxHeight} overflow-y-hidden` : '',
         )}
       >
         {children}
       </div>
-      {/* Toggle button - overlaid at the bottom */}
+      {/* Toggle button - always in normal flow so it has its own space */}
       {shouldShowToggle ? (
-        <div className={cn('absolute inset-x-0 bottom-0', !isExpanded && 'pt-4')}>
-          <Button
-            size="xs"
-            aria-label={isExpanded ? 'Collapse code block' : 'Expand code block'}
-            aria-expanded={isExpanded}
-            className="h-4 w-full shrink-0 rounded-none bg-transparent text-center text-foreground/50 hover:bg-neutral/10"
-            onClick={() => {
-              setIsExpanded((previous) => !previous);
-            }}
-          >
-            <ChevronDown className={cn('transition-transform', isExpanded ? 'rotate-x-180' : '')} />
-          </Button>
-        </div>
-      ) : undefined}
+        <Button
+          size="xs"
+          aria-label={isExpanded ? 'Collapse code block' : 'Expand code block'}
+          aria-expanded={isExpanded}
+          className="h-4 w-full shrink-0 rounded-none bg-transparent text-center text-foreground/50 hover:bg-neutral/10"
+          onClick={() => {
+            setIsExpanded((previous) => !previous);
+          }}
+        >
+          <ChevronDown className={cn('transition-transform', isExpanded ? 'rotate-x-180' : '')} />
+        </Button>
+      ) : null}
     </div>
   );
 }

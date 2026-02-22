@@ -8,7 +8,7 @@ import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 
 export type ColorPickerValue = HslColor;
 
@@ -21,6 +21,7 @@ type ColorPickerProperties = {
   readonly isDisabled?: boolean;
   readonly className?: string;
   readonly hasTooltip?: boolean;
+  readonly popoverProperties?: React.ComponentProps<typeof PopoverContent>;
 };
 
 function ColorPicker({
@@ -32,6 +33,7 @@ function ColorPicker({
   isDisabled,
   className,
   hasTooltip = true,
+  popoverProperties,
 }: ColorPickerProperties): React.JSX.Element {
   const [open, setOpen] = useState(false);
 
@@ -39,10 +41,10 @@ function ColorPicker({
     onChange(newValue);
   };
 
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     {
       key: 'i',
-      metaKey: true,
+      modKey: true,
     },
     () => {
       setOpen((previous) => !previous);
@@ -75,7 +77,11 @@ function ColorPicker({
           {triggerContent}
         </PopoverTrigger>
       )}
-      <PopoverContent side="top" className="flex w-48 flex-col gap-2 p-2">
+      <PopoverContent
+        side="top"
+        {...popoverProperties}
+        className={cn('flex w-48 flex-col gap-2 p-2', popoverProperties?.className)}
+      >
         <span className="w-full items-center text-sm text-muted-foreground">Select hue ({value.h}°)</span>
         <div className="flex w-full flex-row gap-2">
           <Slider

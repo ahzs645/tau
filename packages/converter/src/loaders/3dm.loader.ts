@@ -22,6 +22,7 @@ import type {
   File3dmObject,
 } from 'rhino3dm';
 import rhino3dm from 'rhino3dm';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import { BaseLoader } from '#loaders/base.loader.js';
 import type { BaseLoaderOptions } from '#loaders/base.loader.js';
 import type { File } from '#types.js';
@@ -89,7 +90,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     );
 
     // Export to GLB
-    const glb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    const glb = await io.writeBinary(document);
     return glb;
   }
 
@@ -441,7 +442,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       .setAttribute('COLOR_0', colorAccessor);
 
     // Create basic material for points
-    const material = document.createMaterial().setBaseColorFactor([1, 1, 1, 1]);
+    const material = document.createMaterial().setBaseColorFactor([1, 1, 1, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
     // Create mesh and node
@@ -490,10 +491,10 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       const colorAccessor = document.createAccessor().setArray(colors).setType('VEC3').setBuffer(buffer);
       primitive.setAttribute('COLOR_0', colorAccessor);
 
-      material = document.createMaterial().setBaseColorFactor([1, 1, 1, 1]);
+      material = document.createMaterial().setBaseColorFactor([1, 1, 1, 1]).setDoubleSided(true);
     } else {
       const color = this.extractColor(attributes, doc);
-      material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]);
+      material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     }
 
     primitive.setMaterial(material);
@@ -544,7 +545,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
     // Create material with color
     const color = this.extractColor(attributes, doc);
-    const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]);
+    const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
     // Create mesh and node
@@ -586,7 +587,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
     // Create material with color
     const color = this.extractColor(attributes, doc);
-    const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]);
+    const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
     // Create mesh and node
@@ -632,7 +633,8 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     const lightColor = geometry.diffuse as { r: number; g: number; b: number };
     const material = document
       .createMaterial()
-      .setBaseColorFactor([lightColor.r / 255, lightColor.g / 255, lightColor.b / 255, 1]);
+      .setBaseColorFactor([lightColor.r / 255, lightColor.g / 255, lightColor.b / 255, 1])
+      .setDoubleSided(true);
     primitive.setMaterial(material);
 
     // Create mesh and node
@@ -782,8 +784,9 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     return document
       .createMaterial()
       .setBaseColorFactor([color.r, color.g, color.b, 1])
-      .setMetallicFactor(0.1)
-      .setRoughnessFactor(0.8);
+      .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+      .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
+      .setDoubleSided(true);
   }
 
   /**
@@ -805,7 +808,8 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       .createMaterial()
       .setBaseColorFactor([diffuseColor.r / 255, diffuseColor.g / 255, diffuseColor.b / 255, 1])
       .setMetallicFactor(0.1)
-      .setRoughnessFactor(1 - rhinoMaterial.shine / 255); // Convert shine to roughness
+      .setRoughnessFactor(1 - rhinoMaterial.shine / 255) // Convert shine to roughness
+      .setDoubleSided(true);
 
     if (rhinoMaterial.transparency > 0) {
       material.setAlphaMode('BLEND');
@@ -830,7 +834,8 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       .createMaterial()
       .setBaseColorFactor([baseColor.r / 255, baseColor.g / 255, baseColor.b / 255, pbrMaterial.opacity])
       .setMetallicFactor(pbrMaterial.metallic)
-      .setRoughnessFactor(pbrMaterial.roughness);
+      .setRoughnessFactor(pbrMaterial.roughness)
+      .setDoubleSided(true);
 
     if (pbrMaterial.opacity < 1) {
       material.setAlphaMode('BLEND');

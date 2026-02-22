@@ -11,6 +11,7 @@ export type LogLevel = (typeof logLevels)[keyof typeof logLevels];
 export type LogOrigin = {
   component?: string;
   operation?: string;
+  file?: string;
 };
 
 /**

@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useSelector } from '@xstate/react';
-import { fromPromise } from 'xstate';
 import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { exportFromGlb } from '@taucad/converter';
 import type { OutputFormat } from '@taucad/converter';
-import type { Build } from '@taucad/types';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
-import { BuildProvider, useBuild } from '#hooks/use-build.js';
-import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
+import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
+import { CadPreviewViewer, CadPreviewStatus } from '#components/cad-preview.js';
 import { Button } from '#components/ui/button.js';
-import { cn } from '#utils/ui.utils.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { toast } from '#components/ui/sonner.js';
@@ -22,55 +18,7 @@ import { encodeTextFile } from '#utils/filesystem.utils.js';
 import { Loader } from '#components/ui/loader.js';
 
 const heroBuildId = 'hero-qrcode-v2';
-
-type Files = Record<string, { content: Uint8Array<ArrayBuffer> }>;
-type HeroBuild = Build & { files: Files };
-
-function createHeroBuild(fileContent: Uint8Array<ArrayBuffer>): HeroBuild {
-  const mainFile = 'main.scad';
-  return {
-    id: heroBuildId,
-    assets: {
-      mechanical: {
-        main: mainFile,
-        parameters: {},
-      },
-    },
-    name: 'QR Code Generator',
-    description: 'A parametric QR code generator built with OpenSCAD',
-    author: {
-      name: 'Community',
-      avatar: '/avatar-sample.png',
-    },
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    tags: ['openscad', 'parametric', 'qr-code'],
-    thumbnail: '/tau-desktop.jpg',
-    files: { [mainFile]: { content: fileContent } },
-  };
-}
-
-function ViewerStatus({ className, ...properties }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { cadRef } = useBuild();
-  const state = useSelector(cadRef, (snapshot) => snapshot.value);
-
-  return ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
-    <div
-      {...properties}
-      className={cn(
-        'absolute right-2 bottom-2 z-10 flex items-center gap-2 rounded-md border bg-background/70 px-2 py-1 backdrop-blur-sm',
-        className,
-      )}
-    >
-      <span className="font-mono text-sm text-muted-foreground capitalize">{state}...</span>
-      <Loader className="size-4" />
-    </div>
-  ) : null;
-}
-
-type HeroViewerContentProperties = {
-  readonly files: Files;
-};
+const heroMainFile = 'main.scad';
 
 type ExportFormatOption = {
   format: OutputFormat;
@@ -88,27 +36,17 @@ const exportFormatOptions: ExportFormatOption[] = [
   { format: 'ply', label: 'PLY' },
 ];
 
-function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.Element {
+function HeroViewerInner(): React.JSX.Element {
   const navigate = useNavigate();
-  const { cadRef, buildRef, graphicsRef } = useBuild();
-  // Use the root FileManagerProvider (same pattern as project-grid.tsx)
-  const { writeFiles } = useFileManager();
+  const { geometries, cadRef, graphicsRef, defaultParameters, jsonSchema, setParameters } = useCadPreview();
+  const parameters = useSelector(cadRef, (snapshot) => snapshot.context.parameters);
+  const units = useSelector(graphicsRef, (state) => state.context.units);
+  const hasParameters = Boolean(jsonSchema);
   const buildManager = useBuildManager();
 
-  const [hasLoadedModel, setHasLoadedModel] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<ExportFormatOption>(exportFormatOptions[0]!);
   const [isCreatingBuild, setIsCreatingBuild] = useState(false);
-  const hasWrittenFilesRef = useRef(false);
 
-  const geometries = useSelector(cadRef, (snapshot) => snapshot.context.geometries);
-  const parameters = useSelector(cadRef, (snapshot) => snapshot.context.parameters);
-  const defaultParameters = useSelector(cadRef, (snapshot) => snapshot.context.defaultParameters);
-  const units = useSelector(graphicsRef, (snapshot) => snapshot.context.units);
-  const jsonSchema = useSelector(cadRef, (snapshot) => snapshot.context.jsonSchema);
-  const hasParameters = useSelector(cadRef, (snapshot) => Boolean(snapshot.context.jsonSchema));
-  const cadStatus = useSelector(cadRef, (snapshot) => snapshot.value);
-
-  // Get GLB data from geometries (same pattern as chat-converter.tsx)
   const getGlbData = useCallback((): Uint8Array<ArrayBuffer> => {
     const gltfGeometry = geometries.find((g) => g.format === 'gltf');
     if (!gltfGeometry) {
@@ -118,35 +56,11 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
     return gltfGeometry.content;
   }, [geometries]);
 
-  // Write files and load model on mount (matching project-grid.tsx pattern exactly)
-  useEffect(() => {
-    async function initializeAndLoadModel(): Promise<void> {
-      // Write files to filesystem on first load (matching project-grid.tsx path format)
-      if (!hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-        for (const [path, file] of Object.entries(files)) {
-          buildFiles[`/builds/${heroBuildId}/${path}`] = file;
-        }
-
-        await writeFiles(buildFiles);
-        hasWrittenFilesRef.current = true;
-      }
-
-      // Load the CAD model after files are written
-      if (!hasLoadedModel) {
-        buildRef.send({ type: 'loadModel' });
-        setHasLoadedModel(true);
-      }
-    }
-
-    void initializeAndLoadModel();
-  }, [files, writeFiles, buildRef, hasLoadedModel]);
-
   const handleParametersChange = useCallback(
     (newParameters: Record<string, unknown>) => {
-      cadRef.send({ type: 'setParameters', parameters: newParameters });
+      setParameters(newParameters);
     },
-    [cadRef],
+    [setParameters],
   );
 
   const handleExport = useCallback(() => {
@@ -196,7 +110,6 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
     setIsCreatingBuild(true);
 
     try {
-      // Get the current parameters from the CAD context
       const currentParameters = cadRef.getSnapshot().context.parameters;
 
       const createdBuild = await buildManager.createBuild({
@@ -211,25 +124,23 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
           tags: ['openscad', 'parametric', 'qr-code'],
           assets: {
             mechanical: {
-              main: 'main.scad',
+              main: heroMainFile,
               parameters: currentParameters,
             },
           },
           forkedFrom: heroBuildId,
         },
-        files,
+        files: { [heroMainFile]: { content: encodeTextFile(qrcodeScad) } },
       });
 
-      // Navigate to the new build
       await navigate(`/builds/${createdBuild.id}`);
     } catch (error: unknown) {
       console.error('Failed to create build:', error);
       toast.error('Failed to create build');
       setIsCreatingBuild(false);
     }
-  }, [isCreatingBuild, cadRef, buildManager, files, navigate]);
+  }, [isCreatingBuild, cadRef, buildManager, navigate]);
 
-  const isLoading = ['initializing', 'booting'].includes(cadStatus);
   const canExport = geometries.length > 0;
 
   return (
@@ -246,9 +157,9 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
       <div className="flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row">
         {/* 3D Viewer */}
         <div className="relative h-[300px] md:h-full md:flex-1">
-          <ViewerStatus />
+          <CadPreviewStatus className="top-auto right-4 bottom-4" />
 
-          {/* Continue in Editor Button - Top Right overlay */}
+          {/* Continue in Editor Button */}
           <Button
             variant="outline"
             size="sm"
@@ -260,28 +171,15 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
             {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
           </Button>
 
-          {isLoading ? (
-            <div className="flex size-full items-center justify-center">
-              <Loader className="size-16" />
-            </div>
-          ) : geometries.length > 0 ? (
-            <CadViewer
-              enableGrid
-              enableAxes
-              geometries={geometries}
-              className="size-full"
-              stageOptions={{
-                zoomLevel: 1.2,
-              }}
-            />
-          ) : (
-            <div className="flex size-full items-center justify-center">
-              <Loader className="size-16" />
-            </div>
-          )}
+          <CadPreviewViewer
+            enablePan
+            className="size-full"
+            stageOptions={{ zoomLevel: 1.2 }}
+            graphicsOptions={{ enableGrid: true, enableAxes: true }}
+          />
         </div>
 
-        {/* Parameters Panel - Below on mobile, side on desktop */}
+        {/* Parameters Panel */}
         {hasParameters ? (
           <div className="border-t bg-background md:w-80 md:border-t-0 md:border-l">
             <div className="flex h-full flex-col">
@@ -316,11 +214,13 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
                     defaultValue={selectedFormat}
                     getValue={(item) => item.format}
                     renderLabel={(item, selected) => (
-                      <div className="flex items-center gap-2">
-                        <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
-                        <span>{item.label}</span>
-                        {selected?.format === item.format ? <Check className="ml-auto size-4" /> : null}
-                      </div>
+                      <span className="flex w-full items-center justify-between">
+                        <span className="flex items-center gap-2">
+                          <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
+                          <span>{item.label}</span>
+                        </span>
+                        {selected?.format === item.format ? <Check className="size-4" /> : null}
+                      </span>
                     )}
                     className="min-w-0 flex-1"
                     isSearchEnabled={false}
@@ -352,23 +252,11 @@ function HeroViewerContent({ files }: HeroViewerContentProperties): React.JSX.El
 }
 
 export function HeroViewer(): React.JSX.Element {
-  // Create the build data synchronously since we import the file directly
-  const heroBuild = useMemo(() => createHeroBuild(encodeTextFile(qrcodeScad)), []);
+  const heroFiles = useMemo(() => ({ [heroMainFile]: { content: encodeTextFile(qrcodeScad) } }), []);
 
   return (
-    <BuildProvider
-      buildId={heroBuildId}
-      input={{ shouldLoadModelOnStart: false }}
-      provide={{
-        actors: {
-          loadBuildActor: fromPromise(async () => {
-            const { files, ...rest } = heroBuild;
-            return rest;
-          }),
-        },
-      }}
-    >
-      <HeroViewerContent files={heroBuild.files} />
-    </BuildProvider>
+    <CadPreviewProvider buildId={heroBuildId} mainFile={heroMainFile} files={heroFiles}>
+      <HeroViewerInner />
+    </CadPreviewProvider>
   );
 }

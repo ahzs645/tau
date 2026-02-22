@@ -1,16 +1,13 @@
-import React, { useMemo, useCallback } from 'react';
+import React from 'react';
 import type { ReactNode } from 'react';
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import { PerspectiveCamera } from '@react-three/drei';
-import { useSelector } from '@xstate/react';
-import { useFrame } from '@react-three/fiber';
-import { AxesHelper } from '#components/geometry/graphics/three/react/axes-helper.js';
-import { Grid } from '#components/geometry/graphics/three/grid.js';
-import { useCameraReset } from '#components/geometry/graphics/three/use-camera-reset.js';
 import { Lights } from '#components/geometry/graphics/three/react/lights.js';
 import { SectionView } from '#components/geometry/graphics/three/react/section-view.js';
-import { createStripedMaterial } from '#components/geometry/graphics/three/materials/striped-material.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useSectionView } from '#components/geometry/graphics/three/use-section-view.js';
+import { useGeometryBounds } from '#components/geometry/graphics/three/use-geometry-bounds.js';
+import { useCameraFraming } from '#components/geometry/graphics/three/use-camera-framing.js';
+import { useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export type StageOptions = {
   /**
@@ -46,11 +43,9 @@ export type StageOptions = {
   };
 };
 
-const significantRadiusChangeRatio = 0.1;
-
 // Default configuration constants
 export const defaultStageOptions = {
-  offsetRatio: 3,
+  offsetRatio: 2,
   nearPlane: 1e-3,
   minimumFarPlane: 10_000_000_000,
   farPlaneRadiusMultiplier: 5,
@@ -65,8 +60,6 @@ type StageProperties = {
   readonly children: ReactNode;
   readonly enableCentering?: boolean;
   readonly stageOptions?: StageOptions;
-  readonly enableGrid?: boolean;
-  readonly enableAxes?: boolean;
 } & Omit<React.HTMLAttributes<HTMLDivElement>, 'id'>;
 
 export function Stage({
@@ -77,186 +70,40 @@ export function Stage({
 }: StageProperties): React.JSX.Element {
   const outer = React.useRef<THREE.Group>(null);
   const inner = React.useRef<THREE.Group>(null);
-  const { graphicsRef: graphicsActor } = useBuild();
 
-  const cameraFovAngle = useSelector(graphicsActor, (state) => state.context.cameraFovAngle);
+  const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const environmentPreset = useGraphicsSelector((state) => state.context.environmentPreset);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
 
-  const isSectionViewActive = useSelector(graphicsActor, (state) => state.context.isSectionViewActive);
-  const selectedSectionViewId = useSelector(graphicsActor, (state) => state.context.selectedSectionViewId);
-  // Translation is derived from pivot for display; Stage uses pivot directly
-  const sectionViewRotation = useSelector(graphicsActor, (state) => state.context.sectionViewRotation);
-  const sectionViewDirection = useSelector(graphicsActor, (state) => state.context.sectionViewDirection);
-  const sectionViewPivot = useSelector(graphicsActor, (state) => state.context.sectionViewPivot);
-  const availableSectionViews = useSelector(graphicsActor, (state) => state.context.availableSectionViews);
-  const enableClippingLines = useSelector(graphicsActor, (state) => state.context.enableClippingLines);
-  const enableClippingMesh = useSelector(graphicsActor, (state) => state.context.enableClippingMesh);
-  const gridSizesComputed = useSelector(graphicsActor, (state) => state.context.gridSizesComputed);
+  // Section view (clipping plane + capping material)
+  const sectionView = useSectionView();
 
-  // Build THREE.Plane for the SectionView component
-  const sectionView = useMemo(() => {
-    if (!selectedSectionViewId) {
-      // Default plane when nothing is selected
-      return new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-    }
+  // Geometry bounds tracking (per-frame bounding sphere + optional centering)
+  const { geometryRadius, geometryCenter } = useGeometryBounds(inner, outer, { enableCentering });
 
-    const selectedPlane = availableSectionViews.find((plane) => plane.id === selectedSectionViewId);
-    if (!selectedPlane) {
-      return new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-    }
-
-    // Start with the base normal from the selected plane
-    const normal = new THREE.Vector3(...selectedPlane.normal);
-
-    // Apply rotation to the normal if rotation is set
-    const [rotX, rotY, rotZ] = sectionViewRotation;
-    if (rotX !== 0 || rotY !== 0 || rotZ !== 0) {
-      const euler = new THREE.Euler(rotX, rotY, rotZ);
-      normal.applyEuler(euler);
-    }
-
-    // Apply direction after rotation
-    normal.multiplyScalar(-sectionViewDirection);
-
-    // Compute plane constant from the world-space pivot point: n·p + c = 0
-    // => c = -n·p. Using pivot as source of truth ensures the plane remains
-    // anchored during rotations and flips while keeping display translation stable.
-    const constant = -normal.dot(new THREE.Vector3(...sectionViewPivot));
-
-    return new THREE.Plane(normal, constant);
-  }, [selectedSectionViewId, sectionViewPivot, sectionViewRotation, sectionViewDirection, availableSectionViews]);
-
-  // Create striped material for capping surface
-  const cappingMaterial = useMemo(() => {
-    // Use a larger multiplier (5x largeSize) to reduce visual noise from dense stripes
-    const stripeSpacing = gridSizesComputed.largeSize * 0.1;
-    // Width should be proportional to spacing for good visibility (10% of spacing)
-    const stripeWidth = stripeSpacing * 0.2;
-
-    return createStripedMaterial({
-      stripeFrequency: stripeSpacing,
-      stripeWidth,
-    });
-  }, [gridSizesComputed.largeSize]);
-
-  // State for camera reset functionality
-  const originalDistanceReference = React.useRef<number | undefined>(undefined);
-  const isInitialResetDoneRef = React.useRef<boolean>(false);
-
-  const [{ geometryRadius, sceneRadius }, set] = React.useState<{
-    // The radius of the scene. Used to determine if the camera needs to be updated
-    sceneRadius: number | undefined;
-    // The radius of the geometry.
-    geometryRadius: number;
-  }>({
-    sceneRadius: undefined,
-    geometryRadius: 0,
-  });
-
-  const { offsetRatio, nearPlane, minimumFarPlane, farPlaneRadiusMultiplier, zoomLevel, rotation } = useMemo(() => {
-    return {
-      ...defaultStageOptions,
-      ...stageOptions,
-      rotation: { ...defaultStageOptions.rotation, ...stageOptions.rotation },
-    };
-  }, [stageOptions]);
-
-  // Function to set scene radius
-  const setSceneRadius = useCallback((radius: number) => {
-    set((previous) => ({
-      ...previous,
-      sceneRadius: radius,
-    }));
-  }, []);
-
-  // Use the camera reset hook
-  const resetCamera = useCameraReset({
-    geometryRadius,
-    rotation: {
-      side: rotation.side,
-      vertical: rotation.vertical,
-    },
-    perspective: {
-      offsetRatio,
-      zoomLevel,
-      nearPlane,
-      minimumFarPlane,
-      farPlaneRadiusMultiplier,
-    },
-    setSceneRadius,
-    originalDistanceReference,
-    cameraFovAngle,
-  });
-
-  /**
-   * Position the scene.
-   */
-  // TODO: implement a solution that doesn't require hooking into the frame loop.
-  useFrame(() => {
-    if (outer.current) {
-      outer.current.updateWorldMatrix(true, true);
-    }
-
-    if (!inner.current) {
-      return;
-    }
-
-    const box3 = new THREE.Box3().setFromObject(inner.current);
-
-    if (enableCentering) {
-      const centerPoint = new THREE.Vector3();
-      box3.getCenter(centerPoint);
-      if (outer.current) {
-        outer.current.position.set(
-          outer.current.position.x - centerPoint.x,
-          outer.current.position.y - centerPoint.y,
-          outer.current.position.z - centerPoint.z,
-        );
-      }
-    }
-
-    const sphere = new THREE.Sphere();
-    box3.getBoundingSphere(sphere);
-    set((previous) => {
-      return { geometryRadius: sphere.radius, sceneRadius: previous.sceneRadius };
-    });
-  });
-
-  /**
-   * Position the camera based on the scene's bounding box.
-   */
-  React.useLayoutEffect(() => {
-    // If the scene radius is undefined, we need to initialize the camera, so we default to true.
-    // Force update when camera type changes
-    const changeRatio = sceneRadius === undefined ? 0 : Math.abs((geometryRadius - sceneRadius) / sceneRadius);
-    const isSignificantChange = sceneRadius === undefined ? true : changeRatio > significantRadiusChangeRatio;
-
-    if (isSignificantChange) {
-      if (isInitialResetDoneRef.current) {
-        resetCamera({ enableConfiguredAngles: false }); // Subsequent resets without XY rotation
-      } else {
-        resetCamera(); // Initial reset with rotation
-        isInitialResetDoneRef.current = true;
-      }
-    }
-  }, [resetCamera, sceneRadius, geometryRadius]);
+  // Camera framing policy (auto-reset on significant geometry changes)
+  useCameraFraming(geometryRadius, geometryCenter, stageOptions);
 
   return (
     <group {...properties}>
       <PerspectiveCamera makeDefault />
       <group ref={outer}>
-        {properties.enableAxes ? <AxesHelper /> : null}
-        {properties.enableGrid ? <Grid /> : null}
         <SectionView
-          plane={sectionView}
-          enableSection={Boolean(isSectionViewActive && selectedSectionViewId)}
-          enableLines={enableClippingLines}
-          enableMesh={enableClippingMesh}
-          cappingMaterial={cappingMaterial}
+          plane={sectionView.plane}
+          enableSection={sectionView.isActive}
+          enableLines={sectionView.enableLines}
+          enableMesh={sectionView.enableMesh}
+          cappingMaterial={sectionView.cappingMaterial}
         >
           <group ref={inner}>{children}</group>
         </SectionView>
       </group>
-      <Lights />
+      <Lights
+        enableMatcap={enableMatcap}
+        environmentPreset={environmentPreset}
+        sceneRadius={geometryRadius}
+        upDirection={upDirection}
+      />
     </group>
   );
 }

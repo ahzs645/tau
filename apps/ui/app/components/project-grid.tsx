@@ -1,19 +1,16 @@
 import { Eye, ArrowRight } from 'lucide-react';
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { useSelector } from '@xstate/react';
 import { kernelConfigurations } from '@taucad/types/constants';
-import { fromPromise } from 'xstate';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
 import { Avatar, AvatarFallback, AvatarImage } from '#components/ui/avatar.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardFooter } from '#components/ui/card.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Loader } from '#components/ui/loader.js';
-import { BuildProvider, useBuild } from '#hooks/use-build.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { useFileManager } from '#hooks/use-file-manager.js';
+import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
+import { CadPreviewViewer } from '#components/cad-preview.js';
 import type { BuildWithFiles } from '#constants/build-examples.js';
 
 type CommunityBuildCardProperties = BuildWithFiles;
@@ -22,7 +19,6 @@ export type CommunityBuildGridProperties = {
   readonly builds: BuildWithFiles[];
   readonly hasMore?: boolean;
   readonly onLoadMore?: () => void;
-  /** Maximum number of builds to display. If not provided, all builds are shown. */
   readonly limit?: number;
 };
 
@@ -38,21 +34,7 @@ export function CommunityBuildGrid({
     <>
       <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {displayedBuilds.map((build) => (
-          <BuildProvider
-            key={build.id}
-            buildId={build.id}
-            input={{ shouldLoadModelOnStart: false }}
-            provide={{
-              actors: {
-                loadBuildActor: fromPromise(async () => {
-                  const { files, ...rest } = build;
-                  return rest;
-                }),
-              },
-            }}
-          >
-            <ProjectCard {...build} />
-          </BuildProvider>
+          <ProjectCard key={build.id} {...build} />
         ))}
       </div>
 
@@ -67,35 +49,24 @@ export function CommunityBuildGrid({
   );
 }
 
-function ProjectCard({ id, name, description, thumbnail, author, tags, assets, files }: CommunityBuildCardProperties) {
+function ProjectCard({
+  id,
+  name,
+  description,
+  thumbnail,
+  author,
+  tags,
+  assets,
+  files,
+}: CommunityBuildCardProperties): React.JSX.Element {
   const [showPreview, setShowPreview] = useState(false);
   const [isForking, setIsForking] = useState(false);
-  const [hasLoadedModel, setHasLoadedModel] = useState(false);
-  const hasWrittenFilesRef = useRef(false);
-
-  // Get actors from BuildProvider context
-  const { cadRef, buildRef } = useBuild();
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const status = useSelector(cadRef, (state) => state.value);
   const buildManager = useBuildManager();
-  const { writeFiles } = useFileManager();
-
   const navigate = useNavigate();
 
   const kernels = useMemo(() => [], []);
 
-  const mechanicalAsset = assets.mechanical;
-  if (!mechanicalAsset) {
-    throw new Error('Mechanical asset not found');
-  }
-
-  // Load the CAD model when preview is enabled for the first time
-  useEffect(() => {
-    if (showPreview && !hasLoadedModel) {
-      buildRef.send({ type: 'loadModel' });
-      setHasLoadedModel(true);
-    }
-  }, [showPreview, hasLoadedModel, buildRef]);
+  const mainFile = assets.mechanical?.main ?? 'main.ts';
 
   const handleFork = useCallback(
     async (event: React.MouseEvent) => {
@@ -113,7 +84,7 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
             name: `${name} (Remixed)`,
             description,
             thumbnail,
-            author, // TODO: This should be the current user in a real implementation
+            author,
             tags,
             assets,
             forkedFrom: id,
@@ -121,11 +92,9 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
           files,
         });
 
-        // Navigate to the new build
         await navigate(`/builds/${createdBuild.id}`);
       } catch (error: unknown) {
         console.error('Failed to remix project:', error);
-        // TODO: Show error toast/notification to user
         setIsForking(false);
       }
     },
@@ -133,30 +102,11 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
   );
 
   const handlePreviewToggle = useCallback(
-    async (event: React.MouseEvent) => {
+    (event: React.MouseEvent) => {
       event.stopPropagation();
-
-      // Write files to filesystem on first preview toggle (temporary until in-memory fs)
-      if (!showPreview && !hasWrittenFilesRef.current) {
-        const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-        for (const [path, file] of Object.entries(files)) {
-          buildFiles[`/builds/${id}/${path}`] = file;
-        }
-
-        // Set flag before await to prevent concurrent writes
-        hasWrittenFilesRef.current = true;
-        try {
-          await writeFiles(buildFiles);
-        } catch (error) {
-          // Reset flag on failure to allow retry
-          hasWrittenFilesRef.current = false;
-          throw error;
-        }
-      }
-
       setShowPreview(!showPreview);
     },
-    [showPreview, files, id, writeFiles],
+    [showPreview],
   );
 
   const handleCardClick = useCallback(() => {
@@ -172,28 +122,20 @@ function ProjectCard({ id, name, description, thumbnail, author, tags, assets, f
           )}
           {showPreview ? (
             <div className="size-full object-cover">
-              {['initializing', 'booting'].includes(status) ? (
-                <div className="flex size-full items-center justify-center">
-                  <Loader className="size-10" />
-                </div>
-              ) : null}
-              <div
-                className="size-full"
-                onClick={(event) => {
-                  event.stopPropagation();
-                }}
-              >
-                <CadViewer
-                  enablePan={false}
-                  enableLines={false}
-                  enableMatcap={false}
-                  geometries={geometries}
-                  className="cursor-default bg-transparent"
-                  stageOptions={{
-                    zoomLevel: 1.5,
+              <CadPreviewProvider buildId={id} mainFile={mainFile} files={files}>
+                <div
+                  className="size-full"
+                  onClick={(event) => {
+                    event.stopPropagation();
                   }}
-                />
-              </div>
+                >
+                  <CadPreviewViewer
+                    enablePan={false}
+                    stageOptions={{ zoomLevel: 1.5 }}
+                    graphicsOptions={{ enableLines: false, viewerClassName: 'bg-muted' }}
+                  />
+                </div>
+              </CadPreviewProvider>
             </div>
           ) : null}
           <Button

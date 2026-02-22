@@ -11,11 +11,12 @@ import {
   CommandGroup,
   CommandItem,
 } from '#components/ui/command.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
+import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { useTypedMatches } from '#hooks/use-typed-matches.js';
 
 /**
@@ -119,8 +120,8 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
                   }
                 }}
               >
-                <div className="flex items-center gap-2">
-                  <span className="shrink-0 [&>svg]:size-4!">{item.icon}</span>
+                <div className={menuItemLayoutClass}>
+                  <span className="shrink-0">{item.icon}</span>
                   <span>{item.label}</span>
                 </div>
                 {item.shortcut ? <KeyShortcut className="ml-auto">{item.shortcut}</KeyShortcut> : null}
@@ -135,7 +136,7 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
 
 const commandKeyCombination = {
   key: 'k',
-  metaKey: true,
+  modKey: true,
 } as const satisfies KeyCombination;
 
 type CommandPaletteTriggerProperties = {
@@ -145,7 +146,7 @@ type CommandPaletteTriggerProperties = {
 function CommandPaletteTrigger({ items }: CommandPaletteTriggerProperties): React.JSX.Element {
   const [open, setOpen] = useState(false);
 
-  const { formattedKeyCombination } = useKeydown(commandKeyCombination, () => {
+  const { formattedKeyCombination } = useKeybinding(commandKeyCombination, () => {
     setOpen((previous) => !previous);
   });
 
@@ -195,7 +196,7 @@ function CommandPaletteMobile({ items }: CommandPaletteMobileProperties): React.
 
   const renderItemLabel = useCallback(
     (item: CommandPaletteItem, _selectedItem: CommandPaletteItem | undefined) => (
-      <div className="flex items-center gap-2 [&>svg]:size-4!">
+      <div className={menuItemLayoutClass}>
         {item.icon}
         {item.label}
       </div>

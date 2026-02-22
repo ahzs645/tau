@@ -24,6 +24,7 @@ export function NavMain({
     url: string;
     icon?: LucideIcon;
     isActive?: boolean;
+    action?: () => void;
     items?: Array<{
       title: string;
       url: string;
@@ -38,6 +39,19 @@ export function NavMain({
       <SidebarMenu>
         {items.map((item) => {
           const hasItems = item.items !== undefined && item.items.length > 0;
+
+          // Items with an action callback render a button instead of a NavLink
+          if (item.action) {
+            return (
+              <SidebarMenuItem key={item.title}>
+                <SidebarMenuButton onClick={item.action}>
+                  {item.icon ? <item.icon className="size-4 shrink-0" /> : null}
+                  <span className="flex-1 truncate">{item.title}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          }
+
           return (
             <Collapsible key={item.title} asChild defaultOpen={item.isActive} className="group/collapsible">
               <SidebarMenuItem>

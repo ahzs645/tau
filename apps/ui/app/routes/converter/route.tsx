@@ -1,9 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { importToGlb, supportedImportFormats, supportedExportFormats, formatConfigurations } from '@taucad/converter';
 import type { InputFormat, OutputFormat } from '@taucad/converter';
 import { Download, Upload, RotateCcw, Package, Code2 } from 'lucide-react';
-import { useSelector } from '@xstate/react';
 import { fromPromise } from 'xstate';
 import type { Geometry, Build } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
@@ -48,7 +47,9 @@ import { ChatInterfaceGraphics } from '#routes/builds_.$id/chat-interface-graphi
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { cn } from '#utils/ui.utils.js';
+import { Loader } from '#components/ui/loader.js';
 import { BuildProvider, useBuild } from '#hooks/use-build.js';
+import { GraphicsProvider, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { metaConfig } from '#constants/meta.constants.js';
 import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 
@@ -69,21 +70,44 @@ type UploadedFileInfo = {
   size: number;
 };
 
+const converterViewId = 'converter-main';
+
 function ConverterContent(): React.JSX.Element {
-  const { graphicsRef: graphicsActor } = useBuild();
+  const { buildRef, viewGraphics } = useBuild();
+
+  useEffect(() => {
+    buildRef.send({ type: 'createViewGraphics', viewId: converterViewId });
+    return () => {
+      buildRef.send({ type: 'destroyViewGraphics', viewId: converterViewId });
+    };
+  }, [buildRef]);
+
+  const graphicsRef = viewGraphics.get(converterViewId);
+  if (!graphicsRef) {
+    return <Loader className="size-12" />;
+  }
+
+  return (
+    <GraphicsProvider graphicsRef={graphicsRef}>
+      <ConverterContentInner />
+    </GraphicsProvider>
+  );
+}
+
+function ConverterContentInner(): React.JSX.Element {
   const [uploadedFile, setUploadedFile] = useState<UploadedFileInfo | undefined>(undefined);
   const [glbData, setGlbData] = useState<Uint8Array<ArrayBuffer> | undefined>(undefined);
   const [selectedFormats, setSelectedFormats] = useCookie<OutputFormat[]>(cookieName.converterOutputFormats, []);
   const [useZipForMultiple, setUseZipForMultiple] = useCookie<boolean>(cookieName.converterMultifileZip, true);
   const [isConverting, setIsConverting] = useState(false);
 
-  const enableSurfaces = useSelector(graphicsActor, (state) => state.context.enableSurfaces);
-  const enableLines = useSelector(graphicsActor, (state) => state.context.enableLines);
-  const enableGizmo = useSelector(graphicsActor, (state) => state.context.enableGizmo);
-  const enableGrid = useSelector(graphicsActor, (state) => state.context.enableGrid);
-  const enableAxes = useSelector(graphicsActor, (state) => state.context.enableAxes);
-  const enableMatcap = useSelector(graphicsActor, (state) => state.context.enableMatcap);
-  const upDirection = useSelector(graphicsActor, (state) => state.context.upDirection);
+  const enableSurfaces = useGraphicsSelector((state) => state.context.enableSurfaces);
+  const enableLines = useGraphicsSelector((state) => state.context.enableLines);
+  const enableGizmo = useGraphicsSelector((state) => state.context.enableGizmo);
+  const enableGrid = useGraphicsSelector((state) => state.context.enableGrid);
+  const enableAxes = useGraphicsSelector((state) => state.context.enableAxes);
+  const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
+  const upDirection = useGraphicsSelector((state) => state.context.upDirection);
 
   const handleFileSelect = useCallback(async (file: File) => {
     setIsConverting(true);
@@ -226,7 +250,7 @@ function ConverterContent(): React.JSX.Element {
                 ) : undefined}
                 <ChatInterfaceGraphics className="w-100" />
                 <div className="pointer-events-auto flex items-center gap-2">
-                  <FovControl defaultAngle={60} className="w-60" />
+                  <FovControl className="w-60" />
                   <GridSizeIndicator />
                   <SectionViewControl />
                   <MeasureControl />

@@ -1,31 +1,29 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Link } from 'react-router';
-import {
-  Database,
-  Download,
-  FolderArchive,
-  HardDrive,
-  MemoryStick,
-  MoreHorizontal,
-  RefreshCw,
-  Trash2,
-} from 'lucide-react';
+import { Database, Download, FolderArchive, FolderOpen, MoreHorizontal, RefreshCw, Star, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { FilesystemBackend, Build } from '@taucad/types';
-import { filesystemBackendMeta } from '@taucad/types/constants';
 import { ExternalLink } from '#components/external-link.js';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { Loader } from '#components/ui/loader.js';
 import { Tree, Folder, File } from '#components/magicui/file-tree.js';
 import type { TreeViewElement } from '#components/magicui/file-tree.js';
-import { Loader } from '#components/ui/loader.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuilds } from '#hooks/use-builds.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import { isOpfsSupported } from '#constants/browser.constants.js';
+import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 import type { Handle } from '#types/matches.types.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { cn } from '#utils/ui.utils.js';
+import {
+  getStoredDirectoryHandle,
+  storeDirectoryHandle,
+  checkHandlePermission,
+  requestHandlePermission,
+} from '#filesystem/handle-store.js';
+import type { FileTreeNode } from '#machines/file-manager.js';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -38,33 +36,31 @@ export const handle: Handle = {
 };
 
 /**
- * Backend option type for ComboBoxResponsive
+ * Backend column metadata.
  */
-type BackendOption = {
-  value: FilesystemBackend;
+type BackendColumnMeta = {
+  key: FilesystemBackend;
   label: string;
-  description: string;
   icon: LucideIcon;
+  description: string;
+  isSupported: boolean;
 };
 
-/**
- * Backend options with icons
- */
-const backendOptions: BackendOption[] = [
+const backendColumns: BackendColumnMeta[] = [
   {
-    value: 'indexeddb',
-    ...filesystemBackendMeta.indexeddb,
+    key: 'indexeddb',
+    label: 'IndexedDB',
     icon: Database,
+    description: 'Browser database storage',
+    isSupported: true,
   },
+  // OPFS column removed -- disabled due to file corruption issues
   {
-    value: 'opfs',
-    ...filesystemBackendMeta.opfs,
-    icon: HardDrive,
-  },
-  {
-    value: 'memory',
-    ...filesystemBackendMeta.memory,
-    icon: MemoryStick,
+    key: 'webaccess',
+    label: 'File System',
+    icon: FolderOpen,
+    description: 'Local directory on your computer',
+    isSupported: isFileSystemAccessSupported,
   },
 ];
 
@@ -130,60 +126,6 @@ function BuildLink({
       </ExternalLink>
     </span>
   );
-}
-
-/**
- * Build tree structure from filesystem
- */
-async function buildFileTree(
-  readdir: (path: string) => Promise<string[]>,
-  stat: (path: string) => Promise<{ type: 'file' | 'dir' }>,
-  path: string,
-): Promise<TreeViewElement[]> {
-  try {
-    const entries = await readdir(path);
-    const elements: TreeViewElement[] = [];
-
-    for (const entry of entries) {
-      const fullPath = `${path}/${entry}`.replace('//', '/');
-      try {
-        // eslint-disable-next-line no-await-in-loop -- need sequential processing for correct tree building
-        const stats = await stat(fullPath);
-        if (stats.type === 'dir') {
-          elements.push({
-            id: fullPath,
-            name: entry,
-            // eslint-disable-next-line no-await-in-loop -- need sequential processing for correct tree building
-            children: await buildFileTree(readdir, stat, fullPath),
-          });
-        } else {
-          elements.push({
-            id: fullPath,
-            name: entry,
-          });
-        }
-      } catch {
-        // Skip files that can't be stat'd
-      }
-    }
-
-    // Sort: folders first, then alphabetically
-    return elements.sort((a, b) => {
-      const aIsFolder = a.children !== undefined;
-      const bIsFolder = b.children !== undefined;
-      if (aIsFolder && !bIsFolder) {
-        return -1;
-      }
-
-      if (!aIsFolder && bIsFolder) {
-        return 1;
-      }
-
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    });
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -381,31 +323,355 @@ function renderTree(elements: TreeViewElement[], handlers: TreeActionHandlers): 
   });
 }
 
+/**
+ * Convert FileTreeNode[] from the worker to TreeViewElement[] for the file tree component.
+ * The types are structurally compatible, but this explicit mapping ensures type safety.
+ */
+function toTreeViewElements(nodes: FileTreeNode[]): TreeViewElement[] {
+  return nodes.map((node) => ({
+    id: node.id,
+    name: node.name,
+    children: node.children ? toTreeViewElements(node.children) : undefined,
+  }));
+}
+
+/**
+ * Recursively count entries whose name starts with `bld_` (build directories).
+ */
+function countBuilds(elements: TreeViewElement[]): number {
+  let count = 0;
+  for (const element of elements) {
+    if (element.name.startsWith('bld_')) {
+      count += 1;
+    }
+
+    if (element.children) {
+      count += countBuilds(element.children);
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Collect IDs of all folders named "builds" so they can be expanded by default.
+ */
+function findBuildsFolderIds(elements: TreeViewElement[]): string[] {
+  const ids: string[] = [];
+  for (const element of elements) {
+    if (element.name === 'builds' && element.children) {
+      ids.push(element.id);
+    }
+
+    if (element.children) {
+      ids.push(...findBuildsFolderIds(element.children));
+    }
+  }
+
+  return ids;
+}
+
+// ============ WebAccess Directory State ============
+
+type WebAccessDirectoryState = {
+  directoryName: string | undefined;
+  isConnected: boolean;
+  /** Whether we need the user to re-grant permission (handle exists but expired) */
+  needsPermission: boolean;
+};
+
+// ============ Backend Column Component ============
+
+/**
+ * A single column in the 3-column grid showing a backend's file tree.
+ */
+function BackendColumn({
+  meta,
+  isDefault,
+  treeActionHandlers,
+  fileTree,
+  isLoading,
+  onRefresh,
+  onSetDefault,
+  webAccessState,
+  onConnectDirectory,
+  onGrantAccess,
+  onChangeDirectory,
+}: {
+  readonly meta: BackendColumnMeta;
+  readonly isDefault: boolean;
+  readonly treeActionHandlers: TreeActionHandlers;
+  readonly fileTree: TreeViewElement[];
+  readonly isLoading: boolean;
+  readonly onRefresh: () => void;
+  readonly onSetDefault: () => void;
+  readonly webAccessState?: WebAccessDirectoryState;
+  readonly onConnectDirectory?: () => void;
+  readonly onGrantAccess?: () => void;
+  readonly onChangeDirectory?: () => void;
+}): React.JSX.Element {
+  const Icon = meta.icon;
+  const isDisabled = !meta.isSupported;
+
+  return (
+    <div className={cn('flex min-h-0 flex-col gap-3 rounded-lg border bg-card p-4', isDisabled && 'opacity-50')}>
+      {/* Column Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Icon className="size-4 shrink-0 text-muted-foreground" />
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">{meta.label}</span>
+              {countBuilds(fileTree) > 0 ? (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                  {countBuilds(fileTree)}
+                </span>
+              ) : undefined}
+            </div>
+            {meta.key === 'webaccess' && webAccessState?.directoryName ? (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                {webAccessState.directoryName} -{' '}
+                <Button variant="link" size="xs" className="h-auto p-0 text-xs" onClick={onChangeDirectory}>
+                  Change Directory
+                </Button>
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">{meta.description}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn('size-7', isDefault && 'text-primary')}
+                disabled={isDisabled}
+                onClick={onSetDefault}
+              >
+                <Star className={cn('size-3.5', isDefault && 'fill-primary')} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isDefault ? 'Default storage' : 'Set as default storage'}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                disabled={isLoading || isDisabled}
+                onClick={onRefresh}
+              >
+                <RefreshCw className={cn('size-3.5', isLoading && 'animate-spin')} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Refresh</TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* WebAccess directory management */}
+      {meta.key === 'webaccess' && webAccessState ? (
+        <WebAccessDirectoryPanel
+          state={webAccessState}
+          onConnect={onConnectDirectory!}
+          onGrantAccess={onGrantAccess!}
+        />
+      ) : undefined}
+
+      {/* Unsupported banner */}
+      {isDisabled ? (
+        <div className="flex flex-1 items-center justify-center rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+          Not supported in this browser
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto rounded-md border">
+          {isLoading ? (
+            <div className="flex h-32 items-center justify-center">
+              <Loader className="size-6" />
+            </div>
+          ) : fileTree.length === 0 ? (
+            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">No files found</div>
+          ) : (
+            <Tree elements={fileTree} initialExpandedItems={findBuildsFolderIds(fileTree)}>
+              {renderTree(fileTree, treeActionHandlers)}
+            </Tree>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * WebAccess directory management panel shown within the WebAccess column.
+ */
+function WebAccessDirectoryPanel({
+  state,
+  onConnect,
+  onGrantAccess,
+}: {
+  readonly state: WebAccessDirectoryState;
+  readonly onConnect: () => void;
+  readonly onGrantAccess: () => void;
+}): React.JSX.Element | undefined {
+  if (state.directoryName === undefined) {
+    return (
+      <Button variant="outline" size="sm" className="gap-2" onClick={onConnect}>
+        <FolderOpen className="size-4" />
+        Connect Directory
+      </Button>
+    );
+  }
+
+  if (state.needsPermission) {
+    return (
+      <div className="border-amber-500/30 bg-amber-500/10 flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+        <div className="flex items-center gap-2">
+          <FolderOpen className="text-amber-600 size-3.5 shrink-0" />
+          <span className="text-xs">{state.directoryName}</span>
+        </div>
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onGrantAccess}>
+          Grant Access
+        </Button>
+      </div>
+    );
+  }
+
+  return undefined;
+}
+
+// ============ Main Route Component ============
+
 export default function FilesRoute(): React.JSX.Element {
   const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
-  const { fileManagerRef, reconfigureBackend, readdir, readFile, deleteFile, getZippedDirectory } = useFileManager();
+  const { fileManagerRef, readFile, deleteFile, getZippedDirectory, readBackendFileTree } = useFileManager();
   const { builds } = useBuilds();
-  const [isLoading, setIsLoading] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [fileTree, setFileTree] = useState<TreeViewElement[]>([]);
+
+  // Per-column state
+  const [columnTrees, setColumnTrees] = useState<Record<string, TreeViewElement[]>>({});
+  const [columnLoading, setColumnLoading] = useState<Record<string, boolean>>({});
+  // WebAccess directory state
+  const [webAccessState, setWebAccessState] = useState<WebAccessDirectoryState>({
+    directoryName: undefined,
+    isConnected: false,
+    needsPermission: false,
+  });
 
   // Create a lookup map for builds by ID
   const buildsMap = useMemo(() => new Map(builds.map((build) => [build.id, build])), [builds]);
 
-  // Get stat function from the worker
-  const getStat = useCallback(
-    async (path: string): Promise<{ type: 'file' | 'dir' }> => {
-      const snapshot = fileManagerRef.getSnapshot();
-      const worker = snapshot.context.wrappedWorker;
-      if (!worker) {
-        throw new Error('Worker not ready');
+  // Check WebAccess handle status on mount
+  useEffect(() => {
+    const checkWebAccess = async (): Promise<void> => {
+      try {
+        const storedHandle = await getStoredDirectoryHandle();
+        if (storedHandle) {
+          const permission = await checkHandlePermission(storedHandle);
+          setWebAccessState({
+            directoryName: storedHandle.name,
+            isConnected: permission === 'granted',
+            needsPermission: permission !== 'granted',
+          });
+        }
+      } catch {
+        // Handle store might not be available
+      }
+    };
+
+    void checkWebAccess();
+  }, []);
+
+  // Load a single backend's file tree
+  const loadColumnTree = useCallback(
+    async (backend: FilesystemBackend): Promise<void> => {
+      setColumnLoading((previous) => ({ ...previous, [backend]: true }));
+      try {
+        const nodes = await readBackendFileTree(backend);
+        const elements = toTreeViewElements(nodes);
+        setColumnTrees((previous) => ({ ...previous, [backend]: elements }));
+      } catch {
+        setColumnTrees((previous) => ({ ...previous, [backend]: [] }));
+      } finally {
+        setColumnLoading((previous) => ({ ...previous, [backend]: false }));
+      }
+    },
+    [readBackendFileTree],
+  );
+
+  // Load all column trees on mount
+  useEffect(() => {
+    for (const column of backendColumns) {
+      if (column.isSupported) {
+        // Skip webaccess if not connected
+        if (column.key === 'webaccess' && !webAccessState.isConnected) {
+          continue;
+        }
+
+        void loadColumnTree(column.key);
+      }
+    }
+  }, [loadColumnTree, webAccessState.isConnected]);
+
+  // ============ Action Handlers ============
+
+  // Set default backend (just updates cookie, no directory picker prompt)
+  const handleSetDefault = useCallback(
+    (backend: FilesystemBackend) => {
+      setBackendCookie(backend);
+    },
+    [setBackendCookie],
+  );
+
+  // Connect a new workspace directory for webaccess
+  const handleConnectDirectory = useCallback(async () => {
+    try {
+      const newHandle = await globalThis.window.showDirectoryPicker({
+        id: 'tau-workspace',
+        mode: 'readwrite',
+      });
+
+      await storeDirectoryHandle(newHandle);
+      setWebAccessState({
+        directoryName: newHandle.name,
+        isConnected: true,
+        needsPermission: false,
+      });
+      // Reload webaccess tree with the new directory
+      void loadColumnTree('webaccess');
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
       }
 
-      const stats = await worker.stat(path);
-      return { type: stats.type };
-    },
-    [fileManagerRef],
-  );
+      throw error;
+    }
+  }, [loadColumnTree]);
+
+  // Grant permission on existing workspace handle
+  const handleGrantAccess = useCallback(async () => {
+    const storedHandle = await getStoredDirectoryHandle();
+    if (!storedHandle) {
+      return;
+    }
+
+    const granted = await requestHandlePermission(storedHandle);
+    if (granted) {
+      setWebAccessState((previous) => ({
+        ...previous,
+        isConnected: true,
+        needsPermission: false,
+      }));
+      void loadColumnTree('webaccess');
+    }
+  }, [loadColumnTree]);
+
+  // Change workspace directory (opens picker for a new directory)
+  const handleChangeDirectory = useCallback(async () => {
+    await handleConnectDirectory();
+  }, [handleConnectDirectory]);
 
   // Get rmdir function from the worker for recursive directory deletion
   const deleteDirectory = useCallback(
@@ -416,7 +682,6 @@ export default function FilesRoute(): React.JSX.Element {
         throw new Error('Worker not ready');
       }
 
-      // Recursively delete directory contents first
       const deleteRecursive = async (dirPath: string): Promise<void> => {
         const entries = await worker.readdir(dirPath);
         for (const entry of entries) {
@@ -427,7 +692,6 @@ export default function FilesRoute(): React.JSX.Element {
           await (stats.type === 'dir' ? deleteRecursive(fullPath) : worker.unlink(fullPath));
         }
 
-        // Delete the now-empty directory
         await worker.rmdir(dirPath);
       };
 
@@ -436,45 +700,18 @@ export default function FilesRoute(): React.JSX.Element {
     [fileManagerRef],
   );
 
-  // Load file tree
-  const loadFileTree = useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      const tree = await buildFileTree(async (path) => readdir(path), getStat, '/');
-      setFileTree(tree);
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [readdir, getStat]);
-
-  // Load file tree on mount
-  useEffect(() => {
-    void loadFileTree();
-  }, [loadFileTree]);
-
-  // Handle backend change
-  const handleBackendChange = useCallback(
-    async (value: string) => {
-      const backend = value as FilesystemBackend;
-      setBackendCookie(backend);
-      setIsLoading(true);
-      try {
-        await reconfigureBackend(backend);
-        await loadFileTree();
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [reconfigureBackend, setBackendCookie, loadFileTree],
-  );
-
-  // Handle file deletion
+  // Handle file deletion (refreshes all trees since we don't know which backend)
   const handleDeleteFile = useCallback(
     async (path: string) => {
       await deleteFile(path, { source: 'user' });
-      await loadFileTree();
+      // Refresh all supported trees
+      for (const column of backendColumns) {
+        if (column.isSupported) {
+          void loadColumnTree(column.key);
+        }
+      }
     },
-    [deleteFile, loadFileTree],
+    [deleteFile, loadColumnTree],
   );
 
   // Handle file download
@@ -492,9 +729,13 @@ export default function FilesRoute(): React.JSX.Element {
   const handleDeleteFolder = useCallback(
     async (path: string) => {
       await deleteDirectory(path);
-      await loadFileTree();
+      for (const column of backendColumns) {
+        if (column.isSupported) {
+          void loadColumnTree(column.key);
+        }
+      }
     },
-    [deleteDirectory, loadFileTree],
+    [deleteDirectory, loadColumnTree],
   );
 
   // Handle folder download as ZIP
@@ -516,58 +757,35 @@ export default function FilesRoute(): React.JSX.Element {
     buildsMap,
   };
 
-  // Get current backend option
-  const currentBackendOption = backendOptions.find((option) => option.value === backendCookie) ?? backendOptions[0]!;
-
   return (
-    <div className="container mx-auto flex h-full max-w-4xl flex-col gap-4 px-4 py-8">
+    <div className="flex h-full flex-col gap-4 px-6 py-8">
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <h1 className="shrink-0 text-3xl font-medium tracking-tight">Files</h1>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-2" disabled={isRefreshing} onClick={loadFileTree}>
-            <RefreshCw className={cn('size-4', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
-          <ComboBoxResponsive
-            groupedItems={[{ name: 'Storage Backends', items: backendOptions }]}
-            defaultValue={currentBackendOption}
-            getValue={(item) => item.value}
-            renderLabel={(item) => (
-              <div className="flex items-center gap-2">
-                <item.icon className="size-4" />
-                <div className="flex flex-col items-start">
-                  <span>{item.label}</span>
-                  <span className="text-xs text-muted-foreground">{item.description}</span>
-                </div>
-              </div>
-            )}
-            popoverProperties={{ className: 'w-[320px]', align: 'end' }}
-            isDisabled={(item) => item.value === 'opfs' && !isOpfsSupported}
-            title="Select Storage Backend"
-            description="Choose where to store files"
-            isSearchEnabled={false}
-            onSelect={handleBackendChange}
-          >
-            <Button variant="outline" className="gap-2" disabled={isLoading}>
-              {isLoading ? <Loader className="size-4" /> : <currentBackendOption.icon className="size-4" />}
-              {currentBackendOption.label}
-            </Button>
-          </ComboBoxResponsive>
-        </div>
       </div>
 
-      {/* File Tree */}
-      <div className="flex-1 overflow-hidden rounded-md border">
-        {isLoading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader className="size-8" />
-          </div>
-        ) : fileTree.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-muted-foreground">No files found</div>
-        ) : (
-          <Tree elements={fileTree}>{renderTree(fileTree, treeActionHandlers)}</Tree>
-        )}
+      {/* 3-column grid */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-2">
+        {backendColumns.map((column) => (
+          <BackendColumn
+            key={column.key}
+            meta={column}
+            isDefault={backendCookie === column.key}
+            treeActionHandlers={treeActionHandlers}
+            fileTree={columnTrees[column.key] ?? []}
+            isLoading={columnLoading[column.key] ?? false}
+            webAccessState={column.key === 'webaccess' ? webAccessState : undefined}
+            onRefresh={() => {
+              void loadColumnTree(column.key);
+            }}
+            onSetDefault={() => {
+              handleSetDefault(column.key);
+            }}
+            onConnectDirectory={column.key === 'webaccess' ? handleConnectDirectory : undefined}
+            onGrantAccess={column.key === 'webaccess' ? handleGrantAccess : undefined}
+            onChangeDirectory={column.key === 'webaccess' ? handleChangeDirectory : undefined}
+          />
+        ))}
       </div>
     </div>
   );

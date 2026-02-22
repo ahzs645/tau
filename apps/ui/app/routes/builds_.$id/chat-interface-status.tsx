@@ -1,29 +1,67 @@
-import { useSelector } from '@xstate/react';
-import type { StateFrom } from 'xstate';
 import { ChevronDown, Info, X } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { useBuild } from '#hooks/use-build.js';
 import { cn } from '#utils/ui.utils.js';
-import type { graphicsMachine } from '#machines/graphics.machine.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
+import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
-type GraphicsState = StateFrom<typeof graphicsMachine>;
+type ChatInterfaceStatusProps = React.HTMLAttributes<HTMLDivElement>;
 
-const infoFromState = (
-  state: GraphicsState,
-): {
+/**
+ * Derives a stable string for the detailed operational sub-state.
+ * Returns a primitive so useSelector only re-renders when the actual
+ * operational state transitions, not on unrelated context changes.
+ */
+type DetailedMode =
+  | 'ready'
+  | 'section-view-pending'
+  | 'section-view-active'
+  | 'measure-selecting'
+  | 'measure-selected'
+  | 'unknown';
+
+function useDetailedOperationalMode(): DetailedMode {
+  return useGraphicsSelector((state) => {
+    if (state.matches({ operational: 'ready' })) {
+      return 'ready' as const;
+    }
+
+    if (state.matches({ operational: { 'section-view': 'pending' } })) {
+      return 'section-view-pending' as const;
+    }
+
+    if (state.matches({ operational: { 'section-view': 'active' } })) {
+      return 'section-view-active' as const;
+    }
+
+    if (state.matches({ operational: { measure: 'selecting' } })) {
+      return 'measure-selecting' as const;
+    }
+
+    if (state.matches({ operational: { measure: 'selected' } })) {
+      return 'measure-selected' as const;
+    }
+
+    return 'unknown' as const;
+  });
+}
+
+type StatusInfo = {
   label: string;
   description: React.ReactNode;
   tooltipLabel: string;
   tips?: React.ReactNode[];
-} => {
-  switch (true) {
-    case state.matches({ operational: { 'section-view': 'pending' } }): {
+};
+
+function useStatusInfo(mode: DetailedMode): StatusInfo {
+  const hasMeasurements = useGraphicsSelector((state) => state.context.measurements.length > 0);
+
+  switch (mode) {
+    case 'section-view-pending': {
       return {
         label: 'Section View',
         description: 'Select a plane to view a cross section',
@@ -31,7 +69,7 @@ const infoFromState = (
       };
     }
 
-    case state.matches({ operational: { 'section-view': 'active' } }): {
+    case 'section-view-active': {
       return {
         label: 'Section View',
         description: 'Move arrows to adjust section view',
@@ -39,11 +77,8 @@ const infoFromState = (
       };
     }
 
-    case state.matches({ operational: { measure: 'selecting' } }):
-    case state.matches({ operational: { measure: 'selected' } }): {
-      const measurementCount = state.context.measurements.length;
-      const hasMeasurements = measurementCount > 0;
-
+    case 'measure-selecting':
+    case 'measure-selected': {
       return {
         label: 'Measure',
         description: (
@@ -59,40 +94,44 @@ const infoFromState = (
     default: {
       return {
         label: 'Unknown',
-        description: `Unknown graphics state: ${JSON.stringify(state.value)}`,
+        description: 'Unknown graphics state',
         tooltipLabel: 'Close unknown state',
       };
     }
   }
-};
+}
 
-export function ChatInterfaceStatus({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { graphicsRef: graphicsActor } = useBuild();
-  const state = useSelector(graphicsActor, (state) => state);
+export function ChatInterfaceStatus({ className, ...props }: ChatInterfaceStatusProps): React.ReactNode {
+  const graphicsRef = useGraphics();
+  const mode = useDetailedOperationalMode();
   const [isViewerStatusOpen, setIsViewerStatusOpen] = useCookie(cookieName.viewOpStatus, true);
 
+  const isSectionView = mode === 'section-view-pending' || mode === 'section-view-active';
+  const isMeasure = mode === 'measure-selecting' || mode === 'measure-selected';
+  const isVisible = isSectionView || isMeasure;
+
   const handleClose = (): void => {
-    if (state.matches({ operational: 'section-view' })) {
-      graphicsActor.send({ type: 'setSectionViewActive', payload: false });
-    } else if (state.matches({ operational: 'measure' })) {
-      graphicsActor.send({ type: 'setMeasureActive', payload: false });
+    if (isSectionView) {
+      graphicsRef.send({ type: 'setSectionViewActive', payload: false });
+    } else if (isMeasure) {
+      graphicsRef.send({ type: 'setMeasureActive', payload: false });
     }
   };
 
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     {
       key: 'Escape',
     },
     handleClose,
   );
 
-  const { label, description, tooltipLabel, tips } = infoFromState(state);
+  const { label, description, tooltipLabel, tips } = useStatusInfo(mode);
 
-  return state.matches({ operational: 'section-view' }) || state.matches({ operational: 'measure' }) ? (
+  return isVisible ? (
     <Collapsible
       {...props}
       open={isViewerStatusOpen}
-      className={cn('group/viewer-status m-auto items-start rounded-2xl border bg-background', className)}
+      className={cn('group/viewer-status m-auto max-w-full items-start rounded-2xl border bg-background', className)}
       onOpenChange={setIsViewerStatusOpen}
     >
       <CollapsibleTrigger asChild>

@@ -1,6 +1,6 @@
 /* eslint-disable react/boolean-prop-naming -- Shadcn convention. */
 import * as React from 'react';
-import * as ContextMenuPrimitive from '@radix-ui/react-context-menu';
+import { ContextMenu as ContextMenuPrimitive } from 'radix-ui';
 import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
 import {
@@ -8,6 +8,9 @@ import {
   menuContentVariants,
   menuLabelVariants,
   menuSeparatorVariants,
+  menuSubTriggerOpenClass,
+  menuShortcutClass,
+  subMenuSideAlignOffset,
 } from '#components/ui/menu.variants.js';
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>): React.JSX.Element {
@@ -50,26 +53,24 @@ function ContextMenuSubTrigger({
     <ContextMenuPrimitive.SubTrigger
       data-slot="context-menu-sub-trigger"
       data-inset={inset}
-      className={cn(
-        menuItemVariants({ inset }),
-        'data-[state=open]:text-accent-foreground data-[state=open]:bg-accent',
-        className,
-      )}
+      className={cn(menuItemVariants({ inset }), menuSubTriggerOpenClass, className)}
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ml-auto" />
+      <ChevronRightIcon className="ml-auto size-3.5" />
     </ContextMenuPrimitive.SubTrigger>
   );
 }
 
 function ContextMenuSubContent({
   className,
+  alignOffset = subMenuSideAlignOffset,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>): React.JSX.Element {
   return (
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
+      alignOffset={alignOffset}
       className={cn(
         menuContentVariants(),
         'shadow-lg origin-(--radix-context-menu-content-transform-origin)',
@@ -194,13 +195,7 @@ function ContextMenuSeparator({
 }
 
 function ContextMenuShortcut({ className, ...props }: React.ComponentProps<'span'>): React.JSX.Element {
-  return (
-    <span
-      data-slot="context-menu-shortcut"
-      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
-      {...props}
-    />
-  );
+  return <span data-slot="context-menu-shortcut" className={cn(menuShortcutClass, className)} {...props} />;
 }
 
 export {

@@ -3,19 +3,15 @@ import { useSelector } from '@xstate/react';
 import { ChatHistory } from '#routes/builds_.$id/chat-history.js';
 import { ChatFileTree } from '#routes/builds_.$id/chat-file-tree.js';
 import { ChatParameters } from '#routes/builds_.$id/chat-parameters.js';
-import { ChatViewer } from '#routes/builds_.$id/chat-viewer.js';
 import { ChatEditorLayout } from '#routes/builds_.$id/chat-editor-layout.js';
-import { ChatViewerStatus } from '#routes/builds_.$id/chat-viewer-status.js';
-import { ChatViewerControls } from '#routes/builds_.$id/chat-viewer-controls.js';
-import { ChatStackTrace } from '#routes/builds_.$id/chat-stack-trace.js';
 import { ChatDetails } from '#routes/builds_.$id/chat-details.js';
 import { ChatConverter } from '#routes/builds_.$id/chat-converter.js';
 import { BuildNotFound } from '#routes/builds_.$id/build-not-found.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatInterfaceNav } from '#routes/builds_.$id/chat-interface-nav.js';
 import { Tabs, TabsContent } from '#components/ui/tabs.js';
-import { ChatInterfaceStatus } from '#routes/builds_.$id/chat-interface-status.js';
 import { useChatInterfaceState } from '#routes/builds_.$id/use-chat-interface-state.js';
+import { ViewerDockview } from '#routes/builds_.$id/chat-viewer-dockview.js';
 import { Drawer, DrawerContent, DrawerTitle, DrawerDescription } from '#components/ui/drawer.js';
 import { useBuild } from '#hooks/use-build.js';
 
@@ -37,50 +33,10 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
           paddingBottom: isViewerTab ? '0' : `calc(${Number(activeSnapPoint) - 0.07} * 100dvh)`,
         }}
       >
-        <ChatViewer />
+        <ViewerDockview />
 
         {/* Build Not Found Overlay */}
         {isBuildError ? <BuildNotFound /> : null}
-
-        {/* Gizmo Container - Static container for the gizmo to ensure it shares the same containing block as the anchor */}
-        <div
-          id="viewport-gizmo-container"
-          className={cn('absolute right-0 bottom-18', isViewerTab ? 'bottom-18' : 'hidden')}
-        />
-
-        {/* Top Content - Stack trace */}
-        <div
-          className={cn(
-            'absolute top-(--header-height) right-2 left-2',
-            isViewerTab || !drawerOpen ? 'block' : 'hidden',
-          )}
-        >
-          <ChatStackTrace side="top" />
-        </div>
-
-        {/* Centered Content - Status indicators */}
-        <div
-          className={cn(
-            'absolute',
-            'left-1/2',
-            '-translate-x-1/2',
-            'top-[calc(var(--header-height)+var(--spacing)*4)]',
-            'z-50',
-          )}
-        >
-          <ChatViewerStatus />
-          <ChatInterfaceStatus />
-        </div>
-
-        {/* Bottom-left Content - Viewer controls (only visible on model tab) */}
-        <div
-          className={cn(
-            'pointer-events-auto absolute bottom-[calc(var(--nav-height)+var(--spacing)*2)] left-0 z-10 flex w-full flex-row justify-between gap-2 px-2',
-            isViewerTab ? 'flex' : 'hidden',
-          )}
-        >
-          <ChatViewerControls />
-        </div>
       </div>
 
       <Drawer

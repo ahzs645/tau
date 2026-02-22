@@ -37,7 +37,9 @@ type ChatPersistenceMachineEvents =
   | { type: 'queuePersist'; messages: MyUIMessage[] }
   | { type: 'handleError'; error: Error }
   | { type: 'setPersistedError'; error: ChatError }
-  | { type: 'clearPersistedError' };
+  | { type: 'clearPersistedError' }
+  // Flush pending state immediately (bypasses debounce, used on tab close)
+  | { type: 'flushNow' };
 
 // Placeholder actors - actual implementations provided via machine.provide()
 const loadChatActor = fromPromise<Chat | undefined, { chatId: string }>(async () => {
@@ -186,6 +188,11 @@ export const chatPersistenceMachine = setup({
               actions: assign({
                 pendingMessages: ({ event }) => event.messages,
               }),
+            },
+            // Immediately bypass debounce and persist
+            flushNow: {
+              target: 'persisting',
+              guard: 'hasPendingMessages',
             },
           },
         },

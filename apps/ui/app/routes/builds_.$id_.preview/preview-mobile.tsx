@@ -1,12 +1,8 @@
 import { memo, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useActorRef, useSelector } from '@xstate/react';
 import { Code, ChevronDown, Download, FileCode } from 'lucide-react';
-import type { ExportFormat } from '@taucad/types';
-import { fileExtensionFromExportFormat } from '@taucad/types/constants';
 import { Loader } from '#components/ui/loader.js';
 import { Button } from '#components/ui/button.js';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Tabs, TabsContent } from '#components/ui/tabs.js';
 import { Drawer, DrawerContent, DrawerTitle, DrawerDescription } from '#components/ui/drawer.js';
 import {
@@ -17,94 +13,35 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { downloadBlob } from '#utils/file.utils.js';
 import { toast } from '#components/ui/sonner.js';
-import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
 import { cn } from '#utils/ui.utils.js';
-import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
+import { useCadPreview } from '#hooks/use-cad-preview.js';
+import { useCadExport } from '#hooks/use-cad-export.js';
+import { CadPreviewViewer, CadPreviewStatus } from '#components/cad-preview.js';
+import { usePreviewBuild } from '#routes/builds_.$id_.preview/preview-build-context.js';
 import { usePreviewState } from '#routes/builds_.$id_.preview/use-preview-state.js';
 import { PreviewNav } from '#routes/builds_.$id_.preview/preview-nav.js';
 import { PreviewDetails } from '#routes/builds_.$id_.preview/preview-details.js';
 import { PreviewFiles } from '#routes/builds_.$id_.preview/preview-files.js';
 import { PreviewParameters } from '#routes/builds_.$id_.preview/preview-parameters.js';
+import { usePreviewFileList } from '#routes/builds_.$id_.preview/use-preview-file-list.js';
 
-type PreviewMobileProps = {
-  readonly isStaticBuild: boolean;
-  readonly staticBuildFiles?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
-};
-
-export const PreviewMobile = memo(function ({
-  isStaticBuild,
-  staticBuildFiles,
-}: PreviewMobileProps): React.JSX.Element {
+export const PreviewMobile = memo(function (): React.JSX.Element {
   const navigate = useNavigate();
-  const { buildRef, cadRef } = useBuild();
-  const build = useSelector(buildRef, (state) => state.context.build);
-  const geometries = useSelector(cadRef, (state) => state.context.geometries);
-  const cadState = useSelector(cadRef, (state) => state.value);
+  const { build, isStaticBuild, staticBuildFiles } = usePreviewBuild();
+  const { geometries } = useCadPreview();
+  const { exportGeometry } = useCadExport(build?.name ?? 'file');
   const fileManager = useFileManager();
   const buildManager = useBuildManager();
+  const files = usePreviewFileList();
 
   const [isCloning, setIsCloning] = useState(false);
-
-  // Get files from file manager
-  const files = useSelector(fileManager.fileManagerRef, (state) => {
-    const fileTreeMap = state.context.fileTree;
-    if (fileTreeMap.size === 0) {
-      return [];
-    }
-
-    return [...fileTreeMap.values()].map((entry) => ({
-      path: entry.path,
-      name: entry.name,
-      size: entry.size,
-    }));
-  });
 
   const { activeTab, drawerOpen, activeSnapPoint, snapPoints, handleTabChange, handleDrawerChange, handleSnapChange } =
     usePreviewState();
 
   const isModelTab = activeTab === 'model';
-
-  // Create export geometry machine instance
-  const exportActorRef = useActorRef(exportGeometryMachine, {
-    input: { cadRef },
-  });
-
-  const handleExport = useCallback(
-    (format: ExportFormat) => {
-      const fileExtension = fileExtensionFromExportFormat[format];
-      const filename = `${build?.name ?? 'file'}.${fileExtension}`;
-      toast.promise(
-        new Promise<Blob>((resolve, reject) => {
-          exportActorRef.send({
-            type: 'requestExport',
-            format,
-            onSuccess(blob) {
-              downloadBlob(blob, filename);
-              resolve(blob);
-            },
-            onError(error) {
-              reject(new Error(error));
-            },
-          });
-        }),
-        {
-          loading: `Downloading ${filename}...`,
-          success: `Downloaded ${filename}`,
-          error(error) {
-            let message = `Failed to download ${filename}`;
-            if (error instanceof Error) {
-              message = `${message}: ${error.message}`;
-            }
-
-            return message;
-          },
-        },
-      );
-    },
-    [exportActorRef, build?.name],
-  );
 
   const handleDownloadZip = useCallback(async (): Promise<void> => {
     if (!build) {
@@ -128,13 +65,11 @@ export const PreviewMobile = memo(function ({
   }, [build, fileManager]);
 
   const handleRemix = useCallback(async () => {
-    // For dynamic builds, navigate directly
     if (!isStaticBuild || !staticBuildFiles || !build) {
       void navigate(`/builds/${build?.id}`);
       return;
     }
 
-    // For static builds, clone the build first
     if (isCloning) {
       return;
     }
@@ -158,7 +93,6 @@ export const PreviewMobile = memo(function ({
         files: staticBuildFiles,
       });
 
-      // Navigate to the new build
       await navigate(`/builds/${createdBuild.id}`);
     } catch (error: unknown) {
       console.error('Failed to remix build:', error);
@@ -167,8 +101,6 @@ export const PreviewMobile = memo(function ({
       setIsCloning(false);
     }
   }, [isStaticBuild, staticBuildFiles, build, isCloning, buildManager, navigate]);
-
-  const isLoading = ['buffering', 'rendering', 'booting', 'initializing'].includes(cadState);
 
   if (!build) {
     return (
@@ -189,24 +121,13 @@ export const PreviewMobile = memo(function ({
       >
         {/* 3D Viewer */}
         <div className="relative h-full">
-          {geometries.length > 0 ? (
-            <CadViewer enableZoom enablePan geometries={geometries} />
-          ) : (
-            <div className="flex h-full items-center justify-center">
-              <Loader className="size-16 text-primary" />
-            </div>
-          )}
+          <CadPreviewViewer enableZoom enablePan className="h-full" />
         </div>
 
-        {/* Status Overlay - positioned below the header */}
-        {isLoading ? (
-          <div className="absolute top-[calc(var(--header-height)+var(--spacing)*4)] left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-md border bg-background/70 px-3 py-1.5 backdrop-blur-sm">
-            <span className="font-mono text-sm text-muted-foreground capitalize">{cadState}...</span>
-            <Loader className="size-4" />
-          </div>
-        ) : null}
+        {/* Status Overlay */}
+        <CadPreviewStatus className="top-[calc(var(--header-height)+var(--spacing)*4)] right-auto left-1/2 -translate-x-1/2" />
 
-        {/* Floating Action Button - Code dropdown, positioned above the nav */}
+        {/* Floating Action Button */}
         <div
           className={cn(
             'absolute right-4 bottom-[calc(var(--nav-height)+var(--spacing)*4)] z-10',
@@ -223,11 +144,11 @@ export const PreviewMobile = memo(function ({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem disabled={isCloning} onClick={handleRemix}>
-                {isCloning ? <Loader className="mr-2 size-4" /> : <FileCode className="mr-2 size-4" />}
+                {isCloning ? <Loader /> : <FileCode />}
                 {isCloning ? 'Remixing...' : 'Remix'}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDownloadZip}>
-                <Download className="mr-2 size-4" />
+                <Download />
                 Download ZIP
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -251,7 +172,6 @@ export const PreviewMobile = memo(function ({
           Preview content - use navigation tabs to switch between panels
         </DrawerDescription>
 
-        {/* Drawer for content panels */}
         <DrawerContent
           aria-labelledby="drawer-title"
           aria-describedby="drawer-description"
@@ -266,7 +186,6 @@ export const PreviewMobile = memo(function ({
             height: '100%',
           }}
         >
-          {/* Tab contents */}
           <Tabs
             value={activeTab}
             className="flex h-full flex-col p-0"
@@ -283,13 +202,13 @@ export const PreviewMobile = memo(function ({
             </TabsContent>
             <TabsContent enableAnimation={false} value="model" className="flex h-full flex-col" />
             <TabsContent enableAnimation={false} value="details" className="flex h-full flex-col overflow-y-auto">
-              <PreviewDetails build={build} geometriesCount={geometries.length} onExport={handleExport} />
+              <PreviewDetails build={build} geometriesCount={geometries.length} onExport={exportGeometry} />
             </TabsContent>
           </Tabs>
         </DrawerContent>
       </Drawer>
 
-      {/* Navigation tabs - Always visible and sticky to bottom */}
+      {/* Navigation tabs */}
       <div className={cn('pointer-events-auto fixed right-0 bottom-0 left-0 z-50')}>
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <PreviewNav className="h-(--nav-height)" />

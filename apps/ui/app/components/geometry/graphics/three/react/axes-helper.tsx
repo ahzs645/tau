@@ -45,64 +45,65 @@ export function AxesHelper({
 }: CustomAxesHelperProps): React.JSX.Element {
   const [hoveredAxis, setHoveredAxis] = React.useState<'x' | 'y' | 'z' | undefined>(undefined);
 
+  // Static axis definitions - only recreated when size or colors change, NOT on hover
   const axes = React.useMemo(
-    () =>
-      [
-        {
-          id: 'x',
-          getPoints: () => [
-            hoveredAxis === 'x' ? new THREE.Vector3(-size, 0, 0) : new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(size, 0, 0),
-          ],
-          color: xAxisColor,
-        },
-        {
-          id: 'y',
-          getPoints: () => [
-            hoveredAxis === 'y' ? new THREE.Vector3(0, -size, 0) : new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, size, 0),
-          ],
-          color: yAxisColor,
-        },
-        {
-          id: 'z',
-          getPoints: () => [
-            hoveredAxis === 'z' ? new THREE.Vector3(0, 0, -size) : new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, 0, size),
-          ],
-          color: zAxisColor,
-        },
-      ] as const,
-    [hoveredAxis, size, xAxisColor, yAxisColor, zAxisColor],
+    () => [
+      {
+        id: 'x' as const,
+        origin: new THREE.Vector3(0, 0, 0),
+        negativeEnd: new THREE.Vector3(-size, 0, 0),
+        positiveEnd: new THREE.Vector3(size, 0, 0),
+        color: xAxisColor,
+      },
+      {
+        id: 'y' as const,
+        origin: new THREE.Vector3(0, 0, 0),
+        negativeEnd: new THREE.Vector3(0, -size, 0),
+        positiveEnd: new THREE.Vector3(0, size, 0),
+        color: yAxisColor,
+      },
+      {
+        id: 'z' as const,
+        origin: new THREE.Vector3(0, 0, 0),
+        negativeEnd: new THREE.Vector3(0, 0, -size),
+        positiveEnd: new THREE.Vector3(0, 0, size),
+        color: zAxisColor,
+      },
+    ],
+    [size, xAxisColor, yAxisColor, zAxisColor],
   );
 
   return (
     <group userData={{ isPreviewOnly: true }}>
-      {axes.map((axis) => (
-        <Fragment key={axis.id}>
-          <Line
-            points={axis.getPoints()}
-            opacity={0.6}
-            // Large render order to ensure the axes are placed on top of all other objects
-            renderOrder={Infinity}
-            color={axis.color}
-            lineWidth={hoveredAxis === axis.id ? hoverThickness : thickness}
-          />
-          <Line
-            transparent
-            depthTest={false}
-            points={axis.getPoints()}
-            opacity={0}
-            lineWidth={thickness * 8}
-            onPointerOver={() => {
-              setHoveredAxis(axis.id);
-            }}
-            onPointerOut={() => {
-              setHoveredAxis(undefined);
-            }}
-          />
-        </Fragment>
-      ))}
+      {axes.map((axis) => {
+        const isHovered = hoveredAxis === axis.id;
+        const points = [isHovered ? axis.negativeEnd : axis.origin, axis.positiveEnd];
+        return (
+          <Fragment key={axis.id}>
+            <Line
+              points={points}
+              opacity={0.6}
+              // Large render order to ensure the axes are placed on top of all other objects
+              renderOrder={Infinity}
+              color={axis.color}
+              lineWidth={isHovered ? hoverThickness : thickness}
+            />
+            <Line
+              transparent
+              depthTest={false}
+              points={points}
+              opacity={0}
+              lineWidth={thickness * 8}
+              onPointerOver={() => {
+                setHoveredAxis(axis.id);
+              }}
+              onPointerOut={() => {
+                setHoveredAxis(undefined);
+              }}
+            />
+          </Fragment>
+        );
+      })}
     </group>
   );
 }

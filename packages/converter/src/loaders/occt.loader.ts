@@ -2,6 +2,7 @@
 import { Document, NodeIO } from '@gltf-transform/core';
 import occtimportjs from 'occt-import-js';
 import type { ImportResult as OcctImportResult } from 'occt-import-js';
+import { cadMaterialDefaults } from '@taucad/types/constants';
 import type { InputFormat, File } from '#types.js';
 import { BaseLoader } from '#loaders/base.loader.js';
 
@@ -91,13 +92,25 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
         primitive.setAttribute('NORMAL', normalAccessor);
       }
 
-      // Create material with color if specified
+      // Create material with color if specified, or fallback default
       if (meshData.color) {
         const [red, green, blue] = meshData.color;
         const material = document
           .createMaterial()
           .setBaseColorFactor([red, green, blue, 1])
+          .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
+          .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+          .setDoubleSided(true)
           .setName(`Material_${meshData.name || 'Default'}`);
+        primitive.setMaterial(material);
+      } else {
+        const material = document
+          .createMaterial()
+          .setBaseColorFactor([...cadMaterialDefaults.baseColorFactor])
+          .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
+          .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+          .setDoubleSided(true)
+          .setName('Material_Default');
         primitive.setMaterial(material);
       }
 
@@ -115,8 +128,7 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
       scene.addChild(node);
     }
 
-    // Assertion due to `gltf-transform` returning `Uint8Array` instead of `Uint8Array<ArrayBuffer>`
-    const glb = (await this.io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    const glb = await this.io.writeBinary(document);
     return glb;
   }
 }

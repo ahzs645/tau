@@ -1,12 +1,14 @@
 import React, { useMemo } from 'react';
 import { Label, Pie, PieChart, Cell } from 'recharts';
 import type { PieLabelRenderProps } from 'recharts';
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '#components/ui/chart.js';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '#components/ui/chart.js';
+import type { ChartConfig } from '#components/ui/chart.js';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#components/ui/card.js';
 import { formatCurrency } from '#utils/currency.utils.js';
 import type { UsageRecord } from '#hooks/use-all-usage.js';
 import { getProviderColor } from '#routes/usage/provider-colors.js';
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- RADIAN is a constant
 const RADIAN = Math.PI / 180;
 
 /**
@@ -20,20 +22,20 @@ function renderCustomLabel(props: PieLabelRenderProps): React.ReactElement | und
     return undefined;
   }
 
-  const cxNum = Number(cx);
-  const cyNum = Number(cy);
-  const outerRadiusNum = Number(outerRadius);
-  const midAngleNum = Number(midAngle);
+  const cxNumber = Number(cx);
+  const cyNumber = Number(cy);
+  const outerRadiusNumber = Number(outerRadius);
+  const midAngleNumber = Number(midAngle);
 
-  const radius = outerRadiusNum + 25;
-  const x = cxNum + radius * Math.cos(-midAngleNum * RADIAN);
-  const y = cyNum + radius * Math.sin(-midAngleNum * RADIAN);
+  const radius = outerRadiusNumber + 25;
+  const x = cxNumber + radius * Math.cos(-midAngleNumber * RADIAN);
+  const y = cyNumber + radius * Math.sin(-midAngleNumber * RADIAN);
 
   return (
     <text
       x={x}
       y={y}
-      textAnchor={x > cxNum ? 'start' : 'end'}
+      textAnchor={x > cxNumber ? 'start' : 'end'}
       dominantBaseline="central"
       className="fill-foreground text-xs font-medium"
     >
@@ -132,6 +134,7 @@ function UsagePieChartComponent({
               labelLine={{ stroke: 'var(--border)', strokeWidth: 1 }}
             >
               {chartData.map((entry) => (
+                // eslint-disable-next-line @typescript-eslint/no-deprecated -- todo: fix this
                 <Cell key={entry.provider} fill={entry.fill} />
               ))}
               <Label
@@ -142,7 +145,7 @@ function UsagePieChartComponent({
                         <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-xl font-bold">
                           {formatCurrency(totalCost, { significantFigures: 3, minDecimalPlaces: 3 })}
                         </tspan>
-                        <tspan x={viewBox.cx} y={(viewBox.cy ?? 0) + 20} className="fill-muted-foreground text-xs">
+                        <tspan x={viewBox.cx} y={viewBox.cy + 20} className="fill-muted-foreground text-xs">
                           Total
                         </tspan>
                       </text>

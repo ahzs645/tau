@@ -4,13 +4,16 @@
   "include": [],
   "references": [
     {
-      "path": "../../libs/utils"
-    },
-    {
       "path": "../../packages/json-schema"
     },
     {
       "path": "../../libs/api-extractor"
+    },
+    {
+      "path": "../../libs/utils"
+    },
+    {
+      "path": "../../packages/kernels"
     },
     {
       "path": "../../libs/tau-examples"

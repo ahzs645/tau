@@ -4,7 +4,33 @@ export type KeyCombination = Pick<KeyboardEvent, 'key'> &
      * Whether to require all modifiers to be pressed
      */
     requireAllModifiers?: boolean;
+    /**
+     * Platform-aware "primary modifier". Resolves to Cmd (metaKey) on macOS, Ctrl (ctrlKey) elsewhere.
+     * Equivalent to VS Code's KeyMod.CtrlCmd.
+     * When true, do not set `metaKey` or `ctrlKey` alongside it.
+     */
+    modKey?: boolean;
   };
+
+/**
+ * Detected platform for key formatting.
+ * Set by KeyboardProvider on init; defaults to 'mac' for SSR.
+ */
+let detectedPlatform: 'mac' | 'other' = 'mac';
+
+/**
+ * Sets the detected platform. Called by KeyboardProvider on mount.
+ */
+export function setPlatform(platform: 'mac' | 'other'): void {
+  detectedPlatform = platform;
+}
+
+/**
+ * Returns the currently detected platform.
+ */
+export function getPlatform(): 'mac' | 'other' {
+  return detectedPlatform;
+}
 
 /* eslint-disable @typescript-eslint/naming-convention -- these are the key codes from the KeyboardEvent interface */
 const specialKeys: Record<string, string> = {
@@ -38,32 +64,31 @@ const formatKey = (key: KeyCombination['key']): string => {
 };
 
 /**
- * Formats a key combination into platform-specific notation
+ * Formats a key combination into platform-specific notation.
  */
-export const formatKeyCombination = (combo: KeyCombination): string => {
-  // TODO: Add support for non-mac platforms
-  // const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
+export function formatKeyCombination(combo: KeyCombination): string {
+  const isMac = detectedPlatform === 'mac';
   const parts: string[] = [];
+
+  // Resolve modKey to the platform-specific modifier
+  const effectiveMetaKey = combo.modKey ? isMac : Boolean(combo.metaKey);
+  const effectiveCtrlKey = combo.modKey ? !isMac : Boolean(combo.ctrlKey);
 
   // Add modifiers in the correct order
   if (combo.altKey) {
-    parts.push('⌥');
+    parts.push(isMac ? '⌥' : 'Alt+');
   }
 
   if (combo.shiftKey) {
-    parts.push('⇧');
+    parts.push(isMac ? '⇧' : 'Shift+');
   }
 
-  if (combo.metaKey && combo.ctrlKey) {
-    parts.push('⌘');
-  }
-
-  if (combo.metaKey) {
-    parts.push('⌘');
-  }
-
-  if (combo.ctrlKey) {
-    parts.push('⌃');
+  if (effectiveMetaKey && effectiveCtrlKey) {
+    parts.push(isMac ? '⌘' : 'Ctrl+');
+  } else if (effectiveMetaKey) {
+    parts.push(isMac ? '⌘' : 'Win+');
+  } else if (effectiveCtrlKey) {
+    parts.push(isMac ? '⌃' : 'Ctrl+');
   }
 
   // Format the main key
@@ -73,4 +98,4 @@ export const formatKeyCombination = (combo: KeyCombination): string => {
   }
 
   return parts.join('');
-};
+}

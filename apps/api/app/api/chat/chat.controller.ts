@@ -1,7 +1,7 @@
-import { Body, Controller, Logger, Post, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
+import { Body, Controller, Logger, Post, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import type { ToolSelection } from '@taucad/chat';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -32,11 +32,7 @@ export class ChatController {
   ) {}
 
   @Post()
-  public async createChat(
-    @Body() body: CreateChatDto,
-    @Res() response: FastifyReply,
-    @Req() request: FastifyRequest,
-  ): Promise<void> {
+  public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
     const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
@@ -101,28 +97,25 @@ export class ChatController {
     // Get the agent from the service
     const agent = await this.chatService.createAgent(modelId, selectedToolChoice, selectedKernel);
 
-    // Abort the request if the client disconnects
+    // Abort the request if the client disconnects.
+    // Listen on response.raw (ServerResponse) — for SSE, the response stream
+    // stays open and its 'close' event fires when the client disconnects.
+    // request.raw (IncomingMessage) fires 'close' when the POST body is consumed,
+    // which is too early to detect SSE disconnects.
     const abortController = new AbortController();
-    const { socket } = request.raw;
 
-    const handleSocketClose = (): void => {
-      if (request.raw.destroyed) {
+    response.raw.on('close', () => {
+      // WritableFinished is true when the stream completed normally.
+      // If false, the client disconnected before the stream finished.
+      if (!response.raw.writableFinished) {
         abortController.abort();
       }
-    };
+    });
 
-    socket.on('close', handleSocketClose);
-
-    // Clean up the listener when the response finishes to prevent memory leaks
-    // With HTTP keep-alive, the same socket is reused across multiple requests,
-    // so we must remove the listener to avoid accumulation
-    const cleanupSocketListener = (): void => {
-      socket.off('close', handleSocketClose);
-    };
-
-    response.raw.on('finish', cleanupSocketListener);
-    response.raw.on('error', cleanupSocketListener);
-    response.raw.on('close', cleanupSocketListener);
+    // Register the abort signal on the RPC service so in-flight RPC calls
+    // are rejected immediately when the client aborts, rather than waiting
+    // for the 60s timeout
+    this.chatRpcService.registerAbortSignal(body.id, abortController.signal);
 
     this.logger.debug(`Starting execution for thread: ${body.id}`);
     const stream = await agent.graph.stream(

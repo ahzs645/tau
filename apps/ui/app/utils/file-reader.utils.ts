@@ -151,6 +151,93 @@ export async function readFromFileList(fileList: FileList | File[], onProgress?:
 }
 
 /**
+ * Recursively read files from a FileSystemDirectoryHandle (File System Access API).
+ * Used for importing directories via showDirectoryPicker().
+ * The files are read as copies -- the resulting FileMap is not a live link to the OS folder.
+ */
+export async function readFromDirectoryHandle(
+  handle: FileSystemDirectoryHandle,
+  onProgress?: ProgressCallback,
+): Promise<FileMap> {
+  const files: FileMap = new Map();
+  const stats: ProgressStats = { processed: 0, total: 0 };
+
+  // First pass: count files for progress
+  await countDirectoryFiles(handle, stats);
+  stats.total = stats.processed;
+  stats.processed = 0;
+
+  // Second pass: read files
+  await readDirectoryHandleRecursive(handle, '', files, { onProgress, stats });
+
+  return files;
+}
+
+/**
+ * Count all files in a directory handle recursively (for progress tracking).
+ */
+async function countDirectoryFiles(handle: FileSystemDirectoryHandle, stats: ProgressStats): Promise<void> {
+  const entries = await collectDirectoryEntries(handle);
+  for (const entry of entries) {
+    if (entry.kind === 'file') {
+      stats.processed++;
+    } else {
+      // eslint-disable-next-line no-await-in-loop -- sequential counting required
+      await countDirectoryFiles(entry, stats);
+    }
+  }
+}
+
+/**
+ * Collect all entries from a FileSystemDirectoryHandle into an array.
+ * Materialises the async iterator to avoid TypeScript narrowing issues.
+ */
+async function collectDirectoryEntries(
+  handle: FileSystemDirectoryHandle,
+): Promise<Array<FileSystemFileHandle | FileSystemDirectoryHandle>> {
+  const entries: Array<FileSystemFileHandle | FileSystemDirectoryHandle> = [];
+  for await (const entry of handle.values()) {
+    entries.push(entry);
+  }
+
+  return entries;
+}
+
+/**
+ * Recursively read files from a FileSystemDirectoryHandle into a FileMap.
+ */
+async function readDirectoryHandleRecursive(
+  handle: FileSystemDirectoryHandle,
+  basePath: string,
+  files: FileMap,
+  progressInfo?: { onProgress?: ProgressCallback; stats?: ProgressStats },
+): Promise<void> {
+  const entries = await collectDirectoryEntries(handle);
+  for (const entry of entries) {
+    const entryPath = basePath ? joinPath(basePath, entry.name) : entry.name;
+
+    if (entry.kind === 'file') {
+      // eslint-disable-next-line no-await-in-loop -- sequential file reading for progress tracking
+      const file = await entry.getFile();
+      // eslint-disable-next-line no-await-in-loop -- sequential file reading for progress tracking
+      const arrayBuffer = await file.arrayBuffer();
+      files.set(entryPath, {
+        filename: entryPath,
+        content: new Uint8Array(arrayBuffer),
+      });
+
+      if (progressInfo?.stats && progressInfo.onProgress) {
+        progressInfo.stats.processed++;
+        progressInfo.onProgress(progressInfo.stats.processed, progressInfo.stats.total);
+      }
+    } else {
+      // eslint-disable-next-line no-await-in-loop -- sequential traversal required
+      await readDirectoryHandleRecursive(entry, entryPath, files, progressInfo);
+    }
+  }
+}
+
+/**
  * Check if a file is a ZIP archive based on extension or MIME type.
  */
 export function isZipFile(file: File): boolean {

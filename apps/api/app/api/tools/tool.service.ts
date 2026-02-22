@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { StructuredTool } from '@langchain/core/tools';
-import { OpenAI, OpenAIEmbeddings } from '@langchain/openai';
 import type { ToolName, ToolMode, ToolSelection } from '@taucad/chat';
 import { toolName, toolMode } from '@taucad/chat/constants';
 import type { Environment } from '#config/environment.config.js';
@@ -27,6 +26,7 @@ export const toolChoiceFromToolName = {
 @Injectable()
 export class ToolService {
   private webSearchTool: StructuredTool | undefined;
+  private webBrowserTool: StructuredTool | undefined;
 
   public constructor(private readonly configService: ConfigService<Environment, true>) {}
 
@@ -34,20 +34,10 @@ export class ToolService {
     tools: Partial<Record<ToolName, StructuredTool>>;
     resolvedToolChoice: string;
   } {
-    const model = new OpenAI({ temperature: 0 });
-    const embeddings = new OpenAIEmbeddings();
     // Define the tools for the agent to use
     const toolCategoryToTool = {
       [toolName.webSearch]: this.getWebSearchTool(),
-      [toolName.webBrowser]: createWebBrowserTool({
-        model,
-        embeddings,
-        chunkSize: 2000,
-        chunkOverlap: 200,
-        maxChunks: 4,
-        maxResults: 4,
-        forceSummary: false,
-      }),
+      [toolName.webBrowser]: this.getWebBrowserTool(),
       [toolName.editFile]: editFileTool,
       [toolName.testModel]: testModelTool,
       [toolName.editTests]: editTestsTool,
@@ -99,16 +89,24 @@ export class ToolService {
     return { tools: toolCategoryToTool, resolvedToolChoice };
   }
 
-  private getWebSearchTool(): StructuredTool {
-    if (!this.webSearchTool) {
-      const tavilyApiKey = this.configService.get('TAVILY_API_KEY', { infer: true });
-      if (!tavilyApiKey) {
-        throw new Error('Tried to create web search tool without TAVILY_API_KEY in the environment variables');
-      }
-
-      this.webSearchTool = createWebSearchTool({ tavilyApiKey });
+  private getTavilyApiKey(): string {
+    const tavilyApiKey = this.configService.get('TAVILY_API_KEY', { infer: true });
+    if (!tavilyApiKey) {
+      throw new Error('Tried to create Tavily tool without TAVILY_API_KEY in the environment variables');
     }
 
+    return tavilyApiKey;
+  }
+
+  private getWebSearchTool(): StructuredTool {
+    this.webSearchTool ??= createWebSearchTool({ tavilyApiKey: this.getTavilyApiKey() });
+
     return this.webSearchTool;
+  }
+
+  private getWebBrowserTool(): StructuredTool {
+    this.webBrowserTool ??= createWebBrowserTool({ tavilyApiKey: this.getTavilyApiKey() });
+
+    return this.webBrowserTool;
   }
 }

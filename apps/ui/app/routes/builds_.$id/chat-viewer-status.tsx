@@ -1,11 +1,12 @@
 import { useSelector } from '@xstate/react';
 import { Loader } from '#components/ui/loader.js';
 import { useBuild } from '#hooks/use-build.js';
+import { useCadSelector } from '#hooks/use-cad.js';
 import { cn } from '#utils/ui.utils.js';
 
 export function ChatViewerStatus({ className, ...props }: React.HTMLAttributes<HTMLDivElement>): React.ReactNode {
-  const { cadRef: cadActor, buildRef } = useBuild();
-  const state = useSelector(cadActor, (state) => state.value);
+  const { buildRef } = useBuild();
+  const cadState = useCadSelector((state) => state.value, undefined);
   const buildState = useSelector(buildRef, (state) => state.value);
 
   // Don't show loading states if the build failed to load (e.g., not found)
@@ -13,7 +14,11 @@ export function ChatViewerStatus({ className, ...props }: React.HTMLAttributes<H
     return null;
   }
 
-  return ['buffering', 'rendering', 'booting', 'initializing'].includes(state) ? (
+  const loadingState =
+    typeof cadState === 'string' && ['buffering', 'rendering', 'booting', 'initializing'].includes(cadState)
+      ? cadState
+      : undefined;
+  return loadingState ? (
     <div
       {...props}
       className={cn(
@@ -22,7 +27,7 @@ export function ChatViewerStatus({ className, ...props }: React.HTMLAttributes<H
       )}
     >
       <Loader className="size-4 text-primary md:size-6" />
-      <span className="font-mono text-sm text-muted-foreground capitalize">{state}...</span>
+      <span className="font-mono text-sm text-muted-foreground capitalize">{loadingState}...</span>
     </div>
   ) : null;
 }

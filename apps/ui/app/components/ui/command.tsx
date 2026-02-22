@@ -4,7 +4,7 @@ import { SearchIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '#components/ui/dialog.js';
 import { emptyItemVariants } from '#components/ui/empty-items.js';
-import { menuItemVariants, menuSeparatorVariants } from '#components/ui/menu.variants.js';
+import { menuItemVariants, menuSeparatorVariants, menuShortcutClass } from '#components/ui/menu.variants.js';
 
 function Command({ className, ...properties }: React.ComponentProps<typeof CommandPrimitive>): React.JSX.Element {
   return (
@@ -122,9 +122,10 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        menuItemVariants({ focusable: false }),
-        // Cmdk uses data-[disabled=true] not data-disabled:, override base with same specificity then re-apply for truly disabled
-        'hover:text-accent-foreground data-[selected=true]:text-accent-foreground cursor-pointer hover:bg-accent data-disabled:pointer-events-auto data-disabled:opacity-100 data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent',
+        menuItemVariants({ highlight: 'selected' }),
+        // Cmdk sets data-disabled="false" on ALL non-disabled items, but Tailwind's data-disabled: matches bare attribute presence.
+        // Reset base data-disabled: styles, then re-apply only for truly disabled items via data-[disabled=true]:
+        'data-disabled:pointer-events-auto data-disabled:text-inherit data-disabled:opacity-100 data-[disabled=true]:pointer-events-none data-[disabled=true]:text-muted-foreground/50 data-[disabled=true]:opacity-50',
         className,
       )}
       {...properties}
@@ -133,13 +134,7 @@ function CommandItem({
 }
 
 function CommandShortcut({ className, ...properties }: React.ComponentProps<'span'>): React.JSX.Element {
-  return (
-    <span
-      data-slot="command-shortcut"
-      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
-      {...properties}
-    />
-  );
+  return <span data-slot="command-shortcut" className={cn(menuShortcutClass, className)} {...properties} />;
 }
 
 export {

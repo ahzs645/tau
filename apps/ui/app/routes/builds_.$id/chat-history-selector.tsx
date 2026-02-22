@@ -17,9 +17,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogC
 import { Input } from '#components/ui/input.js';
 import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
-import { FloatingPanelContentHeaderActions } from '#components/ui/floating-panel.js';
+import {
+  FloatingPanelContentHeaderActions,
+  FloatingPanelMenuButton,
+  FloatingPanelButtonGroup,
+} from '#components/ui/floating-panel.js';
 import { useChatRpcStatus } from '#hooks/use-chat-rpc-socket.js';
 
 const newChatKeyCombination = {
@@ -28,7 +32,13 @@ const newChatKeyCombination = {
   shiftKey: true,
 } satisfies KeyCombination;
 
-export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => void }): ReactNode {
+export function ChatHistorySelector({
+  onNewChat,
+  closeButton,
+}: {
+  readonly onNewChat?: () => void;
+  readonly closeButton?: ReactNode;
+}): ReactNode {
   const { buildRef, editorRef, buildId, setLastChatId } = useBuild();
   const { chats, createChat, updateChatName, deleteChat, isLoading: isChatsLoading } = useChats(buildId);
 
@@ -62,7 +72,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
     onNewChat?.();
   }, [createChat, setLastChatId, onNewChat]);
 
-  const { formattedKeyCombination } = useKeydown(newChatKeyCombination, handleAddChat);
+  const { formattedKeyCombination } = useKeybinding(newChatKeyCombination, handleAddChat);
 
   const { sendMessage } = useChat({
     ...useChatConstants,
@@ -180,8 +190,8 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
               </div>
             ) : null}
             {chat.error ? (
-              <div className="flex items-center gap-1 text-xs text-destructive">
-                <AlertCircle className="size-3 shrink-0 text-destructive" />
+              <div className="flex items-center gap-1 text-xs text-warning">
+                <AlertCircle className="size-3 shrink-0 text-warning" />
                 <span className="truncate">{chat.error.title}</span>
               </div>
             ) : null}
@@ -194,7 +204,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
             <Button
               variant="ghost"
               size="icon"
-              className="hover:bg-neutral/10 max-md:bg-neutral/10 md:size-6"
+              className="hover:bg-neutral/20! max-md:bg-neutral/20! md:size-6"
               onClick={(event) => {
                 event.stopPropagation();
                 handleRenameChat(chat.id, chatName);
@@ -205,7 +215,7 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
             <Button
               variant="ghost"
               size="icon"
-              className="hover:bg-destructive/10 max-md:bg-destructive/10 md:size-6"
+              className="hover:bg-destructive/20! max-md:bg-destructive/20! md:size-6"
               onClick={(event) => {
                 event.stopPropagation();
                 void handleDeleteChat(chat.id);
@@ -225,14 +235,14 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
 
   return (
     <>
-      <div className={cn('wrap ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
+      <div className={cn('ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
         <span className="truncate">{activeChat?.name}</span>
         {isDisconnected ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="relative flex size-2 shrink-0">
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive opacity-75" />
-                <span className="relative inline-flex size-2 rounded-full bg-destructive" />
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-warning opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-warning" />
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom">
@@ -244,46 +254,50 @@ export function ChatHistorySelector({ onNewChat }: { readonly onNewChat?: () => 
           </Tooltip>
         ) : null}
       </div>
-      <FloatingPanelContentHeaderActions className="h-7.75">
-        <Tooltip>
-          <ComboBoxResponsive
-            groupedItems={groupedChats}
-            renderLabel={renderChatLabel}
-            getValue={getChatValue}
-            defaultValue={activeChat}
-            placeholder="Select a chat"
-            searchPlaceHolder="Search chats..."
-            title="Chats"
-            description="Select a chat to continue the conversation."
-            popoverProperties={{
-              align: 'end',
-              className: 'w-[300px]',
-            }}
-            onSelect={handleSelectChat}
-          >
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="size-6 rounded-sm">
-                <History className="size-4" />
-              </Button>
-            </TooltipTrigger>
-          </ComboBoxResponsive>
-          <TooltipContent side="top">Search chats</TooltipContent>
-        </Tooltip>
+      <FloatingPanelContentHeaderActions>
+        <FloatingPanelButtonGroup>
+          <Tooltip>
+            <ComboBoxResponsive
+              groupedItems={groupedChats}
+              renderLabel={renderChatLabel}
+              getValue={getChatValue}
+              defaultValue={activeChat}
+              placeholder="Select a chat"
+              searchPlaceHolder="Search chats..."
+              title="Chats"
+              description="Select a chat to continue the conversation."
+              popoverProperties={{
+                align: 'end',
+                className: 'w-[300px]',
+              }}
+              onSelect={handleSelectChat}
+            >
+              <TooltipTrigger asChild>
+                <FloatingPanelMenuButton aria-label="Search chats">
+                  <History className="size-4" />
+                </FloatingPanelMenuButton>
+              </TooltipTrigger>
+            </ComboBoxResponsive>
+            <TooltipContent side="top">Search chats</TooltipContent>
+          </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-6 rounded-sm" onClick={handleAddChat}>
-              <Plus className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            New chat{' '}
-            <KeyShortcut variant="tooltip" className="ml-1">
-              {formattedKeyCombination}
-            </KeyShortcut>
-          </TooltipContent>
-        </Tooltip>
-        <ChatHistorySettings />
+          <FloatingPanelMenuButton
+            aria-label="New chat"
+            tooltip={
+              <>
+                New chat{' '}
+                <KeyShortcut variant="tooltip" className="ml-1">
+                  {formattedKeyCombination}
+                </KeyShortcut>
+              </>
+            }
+            onClick={handleAddChat}
+          >
+            <Plus className="size-4" />
+          </FloatingPanelMenuButton>
+          <ChatHistorySettings />
+        </FloatingPanelButtonGroup>
+        {closeButton}
       </FloatingPanelContentHeaderActions>
 
       {/* Rename Dialog */}

@@ -15,11 +15,14 @@ import type {
 } from '@taucad/chat';
 
 /** Timeout for RPC execution in milliseconds (60 seconds) */
-const rpcExecutionTimeoutMs = 60_000;
+export const rpcExecutionTimeoutMs = 60_000;
+
+/** Delay before clearing the aborted-chat entry after an abort signal fires (milliseconds).
+ *  Catches straggler RPCs that start after abort but before LangGraph fully stops. */
+export const abortCleanupDelayMs = 5000;
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
   timeoutId: ReturnType<typeof setTimeout>;
   rpcName: keyof RpcSchemasRegistry;
   chatId: string;
@@ -48,6 +51,13 @@ export class ChatRpcService implements OnModuleDestroy {
 
   /** Pending RPC requests by requestId */
   private readonly pendingRequests = new Map<string, PendingRequest>();
+
+  /** Track aborted chats to reject new RPCs after abort */
+  private readonly abortedChats = new Set<string>();
+
+  /** Cleanup timers for aborted chats, keyed by chatId. Tracked so stale timers
+   *  from a previous abort can be cancelled when a new signal is registered. */
+  private readonly abortCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /**
    * Register a Socket.IO connection for a chat room.
@@ -124,6 +134,43 @@ export class ChatRpcService implements OnModuleDestroy {
   }
 
   /**
+   * Register an AbortSignal for a chat request. When the signal fires:
+   * 1. All pending RPC requests for this chat are immediately rejected
+   * 2. Any new sendRpcRequest calls for this chat return an error immediately
+   *
+   * This ensures that when the client disconnects or aborts a request,
+   * in-flight RPC calls are rejected promptly rather than waiting for
+   * the 60s timeout. The registration is automatically cleaned up
+   * after the signal fires.
+   *
+   * Zero tool changes needed — tools keep calling sendRpcRequest as before.
+   */
+  public registerAbortSignal(chatId: string, signal: AbortSignal): void {
+    // Cancel any stale cleanup timer from a previous abort so it cannot
+    // prematurely clear the abort entry for the new request.
+    this.cancelAbortCleanupTimer(chatId);
+
+    // Clear any stale abort entry from a previous request on this chat.
+    this.abortedChats.delete(chatId);
+
+    if (signal.aborted) {
+      this.abortedChats.add(chatId);
+      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
+      this.scheduleAbortCleanup(chatId);
+      return;
+    }
+
+    const onAbort = (): void => {
+      this.abortedChats.add(chatId);
+      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
+      signal.removeEventListener('abort', onAbort);
+      this.scheduleAbortCleanup(chatId);
+    };
+
+    signal.addEventListener('abort', onAbort);
+  }
+
+  /**
    * Clean up all pending requests and timeouts on module destroy.
    * Called during graceful shutdown to prevent timeouts from running
    * and potentially accessing destroyed resources.
@@ -146,6 +193,13 @@ export class ChatRpcService implements OnModuleDestroy {
 
     this.pendingRequests.clear();
     this.connections.clear();
+
+    for (const timerId of this.abortCleanupTimers.values()) {
+      clearTimeout(timerId);
+    }
+
+    this.abortCleanupTimers.clear();
+    this.abortedChats.clear();
 
     this.logger.log('RPC service cleanup complete');
   }
@@ -173,6 +227,16 @@ export class ChatRpcService implements OnModuleDestroy {
     rpcName: T,
     args: RpcInput<T>,
   ): Promise<RpcResult<T> | RpcExecutionError | RpcValidationError> {
+    // Reject immediately if this chat's request was already aborted
+    if (this.abortedChats.has(chatId)) {
+      const abortedError: RpcExecutionError = {
+        errorCode: 'CLIENT_DISCONNECTED',
+        message: 'Chat request was cancelled.',
+        rpcName,
+      };
+      return abortedError;
+    }
+
     const socketSet = this.connections.get(chatId);
 
     // Find the first connected socket from the set
@@ -216,8 +280,6 @@ export class ChatRpcService implements OnModuleDestroy {
       // Store pending request
       this.pendingRequests.set(requestId, {
         resolve: resolve as (value: unknown) => void,
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- Not used, we always resolve with errors
-        reject() {},
         timeoutId,
         rpcName,
         chatId,
@@ -397,6 +459,31 @@ export class ChatRpcService implements OnModuleDestroy {
         pending.resolve(disconnectError);
         this.logger.debug(`Resolved pending request ${requestId} with ${errorType}`);
       }
+    }
+  }
+
+  /**
+   * Schedule cleanup of the aborted chat entry after a short delay.
+   * The delay catches RPCs that start after abort fires but before
+   * LangGraph fully stops. The timer is tracked so it can be cancelled
+   * if a new signal is registered for the same chatId.
+   */
+  private scheduleAbortCleanup(chatId: string): void {
+    const timerId = setTimeout(() => {
+      this.abortedChats.delete(chatId);
+      this.abortCleanupTimers.delete(chatId);
+    }, abortCleanupDelayMs);
+    this.abortCleanupTimers.set(chatId, timerId);
+  }
+
+  /**
+   * Cancel a pending abort cleanup timer for a chatId, if one exists.
+   */
+  private cancelAbortCleanupTimer(chatId: string): void {
+    const existingTimer = this.abortCleanupTimers.get(chatId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.abortCleanupTimers.delete(chatId);
     }
   }
 }

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { Slot } from '@radix-ui/react-slot';
+import { Slot as SlotPrimitive } from 'radix-ui';
 import { useBuild } from '#hooks/use-build.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -62,7 +62,7 @@ export function FileLink({
     [build, path, lineNumber, column],
   );
 
-  const Component = asChild ? Slot : 'button';
+  const Component = asChild ? SlotPrimitive.Slot : 'button';
 
   return (
     <Component

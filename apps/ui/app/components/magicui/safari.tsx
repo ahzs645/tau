@@ -60,7 +60,7 @@ export function Safari({
             <path
               fillRule="evenodd"
               clipRule="evenodd"
-              d="M1.06738 12C1.06738 5.92487 5.99225 1 12.0674 1H1189.93C1196.01 1 1200.93 5.92487 1200.93 12V51H1.06738V12Z"
+              d="M0 12C0 5.37258 5.37258 0 12 0H1190C1196.63 0 1202 5.37258 1202 12V51H0V12Z"
               className="fill-white dark:fill-[#262626]"
             />
             {/* Traffic lights */}
@@ -69,7 +69,7 @@ export function Safari({
             <circle cx="67" cy="25" r="6" className="fill-[#E5E5E5] dark:fill-[#404040]" />
             {/* URL bar background */}
             <path
-              d="M286 17C286 13.6863 288.686 11 292 11H946C949.314 11 952 13.6863 952 17V35C952 38.3137 949.314 41 946 41H292C288.686 41 286 38.3137 286 35V17Z"
+              d="M301 11H937C945.284 11 952 17.716 952 26C952 34.284 945.284 41 937 41H301C292.716 41 286 34.284 286 26C286 17.716 292.716 11 301 11Z"
               className="fill-[#E5E5E5] dark:fill-[#404040]"
             />
             {/* Lock icon */}

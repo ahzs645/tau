@@ -1,6 +1,7 @@
 /* eslint-disable no-barrel-files/no-barrel-files -- allowable for package entry point. */
-export { default as replicadTypesCleanJsDoc } from '#generated/replicad/replicad-clean-jsdoc.d.ts?raw';
-// eslint-disable-next-line no-restricted-imports, @nx/enforce-module-boundaries -- replicad does not export types.
-export { default as replicadTypesOriginal } from '../../../node_modules/replicad/dist/replicad.d.ts?raw';
+export { default as replicadTypesOriginal } from '#generated/replicad/replicad-modeling.bundled.d.ts?raw';
 
+export { default as jscadModelingTypes } from '#generated/jscad/jscad-modeling.bundled.d.ts?raw';
 export { default as kclStdlibReference } from '#generated/kcl/kcl-stdlib-compact.md?raw';
+
+export type { ApiData, ApiDataMetadata, ApiEntry, ApiEntryKind, ApiParameter } from '#api-extraction.types.js';

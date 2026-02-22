@@ -58,7 +58,7 @@ export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOp
     );
 
     // Export the transformed document back to GLB
-    const transformedGlb = (await io.writeBinary(document)) as Uint8Array<ArrayBuffer>;
+    const transformedGlb = await io.writeBinary(document);
     return transformedGlb;
   }
 

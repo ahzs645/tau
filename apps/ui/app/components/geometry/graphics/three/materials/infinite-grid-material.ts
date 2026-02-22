@@ -7,7 +7,7 @@ export type InfiniteGridMaterialProperties = {
    */
   readonly smallSize?: number;
   /**
-   * The thickness of the lines of the small grid.
+   * The thickness of the lines of the small grid in screen pixels.
    * Increasing makes small grid lines thicker and more prominent.
    * @default 1.25
    */
@@ -18,7 +18,7 @@ export type InfiniteGridMaterialProperties = {
    */
   readonly largeSize?: number;
   /**
-   * The thickness of the lines of the large grid.
+   * The thickness of the lines of the large grid in screen pixels.
    * Increasing makes large grid lines thicker and more prominent.
    * @default 2
    */
@@ -41,7 +41,7 @@ export type InfiniteGridMaterialProperties = {
   /**
    * The base opacity of the grid lines.
    * Increasing makes the entire grid more visible/opaque.
-   * @default 0.4
+   * @default 0.3
    */
   readonly lineOpacity?: number;
   /**
@@ -105,8 +105,8 @@ export function infiniteGridMaterial(properties?: InfiniteGridMaterialProperties
     color = new THREE.Color('grey'),
     axes = 'xyz',
     smallThickness = 1.25,
-    largeThickness = 2.5,
-    lineOpacity = 0.4,
+    largeThickness = 2,
+    lineOpacity = 0.3,
     minGridDistance = 10,
     gridDistanceMultiplier = 20,
     fadeStart = 0.05,
@@ -125,6 +125,7 @@ export function infiniteGridMaterial(properties?: InfiniteGridMaterialProperties
   const material = new THREE.ShaderMaterial({
     side: THREE.DoubleSide,
     transparent: true,
+    depthWrite: false,
     uniforms: {
       uSmallSize: {
         value: smallSize,
@@ -231,13 +232,55 @@ export function infiniteGridMaterial(properties?: InfiniteGridMaterialProperties
       uniform float uFadeEnd;
       uniform int uAxes;
 
-      float getGrid(vec2 planePos, float size, float thickness) {
-        vec2 r = planePos / size;
+      // Pristine Grid — based on Ben Golus's "The Best Darn Grid Shader (Yet)"
+      // https://bgolus.medium.com/the-best-darn-grid-shader-yet-727f9278b9d8
+      // Adapted for constant-pixel-width lines with phone-wire AA,
+      // draw width clamping, Moire suppression, and premultiplied alpha blending.
+      float pristineGrid(vec2 uv, float thickness) {
+        // Per-axis screen-space derivatives using length() instead of fwidth().
+        // fwidth() = abs(dFdx) + abs(dFdy) overestimates on diagonals;
+        // length() gives the geometrically correct derivative magnitude per axis.
+        vec4 uvDDXY = vec4(dFdx(uv), dFdy(uv));
+        vec2 uvDeriv = vec2(length(uvDDXY.xz), length(uvDDXY.yw));
         
-        vec2 grid = abs(fract(r - 0.5) - 0.5) / (fwidth(r) * thickness);
-        float line = min(grid.x, grid.y);
+        // Convert pixel thickness to UV-space line width (fraction of cell).
+        // Clamp to [0, 1] since a line cannot be wider than the cell itself.
+        vec2 targetWidth = clamp(uvDeriv * thickness, 0.0, 1.0);
         
-        return 1.0 - min(line, 1.0);
+        // Phone-wire AA + draw width clamping:
+        // - min = uvDeriv: line is never thinner than 1 screen pixel
+        //   (prevents sub-pixel aliasing; instead lines stay 1px and fade)
+        // - max = 0.5: ensures correct brightness convergence at the horizon
+        //   (at 0.5, average intensity matches the target, preventing dark gutters)
+        vec2 drawWidth = clamp(targetWidth, uvDeriv, vec2(0.5));
+        
+        // 1.5px AA border — smoothstep with 1.5 pixel width produces
+        // a similar perceived sharpness to a 1px linear gradient, but smoother.
+        vec2 lineAA = max(uvDeriv, 0.000001) * 1.5;
+        
+        // Distance to nearest grid line (0 at line center, 0.5 at midpoint)
+        vec2 gridUV = 1.0 - abs(fract(uv) * 2.0 - 1.0);
+        
+        // Smooth antialiased grid lines
+        vec2 grid2 = smoothstep(drawWidth + lineAA, drawWidth - lineAA, gridUV);
+        
+        // Phone-wire AA intensity fade: when lines were expanded beyond their
+        // target width to stay at minimum 1px, reduce opacity proportionally.
+        // This creates the illusion of sub-pixel lines fading out gracefully
+        // rather than aliasing as they recede into the distance.
+        grid2 *= clamp(targetWidth / drawWidth, 0.0, 1.0);
+        
+        // Moire suppression: when grid cells approach sub-pixel size
+        // (uvDeriv > 0.5), smoothly transition from individual lines to a
+        // solid average color. This eliminates interference patterns that
+        // appear when multiple grid cells fall within a single pixel.
+        grid2 = mix(grid2, targetWidth, clamp(uvDeriv * 2.0 - 1.0, 0.0, 1.0));
+        
+        // Premultiplied alpha blend to combine both axes.
+        // Equivalent to: grid2.x * (1.0 - grid2.y) + grid2.y
+        // This correctly composites overlapping transparent lines,
+        // unlike max() which loses intensity at intersections.
+        return mix(grid2.x, 1.0, grid2.y);
       }
       
       void main() {
@@ -280,10 +323,17 @@ export function infiniteGridMaterial(properties?: InfiniteGridMaterialProperties
         // Calculate fade factor using smoothstep for cleaner fade
         float fadeFactor = smoothstep(uFadeEnd, uFadeStart, distanceRatio);
         
-        float gridSmall = getGrid(worldPlane, uSmallSize, uSmallThickness);
-        float gridLarge = getGrid(worldPlane, uLargeSize, uLargeThickness);
+        // Compute grid for both scales using Pristine Grid algorithm.
+        // Each grid gets its own UV space (worldPlane / size) so the
+        // derivative-based antialiasing is computed per-scale.
+        float gridSmall = pristineGrid(worldPlane / uSmallSize, uSmallThickness);
+        float gridLarge = pristineGrid(worldPlane / uLargeSize, uLargeThickness);
         
-        float grid = max(gridSmall, gridLarge);
+        // Combine grids using premultiplied alpha blend (large over small).
+        // Where large grid lines exist, they take priority; elsewhere the
+        // small grid shows through. This is equivalent to layered alpha
+        // compositing and produces correct brightness at intersections.
+        float grid = mix(gridSmall, 1.0, gridLarge);
         
         // Apply final color with basic opacity
         gl_FragColor = vec4(uColor.rgb, grid * fadeFactor * uLineOpacity);

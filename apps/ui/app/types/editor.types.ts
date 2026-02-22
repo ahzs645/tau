@@ -1,5 +1,6 @@
 import type { FileStatus } from '@taucad/types';
-import type { PanelId, DesktopPanelId } from '#constants/editor.constants.js';
+import type { SerializedDockview } from 'dockview-react';
+import type { PanelId, DesktopPanelId, GraphicsViewSettings } from '#constants/editor.constants.js';
 import { allotmentPanelOrder } from '#constants/editor.constants.js';
 
 // ============================================================================
@@ -67,6 +68,21 @@ export function fromAllotmentSizes(sizes: readonly number[]): Record<PanelId, nu
 }
 
 // ============================================================================
+// View State Types
+// ============================================================================
+
+/**
+ * Per-viewer-panel state. Each viewer panel in the Dockview layout has its own
+ * entry file binding and graphics settings.
+ */
+export type ViewState = {
+  /** Which file this viewer panel is displaying (undefined = no file selected, show empty state) */
+  entryFile: string | undefined;
+  /** Per-view graphics settings (surfaces, lines, grid, FOV, etc.) */
+  graphicsSettings: GraphicsViewSettings;
+};
+
+// ============================================================================
 // Editor State Types
 // ============================================================================
 
@@ -88,6 +104,12 @@ export type EditorState = {
   lastChatId: string | undefined;
   /** Panel layout state (open/close, sizes, mobile tab) */
   panelState: PanelState;
+  /** Serialized DockviewReact layout for the code editor area */
+  editorLayout: SerializedDockview | undefined;
+  /** Serialized DockviewReact layout for the geometry viewer area */
+  viewerLayout: SerializedDockview | undefined;
+  /** Per-viewer-panel state, keyed by Dockview panel ID */
+  viewSettings: Record<string, ViewState>;
   /** Timestamp of last update */
   updatedAt: number;
 };

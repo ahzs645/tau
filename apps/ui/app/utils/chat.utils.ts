@@ -90,8 +90,9 @@ const toolSerializers = {
         .join('\n'),
   },
   [toolName.webBrowser]: {
-    input: (input) => joinLines(`url: ${input.url}`, input.query ? `query: ${input.query}` : undefined),
-    output: (output) => output,
+    input: (input) =>
+      joinLines(`urls: ${(input.urls ?? []).join(', ')}`, input.query ? `query: ${input.query}` : undefined),
+    output: (output) => output.map((result) => `- [${result.url}]\n  ${result.content.slice(0, 200)}...`).join('\n'),
   },
   [toolName.editFile]: {
     input: (input) => `targetFile: ${input.targetFile}\ncodeEdit: <${input.codeEdit?.length ?? 0} chars>`,
@@ -383,6 +384,56 @@ export function serializeTranscript(messages: MyUIMessage[], title: string): str
     .join('\n\n---\n\n');
 
   return `${header}\n\n---\n\n${blocks}\n`;
+}
+
+/**
+ * Transitions all in-progress tool parts in the last assistant message
+ * to output-error state. Used when a stream is interrupted by the user
+ * (stop-then-send flow).
+ *
+ * This ensures interrupted tools show the error state in the UI via
+ * the existing `<ChatToolError>` component used by all tool renderers.
+ *
+ * Only modifies the last message if it's an assistant message with
+ * tool parts in `input-streaming` or `input-available` state.
+ * Returns the original array if no changes are needed.
+ */
+export function finalizeInterruptedToolParts(messages: MyUIMessage[]): MyUIMessage[] {
+  const lastMessage = messages.at(-1);
+  if (!lastMessage || lastMessage.role !== 'assistant') {
+    return messages;
+  }
+
+  const hasInterruptedTools = lastMessage.parts.some(
+    (part) => isToolPart(part) && (part.state === 'input-streaming' || part.state === 'input-available'),
+  );
+
+  if (!hasInterruptedTools) {
+    return messages;
+  }
+
+  const updatedParts = lastMessage.parts.map((part) => {
+    if (isToolPart(part) && (part.state === 'input-streaming' || part.state === 'input-available')) {
+      // Assertion needed: input-streaming parts have PartialObject<Schema> for `input`,
+      // but output-error expects the full Schema. The partial input is acceptable
+      // for display purposes since the tool was interrupted.
+      const errorText = JSON.stringify({
+        errorCode: 'USER_INTERRUPTED',
+        message: 'Interrupted by user.',
+        toolCallId: part.toolCallId,
+      });
+      const interruptedPart = {
+        ...part,
+        state: 'output-error' as const,
+        errorText,
+      };
+      return interruptedPart as MyMessagePart;
+    }
+
+    return part;
+  });
+
+  return [...messages.slice(0, -1), { ...lastMessage, parts: updatedParts }];
 }
 
 // Helper function to create a new message

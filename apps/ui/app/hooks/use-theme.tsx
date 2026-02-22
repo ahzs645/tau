@@ -37,6 +37,8 @@ export const themeOptions: ThemeOption[] = [
 type UseThemeReturn = {
   /** The resolved theme - always 'light' or 'dark', never 'system' */
   theme: Theme;
+  /** The raw resolved theme from remix-themes. Null during SSR when no preference is stored (system theme mode). */
+  ssrTheme: ThemeWithSystem;
   /** The user's theme preference including 'system' (null) option */
   themeWithSystem: ThemeWithSystem;
   setTheme: (theme: ThemeWithSystem) => void;
@@ -85,6 +87,7 @@ export function useTheme(): UseThemeReturn {
 
   return {
     theme,
+    ssrTheme: resolvedTheme,
     themeWithSystem,
     setTheme,
     cycleTheme,

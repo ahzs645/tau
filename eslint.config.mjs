@@ -88,7 +88,7 @@ const config = [
       '@nx/enforce-module-boundaries': [
         'error',
         {
-          allow: [],
+          allow: ['@taucad/kernels'],
           allowCircularSelfDependency: true,
           depConstraints: [
             {
@@ -299,7 +299,7 @@ const config = [
   {
     // Packages
     files: ['packages/**/*.{ts,tsx}'],
-    ignores: ['packages/**/*.{spec,test,config}.{ts,tsx}'], // Only lint the source files.
+    ignores: ['packages/**/*.{spec,test,config,setup}.{ts,tsx}'], // Only lint the source files.
     rules: {
       // Packages MUST declare all their dependencies in the package.json, as they are
       // published and consumers will not have access to the monorepo.
@@ -309,11 +309,18 @@ const config = [
           packageDir: ['.'], // Exclude the '../..' path as we want to exclude the root package.json.
           devDependencies: true,
           optionalDependencies: false,
-          peerDependencies: false,
+          peerDependencies: true,
           includeTypes: true,
           includeInternal: true,
         },
       ],
+    },
+  },
+  {
+    // Package entry points need barrel file imports
+    files: ['{packages,libs}/**/index.ts'],
+    rules: {
+      'no-barrel-files/no-barrel-files': 'off',
     },
   },
 ];

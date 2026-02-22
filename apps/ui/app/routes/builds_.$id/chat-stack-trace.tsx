@@ -1,4 +1,3 @@
-import { useSelector } from '@xstate/react';
 import { useCallback, useState } from 'react';
 import { ChevronRight, Sparkles } from 'lucide-react';
 import type { KernelProvider, KernelIssue, KernelStackFrame, IssueSeverity } from '@taucad/types';
@@ -10,10 +9,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { FileLink } from '#components/files/file-link.js';
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
+import { useBuild } from '#hooks/use-build.js';
+import { useCad, useCadSelector } from '#hooks/use-cad.js';
 import { useChatActions } from '#hooks/use-chat.js';
 import { useChats } from '#hooks/use-chats.js';
-import { useKeydown } from '#hooks/use-keydown.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useModifiers } from '#hooks/use-keyboard.js';
+import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
@@ -23,7 +24,7 @@ import { useFileManager } from '#hooks/use-file-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
-const shiftKeyCombination = { key: 'Shift' } as const;
+const shiftKey = formatKeyCombination({ key: 'Shift' });
 
 type FormatErrorPromptOptions = {
   error: KernelIssue;
@@ -127,7 +128,7 @@ function StackFrame({ frame, index }: { readonly frame: KernelStackFrame; readon
     <div className="flex min-w-0 items-center gap-2 font-mono text-[0.625rem]">
       <span className="w-3 shrink-0 text-right text-muted-foreground">{index + 1}</span>
       <span className="shrink-0 text-muted-foreground">|</span>
-      <span className="shrink-0 text-foreground">{frame.functionName ?? '<anonymous>'}</span>
+      <span className="min-w-0 truncate text-foreground">{frame.functionName ?? '<anonymous>'}</span>
       {isClickable ? (
         <FileLink
           path={frame.fileName!}
@@ -140,6 +141,54 @@ function StackFrame({ frame, index }: { readonly frame: KernelStackFrame; readon
       ) : (
         <div className="flex min-w-0">{locationContent}</div>
       )}
+    </div>
+  );
+}
+
+function StackTraceSection({
+  stackFrames,
+  styles,
+}: {
+  readonly stackFrames: KernelStackFrame[];
+  readonly styles: ReturnType<typeof getSeverityStyles>;
+}): React.JSX.Element {
+  const [showInternal, setShowInternal] = useState(false);
+
+  // Split frames into visible (user + library) and hidden (framework + runtime) frames
+  const userFrames = stackFrames.filter((frame) => frame.context === 'user' || frame.context === 'library');
+  const internalFrames = stackFrames.filter(
+    (frame) => frame.context === 'framework' || frame.context === 'runtime' || !frame.context,
+  );
+  const hasInternalFrames = internalFrames.length > 0;
+
+  // When collapsed, show only user frames; when expanded, show all in original order
+  const visibleFrames = showInternal ? stackFrames : userFrames;
+
+  return (
+    <div className="space-y-1">
+      <div className="font-medium text-muted-foreground">Stack trace:</div>
+      <div className={cn('space-y-0.5 rounded border bg-background/80 p-2', styles.stackBorder)}>
+        {visibleFrames.map((frame, index) => (
+          <StackFrame
+            key={`${frame.functionName}-${frame.fileName}-${frame.lineNumber}-${frame.columnNumber}`}
+            frame={frame}
+            index={index}
+          />
+        ))}
+        {hasInternalFrames ? (
+          <button
+            type="button"
+            className="mt-1 cursor-pointer font-mono text-[0.625rem] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+            onClick={() => {
+              setShowInternal(!showInternal);
+            }}
+          >
+            {showInternal
+              ? `▾ Hide platform internals (${internalFrames.length} frames)`
+              : `▸ Show platform internals (${internalFrames.length} frames)`}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -237,13 +286,7 @@ function ErrorStackTrace({
   const styles = getSeverityStyles(severity);
 
   // Track shift key state for "new chat" functionality
-  const { isKeyPressed: isShiftHeld, formattedKeyCombination: shiftKey } = useKeydown(
-    shiftKeyCombination,
-    () => {
-      // No-op callback - we only care about isKeyPressed state
-    },
-    { preventDefault: false, stopPropagation: false },
-  );
+  const { shift: isShiftHeld } = useModifiers();
 
   return (
     <div
@@ -307,20 +350,7 @@ function ErrorStackTrace({
       </div>
 
       {/* Stack trace */}
-      {stackFrames && stackFrames.length > 0 ? (
-        <div className="space-y-1">
-          <div className="font-medium text-muted-foreground">Stack trace:</div>
-          <div className={cn('space-y-0.5 rounded border bg-background/80 p-2', styles.stackBorder)}>
-            {stackFrames.map((frame, index) => (
-              <StackFrame
-                key={`${frame.functionName}-${frame.fileName}-${frame.lineNumber}-${frame.columnNumber}`}
-                frame={frame}
-                index={index}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {stackFrames && stackFrames.length > 0 ? <StackTraceSection stackFrames={stackFrames} styles={styles} /> : null}
     </div>
   );
 }
@@ -398,6 +428,8 @@ function IssuesSummary({ counts }: { readonly counts: IssueCounts }): React.JSX.
 }
 
 type ChatStackTraceProps = React.HTMLAttributes<HTMLDivElement> & {
+  /** Entry file being rendered in this viewer */
+  readonly entryFile: string;
   /**
    * Which side to show the collapsible trigger.
    * - 'top': Trigger at the top, content expands below
@@ -406,23 +438,22 @@ type ChatStackTraceProps = React.HTMLAttributes<HTMLDivElement> & {
   readonly side: 'top' | 'bottom';
 };
 
-export function ChatStackTrace({ className, side, ...props }: ChatStackTraceProps): React.ReactNode {
-  const { getMainFilename, cadRef, editorRef, buildId, setLastChatId } = useBuild();
+export function ChatStackTrace({ entryFile, className, side, ...props }: ChatStackTraceProps): React.ReactNode {
+  const { getMainFilename, editorRef, buildId, setLastChatId } = useBuild();
   const fileManager = useFileManager();
   const { createChat } = useChats(buildId);
   const [isOpen, setIsOpen] = useState(true);
 
-  // Get the active file path from editor
-  const activeFilePath = useSelector(editorRef, (state) => state.context.activeFilePath);
+  // Guard against stale cadActor during build transitions.
+  // CadProvider may still hold the previous build's actor while buildId has
+  // already changed to the new build. Check that the actor ID matches the
+  // expected pattern "cad-{buildId}-{entryFile}" before reading its state.
+  const cadRef = useCad();
+  const isCadActorStale = cadRef ? !cadRef.id.includes(buildId) : true;
 
-  // Get all kernel issues for the active file
-  const errors = useSelector(cadRef, (state) => {
-    if (!activeFilePath) {
-      return undefined;
-    }
-
-    return state.context.kernelIssues.get(activeFilePath);
-  });
+  // Get all kernel issues for this viewer's compilation unit via CadProvider context
+  const rawErrors = useCadSelector((state) => state.context.kernelIssues.get(entryFile), undefined);
+  const errors = isCadActorStale ? undefined : rawErrors;
 
   const { sendMessage } = useChatActions();
   const { selectedModel } = useModels();

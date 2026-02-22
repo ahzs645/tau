@@ -5,19 +5,20 @@ import {
   FilePlus,
   FolderPlus,
   MoreHorizontal,
-  Trash2,
-  Copy,
-  Upload,
-  FileEdit,
   Search,
   Eye,
-  EyeOff,
   Folder,
   FolderOpen,
   CopyMinus,
+  Edit,
+  Upload,
+  Copy,
+  Trash2,
+  Download,
+  Code,
+  Clipboard,
 } from 'lucide-react';
 import { useSelector } from '@xstate/react';
-import { minimatch } from 'minimatch';
 import {
   syncDataLoaderFeature,
   selectionFeature,
@@ -31,7 +32,7 @@ import {
 } from '@headless-tree/core';
 import { useTree, AssistiveTreeDescription } from '@headless-tree/react';
 import type { Build } from '@taucad/types';
-import { kernelConfigurations } from '@taucad/types/constants';
+import { kernelConfigurations, tauFileDragMime } from '@taucad/types/constants';
 import type { KernelConfiguration } from '@taucad/types/constants';
 import type { FileItem } from '#types/editor.types.js';
 import { cn } from '#utils/ui.utils.js';
@@ -43,6 +44,8 @@ import {
   FloatingPanelContentBody,
   FloatingPanelContentHeader,
   FloatingPanelContentHeaderActions,
+  FloatingPanelMenuButton,
+  FloatingPanelButtonGroup,
   FloatingPanelContentTitle,
 } from '#components/ui/floating-panel.js';
 import {
@@ -75,8 +78,8 @@ import { EmptyItems } from '#components/ui/empty-items.js';
 import { HighlightText } from '#components/highlight-text.js';
 import { FileExtensionIcon, getIconIdFromExtension } from '#components/icons/file-extension-icon.js';
 import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
+import { downloadBlob, asBuffer } from '#utils/file.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 
 type TreeItemData = {
   path: string;
@@ -87,7 +90,6 @@ type TreeItemData = {
 };
 
 const rootId = '';
-const defaultHiddenPatterns = ['.gitkeep', '**/.gitkeep'];
 
 type PendingFolder = {
   parentPath: string; // '' for root
@@ -101,10 +103,6 @@ type PendingFile = {
   content: string;
   error: string | undefined;
 };
-
-function isHiddenFile(path: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => minimatch(path, pattern));
-}
 
 // Helper to read all entries from a directory (may require multiple calls)
 async function readAllDirectoryEntries(dirReader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
@@ -182,36 +180,30 @@ async function processDataTransferItems(
 type ChatEditorFileTreeProps = {
   readonly enableSearch?: boolean;
   readonly onSearchChange?: (isOpen: boolean) => void;
+  readonly closeButton?: React.ReactNode;
 };
 
 export const ChatEditorFileTree = memo(function ({
   enableSearch = false,
   onSearchChange,
+  closeButton,
 }: ChatEditorFileTreeProps): React.JSX.Element {
   // It's necessary to opt out of React Compiler auto-memoization for this component due to:
   // https://headless-tree.lukasbach.com/guides/react-compiler/
   'use no memo'; // Opt out of React Compiler memoization
-  const { buildRef, editorRef, gitRef, cadRef } = useBuild();
+  const { buildRef, editorRef, gitRef } = useBuild();
   const buildId = useSelector(buildRef, (state) => state.context.buildId);
   const fileManager = useFileManager();
-  const { fileManagerRef, readFile, writeFile, renameFile, deleteFile } = fileManager;
+  const { fileManagerRef, readFile, writeFile, renameFile, duplicateFile, deleteFile, getZippedDirectory } =
+    fileManager;
 
   useEffect(() => {
-    // Editor → FileManager → CAD coordination
+    // Editor → FileManager coordination (reading file content for the editor)
+    // Note: Editor file navigation no longer drives the viewport.
+    // The viewport has its own independent FileSelector (Step 7).
     const fileOpenedSub = editorRef.on('fileOpened', (event) => {
-      // Read file directly - this properly awaits the worker call
+      // Read file content for the editor display
       void readFile(event.path);
-
-      // Only send setFile when switching to a different file
-      // This prevents unnecessary re-renders when clicking on an already open file
-      // Content changes from editor/chat tools trigger setFile separately
-      const currentFile = cadRef.getSnapshot().context.file;
-      if (currentFile?.filename !== event.path) {
-        cadRef.send({
-          type: 'setFile',
-          file: { path: `/builds/${buildId}`, filename: event.path },
-        });
-      }
     });
 
     // Track both build and Editor state loading to handle race condition
@@ -294,7 +286,7 @@ export const ChatEditorFileTree = memo(function ({
       fileDeletedSub.unsubscribe();
       fileWrittenSub.unsubscribe();
     };
-  }, [buildRef, editorRef, fileManagerRef, cadRef, buildId, readFile]);
+  }, [buildRef, editorRef, fileManagerRef, buildId, readFile]);
 
   // Derive file tree from file-manager (reactive selector)
   // Use custom equality to prevent unnecessary re-renders
@@ -354,8 +346,6 @@ export const ChatEditorFileTree = memo(function ({
   const [expandedItems, setExpandedItems] = useState<string[]>(() => [rootId]);
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [focusedItem, setFocusedItem] = useState<string | undefined>(undefined);
-  const [showHiddenFiles, setShowHiddenFiles] = useState(false);
-  const hiddenFilePatterns = useMemo(() => defaultHiddenPatterns, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadTargetPath, setUploadTargetPath] = useState<string | undefined>(undefined);
   const [pendingFolder, setPendingFolder] = useState<PendingFolder | undefined>(undefined);
@@ -463,13 +453,8 @@ export const ChatEditorFileTree = memo(function ({
           return isImmediateChild;
         });
 
-        // Filter hidden files
-        const filtered = showHiddenFiles
-          ? children
-          : children.filter((path) => !isHiddenFile(path, hiddenFilePatterns));
-
         // Sort alphabetically (folders first, then files)
-        return filtered.sort((a, b) => {
+        return children.sort((a, b) => {
           const aName = a.split('/').pop() ?? a;
           const bName = b.split('/').pop() ?? b;
           const aIsFolder = allPaths.has(a) && fileTree.every((f) => f.path !== a);
@@ -489,7 +474,7 @@ export const ChatEditorFileTree = memo(function ({
         });
       },
     }),
-    [fileTree, allPaths, showHiddenFiles, hiddenFilePatterns],
+    [fileTree, allPaths],
   );
 
   // Initialize headless-tree
@@ -652,6 +637,14 @@ export const ChatEditorFileTree = memo(function ({
 
       return !allItemsAlreadyInTarget;
     },
+    // Set custom data on the drag event so Dockview panels can receive file drops
+    createForeignDragObject(items) {
+      const paths = items.map((item) => item.getId()).filter((id) => id !== rootId);
+      return {
+        format: tauFileDragMime,
+        data: JSON.stringify(paths),
+      };
+    },
     // Allow file drops from computer on folders, root, or root-level files
     canDropForeignDragObject(_dataTransfer, target) {
       const targetId = target.item.getId();
@@ -704,11 +697,11 @@ export const ChatEditorFileTree = memo(function ({
     ],
   });
 
-  // Rebuild tree when file data changes or hidden files toggle
+  // Rebuild tree when file data changes
   useEffect(() => {
     tree.rebuildTree();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree or showHiddenFiles changes
-  }, [fileTree, showHiddenFiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree changes
+  }, [fileTree]);
 
   // Sync tree search state with external enableSearch prop
   useEffect(() => {
@@ -726,6 +719,56 @@ export const ChatEditorFileTree = memo(function ({
       setFocusedItem(activeFilePath);
     }
   }, [activeFilePath, focusedItem]);
+
+  // Reveal a file in the tree when requested from the tab context menu.
+  // Expands all parent directories, focuses the item, and scrolls it into view.
+  useEffect(() => {
+    const subscription = editorRef.on('fileRevealRequested', (event) => {
+      const targetPath = event.path;
+
+      // Expand all parent directories
+      const parts = targetPath.split('/');
+      parts.pop(); // Remove the filename
+      const parentPaths: string[] = [];
+      let current = '';
+      for (const part of parts) {
+        if (!part) {
+          continue;
+        }
+
+        current = current ? `${current}/${part}` : part;
+        parentPaths.push(current);
+      }
+
+      if (parentPaths.length > 0) {
+        setExpandedItems((previous) => {
+          const newExpanded = new Set(previous);
+          for (const path of parentPaths) {
+            newExpanded.add(path);
+          }
+
+          return [...newExpanded];
+        });
+      }
+
+      // Focus the item and scroll into view after the tree re-renders
+      setFocusedItem(targetPath);
+      setSelectedItems([targetPath]);
+
+      requestAnimationFrame(() => {
+        try {
+          const item = tree.getItemInstance(targetPath);
+          void item.scrollTo({ block: 'center' });
+        } catch {
+          // Item may not exist in the tree yet
+        }
+      });
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [editorRef, tree, setExpandedItems, setFocusedItem, setSelectedItems]);
 
   const handleCreateFile = useCallback(
     (template: KernelConfiguration | undefined) => {
@@ -828,9 +871,101 @@ export const ChatEditorFileTree = memo(function ({
     // Focus restoration is handled by DialogContent's onCloseAutoFocus
   }, [editorRef, deleteFile, fileTree, itemsToDelete, tree]);
 
-  const handleDuplicate = useCallback((_items: Array<ItemInstance<TreeItemData>>) => {
-    // Duplication requires file-manager content, which isn't exposed yet
-    toast.info('File duplication is not yet supported');
+  const handleDuplicate = useCallback(
+    (items: Array<ItemInstance<TreeItemData>>) => {
+      for (const item of items) {
+        const originalPath = item.getId();
+        if (originalPath === rootId || item.isFolder()) {
+          continue;
+        }
+
+        const fileName = originalPath.split('/').pop() ?? originalPath;
+        const directory = originalPath.includes('/') ? originalPath.slice(0, originalPath.lastIndexOf('/')) : '';
+
+        // Generate "name copy.ext", "name copy 2.ext", etc.
+        const lastDotIndex = fileName.lastIndexOf('.');
+        const baseName = lastDotIndex > 0 ? fileName.slice(0, lastDotIndex) : fileName;
+        const extension = lastDotIndex > 0 ? fileName.slice(lastDotIndex) : '';
+
+        let duplicateName = `${baseName} copy${extension}`;
+        let duplicatePath = directory ? `${directory}/${duplicateName}` : duplicateName;
+        let counter = 2;
+
+        while (allPaths.has(duplicatePath)) {
+          duplicateName = `${baseName} copy ${counter}${extension}`;
+          duplicatePath = directory ? `${directory}/${duplicateName}` : duplicateName;
+          counter++;
+        }
+
+        const finalPath = duplicatePath;
+        toast.promise(
+          async () => {
+            await duplicateFile(originalPath, finalPath);
+            editorRef.send({ type: 'openFile', path: finalPath, source: 'user' });
+          },
+          {
+            loading: `Duplicating ${fileName}...`,
+            success: `Created ${duplicateName}`,
+            error: `Failed to duplicate ${fileName}`,
+          },
+        );
+      }
+    },
+    [allPaths, duplicateFile, editorRef],
+  );
+
+  const handleOpenInEditor = useCallback(
+    (path: string) => {
+      editorRef.send({ type: 'openFile', path, source: 'user' });
+    },
+    [editorRef],
+  );
+
+  const handleOpenInViewer = useCallback(
+    (path: string) => {
+      buildRef.send({ type: 'openInViewer', entryFile: path });
+    },
+    [buildRef],
+  );
+
+  const handleDownload = useCallback(
+    (path: string, isFolder: boolean) => {
+      const name = path.split('/').pop() ?? path;
+
+      if (isFolder) {
+        const fullPath = `/builds/${buildId}/${path}`;
+        toast.promise(
+          async () => {
+            const zipBlob = await getZippedDirectory(fullPath);
+            downloadBlob(zipBlob, `${name}.zip`);
+          },
+          {
+            loading: `Downloading ${name}...`,
+            success: `Downloaded ${name}.zip`,
+            error: `Failed to download ${name}`,
+          },
+        );
+      } else {
+        toast.promise(
+          async () => {
+            const content = await readFile(path);
+            const blob = new Blob([asBuffer(content.buffer)], { type: 'application/octet-stream' });
+            downloadBlob(blob, name);
+          },
+          {
+            loading: `Downloading ${name}...`,
+            success: `Downloaded ${name}`,
+            error: `Failed to download ${path}`,
+          },
+        );
+      }
+    },
+    [buildId, readFile, getZippedDirectory],
+  );
+
+  const handleCopyPath = useCallback((path: string) => {
+    void navigator.clipboard.writeText(path);
+    toast.success('Path copied to clipboard');
   }, []);
 
   const handleUploadClick = useCallback((targetPath: string) => {
@@ -941,47 +1076,23 @@ export const ChatEditorFileTree = memo(function ({
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Files</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label={showHiddenFiles ? 'Hide hidden files' : 'Show hidden files'}
-                  className="size-6 rounded-sm"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    setShowHiddenFiles(!showHiddenFiles);
-                  }}
-                >
-                  {showHiddenFiles ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{showHiddenFiles ? 'Hide hidden files' : 'Show hidden files'}</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label={enableSearch ? 'Hide search' : 'Search files'}
-                  className={cn('size-6 rounded-sm', enableSearch && 'text-primary')}
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    onSearchChange?.(!enableSearch);
-                  }}
-                >
-                  <Search className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{enableSearch ? 'Hide search' : 'Search files'}</TooltipContent>
-            </Tooltip>
-            <DropdownMenu>
-              <Tooltip>
-                <Button asChild aria-label="Create new file" className="size-6 rounded-sm" size="icon" variant="ghost">
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger>
-                      <FilePlus className="size-4" />
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                </Button>
+            <FloatingPanelButtonGroup>
+              <FloatingPanelMenuButton
+                aria-label={enableSearch ? 'Hide search' : 'Search files'}
+                className={cn(enableSearch && 'text-primary')}
+                tooltip={enableSearch ? 'Hide search' : 'Search files'}
+                onClick={() => {
+                  onSearchChange?.(!enableSearch);
+                }}
+              >
+                <Search className="size-4" />
+              </FloatingPanelMenuButton>
+              <DropdownMenu>
+                <FloatingPanelMenuButton asChild tooltip="Create new file" aria-label="Create new file">
+                  <DropdownMenuTrigger>
+                    <FilePlus className="size-4" />
+                  </DropdownMenuTrigger>
+                </FloatingPanelMenuButton>
                 <DropdownMenuContent
                   align="end"
                   onCloseAutoFocus={(event) => {
@@ -1001,7 +1112,6 @@ export const ChatEditorFileTree = memo(function ({
                       });
                     }}
                   >
-                    <FileExtensionIcon filename="file.txt" className="size-4" />
                     Blank
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -1015,47 +1125,32 @@ export const ChatEditorFileTree = memo(function ({
                         });
                       }}
                     >
-                      <FileExtensionIcon filename={kernel.mainFile} className="size-4" />
                       {kernel.name}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
-                <TooltipContent>Create new file</TooltipContent>
-              </Tooltip>
-            </DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Create new folder"
-                  className="size-6 rounded-sm"
-                  size="icon"
-                  variant="ghost"
-                  onClick={handleCreateFolder}
-                >
-                  <FolderPlus className="mt-0.5 size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Create new folder</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Collapse all folders"
-                  className="size-6 rounded-sm"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => {
-                    tree.collapseAll();
-                  }}
-                >
-                  <CopyMinus className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Collapse all folders</TooltipContent>
-            </Tooltip>
+              </DropdownMenu>
+              <FloatingPanelMenuButton
+                aria-label="Create new folder"
+                tooltip="Create new folder"
+                onClick={handleCreateFolder}
+              >
+                <FolderPlus className="mt-0.5 size-4" />
+              </FloatingPanelMenuButton>
+              <FloatingPanelMenuButton
+                aria-label="Collapse all folders"
+                tooltip="Collapse all folders"
+                onClick={() => {
+                  tree.collapseAll();
+                }}
+              >
+                <CopyMinus className="size-4" />
+              </FloatingPanelMenuButton>
+            </FloatingPanelButtonGroup>
+            {closeButton}
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <FloatingPanelContentBody className="flex min-h-0 flex-col">
+        <FloatingPanelContentBody className="group/filetree flex min-h-0 flex-col">
           {enableSearch ? (
             <div className="flex w-full shrink-0 flex-row gap-2 border-b bg-sidebar p-2">
               <SearchInput
@@ -1127,6 +1222,7 @@ export const ChatEditorFileTree = memo(function ({
               {(() => {
                 const items = tree.getItems();
                 const rootItem = tree.getRootItem();
+                const activeFileLevel = activeFilePath ? activeFilePath.split('/').length - 1 : 0;
                 const dragTargetItem = items.find((i) => i.isDragTarget());
 
                 // Determine highlighting strategy
@@ -1176,9 +1272,14 @@ export const ChatEditorFileTree = memo(function ({
                               isOpen={openFiles.some((f) => f.path === itemId)}
                               searchQuery={tree.getState().search ?? ''}
                               isInsideDragTarget={isInsideDragTarget}
+                              activeFileLevel={activeFileLevel}
                               onDelete={handleDelete}
                               onDuplicate={handleDuplicate}
                               onUpload={handleUploadClick}
+                              onOpenInEditor={handleOpenInEditor}
+                              onOpenInViewer={handleOpenInViewer}
+                              onDownload={handleDownload}
+                              onCopyPath={handleCopyPath}
                             />
                             {/* Pending folder inside this folder */}
                             {pendingFolder && pendingFolder.parentPath === itemId && item.isFolder() ? (
@@ -1254,9 +1355,14 @@ type TreeItemProps = {
   readonly isOpen: boolean;
   readonly searchQuery: string;
   readonly isInsideDragTarget: boolean;
+  readonly activeFileLevel: number;
   readonly onDelete: (items: Array<ItemInstance<TreeItemData>>) => void;
   readonly onDuplicate: (items: Array<ItemInstance<TreeItemData>>) => void;
   readonly onUpload: (path: string) => void;
+  readonly onOpenInEditor: (path: string) => void;
+  readonly onOpenInViewer: (path: string) => void;
+  readonly onDownload: (path: string, isFolder: boolean) => void;
+  readonly onCopyPath: (path: string) => void;
 };
 
 // eslint-disable-next-line complexity -- UI rendering with many conditional states
@@ -1266,13 +1372,19 @@ function TreeItem({
   isOpen,
   searchQuery,
   isInsideDragTarget,
+  activeFileLevel,
   onDelete,
   onDuplicate,
   onUpload,
+  onOpenInEditor,
+  onOpenInViewer,
+  onDownload,
+  onCopyPath,
 }: TreeItemProps): React.JSX.Element {
   const data = item.getItemData();
   const hasGitChanges = Boolean(data.gitStatus && data.gitStatus !== 'clean');
-  const paddingLeft = item.getItemMeta().level * 16 + 8;
+  const itemLevel = item.getItemMeta().level;
+  const paddingLeft = itemLevel * 16 + 8;
   const isSelected = item.isSelected();
   const isRenaming = item.isRenaming();
   const isFolder = item.isFolder();
@@ -1282,9 +1394,25 @@ function TreeItem({
     const renameInputProps = item.getRenameInputProps() as React.InputHTMLAttributes<HTMLInputElement>;
     return (
       <div
-        className="flex h-7 items-center border border-primary py-1 pr-1 pl-2"
+        className="relative flex h-7 items-center border border-primary py-1 pr-1 pl-2"
         style={{ paddingLeft: `${paddingLeft}px` }}
       >
+        {/* Indent guide lines (VS Code-style) */}
+        {Array.from({ length: itemLevel }, (_, index) => {
+          const guideDepth = index + 1;
+          const isActiveGuide = activeFileLevel > 0 ? guideDepth === activeFileLevel : guideDepth === itemLevel;
+          return (
+            <span
+              key={guideDepth}
+              aria-hidden
+              className={cn(
+                'pointer-events-none absolute top-0 h-full w-px',
+                isActiveGuide ? 'bg-border' : 'bg-border opacity-0 transition-opacity group-hover/filetree:opacity-100',
+              )}
+              style={{ left: `${guideDepth * 16}px` }}
+            />
+          );
+        })}
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {isFolder ? (
             item.isExpanded() ? (
@@ -1320,11 +1448,13 @@ function TreeItem({
   }
 
   // Normal view - wrapped by ContextMenu
+  const treeItemProps = item.getProps();
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          {...item.getProps()}
+          {...treeItemProps}
           className={cn(
             'group/file relative flex h-7 w-full cursor-pointer items-center justify-between py-1 pr-1 pl-2 text-sm text-sidebar-foreground',
             !isActive && 'hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
@@ -1334,7 +1464,42 @@ function TreeItem({
             (item.isDragTarget() || isInsideDragTarget) && 'bg-primary/20',
           )}
           style={{ paddingLeft: `${paddingLeft}px` }}
+          onClick={(event) => {
+            if (event.shiftKey || event.ctrlKey || event.metaKey) {
+              // Multi-select click: handle selection + focus only, skip primaryAction (file open)
+              if (event.shiftKey) {
+                item.selectUpTo(event.ctrlKey || event.metaKey);
+              } else {
+                item.toggleSelect();
+              }
+
+              item.setFocused();
+              return;
+            }
+
+            // Plain click: delegate to tree's onClick (handles selection, focus, primaryAction, expand/collapse)
+            const { onClick } = treeItemProps as { onClick?: (event: MouseEvent) => void };
+            onClick?.(event.nativeEvent);
+          }}
         >
+          {/* Indent guide lines (VS Code-style) */}
+          {Array.from({ length: itemLevel }, (_, index) => {
+            const guideDepth = index + 1;
+            const isActiveGuide = activeFileLevel > 0 ? guideDepth === activeFileLevel : guideDepth === itemLevel;
+            return (
+              <span
+                key={guideDepth}
+                aria-hidden
+                className={cn(
+                  'pointer-events-none absolute top-0 h-full w-px',
+                  isActiveGuide
+                    ? 'bg-border'
+                    : 'bg-border opacity-0 transition-opacity group-hover/filetree:opacity-100',
+                )}
+                style={{ left: `${guideDepth * 16}px` }}
+              />
+            );
+          })}
           <div className="flex min-w-0 flex-1 grow items-center gap-2">
             {isFolder ? (
               item.isExpanded() ? (
@@ -1360,7 +1525,7 @@ function TreeItem({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   size="icon"
                   className="absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100"
                   onClick={(event) => {
@@ -1370,14 +1535,33 @@ function TreeItem({
                   <MoreHorizontal className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
+              <DropdownMenuContent align="start" side="right">
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenInEditor(item.getId());
+                  }}
+                >
+                  <Code />
+                  <span>Open in Editor</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenInViewer(item.getId());
+                  }}
+                >
+                  <Eye />
+                  <span>Open in Viewer</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={() => {
                     item.startRenaming();
                   }}
                 >
-                  <FileEdit className="size-4" />
-                  Rename
+                  <Edit />
+                  <span>Rename</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={(event) => {
@@ -1385,8 +1569,8 @@ function TreeItem({
                     onUpload(item.getId());
                   }}
                 >
-                  <Upload className="size-4" />
-                  Upload Files
+                  <Upload />
+                  <span>Upload Files</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={(event) => {
@@ -1394,8 +1578,27 @@ function TreeItem({
                     onDuplicate([item]);
                   }}
                 >
-                  <Copy className="size-4" />
-                  Duplicate
+                  <Copy />
+                  <span>Duplicate</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCopyPath(item.getId());
+                  }}
+                >
+                  <Clipboard />
+                  <span>Copy Path</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDownload(item.getId(), false);
+                  }}
+                >
+                  <Download />
+                  <span>Download</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -1405,8 +1608,8 @@ function TreeItem({
                     onDelete([item]);
                   }}
                 >
-                  <Trash2 className="size-4" />
-                  Delete
+                  <Trash2 />
+                  <span>Delete</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1414,43 +1617,70 @@ function TreeItem({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {isFolder ? null : (
+          <>
+            <ContextMenuItem
+              onClick={() => {
+                onOpenInEditor(item.getId());
+              }}
+            >
+              <Code />
+              <span>Open in Editor</span>
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => {
+                onOpenInViewer(item.getId());
+              }}
+            >
+              <Eye />
+              <span>Open in Viewer</span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ContextMenuItem
           onSelect={() => {
             item.startRenaming();
           }}
         >
-          <FileEdit className="size-4" />
-          Rename
+          <Edit />
+          <span>Rename</span>
         </ContextMenuItem>
-        {isFolder ? (
+        <ContextMenuItem
+          onClick={() => {
+            onUpload(item.getId());
+          }}
+        >
+          <Upload />
+          <span>Upload Files</span>
+        </ContextMenuItem>
+        {isFolder ? null : (
           <ContextMenuItem
             onClick={() => {
-              onUpload(item.getId());
+              onDuplicate([item]);
             }}
           >
-            <Upload className="size-4" />
-            Upload Files
+            <Copy />
+            <span>Duplicate</span>
           </ContextMenuItem>
-        ) : (
-          <>
-            <ContextMenuItem
-              onClick={() => {
-                onUpload(item.getId());
-              }}
-            >
-              <Upload className="size-4" />
-              Upload Files
-            </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() => {
-                onDuplicate([item]);
-              }}
-            >
-              <Copy className="size-4" />
-              Duplicate
-            </ContextMenuItem>
-          </>
         )}
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() => {
+            onCopyPath(item.getId());
+          }}
+        >
+          <Clipboard />
+          <span>Copy Path</span>
+        </ContextMenuItem>
+        <ContextMenuItem
+          onClick={() => {
+            onDownload(item.getId(), isFolder);
+          }}
+        >
+          <Download />
+          <span>{isFolder ? 'Download as ZIP' : 'Download'}</span>
+        </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
@@ -1458,8 +1688,8 @@ function TreeItem({
             onDelete([item]);
           }}
         >
-          <Trash2 className="size-4" />
-          Delete
+          <Trash2 />
+          <span>Delete</span>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

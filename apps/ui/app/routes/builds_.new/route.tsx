@@ -17,7 +17,7 @@ import { toast } from '#components/ui/sonner.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import type { Handle } from '#types/matches.types.js';
 import { cn } from '#utils/ui.utils.js';
-import { useKeydown } from '#hooks/use-keydown.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
@@ -152,7 +152,7 @@ export default function BuildsNew(): React.JSX.Element {
   const isCreateButtonDisabled = !buildName.trim() || isCreating;
 
   // Add keyboard shortcut for Enter to submit
-  const { formattedKeyCombination } = useKeydown(
+  const { formattedKeyCombination } = useKeybinding(
     { key: 'Enter' },
     useCallback(() => {
       if (isCreateButtonDisabled) {

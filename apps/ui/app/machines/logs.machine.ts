@@ -1,18 +1,17 @@
 import { setup, assign } from 'xstate';
-import { idPrefix, logLevels } from '@taucad/types/constants';
-import { generatePrefixedId } from '@taucad/utils/id';
+import { logLevels } from '@taucad/types/constants';
 import type { LogEntry, LogOptions } from '@taucad/types';
+import { LogRingBuffer } from '#utils/log-ring-buffer.js';
 
 const defaultMaxLogs = 1000;
+let logIdCounter = 0;
 
-// Type definitions
 type LogMachineContext = {
-  logs: LogEntry[];
-  maxLogs: number;
+  logBuffer: LogRingBuffer<LogEntry>;
+  logVersion: number;
 };
 
 type LogMachineEvents =
-  | { type: 'setLogs'; logs: LogEntry[] }
   | { type: 'addLog'; message: string; options?: LogOptions }
   | { type: 'addLogs'; entries: Array<{ message: string; options?: LogOptions }> }
   | { type: 'clearLogs' };
@@ -28,55 +27,53 @@ export const logMachine = setup({
   id: 'logs',
   initial: 'ready',
   context: {
-    logs: [],
-    maxLogs: defaultMaxLogs,
+    logBuffer: new LogRingBuffer<LogEntry>(defaultMaxLogs),
+    logVersion: 0,
   },
 
   states: {
     ready: {
       on: {
-        setLogs: {
-          actions: assign({
-            logs: ({ event }) => event.logs,
-          }),
-        },
         addLog: {
           actions: assign({
-            logs({ context, event }) {
-              const newLog: LogEntry = {
-                id: generatePrefixedId(idPrefix.log),
+            logVersion({ context, event }) {
+              context.logBuffer.push({
+                id: `log_${String(logIdCounter++)}`,
                 timestamp: Date.now(),
                 level: event.options?.level ?? logLevels.info,
                 message: event.message,
                 origin: event.options?.origin,
                 data: event.options?.data,
-              };
-
-              const updatedLogs = [newLog, ...context.logs];
-              return updatedLogs.slice(0, context.maxLogs);
+              });
+              return context.logBuffer.version;
             },
           }),
         },
         addLogs: {
           actions: assign({
-            logs({ context, event }) {
-              const newLogs = event.entries.map((entry) => ({
-                id: generatePrefixedId(idPrefix.log),
-                timestamp: Date.now(),
-                level: entry.options?.level ?? logLevels.info,
-                message: entry.message,
-                origin: entry.options?.origin,
-                data: entry.options?.data,
-              }));
+            logVersion({ context, event }) {
+              const now = Date.now();
+              for (const entry of event.entries) {
+                context.logBuffer.push({
+                  id: `log_${String(logIdCounter++)}`,
+                  timestamp: now,
+                  level: entry.options?.level ?? logLevels.info,
+                  message: entry.message,
+                  origin: entry.options?.origin,
+                  data: entry.options?.data,
+                });
+              }
 
-              const updatedLogs = [...newLogs, ...context.logs];
-              return updatedLogs.slice(0, context.maxLogs);
+              return context.logBuffer.version;
             },
           }),
         },
         clearLogs: {
           actions: assign({
-            logs: () => [],
+            logVersion({ context }) {
+              context.logBuffer.clear();
+              return context.logBuffer.version;
+            },
           }),
         },
       },

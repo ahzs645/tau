@@ -168,8 +168,8 @@ export function getBetterAuthConfig(options: BetterAuthConfigOptions): BetterAut
     // eslint-disable-next-line @typescript-eslint/naming-convention -- onAPIError is a valid option
     onAPIError: {
       throw: false,
-      onError(error, ctx) {
-        logger.error(`Auth error: ${JSON.stringify(error)}. Context: ${JSON.stringify(ctx)}.`);
+      onError(error, _ctx) {
+        logger.error(`Auth error: ${JSON.stringify(error)}.`);
       },
     },
   };

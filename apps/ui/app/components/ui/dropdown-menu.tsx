@@ -1,5 +1,5 @@
 import * as React from 'react';
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
+import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui';
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
 import { Switch } from '#components/ui/switch.js';
@@ -12,6 +12,12 @@ import {
   menuContentVariants,
   menuLabelVariants,
   menuSeparatorVariants,
+  menuSubTriggerOpenClass,
+  menuShortcutClass,
+  menuSideAlignOffset,
+  subMenuSideAlignOffset,
+  menuItemLayoutClass,
+  menuItemIconClass,
 } from '#components/ui/menu.variants.js';
 
 function DropdownMenu({ ...properties }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>): React.JSX.Element {
@@ -33,13 +39,19 @@ function DropdownMenuTrigger({
 function DropdownMenuContent({
   className,
   sideOffset = 4,
+  side,
+  alignOffset,
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>): React.JSX.Element {
+  const resolvedAlignOffset = alignOffset ?? (side === 'left' || side === 'right' ? menuSideAlignOffset : undefined);
+
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
+        side={side}
+        alignOffset={resolvedAlignOffset}
         className={cn(
           menuContentVariants(),
           'max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto',
@@ -71,7 +83,7 @@ function DropdownMenuItem({
       data-slot="dropdown-menu-item"
       data-inset={isInset}
       data-variant={variant}
-      className={cn(menuItemVariants({ variant, inset: isInset }), 'cursor-pointer', className)}
+      className={cn(menuItemVariants({ variant, inset: isInset }), className)}
       {...properties}
     />
   );
@@ -86,7 +98,7 @@ function DropdownMenuCheckboxItem({
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
-      className={cn(menuItemVariants({ inset: true }), 'cursor-pointer pr-2', className)}
+      className={cn(menuItemVariants({ inset: true }), 'pr-2', className)}
       checked={checked}
       {...properties}
     >
@@ -114,7 +126,7 @@ function DropdownMenuRadioItem({
   return (
     <DropdownMenuPrimitive.RadioItem
       data-slot="dropdown-menu-radio-item"
-      className={cn(menuItemVariants({ inset: true }), 'cursor-pointer pr-2', className)}
+      className={cn(menuItemVariants({ inset: true }), 'pr-2', className)}
       {...properties}
     >
       <span
@@ -143,14 +155,14 @@ function DropdownMenuSwitchItem({
   return (
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-switch-item"
-      className={cn(menuItemVariants(), 'cursor-pointer justify-between', className)}
+      className={cn(menuItemVariants(), 'justify-between', className)}
       onSelect={(event) => {
         event.preventDefault();
         onIsCheckedChange?.(!isChecked);
       }}
       {...properties}
     >
-      <span className="flex items-center gap-2">{children}</span>
+      <span className={menuItemLayoutClass}>{children}</span>
       <Switch
         className="data-[state=unchecked]:bg-muted-foreground!"
         checked={isChecked}
@@ -198,19 +210,14 @@ function DropdownMenuSliderItem({
   return (
     <div
       data-slot="dropdown-menu-slider-item"
-      className={cn('px-2 py-2', className)}
+      className={cn('px-3 py-2', className)}
       // Prevent dropdown from closing when interacting with slider
       onPointerDown={(event) => {
         event.stopPropagation();
       }}
     >
       <div className="mb-2 flex items-center justify-between">
-        <span
-          className={cn(
-            'flex items-center gap-2 text-sm',
-            "[&_svg]:pointer-events-none [&_svg]:text-muted-foreground [&_svg:not([class*='size-'])]:size-4",
-          )}
-        >
+        <span className={cn(menuItemLayoutClass, menuItemIconClass, 'text-sm')}>
           {children}
           {infoTooltip}
         </span>
@@ -256,18 +263,13 @@ function DropdownMenuToggleGroupItem<T extends string>({
   return (
     <div
       data-slot="dropdown-menu-toggle-group-item"
-      className={cn('flex items-center justify-between px-2 py-1.5', className)}
+      className={cn('flex items-center justify-between px-3 py-1.5', className)}
       // Prevent dropdown from closing when interacting with toggle group
       onPointerDown={(event) => {
         event.stopPropagation();
       }}
     >
-      <span
-        className={cn(
-          'flex items-center gap-2 text-sm',
-          "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        )}
-      >
+      <span className={cn(menuItemLayoutClass, menuItemIconClass, 'text-sm')}>
         {children}
         {infoTooltip}
       </span>
@@ -324,13 +326,7 @@ function DropdownMenuSeparator({
 }
 
 function DropdownMenuShortcut({ className, ...properties }: React.ComponentProps<'span'>): React.JSX.Element {
-  return (
-    <span
-      data-slot="dropdown-menu-shortcut"
-      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
-      {...properties}
-    />
-  );
+  return <span data-slot="dropdown-menu-shortcut" className={cn(menuShortcutClass, className)} {...properties} />;
 }
 
 function DropdownMenuSub({ ...properties }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>): React.JSX.Element {
@@ -349,26 +345,24 @@ function DropdownMenuSubTrigger({
     <DropdownMenuPrimitive.SubTrigger
       data-slot="dropdown-menu-sub-trigger"
       data-inset={isInset}
-      className={cn(
-        menuItemVariants({ inset: isInset }),
-        'data-[state=open]:text-accent-foreground cursor-pointer data-[state=open]:bg-accent',
-        className,
-      )}
+      className={cn(menuItemVariants({ inset: isInset }), menuSubTriggerOpenClass, className)}
       {...properties}
     >
       {children}
-      <ChevronRightIcon className="ml-auto size-4" />
+      <ChevronRightIcon className="ml-auto size-3.5" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }
 
 function DropdownMenuSubContent({
   className,
+  alignOffset = subMenuSideAlignOffset,
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
+      alignOffset={alignOffset}
       className={cn(
         menuContentVariants(),
         'shadow-lg origin-(--radix-dropdown-menu-content-transform-origin)',
@@ -430,18 +424,13 @@ function DropdownMenuSelectItem<T>({
   return (
     <div
       data-slot="dropdown-menu-select-item"
-      className={cn('flex items-center justify-between px-2 py-1.5', className)}
+      className={cn('flex items-center justify-between px-3 py-1.5', className)}
       // Prevent parent dropdown from closing when interacting with select
       onPointerDown={(event) => {
         event.stopPropagation();
       }}
     >
-      <span
-        className={cn(
-          'flex items-center gap-2 text-sm',
-          "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:text-muted-foreground [&_svg:not([class*='size-'])]:size-4",
-        )}
-      >
+      <span className={cn(menuItemLayoutClass, menuItemIconClass, 'text-sm')}>
         {children}
         {infoTooltip}
       </span>
