@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import { toolName } from '@taucad/chat/constants';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import { getKernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.js';

@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/types';
+import type { KernelProvider } from '@taucad/kernels';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import { jscadConfig } from '#api/chat/prompts/kernel-prompt-configs/jscad.prompt.config.js';
 import { openscadConfig } from '#api/chat/prompts/kernel-prompt-configs/openscad.prompt.config.js';

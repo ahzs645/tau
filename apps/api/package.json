@@ -6,6 +6,7 @@
   "dependencies": {
     "@taucad/api-extractor": "workspace:*",
     "@taucad/tau-examples": "workspace:*",
+    "@taucad/kernels": "workspace:*",
     "@taucad/types": "workspace:*",
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*"
