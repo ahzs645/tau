@@ -32,8 +32,9 @@ Import and extend the base `KernelWorker` class:
 
 ```typescript
 import { expose } from 'comlink';
-import type { CreateGeometryResult, ExportFormat, ExportGeometryResult, GetParametersResult } from '@taucad/types';
-import { createKernelSuccess, createKernelError } from '@taucad/types/guards';
+import type { ExportFormat } from '@taucad/types';
+import type { CreateGeometryResult, ExportGeometryResult, GetParametersResult } from '@taucad/kernels';
+import { createKernelSuccess, createKernelError } from '@taucad/kernels';
 import { KernelWorker } from '#components/geometry/kernel/utils/kernel-worker.js';
 
 class MyKernelWorker extends KernelWorker {
@@ -124,14 +125,14 @@ protected async createGeometry(
 }
 ```
 
-#### `exportGeometry(fileType, geometryId?, meshConfig?)`
+#### `exportGeometry(fileType, tessellation?)`
 
 Export geometry to the requested format.
 
 ```typescript
 protected async exportGeometry(
   fileType: ExportFormat,
-  meshConfig?: { linearTolerance: number; angularTolerance: number },
+  tessellation?: Tessellation,
 ): Promise<ExportGeometryResult> {
   // Export from cached geometry
   const blob = await this.exportToFormat(fileType);
@@ -144,16 +145,16 @@ protected async exportGeometry(
 
 ## Step 2: Register the Worker
 
-The kernel machine dynamically creates workers from a `KernelConfig` array injected at startup. Each entry bundles an `id`, `url`, and optional `options`. Array position defines `canHandle` priority (first match wins).
+The kernel machine dynamically creates workers from a `KernelModules` array injected at startup. Each entry bundles an `id`, `url`, and optional `options`. Array position defines `canHandle` priority (first match wins).
 
 ### First-party kernels
 
-For kernels shipped with Tau, add an entry to `defaultKernelConfig` in `apps/ui/app/constants/kernel-workers.ts`:
+For kernels shipped with Tau, add an entry to `defaultKernelModules` in `apps/ui/app/constants/kernel-workers.ts`:
 
 ```typescript
 import myKernelWorkerUrl from '#components/geometry/kernel/mykernel/mykernel.worker.js?url';
 
-export const defaultKernelConfig: KernelConfig = [
+export const defaultKernelModules: KernelModules = [
   // ... existing entries (order = canHandle priority)
   { id: 'mykernel', url: myKernelWorkerUrl, options: { /* init options */ } },
   { id: 'tau', url: tauWorkerUrl }, // tau is typically last
@@ -165,16 +166,16 @@ export const defaultKernelConfig: KernelConfig = [
 External consumers can extend the default config without modifying Tau's source:
 
 ```typescript
-import { defaultKernelConfig } from '#constants/kernel-workers.js';
-import type { KernelConfig } from '@taucad/types';
+import { defaultKernelModules } from '#constants/kernel-workers.js';
+import type { KernelModules } from '@taucad/kernels';
 
-const extendedConfig: KernelConfig = [
-  ...defaultKernelConfig,
+const extendedModules: KernelModules = [
+  ...defaultKernelModules,
   { id: 'manifold', url: manifoldWorkerUrl },
 ];
 
 // Pass to BuildProvider
-<BuildProvider buildId={id} kernelConfig={extendedConfig}>
+<BuildProvider buildId={id} kernelOptions={extendedConfig}>
 ```
 
 The `id` field accepts any string -- known kernel names get autocomplete, but arbitrary third-party IDs work without type errors.
@@ -248,7 +249,7 @@ import { myKernelExamples } from '@taucad/tau-examples';
 
 Edit `apps/api/app/api/chat/prompts/chat-prompt-cad.ts`:
 
-Add a `KernelConfig` entry to `cadKernelConfigs` with:
+Add a `KernelModules` entry to `cadKernelConfigs` with:
 
 - `fileExtension` — File extension (e.g., `.ts`, `.scad`)
 - `languageName` — Human-readable name
@@ -281,7 +282,7 @@ pnpm nx test ui --watch=false
 Always return result objects using the helpers:
 
 ```typescript
-import { createKernelSuccess, createKernelError } from '@taucad/types/guards';
+import { createKernelSuccess, createKernelError } from '@taucad/kernels';
 
 // Success
 return createKernelSuccess({ data });
@@ -358,12 +359,12 @@ Middleware wraps kernel operations (geometry creation, parameter extraction, exp
 
 ### Architecture
 
-Middleware is **dynamically loaded** in the Web Worker via `import(url)`. The main thread injects a `MiddlewareConfig` array — an ordered list of middleware entries — through the same dependency injection pattern used for kernel workers.
+Middleware is **dynamically loaded** in the Web Worker via `import(url)`. The main thread injects a `MiddlewareEntries` array — an ordered list of middleware entries — through the same dependency injection pattern used for kernel workers.
 
 ```
 BuildProvider → build.machine → cad.machine → kernel.machine → Worker
                                                     ↓
-                                            MiddlewareConfig[]
+                                            MiddlewareEntries[]
                                                     ↓
                                           import(url) per entry
 ```
@@ -374,9 +375,9 @@ Create your middleware in `apps/ui/app/components/geometry/kernel/middleware/`:
 
 ```typescript
 import { z } from 'zod';
-import { createKernelMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
+import { defineMiddleware } from '#components/geometry/kernel/middleware/kernel-middleware.js';
 
-export const myMiddleware = createKernelMiddleware({
+export const myMiddleware = defineMiddleware({
   name: 'MyMiddleware',
   version: '1.0.0',
 
@@ -408,12 +409,12 @@ export const myMiddleware = createKernelMiddleware({
 
 #### First-party middleware
 
-Add a `?url` import and entry to `defaultMiddlewareConfig` in `apps/ui/app/constants/kernel.constants.ts`:
+Add a `?url` import and entry to `defaultMiddlewareEntries` in `apps/ui/app/constants/kernel.constants.ts`:
 
 ```typescript
 import myMiddlewareUrl from '#components/geometry/kernel/middleware/my.middleware.js?url';
 
-export const defaultMiddlewareConfig: MiddlewareConfig = [
+export const defaultMiddlewareEntries: MiddlewareEntries = [
   // ... existing entries (order = execution order)
   { url: myMiddlewareUrl },
 ];
@@ -424,11 +425,11 @@ export const defaultMiddlewareConfig: MiddlewareConfig = [
 External consumers extend or replace the default config:
 
 ```typescript
-import { defaultMiddlewareConfig } from '#constants/kernel.constants.js';
-import type { MiddlewareConfig } from '@taucad/types';
+import { defaultMiddlewareEntries } from '#constants/kernel.constants.js';
+import type { MiddlewareEntries } from '@taucad/kernels';
 
-const extendedConfig: MiddlewareConfig = [
-  ...defaultMiddlewareConfig,
+const extendedEntries: MiddlewareEntries = [
+  ...defaultMiddlewareEntries,
   { url: '/path/to/custom-middleware.js', config: { threshold: 0.8 } },
 ];
 
@@ -455,17 +456,17 @@ This flows through the full machine hierarchy and calls `configureMiddleware` on
 
 Every middleware has a framework-level `enabled` flag that defaults to `true`. The framework automatically skips hooks for disabled middleware -- middleware authors never need to check it.
 
-Resolution order: `MiddlewareEntry.enabled` > `createKernelMiddleware({ enabled })` > `true`
+Resolution order: `MiddlewareEntry.enabled` > `defineMiddleware({ enabled })` > `true`
 
 ```typescript
 // Middleware enabled by default (standard)
-export const myMiddleware = createKernelMiddleware({
+export const myMiddleware = defineMiddleware({
   name: 'MyMiddleware',
   // enabled defaults to true
 });
 
 // Middleware disabled by default (opt-in)
-export const debugMiddleware = createKernelMiddleware({
+export const debugMiddleware = defineMiddleware({
   name: 'DebugMiddleware',
   enabled: false,
 });
