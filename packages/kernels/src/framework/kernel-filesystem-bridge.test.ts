@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { fromMemoryFS } from '#client/filesystem-constructors.js';
 import {
   createFileSystemServer,
@@ -119,6 +119,36 @@ describe('kernel-filesystem-bridge', () => {
         channel.port2.postMessage({ id: 999, method: 'fakeMethod', args: [] });
       });
       expect(result.error).toContain('Unknown method');
+    });
+  });
+
+  describe('proxy call timeout', () => {
+    it('should reject with timeout error when server never responds', async () => {
+      vi.useFakeTimers();
+
+      try {
+        const channel = new MessageChannel();
+        const proxy = createFileSystemProxy(channel.port2);
+
+        const readPromise = proxy.readFile('/never.txt', 'utf8');
+        const expectation = expect(readPromise).rejects.toThrow("Filesystem call 'readFile' timed out");
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expectation;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should not reject before timeout elapses when server responds in time', async () => {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
+      const fs = fromMemoryFS({ '/fast.txt': 'quick' });
+      const channel = new MessageChannel();
+      createFileSystemServer(fs, channel.port1);
+      const proxy = createFileSystemProxy(channel.port2);
+
+      const content = await proxy.readFile('/fast.txt', 'utf8');
+      expect(content).toBe('quick');
     });
   });
 
