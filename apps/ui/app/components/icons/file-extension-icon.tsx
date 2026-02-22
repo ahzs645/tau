@@ -63,6 +63,20 @@ const iconConfigMap: Partial<Record<string, IconConfig>> = {
     id: 'collada',
   },
 
+  // USD formats
+  usda: {
+    type: 'lib',
+    id: 'usd',
+  },
+  usdc: {
+    type: 'lib',
+    id: 'usd',
+  },
+  usdz: {
+    type: 'lib',
+    id: 'usd',
+  },
+
   // Renamed format-3d types (extension doesn't match format name)
   stp: {
     type: 'format-3d',
