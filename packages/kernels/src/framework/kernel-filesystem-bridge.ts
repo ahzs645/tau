@@ -27,6 +27,11 @@ type BridgeResponse = {
 };
 
 /**
+ * Maximum time (ms) to wait for a message port call to complete.
+ */
+const messagePortCallTimeoutMs = 30_000;
+
+/**
  * Serve a KernelFileSystem over a MessagePort.
  *
  * Sets up a message handler on the given port. Incoming `{ id, method, args }`
@@ -50,7 +55,7 @@ export function createFileSystemServer(fileSystem: FileSystemPortable, port: Mes
     try {
       const result: unknown = await fn(...args);
       port.postMessage({ id, result } satisfies BridgeResponse);
-    } catch (error: unknown) {
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       port.postMessage({ id, error: message } satisfies BridgeResponse);
     }
@@ -110,7 +115,21 @@ export function createFileSystemProxy(port: MessagePort): KernelFileSystem {
   async function call(method: string, args: unknown[]): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = nextId++;
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (pending.delete(id)) {
+          reject(new Error(`Filesystem call '${method}' timed out`));
+        }
+      }, messagePortCallTimeoutMs);
+      pending.set(id, {
+        resolve(value) {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject(error) {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
       port.postMessage({ id, method, args } satisfies BridgeRequest);
     });
   }
