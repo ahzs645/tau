@@ -16,12 +16,45 @@ type CodeEditorProperties = EditorProps & {
 // files. For typical engineering code files (< 500 lines) this is < 5 ms.
 const maxForceTokenizeLines = 5000;
 
+/**
+ * Shared overflow widgets container for all Monaco editors.
+ *
+ * Monaco's hover tooltip, suggest widget, and parameter hints use
+ * `position: fixed` when `fixedOverflowWidgets` is enabled. Inside
+ * Dockview panels, CSS `contain: layout` and GPU-acceleration properties
+ * (`transform`, `will-change`, `backface-visibility`) on ancestor elements
+ * create new containing blocks that break fixed positioning — widgets get
+ * clipped by `overflow: hidden` on the group view instead of rendering
+ * above everything.
+ *
+ * Placing the overflow container on `document.body` (outside the Dockview
+ * DOM hierarchy) avoids all CSS containment issues. Each Monaco editor
+ * appends its own child `overflowingContentWidgets` container inside this
+ * shared node. Combined with `fixedOverflowWidgets: true`, widgets use
+ * viewport coordinates and render above all panes.
+ */
+function createOverflowWidgetsDomNode(): HTMLDivElement {
+  const node = document.createElement('div');
+  node.className = 'monaco-editor';
+  node.style.cssText = 'position:fixed;top:0;left:0;overflow:visible;z-index:50;pointer-events:none;';
+  document.body.append(node);
+  return node;
+}
+
+const overflowWidgetsDomNode = createOverflowWidgetsDomNode();
+
 await configureMonaco();
 
 export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.JSX.Element {
   const { theme } = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
+
+  // Sync the shared overflow widgets container theme class so hover
+  // tooltips, suggest widgets, and parameter hints are styled correctly.
+  useEffect(() => {
+    overflowWidgetsDomNode.className = `monaco-editor ${theme === Theme.DARK ? 'vs-dark' : 'vs'}`;
+  }, [theme]);
 
   const handleMount = useCallback((editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
     completionRef.current = registerCompletions(editor, monaco);
@@ -69,11 +102,12 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
         // Disable vertical scroll beyond last line
         scrollBeyondLastLine: false,
         wordWrap: 'on',
-        // Use position:fixed for overflow widgets (hover, suggest, parameter
-        // hints) so they render above all content. Dockview's CSS containment
-        // (contain, transform, will-change) is overridden in dockview.tsx
-        // to ensure position:fixed is relative to the viewport, not the panel.
+        // Render overflow widgets (hover, suggest, parameter hints) in a shared
+        // container on document.body so they escape Dockview's CSS containment.
+        // fixedOverflowWidgets uses position:fixed with viewport coordinates;
+        // overflowWidgetsDomNode places the container outside the Dockview hierarchy.
         fixedOverflowWidgets: true,
+        overflowWidgetsDomNode,
         // Enable smooth cursor animation when typing and keying left/right/up/down
         cursorSmoothCaretAnimation: 'on',
         // Disable the sticky scrolling which displays the parent closure at the top of the editor for better performance.
