@@ -101,6 +101,9 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
   const { file, parameters } = event;
 
   void (async () => {
+    let offProgress: (() => void) | undefined;
+    let offParameters: (() => void) | undefined;
+
     try {
       const client = await ensureKernelClient(context);
 
@@ -108,12 +111,11 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
         client.notifyFileChanged(context.changedPaths);
       }
 
-      // Subscribe to per-render events
-      const offProgress = client.on('progress', (phase: RenderPhase) => {
+      offProgress = client.on('progress', (phase: RenderPhase) => {
         sendBack({ type: 'kernelProgress', phase });
       });
 
-      const offParameters = client.on('parametersResolved', (parametersResult: GetParametersResult) => {
+      offParameters = client.on('parametersResolved', (parametersResult: GetParametersResult) => {
         if (isKernelSuccess(parametersResult)) {
           const data = parametersResult.data as {
             defaultParameters: Record<string, unknown>;
@@ -128,9 +130,6 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
       });
 
       const result = await client.render(file, parameters);
-
-      offProgress();
-      offParameters();
 
       if (isKernelSuccess(result)) {
         sendBack({
@@ -154,6 +153,9 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
           },
         ],
       });
+    } finally {
+      offProgress?.();
+      offParameters?.();
     }
   })();
 });
