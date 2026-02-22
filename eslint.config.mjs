@@ -346,7 +346,13 @@ const config = [
       'jsdoc/require-description': [
         'warn',
         {
-          contexts: ['FunctionDeclaration', 'MethodDefinition', 'ClassDeclaration'],
+          contexts: [
+            'FunctionDeclaration',
+            'MethodDefinition',
+            'ClassDeclaration',
+            'TSTypeAliasDeclaration',
+            'TSInterfaceDeclaration',
+          ],
         },
       ],
       'jsdoc/require-param-description': 'warn',
