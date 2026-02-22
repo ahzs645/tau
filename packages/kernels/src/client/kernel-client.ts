@@ -226,7 +226,7 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
     const fileSystemPort =
       'port' in resolvedOptions ? resolvedOptions.port : createFileSystemPort(resolvedOptions.fileSystem);
 
-    await workerClient.initialize({ kernelModules, bundlerEntries }, fileSystemPort, middlewareEntries, bundlerEntries);
+    await workerClient.initialize({ kernelModules }, fileSystemPort, middlewareEntries, bundlerEntries);
 
     connected = true;
     return workerClient;
