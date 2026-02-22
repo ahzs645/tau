@@ -259,6 +259,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Pending module registrations queued before the bundler is loaded */
   private readonly pendingModuleRegistrations = new Map<string, BuiltinModuleEntry>();
 
+  /** In-flight bundler initializations to coalesce concurrent callers for the same extension */
+  private readonly bundlerInitInProgress = new Map<string, Promise<{ definition: BundlerDefinition; ctx: unknown }>>();
+
   /**
    * Unified filesystem interface for kernel workers.
    * Provides three path resolution contexts:
@@ -727,25 +730,27 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   public async ensureLoadedBundler(bundlerEntry: BundlerEntry, preloadedDefinition?: BundlerDefinition): Promise<void> {
     const initSpan = this.tracer.startSpan('kernel.bundler-init');
 
-    let definition: BundlerDefinition;
-    if (preloadedDefinition) {
-      definition = preloadedDefinition;
-    } else {
-      const mod: Record<string, unknown> = (await import(/* @vite-ignore */ bundlerEntry.bundlerModuleUrl)) as Record<
-        string,
-        unknown
-      >;
-      definition = (mod['default'] ?? mod) as BundlerDefinition;
-    }
-
-    const { extensions } = bundlerEntry;
-    for (const ext of extensions) {
-      if (!this.loadedBundlers.has(ext) && !this.pendingBundlerInits.has(ext)) {
-        this.pendingBundlerInits.set(ext, { definition, extensions, options: bundlerEntry.options });
+    try {
+      let definition: BundlerDefinition;
+      if (preloadedDefinition) {
+        definition = preloadedDefinition;
+      } else {
+        const mod: Record<string, unknown> = (await import(/* @vite-ignore */ bundlerEntry.bundlerModuleUrl)) as Record<
+          string,
+          unknown
+        >;
+        definition = (mod['default'] ?? mod) as BundlerDefinition;
       }
-    }
 
-    initSpan.end();
+      const { extensions } = bundlerEntry;
+      for (const ext of extensions) {
+        if (!this.loadedBundlers.has(ext) && !this.pendingBundlerInits.has(ext)) {
+          this.pendingBundlerInits.set(ext, { definition, extensions, options: bundlerEntry.options });
+        }
+      }
+    } finally {
+      initSpan.end();
+    }
   }
 
   /**
@@ -779,33 +784,29 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       return existing;
     }
 
+    const inFlight = this.bundlerInitInProgress.get(ext);
+    if (inFlight) {
+      return inFlight;
+    }
+
     const pending = this.pendingBundlerInits.get(ext);
     if (!pending) {
       throw new Error(`No bundler registered for .${ext} files`);
     }
 
-    const { definition, extensions, options: bundlerOptions } = pending;
-    const projectPath = this.getProjectRootPath();
-    const initSpan = this.tracer.startSpan('kernel.bundler-context-init');
+    const promise = this.doInitializeBundler(pending);
 
-    const rawOptions = bundlerOptions ?? {};
-    const validatedOptions = definition.optionsSchema ? definition.optionsSchema.parse(rawOptions) : rawOptions;
-
-    const ctx = await definition.initialize({ filesystem: this.filesystem, projectPath }, validatedOptions);
-    const loaded = { definition, ctx };
-
-    for (const extension of extensions) {
-      this.loadedBundlers.set(extension, loaded);
-      this.pendingBundlerInits.delete(extension);
+    for (const extension of pending.extensions) {
+      this.bundlerInitInProgress.set(extension, promise);
     }
 
-    for (const [name, entry] of this.pendingModuleRegistrations) {
-      definition.registerModule(name, entry, ctx);
+    try {
+      return await promise;
+    } finally {
+      for (const extension of pending.extensions) {
+        this.bundlerInitInProgress.delete(extension);
+      }
     }
-
-    this.pendingModuleRegistrations.clear();
-    initSpan.end();
-    return loaded;
   }
 
   /**
@@ -952,6 +953,45 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected abstract getDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]>;
 
   /**
+   * Perform the actual bundler context initialization.
+   * Separated from ensureBundlerForExtension so concurrent callers coalesce on the same promise.
+   */
+  private async doInitializeBundler(pending: {
+    definition: BundlerDefinition;
+    extensions: string[];
+    options?: Record<string, unknown>;
+  }): Promise<{ definition: BundlerDefinition; ctx: unknown }> {
+    const { definition, extensions, options: bundlerOptions } = pending;
+    const projectPath = this.getProjectRootPath();
+    const initSpan = this.tracer.startSpan('kernel.bundler-context-init');
+
+    try {
+      const rawOptions = bundlerOptions ?? {};
+      const validatedOptions = definition.optionsSchema ? definition.optionsSchema.parse(rawOptions) : rawOptions;
+
+      const ctx = await definition.initialize({ filesystem: this.filesystem, projectPath }, validatedOptions);
+      const loaded = { definition, ctx };
+
+      for (const extension of extensions) {
+        this.loadedBundlers.set(extension, loaded);
+        this.pendingBundlerInits.delete(extension);
+      }
+
+      for (const [name, entry] of this.pendingModuleRegistrations) {
+        definition.registerModule(name, entry, ctx);
+      }
+
+      if (this.pendingBundlerInits.size === 0) {
+        this.pendingModuleRegistrations.clear();
+      }
+
+      return loaded;
+    } finally {
+      initSpan.end();
+    }
+  }
+
+  /**
    * Load middleware modules from URLs and resolve their configs.
    * Uses a module cache to avoid redundant network requests when reconfiguring.
    *
@@ -959,23 +999,27 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private async loadMiddleware(middlewareEntries: MiddlewareEntries): Promise<void> {
     const middlewareSpan = this.tracer.startSpan('kernel.load-middleware', { count: middlewareEntries.length });
-    const resolved: ResolvedMiddleware[] = [];
 
-    for (const entry of middlewareEntries) {
-      // eslint-disable-next-line no-await-in-loop -- Middleware must be loaded sequentially to preserve order
-      const middleware = await this.importMiddlewareModule(entry.url);
+    try {
+      const resolved: ResolvedMiddleware[] = [];
 
-      const resolvedOptions = middleware.optionsSchema
-        ? (middleware.optionsSchema.parse(entry.options ?? {}) as Record<string, unknown>)
-        : {};
+      for (const entry of middlewareEntries) {
+        // eslint-disable-next-line no-await-in-loop -- Middleware must be loaded sequentially to preserve order
+        const middleware = await this.importMiddlewareModule(entry.url);
 
-      const enabled = entry.enabled ?? middleware.enabled ?? true;
+        const resolvedOptions = middleware.optionsSchema
+          ? (middleware.optionsSchema.parse(entry.options ?? {}) as Record<string, unknown>)
+          : {};
 
-      resolved.push({ middleware, options: resolvedOptions, url: entry.url, enabled });
+        const enabled = entry.enabled ?? middleware.enabled ?? true;
+
+        resolved.push({ middleware, options: resolvedOptions, url: entry.url, enabled });
+      }
+
+      this.resolvedMiddleware = resolved;
+    } finally {
+      middlewareSpan.end();
     }
-
-    this.resolvedMiddleware = resolved;
-    middlewareSpan.end();
   }
 
   /**
