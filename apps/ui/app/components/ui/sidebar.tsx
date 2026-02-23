@@ -18,7 +18,7 @@ import type { KeyCombination } from '#utils/keys.utils.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 
-const sidebarDefaultOpen = false;
+const sidebarDefaultOpen = true;
 const sidebarWidth = 'calc(var(--spacing) * 56)';
 const sidebarWidthMobile = 'calc(var(--spacing) * 72)';
 const sidebarWidthIcon = 'calc(var(--spacing) * 2)';
