@@ -75,15 +75,13 @@ The `main` function is the entry point that the kernel calls. It receives a `par
 Pass the code and optional parameter overrides to `client.render()`:
 
 ```typescript
-import { isKernelSuccess } from '@taucad/kernels';
-
 const result = await client.render({
   file: 'main.ts',
   code: modelCode,
   parameters: { width: 50, depth: 15 },
 });
 
-if (isKernelSuccess(result)) {
+if (result.success) {
   const geometry = result.data.geometries[0];
   console.log(`Rendered: ${geometry.type}`);
   console.log(`GLB size: ${geometry.blob.byteLength} bytes`);
@@ -94,7 +92,7 @@ if (isKernelSuccess(result)) {
 }
 ```
 
-The `isKernelSuccess` type guard narrows the result type so you can safely access `result.data`. If rendering fails, the `issues` array contains structured errors with messages, locations, and severity levels.
+The `success` field is the discriminant -- TypeScript narrows the result type so you can safely access `result.data` in the `true` branch. If rendering fails, the `issues` array contains structured errors with messages, locations, and severity levels.
 
 ## Step 4: Export to STEP
 
@@ -103,7 +101,7 @@ Export the rendered geometry to STEP format for use in professional CAD tools:
 ```typescript
 const exportResult = await client.export('step');
 
-if (isKernelSuccess(exportResult)) {
+if (exportResult.success) {
   const file = exportResult.data.files[0];
   console.log(`Exported: ${file.name} (${file.blob.byteLength} bytes)`);
   // Save to disk, upload, or pass to another tool
@@ -130,7 +128,7 @@ You built a parametric 3D model using the Replicad kernel:
 2. Wrote a parametric model with configurable dimensions
 3. Rendered it to glTF with parameter overrides
 4. Exported the result to STEP format
-5. Used `isKernelSuccess` to handle success and error cases
+5. Used `result.success` to handle success and error cases
 
 ## Next Steps
 

@@ -2,7 +2,7 @@ import { assign, assertEvent, setup, sendTo, fromPromise, fromCallback, waitFor 
 import type { Snapshot, ActorRef, OutputFrom, DoneActorEvent, ActorRefFrom } from 'xstate';
 import type { Geometry, ExportFormat, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
-import { createKernelClient, isKernelSuccess } from '@taucad/kernels';
+import { createKernelClient } from '@taucad/kernels';
 import type {
   KernelClient,
   KernelClientOptions,
@@ -116,7 +116,7 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
       });
 
       offParameters = client.on('parametersResolved', (parametersResult: GetParametersResult) => {
-        if (isKernelSuccess(parametersResult)) {
+        if (parametersResult.success) {
           const data = parametersResult.data as {
             defaultParameters: Record<string, unknown>;
             jsonSchema: JSONSchema7;
@@ -131,7 +131,7 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
 
       const result = await client.render({ file, parameters });
 
-      if (isKernelSuccess(result)) {
+      if (result.success) {
         sendBack({
           type: 'geometryComputed',
           geometries: result.data,
@@ -184,7 +184,7 @@ const exportGeometryActor = fromPromise<
   try {
     const result = await context.kernelClient.export(format);
 
-    if (isKernelSuccess(result)) {
+    if (result.success) {
       const { data } = result;
       if (Array.isArray(data) && data.length > 0 && data[0]?.blob) {
         return { type: 'geometryExported', blob: data[0].blob, format };

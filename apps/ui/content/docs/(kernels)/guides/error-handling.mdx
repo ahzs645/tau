@@ -6,7 +6,7 @@ icon: lucide:triangle-alert
 
 # Error Handling
 
-Kernel operations return a discriminated union `KernelResult<T>`. Use the `isKernelSuccess` and `isKernelError` type guards to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames.
+Kernel operations return a discriminated union `KernelResult<T>`. Check the `success` field to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ Kernel operations return a discriminated union `KernelResult<T>`. Use the `isKer
 
 ## Goal
 
-Handle success and error results from `render`, `export`, and `getParameters` using type guards and the `KernelIssue` structure. Apply patterns that work for both render and export calls.
+Handle success and error results from `render`, `export`, and `getParameters` using the `success` discriminant and the `KernelIssue` structure. Apply patterns that work for both render and export calls.
 
 ## Steps
 
@@ -40,17 +40,12 @@ type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 
 The `success` field is the discriminant. When `success` is `true`, `data` is present. When `success` is `false`, only `issues` is present.
 
-### 2. Use Type Guards from @taucad/kernels
+### 2. Narrow Results with the `success` Field
 
-Import and use `isKernelSuccess` and `isKernelError` to narrow the result:
+Check `result.success` to narrow the discriminated union. TypeScript automatically infers the correct type in each branch:
 
 ```typescript
-import {
-  createKernelClient,
-  fromMemoryFS,
-  isKernelSuccess,
-  isKernelError,
-} from '@taucad/kernels';
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
 import { replicad } from '@taucad/kernels/kernels';
 import { esbuild } from '@taucad/kernels/bundler';
 import { createWorkerTransport } from '@taucad/kernels/transport';
@@ -69,9 +64,9 @@ const result = await client.render({
   code: `export default function main() { return null; }`,
 });
 
-if (isKernelSuccess(result)) {
+if (result.success) {
   console.log(`Rendered ${result.data.geometries.length} geometry`);
-} else if (isKernelError(result)) {
+} else {
   console.error('Render failed:', result.issues.map((i) => i.message).join('; '));
 }
 ```
@@ -122,7 +117,7 @@ Pattern for `client.render`:
 ```typescript
 const result = await client.render({ file: 'main.ts', code: userCode });
 
-if (isKernelSuccess(result)) {
+if (result.success) {
   const { geometries } = result.data;
   for (const geom of geometries) {
     // Use geom.blob, geom.type
@@ -151,7 +146,7 @@ const result = await client.export({
   fileType: 'glb',
 });
 
-if (isKernelSuccess(result)) {
+if (result.success) {
   const blobs = result.data;
   for (const { blob, name } of blobs) {
     // Save blob to disk or trigger download

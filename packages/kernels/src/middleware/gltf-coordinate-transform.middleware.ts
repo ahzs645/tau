@@ -1,7 +1,6 @@
 import type { Document } from '@gltf-transform/core';
 import { NodeIO } from '@gltf-transform/core';
 import type { GeometryGltf } from '@taucad/types';
-import { isKernelSuccess } from '#framework/kernel-helpers.js';
 import { defineMiddleware } from '#middleware/kernel-middleware.js';
 
 /**
@@ -136,7 +135,7 @@ export const gltfCoordinateTransformMiddleware = defineMiddleware({
 
     // Transform on the way back up (onion model "return journey")
     // This runs for both computed and cached results
-    if (!isKernelSuccess(result) || result.data.length === 0) {
+    if (!result.success || result.data.length === 0) {
       return result;
     }
 

@@ -23,5 +23,5 @@ export { defineBundler } from '#types/kernel-bundler.types.js';
 // Kernel types (re-exported for consumers)
 export type * from '#types/index.js';
 
-// Helpers & Guards
-export { createKernelSuccess, createKernelError, isKernelSuccess, isKernelError } from '#framework/kernel-helpers.js';
+// Helpers
+export { createKernelSuccess, createKernelError } from '#framework/kernel-helpers.js';

@@ -10,7 +10,7 @@ Use these types when handling kernel operation results, errors, and geometry out
 
 ## Result Types
 
-All kernel operations return a discriminated union: `KernelSuccessResult<T> | KernelErrorResult`. Use the `isKernelSuccess()` and `isKernelError()` type guards for narrowing.
+All kernel operations return a discriminated union: `KernelSuccessResult<T> | KernelErrorResult`. Check the `success` field to narrow the result.
 
 ```typescript
 type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
@@ -38,16 +38,14 @@ type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 | `ExportGeometryResult` | `KernelResult<Array<{ blob: Blob; name: string }>>` |
 | `RenderPhase` | `string` — framework phases: `'resolvingDeps'`, `'bundling'`, `'extractingParams'`, `'computingGeometry'`, `'postProcessing'` |
 
-## Type Guards
+## Narrowing Results
 
 ```typescript
-import { isKernelSuccess, isKernelError } from '@taucad/kernels';
-
 const result = await client.render({ file: 'main.ts' });
 
-if (isKernelSuccess(result)) {
+if (result.success) {
   console.log(result.data.geometries.length);
-} else if (isKernelError(result)) {
+} else {
   console.error(result.issues);
 }
 ```

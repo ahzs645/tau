@@ -3,7 +3,6 @@ import { NodeIO } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import type { GeometryGltf } from '@taucad/types';
 import { z } from 'zod';
-import { isKernelSuccess } from '#framework/kernel-helpers.js';
 import { detectEdges } from '#utils/edge-detection.js';
 import { defineMiddleware } from '#middleware/kernel-middleware.js';
 
@@ -191,7 +190,7 @@ export const gltfEdgeDetectionMiddleware = defineMiddleware({
     const result = await handler(input);
 
     // Add edges on the way back up (onion model "return journey")
-    if (!isKernelSuccess(result) || result.data.length === 0) {
+    if (!result.success || result.data.length === 0) {
       return result;
     }
 
