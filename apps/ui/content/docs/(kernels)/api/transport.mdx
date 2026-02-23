@@ -1,0 +1,41 @@
+---
+title: Transport API
+description: KernelTransport interface and createWorkerTransport for worker communication.
+icon: lucide:cable
+---
+
+# Transport API
+
+Use the transport API when configuring how the kernel client communicates with worker processes. The transport abstracts MessagePort-based RPC over the worker boundary.
+
+## Types
+
+<auto-type-table path="./props/transport.ts" name="KernelTransport" />
+
+## createWorkerTransport
+
+`createWorkerTransport(workerUrl)` creates a `KernelTransport` that spawns a Web Worker from the given URL and establishes a MessageChannel for bidirectional communication. Returns `KernelTransport & { worker: Worker }`.
+
+## Usage
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const transport = createWorkerTransport(
+  new URL('@taucad/kernels/worker', import.meta.url).href,
+);
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem: fromMemoryFS(),
+  transport,
+});
+```
+
+## Related
+
+- [Worker Model](../concepts/worker-model)

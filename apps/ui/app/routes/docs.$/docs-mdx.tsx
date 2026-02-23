@@ -1,13 +1,19 @@
 import type { MDXComponents } from 'mdx/types.js';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
+import { TypeTable } from 'fumadocs-ui/components/type-table';
 import { InlineCode, Pre } from '#components/code/code-block.js';
 import { DocsCodeBlock } from '#routes/docs.$/docs-codeblock.js';
+import { MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
+import { Mermaid } from '#components/docs/mermaid.js';
 import { cn } from '#utils/ui.utils.js';
 import { extractTextFromChildren } from '#utils/react.utils.js';
 
 export function getMdxComponents(): MDXComponents {
   return {
     ...defaultMdxComponents,
+    TypeTable,
+    Mermaid,
+    a: MarkdownHyperlink,
     pre(properties) {
       const { className, children, title } = properties as {
         className: string;

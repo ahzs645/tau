@@ -1,0 +1,141 @@
+---
+title: Filesystem Setup
+description: Configure Node.js, in-memory, or browser-based filesystems for kernel input.
+icon: lucide:folder-cog
+---
+
+# Filesystem Setup
+
+Configure the filesystem backend that kernels use to read project files. The framework provides three built-in constructors: `fromNodeFS` for disk access, `fromMemoryFS` for in-memory content, and `fromZenFS` for browser-based virtual filesystems.
+
+## Prerequisites
+
+- [Install @taucad/kernels](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+
+## Goal
+
+Choose and configure a `KernelFileSystem` implementation so your kernel client can read (and optionally write) project files during render, export, and parameter extraction.
+
+## Steps
+
+### 1. Import Filesystem Constructors from @taucad/kernels
+
+All three constructors are exported from the main package:
+
+```typescript
+import { fromNodeFS, fromMemoryFS, fromZenFS } from '@taucad/kernels';
+```
+
+### 2. Use fromNodeFS for Disk-Based Projects
+
+Use `fromNodeFS` when your project files live on disk. Pass the base path; all file operations are resolved relative to it. Requires Node.js (not available in browser builds).
+
+```typescript
+import { createKernelClient, fromNodeFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem: fromNodeFS('/path/to/project'),
+  transport: createWorkerTransport(
+    new URL('@taucad/kernels/worker', import.meta.url),
+  ),
+});
+```
+
+Use this when running in Node.js (CLI, tests, server-side) and when you need persistent cache (e.g., geometry cache, parameter cache).
+
+### 3. Use fromMemoryFS for In-Memory Content
+
+Use `fromMemoryFS` when file content is passed directly (e.g., from an editor) or when you want no disk I/O. Optionally seed with initial files:
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const filesystem = fromMemoryFS({
+  'main.ts': `
+    import { drawRoundedRectangle } from 'replicad';
+    export default function main() {
+      return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
+    }
+  `,
+  'lib/utils.ts': 'export function helper() { return 42; }',
+});
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem,
+  transport: createWorkerTransport(
+    new URL('@taucad/kernels/worker', import.meta.url),
+  ),
+});
+```
+
+When you call `client.render({ file: 'main.ts', code: '...' })`, the `code` is written to the in-memory store before the kernel runs. Use `fromMemoryFS()` with no args for an empty store that you populate via `render`/`connect`.
+
+### 4. Use fromZenFS for Browser Virtual Filesystems
+
+Use `fromZenFS` when running in the browser with a ZenFS-backed virtual filesystem (e.g., IndexedDB, in-memory). Pass the ZenFS `fs` instance:
+
+```typescript
+import { createKernelClient, fromZenFS } from '@taucad/kernels';
+import { fs } from '@zenfs/core';
+
+const filesystem = fromZenFS(fs, '/');
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem,
+  transport: createWorkerTransport(
+    new URL('@taucad/kernels/worker', import.meta.url),
+  ),
+});
+```
+
+Use this when you need a persistent browser filesystem (IndexedDB) or when integrating with ZenFS-based tooling.
+
+### 5. Understand the KernelFileSystem Interface
+
+Any filesystem implementation must implement the `KernelFileSystem` interface. It exposes eight methods matching `fs.promises` semantics:
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `readFile` | `(path, encoding?) => Promise<string \| Uint8Array>` | Read file as text (`'utf8'`) or binary |
+| `writeFile` | `(path, data) => Promise<void>` | Write text or binary |
+| `mkdir` | `(path, options?) => Promise<void>` | Create directory (supports `{ recursive: true }`) |
+| `readdir` | `(path) => Promise<string[]>` | List directory entries |
+| `unlink` | `(path) => Promise<void>` | Delete file |
+| `stat` | `(path) => Promise<{ type, size, mtimeMs }>` | Get file/dir metadata |
+| `exists` | `(path) => Promise<boolean>` | Check if path exists |
+
+All paths are absolute. The framework builds higher-level operations (e.g., `ensureDirectoryExists`, batch reads) from these primitives.
+
+## When to Use Each
+
+| Constructor | Use when |
+|-------------|----------|
+| `fromNodeFS(basePath)` | Node.js environment, disk-based projects, persistent cache |
+| `fromMemoryFS(files?)` | Editor-driven content, tests, no disk I/O, ephemeral cache |
+| `fromZenFS(fs, rootPath?)` | Browser with ZenFS (IndexedDB, in-memory), same-thread worker serving |
+
+## Variations
+
+- **Reading files from disk vs in-memory**: With `fromNodeFS`, kernels read from the real filesystem. With `fromMemoryFS`, they read from the in-memory Map. The bundler and kernels use the same interface; only the backend differs.
+- **Custom implementation**: Implement `KernelFileSystem` directly for custom backends (e.g., cloud storage, virtual mounts). See [API Reference: Types](/docs/api/types) for the full interface.
+- **Filesystem bridge**: For advanced setups (e.g., UI exposing a filesystem to a worker), use `createFileSystemPort` and `exposeFileSystem` from `@taucad/kernels/filesystem`.
+
+## Related
+
+- [Using Middleware](./using-middleware) -- Caching middleware requires a writable filesystem
+- [Worker Model](../concepts/worker-model) -- How the filesystem is bridged to the worker
+- [API Reference: Types](/docs/api/types) -- KernelFileSystem interface
+- [API Reference: Client](/docs/api/client) -- createKernelClient filesystem option

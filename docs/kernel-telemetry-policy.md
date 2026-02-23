@@ -20,6 +20,7 @@ All span names follow the pattern `{subsystem}.{operation}`, inspired by OpenTel
 | `fs.*` | Filesystem operations | `fs.read`, `fs.readBatch`, `fs.exists`, `fs.readdir` |
 | `wasm.*` | WASM compilation | `wasm.compile` |
 | `middleware.*` | Middleware wrapping | `middleware.wrap({MiddlewareName})` |
+| `oc.*` | OpenCASCADE API calls | `oc.summary`, `oc.BRepPrimAPI_MakeBox`, `oc.BRepAlgoAPI_Fuse` |
 | `{kernelId}.*` | Kernel-authored spans | `replicad.wasm-init`, `replicad.run-main`, `replicad.font-load`, `replicad.mesh-to-gltf`, `openscad.wasm-init`, `openscad.call-main`, `openscad.mount-fonts`, `openscad.convert-geometry` |
 
 ### Rules
@@ -77,8 +78,11 @@ kernel.render
 │   └── deps.content-hash
 └── kernel.compute (via middleware chain)
     └── middleware.wrap({Name})
-        └── {kernelId}.run-main / {kernelId}.call-main
-            └── {kernelId}.mesh-to-gltf / {kernelId}.convert-geometry
+        ├── {kernelId}.run-main / {kernelId}.call-main
+        │   ├── oc.{ClassName} (per-call mode only)
+        │   └── ...
+        ├── oc.summary (summary mode only, after run-main)
+        └── {kernelId}.mesh-to-gltf / {kernelId}.convert-geometry
 ```
 
 ### Subsequent Renders (kernel already selected)
@@ -112,6 +116,8 @@ Attributes are `Record<string, string | number | boolean>` only. No objects, no 
 | `{kernelId}.wasm-init` | -- | `{ withExceptions }` |
 | `{kernelId}.run-main` | -- | -- |
 | `{kernelId}.mesh-to-gltf` | -- | `{ shapeCount }` |
+| `oc.summary` | `{ total.calls, total.ms, classes }` | `{ {ClassName}.calls, {ClassName}.ms }` per class |
+| `oc.{ClassName}` | `{ method }` (`constructor` or `apply`) | -- |
 
 ### Guidelines
 
@@ -120,14 +126,63 @@ Attributes are `Record<string, string | number | boolean>` only. No objects, no 
 - Root spans should carry identifying context (file, kernel, format).
 - Avoid high-cardinality attributes (e.g., full file contents, large arrays).
 
+## OC API Call Tracing
+
+The Replicad kernel supports automatic OpenCASCADE API call tracing via a JavaScript Proxy that wraps the OC WASM instance. Controlled by the `ocTracing` kernel option.
+
+### Modes
+
+| Mode | Overhead | Behavior | Default |
+|------|----------|----------|---------|
+| `summary` | ~2-5% | Accumulates per-class call counts and total durations. Emits a single `oc.summary` span at flush time with aggregated attributes. | Yes |
+| `per-call` | ~10-20% | Creates individual `oc.{ClassName}` spans via `tracer.startSpan()` for every OC constructor/method call. | No (opt-in) |
+| `off` | 0% | No OC tracing. | No |
+
+### Proxy Architecture
+
+The tracing proxy (`oc-tracing.ts`) intercepts at two levels:
+
+1. **Class resolution** (`get` trap): When `oc.BRepPrimAPI_MakeBox` is accessed, returns a wrapped function proxy for that class. No WASM calls during property access.
+2. **Function invocation** (`apply`/`construct` trap): When a constructor or method is called, wraps the call with timing instrumentation.
+
+### Composition with Exception Proxy
+
+When both tracing and exception handling are active, the composition order is:
+
+```
+raw OC → wrapOcInstance() (exceptions) → wrapOcWithTracing() (tracing, outermost)
+```
+
+Tracing wraps outermost so spans include exception handling overhead.
+
+### Span Hierarchy
+
+Per-call spans are children of `replicad.run-main` (the tracer's stack-based `activeSpanId` makes any `startSpan()` during `runMain()` a child):
+
+```
+kernel.compute
+└── replicad.run-main
+    ├── oc.BRepPrimAPI_MakeBox
+    ├── oc.BRepPrimAPI_MakeCylinder
+    └── oc.BRepAlgoAPI_Fuse
+```
+
+Summary spans appear as siblings after `replicad.run-main` (flush is called after `mainSpan.end()`):
+
+```
+kernel.compute
+├── replicad.run-main
+└── oc.summary   (attributes: per-class counts and durations)
+```
+
 ## Performance Contract
 
 ### Worker Side
 
 - `KernelTracer.startSpan()` is O(1): monotonic ID increment, single `performance.mark()` call, push to active span stack.
 - `KernelTracer.reset()` is called once per render cycle (at the start of `render`), not per span. It clears all accumulated marks and measures.
-- `WorkerTelemetryCollector` batches entries via `PerformanceObserver` and flushes at 100ms intervals during long operations.
-- Telemetry is explicitly flushed on render completion (before the `geometryComputed` response is sent) to ensure spans arrive before geometry results.
+- `WorkerTelemetryCollector` batches entries via `PerformanceObserver`. No timers are used -- flushing is explicit only, so the collector adds zero overhead when idle and does not keep the event loop alive.
+- Telemetry is explicitly flushed by the dispatcher after each `render()` and `export()` operation (before the response is sent) to ensure spans arrive before results.
 
 ### Main Thread
 
@@ -145,10 +200,11 @@ Attributes are `Record<string, string | number | boolean>` only. No objects, no 
 
 | Component | File | Role |
 |-----------|------|------|
-| `KernelTracer` | `apps/ui/app/components/geometry/kernel/utils/kernel-tracer.ts` | Span creation with parent-child hierarchy |
-| `WorkerTelemetryCollector` | `apps/ui/app/components/geometry/kernel/utils/worker-telemetry.ts` | Batched collection via PerformanceObserver |
-| `KernelWorkerDispatcher` | `apps/ui/app/components/geometry/kernel/utils/kernel-worker-dispatcher.ts` | Telemetry flush on render completion |
-| `KernelWorker` | `apps/ui/app/components/geometry/kernel/utils/kernel-worker.ts` | Framework span instrumentation |
-| `KernelRuntimeWorker` | `apps/ui/app/components/geometry/kernel/kernel-runtime-worker.ts` | Kernel selection spans |
+| `KernelTracer` | `packages/kernels/src/framework/kernel-tracer.ts` | Span creation with parent-child hierarchy |
+| `WorkerTelemetryCollector` | `packages/kernels/src/framework/worker-telemetry.ts` | Batched collection via PerformanceObserver |
+| `KernelWorkerDispatcher` | `packages/kernels/src/framework/kernel-worker-dispatcher.ts` | Telemetry flush on render completion |
+| `KernelWorker` | `packages/kernels/src/framework/kernel-worker.ts` | Framework span instrumentation |
+| `KernelRuntimeWorker` | `packages/kernels/src/framework/kernel-runtime-worker.ts` | Kernel selection spans |
+| `wrapOcWithTracing` | `packages/kernels/src/kernels/replicad/oc-tracing.ts` | OC API call tracing proxy |
 | `buildSpanTree` | `apps/ui/app/routes/builds_.$id/chat-kernel.tsx` | UI tree reconstruction |
 | `createTelemetryAggregator` | `apps/ui/app/machines/kernel.machine.ts` | Main-thread forwarding |

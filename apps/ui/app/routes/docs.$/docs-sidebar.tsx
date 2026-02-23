@@ -2,9 +2,8 @@ import type * as PageTree from 'fumadocs-core/page-tree';
 import { useMemo, useCallback, createContext, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { cva } from 'class-variance-authority';
-import { XIcon, MenuIcon, Box, Blocks, Layers, Terminal } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import { useLocation, NavLink } from 'react-router';
+import { XIcon, MenuIcon } from 'lucide-react';
+import { useLocation, NavLink, useNavigate } from 'react-router';
 import { useTreeContext } from 'fumadocs-ui/contexts/tree';
 import { useSearchContext } from 'fumadocs-ui/contexts/search';
 import { cn } from '#utils/ui.utils.js';
@@ -161,71 +160,76 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
   );
 }
 
-type FrameworkId = 'editor' | 'framework' | 'platform' | 'cli';
-
-type Framework = {
-  readonly id: FrameworkId;
+type DocSection = {
+  readonly id: string;
   readonly label: string;
-  readonly icon: LucideIcon;
+  readonly icon: ReactNode;
+  readonly url: string;
 };
 
-const frameworks: Framework[] = [
-  {
-    id: 'editor',
-    label: 'Editor',
-    icon: Box,
-  },
-  {
-    id: 'framework',
-    label: 'Framework',
-    icon: Blocks,
-  },
-  {
-    id: 'platform',
-    label: 'Platform',
-    icon: Layers,
-  },
-  {
-    id: 'cli',
-    label: 'CLI',
-    icon: Terminal,
-  },
-] as const satisfies Framework[];
+function getDocSections(root: PageTree.Root): DocSection[] {
+  const sections: DocSection[] = [];
+
+  for (const child of root.children) {
+    if (child.type === 'folder' && child.root) {
+      const firstPage = child.children.find((c): c is PageTree.Item => c.type === 'page');
+      const firstUrl = child.index?.url ?? firstPage?.url;
+      if (firstUrl) {
+        sections.push({
+          id: child.$id ?? firstUrl,
+          label: typeof child.name === 'string' ? child.name : firstUrl,
+          icon: child.icon,
+          url: firstUrl,
+        });
+      }
+    }
+  }
+
+  return sections;
+}
+
+function useCurrentSection(sections: DocSection[]): DocSection | undefined {
+  const location = useLocation();
+  return useMemo(
+    () => sections.find((section) => location.pathname.startsWith(section.url)) ?? sections[0],
+    [sections, location.pathname],
+  );
+}
 
 function DocsSidebarFrameworkSelector({ className }: { readonly className?: string }): React.JSX.Element {
-  const [selectedFramework, setSelectedFramework] = useState<Framework>(frameworks[0]!);
+  const { root } = useTreeContext();
+  const navigate = useNavigate();
+  const sections = useMemo(() => getDocSections(root), [root]);
+  const currentSection = useCurrentSection(sections);
 
   const groupedItems = [
     {
       name: 'Documentation',
-      items: frameworks,
+      items: sections,
     },
   ];
 
   return (
-    <ComboBoxResponsive<Framework>
-      searchPlaceHolder="Search frameworks..."
+    <ComboBoxResponsive<DocSection>
+      searchPlaceHolder="Search sections..."
       isSearchEnabled={false}
       groupedItems={groupedItems}
-      renderLabel={(framework) => {
-        const Icon = framework.icon;
-        return (
-          <div className="flex items-center gap-2">
-            <Icon className="size-4" />
-            <span>{framework.label}</span>
-          </div>
-        );
-      }}
+      renderLabel={(section) => (
+        <div className="flex items-center gap-2">
+          {section.icon ? <span className="[&_svg]:size-4">{section.icon}</span> : undefined}
+          <span>{section.label}</span>
+        </div>
+      )}
       popoverProperties={{ align: 'start' }}
-      getValue={(framework) => framework.id}
-      defaultValue={selectedFramework}
-      title="Select Framework"
-      description="Choose which framework documentation to view"
+      getValue={(section) => section.id}
+      defaultValue={currentSection}
+      title="Select Section"
+      description="Choose which documentation section to view"
       className="md:w-[180px]"
       onSelect={(value) => {
-        const framework = frameworks.find((f) => f.id === value);
-        if (framework) {
-          setSelectedFramework(framework);
+        const section = sections.find((s) => s.id === value);
+        if (section) {
+          void navigate(section.url);
         }
       }}
     >
@@ -236,8 +240,8 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
           className,
         )}
       >
-        <selectedFramework.icon data-slot="framework-icon" className="size-4" />
-        {selectedFramework.label}
+        {currentSection?.icon ? <span className="[&_svg]:size-4">{currentSection.icon}</span> : undefined}
+        {currentSection?.label ?? 'Docs'}
       </Button>
     </ComboBoxResponsive>
   );

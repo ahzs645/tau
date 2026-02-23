@@ -1,0 +1,76 @@
+---
+title: Installation
+description: Install @taucad/kernels and configure it for your project.
+icon: lucide:download
+---
+
+# Installation
+
+Install `@taucad/kernels` and its peer dependencies to start using the multi-kernel CAD runtime in your project.
+
+## Prerequisites
+
+- Node.js 20 or later
+- A package manager: npm, pnpm, or yarn
+
+## Install the Package
+
+```bash tab="pnpm"
+pnpm add @taucad/kernels
+```
+
+```bash tab="npm"
+npm install @taucad/kernels
+```
+
+```bash tab="yarn"
+yarn add @taucad/kernels
+```
+
+## Framework Configuration
+
+### Vite
+
+`@taucad/kernels` uses Web Workers for kernel isolation. Vite handles worker URLs natively via `new URL(..., import.meta.url)`:
+
+```typescript
+import { createKernelClient } from '@taucad/kernels';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const transport = createWorkerTransport(
+  new URL('@taucad/kernels/worker', import.meta.url),
+);
+```
+
+### Node.js
+
+For server-side usage, workers run as Node.js worker threads. Use `fromNodeFS` for filesystem access:
+
+```typescript
+import { createKernelClient, fromNodeFS } from '@taucad/kernels';
+import fs from 'node:fs';
+
+const client = createKernelClient({
+  kernels: [/* ... */],
+  filesystem: fromNodeFS(fs),
+});
+```
+
+## Subpath Imports
+
+The package exposes multiple subpath imports for tree-shaking:
+
+| Import Path | Contents |
+|---|---|
+| `@taucad/kernels` | Client, filesystem constructors, helpers |
+| `@taucad/kernels/kernels` | Kernel factories (`replicad`, `openscad`, `jscad`, `zoo`) |
+| `@taucad/kernels/middleware` | `defineMiddleware` and built-in middleware |
+| `@taucad/kernels/bundler` | `defineBundler` and esbuild bundler |
+| `@taucad/kernels/transport` | Transport layer (`createWorkerTransport`) |
+| `@taucad/kernels/types` | All TypeScript type exports |
+| `@taucad/kernels/testing` | Testing utilities |
+
+## What's Next
+
+- [Quick Start](./quick-start) -- Render your first 3D model in under 5 minutes
+- [API Reference](/docs/api/client) -- Full API documentation for `createKernelClient`

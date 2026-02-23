@@ -1,0 +1,70 @@
+---
+title: Testing Utilities
+description: Test helpers for kernel development including worker creation, filesystem seeding, and geometry validation.
+icon: lucide:flask-conical
+---
+
+# Testing Utilities
+
+Use the testing API when writing unit tests for custom kernels, middleware, or kernel integration. All utilities require Vitest as a peer dependency.
+
+## Types
+
+<auto-type-table path="./props/testing.ts" name="GeometryExpectation" />
+
+## Exported Functions
+
+| Function | Description |
+|----------|--------------|
+| `createTestWorker` | Create and initialize a `KernelRuntimeWorker` with kernel definition and seeded files |
+| `initializeWorkerForTesting` | Initialize an existing worker with MessageChannel-based filesystem bridge |
+| `seedTestFilesystem` | Seed ZenFS with files; resets to clean state first |
+| `clearTestFilesystem` | Reset ZenFS to empty in-memory backend |
+| `createMockLogger` | Create a mock logger for testing |
+| `createMockFilesystem` | Create a mock filesystem implementation |
+| `createMockRuntime` | Create a mock kernel runtime with stubbed methods |
+| `createSuccessResult` | Create a successful CreateGeometryResult for middleware tests |
+| `createErrorResult` | Create a failed CreateGeometryResult for middleware tests |
+| `createMockInput` | Create mock input for middleware tests |
+| `MockKernelWorker` | Mock worker class for unit testing |
+| `validateGlbData` | Assert GLB data has valid header and non-zero length |
+| `getInspectReport` | Get gltf-transform inspect report from GLB data |
+| `getGeometryStatsFromInspect` | Extract vertexCount, faceCount, meshCount from InspectReport |
+| `getBoundingBoxFromInspect` | Extract bounding box size and center from InspectReport |
+| `extractGltfFromResult` | Extract GLB/GLTF blob from CreateGeometryResult |
+| `createGeometryVariant` | Create a geometry variant for test assertions |
+| `createGeometryTestHelpers` | Create helpers that combine validation and expectation checking |
+
+## Usage
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import {
+  createTestWorker,
+  clearTestFilesystem,
+  extractGltfFromResult,
+  validateGlbData,
+} from '@taucad/kernels/testing';
+import replicadDefinition from '@taucad/kernels/kernels/replicad';
+
+describe('kernel test', () => {
+  it('renders geometry', async () => {
+    const worker = await createTestWorker(
+      replicadDefinition,
+      { '/builds/test/main.ts': 'export default () => null' },
+    );
+    const result = await worker.createGeometry({
+      file: { filename: 'main.ts', path: '/builds/test' },
+      parameters: {},
+    });
+    expect(result.success).toBe(true);
+    const glb = extractGltfFromResult(result);
+    if (glb) validateGlbData(glb);
+    await clearTestFilesystem();
+  });
+});
+```
+
+## Related
+
+- [Testing Kernels](../guides/testing-kernels)

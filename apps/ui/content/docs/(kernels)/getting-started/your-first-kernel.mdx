@@ -1,0 +1,140 @@
+---
+title: Your First Kernel
+description: Build a parametric 3D model step-by-step with the Replicad kernel, render it, and export to STEP.
+icon: lucide:graduation-cap
+---
+
+# Your First Kernel
+
+Build a parametric box with rounded edges using the Replicad kernel. You will learn how to set up a kernel client, write parametric CAD code, render geometry, and export to STEP format.
+
+## What You'll Learn
+
+- How to configure a kernel client with `createKernelClient`
+- How to write parametric CAD models that accept user parameters
+- How to render models and inspect the result
+- How to export models to STEP format for professional CAD workflows
+
+## Prerequisites
+
+- [Install @taucad/kernels](./installation)
+- Completed the [Quick Start](./quick-start)
+
+## Step 1: Set Up the Client
+
+Create a kernel client with the Replicad kernel, esbuild bundler, and an in-memory filesystem:
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem: fromMemoryFS(),
+  transport: createWorkerTransport(
+    new URL('@taucad/kernels/worker', import.meta.url),
+  ),
+});
+
+client.on('log', ({ message }) => console.log('[kernel]', message));
+```
+
+The `createKernelClient` function creates a high-level client that manages worker lifecycle, kernel selection, and middleware. The `fromMemoryFS()` function provides an in-memory filesystem for passing code to the kernel without touching disk.
+
+## Step 2: Write a Parametric Model
+
+Define a CAD model that creates a box with configurable dimensions and fillet radius. Parameters make your model flexible -- users can adjust dimensions without editing code.
+
+```typescript
+const modelCode = `
+  import { drawRoundedRectangle } from 'replicad';
+
+  const defaultParams = {
+    width: 30,
+    height: 20,
+    depth: 10,
+    fillet: 3,
+  };
+
+  export default function main(params = defaultParams) {
+    const { width, height, depth, fillet } = params;
+    return drawRoundedRectangle(width, height, fillet)
+      .sketchOnPlane('XY')
+      .extrude(depth);
+  }
+`;
+```
+
+The `main` function is the entry point that the kernel calls. It receives a `params` object whose shape is inferred from `defaultParams`. The kernel extracts these parameters automatically and provides a JSON Schema for UI generation.
+
+## Step 3: Render the Model
+
+Pass the code and optional parameter overrides to `client.render()`:
+
+```typescript
+import { isKernelSuccess } from '@taucad/kernels';
+
+const result = await client.render({
+  file: 'main.ts',
+  code: modelCode,
+  parameters: { width: 50, depth: 15 },
+});
+
+if (isKernelSuccess(result)) {
+  const geometry = result.data.geometries[0];
+  console.log(`Rendered: ${geometry.type}`);
+  console.log(`GLB size: ${geometry.blob.byteLength} bytes`);
+} else {
+  for (const issue of result.issues) {
+    console.error(`[${issue.severity}] ${issue.message}`);
+  }
+}
+```
+
+The `isKernelSuccess` type guard narrows the result type so you can safely access `result.data`. If rendering fails, the `issues` array contains structured errors with messages, locations, and severity levels.
+
+## Step 4: Export to STEP
+
+Export the rendered geometry to STEP format for use in professional CAD tools:
+
+```typescript
+const exportResult = await client.export('step');
+
+if (isKernelSuccess(exportResult)) {
+  const file = exportResult.data.files[0];
+  console.log(`Exported: ${file.name} (${file.blob.byteLength} bytes)`);
+  // Save to disk, upload, or pass to another tool
+} else {
+  console.error('Export failed:', exportResult.issues);
+}
+```
+
+STEP export is available for the Replicad kernel. Other kernels support different export formats -- see [Choosing a Kernel](../guides/choosing-a-kernel) for a comparison.
+
+## Step 5: Clean Up
+
+Terminate the client to shut down workers:
+
+```typescript
+client.terminate();
+```
+
+## Recap
+
+You built a parametric 3D model using the Replicad kernel:
+
+1. Created a `KernelClient` with `createKernelClient`
+2. Wrote a parametric model with configurable dimensions
+3. Rendered it to glTF with parameter overrides
+4. Exported the result to STEP format
+5. Used `isKernelSuccess` to handle success and error cases
+
+## Next Steps
+
+- [Using Middleware](../guides/using-middleware) -- Add caching and post-processing to your pipeline
+- [Filesystem Setup](../guides/filesystem-setup) -- Use Node.js or browser filesystems instead of in-memory
+- [Architecture](../concepts/architecture) -- Understand how client, transport, worker, and kernel layers interact
+- [API Reference: Client](/docs/api/client) -- Complete documentation for `KernelClient` methods

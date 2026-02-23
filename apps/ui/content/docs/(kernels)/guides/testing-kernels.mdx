@@ -1,0 +1,196 @@
+---
+title: Testing Kernels
+description: Use testing utilities to write unit tests for custom kernels and middleware.
+icon: lucide:flask-conical
+---
+
+# Testing Kernels
+
+Use the `@taucad/kernels/testing` utilities to write unit tests for custom kernels and middleware. The package provides worker setup, mock runtimes, filesystem seeding, and geometry validation helpers.
+
+## Prerequisites
+
+- [Install @taucad/kernels](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+- Vitest configured in your project (peer dependency of `@taucad/kernels`)
+
+## Goal
+
+Write unit tests that exercise kernel logic, middleware hooks, and geometry output using `createTestWorker`, mock runtimes, and geometry validation helpers.
+
+## Steps
+
+### 1. Import Testing Utilities from @taucad/kernels/testing
+
+All testing helpers are exported from the testing subpath:
+
+```typescript
+import {
+  createTestWorker,
+  initializeWorkerForTesting,
+  seedTestFilesystem,
+  clearTestFilesystem,
+  createMockLogger,
+  createMockFilesystem,
+  createMockRuntime,
+  validateGlbData,
+  getInspectReport,
+  createGeometryTestHelpers,
+} from '@taucad/kernels/testing';
+```
+
+### 2. Use createTestWorker for Kernel Integration Tests
+
+`createTestWorker` creates and initializes a `KernelRuntimeWorker` with a kernel definition and seeded files. It uses the production code path:
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { createTestWorker } from '@taucad/kernels/testing';
+import replicadDefinition from '@taucad/kernels/kernels/replicad';
+
+describe('Replicad kernel', () => {
+  it('creates geometry from TypeScript', async () => {
+    const worker = await createTestWorker(
+      replicadDefinition,
+      {
+        'main.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
+          }
+        `,
+      },
+    );
+
+    const result = await worker.createGeometry({
+      file: { filename: 'main.ts', path: '/builds/test' },
+      parameters: {},
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toHaveLength(1);
+    }
+  });
+});
+```
+
+Call `seedTestFilesystem` before `initializeWorkerForTesting` if you need to set up files separately.
+
+### 3. Use initializeWorkerForTesting for Custom Worker Setup
+
+When you need more control over worker initialization (e.g., custom middleware, telemetry):
+
+```typescript
+import { KernelRuntimeWorker } from '@taucad/kernels/worker';
+import { initializeWorkerForTesting, seedTestFilesystem } from '@taucad/kernels/testing';
+
+await seedTestFilesystem({
+  '/builds/test/main.ts': `export default function main() { return null; }`,
+});
+
+const worker = new KernelRuntimeWorker();
+await initializeWorkerForTesting(worker, {
+  onLog: ({ message }) => console.log(message),
+  workerOptions: { kernelModules: [/* ... */] },
+});
+```
+
+### 4. Seed and Clear the Test Filesystem
+
+`seedTestFilesystem` resets the ZenFS in-memory backend and writes files. `clearTestFilesystem` resets without seeding:
+
+```typescript
+import { seedTestFilesystem, clearTestFilesystem } from '@taucad/kernels/testing';
+
+beforeEach(async () => {
+  await seedTestFilesystem({
+    '/builds/test/main.ts': 'export default function main() { return null; }',
+    '/builds/test/lib/utils.ts': 'export const x = 1;',
+  });
+});
+
+afterEach(async () => {
+  await clearTestFilesystem();
+});
+```
+
+Paths can be absolute or relative; relative paths are normalized to start with `/`.
+
+### 5. Use createMockLogger, createMockFilesystem, createMockRuntime
+
+For middleware unit tests, use mocks to avoid a real worker:
+
+```typescript
+import {
+  createMockLogger,
+  createMockFilesystem,
+  createMockRuntime,
+} from '@taucad/kernels/testing';
+
+const logger = createMockLogger();
+const filesystem = createMockFilesystem({
+  existsResult: true,
+  readFileResult: (path) => Promise.resolve(new TextEncoder().encode('content')),
+});
+
+const runtime = createMockRuntime({
+  filesystemOverrides: { existsResult: true },
+  dependencies: [],
+  dependencyHash: 'abc123',
+});
+
+// Assert on mock calls
+expect(filesystem.mocks.readFile).toHaveBeenCalledWith('/path/to/file');
+```
+
+`createMockFilesystem` returns a `KernelFileSystem` with a `mocks` property for vitest assertions.
+
+### 6. Validate Geometry with validateGlbData and getInspectReport
+
+Use `validateGlbData` to assert GLB format and `getInspectReport` for detailed geometry stats:
+
+```typescript
+import { validateGlbData, getInspectReport, extractGltfFromResult } from '@taucad/kernels/testing';
+
+const result = await worker.createGeometry({ /* ... */ });
+const glb = extractGltfFromResult(result);
+
+expect(glb).toBeDefined();
+validateGlbData(glb!);
+
+const report = await getInspectReport(glb!);
+expect(report.meshes.properties).toHaveLength(1);
+```
+
+### 7. Use createGeometryTestHelpers for Geometry Assertions
+
+`createGeometryTestHelpers` provides helpers for common geometry assertions:
+
+```typescript
+import { createGeometryTestHelpers } from '@taucad/kernels/testing';
+
+const helpers = createGeometryTestHelpers();
+
+const result = await worker.createGeometry({ /* ... */ });
+
+await helpers.expectValidGltf(result);
+await helpers.expectMeshCount(result, 1);
+await helpers.expectVertexCount(result, 24);
+await helpers.expectBoundingBoxSize(result, [30, 50, 10], 0.1);
+```
+
+Helpers include `expectValidGltf`, `expectMeshCount`, `expectVertexCount`, `expectFaceCount`, `expectBoundingBoxSize`, and `expectBoundingBoxCenter`.
+
+## Variations
+
+- **createSuccessResult / createErrorResult**: Build `CreateGeometryResult` values for middleware tests without running a kernel.
+- **createMockInput**: Create `CreateGeometryInput` for testing middleware hooks.
+- **MockKernelWorker**: Use when you need a worker-shaped mock for transport tests.
+- **getGeometryStatsFromInspect / getBoundingBoxFromInspect**: Extract stats from an `InspectReport` for custom assertions.
+
+## Related
+
+- [Create a Custom Kernel](./custom-kernel) -- Test custom kernel definitions
+- [Create Custom Middleware](./custom-middleware) -- Test middleware with createMockRuntime
+- [API Reference: Testing](/docs/api/testing) -- Full testing utility documentation

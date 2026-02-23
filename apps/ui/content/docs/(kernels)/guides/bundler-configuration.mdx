@@ -1,0 +1,147 @@
+---
+title: Bundler Configuration
+description: Configure the esbuild bundler for TypeScript and JavaScript kernel inputs.
+icon: lucide:package
+---
+
+# Bundler Configuration
+
+Configure the esbuild bundler for JS/TS kernels (Replicad, JSCAD). The bundler resolves imports, bundles code, and executes it inside the worker. You can customize extensions, and for advanced use cases, define custom bundlers.
+
+## Prerequisites
+
+- [Install @taucad/kernels](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+- [Choosing a Kernel](./choosing-a-kernel) -- Understand which kernels use bundlers
+
+## Goal
+
+Configure the esbuild bundler for your JS/TS kernels, understand how bundling integrates with kernel selection, and optionally register custom modules or define a custom bundler.
+
+## Steps
+
+### 1. Import esbuild from @taucad/kernels/bundler
+
+The default bundler is created via the `esbuild()` factory:
+
+```typescript
+import { esbuild } from '@taucad/kernels/bundler';
+```
+
+### 2. Add the Bundler to createKernelClient
+
+Pass the bundler in the `bundlers` array. JS/TS kernels (Replicad, JSCAD) require a bundler to resolve imports and execute code:
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem: fromMemoryFS(),
+  transport: createWorkerTransport(
+    new URL('@taucad/kernels/worker', import.meta.url),
+  ),
+});
+```
+
+### 3. Configure EsbuildOptions
+
+Use `EsbuildOptions` to override the default file extensions:
+
+```typescript
+import { esbuild } from '@taucad/kernels/bundler';
+
+const bundler = esbuild({ extensions: ['ts', 'tsx'] });
+```
+
+Default extensions are `['ts', 'js', 'tsx', 'jsx']`. Restrict to TypeScript only if your project uses no `.js`/`.jsx` files.
+
+### 4. Understand How Bundling Works with JS/TS Kernels
+
+The flow for Replicad and JSCAD:
+
+1. **detectImports**: The bundler runs a lightweight pass (externals mode) to discover bare-specifier imports (e.g., `replicad`, `@jscad/modeling`). No modules need to be registered. This drives kernel selection.
+2. **Kernel initialization**: The selected kernel registers built-in modules (WASM-loaded libraries) via `runtime.bundler.registerModule`.
+3. **bundle**: Full production bundle with all registered modules resolved. Produces runnable ESM code.
+4. **execute**: The bundled code is run via dynamic import (Blob URL in browser, data URL in Node.js).
+
+Kernels access the bundler through `runtime.bundler` and `runtime.execute`. You do not call these directly; the kernel lifecycle handles it.
+
+### 5. Custom Module Registration (Kernel Authors)
+
+If you build a custom JS/TS kernel, register built-in modules during `initialize`:
+
+```typescript
+import { defineKernel } from '@taucad/kernels';
+
+export default defineKernel({
+  async initialize(options, runtime) {
+    const wasmCode = await loadReplicadWasm();
+    runtime.bundler.registerModule('replicad', {
+      code: wasmCode,
+      version: '1.0.0',
+      globalName: 'replicad',
+    });
+    return { /* context */ };
+  },
+  // ...
+});
+```
+
+See the Replicad and JSCAD kernel source for full examples.
+
+### 6. Define a Custom Bundler with defineBundler
+
+For non-esbuild bundlers (e.g., custom transpiler, different execution model), use `defineBundler`:
+
+```typescript
+import { defineBundler } from '@taucad/kernels/bundler';
+
+const myBundler = defineBundler({
+  name: 'MyBundler',
+  version: '1.0.0',
+  extensions: ['ts', 'js'],
+
+  async initialize({ filesystem, projectPath }) {
+    return { filesystem, projectPath };
+  },
+
+  async detectImports({ entryPath }, _ctx) {
+    // Lightweight pass: discover imports without producing code
+    return { detectedModules: [], dependencies: [entryPath] };
+  },
+
+  async bundle({ entryPath }, _ctx) {
+    // Produce runnable code
+    return { code: '...', success: true, issues: [], dependencies: [] };
+  },
+
+  async execute(_code, _ctx) {
+    // Run the bundled code
+    return { success: true, value: {} };
+  },
+
+  registerModule(_name, _builtinModule, _ctx) {
+    // Store for resolution during bundle()
+  },
+});
+```
+
+Register your bundler via a `BundlerPlugin` with `moduleUrl` pointing to the built module.
+
+## Variations
+
+- **Multiple bundlers**: Pass multiple bundlers when you have kernels with different extension needs. The framework selects the bundler that handles the file extension.
+- **Bundler selection**: The worker matches the entry file extension to `bundler.extensions`. The first matching bundler is used.
+- **Skip bundler in tests**: Use `skipBundler: true` in `createTestWorker` when testing kernel logic that does not need bundling.
+
+## Related
+
+- [Create a Custom Kernel](./custom-kernel) -- Implement kernels that use the bundler
+- [Plugin System](../concepts/plugin-system) -- How bundlers are loaded
+- [API Reference: Bundler](/docs/api/bundler) -- EsbuildOptions, defineBundler, BundlerDefinition
+- [API Reference: Types](/docs/api/types) -- KernelBundler, BuiltinModule

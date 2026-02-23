@@ -1,0 +1,53 @@
+---
+title: Kernel Factories
+description: Factory functions for Replicad, OpenSCAD, JSCAD, Zoo, and Tau kernel plugins.
+icon: lucide:cog
+---
+
+# Kernel Factories
+
+Use kernel factories when registering CAD engines with `createKernelClient`. Each factory returns a `KernelPlugin` that the client uses for kernel selection and worker loading.
+
+## Types
+
+<auto-type-table path="./props/kernels.ts" name="KernelPlugin" />
+
+<auto-type-table path="./props/kernels.ts" name="ReplicadOptions" />
+
+<auto-type-table path="./props/kernels.ts" name="ZooOptions" />
+
+## Factories
+
+| Factory | Extensions | Purpose |
+|---------|------------|---------|
+| `replicad(options?)` | `ts`, `js` | OpenCASCADE-based parametric BRep |
+| `openscad()` | `scad` | CSG modeling |
+| `jscad()` | `ts`, `js` | @jscad/modeling parametric CSG |
+| `zoo(options)` | `kcl` | KCL via Zoo API |
+| `tau()` | `*` | Catch-all for STEP, STL, 3MF |
+
+## Usage
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad, openscad, jscad, zoo, tau } from '@taucad/kernels/kernels';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const client = createKernelClient({
+  kernels: [
+    replicad({ withExceptions: true }),
+    openscad(),
+    jscad(),
+    zoo({ baseUrl: 'wss://example.com/v1/kernels/zoo' }),
+    tau(),
+  ],
+  bundlers: [],
+  filesystem: fromMemoryFS(),
+  transport: createWorkerTransport(workerUrl),
+});
+```
+
+## Related
+
+- [Choosing a Kernel](../guides/choosing-a-kernel)
+- [Plugin System](../concepts/plugin-system)

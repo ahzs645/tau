@@ -1,0 +1,57 @@
+---
+title: Core Types
+description: KernelResult, KernelIssue, CreateGeometryResult, and other fundamental type definitions.
+icon: lucide:file-type
+---
+
+# Core Types
+
+Use these types when handling kernel operation results, errors, and geometry output. They form the shared contract between the client and worker runtime.
+
+## Result Types
+
+All kernel operations return a discriminated union: `KernelSuccessResult<T> | KernelErrorResult`. Use the `isKernelSuccess()` and `isKernelError()` type guards for narrowing.
+
+```typescript
+type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
+```
+
+<auto-type-table path="./props/types.ts" name="KernelSuccessResult" />
+
+<auto-type-table path="./props/types.ts" name="KernelErrorResult" />
+
+## Issue and Location Types
+
+<auto-type-table path="./props/types.ts" name="KernelIssue" />
+
+<auto-type-table path="./props/types.ts" name="KernelStackFrame" />
+
+<auto-type-table path="./props/types.ts" name="ErrorLocation" />
+
+## Geometry and Export Types
+
+| Type | Definition |
+|------|-----------|
+| `CreateGeometryResult` | `KernelResult<GeometryResponse[]>` |
+| `HashedGeometryResult` | `KernelResult<Geometry[]>` — with content-hash for React keys |
+| `GetParametersResult` | `KernelResult<{ defaultParameters: Record<string, unknown>; jsonSchema: unknown }>` |
+| `ExportGeometryResult` | `KernelResult<Array<{ blob: Blob; name: string }>>` |
+| `RenderPhase` | `string` — framework phases: `'resolvingDeps'`, `'bundling'`, `'extractingParams'`, `'computingGeometry'`, `'postProcessing'` |
+
+## Type Guards
+
+```typescript
+import { isKernelSuccess, isKernelError } from '@taucad/kernels';
+
+const result = await client.render({ file: 'main.ts' });
+
+if (isKernelSuccess(result)) {
+  console.log(result.data.geometries.length);
+} else if (isKernelError(result)) {
+  console.error(result.issues);
+}
+```
+
+## Related
+
+- [Error Handling](../guides/error-handling)

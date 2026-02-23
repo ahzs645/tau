@@ -1,0 +1,65 @@
+---
+title: Middleware API
+description: defineMiddleware and built-in middleware factories for caching, transforms, and edge detection.
+icon: lucide:layers
+---
+
+# Middleware API
+
+Use the middleware API when extending kernel behavior with caching, coordinate transforms, or geometry post-processing. Middleware wraps kernel operations in an onion-model pipeline.
+
+## Types
+
+<auto-type-table path="./props/middleware.ts" name="KernelMiddleware" />
+
+<auto-type-table path="./props/middleware.ts" name="MiddlewareState" />
+
+<auto-type-table path="./props/middleware.ts" name="KernelMiddlewareRuntime" />
+
+<auto-type-table path="./props/middleware.ts" name="MiddlewarePlugin" />
+
+## defineMiddleware
+
+`defineMiddleware` creates a middleware plugin from a configuration object. Provide optional hooks: `wrapGetParameters`, `wrapCreateGeometry`, `wrapExportGeometry`, `onInitialize`, `onTeardown`.
+
+## Built-in Factories
+
+| Factory | Purpose |
+|---------|---------|
+| `parameterCache()` | Cache parameter definitions by input hash |
+| `geometryCache()` | Cache geometry output by input hash |
+| `gltfCoordinateTransform()` | Apply coordinate system transforms to glTF output |
+| `gltfEdgeDetection()` | Add edge geometry to glTF meshes |
+
+## Usage
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+import {
+  parameterCache,
+  geometryCache,
+  gltfCoordinateTransform,
+  gltfEdgeDetection,
+} from '@taucad/kernels/middleware';
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem: fromMemoryFS(),
+  transport: createWorkerTransport(workerUrl),
+  middleware: [
+    parameterCache(),
+    geometryCache(),
+    gltfCoordinateTransform(),
+    gltfEdgeDetection(),
+  ],
+});
+```
+
+## Related
+
+- [Using Middleware](../guides/using-middleware)
+- [Custom Middleware](../guides/custom-middleware)

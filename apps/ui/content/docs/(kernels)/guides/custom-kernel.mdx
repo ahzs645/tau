@@ -1,0 +1,196 @@
+---
+title: Create a Custom Kernel
+description: Build a kernel plugin using defineKernel to integrate a new CAD engine.
+icon: lucide:package-plus
+---
+
+# Create a Custom Kernel
+
+Build a kernel plugin using `defineKernel` to integrate a new CAD engine. This guide shows how to implement the required lifecycle methods and register your kernel with the client.
+
+## Prerequisites
+
+- [Install @taucad/kernels](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+- [Plugin System](../concepts/plugin-system) -- Understand how plugins are loaded
+
+## Goal
+
+Implement a kernel that handles a custom file type, produces geometry, and supports export. The kernel runs inside the worker and is loaded via a `KernelPlugin` registration.
+
+## Steps
+
+### 1. Import defineKernel and Helpers
+
+Import `defineKernel` and result helpers from `@taucad/kernels`:
+
+```typescript
+import {
+  defineKernel,
+  createKernelSuccess,
+  createKernelError,
+} from '@taucad/kernels';
+```
+
+### 2. Implement the Kernel Definition
+
+Use `defineKernel` with a definition object. You must implement `initialize`, `getDependencies`, `getParameters`, `createGeometry`, and `exportGeometry`. Optionally implement `canHandle` for kernel selection:
+
+```typescript
+// my-kernel.kernel.ts
+import {
+  defineKernel,
+  createKernelSuccess,
+  createKernelError,
+} from '@taucad/kernels';
+
+type MyContext = {
+  engine: unknown; // Your CAD engine instance
+};
+
+type MyNativeHandle = unknown; // Opaque handle for export
+
+export default defineKernel<MyContext, MyNativeHandle>({
+  name: 'MyKernel',
+  version: '1.0.0',
+
+  async initialize(_options, _runtime) {
+    return { engine: null };
+  },
+
+  async canHandle({ extension }, _runtime, _context) {
+    return extension === 'myformat';
+  },
+
+  async getDependencies({ filePath }, _runtime, _context) {
+    return [filePath];
+  },
+
+  async getParameters(input, runtime, _context) {
+    return createKernelSuccess({
+      defaultParameters: {},
+      jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+    });
+  },
+
+  async createGeometry({ filePath, basePath, parameters }, { filesystem, logger }, context) {
+    const code = await filesystem.readFile(filePath, 'utf8');
+    // Evaluate code with your engine, produce geometry
+    const geometry = []; // GeometryResponse[]
+    const nativeHandle = null; // Opaque handle for exportGeometry
+    return { geometry, nativeHandle };
+  },
+
+  async exportGeometry({ fileType, nativeHandle }, { logger }, _context) {
+    if (fileType !== 'glb') {
+      return createKernelError([
+        { message: `Unsupported export format: ${fileType}`, type: 'runtime', severity: 'error' },
+      ]);
+    }
+    // Convert nativeHandle to Blob
+    const blob = new Blob([/* ... */], { type: 'model/gltf-binary' });
+    return createKernelSuccess([{ blob, name: 'model.glb' }]);
+  },
+});
+```
+
+### 3. Return Results with createKernelSuccess and createKernelError
+
+Use `createKernelSuccess` for successful operations and `createKernelError` for failures:
+
+```typescript
+import { createKernelSuccess, createKernelError } from '@taucad/kernels';
+
+// Success: wrap data and optional issues
+return createKernelSuccess({ defaultParameters: {}, jsonSchema: {} });
+return createKernelSuccess([{ blob, name: 'model.glb' }]);
+
+// Error: wrap one or more issues
+return createKernelError([
+  { message: 'File not found', type: 'runtime', severity: 'error' },
+]);
+```
+
+For `createGeometry`, return `{ geometry, nativeHandle }` directly. Throw or return `createKernelError` when the operation fails.
+
+### 4. Create a KernelPlugin Registration
+
+Build a factory that returns a `KernelPlugin` so the client can load your kernel. The `moduleUrl` must point to your kernel module (built output):
+
+```typescript
+// my-kernel-plugin.ts
+import type { KernelPlugin } from '@taucad/kernels';
+
+export function myKernel(): KernelPlugin {
+  return {
+    id: 'my-kernel',
+    moduleUrl: new URL('./my-kernel.kernel.js', import.meta.url).href,
+    extensions: ['myformat'],
+    options: {},
+  };
+}
+```
+
+### 5. Register and Use the Kernel
+
+Pass your kernel factory to `createKernelClient`:
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+import { myKernel } from './my-kernel-plugin.js';
+
+const client = createKernelClient({
+  kernels: [myKernel()],
+  bundlers: [esbuild()],
+  filesystem: fromMemoryFS(),
+  transport: createWorkerTransport(
+    new URL('@taucad/kernels/worker', import.meta.url),
+  ),
+});
+
+const result = await client.render({
+  file: 'model.myformat',
+  code: '...',
+});
+```
+
+### 6. Implement getDependencies for Cache Invalidation
+
+Return all file paths that affect the geometry. The framework uses this for change detection and cache keys:
+
+```typescript
+async getDependencies({ filePath, basePath }, { filesystem }, _context) {
+  const content = await filesystem.readFile(filePath, 'utf8');
+  const imports = parseImports(content); // Your import parser
+  const baseDir = basePath.endsWith('/') ? basePath : `${basePath}/`;
+  return [filePath, ...imports.map((p) => baseDir + p)];
+}
+```
+
+### 7. Implement getParameters for Parametric Models
+
+Extract parameters and a JSON Schema for UI generation:
+
+```typescript
+async getParameters({ filePath }, { filesystem }, _context) {
+  const code = await filesystem.readFile(filePath, 'utf8');
+  const { defaultParameters, jsonSchema } = extractParameters(code);
+  return createKernelSuccess({ defaultParameters, jsonSchema });
+}
+```
+
+## Variations
+
+- **optionsSchema**: Add a Zod schema to validate kernel options. The inferred type flows to `initialize(options)`.
+- **cleanup**: Implement `cleanup(context)` to tear down WASM instances or temp files when the worker is disposed.
+- **detectImport / builtinModuleNames**: For JS/TS kernels, add `detectImport` (RegExp) or `builtinModuleNames` so the framework can select your kernel based on imports.
+- **Bundler integration**: JS/TS kernels use `runtime.bundler` and `runtime.execute`. See the Replicad or JSCAD kernel source for examples.
+
+## Related
+
+- [Plugin System](../concepts/plugin-system) -- How kernels are loaded and selected
+- [Architecture](../concepts/architecture) -- Client, transport, worker, and kernel layers
+- [API Reference: defineKernel](/docs/api/kernels) -- Full type documentation
+- [API Reference: Types](/docs/api/types) -- KernelRuntime, CreateGeometryInput, and related types

@@ -1,0 +1,47 @@
+---
+title: Client API
+description: createKernelClient, KernelClient, filesystem constructors, and connection management.
+icon: lucide:monitor
+---
+
+# Client API
+
+Use the client API when you need to create a kernel runtime, configure filesystem access, or manage worker connections. The factory and constructors are the primary entry points for integrating `@taucad/kernels` into an application.
+
+## createKernelClient
+
+<auto-type-table path="./props/client.ts" name="KernelClientOptions" />
+
+<auto-type-table path="./props/client.ts" name="ConnectOptions" />
+
+<auto-type-table path="./props/client.ts" name="KernelClient" />
+
+## Filesystem
+
+<auto-type-table path="./props/client.ts" name="KernelFileSystem" />
+
+`fromMemoryFS`, `fromNodeFS`, and `fromZenFS` implement `KernelFileSystem` for in-memory, Node.js, and ZenFS backends respectively.
+
+## Usage
+
+```typescript
+import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+import { replicad } from '@taucad/kernels/kernels';
+import { esbuild } from '@taucad/kernels/bundler';
+import { createWorkerTransport } from '@taucad/kernels/transport';
+
+const client = createKernelClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  filesystem: fromMemoryFS(),
+  transport: createWorkerTransport(new URL('@taucad/kernels/worker', import.meta.url).href),
+});
+
+const result = await client.render({ file: 'main.ts', code: 'export default () => {}' });
+client.terminate();
+```
+
+## Related
+
+- [Quick Start](../getting-started/quick-start)
+- [Filesystem Setup](../guides/filesystem-setup)
