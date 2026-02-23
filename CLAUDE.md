@@ -68,6 +68,7 @@ This project uses extremely strict linting via XO + ESLint with the following ke
 - Use `undefined` instead of `null`
 - No `any` type - use `unknown` instead
 - Always include `.js` extensions for local imports with `#` prefix
+- Maximum 3 parameters per function/method; prefer single options object for 3+ args. See docs/library-api-best-practices.md
 
 ### Code Style
 - Always use curly braces for control flow statements

@@ -53,6 +53,13 @@ alwaysApply: false
 7. Minimal Changes
 8. Pure Functions
 9. Composition over inheritance
+10. Parameter Design (max 3 positional params)
+    - Default: single object param `fn({ a, b, c })`
+    - 2 params: `fn(subject, options?)` when one clear required value + optional config
+    - 3 params: only for consistent interface contracts with distinct architectural concerns
+    - Never: 4+ positional params
+    - Smell test: if you write `_unused` params to skip positions, the API is wrong
+    - See docs/library-api-best-practices.md for full rationale
 
 ## Functional Programming:
 - Avoid Mutation

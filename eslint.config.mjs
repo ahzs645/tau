@@ -241,6 +241,10 @@ const config = [
 
       // Allow up to 5 nested callbacks. This is useful for test files with nested describe/it blocks.
       'max-nested-callbacks': ['error', { max: 5 }],
+
+      // Enforce max 3 positional parameters. Prefer single options objects for 3+ args.
+      // See docs/library-api-best-practices.md section 4 for rationale and smell tests.
+      'max-params': ['error', { max: 3 }],
     },
   },
   {
