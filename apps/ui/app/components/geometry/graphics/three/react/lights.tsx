@@ -79,11 +79,11 @@ export function Lights({
   const ambientReference = useRef<THREE.AmbientLight>(null);
 
   // Clamp sceneRadius to avoid zero/tiny values before geometry loads
-  const r = Math.max(sceneRadius, 1);
+  const clampedSceneRadius = Math.max(sceneRadius, 1);
 
   // Keep clamped radius accessible in useFrame without re-subscribing
-  const radiusRef = useRef(r);
-  radiusRef.current = r;
+  const radiusRef = useRef(clampedSceneRadius);
+  radiusRef.current = clampedSceneRadius;
 
   // Per-frame updates delegated to the shared applyLightingForCamera utility.
   // This ensures the live renderer and the offline screenshot renderer apply
@@ -132,7 +132,7 @@ export function Lights({
       />
 
       {showEnvironment ? (
-        <Environment resolution={envResolution}>
+        <Environment resolution={envResolution} near={clampedSceneRadius * 0.01} far={clampedSceneRadius * 20}>
           {environmentPreset === 'studio' ? (
             <>
               {/* ── Key panel (right-upper in camera space) ── */}
@@ -142,9 +142,9 @@ export function Lights({
               <Lightformer
                 form="rect"
                 intensity={studioKeyIntensity}
-                position={[r * 4, r * 1.5, r]}
+                position={[clampedSceneRadius * 4, clampedSceneRadius * 1.5, clampedSceneRadius]}
                 rotation={[Math.PI / 8, -Math.PI / 3, 0]}
-                scale={[r * 4, r * 4, 1]}
+                scale={[clampedSceneRadius * 4, clampedSceneRadius * 4, 1]}
               />
               {/* ── Left-upper fill (left-upper in camera space) ── */}
               {/* Illuminates left-facing L sections (WNW = NW-left) that the
@@ -153,9 +153,9 @@ export function Lights({
               <Lightformer
                 form="rect"
                 intensity={studioLeftFillIntensity}
-                position={[-r * 3, r, r * 0.5]}
+                position={[-clampedSceneRadius * 3, clampedSceneRadius, clampedSceneRadius * 0.5]}
                 rotation={[Math.PI / 8, Math.PI / 3, 0]}
-                scale={[r * 4, r * 4, 1]}
+                scale={[clampedSceneRadius * 4, clampedSceneRadius * 4, 1]}
               />
               {/* ── Top panel (overhead in camera space) ── */}
               {/* Reduced overhead accent — kept low to avoid over-brightening
@@ -163,9 +163,9 @@ export function Lights({
               <Lightformer
                 form="rect"
                 intensity={studioTopIntensity}
-                position={[0, r * 3, 0]}
+                position={[0, clampedSceneRadius * 3, 0]}
                 rotation={[Math.PI / 2, 0, 0]}
-                scale={[r * 3, r * 3, 1]}
+                scale={[clampedSceneRadius * 3, clampedSceneRadius * 3, 1]}
               />
               {/* ── Ground panel (below-right in camera space) ── */}
               {/* Bright ground for bottom-view luminosity. Offset in +X so that
@@ -174,9 +174,9 @@ export function Lights({
               <Lightformer
                 form="rect"
                 intensity={studioGroundIntensity}
-                position={[r * 2, -r * 3, 0]}
+                position={[clampedSceneRadius * 2, -clampedSceneRadius * 3, 0]}
                 rotation={[-Math.PI / 2, 0, 0]}
-                scale={[r * 6, r * 6, 1]}
+                scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
               {/* ── Specular highlight panel (upper-right in camera space) ── */}
               {/* Positioned in the (+X, -Y, +Z) octant to create a focused specular
@@ -189,8 +189,8 @@ export function Lights({
               <Lightformer
                 form="rect"
                 intensity={studioBackFillIntensity}
-                position={[r * 2, -r * 3, r * 4]}
-                scale={[r * 2, r * 2, 1]}
+                position={[clampedSceneRadius * 2, -clampedSceneRadius * 3, clampedSceneRadius * 4]}
+                scale={[clampedSceneRadius * 2, clampedSceneRadius * 2, 1]}
               />
             </>
           ) : (
@@ -199,16 +199,16 @@ export function Lights({
               <Lightformer
                 form="rect"
                 intensity={neutralKeyIntensity}
-                position={[0, r * 3, 0]}
+                position={[0, clampedSceneRadius * 3, 0]}
                 rotation={[Math.PI / 2, 0, 0]}
-                scale={[r * 6, r * 6, 1]}
+                scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
               <Lightformer
                 form="rect"
                 intensity={neutralGroundIntensity}
-                position={[0, -r * 3, 0]}
+                position={[0, -clampedSceneRadius * 3, 0]}
                 rotation={[-Math.PI / 2, 0, 0]}
-                scale={[r * 6, r * 6, 1]}
+                scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
             </>
           )}
