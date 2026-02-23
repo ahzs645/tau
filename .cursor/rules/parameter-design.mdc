@@ -57,7 +57,7 @@ See `docs/library-api-best-practices.md` (section 5) for full rationale and exam
 |---|---|---|
 | `create*` | Factory | `createKernelClient`, `createFileSystemPort` |
 | `define*` | Plugin definition | `defineKernel`, `defineMiddleware` |
-| `is*` | Type guard | `isKernelSuccess`, `isKernelError` |
+| `is*` | Type guard | `isGeometryFile`, `isKernelPlugin` |
 | `from*` | Conversion | `fromNodeFS`, `fromMemoryFS` |
 | `on*` | Hook / callback | `onInitialize`, `onLog`, `onProgress` |
 

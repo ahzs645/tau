@@ -184,7 +184,7 @@ Each naming prefix signals a specific role:
 |---|---|---|
 | `create*` | Factory function | `createKernelClient`, `createFileSystemPort` |
 | `define*` | Plugin definition | `defineKernel`, `defineMiddleware`, `defineBundler` |
-| `is*` | Type guard | `isKernelSuccess`, `isKernelError` |
+| `is*` | Type guard | `isGeometryFile`, `isKernelPlugin` |
 | `from*` | Conversion constructor | `fromNodeFS`, `fromMemoryFS`, `fromZenFS` |
 | `on*` | Framework hook / event callback | `onInitialize`, `onLog`, `onProgress` |
 
