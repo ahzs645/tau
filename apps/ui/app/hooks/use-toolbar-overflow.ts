@@ -85,6 +85,7 @@ export function useToolbarOverflow(
  * Given toolbar items, the measured container width, gap, and reserved width,
  * determines which items are visible vs overflowed and whether compact mode is active.
  */
+// eslint-disable-next-line max-params -- pure function with 25+ test call sites; wrapping would add noise for simple numeric args
 export function computeToolbarOverflow(
   items: readonly ToolbarItemConfig[],
   containerWidth: number | undefined,

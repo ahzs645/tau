@@ -417,6 +417,7 @@ function SvgWindow({
 
   // Create onWheel handler as useCallback with explicit dependencies
   const onWheel = useCallback(
+    // eslint-disable-next-line max-params -- signature dictated by Panzoom onWheel callback API
     (event: WheelEvent, instance: PanzoomObject, container: HTMLDivElement, currentAdaptedViewbox: Viewbox): void => {
       // Keep zoom centered around the world origin [0,0]
       event.preventDefault();

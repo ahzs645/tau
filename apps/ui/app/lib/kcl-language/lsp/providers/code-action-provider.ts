@@ -19,6 +19,7 @@ export function createCodeActionProvider(
   client: KclLspClient,
 ): Monaco.languages.CodeActionProvider {
   return {
+    // eslint-disable-next-line max-params -- Monaco editor API contract
     async provideCodeActions(
       model: Monaco.editor.ITextModel,
       range: Monaco.Range,

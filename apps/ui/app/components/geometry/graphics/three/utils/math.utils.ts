@@ -169,6 +169,7 @@ export function calculateFovLightingCompensation(
  *   size should remain constant.  Defaults to 0 (origin).
  * @returns The compensated distance that keeps the focus plane the same apparent size.
  */
+// eslint-disable-next-line max-params -- heavily used utility (30+ call sites); wrapping would add noise for simple numeric args
 export function calculateFovDistanceCompensation(
   oldFovDeg: number,
   newFovDeg: number,

@@ -291,12 +291,17 @@ function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
  * - Returned GridSizes values include all conversions and factors applied
  */
 // Grid size calculation logic (ported from React)
-function calculateGridSizes(
-  cameraPosition: number,
-  cameraFov: number,
-  gridUnitSystem: 'si' | 'imperial',
-  unitFactor: number,
-): GridSizes {
+function calculateGridSizes({
+  cameraPosition,
+  cameraFov,
+  gridUnitSystem,
+  unitFactor,
+}: {
+  cameraPosition: number;
+  cameraFov: number;
+  gridUnitSystem: 'si' | 'imperial';
+  unitFactor: number;
+}): GridSizes {
   const visibleWidthAtDistance = 2 * cameraPosition * Math.tan((cameraFov * Math.PI) / 360);
   let baseGridSize = visibleWidthAtDistance / 5; // BaseGridSizeCoefficient
 
@@ -516,12 +521,12 @@ export const graphicsMachine = setup({
       if (isSystemChange || isImperialFactorChange) {
         // Use relative factor × 1000 for grid calculations
         const gridUnitFactor = relativeFactor * 1000;
-        const newGridSizes = calculateGridSizes(
-          context.cameraPosition,
-          context.cameraFovAngleComputed,
-          unitData.system,
-          gridUnitFactor,
-        );
+        const newGridSizes = calculateGridSizes({
+          cameraPosition: context.cameraPosition,
+          cameraFov: context.cameraFovAngleComputed,
+          gridUnitSystem: unitData.system,
+          unitFactor: gridUnitFactor,
+        });
 
         enqueue.sendTo(({ self }) => self, {
           type: 'updateGridSize',
@@ -549,7 +554,12 @@ export const graphicsMachine = setup({
       // Recalculate grid sizes based on new controls state
       // Use relative factor × 1000 for grid calculations
       const gridUnitFactor = context.units.length.factor * 1000;
-      const newGridSizes = calculateGridSizes(event.position, event.fov, context.units.length.system, gridUnitFactor);
+      const newGridSizes = calculateGridSizes({
+        cameraPosition: event.position,
+        cameraFov: event.fov,
+        gridUnitSystem: context.units.length.system,
+        unitFactor: gridUnitFactor,
+      });
 
       enqueue.sendTo(({ self }) => self, {
         type: 'updateGridSize',

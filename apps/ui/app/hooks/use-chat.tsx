@@ -393,6 +393,7 @@ export function useChatActions(): {
   addEditDraftImage: (image: string) => void;
   removeEditDraftImage: (index: number) => void;
   clearMessageEdit: (messageId: string) => void;
+  // eslint-disable-next-line max-params -- callback signature shared across chat components; refactoring would require updating many call sites
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
 } {
@@ -472,6 +473,7 @@ export function useChatActions(): {
       },
 
       // Edit and retry - uses both useChat and draft machine
+      // eslint-disable-next-line max-params -- matches the callback signature used across chat components
       editMessage(messageId: string, content: string, model: string, _metadata?: unknown, imageUrls?: string[]) {
         // Clear the edit from draft machine
         draftActorRef.send({ type: 'clearMessageEdit', messageId });

@@ -183,12 +183,17 @@ export function computeEnvironmentRotation(
  * @param config - Offset multipliers for headlamp placement.
  * @returns The world-space position and target position for the headlamp.
  */
-export function computeHeadlampTransform(
-  cameraPosition: THREE.Vector3,
-  cameraMatrixWorld: THREE.Matrix4,
-  sceneRadius: number,
-  config: HeadlampConfig,
-): { position: THREE.Vector3; targetPosition: THREE.Vector3 } {
+export function computeHeadlampTransform({
+  cameraPosition,
+  cameraMatrixWorld,
+  sceneRadius,
+  config,
+}: {
+  cameraPosition: THREE.Vector3;
+  cameraMatrixWorld: THREE.Matrix4;
+  sceneRadius: number;
+  config: HeadlampConfig;
+}): { position: THREE.Vector3; targetPosition: THREE.Vector3 } {
   // Camera basis vectors in world space:
   // - column 0: camera-right (+X local)
   // - column 1: camera-up (+Y local)
@@ -267,12 +272,12 @@ export function applyLightingForCamera({ scene, camera, headlamp, ambient, confi
   if (headlamp) {
     headlamp.intensity = config.headlampIntensity * compensation.headlampFactor;
 
-    const transform = computeHeadlampTransform(
-      camera.position,
-      camera.matrixWorld,
-      config.sceneRadius,
-      config.headlampConfig,
-    );
+    const transform = computeHeadlampTransform({
+      cameraPosition: camera.position,
+      cameraMatrixWorld: camera.matrixWorld,
+      sceneRadius: config.sceneRadius,
+      config: config.headlampConfig,
+    });
 
     headlamp.position.copy(transform.position);
     headlamp.target.position.copy(transform.targetPosition);

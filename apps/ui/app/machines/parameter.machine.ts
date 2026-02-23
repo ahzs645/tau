@@ -225,12 +225,17 @@ function calculateParameterRange(parameters: {
 /**
  * Calculate formatted value and approximation status
  */
-function calculateFormatting(
-  committedValue: number,
-  unitFactor: number,
-  isLength: boolean,
-  isInteracting: boolean,
-): {
+function calculateFormatting({
+  committedValue,
+  unitFactor,
+  isLength,
+  isInteracting,
+}: {
+  committedValue: number;
+  unitFactor: number;
+  isLength: boolean;
+  isInteracting: boolean;
+}): {
   formattedValue: string | undefined;
   isApproximation: boolean;
 } {
@@ -339,7 +344,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(event.value, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: event.value,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       return {
         committedValue: event.value,
@@ -372,7 +382,12 @@ export const parameterMachine = setup({
       if (context.lastEmittedValue !== undefined && Math.abs(baselineValue - context.lastEmittedValue) < 1e-10) {
         // Value hasn't changed, don't emit (but still update local state for UI)
         const isEditing = context.isFocused || context.isDragging;
-        const formatting = calculateFormatting(baselineValue, unitFactor, isLength, isEditing);
+        const formatting = calculateFormatting({
+          committedValue: baselineValue,
+          unitFactor,
+          isLength,
+          isInteracting: isEditing,
+        });
         enqueue.assign({
           committedValue: baselineValue,
           ...formatting,
@@ -382,7 +397,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new committed value
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(baselineValue, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: baselineValue,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       enqueue.assign({
         committedValue: baselineValue,
@@ -432,7 +452,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new unit factor (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(context.committedValue, newUnitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: context.committedValue,
+        unitFactor: newUnitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       return {
         localValue,
@@ -483,7 +508,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(context.committedValue, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: context.committedValue,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       return {
         defaultValue: newDefaultValue,
@@ -552,7 +582,12 @@ export const parameterMachine = setup({
       if (context.lastEmittedValue !== undefined && Math.abs(baselineValue - context.lastEmittedValue) < 1e-10) {
         // Value hasn't changed, don't emit (but still update local state for UI)
         // Use editing mode for formatting to preserve precision during arrow key interaction
-        const formatting = calculateFormatting(baselineValue, unitFactor, isLength, true);
+        const formatting = calculateFormatting({
+          committedValue: baselineValue,
+          unitFactor,
+          isLength,
+          isInteracting: true,
+        });
         enqueue.assign({
           localValue: clampedValue,
           committedValue: baselineValue,
@@ -563,7 +598,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new committed value
       // Use editing mode for formatting to preserve precision during arrow key interaction
-      const formatting = calculateFormatting(baselineValue, unitFactor, isLength, true);
+      const formatting = calculateFormatting({
+        committedValue: baselineValue,
+        unitFactor,
+        isLength,
+        isInteracting: true,
+      });
 
       enqueue.assign({
         localValue: clampedValue,
@@ -634,7 +674,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new committed value (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(baselineValue, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: baselineValue,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       enqueue.assign({
         committedValue: baselineValue,
@@ -672,7 +717,12 @@ export const parameterMachine = setup({
     });
 
     // Calculate formatting
-    const formatting = calculateFormatting(input.initialValue, unitFactor, isLength, false);
+    const formatting = calculateFormatting({
+      committedValue: input.initialValue,
+      unitFactor,
+      isLength,
+      isInteracting: false,
+    });
 
     return {
       committedValue: input.initialValue,

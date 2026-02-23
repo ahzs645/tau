@@ -60,7 +60,19 @@ export class GitHubTreeTruncatedError extends Error {
   public readonly ref: string;
   public readonly partialCount: number;
 
-  public constructor(owner: string, repo: string, ref: string, partialCount: number, message: string) {
+  public constructor({
+    owner,
+    repo,
+    ref,
+    partialCount,
+    message,
+  }: {
+    owner: string;
+    repo: string;
+    ref: string;
+    partialCount: number;
+    message: string;
+  }) {
     super(message);
     this.name = 'GitHubTreeTruncatedError';
     this.owner = owner;
@@ -184,12 +196,17 @@ class GitHubApiClient {
    * Note: The GraphQL API requires authentication. If a 401 error occurs,
    * this method will throw a clean error that can be handled gracefully by the UI.
    */
-  public async listBranches(
-    owner: string,
-    repo: string,
+  public async listBranches({
+    owner,
+    repo,
     pageSize = 100,
-    cursor?: string,
-  ): Promise<{
+    cursor,
+  }: {
+    owner: string;
+    repo: string;
+    pageSize?: number;
+    cursor?: string;
+  }): Promise<{
     branches: Array<{ name: string; sha: string; updatedAt: number }>;
     hasMore: boolean;
     endCursor: string | undefined;
@@ -331,18 +348,19 @@ class GitHubApiClient {
       // Check if the tree response was truncated due to size limits
       // GitHub truncates trees exceeding ~100,000 entries or 7MB response size
       if (data.truncated) {
-        throw new GitHubTreeTruncatedError(
+        throw new GitHubTreeTruncatedError({
           owner,
           repo,
           ref,
-          data.tree.length,
-          'The repository tree is too large and was truncated by GitHub. ' +
+          partialCount: data.tree.length,
+          message:
+            'The repository tree is too large and was truncated by GitHub. ' +
             'Consider using one of the following alternative strategies:\n' +
             '1. Use the Repository Contents API to traverse directories incrementally\n' +
             '2. Use the GraphQL API with pagination for more control\n' +
             '3. Clone the repository locally using git\n' +
             '4. Filter to a specific subdirectory if you only need part of the tree',
-        );
+        });
       }
 
       // Filter to only blobs (files) and map to path/size
@@ -370,12 +388,17 @@ class GitHubApiClient {
    *
    * Note: GitHub API returns Content-Length header when using full refs like refs/heads/main
    */
-  public async downloadArchiveWithSize(
-    owner: string,
-    repo: string,
-    ref: string,
-    signal?: AbortSignal,
-  ): Promise<{ stream: ReadableStream<Uint8Array<ArrayBuffer>>; size: number | undefined }> {
+  public async downloadArchiveWithSize({
+    owner,
+    repo,
+    ref,
+    signal,
+  }: {
+    owner: string;
+    repo: string;
+    ref: string;
+    signal?: AbortSignal;
+  }): Promise<{ stream: ReadableStream<Uint8Array<ArrayBuffer>>; size: number | undefined }> {
     // Convert short ref to full ref for GitHub API (required for Content-Length header)
     // refs/heads/main, refs/tags/v1.0, etc work; short refs like "main" don't return Content-Length
     const fullRef = ref.startsWith('refs/') ? ref : `refs/heads/${ref}`;

@@ -145,7 +145,12 @@ export function useSampledPoints(options: UseSampledPointsOptions): SampledPoint
     }
 
     const sample = async (): Promise<void> => {
-      const result = await sampleAssemblyPoints(gear12Geometry, gear8Geometry, pointCount, assemblySplitRatio);
+      const result = await sampleAssemblyPoints({
+        gear12Geometry,
+        gear8Geometry,
+        sourcePointCount: pointCount,
+        splitRatio: assemblySplitRatio,
+      });
 
       if (result) {
         setAssemblyGear12Points(result.gear12Points);

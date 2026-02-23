@@ -10,12 +10,17 @@ import * as THREE from 'three';
  * @param referenceUp - Optional reference "up" vector perpendicular to the axis (default: best perpendicular to axis)
  * @returns Quaternion representing the rotation around the axis
  */
-export function computeAxisRotationForCamera(
-  axis: THREE.Vector3,
-  position: THREE.Vector3,
-  camera: THREE.Camera,
-  referenceUp?: THREE.Vector3,
-): THREE.Quaternion {
+export function computeAxisRotationForCamera({
+  axis,
+  position,
+  camera,
+  referenceUp,
+}: {
+  axis: THREE.Vector3;
+  position: THREE.Vector3;
+  camera: THREE.Camera;
+  referenceUp?: THREE.Vector3;
+}): THREE.Quaternion {
   // Calculate direction from object to camera
   const eyeDirection = new THREE.Vector3();
   eyeDirection.subVectors(camera.position, position).normalize();

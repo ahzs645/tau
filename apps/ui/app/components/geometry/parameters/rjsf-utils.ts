@@ -119,12 +119,17 @@ export function isSchemaMatchingSearch(schema: RJSFSchema, searchTerm: string, p
  * @param defaultParameters - The default parameters object containing all default values
  * @returns The default value to use for comparison (schema default or array item default)
  */
-export function getFieldDefaultValue(
-  fieldPath: readonly string[],
-  formData: unknown,
-  schemaDefault: unknown,
-  defaultParameters: Record<string, unknown>,
-): unknown {
+export function getFieldDefaultValue({
+  fieldPath,
+  formData,
+  schemaDefault,
+  defaultParameters,
+}: {
+  fieldPath: readonly string[];
+  formData: unknown;
+  schemaDefault: unknown;
+  defaultParameters: Record<string, unknown>;
+}): unknown {
   // For array items, we need to compare against the default array item at this index
   if (fieldPath.length > 1 && typeof formData !== 'object') {
     // Check if the last segment is numeric (array index)

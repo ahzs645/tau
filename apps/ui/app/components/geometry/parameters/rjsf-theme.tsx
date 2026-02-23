@@ -131,7 +131,12 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
 
   // Get the appropriate default value (handles array items specially)
   const defaultValue = formContext.defaultParameters
-    ? getFieldDefaultValue(fieldPath, formData, schema.default, formContext.defaultParameters)
+    ? getFieldDefaultValue({
+        fieldPath,
+        formData,
+        schemaDefault: schema.default,
+        defaultParameters: formContext.defaultParameters,
+      })
     : schema.default;
 
   const fieldHasValue = hasCustomValue(formData, defaultValue, fieldPath);

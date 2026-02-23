@@ -23,6 +23,7 @@ function createTestCamera(fov = 54, distance = 10): THREE.PerspectiveCamera {
 }
 
 /** Creates an axis-aligned bounding box centred at `center` with given half-extents. */
+// eslint-disable-next-line max-params -- test helper, simple positional args are clearer here
 function makeBox(center: THREE.Vector3, hx: number, hy: number, hz: number): THREE.Box3 {
   return new THREE.Box3(
     new THREE.Vector3(center.x - hx, center.y - hy, center.z - hz),

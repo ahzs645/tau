@@ -281,8 +281,8 @@ export function SplitMorphingPoints({
 
   useFrame((state, delta) => {
     // Animate progress towards target
-    const progress = updateMorphAnimation(
-      {
+    const progress = updateMorphAnimation({
+      state: {
         progressRef: morphProgressRef,
         hasReachedTargetRef: morphHasReachedTargetRef,
         previousTargetRef: morphPreviousTargetRef,
@@ -290,10 +290,10 @@ export function SplitMorphingPoints({
       targetProgress,
       delta,
       animationSpeed,
-      () => {
+      onComplete() {
         onMorphComplete?.(0);
       },
-    );
+    });
 
     // Notify parent of progress change (for animating assembly tilt)
     onProgressChange?.(progress);

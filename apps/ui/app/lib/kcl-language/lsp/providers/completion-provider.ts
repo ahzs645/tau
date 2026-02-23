@@ -30,6 +30,7 @@ export function createCompletionProvider(
   return {
     triggerCharacters: ['.', '|', '('],
 
+    // eslint-disable-next-line max-params -- Monaco editor API contract
     async provideCompletionItems(
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
@@ -234,6 +235,7 @@ type SymbolCompletionOptions = {
 /**
  * Convert a KCL symbol to a Monaco completion item.
  */
+// eslint-disable-next-line max-params -- 4th param is already an options object
 function convertSymbolToCompletion(
   monaco: typeof Monaco,
   symbol: KclSymbol,

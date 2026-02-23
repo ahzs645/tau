@@ -112,12 +112,17 @@ export function createGizmoRenderer(canvas: HTMLCanvasElement, size: number): TH
  * canvas from the DOM, and forces WebGL context loss to prevent GPU context
  * exhaustion.
  */
-export function disposeGizmoResources(
-  gizmo: ViewportGizmo,
-  renderer: THREE.WebGLRenderer,
-  canvas: HTMLCanvasElement,
-  handleChange: () => void,
-): void {
+export function disposeGizmoResources({
+  gizmo,
+  renderer,
+  canvas,
+  handleChange,
+}: {
+  gizmo: ViewportGizmo;
+  renderer: THREE.WebGLRenderer;
+  canvas: HTMLCanvasElement;
+  handleChange: () => void;
+}): void {
   gizmo.removeEventListener('change', handleChange);
   gizmo.dispose();
 

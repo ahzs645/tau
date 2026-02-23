@@ -262,12 +262,17 @@ function gatherBoundaryEdges(
   return { boundaryEdges, interiorEdges };
 }
 
-function tryDetectCircularFace(
-  boundaryEdges: Array<[number, number]>,
-  worldPositions: THREE.Vector3[],
-  faceNormal: THREE.Vector3,
-  planePoint: THREE.Vector3,
-): SnapPoint[] | undefined {
+function tryDetectCircularFace({
+  boundaryEdges,
+  worldPositions,
+  faceNormal,
+  planePoint,
+}: {
+  boundaryEdges: Array<[number, number]>;
+  worldPositions: THREE.Vector3[];
+  faceNormal: THREE.Vector3;
+  planePoint: THREE.Vector3;
+}): SnapPoint[] | undefined {
   const boundaryVertexIndices = new Set<number>();
   for (const [i, j] of boundaryEdges) {
     boundaryVertexIndices.add(i);
@@ -452,7 +457,12 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
   const { boundaryEdges } = gatherBoundaryEdges(faceTriangleIndices, triangles, canonicalIndex);
 
   // 8. Try circular face detection first
-  const maybeCircle = tryDetectCircularFace(boundaryEdges, worldPositions, refNormal, refPoint);
+  const maybeCircle = tryDetectCircularFace({
+    boundaryEdges,
+    worldPositions,
+    faceNormal: refNormal,
+    planePoint: refPoint,
+  });
   if (maybeCircle) {
     return maybeCircle;
   }

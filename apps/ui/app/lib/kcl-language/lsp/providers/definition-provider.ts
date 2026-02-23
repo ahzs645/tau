@@ -126,6 +126,7 @@ export type GetOrEnsureModel = (path: string) => Promise<Monaco.editor.ITextMode
  * Create a Monaco definition provider that uses the LSP client.
  * Falls back to symbol service when LSP returns null.
  */
+// eslint-disable-next-line max-params -- Factory function with optional provider dependencies
 export function createDefinitionProvider(
   monaco: typeof Monaco,
   client: KclLspClient,
@@ -304,6 +305,7 @@ function extractFilePathFromUri(uri: string): string {
  *
  * This is required for Monaco to show Cmd+hover link underlines.
  */
+// eslint-disable-next-line max-params -- Distinct required dependencies for model resolution
 async function ensureModelForUri(
   monaco: typeof Monaco,
   targetUri: string,

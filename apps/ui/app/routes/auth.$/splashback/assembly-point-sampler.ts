@@ -101,12 +101,17 @@ async function sampleFromGeometry(geometry: Geometry, pointCount: number): Promi
  * );
  * ```
  */
-export async function sampleAssemblyPoints(
-  gear12Geometry: Geometry,
-  gear8Geometry: Geometry,
-  sourcePointCount: number,
+export async function sampleAssemblyPoints({
+  gear12Geometry,
+  gear8Geometry,
+  sourcePointCount,
   splitRatio = 0.6,
-): Promise<AssemblySampledPoints | undefined> {
+}: {
+  gear12Geometry: Geometry;
+  gear8Geometry: Geometry;
+  sourcePointCount: number;
+  splitRatio?: number;
+}): Promise<AssemblySampledPoints | undefined> {
   // Calculate how many actual target points to sample from each gear
   const gear12TargetCount = Math.floor(sourcePointCount * splitRatio);
   const gear8TargetCount = sourcePointCount - gear12TargetCount;

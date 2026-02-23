@@ -14,6 +14,7 @@ const log = createKclLogger('Rename Provider');
  */
 export function createRenameProvider(monaco: typeof Monaco, client: KclLspClient): Monaco.languages.RenameProvider {
   return {
+    // eslint-disable-next-line max-params -- Monaco editor API contract
     async provideRenameEdits(
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,

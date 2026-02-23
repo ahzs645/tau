@@ -448,7 +448,12 @@ describe('computeHeadlampTransform', () => {
       const cameraMatrix = new THREE.Matrix4().identity();
       const radius = 5;
 
-      const { position } = computeHeadlampTransform(cameraPosition, cameraMatrix, radius, defaultHeadlampConfig);
+      const { position } = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: radius,
+        config: defaultHeadlampConfig,
+      });
 
       // With identity matrix:
       // camera-right = column 0 = (1,0,0)
@@ -468,7 +473,12 @@ describe('computeHeadlampTransform', () => {
       const cameraMatrix = new THREE.Matrix4().identity();
       const radius = 5;
 
-      const { targetPosition } = computeHeadlampTransform(cameraPosition, cameraMatrix, radius, defaultHeadlampConfig);
+      const { targetPosition } = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: radius,
+        config: defaultHeadlampConfig,
+      });
 
       // With identity matrix:
       // camera-forward = -column2 = (0,0,-1) negated = (0,0,1)... actually
@@ -490,8 +500,18 @@ describe('computeHeadlampTransform', () => {
       const cameraPosition = new THREE.Vector3(0, 0, 10);
       const cameraMatrix = new THREE.Matrix4().identity();
 
-      const small = computeHeadlampTransform(cameraPosition, cameraMatrix, 1, defaultHeadlampConfig);
-      const large = computeHeadlampTransform(cameraPosition, cameraMatrix, 10, defaultHeadlampConfig);
+      const small = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: 1,
+        config: defaultHeadlampConfig,
+      });
+      const large = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: 10,
+        config: defaultHeadlampConfig,
+      });
 
       // The offset from camera position should be 10x larger
       const smallOffset = small.position.clone().sub(cameraPosition);
@@ -513,7 +533,12 @@ describe('computeHeadlampTransform', () => {
         targetUpSkew: 0,
       };
 
-      const { position } = computeHeadlampTransform(cameraPosition, cameraMatrix, radius, config);
+      const { position } = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: radius,
+        config,
+      });
 
       // Camera-right = (1,0,0), camera-up = (0,1,0)
       // position = (0,0,0) + (0,1,0)*1*1 + (1,0,0)*1*1 = (1, 1, 0)
@@ -531,7 +556,12 @@ describe('computeHeadlampTransform', () => {
       const originalZ = cameraPosition.z;
       const cameraMatrix = new THREE.Matrix4().identity();
 
-      computeHeadlampTransform(cameraPosition, cameraMatrix, 5, defaultHeadlampConfig);
+      computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: 5,
+        config: defaultHeadlampConfig,
+      });
 
       expect(cameraPosition.x).toBe(originalX);
       expect(cameraPosition.y).toBe(originalY);

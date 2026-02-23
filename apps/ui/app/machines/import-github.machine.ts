@@ -163,12 +163,17 @@ type BranchesResult = {
 /**
  * Build the URL string for the current machine state
  */
-function buildImportUrl(
-  owner: string,
-  repo: string,
-  selectedBranch: string,
-  selectedMainFile: string | undefined,
-): string {
+function buildImportUrl({
+  owner,
+  repo,
+  selectedBranch,
+  selectedMainFile,
+}: {
+  owner: string;
+  repo: string;
+  selectedBranch: string;
+  selectedMainFile: string | undefined;
+}): string {
   if (!owner || !repo) {
     return '/import';
   }
@@ -208,7 +213,12 @@ const getRepoMetadataActor = fromPromise<RepoMetadataResult, { owner: string; re
 const getBranchesActor = fromPromise<BranchesResult, { owner: string; repo: string; cursor?: string }>(
   async ({ input }): Promise<BranchesResult> => {
     const client = getGitHubClient();
-    const result = await client.listBranches(input.owner, input.repo, 100, input.cursor);
+    const result = await client.listBranches({
+      owner: input.owner,
+      repo: input.repo,
+      pageSize: 100,
+      cursor: input.cursor,
+    });
 
     return {
       type: 'branchesRetrieved' as const,
@@ -251,12 +261,12 @@ const downloadZipActor = fromPromise<
 
   // Download the archive and get size from the GET response headers
   // Pass the signal to abort the fetch request if canceled
-  const { stream, size: contentLength } = await client.downloadArchiveWithSize(
-    input.owner,
-    input.repo,
-    input.ref,
+  const { stream, size: contentLength } = await client.downloadArchiveWithSize({
+    owner: input.owner,
+    repo: input.repo,
+    ref: input.ref,
     signal,
-  );
+  });
 
   // Use size from Content-Length header (available immediately when download starts)
   const totalBytes = contentLength ?? 0;
@@ -697,12 +707,22 @@ export const importGitHubMachine = setup({
     }),
     // Emit URL replacement for real-time typing updates (no history change)
     emitUrlReplaced: enqueueActions(({ enqueue, context }) => {
-      const url = buildImportUrl(context.owner, context.repo, context.selectedBranch, context.selectedMainFile);
+      const url = buildImportUrl({
+        owner: context.owner,
+        repo: context.repo,
+        selectedBranch: context.selectedBranch,
+        selectedMainFile: context.selectedMainFile,
+      });
       enqueue.emit({ type: 'urlReplaced' as const, url });
     }),
     // Emit URL push for meaningful navigation points (adds to history)
     emitUrlPushed: enqueueActions(({ enqueue, context }) => {
-      const url = buildImportUrl(context.owner, context.repo, context.selectedBranch, context.selectedMainFile);
+      const url = buildImportUrl({
+        owner: context.owner,
+        repo: context.repo,
+        selectedBranch: context.selectedBranch,
+        selectedMainFile: context.selectedMainFile,
+      });
       enqueue.emit({ type: 'urlPushed' as const, url });
     }),
     // Emit URL based on whether we're clearing or setting a full repo URL
@@ -710,7 +730,12 @@ export const importGitHubMachine = setup({
     // Valid repo detected → push to history (for back button support)
     // Partial/incomplete URL → replace (for real-time typing feedback)
     emitUrlChange: enqueueActions(({ enqueue, context }) => {
-      const url = buildImportUrl(context.owner, context.repo, context.selectedBranch, context.selectedMainFile);
+      const url = buildImportUrl({
+        owner: context.owner,
+        repo: context.repo,
+        selectedBranch: context.selectedBranch,
+        selectedMainFile: context.selectedMainFile,
+      });
       // If owner/repo are empty, this is a clear action - push to history
       if (!context.owner || !context.repo) {
         enqueue.emit({ type: 'urlPushed' as const, url });

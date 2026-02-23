@@ -20,12 +20,17 @@ import type { cadMachine } from '#machines/cad.machine.js';
  * creates a new reference on every emission, which triggers the `useEffect`
  * on every render and causes an infinite update loop.
  */
-export function useViewSettingsSync(
-  viewId: string,
-  graphicsRef: ActorRefFrom<typeof graphicsMachine>,
-  editorRef: ActorRefFrom<typeof editorMachine>,
-  cadRef?: ActorRefFrom<typeof cadMachine>,
-): void {
+export function useViewSettingsSync({
+  viewId,
+  graphicsRef,
+  editorRef,
+  cadRef,
+}: {
+  viewId: string;
+  graphicsRef: ActorRefFrom<typeof graphicsMachine>;
+  editorRef: ActorRefFrom<typeof editorMachine>;
+  cadRef?: ActorRefFrom<typeof cadMachine>;
+}): void {
   // Track whether we've emitted at least once (skip the first emission)
   const hasEmittedRef = useRef(false);
   const previousSettingsRef = useRef<Partial<GraphicsViewSettings> | undefined>(undefined);

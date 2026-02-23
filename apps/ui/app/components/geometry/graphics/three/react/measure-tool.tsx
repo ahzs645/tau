@@ -651,7 +651,12 @@ function MeasurementLine({
 
       // 2) Compute rotation around the line axis so the label's normal faces the camera
       _currentNormal.set(0, 0, 1).applyQuaternion(_baseQuat);
-      const axisRotation = computeAxisRotationForCamera(lineDirection, midpoint, camera, _currentNormal);
+      const axisRotation = computeAxisRotationForCamera({
+        axis: lineDirection,
+        position: midpoint,
+        camera,
+        referenceUp: _currentNormal,
+      });
 
       // 3) Combine rotations: base alignment then axis rotation in world space
       _finalQuat.multiplyQuaternions(axisRotation, _baseQuat);

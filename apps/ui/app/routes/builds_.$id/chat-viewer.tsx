@@ -266,7 +266,7 @@ const ViewerContent = memo(function ({
   }, [graphicsActor, geometries, units]);
 
   // Sync graphics settings back to editor state for persistence
-  useViewSettingsSync(viewId, graphicsActor, editorRef, cadActorRef);
+  useViewSettingsSync({ viewId, graphicsRef: graphicsActor, editorRef, cadRef: cadActorRef });
 
   // Restore persisted render timeout to the shared CadMachine on mount
   const persistedViewSettings = useSelector(editorRef, (state) => state.context.viewSettings[viewId]);

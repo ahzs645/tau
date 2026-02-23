@@ -32,13 +32,19 @@ export function lerp(start: number, end: number, t: number): number {
  * @param onComplete - Optional callback when animation reaches target
  * @returns The current progress value
  */
-export function updateMorphAnimation(
-  state: MorphAnimationState,
-  targetProgress: number,
-  delta: number,
-  animationSpeed: number,
-  onComplete?: (progress: number) => void,
-): number {
+export function updateMorphAnimation({
+  state,
+  targetProgress,
+  delta,
+  animationSpeed,
+  onComplete,
+}: {
+  state: MorphAnimationState;
+  targetProgress: number;
+  delta: number;
+  animationSpeed: number;
+  onComplete?: (progress: number) => void;
+}): number {
   // Animate progress towards target using lerp
   state.progressRef.current = lerp(state.progressRef.current, targetProgress, animationSpeed * delta);
 

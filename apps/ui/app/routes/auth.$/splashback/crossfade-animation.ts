@@ -51,12 +51,17 @@ export function calculateCrossfadeOpacity(progress: number): CrossfadeOpacity {
  * @param onComplete - Optional callback when crossfade completes
  * @returns The current opacity values, or undefined if not active
  */
-export function updateCrossfade(
-  state: CrossfadeState,
-  delta: number,
-  duration: number,
-  onComplete?: () => void,
-): CrossfadeOpacity | undefined {
+export function updateCrossfade({
+  state,
+  delta,
+  duration,
+  onComplete,
+}: {
+  state: CrossfadeState;
+  delta: number;
+  duration: number;
+  onComplete?: () => void;
+}): CrossfadeOpacity | undefined {
   if (!state.isActiveRef.current) {
     return undefined;
   }

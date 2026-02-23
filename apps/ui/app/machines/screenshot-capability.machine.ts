@@ -454,12 +454,17 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
 /**
  * Core screenshot capture logic shared between regular and composite captures
  */
-async function captureScreenshots(
-  gl: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.Camera,
-  options?: ScreenshotOptions,
-): Promise<string[]> {
+async function captureScreenshots({
+  gl,
+  scene,
+  camera,
+  options,
+}: {
+  gl: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.Camera;
+  options?: ScreenshotOptions;
+}): Promise<string[]> {
   // Additional validation to ensure canvas is still valid
   if (!gl.domElement.isConnected) {
     throw new Error('Screenshot attempted on disconnected canvas - canvas may have been recreated');
@@ -744,7 +749,7 @@ export const screenshotCapabilityMachine = setup({
 
       (async () => {
         try {
-          const dataUrls = await captureScreenshots(gl, scene, camera, options);
+          const dataUrls = await captureScreenshots({ gl, scene, camera, options });
           sendBack({ type: 'screenshotCompleted', dataUrls, requestId });
         } catch (error: unknown) {
           sendBack({
@@ -772,7 +777,7 @@ export const screenshotCapabilityMachine = setup({
       (async () => {
         try {
           // First, capture individual screenshots using the shared logic
-          const dataUrls = await captureScreenshots(gl, scene, camera, options);
+          const dataUrls = await captureScreenshots({ gl, scene, camera, options });
 
           // Create composite image from individual screenshots
           const compositeOptions = options?.composite ?? defaultCompositeOptions;

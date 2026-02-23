@@ -295,18 +295,18 @@ function SceneContent({
     rotatingGroupRef.current.rotation.y = currentRotationYaxisRef.current;
 
     // Crossfade animation (gear12 -> gear8)
-    const gear8Opacity = updateCrossfade(
-      {
+    const gear8Opacity = updateCrossfade({
+      state: {
         progressRef: crossfadeProgressRef,
         isActiveRef: crossfadeIsActiveRef,
         hasSentCompleteRef: crossfadeHasSentCompleteRef,
       },
       delta,
-      crossfadeDuration,
-      () => {
+      duration: crossfadeDuration,
+      onComplete() {
         onCrossfadeComplete?.(currentRotationYaxisRef.current);
       },
-    );
+    });
 
     if (gear8Opacity) {
       setCrossfadeOpacity({ pointCloud: gear8Opacity.source, mesh: gear8Opacity.target });
@@ -316,18 +316,18 @@ function SceneContent({
     }
 
     // Split crossfade animation (gear8 -> assembly)
-    const assemblyOpacity = updateCrossfade(
-      {
+    const assemblyOpacity = updateCrossfade({
+      state: {
         progressRef: splitCrossfadeProgressRef,
         isActiveRef: splitCrossfadeIsActiveRef,
         hasSentCompleteRef: splitCrossfadeHasSentCompleteRef,
       },
       delta,
-      crossfadeDuration,
-      () => {
+      duration: crossfadeDuration,
+      onComplete() {
         onPhaseTransitionComplete?.();
       },
-    );
+    });
 
     if (assemblyOpacity) {
       setSplitCrossfadeOpacity({ pointCloud: assemblyOpacity.source, mesh: assemblyOpacity.target });

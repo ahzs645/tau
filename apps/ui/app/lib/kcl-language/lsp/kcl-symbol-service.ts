@@ -180,7 +180,12 @@ export class KclSymbolService {
         try {
           const parseResult = await parseFn(entry.source);
           const lineOffsets = computeLineOffsets(entry.source);
-          const symbols = extractSymbolsFromProgram(parseResult.program, uri, entry.source, lineOffsets);
+          const symbols = extractSymbolsFromProgram({
+            program: parseResult.program,
+            uri,
+            content: entry.source,
+            lineOffsets,
+          });
 
           // Mark all stdlib symbols with their module for better documentation
           const moduleSymbols: KclSymbol[] = [];
@@ -376,7 +381,14 @@ export class KclSymbolService {
   /**
    * Get the symbol that a usage refers to
    */
-  public getDefinitionForUsage(uri: string, line: number, column: number, word: string): KclSymbol | undefined {
+  public getDefinitionForUsage(options: {
+    uri: string;
+    line: number;
+    column: number;
+    word: string;
+  }): KclSymbol | undefined {
+    const { uri, line, column, word } = options;
+
     // First check if we're on a declaration
     const symbolAtPosition = this.getSymbolAtPosition(uri, line, column);
     if (symbolAtPosition) {
@@ -576,7 +588,7 @@ export class KclSymbolService {
 
       // Extract symbols even if there are parse errors (partial AST)
       // The WASM parser returns a partial program even when there are errors
-      symbols = extractSymbolsFromProgram(program, uri, content, lineOffsets);
+      symbols = extractSymbolsFromProgram({ program, uri, content, lineOffsets });
       succeeded = true;
       log.debug('Extracted', symbols.length, 'symbols from AST (errors:', parseResult.errors.length, ')');
 
@@ -749,16 +761,17 @@ function escapeRegExp(string: string): string {
 /**
  * Extract symbols from a parsed KCL program
  */
-function extractSymbolsFromProgram(
-  program: Node<Program>,
-  uri: string,
-  content: string,
-  lineOffsets: number[],
-): KclSymbol[] {
+function extractSymbolsFromProgram(options: {
+  program: Node<Program>;
+  uri: string;
+  content: string;
+  lineOffsets: number[];
+}): KclSymbol[] {
+  const { program, uri, content, lineOffsets } = options;
   const symbols: KclSymbol[] = [];
 
   for (const bodyItem of program.body) {
-    const extracted = extractSymbolFromBodyItem(bodyItem, uri, content, lineOffsets);
+    const extracted = extractSymbolFromBodyItem({ item: bodyItem, uri, content, lineOffsets });
     if (extracted) {
       symbols.push(...extracted);
     }
@@ -770,15 +783,17 @@ function extractSymbolsFromProgram(
 /**
  * Extract symbol(s) from a body item
  */
-function extractSymbolFromBodyItem(
-  item: BodyItem,
-  uri: string,
-  content: string,
-  lineOffsets: number[],
-): KclSymbol[] | undefined {
+function extractSymbolFromBodyItem(options: {
+  item: BodyItem;
+  uri: string;
+  content: string;
+  lineOffsets: number[];
+}): KclSymbol[] | undefined {
+  const { item, uri, content, lineOffsets } = options;
+
   switch (item.type) {
     case 'VariableDeclaration': {
-      return extractVariableSymbol(item, uri, content, lineOffsets);
+      return extractVariableSymbol({ item, uri, content, lineOffsets });
     }
 
     case 'ImportStatement': {
@@ -794,12 +809,13 @@ function extractSymbolFromBodyItem(
 /**
  * Extract variable/function symbol from a VariableDeclaration
  */
-function extractVariableSymbol(
-  item: BodyItem & { type: 'VariableDeclaration' },
-  uri: string,
-  _content: string,
-  lineOffsets: number[],
-): KclSymbol[] {
+function extractVariableSymbol(options: {
+  item: BodyItem & { type: 'VariableDeclaration' };
+  uri: string;
+  content: string;
+  lineOffsets: number[];
+}): KclSymbol[] {
+  const { item, uri, lineOffsets } = options;
   const symbols: KclSymbol[] = [];
   const declaration = item as unknown as Node<VariableDeclaration>;
   const declarator = declaration.declaration;

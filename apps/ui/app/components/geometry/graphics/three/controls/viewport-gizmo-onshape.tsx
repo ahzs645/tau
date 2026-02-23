@@ -181,7 +181,7 @@ export function ViewportGizmoOnshape({
       gizmoRef.current = null;
       rendererRef.current = null;
 
-      disposeGizmoResources(gizmo, renderer, canvas, handleChange);
+      disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);

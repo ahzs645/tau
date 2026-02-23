@@ -547,6 +547,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
 
     // eslint-disable-next-line @typescript-eslint/await-thenable -- WASM Context constructor may return thenable
     const mockContext = (await new wasmModule.Context(mockEngine, mockFileSystem)) as {
+      // eslint-disable-next-line max-params -- External WASM API contract
       executeMock: (program: string, path: string, settings: string, capture: boolean) => Promise<unknown>;
     };
 

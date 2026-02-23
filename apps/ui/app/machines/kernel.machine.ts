@@ -129,7 +129,7 @@ const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack })
         }
       });
 
-      const result = await client.render(file, parameters);
+      const result = await client.render({ file, parameters });
 
       if (isKernelSuccess(result)) {
         sendBack({

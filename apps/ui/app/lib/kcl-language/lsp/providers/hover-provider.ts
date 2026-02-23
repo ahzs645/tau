@@ -25,6 +25,7 @@ const log = createKclLogger('Hover Provider');
  *   <documentation>
  *   from "path"
  */
+// eslint-disable-next-line max-params -- Distinct parameters for import resolution
 async function resolveImportSymbolHover(
   symbolService: KclSymbolService,
   uri: string,
@@ -157,7 +158,12 @@ export function createHoverProvider(
           log.debug('Available symbols:', allSymbols.map((s) => `${s.name}(${s.kind})`).join(', '));
         }
 
-        const symbol = symbolService.getDefinitionForUsage(uri, position.lineNumber, position.column, wordInfo.word);
+        const symbol = symbolService.getDefinitionForUsage({
+          uri,
+          line: position.lineNumber,
+          column: position.column,
+          word: wordInfo.word,
+        });
         if (!symbol) {
           log.debug('No symbol found for word:', wordInfo.word);
           return undefined;

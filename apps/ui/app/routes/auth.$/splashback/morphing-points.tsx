@@ -196,8 +196,8 @@ export function MorphingPoints({
     }
 
     // Animate progress towards target
-    const currentProgress = updateMorphAnimation(
-      {
+    const currentProgress = updateMorphAnimation({
+      state: {
         progressRef: morphProgressRef,
         hasReachedTargetRef: morphHasReachedTargetRef,
         previousTargetRef: morphPreviousTargetRef,
@@ -205,11 +205,10 @@ export function MorphingPoints({
       targetProgress,
       delta,
       animationSpeed,
-      () => {
-        // Pass final rotation to callback so target mesh can sync
+      onComplete() {
         onMorphComplete?.(currentRotationYaxisRef.current);
       },
-    );
+    });
 
     // Update shader uniforms
     updateMorphProgress(material, currentProgress);
