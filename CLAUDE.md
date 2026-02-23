@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture Overview
 
-Tau is an AI-powered CAD platform built as a monorepo using Nx with the following architecture:
+Tau is the AI-powered CAD platform built as a monorepo using Nx with the following architecture:
 
 - **Frontend**: React Router v7 app with React 19, TypeScript, and Tailwind CSS
 - **Backend**: NestJS API with Fastify, PostgreSQL database via Drizzle ORM
