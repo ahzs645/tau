@@ -277,8 +277,8 @@ export default defineKernel({
       throw new JscadBuildError([
         {
           message: error instanceof Error ? error.message : String(error),
-          type: 'runtime' as const,
-          severity: 'error' as const,
+          type: 'runtime',
+          severity: 'error',
           stackFrames,
           location,
         },
@@ -293,8 +293,8 @@ export default defineKernel({
           {
             message: 'main() did not return any shapes. Did you forget to add a return statement?',
             location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
-            type: 'runtime' as const,
-            severity: 'warning' as const,
+            type: 'runtime',
+            severity: 'warning',
           },
         ],
       };

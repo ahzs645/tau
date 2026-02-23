@@ -402,8 +402,8 @@ export default defineKernel({
           {
             message: 'main() did not return any shapes. Did you forget to add a return statement?',
             location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
-            type: 'runtime' as const,
-            severity: 'warning' as const,
+            type: 'runtime',
+            severity: 'warning',
           },
         ],
       };
@@ -460,8 +460,8 @@ export default defineKernel({
         return {
           format: 'replicad',
           name: shapeConfig.name ?? 'Geometry',
-          color: (shapeConfig as { color?: string }).color,
-          opacity: (shapeConfig as { opacity?: number }).opacity,
+          color: shapeConfig.color,
+          opacity: shapeConfig.opacity,
           faces,
           edges: { lines: [], edgeGroups: [] },
         } satisfies GeometryReplicad;
