@@ -9,7 +9,7 @@ describe('ESM import smoke tests', () => {
   it('should resolve the main entry point', async () => {
     const mod = await import('#index.js');
     expect(mod).toBeDefined();
-    expect(mod.createDefaultConfig).toBeTypeOf('function');
+    expect(mod.presets).toBeDefined();
     expect(mod.KernelWorkerClient).toBeTypeOf('function');
     expect(mod.createFileSystemPort).toBeTypeOf('function');
     expect(mod.fromZenFS).toBeTypeOf('function');

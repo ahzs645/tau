@@ -240,7 +240,7 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker.createGeometryEntry(createGeometryFile('cube.scad'), {});
+      const result = await worker.createGeometry({ file: createGeometryFile('cube.scad'), parameters: {} });
 
       expect(result.success).toBe(true);
 
@@ -266,7 +266,7 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker.createGeometryEntry(createGeometryFile('cube.scad'), {});
+      const result = await worker.createGeometry({ file: createGeometryFile('cube.scad'), parameters: {} });
 
       expect(result.success).toBe(true);
 
@@ -311,7 +311,7 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker.createGeometryEntry(createGeometryFile('cube.scad'), {});
+      const result = await worker.createGeometry({ file: createGeometryFile('cube.scad'), parameters: {} });
 
       expect(result.success).toBe(true);
 
@@ -370,7 +370,7 @@ describe.skip('Edge Detection Middleware', () => {
         'sphere.scad': '$fn=16; sphere(r=5);',
       });
 
-      const result = await worker.createGeometryEntry(createGeometryFile('sphere.scad'), {});
+      const result = await worker.createGeometry({ file: createGeometryFile('sphere.scad'), parameters: {} });
 
       expect(result.success).toBe(true);
 

@@ -191,12 +191,16 @@ export type InitializeInput<Options = Record<string, unknown>> = {
 
 /**
  * Input for kernel exportGeometry method.
+ *
+ * @template NativeHandle - Kernel-specific native geometry representation, injected by the framework
  */
-export type ExportGeometryInput = {
+export type ExportGeometryInput<NativeHandle = unknown> = {
   /** Export file format */
   fileType: ExportFormat;
   /** Optional tessellation quality for export. Kernel applies its own default when undefined. */
   tessellation?: Tessellation;
+  /** Native geometry handle from the most recent createGeometry call, injected by the framework */
+  nativeHandle: NativeHandle;
 };
 
 // =============================================================================
@@ -253,10 +257,9 @@ export type KernelDefinition<
     context: Context,
   ): Promise<CreateGeometryOutput<NativeHandle>>;
   exportGeometry(
-    input: ExportGeometryInput,
+    input: ExportGeometryInput<NativeHandle>,
     runtime: KernelRuntime,
     context: Context,
-    nativeHandle: NativeHandle,
   ): Promise<ExportGeometryResult>;
 
   cleanup?(context: Context): Promise<void>;
@@ -283,7 +286,7 @@ export type KernelDefinition<
  *   async createGeometry(input, runtime, context) {
  *     return { geometry: [...], nativeHandle: myShapes };
  *   },
- *   async exportGeometry(input, runtime, context, nativeHandle) {
+ *   async exportGeometry({ nativeHandle, ...input }, runtime, context) {
  *     return { success: true, data: [{ blob: ... }] };
  *   },
  * });

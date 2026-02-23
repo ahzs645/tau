@@ -194,18 +194,22 @@ function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolea
 /**
  * Clean up old cache entries to prevent unbounded cache growth.
  * Deletes entries older than maxAgeMs and keeps only maxEntries most recent files.
- *
- * @param filesystem - The filesystem for file operations
- * @param cacheDir - The cache directory path
- * @param maxAgeMs - Maximum age in milliseconds for cache entries
- * @param maxEntries - Maximum number of cache entries to keep
  */
-async function cleanupOldCacheEntries(
-  filesystem: KernelFileSystem,
-  cacheDir: string,
-  maxAgeMs: number,
-  maxEntries: number,
-): Promise<void> {
+async function cleanupOldCacheEntries({
+  filesystem,
+  cacheDir,
+  maxAgeMs,
+  maxEntries,
+}: {
+  /** The filesystem for file operations */
+  filesystem: KernelFileSystem;
+  /** The cache directory path */
+  cacheDir: string;
+  /** Maximum age in milliseconds for cache entries */
+  maxAgeMs: number;
+  /** Maximum number of cache entries to keep */
+  maxEntries: number;
+}): Promise<void> {
   try {
     const files = await getDirectoryStat(filesystem, cacheDir);
 
@@ -315,7 +319,12 @@ export const geometryCacheMiddleware = defineMiddleware({
           logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
 
           // Cleanup old cache entries to prevent unbounded growth
-          await cleanupOldCacheEntries(filesystem, cacheDir, options.maxAgeMs, options.maxEntries);
+          await cleanupOldCacheEntries({
+            filesystem,
+            cacheDir,
+            maxAgeMs: options.maxAgeMs,
+            maxEntries: options.maxEntries,
+          });
         } catch (error) {
           // Cache write error - log and continue
           logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);

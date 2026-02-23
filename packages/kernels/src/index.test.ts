@@ -1,10 +1,9 @@
 import { test, expect } from 'vitest';
-import { createDefaultConfig } from '#config.js';
+import { presets } from '#plugins/presets.js';
 
-test('createDefaultConfig returns expected structure', () => {
-  const config = createDefaultConfig();
-  expect(config).toHaveProperty('workerUrl');
-  expect(config).toHaveProperty('kernelModules');
-  expect(config).toHaveProperty('middlewareEntries');
-  expect(config).toHaveProperty('bundlerEntries');
+test('presets.all() returns expected structure', () => {
+  const config = presets.all();
+  expect(config).toHaveProperty('kernels');
+  expect(config).toHaveProperty('middleware');
+  expect(config).toHaveProperty('bundlers');
 });

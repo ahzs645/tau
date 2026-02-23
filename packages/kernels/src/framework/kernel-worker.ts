@@ -3,12 +3,12 @@ import { logLevels } from '@taucad/types/constants';
 import { joinPath } from '@taucad/utils/path';
 import type { ExportFormat, GeometryFile, OnWorkerLog } from '@taucad/types';
 import type {
-  CreateGeometryResultCompleted,
+  HashedGeometryResult,
   CreateGeometryResult,
   ExportGeometryResult,
   GetParametersResult,
-  MiddlewareEntries,
-  BundlerEntry,
+  MiddlewareRegistrations,
+  BundlerRegistration,
 } from '#types/kernel.types.js';
 import type {
   KernelFileSystem,
@@ -25,11 +25,12 @@ import type {
 import type {
   KernelMiddlewareRuntime,
   CreateGeometryHandler,
+  ExportGeometryHandler,
   GetParametersHandler,
 } from '#types/kernel-middleware.types.js';
 import type {
   KernelBundler,
-  BuiltinModuleEntry,
+  BuiltinModule,
   BundleResult,
   ExecuteResult,
   BundlerDefinition,
@@ -183,21 +184,21 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * The file manager instance.
-   * Initialized via initializeEntry() during worker setup.
-   * This is a Remote proxy to the file-manager worker.
+   * Initialized via initialize() during worker setup.
+   * Backed by a MessagePort bridge to the file-manager worker.
    * Private - use the filesystem property for all filesystem operations.
    */
   private fileManager: KernelFileSystem | undefined;
 
   /**
    * Internal filesystem instance.
-   * Initialized via initializeEntry() when fileSystemPort is provided.
+   * Initialized via initialize() when fileSystemPort is provided.
    */
   private _filesystem: KernelFileSystem | undefined;
 
   /**
    * Internal logger instance.
-   * Initialized via initializeEntry() after onLog is set.
+   * Initialized via initialize() after onLog is set.
    */
   private _logger: KernelLogger | undefined;
 
@@ -212,7 +213,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Dynamically loaded middleware instances with their resolved configs.
-   * Populated during initializeEntry() and updated via configureMiddleware().
+   * Populated during initialize() and updated via configureMiddleware().
    */
   private resolvedMiddleware: ResolvedMiddleware[] = [];
 
@@ -244,7 +245,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Span tracer for hierarchical telemetry with explicit parent-child IDs */
   private readonly tracer = new KernelTracer();
 
-  /** Progress callback set during renderEntry, used by entry methods to emit phase transitions */
+  /** Progress callback set during render, used by entry methods to emit phase transitions */
   private onProgress?: (phase: RenderPhase) => void;
 
   /** Per-render bundle result cache. Cleared at the start of each render cycle. */
@@ -257,7 +258,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   private cachedBundlerFacade: KernelBundler | undefined;
 
   /** Pending module registrations queued before the bundler is loaded */
-  private readonly pendingModuleRegistrations = new Map<string, BuiltinModuleEntry>();
+  private readonly pendingModuleRegistrations = new Map<string, BuiltinModule>();
 
   /** In-flight bundler initializations to coalesce concurrent callers for the same extension */
   private readonly bundlerInitInProgress = new Map<string, Promise<{ definition: BundlerDefinition; ctx: unknown }>>();
@@ -269,11 +270,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * - Relative to project root (for dependency resolution)
    * - Absolute paths (for cache/middleware operations)
    *
-   * @throws Error if accessed before initializeEntry() completes with fileSystemPort
+   * @throws Error if accessed before initialize() completes with fileSystemPort
    */
   private get filesystem(): KernelFileSystem {
     if (!this._filesystem) {
-      throw new Error('filesystem not available - initializeEntry must complete first with fileSystemPort');
+      throw new Error('filesystem not available - initialize must complete first with fileSystemPort');
     }
 
     return this._filesystem;
@@ -283,11 +284,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Logger interface for kernel workers.
    * Provides convenience methods that automatically inject the component name.
    *
-   * @throws Error if accessed before initializeEntry() completes
+   * @throws Error if accessed before initialize() completes
    */
   protected get logger(): KernelLogger {
     if (!this._logger) {
-      throw new Error('logger not available - initializeEntry must complete first');
+      throw new Error('logger not available - initialize must complete first');
     }
 
     return this._logger;
@@ -307,36 +308,37 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Handles common initialization logic and then calls the protected initialize method.
    *
    *
-   * @param callbacks - Object containing callback functions (proxied).
-   * @param callbacks.onLog - The function to call when a log is emitted.
-   * @param transferables - Object containing transferable resources like MessagePorts.
-   * @param transferables.fileSystemPort - Optional MessagePort for direct communication with file-manager worker.
-   * @param options - The options passed to the worker. These are specific to the kernel provider.
-   * @param middlewareEntries - Ordered array of middleware registrations to load dynamically.
+   * @param input - Initialization input containing callbacks, transferables, options, and middleware entries
+   * @param input.callbacks - Object containing callback functions (proxied)
+   * @param input.callbacks.onLog - The function to call when a log is emitted
+   * @param input.transferables - Object containing transferable resources like MessagePorts
+   * @param input.transferables.fileSystemPort - Optional MessagePort for direct communication with file-manager worker
+   * @param input.options - The options passed to the worker, specific to the kernel provider
+   * @param input.middlewareEntries - Ordered array of middleware registrations to load dynamically
    */
-  public async initializeEntry(
-    callbacks: { onLog: OnWorkerLog },
-    transferables: { fileSystemPort?: MessagePort },
-    options: Options,
-    middlewareEntries: MiddlewareEntries,
-  ): Promise<void> {
-    this.onLog = callbacks.onLog;
-    this.options = options;
+  public async initialize(input: {
+    callbacks: { onLog: OnWorkerLog };
+    transferables: { fileSystemPort?: MessagePort };
+    options: Options;
+    middlewareEntries: MiddlewareRegistrations;
+  }): Promise<void> {
+    this.onLog = input.callbacks.onLog;
+    this.options = input.options;
 
     // Create logger (depends on onLog being set)
     this._logger = this.createLogger();
 
     // Register file manager and create filesystem if port is provided
-    if (transferables.fileSystemPort) {
-      this.fileManager = createFileSystemProxy(transferables.fileSystemPort);
+    if (input.transferables.fileSystemPort) {
+      this.fileManager = createFileSystemProxy(input.transferables.fileSystemPort);
       this._filesystem = this.createFilesystem();
     }
 
     const bootstrapSpan = this.tracer.startSpan('kernel.bootstrap');
-    await this.loadMiddleware(middlewareEntries);
+    await this.loadMiddleware(input.middlewareEntries);
 
     const initSpan = this.tracer.startSpan('kernel.init', { kernel: this.constructor.name });
-    await this.initialize({ options: this.options }, this.createRuntime());
+    await this.onInitialize({ options: this.options }, this.createRuntime());
     initSpan.end();
     bootstrapSpan.end();
   }
@@ -370,12 +372,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /** Clean up worker state, native handles, and telemetry collector. */
-  public async cleanupEntry(): Promise<void> {
+  public async cleanup(): Promise<void> {
     this.assetHashCache.clear();
     this.nativeHandle = undefined;
     this.telemetryCollector?.dispose();
     this.telemetryCollector = undefined;
-    await this.cleanup();
+    await this.onCleanup();
   }
 
   /**
@@ -385,7 +387,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param file - The geometry file to check.
    * @returns True if this worker can handle the file, false otherwise.
    */
-  public async canHandleEntry(file: GeometryFile): Promise<boolean> {
+  public async canHandle(file: GeometryFile): Promise<boolean> {
     this.setBasePath(file);
     const basename = KernelWorker.getBasename(file.filename);
     const extension = KernelWorker.getFileExtension(basename);
@@ -396,7 +398,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       extension,
     };
 
-    return this.canHandle(input, this.createRuntime());
+    return this.onCanHandle(input, this.createRuntime());
   }
 
   /**
@@ -407,7 +409,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param file - The geometry file to extract parameters from.
    * @returns The extracted parameters.
    */
-  public async getParametersEntry(file: GeometryFile): Promise<GetParametersResult> {
+  public async getParameters(file: GeometryFile): Promise<GetParametersResult> {
     this.setBasePath(file);
     const start = performance.now();
 
@@ -420,8 +422,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     this.onProgress?.('resolvingDeps');
     const depsSpan = this.tracer.startSpan('kernel.resolve-deps', { phase: 'resolvingDeps' });
-    const basename = KernelWorker.getBasename(file.filename);
-    const dependencies = await this.computeDependencies(basename, undefined, resolvedArray);
+    const dependencies = await this.computeDependencies({ resolvedMiddleware: resolvedArray });
     const dependencyHash = this.computeDependencyHash(dependencies);
     depsSpan.end();
 
@@ -448,7 +449,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const { tracer } = this;
     let chain: GetParametersHandler = async (handlerInput: GetParametersInput) => {
       const parametersSpan = tracer.startSpan('kernel.extract-params', { phase: 'extractingParams' });
-      const result = await this.getParameters(handlerInput, this.createRuntime());
+      const result = await this.onGetParameters(handlerInput, this.createRuntime());
       parametersSpan.end();
       return result;
     };
@@ -502,31 +503,34 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * - Short-circuited results still flow through upstream middleware post-processing
    *
    *
-   * @param file - The geometry file to compute geometry from.
-   * @param parameters - The parameters to use when computing geometry.
-   * @param tessellation - Optional tessellation quality for preview rendering.
+   * @param entry - The geometry entry containing file, parameters, and optional tessellation
+   * @param entry.file - The geometry file to compute geometry from
+   * @param entry.parameters - The parameters to use when computing geometry
+   * @param entry.tessellation - Optional tessellation quality for preview rendering
    * @returns The computed geometry.
    */
-  public async createGeometryEntry(
-    file: GeometryFile,
-    parameters: Record<string, unknown>,
-    tessellation?: Tessellation,
-  ): Promise<CreateGeometryResultCompleted> {
-    this.setBasePath(file);
+  public async createGeometry(entry: {
+    file: GeometryFile;
+    parameters: Record<string, unknown>;
+    tessellation?: Tessellation;
+  }): Promise<HashedGeometryResult> {
+    this.setBasePath(entry.file);
     const start = performance.now();
 
     const input: CreateGeometryInput = {
       filePath: this.activeFileAbsolutePath,
       basePath: this.getProjectRootPath(),
-      parameters,
-      tessellation,
+      parameters: entry.parameters,
+      tessellation: entry.tessellation,
     };
 
     const resolvedArray = this.getMiddleware();
 
     const geoDepsSpan = this.tracer.startSpan('kernel.resolve-deps', { phase: 'resolvingDeps' });
-    const basename = KernelWorker.getBasename(file.filename);
-    const dependencies = await this.computeDependencies(basename, parameters, resolvedArray);
+    const dependencies = await this.computeDependencies({
+      parameters: entry.parameters,
+      resolvedMiddleware: resolvedArray,
+    });
     const dependencyHash = this.computeDependencyHash(dependencies);
     geoDepsSpan.end();
 
@@ -553,7 +557,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const { tracer } = this;
     let chain: CreateGeometryHandler = async (handlerInput: CreateGeometryInput) => {
       const computeSpan = tracer.startSpan('kernel.compute');
-      const result = await this.createGeometry(handlerInput, this.createRuntime());
+      const result = await this.onCreateGeometry(handlerInput, this.createRuntime());
       computeSpan.end();
       return result;
     };
@@ -594,7 +598,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     this.onProgress?.('postProcessing');
     // Dependency hash + index is sufficient for unique React keys
-    const result: CreateGeometryResultCompleted = internalResult.success
+    const result: HashedGeometryResult = internalResult.success
       ? {
           ...internalResult,
           data: internalResult.data.map((geometry, index) => ({
@@ -612,22 +616,100 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Entry point for exporting geometry.
-   * Handles timing (no base path needed for export).
+   * Handles timing and middleware application using onion model.
    *
+   * Middleware wraps around each other (onion model), so:
+   * - Code before handler() runs on the "request journey" (outside-in)
+   * - Code after handler() runs on the "response journey" (inside-out)
+   * - Short-circuited results still flow through upstream middleware post-processing
    *
    * @param fileType - The file type to export the geometry as.
    * @param tessellation - Optional tessellation quality for export meshing.
    * @returns The exported geometry.
    */
-  public async exportGeometryEntry(fileType: ExportFormat, tessellation?: Tessellation): Promise<ExportGeometryResult> {
+  public async exportGeometry(fileType: ExportFormat, tessellation?: Tessellation): Promise<ExportGeometryResult> {
     const exportSpan = this.tracer.startSpan('kernel.export', { format: fileType });
 
     const input: ExportGeometryInput = {
       fileType,
       tessellation,
+      nativeHandle: this.nativeHandle,
     };
 
-    const result = await this.exportGeometry(input, this.createRuntime(), this.nativeHandle);
+    const resolvedArray = this.getMiddleware();
+    const activeMiddleware = resolvedArray.filter(
+      ({ middleware, enabled }) => enabled && middleware.wrapExportGeometry,
+    );
+
+    let result: ExportGeometryResult;
+
+    if (activeMiddleware.length === 0) {
+      const computeSpan = this.tracer.startSpan('kernel.export-compute');
+      result = await this.onExportGeometry(input, this.createRuntime());
+      computeSpan.end();
+    } else {
+      const depsSpan = this.tracer.startSpan('kernel.resolve-deps', { phase: 'resolvingDeps' });
+      const dependencies = await this.computeDependencies({ resolvedMiddleware: resolvedArray });
+      const dependencyHash = this.computeDependencyHash(dependencies);
+      depsSpan.end();
+
+      const runtimes = new Map<string, KernelMiddlewareRuntime>();
+      for (const { middleware, options: middlewareOptions } of activeMiddleware) {
+        runtimes.set(
+          middleware.name,
+          createMiddlewareRuntime({
+            onLog: this.onLog,
+            middlewareName: middleware.name,
+            filesystem: this.filesystem,
+            dependencies,
+            dependencyHash,
+            stateSchema: middleware.stateSchema,
+            options: middlewareOptions,
+            logger: this.getMiddlewareLogger(middleware.name),
+          }),
+        );
+      }
+
+      const { tracer } = this;
+      let chain: ExportGeometryHandler = async (handlerInput: ExportGeometryInput) => {
+        const computeSpan = tracer.startSpan('kernel.export-compute');
+        const exportResult = await this.onExportGeometry(handlerInput, this.createRuntime());
+        computeSpan.end();
+        return exportResult;
+      };
+
+      for (let index = activeMiddleware.length - 1; index >= 0; index--) {
+        const { middleware } = activeMiddleware[index]!;
+        const inner = chain;
+        const runtime = runtimes.get(middleware.name)!;
+        const middlewareName = middleware.name;
+        const wrapHook = middleware.wrapExportGeometry!;
+
+        chain = async (handlerInput: ExportGeometryInput) => {
+          const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
+            middleware: middlewareName,
+          });
+          try {
+            const chainResult = await wrapHook(handlerInput, inner, runtime);
+            span.end();
+            return chainResult;
+          } catch (error) {
+            span.end();
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error('Middleware failed', { data: { name: middlewareName, error: errorMessage } });
+            return createKernelError([
+              {
+                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                type: 'kernel',
+                severity: 'error',
+              },
+            ]);
+          }
+        };
+      }
+
+      result = await chain(input);
+    }
 
     exportSpan.end();
 
@@ -652,7 +734,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @param entries - New middleware configuration to apply
    */
-  public async configureMiddleware(entries: MiddlewareEntries): Promise<void> {
+  public async configureMiddleware(entries: MiddlewareRegistrations): Promise<void> {
     await this.loadMiddleware(entries);
     this.logger.debug('Middleware reconfigured', { data: { count: this.resolvedMiddleware.length } });
   }
@@ -662,36 +744,43 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * in a single call. This eliminates redundant dependency computation, bundling, and hashing
    * between the two operations.
    *
-   * @param file - The geometry file to render
-   * @param parameters - User-provided parameters
-   * @param onParametersResolved - Optional callback to stream parameters back while geometry computes
+   * @param input - Render input containing file, parameters, and optional callbacks
+   * @param input.file - The geometry file to render
+   * @param input.parameters - User-provided parameters
+   * @param input.onParametersResolved - Optional callback to stream parameters back while geometry computes
+   * @param input.onProgress - Optional callback for render phase progress
+   * @param input.tessellation - Optional tessellation quality override
    * @returns The computed geometry
    */
-  public async renderEntry(
-    file: GeometryFile,
-    parameters: Record<string, unknown>,
-    onParametersResolved?: (result: GetParametersResult) => void,
-    onProgress?: (phase: RenderPhase) => void,
-    tessellation?: Tessellation,
-  ): Promise<CreateGeometryResultCompleted> {
+  public async render(input: {
+    file: GeometryFile;
+    parameters: Record<string, unknown>;
+    onParametersResolved?: (result: GetParametersResult) => void;
+    onProgress?: (phase: RenderPhase) => void;
+    tessellation?: Tessellation;
+  }): Promise<HashedGeometryResult> {
     this.tracer.reset();
-    const renderSpan = this.tracer.startSpan('kernel.render', { file: file.filename });
-    this.onProgress = onProgress;
+    const renderSpan = this.tracer.startSpan('kernel.render', { file: input.file.filename });
+    this.onProgress = input.onProgress;
     this.renderDependencyCache = undefined;
-    this.setBasePath(file);
+    this.setBasePath(input.file);
 
-    const parametersResult = await this.getParametersEntry(file);
-    onParametersResolved?.(parametersResult);
+    const parametersResult = await this.getParameters(input.file);
+    input.onParametersResolved?.(parametersResult);
 
-    let mergedParameters = parameters;
+    let mergedParameters = input.parameters;
     if (parametersResult.success) {
       const extracted = parametersResult.data as { defaultParameters?: Record<string, unknown> };
       if (extracted.defaultParameters) {
-        mergedParameters = deepmerge(extracted.defaultParameters, parameters);
+        mergedParameters = deepmerge(extracted.defaultParameters, input.parameters);
       }
     }
 
-    const result = await this.createGeometryEntry(file, mergedParameters, tessellation);
+    const result = await this.createGeometry({
+      file: input.file,
+      parameters: mergedParameters,
+      tessellation: input.tessellation,
+    });
     this.onProgress = undefined;
     renderSpan.end();
     return result;
@@ -727,7 +816,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param bundlerEntry - Bundler registration with module URL and extensions
    * @param preloadedDefinition - Optional pre-loaded definition (bypasses dynamic import; used in tests)
    */
-  public async ensureLoadedBundler(bundlerEntry: BundlerEntry, preloadedDefinition?: BundlerDefinition): Promise<void> {
+  public async ensureLoadedBundler(
+    bundlerEntry: BundlerRegistration,
+    preloadedDefinition?: BundlerDefinition,
+  ): Promise<void> {
     const initSpan = this.tracer.startSpan('kernel.bundler-init');
 
     try {
@@ -775,6 +867,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Call this before any operation that needs the bundler (bundle, execute, detectImports).
    * Must be called after setBasePath() so that getProjectRootPath() returns the correct value.
    *
+   * Use this when the file extension is known and the correct bundler must be selected.
+   * Use ensureBundlerContext() for extension-agnostic contexts where any bundler will do.
+   *
    * @param ext - File extension without dot
    * @returns The loaded bundler for the extension
    */
@@ -810,10 +905,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Ensure any bundler context is initialized (for operations that don't know extension yet).
+   * Ensure any bundler context is initialized (for extension-agnostic contexts where any bundler will do).
    * Initializes the first pending bundler found.
    *
-   * @deprecated Use ensureBundlerForExtension instead when file extension is known
+   * Use this when the file extension is unknown (e.g., the execute() function in createRuntime()).
+   * Use ensureBundlerForExtension() when the file extension is known and the correct bundler must be selected.
    */
   protected async ensureBundlerContext(): Promise<void> {
     if (this.loadedBundlers.size > 0) {
@@ -838,22 +934,22 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Worker-specific initialization. Override this method to add custom initialization logic.
-   * No need to call super.initialize() - common initialization is handled by initializeEntry.
+   * No need to call super.initialize() - common initialization is handled by initialize.
    *
    * @param _input - Input containing worker options
    * @param _runtime - Runtime services (filesystem, logger)
    */
-  protected async initialize(_input: InitializeInput<Options>, _runtime: KernelRuntime): Promise<void> {
+  protected async onInitialize(_input: InitializeInput<Options>, _runtime: KernelRuntime): Promise<void> {
     // Base implementation - can be overridden by subclasses
   }
 
   /**
    * Worker-specific cleanup. Override this method to add custom cleanup logic.
-   * No need to call super.cleanup() - common cleanup is handled by cleanupEntry.
+   * No need to call super.cleanup() - common cleanup is handled by cleanup.
    *
    * This can be used to release memory, close connections, etc.
    */
-  protected async cleanup(): Promise<void> {
+  protected async onCleanup(): Promise<void> {
     // Base implementation - can be overridden by subclasses
   }
 
@@ -908,7 +1004,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns True if the kernel can handle this file
    */
-  protected abstract canHandle(input: CanHandleInput, runtime: KernelRuntime): Promise<boolean>;
+  protected abstract onCanHandle(input: CanHandleInput, runtime: KernelRuntime): Promise<boolean>;
 
   /**
    * Extract parameters from a file.
@@ -917,7 +1013,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns The extracted parameters.
    */
-  protected abstract getParameters(input: GetParametersInput, runtime: KernelRuntime): Promise<GetParametersResult>;
+  protected abstract onGetParameters(input: GetParametersInput, runtime: KernelRuntime): Promise<GetParametersResult>;
 
   /**
    * Compute geometry from a file.
@@ -926,7 +1022,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns The computed geometry.
    */
-  protected abstract createGeometry(input: CreateGeometryInput, runtime: KernelRuntime): Promise<CreateGeometryResult>;
+  protected abstract onCreateGeometry(
+    input: CreateGeometryInput,
+    runtime: KernelRuntime,
+  ): Promise<CreateGeometryResult>;
 
   /**
    * Export geometry using the framework-stored native handle from the last createGeometry call.
@@ -936,10 +1035,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param nativeHandle - Opaque native geometry data stored by the framework after createGeometry
    * @returns The exported geometry.
    */
-  protected abstract exportGeometry(
+  protected abstract onExportGeometry(
     input: ExportGeometryInput,
     runtime: KernelRuntime,
-    nativeHandle: unknown,
   ): Promise<ExportGeometryResult>;
 
   /**
@@ -950,7 +1048,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns Array of absolute file paths that are dependencies (including the entry file)
    */
-  protected abstract getDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]>;
+  protected abstract onGetDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]>;
 
   /**
    * Perform the actual bundler context initialization.
@@ -997,7 +1095,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @param middlewareEntries - Ordered array of middleware entries
    */
-  private async loadMiddleware(middlewareEntries: MiddlewareEntries): Promise<void> {
+  private async loadMiddleware(middlewareEntries: MiddlewareRegistrations): Promise<void> {
     const middlewareSpan = this.tracer.startSpan('kernel.load-middleware', { count: middlewareEntries.length });
 
     try {
@@ -1065,7 +1163,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Create the unified filesystem interface.
-   * Called during initializeEntry() after fileManager is set up.
+   * Called during initialize() after fileManager is set up.
    * All methods use absolute paths - callers use helper methods to construct paths.
    *
    * @returns KernelFileSystem instance with the 8 Node.js-compatible primitives
@@ -1112,39 +1210,38 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Gathers file dependencies, middleware signatures, framework version, kernel options,
    * parameters (for geometry computation), and bundled assets.
    *
-   * @param _filename - The entry file path (relative to basePath)
-   * @param parameters - Optional parameters (included for geometry computation, omitted for parameter extraction)
-   * @param resolvedMiddleware - Resolved middleware array for dependency signatures
+   * @param input - Input containing optional parameters and resolved middleware for dependency computation
+   * @param input.parameters - Optional parameters (included for geometry computation, omitted for parameter extraction)
+   * @param input.resolvedMiddleware - Resolved middleware array for dependency signatures
    * @returns Array of all dependencies
    */
-  private async computeDependencies(
-    _filename: string,
-    parameters?: Record<string, unknown>,
-    resolvedMiddleware?: ResolvedMiddleware[],
-  ): Promise<Dependency[]> {
+  private async computeDependencies(input: {
+    parameters?: Record<string, unknown>;
+    resolvedMiddleware?: ResolvedMiddleware[];
+  }): Promise<Dependency[]> {
     // Use cached base deps within a render cycle (file discovery + hashing is expensive)
     let baseDeps: Dependency[];
     if (this.renderDependencyCache) {
       baseDeps = this.renderDependencyCache.dependencies;
     } else {
-      baseDeps = await this.computeBaseDependencies(resolvedMiddleware);
-      // Cache for reuse by createGeometryEntry within the same render cycle
+      baseDeps = await this.computeBaseDependencies(input.resolvedMiddleware);
+      // Cache for reuse by createGeometry within the same render cycle
       this.renderDependencyCache = { hash: '', dependencies: baseDeps };
     }
 
-    if (parameters === undefined) {
+    if (input.parameters === undefined) {
       return baseDeps;
     }
 
     // Add parameter dependency for geometry computation
-    const parameterDep: ParameterDependency = { type: 'parameter' as const, parameters };
+    const parameterDep: ParameterDependency = { type: 'parameter' as const, parameters: input.parameters };
     return [...baseDeps, parameterDep];
   }
 
   /**
    * Compute all non-parameter dependencies. Factored out so the result
    * can be cached for the duration of a render cycle (shared between
-   * getParametersEntry and createGeometryEntry).
+   * getParameters and createGeometry).
    */
   private async computeBaseDependencies(resolvedMiddleware?: ResolvedMiddleware[]): Promise<Dependency[]> {
     // 1. Discover file dependencies from kernel module
@@ -1153,7 +1250,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       filePath: this.activeFileAbsolutePath,
       basePath: this.getProjectRootPath(),
     };
-    const absolutePaths = await this.getDependencies(discoverInput, this.createRuntime());
+    const absolutePaths = await this.onGetDependencies(discoverInput, this.createRuntime());
     discoverSpan.end();
 
     // 2. Read uncached files
@@ -1320,7 +1417,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const result = await this.createBundlerFacade().bundle(entryPath);
         return result.dependencies;
       },
-      registerModule: (name: string, entry: BuiltinModuleEntry): void => {
+      registerModule: (name: string, entry: BuiltinModule): void => {
         if (this.loadedBundlers.size > 0) {
           for (const bundler of new Set(this.loadedBundlers.values())) {
             bundler.definition.registerModule(name, entry, bundler.ctx);
@@ -1348,7 +1445,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       fileContentCache: this.fileContentCache,
       bundler: this.createBundlerFacade(),
       execute: async (code: string): Promise<ExecuteResult> => {
-        // eslint-disable-next-line @typescript-eslint/no-deprecated -- internal call; execute() has no file extension context
         await this.ensureBundlerContext();
 
         const executeSpan = this.tracer.startSpan('kernel.execute', { phase: 'computingGeometry' });

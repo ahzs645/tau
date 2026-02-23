@@ -30,12 +30,18 @@ const getParameters = async (
   getTestParameters(replicadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
-const createGeometry = async (
-  files: Record<string, string>,
-  mainFile: string,
-  parameters: Record<string, unknown> = {},
-  options?: CreateTestWorkerOptions,
-): ReturnType<typeof createTestGeometry> => createTestGeometry(replicadKernel, files, mainFile, parameters, options);
+const createGeometry = async ({
+  files,
+  mainFile,
+  parameters = {},
+  options,
+}: {
+  files: Record<string, string>;
+  mainFile: string;
+  parameters?: Record<string, unknown>;
+  options?: CreateTestWorkerOptions;
+}): ReturnType<typeof createTestGeometry> =>
+  createTestGeometry({ definition: replicadKernel, files, mainFile, parameters, options });
 
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
@@ -56,7 +62,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -69,7 +75,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -82,7 +88,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -95,7 +101,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -108,7 +114,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -122,7 +128,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -136,7 +142,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
     });
@@ -151,7 +157,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('component.tsx'));
+        const result = await worker.canHandle(createGeometryFile('component.tsx'));
         expect(result).toBe(false);
       });
 
@@ -164,7 +170,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('component.jsx'));
+        const result = await worker.canHandle(createGeometryFile('component.jsx'));
         expect(result).toBe(false);
       });
 
@@ -176,7 +182,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('utils.ts'));
+        const result = await worker.canHandle(createGeometryFile('utils.ts'));
         expect(result).toBe(false);
       });
 
@@ -184,7 +190,7 @@ describe('ReplicadWorker', () => {
         const worker = await createWorker({
           'model.scad': `cube([10, 10, 10]);`,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('model.scad'));
+        const result = await worker.canHandle(createGeometryFile('model.scad'));
         expect(result).toBe(false);
       });
 
@@ -192,7 +198,7 @@ describe('ReplicadWorker', () => {
         const worker = await createWorker({
           'model.kcl': `box([10, 10, 10], center = [0, 0, 0])`,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('model.kcl'));
+        const result = await worker.canHandle(createGeometryFile('model.kcl'));
         expect(result).toBe(false);
       });
 
@@ -205,7 +211,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('jscad-model.ts'));
+        const result = await worker.canHandle(createGeometryFile('jscad-model.ts'));
         expect(result).toBe(false);
       });
     });
@@ -251,7 +257,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+        const result = await worker.canHandle(createGeometryFile('main.ts'));
         expect(result).toBe(true);
       });
 
@@ -270,7 +276,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+        const result = await worker.canHandle(createGeometryFile('main.ts'));
         expect(result).toBe(true);
       });
 
@@ -286,7 +292,7 @@ describe('ReplicadWorker', () => {
             export function add(a: number, b: number) { return a + b; }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+        const result = await worker.canHandle(createGeometryFile('main.ts'));
         expect(result).toBe(false);
       });
 
@@ -306,7 +312,7 @@ describe('ReplicadWorker', () => {
 
         // Step 2: canHandle succeeds via regex (direct import detected)
         // This populates selectionCache with { id: 'replicad', method: 'regex' }
-        const canHandleScaffold = await worker.canHandleEntry(geometryFile);
+        const canHandleScaffold = await worker.canHandle(geometryFile);
         expect(canHandleScaffold).toBe(true);
 
         // Step 3: Agent replaces scaffold with multi-file project
@@ -346,7 +352,7 @@ describe('ReplicadWorker', () => {
         // Step 4: BUG — canHandle without notifyFileChanged uses stale selectionCache
         // The stale cache entry (method: 'regex') causes the kernel's canHandle to
         // re-read main.ts, which no longer has a direct 'replicad' import → returns false
-        const canHandleStale = await worker.canHandleEntry(geometryFile);
+        const canHandleStale = await worker.canHandle(geometryFile);
         expect(canHandleStale).toBe(false);
 
         // Step 5: FIX — notifyFileChanged clears selectionCache
@@ -360,7 +366,7 @@ describe('ReplicadWorker', () => {
         // Pass 1 regex fails (no direct import), Pass 2 bundler traces
         // main.ts → ./lib/cube → replicad → selected with method: 'bundler'
         // method=bundler skips kernel's canHandle (authoritative) → returns true
-        const canHandleFresh = await worker.canHandleEntry(geometryFile);
+        const canHandleFresh = await worker.canHandle(geometryFile);
         expect(canHandleFresh).toBe(true);
       });
     });
@@ -385,7 +391,7 @@ describe('ReplicadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+        const result = await worker.canHandle(createGeometryFile('main.ts'));
         expect(result).toBe(true);
       });
     });
@@ -395,7 +401,7 @@ describe('ReplicadWorker', () => {
   // Tests: Parameter Extraction
   // ===========================================================================
 
-  describe('getParametersEntry', () => {
+  describe('getParameters', () => {
     describe('ESM style - export syntax', () => {
       it('should extract defaultParams from exported const', async () => {
         const { jsonSchema, defaultParameters } = await getParameters(
@@ -610,8 +616,8 @@ describe('ReplicadWorker', () => {
 
   describe('defaultName extraction via geometry output', () => {
     it('should produce geometry when defaultName is exported', async () => {
-      const result = await createGeometry(
-        {
+      const result = await createGeometry({
+        files: {
           'named.ts': `
             import { drawRoundedRectangle } from 'replicad';
             export const defaultName = 'My Custom Box';
@@ -620,8 +626,8 @@ describe('ReplicadWorker', () => {
             }
           `,
         },
-        'named.ts',
-      );
+        mainFile: 'named.ts',
+      });
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -630,8 +636,8 @@ describe('ReplicadWorker', () => {
     });
 
     it('should produce geometry when no defaultName is defined', async () => {
-      const result = await createGeometry(
-        {
+      const result = await createGeometry({
+        files: {
           'unnamed.ts': `
             import { drawRoundedRectangle } from 'replicad';
             export default function main() {
@@ -639,8 +645,8 @@ describe('ReplicadWorker', () => {
             }
           `,
         },
-        'unnamed.ts',
-      );
+        mainFile: 'unnamed.ts',
+      });
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -653,11 +659,11 @@ describe('ReplicadWorker', () => {
   // Tests: Geometry Computation
   // ===========================================================================
 
-  describe('createGeometryEntry', () => {
+  describe('createGeometry', () => {
     describe('Basic geometry - ESM style', () => {
       it('should compute geometry for a simple extruded rectangle', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'box.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -666,8 +672,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'box.ts',
-        );
+          mainFile: 'box.ts',
+        });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -682,8 +688,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should compute geometry with parameters', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'box.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -699,9 +705,9 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'box.ts',
-          { width: 100, height: 60, depth: 20 },
-        );
+          mainFile: 'box.ts',
+          parameters: { width: 100, height: 60, depth: 20 },
+        });
 
         expect(result.success).toBe(true);
 
@@ -712,8 +718,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should compute geometry using draw API', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'profile.ts': `
               import { draw } from 'replicad';
 
@@ -728,8 +734,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'profile.ts',
-        );
+          mainFile: 'profile.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -740,8 +746,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle multiple shapes returned as array', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'multi.ts': `
               import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -752,8 +758,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'multi.ts',
-        );
+          mainFile: 'multi.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -765,8 +771,8 @@ describe('ReplicadWorker', () => {
 
     describe('Basic geometry - CommonJS style', () => {
       it('should compute geometry using global replicad object', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'box.js': `
               const { draw } = replicad;
 
@@ -781,8 +787,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'box.js',
-        );
+          mainFile: 'box.js',
+        });
 
         expect(result.success).toBe(true);
 
@@ -793,8 +799,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should compute geometry with params in CommonJS style', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'box.js': `
               const { draw } = replicad;
 
@@ -814,9 +820,9 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'box.js',
-          { size: 75 },
-        );
+          mainFile: 'box.js',
+          parameters: { size: 75 },
+        });
 
         expect(result.success).toBe(true);
 
@@ -829,8 +835,8 @@ describe('ReplicadWorker', () => {
 
     describe('Complex geometry', () => {
       it('should handle boolean operations (difference)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'hollow.ts': `
               import { drawCircle } from 'replicad';
 
@@ -841,8 +847,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'hollow.ts',
-        );
+          mainFile: 'hollow.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -854,8 +860,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle boolean operations (union/fuse)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'fused.ts': `
               import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -866,8 +872,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'fused.ts',
-        );
+          mainFile: 'fused.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -879,8 +885,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle transformations (translate, rotate)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'transformed.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -893,8 +899,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'transformed.ts',
-        );
+          mainFile: 'transformed.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -904,8 +910,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle loft operations', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'loft.ts': `
               import { drawCircle, makePlane } from 'replicad';
 
@@ -919,8 +925,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'loft.ts',
-        );
+          mainFile: 'loft.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -932,8 +938,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle chamfer and fillet operations', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'filleted.ts': `
               import { drawRoundedRectangle, EdgeFinder } from 'replicad';
 
@@ -943,8 +949,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'filleted.ts',
-        );
+          mainFile: 'filleted.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -956,8 +962,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle shell operation', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'shell.ts': `
               import { drawRoundedRectangle, FaceFinder } from 'replicad';
 
@@ -967,8 +973,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'shell.ts',
-        );
+          mainFile: 'shell.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -983,8 +989,8 @@ describe('ReplicadWorker', () => {
     describe('Multi-file imports', () => {
       it('should handle transitive imports without direct replicad import in entry file', async () => {
         const productionDetectImport = /import.*from\s+['"]replicad['"]/s.source;
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { createBox } from './lib/box';
               import { createCylinder } from './lib/cylinder';
@@ -1010,13 +1016,13 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'main.ts',
-          {},
-          {
+          mainFile: 'main.ts',
+          parameters: {},
+          options: {
             detectImport: productionDetectImport,
             builtinModuleNames: ['replicad'],
           },
-        );
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -1024,8 +1030,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle imports from relative paths', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { createSimpleBox } from "./lib/box";
               import {} from 'replicad';
@@ -1042,8 +1048,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -1054,8 +1060,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle multi-level nested imports', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { createAssembly } from "./parts/assembly";
               import {} from 'replicad';
@@ -1089,8 +1095,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -1101,8 +1107,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should pass parameters through multi-file imports', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { createParametricBox } from "./utils/parametric";
               import {} from 'replicad';
@@ -1123,9 +1129,9 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'main.ts',
-          { size: 100 },
-        );
+          mainFile: 'main.ts',
+          parameters: { size: 100 },
+        });
 
         expect(result.success).toBe(true);
 
@@ -1136,8 +1142,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should handle re-exports from barrel files', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { box, cylinder } from "./shapes";
               import {} from 'replicad';
@@ -1165,8 +1171,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -1178,8 +1184,8 @@ describe('ReplicadWorker', () => {
 
     describe('2D geometry (SVG output)', () => {
       it('should return SVG for 2D sketch without extrusion', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'sketch.ts': `
               import { draw } from 'replicad';
 
@@ -1192,8 +1198,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'sketch.ts',
-        );
+          mainFile: 'sketch.ts',
+        });
 
         expect(result.success).toBe(true);
         if (result.success && Array.isArray(result.data)) {
@@ -1206,8 +1212,8 @@ describe('ReplicadWorker', () => {
 
     describe('Error handling', () => {
       it('should return error for syntax errors', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'syntax_error.ts': `
               import { draw } from 'replicad';
 
@@ -1220,8 +1226,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'syntax_error.ts',
-        );
+          mainFile: 'syntax_error.ts',
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1231,8 +1237,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should return error for undefined function calls', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'undefined_func.ts': `
               import { draw } from 'replicad';
 
@@ -1241,8 +1247,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'undefined_func.ts',
-        );
+          mainFile: 'undefined_func.ts',
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1252,8 +1258,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should return error for runtime errors', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'runtime_error.ts': `
               import { draw } from 'replicad';
 
@@ -1263,8 +1269,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'runtime_error.ts',
-        );
+          mainFile: 'runtime_error.ts',
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1274,8 +1280,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should return error with properly classified stack frames for undefined variable', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import {} from 'replicad';
 
@@ -1286,8 +1292,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1329,8 +1335,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should return error for invalid geometry operations', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'invalid_op.ts': `
               import { drawCircle } from 'replicad';
 
@@ -1340,8 +1346,8 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'invalid_op.ts',
-        );
+          mainFile: 'invalid_op.ts',
+        });
 
         // This may succeed or fail depending on replicad's handling
         // Just verify we get a proper result structure
@@ -1349,18 +1355,18 @@ describe('ReplicadWorker', () => {
       });
 
       it('should decode OpenCASCADE numeric exceptions into human-readable messages when withExceptions is true', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'oc_exception.ts': `
               export default function main() {
                 throw 0x12345;
               }
             `,
           },
-          'oc_exception.ts',
-          {},
-          { workerOptions: { withExceptions: true } },
-        );
+          mainFile: 'oc_exception.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1375,8 +1381,8 @@ describe('ReplicadWorker', () => {
       });
 
       it('should return decoded OC error with type info for zero-height extrusion', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'zero_extrude.ts': `
               import { draw } from 'replicad';
 
@@ -1391,10 +1397,10 @@ describe('ReplicadWorker', () => {
               }
             `,
           },
-          'zero_extrude.ts',
-          {},
-          { workerOptions: { withExceptions: true } },
-        );
+          mainFile: 'zero_extrude.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1427,12 +1433,12 @@ export default function main() {
 }
 `;
 
-        const result = await createGeometry(
-          { 'extrude_stack.ts': code },
-          'extrude_stack.ts',
-          {},
-          { workerOptions: { withExceptions: true } },
-        );
+        const result = await createGeometry({
+          files: { 'extrude_stack.ts': code },
+          mainFile: 'extrude_stack.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1504,12 +1510,12 @@ export default function main() {
 }
 `;
 
-        const result = await createGeometry(
-          { 'nested_helpers.ts': code },
-          'nested_helpers.ts',
-          {},
-          { workerOptions: { withExceptions: true } },
-        );
+        const result = await createGeometry({
+          files: { 'nested_helpers.ts': code },
+          mainFile: 'nested_helpers.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1562,8 +1568,8 @@ export default function main() {
       it('should include stack frames for cross-file OC exceptions', async () => {
         // Cross-file: main.ts imports buildGeometry from helpers.ts.
         // The OC error originates in helpers.ts.
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `import { buildGeometry } from './helpers';
 import {} from 'replicad';
 export default function main() { return buildGeometry(); }
@@ -1581,10 +1587,10 @@ export function buildGeometry() {
 }
 `,
           },
-          'main.ts',
-          {},
-          { workerOptions: { withExceptions: true } },
-        );
+          mainFile: 'main.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1654,12 +1660,12 @@ export default function main() {
         //               ^          ^
         //               5(.)      16(after ')' exclusive)
 
-        const result = await createGeometry(
-          { 'fluent.ts': code },
-          'fluent.ts',
-          {},
-          { workerOptions: { withExceptions: true } },
-        );
+        const result = await createGeometry({
+          files: { 'fluent.ts': code },
+          mainFile: 'fluent.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1727,8 +1733,8 @@ export default function main() {
       });
 
       it('should handle empty geometry result gracefully', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'empty.ts': `
               import { draw } from 'replicad';
 
@@ -1737,8 +1743,8 @@ export default function main() {
               }
             `,
           },
-          'empty.ts',
-        );
+          mainFile: 'empty.ts',
+        });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1748,8 +1754,8 @@ export default function main() {
       });
 
       it('should return warning when main returns undefined (no return statement)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'no_return.ts': `
               import { draw } from 'replicad';
 
@@ -1765,8 +1771,8 @@ export default function main() {
               }
             `,
           },
-          'no_return.ts',
-        );
+          mainFile: 'no_return.ts',
+        });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1779,8 +1785,8 @@ export default function main() {
       });
 
       it('should return warning when main explicitly returns undefined', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'explicit_undefined.ts': `
               import { draw } from 'replicad';
 
@@ -1789,8 +1795,8 @@ export default function main() {
               }
             `,
           },
-          'explicit_undefined.ts',
-        );
+          mainFile: 'explicit_undefined.ts',
+        });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1818,7 +1824,7 @@ export default function main() {
 }
 `;
 
-        const result = await createGeometry({ 'main.ts': code }, 'main.ts');
+        const result = await createGeometry({ files: { 'main.ts': code }, mainFile: 'main.ts' });
         expect(result.success).toBe(false);
 
         // Framework/runtime frames have machine-specific paths; filter to user frames only
@@ -1841,16 +1847,16 @@ export default function main() {
       });
 
       it('should map stack trace to correct file in multi-file project', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `import { broken } from './lib/helper';
 import {} from 'replicad';
 export default function main() { return broken(); }
 `,
             'lib/helper.ts': 'export function broken() { return bla; }',
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(false);
 
@@ -1885,7 +1891,7 @@ export default function main() {
 }
 `;
 
-        const result = await createGeometry({ 'main.ts': code }, 'main.ts');
+        const result = await createGeometry({ files: { 'main.ts': code }, mainFile: 'main.ts' });
         expect(result.success).toBe(false);
 
         const issue = result.issues[0]!;
@@ -1908,8 +1914,8 @@ export default function main() {
       it('should map stack trace through 3-file import chain', async () => {
         // 3-file chain: main.ts -> lib/middle.ts -> lib/bad.ts
         // Error is in bad.ts, called through middle.ts from main.ts.
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `import { getShape } from './lib/middle';
 import {} from 'replicad';
 export default function main() { return getShape(); }
@@ -1919,8 +1925,8 @@ export function getShape() { return broken(); }
 `,
             'lib/bad.ts': 'export function broken() { return bla; }',
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(false);
 
@@ -1971,8 +1977,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle and execute code with HTTPS CDN imports', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'decorated.ts': `
               import { drawRoundedRectangle } from 'replicad';
               import { drawSVG } from "https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js";
@@ -1988,8 +1994,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'decorated.ts',
-        );
+          mainFile: 'decorated.ts',
+        });
 
         expect(result.success).toBe(true);
 
@@ -2011,7 +2017,10 @@ export function getShape() { return broken(); }
             }
           `,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('project/main.ts'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('project/main.ts'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -2055,11 +2064,11 @@ export function getShape() { return broken(); }
 
       // First create geometry
       const geometryFile = createGeometryFile('box.ts');
-      const createResult = await worker.createGeometryEntry(geometryFile, {});
+      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(createResult.success).toBe(true);
 
       // Then export
-      const exportResult = await worker.exportGeometryEntry('step');
+      const exportResult = await worker.exportGeometry('step');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data).toBeDefined();
@@ -2080,9 +2089,9 @@ export function getShape() { return broken(); }
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometryEntry('stl');
+      const exportResult = await worker.exportGeometry('stl');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data.length).toBeGreaterThan(0);
@@ -2101,9 +2110,9 @@ export function getShape() { return broken(); }
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometryEntry('stl-binary');
+      const exportResult = await worker.exportGeometry('stl-binary');
       expect(exportResult.success).toBe(true);
     });
 
@@ -2119,9 +2128,9 @@ export function getShape() { return broken(); }
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometryEntry('gltf');
+      const exportResult = await worker.exportGeometry('gltf');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data[0]?.name).toContain('gltf');
@@ -2140,9 +2149,9 @@ export function getShape() { return broken(); }
       });
 
       const geometryFile = createGeometryFile('box.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometryEntry('glb');
+      const exportResult = await worker.exportGeometry('glb');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data[0]?.name).toContain('glb');
@@ -2164,9 +2173,9 @@ export function getShape() { return broken(); }
       });
 
       const geometryFile = createGeometryFile('assembly.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometryEntry('step-assembly');
+      const exportResult = await worker.exportGeometry('step-assembly');
       expect(exportResult.success).toBe(true);
     });
 
@@ -2179,7 +2188,7 @@ export function getShape() { return broken(); }
       });
 
       // Don't compute geometry first
-      const exportResult = await worker.exportGeometryEntry('step');
+      const exportResult = await worker.exportGeometry('step');
       expect(exportResult.success).toBe(false);
       if (!exportResult.success) {
         expect(exportResult.issues[0]?.message).toContain('No geometry available for export');
@@ -2199,10 +2208,10 @@ export function getShape() { return broken(); }
       });
 
       const geometryFile = createGeometryFile('sphere.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
       // Export with custom mesh configuration
-      const exportResult = await worker.exportGeometryEntry('stl', {
+      const exportResult = await worker.exportGeometry('stl', {
         linearTolerance: 0.001,
         angularTolerance: 5,
       });
@@ -2217,8 +2226,8 @@ export function getShape() { return broken(); }
 
   describe('Named shapes and colors', () => {
     it('should handle named shape objects', async () => {
-      const result = await createGeometry(
-        {
+      const result = await createGeometry({
+        files: {
           'named.ts': `
             import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -2230,15 +2239,15 @@ export function getShape() { return broken(); }
             }
           `,
         },
-        'named.ts',
-      );
+        mainFile: 'named.ts',
+      });
 
       expect(result.success).toBe(true);
     });
 
     it('should handle colored shapes', async () => {
-      const result = await createGeometry(
-        {
+      const result = await createGeometry({
+        files: {
           'colored.ts': `
             import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -2250,15 +2259,15 @@ export function getShape() { return broken(); }
             }
           `,
         },
-        'colored.ts',
-      );
+        mainFile: 'colored.ts',
+      });
 
       expect(result.success).toBe(true);
     });
 
     it('should handle shapes with opacity', async () => {
-      const result = await createGeometry(
-        {
+      const result = await createGeometry({
+        files: {
           'transparent.ts': `
             import { drawRoundedRectangle } from 'replicad';
 
@@ -2270,8 +2279,8 @@ export function getShape() { return broken(); }
             }
           `,
         },
-        'transparent.ts',
-      );
+        mainFile: 'transparent.ts',
+      });
 
       expect(result.success).toBe(true);
     });
@@ -2284,8 +2293,8 @@ export function getShape() { return broken(); }
   describe('TypeScript bundling', () => {
     describe('Type annotations', () => {
       it('should bundle code with typed function parameters and return types', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'typed-box.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -2303,9 +2312,9 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'typed-box.ts',
-          { width: 50, height: 30, depth: 10 },
-        );
+          mainFile: 'typed-box.ts',
+          parameters: { width: 50, height: 30, depth: 10 },
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2314,8 +2323,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle code with type assertions (as)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'assertions.ts': `
               import { makeCylinder } from 'replicad';
 
@@ -2326,8 +2335,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'assertions.ts',
-        );
+          mainFile: 'assertions.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2335,8 +2344,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle code with const assertions (as const)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'const-assertion.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -2353,8 +2362,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'const-assertion.ts',
-        );
+          mainFile: 'const-assertion.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2365,8 +2374,8 @@ export function getShape() { return broken(); }
 
     describe('Type-only imports', () => {
       it('should strip import type declarations from replicad', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'type-import.ts': `
               import { drawRoundedRectangle } from 'replicad';
               import type { Drawing } from 'replicad';
@@ -2377,8 +2386,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'type-import.ts',
-        );
+          mainFile: 'type-import.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2387,8 +2396,8 @@ export function getShape() { return broken(); }
       });
 
       it('should strip inline type imports (import { type X })', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'inline-type.ts': `
               import { draw, type Sketcher, type Drawing } from 'replicad';
 
@@ -2403,8 +2412,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'inline-type.ts',
-        );
+          mainFile: 'inline-type.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2415,8 +2424,8 @@ export function getShape() { return broken(); }
 
     describe('Interfaces and type aliases', () => {
       it('should bundle code with local interface definitions', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'interfaces.ts': `
               import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -2450,8 +2459,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'interfaces.ts',
-        );
+          mainFile: 'interfaces.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2459,8 +2468,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle code with type aliases and union types', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'type-aliases.ts': `
               import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -2487,8 +2496,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'type-aliases.ts',
-        );
+          mainFile: 'type-aliases.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2498,8 +2507,8 @@ export function getShape() { return broken(); }
 
     describe('Generics and advanced TypeScript features', () => {
       it('should bundle code with generic utility functions', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'generics.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -2520,8 +2529,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'generics.ts',
-        );
+          mainFile: 'generics.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2530,8 +2539,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle code with enums', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'enums.ts': `
               import { drawRoundedRectangle, drawCircle } from 'replicad';
 
@@ -2549,8 +2558,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'enums.ts',
-        );
+          mainFile: 'enums.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2559,8 +2568,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle code with optional chaining and nullish coalescing', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'modern-ts.ts': `
               import { drawRoundedRectangle } from 'replicad';
 
@@ -2582,8 +2591,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'modern-ts.ts',
-        );
+          mainFile: 'modern-ts.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2594,8 +2603,8 @@ export function getShape() { return broken(); }
 
     describe('Multi-file TypeScript with shared types', () => {
       it('should bundle multi-file project with shared type definitions', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { drawRoundedRectangle, drawCircle } from 'replicad';
               import type { BoxConfig, CylinderConfig } from './types';
@@ -2642,8 +2651,8 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'main.ts',
-        );
+          mainFile: 'main.ts',
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2651,8 +2660,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle multi-file project with type-only re-exports', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { drawRoundedRectangle } from 'replicad';
               import type { AppParams } from './config';
@@ -2684,9 +2693,9 @@ export function getShape() { return broken(); }
               };
             `,
           },
-          'main.ts',
-          { width: 60, height: 40, depth: 15 },
-        );
+          mainFile: 'main.ts',
+          parameters: { width: 60, height: 40, depth: 15 },
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2697,8 +2706,8 @@ export function getShape() { return broken(); }
 
     describe('Real-world TypeScript CAD patterns', () => {
       it('should bundle a parametric model with full TypeScript features (watering can style)', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import { makePlane, makeCylinder, draw, drawCircle } from 'replicad';
 
@@ -2745,15 +2754,15 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'main.ts',
-          {
+          mainFile: 'main.ts',
+          parameters: {
             baseWidth: 20,
             bodyHeight: 50,
             spoutRadius: 5,
             spoutLength: 30,
             spoutAngle: 45,
           },
-        );
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2761,8 +2770,8 @@ export function getShape() { return broken(); }
       });
 
       it('should bundle a multi-file parametric assembly with TypeScript', async () => {
-        const result = await createGeometry(
-          {
+        const result = await createGeometry({
+          files: {
             'main.ts': `
               import {} from 'replicad';
               import type { AssemblyConfig } from './types';
@@ -2818,12 +2827,12 @@ export function getShape() { return broken(); }
               }
             `,
           },
-          'main.ts',
-          {
+          mainFile: 'main.ts',
+          parameters: {
             base: { width: 60, depth: 40, thickness: 5 },
             pillar: { radius: 4, height: 30 },
           },
-        );
+        });
 
         expect(result.success).toBe(true);
         await geometryHelpers.expectValidGltf(result);
@@ -2883,7 +2892,7 @@ export function getShape() { return broken(); }
       const geometryFile = createGeometryFile('main.ts');
 
       // Override only base.width -- base.depth and base.cornerRadius should be preserved
-      const result = await worker.renderEntry(geometryFile, { base: { width: 50 } });
+      const result = await worker.render({ file: geometryFile, parameters: { base: { width: 50 } } });
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -2906,7 +2915,7 @@ export function getShape() { return broken(); }
       const geometryFile = createGeometryFile('main.ts');
 
       // First render: 10x10x10 box
-      const result1 = await worker.createGeometryEntry(geometryFile, {});
+      const result1 = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(result1.success).toBe(true);
       await geometryHelpers.expectValidGltf(result1);
 
@@ -2924,7 +2933,7 @@ export function getShape() { return broken(); }
       await worker.notifyFileChanged(['/builds/test/main.ts']);
 
       // Second render should use updated code
-      const result2 = await worker.createGeometryEntry(geometryFile, {});
+      const result2 = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(result2.success).toBe(true);
       await geometryHelpers.expectValidGltf(result2);
 
@@ -2946,7 +2955,7 @@ export function getShape() { return broken(); }
       const geometryFile = createGeometryFile('main.ts');
 
       // First render
-      const result1 = await worker.createGeometryEntry(geometryFile, {});
+      const result1 = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(result1.success).toBe(true);
 
       // Modify file content
@@ -2963,7 +2972,7 @@ export function getShape() { return broken(); }
       await worker.notifyFileChanged(['/builds/test/main.ts']);
 
       // Second render should use updated code
-      const result2 = await worker.createGeometryEntry(geometryFile, {});
+      const result2 = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(result2.success).toBe(true);
 
       // Bounding boxes must differ (10mm vs 30mm)
@@ -3003,21 +3012,21 @@ export function getShape() { return broken(); }
       const geometryFile = createGeometryFile('main.ts');
 
       // First render: canHandle + render (matches kernel.machine.ts renderActor flow)
-      const canHandle1 = await worker.canHandleEntry(geometryFile);
+      const canHandle1 = await worker.canHandle(geometryFile);
       expect(canHandle1).toBe(true);
 
-      const result1 = await worker.renderEntry(geometryFile, { size: 30 });
+      const result1 = await worker.render({ file: geometryFile, parameters: { size: 30 } });
       expect(result1.success).toBe(true);
       await geometryHelpers.expectValidGltf(result1);
 
       // Second render with different parameters (same flow as parameter change in UI)
-      // This is the bug: canHandleEntry fails because selectionCache returns method: 'extension'
+      // This is the bug: canHandle fails because selectionCache returns method: 'extension'
       // instead of preserving the original method: 'bundler', causing the kernel's canHandle
       // to re-check the entry file for direct replicad imports (which don't exist).
-      const canHandle2 = await worker.canHandleEntry(geometryFile);
+      const canHandle2 = await worker.canHandle(geometryFile);
       expect(canHandle2).toBe(true);
 
-      const result2 = await worker.renderEntry(geometryFile, { size: 60 });
+      const result2 = await worker.render({ file: geometryFile, parameters: { size: 60 } });
       expect(result2.success).toBe(true);
       await geometryHelpers.expectValidGltf(result2);
     });

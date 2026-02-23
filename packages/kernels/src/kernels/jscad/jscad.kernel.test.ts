@@ -32,7 +32,8 @@ const createGeometry = async (
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
-): ReturnType<typeof createTestGeometry> => createTestGeometry(jscadKernel, files, mainFile, parameters);
+): ReturnType<typeof createTestGeometry> =>
+  createTestGeometry({ definition: jscadKernel, files, mainFile, parameters });
 
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
@@ -53,7 +54,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -66,7 +67,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -79,7 +80,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -94,7 +95,7 @@ describe('JscadWorker', () => {
             module.exports = { main };
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
 
@@ -108,7 +109,7 @@ describe('JscadWorker', () => {
             module.exports = { main };
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
     });
@@ -124,7 +125,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -145,7 +146,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+        const result = await worker.canHandle(createGeometryFile('main.ts'));
         expect(result).toBe(true);
       });
 
@@ -162,7 +163,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.ts'));
+        const result = await worker.canHandle(createGeometryFile('cube.ts'));
         expect(result).toBe(true);
       });
 
@@ -178,7 +179,7 @@ describe('JscadWorker', () => {
             module.exports = { main };
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('cube.js'));
+        const result = await worker.canHandle(createGeometryFile('cube.js'));
         expect(result).toBe(true);
       });
     });
@@ -193,7 +194,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('component.tsx'));
+        const result = await worker.canHandle(createGeometryFile('component.tsx'));
         expect(result).toBe(false);
       });
 
@@ -206,7 +207,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('component.jsx'));
+        const result = await worker.canHandle(createGeometryFile('component.jsx'));
         expect(result).toBe(false);
       });
 
@@ -216,7 +217,7 @@ describe('JscadWorker', () => {
             export function add(a: number, b: number) { return a + b; }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('utils.ts'));
+        const result = await worker.canHandle(createGeometryFile('utils.ts'));
         expect(result).toBe(false);
       });
 
@@ -226,7 +227,7 @@ describe('JscadWorker', () => {
             cube([10, 10, 10]);
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('model.scad'));
+        const result = await worker.canHandle(createGeometryFile('model.scad'));
         expect(result).toBe(false);
       });
 
@@ -236,7 +237,7 @@ describe('JscadWorker', () => {
             box = cube([10, 10, 10])
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('model.kcl'));
+        const result = await worker.canHandle(createGeometryFile('model.kcl'));
         expect(result).toBe(false);
       });
 
@@ -249,7 +250,7 @@ describe('JscadWorker', () => {
             }
           `,
         });
-        const result = await worker.canHandleEntry(createGeometryFile('box.ts'));
+        const result = await worker.canHandle(createGeometryFile('box.ts'));
         expect(result).toBe(false);
       });
     });
@@ -259,7 +260,7 @@ describe('JscadWorker', () => {
   // Tests: Parameter Extraction
   // ===========================================================================
 
-  describe('getParametersEntry', () => {
+  describe('getParameters', () => {
     describe('ESM style - defaultParams export', () => {
       it('should extract defaultParams from exported const', async () => {
         const { jsonSchema, defaultParameters } = await getParameters(
@@ -423,7 +424,7 @@ describe('JscadWorker', () => {
   // Tests: Geometry Computation
   // ===========================================================================
 
-  describe('createGeometryEntry', () => {
+  describe('createGeometry', () => {
     describe('Basic geometry - ESM style', () => {
       it('should compute geometry for a simple cube', async () => {
         const result = await createGeometry(
@@ -1146,11 +1147,11 @@ module.exports = { main, getParameterDefinitions }
 
       // First create geometry
       const geometryFile = createGeometryFile('cube.ts');
-      const createResult = await worker.createGeometryEntry(geometryFile, {});
+      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(createResult.success).toBe(true);
 
       // Then export
-      const exportResult = await worker.exportGeometryEntry('gltf');
+      const exportResult = await worker.exportGeometry('gltf');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data).toBeDefined();
@@ -1172,10 +1173,10 @@ module.exports = { main, getParameterDefinitions }
       });
 
       const geometryFile = createGeometryFile('glb_cube.ts');
-      const createResult = await worker.createGeometryEntry(geometryFile, {});
+      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       expect(createResult.success).toBe(true);
 
-      const exportResult = await worker.exportGeometryEntry('glb');
+      const exportResult = await worker.exportGeometry('glb');
       expect(exportResult.success).toBe(true);
       if (exportResult.success) {
         expect(exportResult.data.length).toBeGreaterThan(0);
@@ -1194,7 +1195,7 @@ module.exports = { main, getParameterDefinitions }
       });
 
       // Don't create geometry, just try to export
-      const exportResult = await worker.exportGeometryEntry('gltf');
+      const exportResult = await worker.exportGeometry('gltf');
       expect(exportResult.success).toBe(false);
     });
 
@@ -1210,10 +1211,10 @@ module.exports = { main, getParameterDefinitions }
       });
 
       const geometryFile = createGeometryFile('cube.ts');
-      await worker.createGeometryEntry(geometryFile, {});
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
 
       // JSCAD only supports gltf/glb
-      const exportResult = await worker.exportGeometryEntry('step');
+      const exportResult = await worker.exportGeometry('step');
       expect(exportResult.success).toBe(false);
     });
   });

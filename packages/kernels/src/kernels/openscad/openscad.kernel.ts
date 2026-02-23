@@ -113,12 +113,13 @@ function resolveIncludePath(baseFilePath: string, relativePath: string): string 
   return resolved.join('/');
 }
 
-async function getReferencedScadFiles(
-  mainFile: string,
-  basePath: string,
-  filesystem: KernelFileSystem,
-  logger: KernelLogger,
-): Promise<string[]> {
+async function getReferencedScadFiles(options: {
+  mainFile: string;
+  basePath: string;
+  filesystem: KernelFileSystem;
+  logger: KernelLogger;
+}): Promise<string[]> {
+  const { mainFile, basePath, filesystem, logger } = options;
   const visited = new Set<string>();
   const result: string[] = [];
 
@@ -235,7 +236,7 @@ async function mountFilesystem(
   (instance.FS as unknown as { chdir(path: string): void }).chdir('/');
   instance.FS.mkdir('/locale');
 
-  const referencedFiles = await getReferencedScadFiles(mainFile, basePath, filesystem, logger);
+  const referencedFiles = await getReferencedScadFiles({ mainFile, basePath, filesystem, logger });
   logger.debug(`Mounting ${referencedFiles.length} referenced files`);
 
   const uncachedAbsolutePaths = referencedFiles
@@ -264,9 +265,9 @@ async function mountFilesystem(
   }
 }
 
-async function mountFonts(instance: OpenSCAD, ctx: OpenScadContext, logger: KernelLogger): Promise<void> {
+async function mountFonts(instance: OpenSCAD, context: OpenScadContext, logger: KernelLogger): Promise<void> {
   try {
-    if (ctx.fontCache.size === 0) {
+    if (context.fontCache.size === 0) {
       logger.debug('Fetching fonts (first time)');
       const fontPromises = fontFiles.map(async ({ url, filename }) => {
         const response = await fetch(url, { cache: 'force-cache' });
@@ -280,7 +281,7 @@ async function mountFonts(instance: OpenSCAD, ctx: OpenScadContext, logger: Kern
 
       const fonts = await Promise.all(fontPromises);
       for (const { filename, data } of fonts) {
-        ctx.fontCache.set(filename, data);
+        context.fontCache.set(filename, data);
       }
     }
 
@@ -290,13 +291,13 @@ async function mountFonts(instance: OpenSCAD, ctx: OpenScadContext, logger: Kern
       // Already exists
     }
 
-    for (const [filename, data] of ctx.fontCache) {
+    for (const [filename, data] of context.fontCache) {
       instance.FS.writeFile(`/fonts/${filename}`, data);
     }
 
     instance.FS.writeFile('/fonts/fonts.conf', fontsConf);
   } catch (error) {
-    ctx.fontCache.clear();
+    context.fontCache.clear();
     logger.warn('Failed to mount fonts - text() may not render correctly', { data: error });
   }
 }
@@ -375,14 +376,24 @@ export default defineKernel<OpenScadContext, string>({
 
   async getDependencies({ filePath, basePath }, { filesystem, logger }) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
-    const relativePaths = await getReferencedScadFiles(relativeFilePath, basePath, filesystem, logger);
+    const relativePaths = await getReferencedScadFiles({
+      mainFile: relativeFilePath,
+      basePath,
+      filesystem,
+      logger,
+    });
     return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
   },
 
-  async getParameters({ filePath, basePath }, { filesystem, logger, fileContentCache }, ctx) {
+  async getParameters({ filePath, basePath }, { filesystem, logger, fileContentCache }, context) {
     try {
       const mainFilePath = resolveToRelative(filePath, basePath);
-      const referencedFiles = await getReferencedScadFiles(mainFilePath, basePath, filesystem, logger);
+      const referencedFiles = await getReferencedScadFiles({
+        mainFile: mainFilePath,
+        basePath,
+        filesystem,
+        logger,
+      });
 
       const allParameters: OpenScadParameterExport['parameters'] = [];
 
@@ -393,7 +404,7 @@ export default defineKernel<OpenScadContext, string>({
           filesystem,
           logger,
           fileContentCache,
-          fontCache: ctx.fontCache,
+          fontCache: context.fontCache,
         });
 
         const parameters = extractedParameters?.parameters;
@@ -446,7 +457,7 @@ export default defineKernel<OpenScadContext, string>({
   async createGeometry(
     { filePath, basePath, parameters, tessellation },
     { filesystem, logger, fileContentCache, tracer },
-    ctx,
+    context,
   ) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const fileContentsCache = new Map<string, string>();
@@ -477,7 +488,7 @@ export default defineKernel<OpenScadContext, string>({
       });
 
       const fontSpan = tracer.startSpan('openscad.mount-fonts');
-      await mountFonts(instance, ctx, logger);
+      await mountFonts(instance, context, logger);
       fontSpan.end();
 
       instance.FS.writeFile(relativeFilePath, code);
@@ -531,7 +542,7 @@ export default defineKernel<OpenScadContext, string>({
     }
   },
 
-  async exportGeometry({ fileType, tessellation }, { logger }, _ctx, nativeHandle) {
+  async exportGeometry({ fileType, tessellation, nativeHandle }, { logger }, _context) {
     if (tessellation) {
       logger.warn(
         'OpenSCAD tessellation is baked at render time via $fa/$fs. Export tessellation override is ignored.',

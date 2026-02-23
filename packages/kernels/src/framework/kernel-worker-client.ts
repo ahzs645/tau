@@ -5,12 +5,12 @@
 
 import type { GeometryFile, ExportFormat, LogOrigin } from '@taucad/types';
 import type {
-  CreateGeometryResultCompleted,
+  HashedGeometryResult,
   ExportGeometryResult,
   GetParametersResult,
   KernelIssue,
-  MiddlewareEntries,
-  BundlerEntries,
+  MiddlewareRegistrations,
+  BundlerRegistrations,
 } from '#types/kernel.types.js';
 import type { Tessellation } from '#types/kernel-worker.types.js';
 import type { KernelResponse, KernelCommand, PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
@@ -41,7 +41,7 @@ export class KernelWorkerClient {
 
   private pendingInit?: { resolve: () => void; reject: (error: Error) => void };
   private pendingRender?: {
-    resolve: (result: CreateGeometryResultCompleted) => void;
+    resolve: (result: HashedGeometryResult) => void;
     reject: (error: Error) => void;
     onParametersResolved?: (result: GetParametersResult) => void;
     onProgress?: OnProgressCallback;
@@ -64,53 +64,59 @@ export class KernelWorkerClient {
   }
 
   /** Send an initialize command to the worker with options, file manager port, and plugin configs. */
-  public async initialize(
-    options: Record<string, unknown>,
-    fileSystemPort: MessagePort,
-    middlewareEntries: MiddlewareEntries,
-    bundlerEntries?: BundlerEntries,
-  ): Promise<void> {
+  public async initialize(input: {
+    options: Record<string, unknown>;
+    fileSystemPort: MessagePort;
+    middlewareEntries: MiddlewareRegistrations;
+    bundlerEntries?: BundlerRegistrations;
+  }): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.pendingInit = { resolve, reject };
       const command: KernelCommand = {
         type: 'initialize',
         requestId: String(this.nextRequestId++),
-        options,
-        middlewareEntries,
-        bundlerEntries,
-        fileSystemPort,
+        options: input.options,
+        middlewareEntries: input.middlewareEntries,
+        bundlerEntries: input.bundlerEntries,
+        fileSystemPort: input.fileSystemPort,
       };
-      this.transport.send(command, [fileSystemPort]);
+      this.transport.send(command, [input.fileSystemPort]);
     });
   }
 
   /**
    * Send a render command to the worker.
    *
-   * @param file - The geometry file to render
-   * @param parameters - User-provided parameters
-   * @param onParametersResolved - Callback for streamed parameter results
-   * @param onProgress - Callback for render phase progress
-   * @param tessellation - Optional tessellation quality for preview rendering
+   * @param input - Render input containing file, parameters, callbacks, and tessellation
+   * @param input.file - The geometry file to render
+   * @param input.parameters - The parameters for rendering
+   * @param input.onParametersResolved - Optional callback when parameters are resolved
+   * @param input.onProgress - Optional progress callback
+   * @param input.tessellation - Optional tessellation quality override
    * @returns Completed geometry result
    */
-  public async render(
-    file: GeometryFile,
-    parameters: Record<string, unknown>,
-    onParametersResolved?: (result: GetParametersResult) => void,
-    onProgress?: OnProgressCallback,
-    tessellation?: Tessellation,
-  ): Promise<CreateGeometryResultCompleted> {
-    return new Promise<CreateGeometryResultCompleted>((resolve, reject) => {
-      this.pendingRender = { resolve, reject, onParametersResolved, onProgress };
+  public async render(input: {
+    file: GeometryFile;
+    parameters: Record<string, unknown>;
+    onParametersResolved?: (result: GetParametersResult) => void;
+    onProgress?: OnProgressCallback;
+    tessellation?: Tessellation;
+  }): Promise<HashedGeometryResult> {
+    return new Promise<HashedGeometryResult>((resolve, reject) => {
+      this.pendingRender = {
+        resolve,
+        reject,
+        onParametersResolved: input.onParametersResolved,
+        onProgress: input.onProgress,
+      };
       const requestId = String(this.nextRequestId++);
       this.lastRenderRequestId = requestId;
       const command: KernelCommand = {
         type: 'render',
         requestId,
-        file,
-        params: parameters,
-        tessellation,
+        file: input.file,
+        params: input.parameters,
+        tessellation: input.tessellation,
       };
       this.transport.send(command);
     });
@@ -134,7 +140,7 @@ export class KernelWorkerClient {
   }
 
   /** Send a middleware reconfiguration command to the worker. */
-  public configureMiddleware(entries: MiddlewareEntries): void {
+  public configureMiddleware(entries: MiddlewareRegistrations): void {
     const command: KernelCommand = { type: 'configureMiddleware', entries };
     this.transport.send(command);
   }

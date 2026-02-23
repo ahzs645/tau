@@ -45,9 +45,9 @@ export class KclError extends Error {
   /**
    * Create a simple error with minimal information
    */
-  public static simple(kind: KclErrorKind, message: string, lineNumber = 0, column = 0): KclError {
-    const sourceRange: SourceRange = [column, column, lineNumber];
-    return new KclError(kind, message, sourceRange);
+  public static simple(input: { kind: KclErrorKind; message: string; lineNumber?: number; column?: number }): KclError {
+    const sourceRange: SourceRange = [input.column ?? 0, input.column ?? 0, input.lineNumber ?? 0];
+    return new KclError(input.kind, input.message, sourceRange);
   }
 
   public readonly kind: KclErrorKind;

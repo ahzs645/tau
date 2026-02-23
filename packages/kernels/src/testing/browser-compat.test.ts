@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 describe('Browser compatibility (jsdom)', () => {
   it('should import the main entry point without errors', async () => {
     const mod = await import('#index.js');
-    expect(mod.createDefaultConfig).toBeTypeOf('function');
+    expect(mod.presets).toBeDefined();
     expect(mod.createFileSystemPort).toBeTypeOf('function');
     expect(mod.createKernelSuccess).toBeTypeOf('function');
     expect(mod.createKernelError).toBeTypeOf('function');
@@ -34,29 +34,13 @@ describe('Browser compatibility (jsdom)', () => {
     expect(mod.createMiddlewareRuntime).toBeTypeOf('function');
   });
 
-  it('should import the config module without errors', async () => {
-    const mod = await import('#config.js');
-    expect(mod.createDefaultConfig).toBeTypeOf('function');
-  });
+  it('presets.all() should return valid plugin configuration', async () => {
+    const { presets } = await import('#plugins/presets.js');
+    const config = presets.all();
 
-  it('createDefaultConfig should return valid configuration', async () => {
-    const { createDefaultConfig } = await import('#config.js');
-    const config = createDefaultConfig();
-
-    expect(config.workerUrl).toBeTypeOf('string');
-    expect(config.kernelModules).toBeInstanceOf(Array);
-    expect(config.middlewareEntries).toBeInstanceOf(Array);
-    expect(config.bundlerEntries).toBeInstanceOf(Array);
-    expect(config.kernelModules.length).toBeGreaterThan(0);
-  });
-
-  it('createDefaultConfig should support disabling kernels', async () => {
-    const { createDefaultConfig } = await import('#config.js');
-    const config = createDefaultConfig({
-      kernels: { zoo: { enabled: false } },
-    });
-
-    const zooKernel = config.kernelModules.find((k) => k.id === 'zoo');
-    expect(zooKernel).toBeUndefined();
+    expect(config.kernels).toBeInstanceOf(Array);
+    expect(config.middleware).toBeInstanceOf(Array);
+    expect(config.bundlers).toBeInstanceOf(Array);
+    expect(config.kernels.length).toBeGreaterThan(0);
   });
 });

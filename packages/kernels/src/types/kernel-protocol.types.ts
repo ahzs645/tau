@@ -2,8 +2,7 @@
  * Kernel Worker Protocol Types
  *
  * Defines the typed MessagePort event protocol between the kernel machine (main thread)
- * and kernel workers. Replaces Comlink for the kernel hot path (render, fileChanged,
- * configureMiddleware) while keeping Comlink for the file manager.
+ * and kernel workers.
  *
  * All request/response commands carry a `requestId` for correlation. Fire-and-forget
  * commands (fileChanged, configureMiddleware, cleanup) do not require a requestId.
@@ -11,12 +10,12 @@
 
 import type { GeometryFile, ExportFormat, LogLevel, LogOrigin } from '@taucad/types';
 import type {
-  CreateGeometryResultCompleted,
+  HashedGeometryResult,
   GetParametersResult,
   ExportGeometryResult,
   KernelIssue,
-  MiddlewareEntries,
-  BundlerEntries,
+  MiddlewareRegistrations,
+  BundlerRegistrations,
 } from '#types/kernel.types.js';
 import type { Tessellation } from '#types/kernel-worker.types.js';
 
@@ -29,8 +28,8 @@ export type KernelCommand =
       type: 'initialize';
       requestId: string;
       options: Record<string, unknown>;
-      middlewareEntries: MiddlewareEntries;
-      bundlerEntries?: BundlerEntries;
+      middlewareEntries: MiddlewareRegistrations;
+      bundlerEntries?: BundlerRegistrations;
       fileSystemPort?: MessagePort;
     }
   | {
@@ -48,7 +47,7 @@ export type KernelCommand =
     }
   | { type: 'cancel'; requestId: string }
   | { type: 'fileChanged'; paths: string[] }
-  | { type: 'configureMiddleware'; entries: MiddlewareEntries }
+  | { type: 'configureMiddleware'; entries: MiddlewareRegistrations }
   | { type: 'cleanup' };
 
 /**
@@ -77,7 +76,7 @@ export type RenderPhase = string;
 export type KernelResponse =
   | { type: 'initialized'; requestId: string }
   | { type: 'parametersResolved'; requestId: string; result: GetParametersResult }
-  | { type: 'geometryComputed'; requestId: string; result: CreateGeometryResultCompleted }
+  | { type: 'geometryComputed'; requestId: string; result: HashedGeometryResult }
   | { type: 'exported'; requestId: string; result: ExportGeometryResult }
   | { type: 'error'; requestId: string; issues: KernelIssue[] }
   | { type: 'progress'; requestId: string; phase: RenderPhase; detail?: Record<string, unknown> }

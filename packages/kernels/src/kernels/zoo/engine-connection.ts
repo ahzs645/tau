@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/parameter-properties -- parameter properties are non-erasable TypeScript */
 import type { Models } from '@kittycad/lib';
 import type { Context } from '@taucad/kcl-wasm-lib';
 import { decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack';
@@ -65,7 +64,7 @@ export class MockEngineConnection {
    *
    */
   public async sendModelingCommandFromWasm(): Promise<Uint8Array<ArrayBuffer>> {
-    throw KclError.simple('engine', 'Mock execution should not require websocket commands');
+    throw KclError.simple({ kind: 'engine', message: 'Mock execution should not require websocket commands' });
   }
 
   /**
@@ -99,11 +98,16 @@ export class EngineConnection {
   private pingIntervalId: NodeJS.Timeout | undefined;
   private initializationContext: InitializationContext | undefined;
 
-  public constructor(apiKey: string, baseUrl: string, wasmModule: WasmModule, fileSystemManager: FileSystemManager) {
-    this.apiKey = apiKey;
-    this.baseUrl = baseUrl;
-    this.wasmModule = wasmModule;
-    this.fileSystemManager = fileSystemManager;
+  public constructor(options: {
+    apiKey: string;
+    baseUrl: string;
+    wasmModule: WasmModule;
+    fileSystemManager: FileSystemManager;
+  }) {
+    this.apiKey = options.apiKey;
+    this.baseUrl = options.baseUrl;
+    this.wasmModule = options.wasmModule;
+    this.fileSystemManager = options.fileSystemManager;
   }
 
   /**
@@ -154,7 +158,7 @@ export class EngineConnection {
           if (!resolved) {
             resolved = true;
             clearTimeout(authTimeoutId);
-            reject(KclError.simple('io', String(error)));
+            reject(KclError.simple({ kind: 'io', message: String(error) }));
           }
         }
       };
@@ -167,6 +171,7 @@ export class EngineConnection {
   /**
    *
    */
+  // eslint-disable-next-line max-params -- Emscripten WASM API contract: signature matches C++ binding
   public async sendModelingCommandFromWasm(
     _commandString: string,
     _id: string,
@@ -189,7 +194,7 @@ export class EngineConnection {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      throw KclError.simple('engine', errorMessage);
+      throw KclError.simple({ kind: 'engine', message: errorMessage });
     }
   }
 
@@ -223,7 +228,7 @@ export class EngineConnection {
     // Clear all pending commands
     for (const [_id, pending] of this.pendingCommands) {
       clearTimeout(pending.timeout);
-      pending.reject(KclError.simple('io', 'Connection closed'));
+      pending.reject(KclError.simple({ kind: 'io', message: 'Connection closed' }));
     }
 
     this.pendingCommands.clear();
@@ -375,7 +380,9 @@ export class EngineConnection {
       reject,
       timeout: setTimeout(() => {
         this.pendingCommands.delete(commandId);
-        reject(KclError.simple('engine', `Timed out waiting for response to commandId: ${commandId}`));
+        reject(
+          KclError.simple({ kind: 'engine', message: `Timed out waiting for response to commandId: ${commandId}` }),
+        );
       }, commandTimeout),
     });
 
@@ -476,7 +483,7 @@ export class EngineConnection {
           const errorMessage = message.errors
             .map((error: { error_code: string; message: string }) => `${error.error_code}: ${error.message}`)
             .join(', ');
-          pending.reject(KclError.simple('engine', errorMessage));
+          pending.reject(KclError.simple({ kind: 'engine', message: errorMessage }));
         }
       }
     }
@@ -567,7 +574,7 @@ export class EngineConnection {
     if (this.websocket && this.websocket.readyState === 1) {
       this.websocket.send(JSON.stringify(message));
     } else {
-      throw KclError.simple('io', 'WebSocket not connected');
+      throw KclError.simple({ kind: 'io', message: 'WebSocket not connected' });
     }
   }
 

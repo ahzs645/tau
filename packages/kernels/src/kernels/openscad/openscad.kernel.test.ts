@@ -31,7 +31,8 @@ const createGeometry = async (
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
-): ReturnType<typeof createTestGeometry> => createTestGeometry(openscadKernel, files, mainFile, parameters);
+): ReturnType<typeof createTestGeometry> =>
+  createTestGeometry({ definition: openscadKernel, files, mainFile, parameters });
 
 /**
  * Helper to compute geometry and get OFF data for analysis.
@@ -43,7 +44,7 @@ async function createGeometryAndGetOffData(
 ): Promise<{ offData: string | undefined; success: boolean }> {
   const worker = await createWorker(files);
   const geometryFile = createGeometryFile(mainFile);
-  const result = await worker.createGeometryEntry(geometryFile, {});
+  const result = await worker.createGeometry({ file: geometryFile, parameters: {} });
 
   // NativeHandle is protected on KernelWorker; for OpenSCAD it holds the raw OFF string
   const offData = (worker as unknown as { nativeHandle: string | undefined }).nativeHandle;
@@ -91,7 +92,7 @@ function analyzeOffColorComponents(offData: string): { rgbFaceCount: number; rgb
 // =============================================================================
 
 describe('OpenSCAD Kernel', () => {
-  describe('getParametersEntry', () => {
+  describe('getParameters', () => {
     describe('Single file projects', () => {
       it('should extract parameters from a simple file', async () => {
         const { jsonSchema, defaultParameters } = await getParameters(
@@ -839,7 +840,7 @@ describe('OpenSCAD Kernel', () => {
   // Tests: Geometry Computation
   // ===========================================================================
 
-  describe('createGeometryEntry', () => {
+  describe('createGeometry', () => {
     describe('Basic geometry', () => {
       it('should compute geometry for a simple cube', async () => {
         const { success, offData } = await createGeometryAndGetOffData(
@@ -1087,7 +1088,10 @@ describe('OpenSCAD Kernel', () => {
             cube([x, x, x]);
           `,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('syntax_error.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('syntax_error.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1102,7 +1106,7 @@ describe('OpenSCAD Kernel', () => {
           'main.scad': 'include <lib.scad>\ncube([10, 10, 10]);',
           'lib.scad': 'x += 5;',
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('main.scad'), {});
+        const result = await worker.createGeometry({ file: createGeometryFile('main.scad'), parameters: {} });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1114,7 +1118,10 @@ describe('OpenSCAD Kernel', () => {
         const worker = await createWorker({
           'empty_module.scad': 'module test() {}  test();',
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('empty_module.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('empty_module.scad'),
+          parameters: {},
+        });
 
         // This may succeed with empty geometry or fail - just verify we get a proper result
         expect(typeof result.success).toBe('boolean');
@@ -1130,7 +1137,10 @@ module my_cube(size = 10) {
 // No call to my_cube() - nothing to render
 `,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('module_only.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('module_only.scad'),
+          parameters: {},
+        });
 
         // Should succeed (not an error) but with a warning
         expect(result.success).toBe(true);
@@ -1150,7 +1160,10 @@ module my_cube(size = 10) {
             cube([x, 10, 10]);
           `,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('compound_assign.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('compound_assign.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1167,7 +1180,10 @@ module my_cube(size = 10) {
 ${errorLine}
 }`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('indented_error.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('indented_error.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1187,7 +1203,10 @@ ${errorLine}
         const worker = await createWorker({
           'severity_error.scad': 'x += 5;',
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('severity_error.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('severity_error.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1522,7 +1541,10 @@ cube([get_size(), 10, 10]);`,
         const worker = await createWorker({
           'undefined_var.scad': `cube([undefined_var, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('undefined_var.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('undefined_var.scad'),
+          parameters: {},
+        });
 
         // OpenSCAD still produces geometry with undef values
         expect(result.success).toBe(true);
@@ -1538,7 +1560,10 @@ cube([get_size(), 10, 10]);`,
           'undefined_module.scad': `my_undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('undefined_module.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('undefined_module.scad'),
+          parameters: {},
+        });
 
         // OpenSCAD still produces geometry (the cube)
         expect(result.success).toBe(true);
@@ -1555,7 +1580,10 @@ cube([10, 10, 10]);`,
 my_undefined_module();
 cube([undefined_var, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('multiple_warnings.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('multiple_warnings.scad'),
+          parameters: {},
+        });
 
         // OpenSCAD still produces geometry
         expect(result.success).toBe(true);
@@ -1580,7 +1608,10 @@ cube([undefined_var, 10, 10]);`,
 second_undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('multi_line_warnings.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('multi_line_warnings.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1603,7 +1634,10 @@ cube([10, 10, 10]);`,
 cube([10, 10, 10]);`,
         });
         // Note: filename includes the subdirectory path
-        const result = await worker.createGeometryEntry(createGeometryFile('site/backyard.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('site/backyard.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1619,7 +1653,7 @@ cube([10, 10, 10]);`,
           'site/main.scad': `undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('site/main.scad'), {});
+        const result = await worker.createGeometry({ file: createGeometryFile('site/main.scad'), parameters: {} });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1636,7 +1670,7 @@ cube([10, 10, 10]);`,
 cube([10, 10, 10]);`,
           'lib/broken.scad': `x += 5;`, // Syntax error in included file
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('site/main.scad'), {});
+        const result = await worker.createGeometry({ file: createGeometryFile('site/main.scad'), parameters: {} });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1654,7 +1688,7 @@ cube([10, 10, 10]);`,
           'site/main.scad': `include <../furniture/missing.scad>
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('site/main.scad'), {});
+        const result = await worker.createGeometry({ file: createGeometryFile('site/main.scad'), parameters: {} });
 
         // Should still produce geometry (the cube)
         expect(result.success).toBe(true);
@@ -1671,7 +1705,10 @@ cube([10, 10, 10]);`,
           'undefined_func.scad': `x = my_undefined_function();
 cube([x, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('undefined_func.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('undefined_func.scad'),
+          parameters: {},
+        });
 
         // Undefined function results in undef, geometry may still be produced
         expect(result.issues.length).toBeGreaterThan(0);
@@ -1683,7 +1720,10 @@ cube([x, 10, 10]);`,
           'too_many_params.scad': `module mymod(a) { cube(a); }
 mymod(10, 20, 30);`, // Too many parameters
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('too_many_params.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('too_many_params.scad'),
+          parameters: {},
+        });
 
         // Should produce geometry - extra parameters are silently ignored in OpenSCAD
         expect(result.success).toBe(true);
@@ -1694,7 +1734,7 @@ mymod(10, 20, 30);`, // Too many parameters
           'recursion.scad': `module infinite() { infinite(); }
 infinite();`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('recursion.scad'), {});
+        const result = await worker.createGeometry({ file: createGeometryFile('recursion.scad'), parameters: {} });
 
         // Recursion detection - OpenSCAD WASM may handle this differently
         // Just verify we get a result without crashing
@@ -1709,7 +1749,10 @@ infinite();`,
           'missing_include.scad': `include <nonexistent_file.scad>
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('missing_include.scad'), {});
+        const result = await worker.createGeometry({
+          file: createGeometryFile('missing_include.scad'),
+          parameters: {},
+        });
 
         // Should still produce geometry (the cube)
         expect(result.success).toBe(true);
@@ -1724,7 +1767,7 @@ cube([10, 10, 10]);`,
           'assertion.scad': `assert(false, "Custom assertion message");
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometryEntry(createGeometryFile('assertion.scad'), {});
+        const result = await worker.createGeometry({ file: createGeometryFile('assertion.scad'), parameters: {} });
 
         // Assertion failure should fail
         expect(result.success).toBe(false);

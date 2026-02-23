@@ -44,7 +44,7 @@ export type KernelMiddlewareOptions<
   name: string;
   /** Version of the middleware for cache key computation. Defaults to '1' if not provided. */
   version?: string;
-  /** Whether the middleware is enabled by default. Defaults to `true`. Overridable via MiddlewareEntry.enabled at registration or runtime. */
+  /** Whether the middleware is enabled by default. Defaults to `true`. Overridable via MiddlewareRegistration.enabled at registration or runtime. */
   enabled?: boolean;
   /** Optional Zod schema for type-safe state. Must be a z.object() schema. */
   stateSchema?: StateSchema;

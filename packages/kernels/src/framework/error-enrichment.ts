@@ -57,7 +57,12 @@ export function parseStackTrace(
     }
   }
 
-  return applySourceMapToFrames(frames, options?.sourceMap, options?.resolveSourcePath, options?.lastEntryName);
+  return applySourceMapToFrames({
+    frames,
+    sourceMapJson: options?.sourceMap,
+    resolveSourcePathFn: options?.resolveSourcePath,
+    lastEntryName: options?.lastEntryName,
+  });
 }
 
 // =============================================================================
@@ -153,12 +158,13 @@ export function resolveSourcePath(sourcePath: string, projectPath?: string): str
  * Maps generated (post-bundle) positions in blob:/data: URLs back to
  * original source file paths and line/column numbers.
  */
-function applySourceMapToFrames(
-  frames: KernelStackFrame[],
-  sourceMapJson?: string,
-  resolveSourcePathFn?: (sourcePath: string) => string,
-  lastEntryName?: string,
-): KernelStackFrame[] {
+function applySourceMapToFrames(options: {
+  frames: KernelStackFrame[];
+  sourceMapJson?: string;
+  resolveSourcePathFn?: (sourcePath: string) => string;
+  lastEntryName?: string;
+}): KernelStackFrame[] {
+  const { frames, sourceMapJson, resolveSourcePathFn, lastEntryName } = options;
   if (!sourceMapJson) {
     return frames;
   }
@@ -315,13 +321,13 @@ export function deriveLocationFromFrames(
 
   if (sourceMapJson) {
     try {
-      const extent = computeExpressionExtentFromSourceMap(
+      const extent = computeExpressionExtentFromSourceMap({
         sourceMapJson,
-        userFrame.fileName,
-        startLineNumber,
+        fileName: userFrame.fileName,
+        lineNumber: startLineNumber,
         startColumn,
         resolveSourcePathFn,
-      );
+      });
       if (extent) {
         startColumn = extent.startColumn;
         endColumn = extent.endColumn;
@@ -343,13 +349,14 @@ export function deriveLocationFromFrames(
 /**
  * Compute the expression extent (start/end columns) from source map mapping data.
  */
-function computeExpressionExtentFromSourceMap(
-  sourceMapJson: string,
-  fileName: string,
-  lineNumber: number,
-  startColumn: number,
-  resolveSourcePathFn?: (sourcePath: string) => string,
-): { startColumn: number; endColumn: number } | undefined {
+function computeExpressionExtentFromSourceMap(options: {
+  sourceMapJson: string;
+  fileName: string;
+  lineNumber: number;
+  startColumn: number;
+  resolveSourcePathFn?: (sourcePath: string) => string;
+}): { startColumn: number; endColumn: number } | undefined {
+  const { sourceMapJson, fileName, lineNumber, startColumn, resolveSourcePathFn } = options;
   const rawMap: unknown = JSON.parse(sourceMapJson);
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
   const consumer = new SourceMapConsumer(rawMap as any);

@@ -7,7 +7,7 @@
 
 import deepmerge from 'deepmerge';
 import type { PartialDeep } from 'type-fest';
-import type { GeometryResponse, GeometryFile, OnWorkerLog } from '@taucad/types';
+import type { ExportFormat, GeometryResponse, GeometryFile, OnWorkerLog } from '@taucad/types';
 import { dirname } from '@zenfs/core/path';
 import { vi } from 'vitest';
 import { configure, fs } from '@zenfs/core';
@@ -15,12 +15,12 @@ import { InMemory } from '@zenfs/core/backends/memory.js';
 import { joinPath } from '@taucad/utils/path';
 import type {
   CreateGeometryResult,
-  CreateGeometryResultCompleted,
+  HashedGeometryResult,
   KernelIssue,
   GetParametersResult,
   ExportGeometryResult,
-  MiddlewareEntries,
-  BundlerEntries,
+  MiddlewareRegistrations,
+  BundlerRegistrations,
 } from '#types/kernel.types.js';
 import type {
   KernelLogger,
@@ -96,10 +96,10 @@ export async function clearTestFilesystem(): Promise<void> {
 export type InitializeWorkerOptions = {
   /** Custom log handler */
   onLog?: OnWorkerLog;
-  /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
+  /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withExceptions: true }) */
   workerOptions?: Record<string, unknown>;
   /** Middleware configuration (defaults to empty array for tests that bypass dynamic loading) */
-  middlewareEntries?: MiddlewareEntries;
+  middlewareEntries?: MiddlewareRegistrations;
 };
 
 /**
@@ -121,18 +121,18 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
 ): Promise<T> {
   const port = createFileSystemPort(fromZenFS(fs));
 
-  await worker.initializeEntry(
-    {
+  await worker.initialize({
+    callbacks: {
       onLog:
         options?.onLog ??
         (() => {
           // No-op for testing
         }),
     },
-    { fileSystemPort: port },
-    options?.workerOptions ?? {},
-    options?.middlewareEntries ?? [],
-  );
+    transferables: { fileSystemPort: port },
+    options: options?.workerOptions ?? {},
+    middlewareEntries: options?.middlewareEntries ?? [],
+  });
 
   return worker;
 }
@@ -380,7 +380,7 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
 
 /**
  * Create a GeometryFile for testing.
- * Used to create test inputs for worker methods like canHandleEntry, getParametersEntry, createGeometryEntry.
+ * Used to create test inputs for worker methods like canHandle, getParameters, createGeometry.
  */
 export function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
   return {
@@ -397,7 +397,7 @@ export function createGeometryFile(filename: string, basePath = '/builds/test'):
  * Options for createTestWorker.
  */
 export type CreateTestWorkerOptions = {
-  /** Worker-specific options passed to initializeEntry (e.g., ReplicadWorker: { withExceptions: true }) */
+  /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withExceptions: true }) */
   workerOptions?: Record<string, unknown>;
   /** Extensions the kernel handles (defaults to ['ts', 'js', 'scad', 'kcl', '*']) */
   extensions?: string[];
@@ -406,7 +406,7 @@ export type CreateTestWorkerOptions = {
   /** Builtin module names this kernel provides (e.g., ['replicad']) */
   builtinModuleNames?: string[];
   /** Bundler config to load (enables detectImports-based transitive detection in tests) */
-  bundlerEntries?: BundlerEntries;
+  bundlerEntries?: BundlerRegistrations;
   /** Pre-loaded bundler definition (bypasses dynamic import; auto-loaded for JS/TS kernels if not provided) */
   bundlerDefinition?: BundlerDefinition;
   /** Skip automatic bundler loading for JS/TS kernels (default: false) */
@@ -528,7 +528,7 @@ export async function getTestParameters(
   const { expect } = await import('vitest');
 
   const worker = await createTestWorker(definition, files);
-  const result = await worker.getParametersEntry(createGeometryFile(mainFile));
+  const result = await worker.getParameters(createGeometryFile(mainFile));
 
   expect(result.success).toBe(true);
 
@@ -542,24 +542,24 @@ export async function getTestParameters(
 /**
  * Helper to create geometry using a kernel and return the result.
  *
- * @param definition - The kernel definition to use
- * @param files - Record of relative paths to file contents
- * @param mainFile - The main file to create geometry from
- * @param parameters - Optional parameters to pass to the geometry creation
- * @param options - Optional worker options
+ * @param input - Input containing kernel definition, files, main file, and optional parameters/options
+ * @param input.definition - The kernel definition to use
+ * @param input.files - Record of relative paths to file contents
+ * @param input.mainFile - The main file to create geometry from
+ * @param input.parameters - Optional parameters to pass to the geometry creation
+ * @param input.options - Optional worker options
  * @returns Promise resolving to the geometry creation result
  */
-// eslint-disable-next-line max-params -- test utility with closely related parameters
-export async function createTestGeometry(
-  definition: KernelDefinition,
-  files: Record<string, string>,
-  mainFile: string,
-  parameters: Record<string, unknown> = {},
-  options?: CreateTestWorkerOptions,
-): Promise<CreateGeometryResult> {
-  const worker = await createTestWorker(definition, files, options);
-  const geometryFile = createGeometryFile(mainFile);
-  return worker.createGeometryEntry(geometryFile, parameters);
+export async function createTestGeometry(input: {
+  definition: KernelDefinition;
+  files: Record<string, string>;
+  mainFile: string;
+  parameters?: Record<string, unknown>;
+  options?: CreateTestWorkerOptions;
+}): Promise<CreateGeometryResult> {
+  const worker = await createTestWorker(input.definition, input.files, input.options);
+  const geometryFile = createGeometryFile(input.mainFile);
+  return worker.createGeometry({ file: geometryFile, parameters: input.parameters ?? {} });
 }
 
 /**
@@ -614,6 +614,8 @@ export type MockKernelWorkerOptions = {
   middlewareEnabled?: boolean[];
   /** Result to return from createGeometry */
   computeResult?: CreateGeometryResult;
+  /** Result to return from exportGeometry */
+  exportResult?: ExportGeometryResult;
   /** Custom onLog handler */
   onLog?: OnWorkerLog;
   /** Mock filesystem for middleware operations */
@@ -629,6 +631,7 @@ export class MockKernelWorker extends KernelWorker {
 
   private readonly testResolvedMiddleware: ResolvedMiddleware[];
   private readonly mockComputeResult: CreateGeometryResult;
+  private readonly mockExportResult: ExportGeometryResult;
 
   public constructor(options: MockKernelWorkerOptions) {
     super();
@@ -640,6 +643,11 @@ export class MockKernelWorker extends KernelWorker {
     }));
     this.mockComputeResult =
       options.computeResult ?? createSuccessResult([{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }]);
+    this.mockExportResult = options.exportResult ?? {
+      success: true,
+      data: [{ blob: new Blob(), name: 'export.gltf' }],
+      issues: [],
+    };
 
     // Set up onLog - use provided or no-op (must be done before _logger)
     // @ts-expect-error - Test utility accessing internals
@@ -656,14 +664,21 @@ export class MockKernelWorker extends KernelWorker {
   }
 
   /**
-   * Helper to run createGeometryEntry with a mock file.
+   * Helper to run createGeometry with a mock file.
    */
   public async runCreateGeometry(
     filename = 'test.kcl',
     parameters: Record<string, unknown> = {},
-  ): Promise<CreateGeometryResultCompleted> {
+  ): Promise<HashedGeometryResult> {
     const mockFile: GeometryFile = { filename, path: filename };
-    return this.createGeometryEntry(mockFile, parameters);
+    return this.createGeometry({ file: mockFile, parameters });
+  }
+
+  /**
+   * Helper to run exportGeometry with a mock export format.
+   */
+  public async runExportGeometry(fileType = 'gltf'): Promise<ExportGeometryResult> {
+    return this.exportGeometry(fileType as ExportFormat);
   }
 
   /**
@@ -674,11 +689,11 @@ export class MockKernelWorker extends KernelWorker {
   }
 
   // Stub implementations of abstract methods
-  protected override async canHandle(_input: CanHandleInput, _runtime: KernelRuntime): Promise<boolean> {
+  protected override async onCanHandle(_input: CanHandleInput, _runtime: KernelRuntime): Promise<boolean> {
     return true;
   }
 
-  protected override async getParameters(
+  protected override async onGetParameters(
     _input: GetParametersInput,
     _runtime: KernelRuntime,
   ): Promise<GetParametersResult> {
@@ -689,25 +704,21 @@ export class MockKernelWorker extends KernelWorker {
     };
   }
 
-  protected override async createGeometry(
+  protected override async onCreateGeometry(
     _input: CreateGeometryInput,
     _runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
     return this.mockComputeResult;
   }
 
-  protected override async exportGeometry(
+  protected override async onExportGeometry(
     _input: ExportGeometryInput,
     _runtime: KernelRuntime,
   ): Promise<ExportGeometryResult> {
-    return {
-      success: true,
-      data: [{ blob: new Blob(), name: 'export.gltf' }],
-      issues: [],
-    };
+    return this.mockExportResult;
   }
 
-  protected override async getDependencies(
+  protected override async onGetDependencies(
     { filePath }: GetDependenciesInput,
     _runtime: KernelRuntime,
   ): Promise<string[]> {

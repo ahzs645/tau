@@ -325,7 +325,7 @@ export default defineKernel<JscadContext, unknown[]>({
     return { geometry: geometries, nativeHandle: filteredShapes };
   },
 
-  async exportGeometry({ fileType }, _runtime, _ctx, nativeHandle) {
+  async exportGeometry({ fileType, nativeHandle }, _runtime, _ctx) {
     if (nativeHandle.length === 0) {
       return createKernelError([{ message: 'No geometry available for export.', type: 'runtime', severity: 'error' }]);
     }

@@ -14,8 +14,11 @@ describe('parseStderrLine', () => {
   describe('Parser errors', () => {
     it('should parse error format: ERROR: Parser error in file "X", line Y: message', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('ERROR: Parser error in file "main.scad", line 118: syntax error', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ERROR: Parser error in file "main.scad", line 118: syntax error',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -35,8 +38,11 @@ describe('parseStderrLine', () => {
 
     it('should parse error format: ERROR: Parser error: message in file X, line Y', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('ERROR: Parser error: syntax error in file /main.scad, line 118', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 118',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -56,8 +62,11 @@ describe('parseStderrLine', () => {
 
     it('should strip leading slashes from filenames', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('ERROR: Parser error: syntax error in file /path/to/file.scad, line 10', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /path/to/file.scad, line 10',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -67,8 +76,11 @@ describe('parseStderrLine', () => {
     it('should parse += syntax errors (compound assignment not supported)', () => {
       // Real error from OpenSCAD when using += operator
       const errors: KernelIssue[] = [];
-      parseStderrLine('ERROR: Parser error: syntax error in file /main.scad, line 118', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 118',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -77,8 +89,11 @@ describe('parseStderrLine', () => {
 
     it('should parse errors with different file paths', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('ERROR: Parser error: unexpected token in file lib/utils.scad, line 42', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ERROR: Parser error: unexpected token in file lib/utils.scad, line 42',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -89,14 +104,13 @@ describe('parseStderrLine', () => {
     it('should map main file basename to full path when mainFilePath is provided', () => {
       const errors: KernelIssue[] = [];
       // When OpenSCAD reports error for "backyard.scad" but the main file is "site/backyard.scad"
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /backyard.scad, line 10',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /backyard.scad, line 10',
+        addError(error) {
           errors.push(error);
         },
-        undefined,
-        'site/backyard.scad', // MainFilePath
-      );
+        mainFilePath: 'site/backyard.scad', // MainFilePath
+      });
 
       expect(errors).toHaveLength(1);
       // Should map basename to full path
@@ -106,14 +120,13 @@ describe('parseStderrLine', () => {
     it('should not map included file paths when mainFilePath is provided', () => {
       const errors: KernelIssue[] = [];
       // Error in an included file - should not be mapped to mainFilePath
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /lib/broken.scad, line 5',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /lib/broken.scad, line 5',
+        addError(error) {
           errors.push(error);
         },
-        undefined,
-        'site/main.scad', // MainFilePath (different file)
-      );
+        mainFilePath: 'site/main.scad', // MainFilePath (different file)
+      });
 
       expect(errors).toHaveLength(1);
       // Should preserve the included file's path, not map to mainFilePath
@@ -122,14 +135,13 @@ describe('parseStderrLine', () => {
 
     it('should map warnings to full path when mainFilePath is provided', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        "WARNING: Ignoring unknown module 'foo' in file main.scad, line 5",
-        (error) => {
+      parseStderrLine({
+        message: "WARNING: Ignoring unknown module 'foo' in file main.scad, line 5",
+        addError(error) {
           errors.push(error);
         },
-        undefined,
-        'site/main.scad', // MainFilePath
-      );
+        mainFilePath: 'site/main.scad', // MainFilePath
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location?.fileName).toBe('site/main.scad');
@@ -143,13 +155,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /main.scad, line 2',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 2',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location).toEqual({
@@ -168,13 +180,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /main.scad, line 2',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 2',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location).toEqual({
@@ -192,13 +204,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /main.scad, line 2',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 2',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location?.startColumn).toBe(3); // 'x' is at 1-based column 3 (after 2 tabs)
@@ -209,13 +221,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'other.scad': 'content' });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /main.scad, line 5',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 5',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location?.startColumn).toBe(1); // 1-based fallback
@@ -227,13 +239,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'main.scad': 'line 1\nline 2' });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /main.scad, line 99',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 99',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location?.startColumn).toBe(1); // 1-based fallback
@@ -246,13 +258,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'main.scad': '' });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'ERROR: Parser error: syntax error in file /main.scad, line 1',
-        (error) => {
+      parseStderrLine({
+        message: 'ERROR: Parser error: syntax error in file /main.scad, line 1',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       // Empty file has one empty line, so line 1 returns '' which gives startColumn=1, endColumn=1
@@ -269,8 +281,11 @@ describe('parseStderrLine', () => {
   describe('Warnings', () => {
     it('should parse warning format: WARNING: message in file X, line Y', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('WARNING: Undefined variable in file model.scad, line 42', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'WARNING: Undefined variable in file model.scad, line 42',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -283,8 +298,11 @@ describe('parseStderrLine', () => {
 
     it('should parse warnings with trailing period', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('WARNING: Variable shadowing, in file test.scad, line 10.', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'WARNING: Variable shadowing, in file test.scad, line 10.',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -297,13 +315,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'model.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'WARNING: Undefined variable in file model.scad, line 2',
-        (error) => {
+      parseStderrLine({
+        message: 'WARNING: Undefined variable in file model.scad, line 2',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location?.startColumn).toBe(1); // 1-based column 1
@@ -316,13 +334,13 @@ describe('parseStderrLine', () => {
       const getFileContents = createGetFileContents({ 'model.scad': `line 1\n${errorLine}\nline 3` });
 
       const errors: KernelIssue[] = [];
-      parseStderrLine(
-        'WARNING: Undefined variable in file model.scad, line 2',
-        (error) => {
+      parseStderrLine({
+        message: 'WARNING: Undefined variable in file model.scad, line 2',
+        addError(error) {
           errors.push(error);
         },
         getFileContents,
-      );
+      });
 
       expect(errors).toHaveLength(1);
       expect(errors[0]?.location?.startColumn).toBe(3); // 1-based column 3 (after 2 spaces)
@@ -333,8 +351,11 @@ describe('parseStderrLine', () => {
   describe('Severity detection', () => {
     it('should set severity to error for ERROR: Parser error patterns', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('ERROR: Parser error in file "main.scad", line 5: syntax error', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ERROR: Parser error in file "main.scad", line 5: syntax error',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -343,8 +364,11 @@ describe('parseStderrLine', () => {
 
     it('should set severity to warning for WARNING: patterns', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('WARNING: Undefined variable in file main.scad, line 10', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'WARNING: Undefined variable in file main.scad, line 10',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -353,8 +377,11 @@ describe('parseStderrLine', () => {
 
     it('should set severity to warning for undefined module warnings', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine("WARNING: Ignoring unknown module 'foo' in file main.scad, line 5", (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: "WARNING: Ignoring unknown module 'foo' in file main.scad, line 5",
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -364,8 +391,11 @@ describe('parseStderrLine', () => {
 
     it('should set severity to warning for undefined function warnings', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine("WARNING: Ignoring unknown function 'bar' in file main.scad, line 8", (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: "WARNING: Ignoring unknown function 'bar' in file main.scad, line 8",
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(1);
@@ -693,8 +723,11 @@ describe('parseStderrLine', () => {
   describe('Non-matching messages', () => {
     it('should not call addError for ECHO statements', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('ECHO: "Hello World"', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'ECHO: "Hello World"',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(0);
@@ -702,8 +735,11 @@ describe('parseStderrLine', () => {
 
     it('should not call addError for "Can\'t parse file" messages', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine("Can't parse file 'main.scad'!", (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: "Can't parse file 'main.scad'!",
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(0);
@@ -711,8 +747,11 @@ describe('parseStderrLine', () => {
 
     it('should not call addError for empty strings', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: '',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(0);
@@ -720,11 +759,17 @@ describe('parseStderrLine', () => {
 
     it('should not call addError for generic info messages', () => {
       const errors: KernelIssue[] = [];
-      parseStderrLine('Compiling design (CSG Tree generation)...', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'Compiling design (CSG Tree generation)...',
+        addError(error) {
+          errors.push(error);
+        },
       });
-      parseStderrLine('Rendering Polygon Mesh using CGAL...', (error) => {
-        errors.push(error);
+      parseStderrLine({
+        message: 'Rendering Polygon Mesh using CGAL...',
+        addError(error) {
+          errors.push(error);
+        },
       });
 
       expect(errors).toHaveLength(0);

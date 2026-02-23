@@ -40,7 +40,7 @@ export type ExecuteResult<T = unknown> = { success: true; value: T } | { success
  * A built-in module registered on the bundler for pre-loaded libraries.
  * These modules are served directly from memory without filesystem I/O.
  */
-export type BuiltinModuleEntry = {
+export type BuiltinModule = {
   /** Pre-bundled ESM code string */
   code: string;
   /** Package version */
@@ -67,7 +67,7 @@ export type KernelBundler = {
    * Used by JS/TS kernels to register WASM-loaded libraries (replicad, @jscad/modeling).
    * Must be called before the first bundle() call.
    */
-  registerModule(name: string, entry: BuiltinModuleEntry): void;
+  registerModule(name: string, entry: BuiltinModule): void;
 };
 
 // =============================================================================
@@ -150,7 +150,7 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
   execute(code: string, context: Context): Promise<ExecuteResult>;
 
   /** Register a builtin module for resolution during bundle(). */
-  registerModule(name: string, builtinModule: BuiltinModuleEntry, context: Context): void;
+  registerModule(name: string, builtinModule: BuiltinModule, context: Context): void;
 
   /**
    * Optional fast-path dependency resolution without full bundling.

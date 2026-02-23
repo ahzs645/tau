@@ -12,7 +12,7 @@ export type LineColumnPosition = {
  * @param charOffset - Character offset from start of file (0-based)
  * @returns Object with 1-based line and 0-based column numbers
  */
-export function charOffsetToLineColumn(sourceCode: string, charOffset: number): LineColumnPosition {
+function charOffsetToLineColumn(sourceCode: string, charOffset: number): LineColumnPosition {
   if (charOffset < 0 || charOffset > sourceCode.length) {
     return { line: 1, column: 0 };
   }

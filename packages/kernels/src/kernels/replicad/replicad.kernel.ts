@@ -43,7 +43,7 @@ const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href
 // =============================================================================
 
 type ReplicadContext = {
-  oc: OpenCascadeInstance;
+  openCascade: OpenCascadeInstance;
   ocWithExceptions: OpenCascadeInstanceWithExceptions | undefined;
   withExceptions: boolean;
   replicadInitialised: boolean;
@@ -90,10 +90,10 @@ function parseError(error: unknown, sourceMapJson?: string, projectPath?: string
   });
 }
 
-function resolveLibraryFrames(frames: KernelStackFrame[], ctx: ReplicadContext): KernelStackFrame[] {
+function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadContext): KernelStackFrame[] {
   return applyLibrarySourceMaps(frames, LIBRARY_PATTERNS, (moduleName) => {
-    if (ctx.librarySourceMapCache.has(moduleName)) {
-      return ctx.librarySourceMapCache.get(moduleName);
+    if (context.librarySourceMapCache.has(moduleName)) {
+      return context.librarySourceMapCache.get(moduleName);
     }
 
     // Library source maps are loaded lazily on first error
@@ -189,25 +189,25 @@ async function runMainRaw(module: RuntimeModuleExports, parameters: Record<strin
   return mainFunction(parameters);
 }
 
-async function runMain<T>(
-  module: RuntimeModuleExports,
-  parameters: Record<string, unknown>,
-  ctx: ReplicadContext,
-  sourceMapJson?: string,
-  projectPath?: string,
-): Promise<RunMainResult<T>> {
+async function runMain<T>(input: {
+  module: RuntimeModuleExports;
+  parameters: Record<string, unknown>;
+  context: ReplicadContext;
+  sourceMapJson?: string;
+  projectPath?: string;
+}): Promise<RunMainResult<T>> {
   try {
-    const value = await runMainRaw(module, parameters);
+    const value = await runMainRaw(input.module, input.parameters);
     return { success: true, value: value as T };
   } catch (error) {
-    const issue = formatRuntimeErrorWithOc(
+    const issue = formatRuntimeErrorWithOc({
       error,
-      ctx.ocWithExceptions,
-      (errorToFormat) => parseError(errorToFormat, sourceMapJson, projectPath),
-      (frames) => resolveLibraryFrames(frames, ctx),
-      (frames) => deriveLocation(frames, sourceMapJson, projectPath),
-      sourceMapJson,
-    );
+      ocInstance: input.context.ocWithExceptions,
+      parseStackTrace: (errorToFormat) => parseError(errorToFormat, input.sourceMapJson, input.projectPath),
+      applySourceMaps: (frames) => resolveLibraryFrames(frames, input.context),
+      deriveLocation: (frames) => deriveLocation(frames, input.sourceMapJson, input.projectPath),
+      sourceMap: input.sourceMapJson,
+    });
     return { success: false, issues: [issue] };
   }
 }
@@ -254,19 +254,18 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
 
     logger.debug(`Initializing OpenCASCADE WASM (withExceptions: ${withExceptions})`);
 
-    let oc: OpenCascadeInstance;
+    let openCascade: OpenCascadeInstance;
     let ocWithExceptions: OpenCascadeInstanceWithExceptions | undefined;
 
     const wasmSpan = tracer.startSpan('replicad.wasm-init', { withExceptions });
     if (withExceptions) {
-      const ocWe = await initOpenCascadeWithExceptions({ tracer });
-      ocWithExceptions = ocWe;
-      oc = ocWe as unknown as OpenCascadeInstance;
-      const wrappedOc = wrapOcInstance(ocWe);
-      replicad.setOC(wrappedOc as unknown as OpenCascadeInstance);
+      ocWithExceptions = await initOpenCascadeWithExceptions({ tracer });
+      openCascade = ocWithExceptions as unknown as OpenCascadeInstance;
+      const wrappedOpenCascade = wrapOcInstance(ocWithExceptions);
+      replicad.setOC(wrappedOpenCascade as unknown as OpenCascadeInstance);
     } else {
-      oc = await initOpenCascade({ tracer });
-      replicad.setOC(oc);
+      openCascade = await initOpenCascade({ tracer });
+      replicad.setOC(openCascade);
     }
 
     wasmSpan.end();
@@ -284,7 +283,7 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
     logger.debug('Replicad kernel initialized');
 
     return {
-      oc,
+      openCascade,
       ocWithExceptions,
       withExceptions,
       replicadInitialised: true,
@@ -312,7 +311,7 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
     return runtime.bundler.resolveDependencies(filePath);
   },
 
-  async getParameters({ filePath, basePath }, runtime, ctx) {
+  async getParameters({ filePath, basePath }, runtime, context) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
@@ -330,18 +329,18 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
 
       return createKernelSuccess({ defaultParameters, jsonSchema });
     } catch (error) {
-      const issue = formatRuntimeErrorWithOc(
+      const issue = formatRuntimeErrorWithOc({
         error,
-        ctx.ocWithExceptions,
-        (errorToFormat) => parseError(errorToFormat, undefined, basePath),
-        (frames) => resolveLibraryFrames(frames, ctx),
-        (frames) => deriveLocation(frames, undefined, basePath),
-      );
+        ocInstance: context.ocWithExceptions,
+        parseStackTrace: (errorToFormat) => parseError(errorToFormat, undefined, basePath),
+        applySourceMaps: (frames) => resolveLibraryFrames(frames, context),
+        deriveLocation: (frames) => deriveLocation(frames, undefined, basePath),
+      });
       return createKernelError([issue]);
     }
   },
 
-  async createGeometry({ filePath, basePath, parameters, tessellation }, runtime, ctx) {
+  async createGeometry({ filePath, basePath, parameters, tessellation }, runtime, context) {
     const { tracer } = runtime;
     const relativeFilePath = resolveToRelative(filePath, basePath);
 
@@ -357,7 +356,13 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
 
     const module = executeResult.value as RuntimeModuleExports;
     const mainSpan = tracer.startSpan('replicad.run-main', { phase: 'computingGeometry' });
-    const mainResult = await runMain<MainResultShapes>(module, parameters, ctx, bundleResult.sourceMap, basePath);
+    const mainResult = await runMain<MainResultShapes>({
+      module,
+      parameters,
+      context,
+      sourceMapJson: bundleResult.sourceMap,
+      projectPath: basePath,
+    });
     mainSpan.end();
 
     if (!mainResult.success) {
@@ -384,15 +389,15 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
     const defaultName = extractDefaultName(module);
 
     let nativeHandle: InputShape[] = [];
-    const renderedShapes = renderOutput(
+    const renderedShapes = renderOutput({
       shapes,
-      (shapesArray) => {
+      beforeRender(shapesArray) {
         nativeHandle = shapesArray;
         return shapesArray;
       },
       defaultName,
       tessellation,
-    );
+    });
 
     const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');
     const shapes2d = renderedShapes.filter((shape): shape is GeometrySvg => shape.format === 'svg');
@@ -415,8 +420,8 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
     return { geometry: [...gltfShapes, ...shapes2d], nativeHandle };
   },
 
-  async exportGeometry({ fileType, tessellation }, _runtime, _ctx, nativeHandle) {
-    const tess = tessellation ?? { linearTolerance: 0.01, angularTolerance: 30 };
+  async exportGeometry({ fileType, tessellation, nativeHandle }, _runtime, _context) {
+    const resolvedTessellation = tessellation ?? { linearTolerance: 0.01, angularTolerance: 30 };
 
     if (nativeHandle.length === 0) {
       return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
@@ -426,8 +431,8 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
       const temporaryShapes = nativeHandle.map((shapeConfig) => {
         const { shape } = shapeConfig;
         const faces = shape.mesh({
-          tolerance: tess.linearTolerance,
-          angularTolerance: tess.angularTolerance,
+          tolerance: resolvedTessellation.linearTolerance,
+          angularTolerance: resolvedTessellation.angularTolerance,
         });
         return {
           format: 'replicad',
@@ -451,8 +456,8 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
 
     const result = nativeHandle.map(({ shape, name }) => ({
       blob: buildBlob(shape, fileType, {
-        tolerance: tess.linearTolerance,
-        angularTolerance: tess.angularTolerance,
+        tolerance: resolvedTessellation.linearTolerance,
+        angularTolerance: resolvedTessellation.angularTolerance,
       }),
       name: name ?? 'Geometry',
     }));

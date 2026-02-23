@@ -25,7 +25,3 @@ export type * from '#types/index.js';
 
 // Helpers & Guards
 export { createKernelSuccess, createKernelError, isKernelSuccess, isKernelError } from '#framework/kernel-helpers.js';
-
-// Legacy (kept for backwards compatibility during migration)
-export { createDefaultConfig } from '#config.js';
-export type { DefaultConfigOptions, DefaultConfigResult } from '#config.js';

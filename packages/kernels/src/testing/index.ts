@@ -18,7 +18,6 @@ export {
   getGeometryStatsFromInspect,
   getBoundingBoxFromInspect,
   extractGltfFromResult,
-  extractAllGltfFromResult,
   createGeometryVariant,
   createGeometryTestHelpers,
 } from '#testing/kernel-geometry-testing.utils.js';

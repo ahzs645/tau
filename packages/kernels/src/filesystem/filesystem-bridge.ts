@@ -4,7 +4,7 @@
  * exposeFileSystem -- worker-side: listens for incoming bridge ports and serves a filesystem.
  * createFileSystemBridge -- main-thread side: creates a MessageChannel and transfers a port to a worker.
  *
- * These mirror Comlink's expose() / wrap() pair for the KernelFileSystem bridge protocol.
+ * Together they form an expose/wrap pair for the KernelFileSystem MessagePort bridge protocol.
  */
 
 import type { KernelFileSystem } from '#types/kernel-worker.types.js';

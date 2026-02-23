@@ -9,7 +9,7 @@
  */
 
 import type { backendProviders, kernelProviders } from '@taucad/types/constants';
-import type { Geometry, GeometryResponse, ExportFormat, GeometryFile, OnWorkerLog } from '@taucad/types';
+import type { Geometry, GeometryResponse } from '@taucad/types';
 
 // =============================================================================
 // Error Types
@@ -124,7 +124,7 @@ export type KernelProviderId = KnownKernelProvider | (string & {});
  * Bundles the kernel module URL and initialization options together.
  * Array position in `KernelModules` determines `canHandle` priority.
  */
-export type KernelWorkerEntry = {
+export type KernelRegistration = {
   id: KernelProviderId;
   options?: Record<string, unknown>;
   /** File extensions this kernel handles (e.g. ['scad'], ['ts', 'js']). '*' is a catch-all. */
@@ -165,7 +165,7 @@ export type KernelWorkerEntry = {
  * ];
  * ```
  */
-export type KernelModules = KernelWorkerEntry[];
+export type KernelModules = KernelRegistration[];
 
 // =============================================================================
 // Middleware Options Types
@@ -182,7 +182,7 @@ export type KernelModules = KernelWorkerEntry[];
  * { url: edgeDetectionUrl, options: { thresholdDegrees: 45 } }
  * ```
  */
-export type MiddlewareEntry = {
+export type MiddlewareRegistration = {
   /** URL of the middleware module (obtained via `?url` import at build time) */
   url: string;
   /** Whether this middleware is active. Defaults to `true`. */
@@ -197,14 +197,14 @@ export type MiddlewareEntry = {
  *
  * @example
  * ```ts
- * const middleware: MiddlewareEntries = [
+ * const middleware: MiddlewareRegistrations = [
  *   { url: parameterCacheUrl },
  *   { url: geometryCacheUrl },
  *   { url: edgeDetectionUrl, options: { thresholdDegrees: 45 } },
  * ];
  * ```
  */
-export type MiddlewareEntries = MiddlewareEntry[];
+export type MiddlewareRegistrations = MiddlewareRegistration[];
 
 // =============================================================================
 // Bundler Options Types
@@ -221,7 +221,7 @@ export type MiddlewareEntries = MiddlewareEntry[];
  * { bundlerModuleUrl: esbuildBundlerUrl, extensions: ['ts', 'js', 'tsx', 'jsx'] }
  * ```
  */
-export type BundlerEntry = {
+export type BundlerRegistration = {
   /** URL of the bundler module (obtained via `?url` import at build time) */
   bundlerModuleUrl: string;
   /** File extensions this bundler handles */
@@ -236,38 +236,12 @@ export type BundlerEntry = {
  *
  * @example
  * ```ts
- * const bundlers: BundlerEntries = [
+ * const bundlers: BundlerRegistrations = [
  *   { bundlerModuleUrl: esbuildBundlerUrl, extensions: ['ts', 'js', 'tsx', 'jsx'] },
  * ];
  * ```
  */
-export type BundlerEntries = BundlerEntry[];
-
-/**
- * Public interface for kernel workers as exposed via Comlink.
- *
- * The kernel-comlink-adapter maps symbol-keyed methods on KernelWorker
- * to string-named equivalents. This type represents that string-named surface,
- * allowing the kernel machine to interact with workers generically without
- * importing concrete worker types.
- */
-export type KernelWorkerInterface = {
-  initializeEntry(
-    callbacks: { onLog: OnWorkerLog },
-    transferables: { fileSystemPort?: MessagePort },
-    options: Record<string, unknown>,
-    middlewareEntries: MiddlewareEntries,
-  ): Promise<void>;
-  cleanupEntry(): Promise<void>;
-  getParametersEntry(file: GeometryFile): Promise<GetParametersResult>;
-  createGeometryEntry(file: GeometryFile, parameters: Record<string, unknown>): Promise<CreateGeometryResultCompleted>;
-  exportGeometryEntry(
-    fileType: ExportFormat,
-    tessellation?: { linearTolerance: number; angularTolerance: number },
-  ): Promise<ExportGeometryResult>;
-  getExportFormats(): ExportFormat[];
-  configureMiddleware(entries: MiddlewareEntries): Promise<void>;
-};
+export type BundlerRegistrations = BundlerRegistration[];
 
 // =============================================================================
 // Operation Result Types
@@ -284,7 +258,7 @@ export type CreateGeometryResult = KernelResult<GeometryResponse[]>;
  * Completed result type for createGeometry.
  * Returned to consumers - geometries have hash for React keys and caching.
  */
-export type CreateGeometryResultCompleted = KernelResult<Geometry[]>;
+export type HashedGeometryResult = KernelResult<Geometry[]>;
 
 /**
  *

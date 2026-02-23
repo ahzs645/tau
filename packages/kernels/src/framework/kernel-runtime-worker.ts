@@ -35,7 +35,7 @@ import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
 
 /**
  * Configuration for a kernel module within the runtime worker.
- * Mirrors KernelWorkerEntry but without the worker URL (since we ARE the worker).
+ * Mirrors KernelRegistration but without the worker URL (since we ARE the worker).
  */
 type KernelModuleEntry = {
   id: string;
@@ -85,14 +85,14 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   // Protected overrides (must precede private methods per linter rules)
   // =====================================================================
 
-  protected override async initialize(
+  protected override async onInitialize(
     { options }: { options: RuntimeWorkerOptions },
     _runtime: KernelRuntime,
   ): Promise<void> {
     this.kernelModules = options.kernelModules;
   }
 
-  protected override async canHandle(input: CanHandleInput, runtime: KernelRuntime): Promise<boolean> {
+  protected override async onCanHandle(input: CanHandleInput, runtime: KernelRuntime): Promise<boolean> {
     const selection = await this.selectKernel(input.filePath, runtime);
     if (!selection) {
       return false;
@@ -114,7 +114,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return true;
   }
 
-  protected override async getDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]> {
+  protected override async onGetDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]> {
     if (this.cachedDetectionDeps) {
       const deps = this.cachedDetectionDeps;
       this.cachedDetectionDeps = undefined;
@@ -125,7 +125,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return kernel.definition.getDependencies(input, runtime, kernel.ctx);
   }
 
-  protected override async getParameters(
+  protected override async onGetParameters(
     input: GetParametersInput,
     runtime: KernelRuntime,
   ): Promise<GetParametersResult> {
@@ -133,7 +133,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return kernel.definition.getParameters(input, runtime, kernel.ctx);
   }
 
-  protected override async createGeometry(
+  protected override async onCreateGeometry(
     input: CreateGeometryInput,
     runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
@@ -161,10 +161,9 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
   }
 
-  protected override async exportGeometry(
+  protected override async onExportGeometry(
     input: ExportGeometryInput,
     runtime: KernelRuntime,
-    nativeHandle: unknown,
   ): Promise<ExportGeometryResult> {
     if (!this.activeKernelId) {
       return {
@@ -174,7 +173,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     const kernel = this.getActiveKernel();
-    return kernel.definition.exportGeometry(input, runtime, kernel.ctx, nativeHandle);
+    return kernel.definition.exportGeometry(input, runtime, kernel.ctx);
   }
 
   protected override getAssetUrls(): string[] {

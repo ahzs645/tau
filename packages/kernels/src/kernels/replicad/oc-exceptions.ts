@@ -270,21 +270,28 @@ export function decodeOcException(
  * - OcExceptionError: thrown by the OC proxy wrapper (has pointer + JS stack)
  * - bare number: direct Emscripten throw (JS stack is unwound)
  * - Error instances: standard JS errors with stack traces
- *
- * @param error - The error thrown during execution
- * @param ocInstance - The OC instance with exceptions support (undefined when not in withExceptions mode)
- * @param parseStackTrace - Function to parse error stack traces into structured frames
- * @param applySourceMaps - Function to apply source map resolution to stack frames
- * @param deriveLocation - Function to derive error location from stack frames
  */
-export function formatRuntimeErrorWithOc(
-  error: unknown,
-  ocInstance: OpenCascadeInstanceWithExceptions | undefined,
-  parseStackTrace: (error: unknown) => KernelStackFrame[],
-  applySourceMaps: (frames: KernelStackFrame[]) => KernelStackFrame[],
-  deriveLocation: (frames: KernelStackFrame[], sourceMap?: string) => ErrorLocation | undefined,
-  sourceMap?: string,
-): KernelIssue {
+export function formatRuntimeErrorWithOc({
+  error,
+  ocInstance,
+  parseStackTrace,
+  applySourceMaps,
+  deriveLocation,
+  sourceMap,
+}: {
+  /** The error thrown during execution */
+  error: unknown;
+  /** The OC instance with exceptions support (undefined when not in withExceptions mode) */
+  ocInstance: OpenCascadeInstanceWithExceptions | undefined;
+  /** Function to parse error stack traces into structured frames */
+  parseStackTrace: (error: unknown) => KernelStackFrame[];
+  /** Function to apply source map resolution to stack frames */
+  applySourceMaps: (frames: KernelStackFrame[]) => KernelStackFrame[];
+  /** Function to derive error location from stack frames */
+  deriveLocation: (frames: KernelStackFrame[], sourceMap?: string) => ErrorLocation | undefined;
+  /** Optional source map JSON string */
+  sourceMap?: string;
+}): KernelIssue {
   if (error instanceof OcExceptionError) {
     const { message, cppStack } = decodeOcException(error.ocExceptionPointer, ocInstance);
     const stackFrames = applySourceMaps(parseStackTrace(error));

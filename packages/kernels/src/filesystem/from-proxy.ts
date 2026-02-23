@@ -2,15 +2,15 @@
  * FromProxy -- wraps a proxy-like object as a KernelFileSystem.
  *
  * Each method is wrapped in a plain arrow function to prevent Proxy traps
- * (e.g., Comlink's `.apply()` / `.bind()`) from intercepting calls and
- * causing serialization failures when the bridge dispatches via `fn(...args)`.
+ * (e.g. `.apply()` / `.bind()`) from intercepting calls and causing
+ * serialization failures when the bridge dispatches via `fn(...args)`.
  */
 
 import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 
 /**
  * Minimal interface for an object that can be wrapped as a KernelFileSystem.
- * Matches both plain objects and Comlink `Remote<T>` proxies.
+ * Matches both plain objects and RPC proxy objects.
  */
 type FileSystemLike = {
   readFile(path: string, encoding: 'utf8'): Promise<string>;
@@ -28,8 +28,7 @@ type FileSystemLike = {
  *
  * Wraps each method in a plain arrow function, isolating the call from
  * Proxy traps that would otherwise intercept `.apply()` or `.bind()`.
- * Use this when bridging a Comlink `Remote` or similar RPC proxy through
- * the main-thread relay path.
+ * Use this when bridging an RPC proxy through the main-thread relay path.
  *
  * For direct worker-to-worker communication, prefer `createFileSystemBridge`
  * instead -- it removes the main thread from the hot path entirely.
@@ -41,7 +40,7 @@ type FileSystemLike = {
  * ```typescript
  * import { fromProxy } from '@taucad/kernels/filesystem';
  *
- * const fileSystem = fromProxy(comlinkRemoteFileManager);
+ * const fileSystem = fromProxy(remoteFileManager);
  * await client.connect({ fileSystem });
  * ```
  */

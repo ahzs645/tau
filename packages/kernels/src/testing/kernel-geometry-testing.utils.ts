@@ -164,18 +164,6 @@ export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<
   return gltfResponse?.content;
 }
 
-/**
- * Extract all GLTF contents from a CreateGeometryResult.
- * Returns an array of all GLTF geometries found.
- */
-export function extractAllGltfFromResult(result: CreateGeometryResult): Array<Uint8Array<ArrayBuffer>> {
-  if (!result.success) {
-    return [];
-  }
-
-  return result.data.filter((response) => isGltfResponse(response)).map((response) => response.content);
-}
-
 // =============================================================================
 // Geometry Variant Factory
 // =============================================================================
@@ -205,12 +193,17 @@ const defaultTolerance = 0.1;
 /**
  * Helper to compare two 3D vectors with tolerance.
  */
-const expectVector3ToBeCloseTo = (
-  actual: [number, number, number],
-  expected: [number, number, number],
-  subject: string,
-  tolerance: number,
-): void => {
+const expectVector3ToBeCloseTo = ({
+  actual,
+  expected,
+  subject,
+  tolerance,
+}: {
+  actual: [number, number, number];
+  expected: [number, number, number];
+  subject: string;
+  tolerance: number;
+}): void => {
   expect(
     Math.abs(actual[0] - expected[0]),
     `${subject}: Expected [X: ${expected[0]}]. Actual [X: ${actual[0]}]`,
@@ -329,7 +322,12 @@ export function createGeometryTestHelpers(): {
       expect(boundingBox, 'Expected bounding box to be defined').toBeDefined();
 
       if (boundingBox) {
-        expectVector3ToBeCloseTo(boundingBox.size, expectedSize, 'Bounding box size', tolerance);
+        expectVector3ToBeCloseTo({
+          actual: boundingBox.size,
+          expected: expectedSize,
+          subject: 'Bounding box size',
+          tolerance,
+        });
       }
     },
 
@@ -343,7 +341,12 @@ export function createGeometryTestHelpers(): {
       expect(boundingBox, 'Expected bounding box to be defined').toBeDefined();
 
       if (boundingBox) {
-        expectVector3ToBeCloseTo(boundingBox.center, expectedCenter, 'Bounding box center', tolerance);
+        expectVector3ToBeCloseTo({
+          actual: boundingBox.center,
+          expected: expectedCenter,
+          subject: 'Bounding box center',
+          tolerance,
+        });
       }
     },
 
@@ -359,8 +362,18 @@ export function createGeometryTestHelpers(): {
 
       expect(boundingBox, 'Expected bounding box to be defined').toBeDefined();
       if (boundingBox) {
-        expectVector3ToBeCloseTo(boundingBox.size, expected.boundingBox.size, 'Bounding box size', tolerance);
-        expectVector3ToBeCloseTo(boundingBox.center, expected.boundingBox.center, 'Bounding box center', tolerance);
+        expectVector3ToBeCloseTo({
+          actual: boundingBox.size,
+          expected: expected.boundingBox.size,
+          subject: 'Bounding box size',
+          tolerance,
+        });
+        expectVector3ToBeCloseTo({
+          actual: boundingBox.center,
+          expected: expected.boundingBox.center,
+          subject: 'Bounding box center',
+          tolerance,
+        });
       }
     },
   };

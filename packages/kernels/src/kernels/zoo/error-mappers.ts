@@ -26,7 +26,7 @@ export function mapErrorToKclError(error: unknown): KclError {
 
   // For any other error, just create a simple unexpected error
   const message = error instanceof Error ? error.message : String(error);
-  return KclError.simple('unexpected', message);
+  return KclError.simple({ kind: 'unexpected', message });
 }
 
 /**

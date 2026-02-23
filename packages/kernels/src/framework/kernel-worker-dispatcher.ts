@@ -2,17 +2,16 @@
  * Worker-side Message Dispatcher
  *
  * Routes KernelCommand messages to the appropriate KernelWorker methods
- * and sends KernelResponse messages back. Replaces Comlink expose() for the
- * kernel worker hot path.
+ * and sends KernelResponse messages back via the kernel worker MessagePort.
  */
 
 import type { OnWorkerLog, LogLevel, LogOrigin } from '@taucad/types';
-import type { CreateGeometryResultCompleted } from '#types/kernel.types.js';
+import type { HashedGeometryResult } from '#types/kernel.types.js';
 import type { KernelCommand, KernelResponse, PerformanceEntryData } from '#types/kernel-protocol.types.js';
 import type { KernelWorker } from '#framework/kernel-worker.js';
 import type { KernelMessagePort } from '#framework/kernel-message-adapter.js';
 
-function extractGltfTransferables(result: CreateGeometryResultCompleted): Transferable[] {
+function extractGltfTransferables(result: HashedGeometryResult): Transferable[] {
   if (!result.success) {
     return [];
   }
@@ -71,7 +70,12 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
             fileSystemPort = message.fileSystemPort;
           }
 
-          await worker.initializeEntry({ onLog }, { fileSystemPort }, message.options, message.middlewareEntries);
+          await worker.initialize({
+            callbacks: { onLog },
+            transferables: { fileSystemPort },
+            options: message.options,
+            middlewareEntries: message.middlewareEntries,
+          });
 
           if (message.bundlerEntries) {
             for (const entry of message.bundlerEntries) {
@@ -85,17 +89,17 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
         }
 
         case 'render': {
-          const result = await worker.renderEntry(
-            message.file,
-            message.params,
-            (parametersResult) => {
+          const result = await worker.render({
+            file: message.file,
+            parameters: message.params,
+            onParametersResolved(parametersResult) {
               respond({ type: 'parametersResolved', requestId, result: parametersResult });
             },
-            (phase) => {
+            onProgress(phase) {
               respond({ type: 'progress', requestId, phase });
             },
-            message.tessellation,
-          );
+            tessellation: message.tessellation,
+          });
           const transferables = extractGltfTransferables(result);
 
           flushLogs();
@@ -115,7 +119,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
         }
 
         case 'export': {
-          const exportResult = await worker.exportGeometryEntry(message.format, message.tessellation);
+          const exportResult = await worker.exportGeometry(message.format, message.tessellation);
           respond({ type: 'exported', requestId, result: exportResult });
           break;
         }
@@ -125,7 +129,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
         }
 
         case 'cleanup': {
-          await worker.cleanupEntry();
+          await worker.cleanup();
           break;
         }
       }

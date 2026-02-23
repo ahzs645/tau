@@ -30,7 +30,7 @@ async function getParameters(
   mainFile: string,
 ): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
   const worker = await createWorker(files);
-  const result = await worker.getParametersEntry(createGeometryFile(mainFile));
+  const result = await worker.getParameters(createGeometryFile(mainFile));
 
   if (!result.success) {
     console.error('getParameters failed:', JSON.stringify(result.issues, null, 2));
@@ -53,7 +53,7 @@ async function getParametersWithError(
   mainFile: string,
 ): Promise<{ success: boolean; issues?: unknown[] }> {
   const worker = await createWorker(files);
-  return worker.getParametersEntry(createGeometryFile(mainFile));
+  return worker.getParameters(createGeometryFile(mainFile));
 }
 
 // =============================================================================
@@ -75,7 +75,7 @@ describe('ZooWorker', () => {
             |> extrude(length = 5)
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.kcl'));
+      const result = await worker.canHandle(createGeometryFile('main.kcl'));
       expect(result).toBe(true);
     });
 
@@ -85,7 +85,7 @@ describe('ZooWorker', () => {
           console.log('hello');
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.js'));
+      const result = await worker.canHandle(createGeometryFile('main.js'));
       expect(result).toBe(false);
     });
 
@@ -95,7 +95,7 @@ describe('ZooWorker', () => {
           const x: number = 10;
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.ts'));
+      const result = await worker.canHandle(createGeometryFile('main.ts'));
       expect(result).toBe(false);
     });
 
@@ -105,7 +105,7 @@ describe('ZooWorker', () => {
           cube([10, 10, 10]);
         `,
       });
-      const result = await worker.canHandleEntry(createGeometryFile('main.scad'));
+      const result = await worker.canHandle(createGeometryFile('main.scad'));
       expect(result).toBe(false);
     });
   });
@@ -114,7 +114,7 @@ describe('ZooWorker', () => {
   // Tests: Parameter Extraction - Single File Projects
   // ===========================================================================
 
-  describe('getParametersEntry', () => {
+  describe('getParameters', () => {
     describe('Single file projects', () => {
       it('should extract numeric parameters', async () => {
         const { jsonSchema, defaultParameters } = await getParameters(

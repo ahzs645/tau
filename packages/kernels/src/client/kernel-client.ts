@@ -6,7 +6,7 @@
  */
 
 import type { GeometryFile, ExportFormat, LogOrigin } from '@taucad/types';
-import type { CreateGeometryResultCompleted, ExportGeometryResult, GetParametersResult } from '#types/kernel.types.js';
+import type { HashedGeometryResult, ExportGeometryResult, GetParametersResult } from '#types/kernel.types.js';
 import type { KernelFileSystem, Tessellation } from '#types/kernel-worker.types.js';
 import type { PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
 import { KernelWorkerClient } from '#framework/kernel-worker-client.js';
@@ -80,19 +80,19 @@ export type KernelClient = {
    * Render geometry from a file. Auto-connects if not yet connected.
    * If no kernel can handle the file, returns a result with `success: false`.
    *
-   * Tessellation resolution: callOptions.tessellation > options.tessellation.preview > undefined (kernel default).
+   * Tessellation resolution: input.tessellation > options.tessellation.preview > undefined (kernel default).
    *
-   * @param file - The geometry file to render
-   * @param parameters - User-provided parameters
-   * @param callOptions - Per-call overrides
-   * @param callOptions.tessellation - Optional tessellation quality override for this render
+   * @param input - Render input containing file, parameters, and optional tessellation quality override
+   * @param input.file - The geometry file to render
+   * @param input.parameters - The parameters for rendering
+   * @param input.tessellation - Optional tessellation quality override
    * @returns Completed geometry result
    */
-  render(
-    file: GeometryFile,
-    parameters: Record<string, unknown>,
-    callOptions?: { tessellation?: Tessellation },
-  ): Promise<CreateGeometryResultCompleted>;
+  render(input: {
+    file: GeometryFile;
+    parameters: Record<string, unknown>;
+    tessellation?: Tessellation;
+  }): Promise<HashedGeometryResult>;
 
   /**
    * Export geometry in the specified format.
@@ -155,7 +155,7 @@ export type KernelClient = {
  * });
  *
  * await client.connect({ fileSystem: myFileSystem });
- * const result = await client.render(file, params);
+ * const result = await client.render({ file, params });
  * ```
  */
 export function createKernelClient(options: KernelClientOptions): KernelClient {
@@ -226,7 +226,12 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
     const fileSystemPort =
       'port' in resolvedOptions ? resolvedOptions.port : createFileSystemPort(resolvedOptions.fileSystem);
 
-    await workerClient.initialize({ kernelModules }, fileSystemPort, middlewareEntries, bundlerEntries);
+    await workerClient.initialize({
+      options: { kernelModules },
+      fileSystemPort,
+      middlewareEntries,
+      bundlerEntries,
+    });
 
     connected = true;
     return workerClient;
@@ -237,28 +242,28 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
       await ensureConnected(connectOptions);
     },
 
-    async render(
-      file: GeometryFile,
-      parameters: Record<string, unknown>,
-      callOptions?: { tessellation?: Tessellation },
-    ): Promise<CreateGeometryResultCompleted> {
+    async render(input: {
+      file: GeometryFile;
+      parameters: Record<string, unknown>;
+      tessellation?: Tessellation;
+    }): Promise<HashedGeometryResult> {
       const client = await ensureConnected();
-      const tessellation = callOptions?.tessellation ?? options.tessellation?.preview;
-      return client.render(
-        file,
-        parameters,
-        (result) => {
+      const tessellation = input.tessellation ?? options.tessellation?.preview;
+      return client.render({
+        file: input.file,
+        parameters: input.parameters,
+        onParametersResolved(result) {
           for (const handler of handlers.parametersResolved) {
             handler(result);
           }
         },
-        (phase, detail) => {
+        onProgress(phase, detail) {
           for (const handler of handlers.progress) {
             handler(phase, detail);
           }
         },
         tessellation,
-      );
+      });
     },
 
     async export(format: ExportFormat, callOptions?: { tessellation?: Tessellation }): Promise<ExportGeometryResult> {

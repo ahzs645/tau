@@ -7,9 +7,7 @@
  * This is the reference implementation of the defineKernel pattern.
  */
 
-// eslint-disable-next-line import-x/no-extraneous-dependencies -- listed as workspace:* dependency
 import { importToGlb, exportFromGlb, supportedImportFormats } from '@taucad/converter';
-// eslint-disable-next-line import-x/no-extraneous-dependencies -- listed as workspace:* dependency
 import type { InputFormat, OutputFormat } from '@taucad/converter';
 import { asBuffer } from '@taucad/utils/file';
 import { defineKernel } from '#types/kernel-worker.types.js';
@@ -97,7 +95,7 @@ export default defineKernel<TauContext, TauNativeHandle>({
     }
   },
 
-  async exportGeometry({ fileType }, { logger }, _ctx, nativeHandle) {
+  async exportGeometry({ fileType, nativeHandle }, { logger }, _ctx) {
     try {
       if (nativeHandle.length === 0) {
         return createKernelError([

@@ -154,8 +154,10 @@ function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellati
 }
 
 /** Render an array of input shapes into geometry representations using the given tessellation quality. */
-export function render(shapes: InputShape[], tessellation?: Tessellation): Array<GeometrySvg | GeometryReplicad> {
-  const tess = tessellation ?? defaultPreviewTessellation;
+export function render(
+  shapes: InputShape[],
+  tessellation: Tessellation = defaultPreviewTessellation,
+): Array<GeometrySvg | GeometryReplicad> {
   return shapes.map((shapeConfig) => {
     if (isSvgable(shapeConfig.shape)) {
       // TODO: fix this type
@@ -164,7 +166,7 @@ export function render(shapes: InputShape[], tessellation?: Tessellation): Array
 
     if (isMeshable(shapeConfig.shape)) {
       // TODO: fix this type
-      return renderMesh(shapeConfig as unknown as MeshableConfiguration, tess);
+      return renderMesh(shapeConfig as unknown as MeshableConfiguration, tessellation);
     }
 
     throw new Error('Invalid shape');
@@ -172,12 +174,17 @@ export function render(shapes: InputShape[], tessellation?: Tessellation): Array
 }
 
 /** Normalize, optionally transform, and render shapes from a model's output. */
-export function renderOutput(
-  shapes: MainResultShapes,
-  beforeRender?: (shapes: InputShape[]) => InputShape[],
+export function renderOutput({
+  shapes,
+  beforeRender,
   defaultName = 'AnyShape',
-  tessellation?: Tessellation,
-): Array<GeometrySvg | GeometryReplicad> {
+  tessellation,
+}: {
+  shapes: MainResultShapes;
+  beforeRender?: (shapes: InputShape[]) => InputShape[];
+  defaultName?: string;
+  tessellation?: Tessellation;
+}): Array<GeometrySvg | GeometryReplicad> {
   const baseShape = createBasicShapeConfig(shapes, defaultName).map((element) => normalizeColorAndOpacity(element));
 
   const config = beforeRender ? beforeRender(baseShape) : baseShape;

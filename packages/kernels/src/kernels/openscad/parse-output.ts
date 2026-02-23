@@ -601,18 +601,19 @@ export class OpenScadStderrParser {
  * - `ERROR: message in file "foo.scad", line 10` (generic error)
  * - `Current top level object is empty.` (special case: no geometry rendered)
  *
- * @param message - The stderr line to parse.
- * @param addError - Callback to invoke when an error is parsed.
- * @param getFileContents - Optional function to lazily fetch file content for calculating column positions.
- * @param mainFilePath - Optional full relative path of the main file (e.g., "site/backyard.scad").
- *                       Used to map basename errors back to full paths for FileLink navigation.
+ * @param options - Options containing the stderr message, error callback, and optional file content/path helpers
+ * @param options.message - The stderr line to parse
+ * @param options.addError - Callback to invoke when an error is parsed
+ * @param options.getFileContents - Optional function to lazily fetch file content for calculating column positions
+ * @param options.mainFilePath - Optional full relative path of the main file, used to map basename errors back to full paths
  */
-export function parseStderrLine(
-  message: string,
-  addError: AddErrorFn,
-  getFileContents?: GetFileContentsFn,
-  mainFilePath?: string,
-): void {
+export function parseStderrLine(options: {
+  message: string;
+  addError: AddErrorFn;
+  getFileContents?: GetFileContentsFn;
+  mainFilePath?: string;
+}): void {
+  const { message, addError, getFileContents, mainFilePath } = options;
   // Delegate to the stateful parser for a single line.
   // Note: TRACE lines will not be captured when using this stateless API since
   // each call creates a new parser instance with no memory of previous errors.

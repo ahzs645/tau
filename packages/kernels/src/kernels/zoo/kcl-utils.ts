@@ -114,7 +114,7 @@ async function loadWasmModule(tracer?: KernelSpanTracer): Promise<WasmModule> {
 
     return wasmModule;
   } catch (error) {
-    throw KclError.simple('engine', `Failed to load WASM module: ${String(error)}`);
+    throw KclError.simple({ kind: 'engine', message: `Failed to load WASM module: ${String(error)}` });
   }
 }
 
@@ -314,7 +314,7 @@ export class KclUtils {
     }
 
     if (!this.wasmModule) {
-      throw KclError.simple('engine', 'WASM module not loaded');
+      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
     }
 
     try {
@@ -327,7 +327,7 @@ export class KclUtils {
         warnings: errors.warnings,
       };
     } catch (error) {
-      throw KclError.simple('syntax', `Failed to parse KCL code: ${String(error)}`);
+      throw KclError.simple({ kind: 'syntax', message: `Failed to parse KCL code: ${String(error)}` });
     }
   }
 
@@ -345,11 +345,11 @@ export class KclUtils {
     }
 
     if (!this.wasmModule) {
-      throw KclError.simple('engine', 'WASM module not loaded');
+      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
     }
 
     if (!this.mockContext) {
-      throw KclError.simple('engine', 'Mock context not initialized');
+      throw KclError.simple({ kind: 'engine', message: 'Mock context not initialized' });
     }
 
     try {
@@ -374,7 +374,7 @@ export class KclUtils {
         error instanceof Error
           ? `KCL mock execution failed: ${error.message}`
           : `KCL mock execution failed: ${String(error)}`;
-      throw KclError.simple('engine', errorMessage);
+      throw KclError.simple({ kind: 'engine', message: errorMessage });
     }
   }
 
@@ -392,11 +392,11 @@ export class KclUtils {
     }
 
     if (!this.wasmModule) {
-      throw KclError.simple('engine', 'WASM module not loaded');
+      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
     }
 
     if (!this.engineManager) {
-      throw KclError.simple('engine', 'Engine manager not initialized');
+      throw KclError.simple({ kind: 'engine', message: 'Engine manager not initialized' });
     }
 
     try {
@@ -421,7 +421,7 @@ export class KclUtils {
 
       const errorMessage =
         error instanceof Error ? `KCL execution failed: ${error.message}` : `KCL execution failed: ${String(error)}`;
-      throw KclError.simple('engine', errorMessage);
+      throw KclError.simple({ kind: 'engine', message: errorMessage });
     }
   }
 
@@ -438,13 +438,13 @@ export class KclUtils {
     }
 
     if (!this.isEngineInitialized) {
-      throw KclError.simple('engine', 'Engine not initialized');
+      throw KclError.simple({ kind: 'engine', message: 'Engine not initialized' });
     }
 
     // Get the context used for execution
     const context = this.engineManager?.context;
     if (!context) {
-      throw KclError.simple('engine', 'No context available for export');
+      throw KclError.simple({ kind: 'engine', message: 'No context available for export' });
     }
 
     // Create export format configuration
@@ -525,10 +525,15 @@ export class KclUtils {
    */
   private async createEngineManager(): Promise<EngineConnection> {
     if (!this.wasmModule) {
-      throw KclError.simple('engine', 'WASM module not loaded');
+      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
     }
 
-    const engineManager = new EngineConnection(this.apiKey, this.baseUrl, this.wasmModule, this.fileSystemManager);
+    const engineManager = new EngineConnection({
+      apiKey: this.apiKey,
+      baseUrl: this.baseUrl,
+      wasmModule: this.wasmModule,
+      fileSystemManager: this.fileSystemManager,
+    });
     return engineManager;
   }
 
