@@ -152,6 +152,55 @@ describe('kernel-filesystem-bridge', () => {
     });
   });
 
+  describe('FileSystemProxy dispose', () => {
+    it('should reject pending calls when disposed', async () => {
+      const channel = new MessageChannel();
+      const proxy = createFileSystemProxy(channel.port2);
+
+      const readPromise = proxy.readFile('/pending.txt', 'utf8');
+      proxy.dispose();
+
+      await expect(readPromise).rejects.toThrow('Filesystem proxy closed');
+      channel.port1.close();
+    });
+
+    it('should reject multiple pending calls when disposed', async () => {
+      const channel = new MessageChannel();
+      const proxy = createFileSystemProxy(channel.port2);
+
+      const read1 = proxy.readFile('/a.txt', 'utf8');
+      const read2 = proxy.readFile('/b.txt', 'utf8');
+      const write1 = proxy.writeFile('/c.txt', 'data');
+      proxy.dispose();
+
+      await expect(read1).rejects.toThrow('Filesystem proxy closed');
+      await expect(read2).rejects.toThrow('Filesystem proxy closed');
+      await expect(write1).rejects.toThrow('Filesystem proxy closed');
+      channel.port1.close();
+    });
+
+    it('should not throw when disposed with no pending calls', () => {
+      const channel = new MessageChannel();
+      const proxy = createFileSystemProxy(channel.port2);
+
+      expect(() => {
+        proxy.dispose();
+      }).not.toThrow();
+      channel.port1.close();
+    });
+
+    it('should not throw when disposed twice', () => {
+      const channel = new MessageChannel();
+      const proxy = createFileSystemProxy(channel.port2);
+
+      expect(() => {
+        proxy.dispose();
+        proxy.dispose();
+      }).not.toThrow();
+      channel.port1.close();
+    });
+  });
+
   describe('createFileSystemPort convenience', () => {
     it('should return a working MessagePort', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
