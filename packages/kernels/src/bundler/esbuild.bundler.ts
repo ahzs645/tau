@@ -26,11 +26,10 @@ import {
   extractExternalImports,
   extractProjectDependencies,
 } from '#bundler/esbuild-core.js';
-import type { EsbuildBundlerContext } from '#bundler/esbuild-core.js';
 
 const autoExportNames = ['main', 'defaultParams', 'getParameterDefinitions'];
 
-export default defineBundler<EsbuildBundlerContext>({
+export default defineBundler({
   name: 'EsbuildBundler',
   version: '1.0.0',
   extensions: ['ts', 'js', 'tsx', 'jsx'],

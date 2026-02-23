@@ -139,16 +139,14 @@ async function getKclUtilsWithEngine(context: ZooContext): Promise<KclUtils> {
 // =============================================================================
 
 const zooOptionsSchema = z.object({
-  baseUrl: z.string().default(''),
+  baseUrl: z.string().default('wss://api.zoo.dev'),
 });
-
-type ZooOptions = z.infer<typeof zooOptionsSchema>;
 
 // =============================================================================
 // Kernel module definition
 // =============================================================================
 
-export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>, ZooOptions>({
+export default defineKernel({
   name: 'ZooKernel',
   version: '1.0.0',
   optionsSchema: zooOptionsSchema,
@@ -156,8 +154,8 @@ export default defineKernel<ZooContext, Uint8Array<ArrayBuffer>, ZooOptions>({
   async initialize(options) {
     return {
       baseUrl: options.baseUrl,
-      kclUtils: undefined,
-      fileSystemManager: undefined,
+      kclUtils: undefined as KclUtils | undefined,
+      fileSystemManager: undefined as FileSystemManager | undefined,
     };
   },
 

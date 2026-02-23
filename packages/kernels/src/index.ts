@@ -5,6 +5,9 @@ export type { KernelClient, KernelClientOptions, ConnectOptions } from '#client/
 // Plugin types
 export type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
 
+// Plugin factory helpers
+export { createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin } from '#plugins/plugin-helpers.js';
+
 // Presets
 export { presets } from '#plugins/presets.js';
 

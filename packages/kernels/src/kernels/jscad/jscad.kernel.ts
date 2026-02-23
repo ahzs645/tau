@@ -26,10 +26,6 @@ import {
 // Types
 // =============================================================================
 
-type JscadContext = {
-  modulesRegistered: boolean;
-};
-
 type JscadModuleExports = {
   getParameterDefinitions?: () => JscadParameterDefinition[];
   defaultParams?: Record<string, unknown>;
@@ -182,7 +178,7 @@ function resolveModule(module: unknown): JscadModuleExports {
 // Kernel module definition
 // =============================================================================
 
-export default defineKernel<JscadContext, unknown[]>({
+export default defineKernel({
   name: 'JscadKernel',
   version: '1.0.0',
 
@@ -226,7 +222,7 @@ export default defineKernel<JscadContext, unknown[]>({
       let jsonSchema;
 
       if (isRecordObject(module) && typeof module.getParameterDefinitions === 'function') {
-        const definitions = (module.getParameterDefinitions as () => JscadParameterDefinition[])();
+        const definitions = module.getParameterDefinitions();
         defaultParameters = convertParameterDefinitionsToDefaults(definitions);
         jsonSchema = convertParameterDefinitionsToJsonSchema(definitions);
       } else if (isRecordObject(module) && module.defaultParams && isRecordObject(module.defaultParams)) {

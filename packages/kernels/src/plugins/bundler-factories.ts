@@ -3,7 +3,7 @@
  * Each factory returns a BundlerPlugin registration object with resolved module URL.
  */
 
-import type { BundlerPlugin } from '#plugins/plugin-types.js';
+import { createBundlerPlugin } from '#plugins/plugin-helpers.js';
 
 /**
  * Esbuild bundler options.
@@ -17,20 +17,14 @@ export type EsbuildOptions = {
  * Create an esbuild bundler plugin registration.
  * Handles JS/TS file bundling, code execution, and module resolution via esbuild-wasm.
  *
- * @param options - Optional esbuild-specific configuration
- * @returns BundlerPlugin for esbuild
- *
  * @example
  * ```typescript
  * esbuild()                            // default: ['ts', 'js', 'tsx', 'jsx']
  * esbuild({ extensions: ['ts', 'tsx'] }) // TypeScript only
  * ```
  */
-export function esbuild(options?: EsbuildOptions): BundlerPlugin {
-  return {
-    id: 'esbuild',
-    moduleUrl: new URL('../bundler/esbuild.bundler.js', import.meta.url).href,
-    extensions: options?.extensions ?? ['ts', 'js', 'tsx', 'jsx'],
-    options: options as Record<string, unknown> | undefined,
-  };
-}
+export const esbuild = createBundlerPlugin<EsbuildOptions>((options) => ({
+  id: 'esbuild',
+  moduleUrl: new URL('../bundler/esbuild.bundler.js', import.meta.url).href,
+  extensions: options?.extensions ?? ['ts', 'js', 'tsx', 'jsx'],
+}));

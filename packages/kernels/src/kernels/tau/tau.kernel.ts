@@ -14,10 +14,6 @@ import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelIssue } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 
-type TauContext = Record<string, never>;
-
-type TauNativeHandle = Uint8Array<ArrayBuffer>;
-
 function getFileExtension(filename: string): string {
   const lastDotIndex = filename.lastIndexOf('.');
   if (lastDotIndex === -1 || lastDotIndex === filename.length - 1) {
@@ -41,7 +37,7 @@ function resolveToRelative(absolutePath: string, basePath: string): string {
   return absolutePath;
 }
 
-export default defineKernel<TauContext, TauNativeHandle>({
+export default defineKernel({
   name: 'TauKernel',
   version: '1.0.0',
 

@@ -362,12 +362,12 @@ function formatValue(value: unknown): string {
 // Kernel module definition
 // =============================================================================
 
-export default defineKernel<OpenScadContext, string>({
+export default defineKernel({
   name: 'OpenScadKernel',
   version: '1.0.0',
 
   async initialize() {
-    return { fontCache: new Map() };
+    return { fontCache: new Map<string, Uint8Array<ArrayBuffer>>() };
   },
 
   async canHandle({ extension }) {

@@ -226,12 +226,14 @@ export type CreateGeometryOutput<NativeHandle = unknown> = {
  * The API is designed to be simple (no class inheritance, no `this` binding)
  * with all state managed through the typed context returned by initialize().
  *
- * When `optionsSchema` is provided, TypeScript infers `Options` from the schema,
- * giving the `initialize` callback type-safe access to validated options.
+ * All three type parameters are inferred automatically:
+ * - Context from the return type of initialize()
+ * - NativeHandle from the nativeHandle field of createGeometry()'s return
+ * - Options from optionsSchema (when provided)
  *
- * @template Context - Kernel-specific context type returned by initialize()
- * @template NativeHandle - Kernel-specific type for native geometry representation
- * @template Options - Type of validated options, inferred from optionsSchema when provided
+ * @template Context - Kernel-specific context type, inferred from initialize() return
+ * @template NativeHandle - Kernel-specific native geometry representation, inferred from createGeometry() return
+ * @template Options - Validated options type, inferred from optionsSchema when provided
  */
 export type KernelDefinition<
   Context = unknown,
@@ -247,36 +249,42 @@ export type KernelDefinition<
   optionsSchema?: z.ZodType<Options>;
 
   /** Initialize kernel with typed options. Options type is inferred from optionsSchema. */
-  initialize(options: Options, runtime: KernelRuntime): Promise<Context>;
+  initialize(options: NoInfer<Options>, runtime: KernelRuntime): Promise<Context>;
 
   /** Optional guard that determines whether this kernel can process a given file. Called during kernel selection. */
-  canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
+  canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: NoInfer<Context>): Promise<boolean>;
 
   /** Return absolute paths of all files the active file depends on, used for change-detection and cache invalidation. */
-  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: Context): Promise<string[]>;
+  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: NoInfer<Context>): Promise<string[]>;
   /** Extract user-facing parameters (and their JSON Schema) from the active file. */
-  getParameters(input: GetParametersInput, runtime: KernelRuntime, context: Context): Promise<GetParametersResult>;
+  getParameters(
+    input: GetParametersInput,
+    runtime: KernelRuntime,
+    context: NoInfer<Context>,
+  ): Promise<GetParametersResult>;
   /** Evaluate the active file and produce tessellated geometry plus a native handle for export. */
   createGeometry(
     input: CreateGeometryInput,
     runtime: KernelRuntime,
-    context: Context,
+    context: NoInfer<Context>,
   ): Promise<CreateGeometryOutput<NativeHandle>>;
   /** Convert a previously created native geometry handle into one or more export file blobs. */
   exportGeometry(
-    input: ExportGeometryInput<NativeHandle>,
+    input: ExportGeometryInput<NoInfer<NativeHandle>>,
     runtime: KernelRuntime,
-    context: Context,
+    context: NoInfer<Context>,
   ): Promise<ExportGeometryResult>;
 
   /** Tear down kernel resources (WASM instances, temp files, etc.) when the worker is disposed. */
-  cleanup?(context: Context): Promise<void>;
+  cleanup?(context: NoInfer<Context>): Promise<void>;
 };
 
 /**
- * Define a kernel module with proper type inference.
- * This is the primary API for kernel authors -- it validates the definition
- * shape at the type level and returns it unchanged at runtime.
+ * Define a kernel module with full type inference.
+ * All type parameters are inferred automatically -- no explicit type arguments needed:
+ * - Context from initialize() return type
+ * - NativeHandle from createGeometry() return type (nativeHandle field)
+ * - Options from optionsSchema (when provided)
  *
  * @param definition - The kernel definition object implementing all required lifecycle methods
  * @returns The same definition, typed as {@link KernelDefinition}
@@ -304,8 +312,8 @@ export type KernelDefinition<
  * });
  * ```
  */
-export function defineKernel<Ctx, NativeHandle, Options extends Record<string, unknown> = Record<string, unknown>>(
-  definition: KernelDefinition<Ctx, NativeHandle, Options>,
-): KernelDefinition<Ctx, NativeHandle, Options> {
+export function defineKernel<Context, NativeHandle, Options extends Record<string, unknown> = Record<string, unknown>>(
+  definition: KernelDefinition<Context, NativeHandle, Options>,
+): KernelDefinition<Context, NativeHandle, Options> {
   return definition;
 }

@@ -12,6 +12,7 @@
  * so spans include exception handling time.
  */
 
+import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 
 /**
@@ -41,7 +42,7 @@ export type OcTracingSummary = {
  * Result of wrapping an OC instance with tracing.
  */
 export type OcTracingResult = {
-  tracedInstance: Record<string, unknown>;
+  tracedInstance: OpenCascadeInstance;
   summary: OcTracingSummary;
 };
 
@@ -57,7 +58,7 @@ export type OcTracingResult = {
  * @returns The traced instance and a summary handle for flushing
  */
 export function wrapOcWithTracing(
-  oc: Record<string, unknown>,
+  oc: OpenCascadeInstance,
   tracer: KernelSpanTracer,
   config: OcTracingConfig,
 ): OcTracingResult {
@@ -121,7 +122,7 @@ export function wrapOcWithTracing(
 
   const classProxyCache = new Map<string, unknown>();
 
-  const tracedInstance: Record<string, unknown> = new Proxy(oc, {
+  const tracedInstance: OpenCascadeInstance = new Proxy(oc, {
     get(target, property, receiver): unknown {
       if (typeof property === 'symbol') {
         return Reflect.get(target, property, receiver);

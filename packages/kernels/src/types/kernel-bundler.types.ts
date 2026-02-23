@@ -117,8 +117,12 @@ export type DetectImportsResult = {
  * without modules registered, then the framework selects and initializes
  * the kernel (which registers real modules), then bundle() produces code.
  *
- * @template Context - Bundler-specific context type returned by initialize()
- * @template Options - Type of validated options, inferred from optionsSchema when provided
+ * Type parameters are inferred automatically:
+ * - Context from initialize() return type
+ * - Options from optionsSchema (when provided)
+ *
+ * @template Context - Bundler-specific context type, inferred from initialize() return
+ * @template Options - Validated options type, inferred from optionsSchema when provided
  */
 export type BundlerDefinition<Context = unknown, Options extends Record<string, unknown> = Record<string, unknown>> = {
   name: string;
@@ -130,7 +134,7 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
   optionsSchema?: z.ZodType<Options>;
 
   /** Initialize the bundler. Receives framework init options plus user-provided options. */
-  initialize(initOptions: BundlerInitOptions, options: Options): Promise<Context>;
+  initialize(initOptions: BundlerInitOptions, options: NoInfer<Options>): Promise<Context>;
 
   /**
    * Detect which bare-specifier modules are imported transitively.
@@ -138,32 +142,33 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
    * Returns detected modules and project dependencies without producing runnable code.
    * This is the primary mechanism for kernel selection -- no module stubs required.
    */
-  detectImports(input: BundleInput, context: Context): Promise<DetectImportsResult>;
+  detectImports(input: BundleInput, context: NoInfer<Context>): Promise<DetectImportsResult>;
 
   /**
    * Produce runnable code with all registered modules resolved.
    * Called AFTER kernel selection and initialization (modules are registered).
    */
-  bundle(input: BundleInput, context: Context): Promise<BundleResult>;
+  bundle(input: BundleInput, context: NoInfer<Context>): Promise<BundleResult>;
 
   /** Execute bundled code (tied to this bundler's output format). */
-  execute(code: string, context: Context): Promise<ExecuteResult>;
+  execute(code: string, context: NoInfer<Context>): Promise<ExecuteResult>;
 
   /** Register a builtin module for resolution during bundle(). */
-  registerModule(name: string, builtinModule: BuiltinModule, context: Context): void;
+  registerModule(name: string, builtinModule: BuiltinModule, context: NoInfer<Context>): void;
 
   /**
    * Optional fast-path dependency resolution without full bundling.
    * Falls back to bundle().dependencies when not implemented.
    */
-  resolveDependencies?(input: BundleInput, context: Context): Promise<string[]>;
+  resolveDependencies?(input: BundleInput, context: NoInfer<Context>): Promise<string[]>;
 
   /** Clean up bundler resources (e.g., esbuild.stop()). */
-  cleanup?(context: Context): Promise<void>;
+  cleanup?(context: NoInfer<Context>): Promise<void>;
 };
 
 /**
- * Helper function to define a bundler module with proper type inference.
+ * Define a bundler module with full type inference.
+ * Context is inferred from initialize() return type; Options from optionsSchema.
  *
  * @example
  * ```typescript
@@ -178,8 +183,8 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
  * });
  * ```
  */
-export function defineBundler<Ctx, Options extends Record<string, unknown> = Record<string, unknown>>(
-  definition: BundlerDefinition<Ctx, Options>,
-): BundlerDefinition<Ctx, Options> {
+export function defineBundler<Context, Options extends Record<string, unknown> = Record<string, unknown>>(
+  definition: BundlerDefinition<Context, Options>,
+): BundlerDefinition<Context, Options> {
   return definition;
 }

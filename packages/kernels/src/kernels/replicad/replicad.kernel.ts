@@ -241,13 +241,11 @@ const replicadOptionsSchema = z.object({
   ocTracing: z.enum(['off', 'summary', 'per-call']).optional().default('summary'),
 });
 
-type ReplicadOptions = z.infer<typeof replicadOptionsSchema>;
-
 // =============================================================================
 // Kernel module definition
 // =============================================================================
 
-export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
+export default defineKernel({
   name: 'ReplicadKernel',
   version: '1.0.0',
   optionsSchema: replicadOptionsSchema,
@@ -265,12 +263,12 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
     const wasmSpan = tracer.startSpan('replicad.wasm-init', { withExceptions });
     if (withExceptions) {
       ocWithExceptions = await initOpenCascadeWithExceptions({ tracer });
-      openCascade = ocWithExceptions as unknown as OpenCascadeInstance;
-      let ocToSet: OpenCascadeInstance = wrapOcInstance(ocWithExceptions) as unknown as OpenCascadeInstance;
+      openCascade = ocWithExceptions;
+      let ocToSet: OpenCascadeInstance = wrapOcInstance(ocWithExceptions);
 
       if (ocTracing !== 'off') {
-        const traced = wrapOcWithTracing(ocToSet as unknown as Record<string, unknown>, tracer, { mode: ocTracing });
-        ocToSet = traced.tracedInstance as unknown as OpenCascadeInstance;
+        const traced = wrapOcWithTracing(ocToSet, tracer, { mode: ocTracing });
+        ocToSet = traced.tracedInstance;
         tracingSummary = traced.summary;
       }
 
@@ -280,8 +278,8 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
       let ocToSet: OpenCascadeInstance = openCascade;
 
       if (ocTracing !== 'off') {
-        const traced = wrapOcWithTracing(ocToSet as unknown as Record<string, unknown>, tracer, { mode: ocTracing });
-        ocToSet = traced.tracedInstance as unknown as OpenCascadeInstance;
+        const traced = wrapOcWithTracing(ocToSet, tracer, { mode: ocTracing });
+        ocToSet = traced.tracedInstance;
         tracingSummary = traced.summary;
       }
 
@@ -307,7 +305,7 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
       ocWithExceptions,
       withExceptions,
       replicadInitialised: true,
-      librarySourceMapCache: new Map(),
+      librarySourceMapCache: new Map<string, SourceMapConsumer | undefined>(),
       tracingSummary,
     };
   },
