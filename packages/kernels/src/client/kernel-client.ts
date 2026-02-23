@@ -304,6 +304,10 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
         fileSystemChannel = undefined;
       }
 
+      for (const set of Object.values(handlers)) {
+        set.clear();
+      }
+
       workerClient = undefined;
       transport = undefined;
       connected = false;

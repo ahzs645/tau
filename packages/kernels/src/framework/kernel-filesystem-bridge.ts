@@ -78,6 +78,14 @@ export function createFileSystemPort(fileSystem: FileSystemPortable): MessagePor
 }
 
 /**
+ * A KernelFileSystem proxy backed by a MessagePort, with an explicit dispose method
+ * to reject pending calls and detach the message handler.
+ */
+export type FileSystemProxy = KernelFileSystem & {
+  dispose(): void;
+};
+
+/**
  * Create a KernelFileSystem proxy backed by a MessagePort.
  *
  * Each method call sends a `{ id, method, args }` message and waits for
@@ -86,9 +94,9 @@ export function createFileSystemPort(fileSystem: FileSystemPortable): MessagePor
  * Used inside the kernel worker to consume a filesystem served over a MessagePort.
  *
  * @param port - MessagePort connected to a filesystem bridge
- * @returns KernelFileSystem interface backed by the port
+ * @returns FileSystemProxy interface backed by the port
  */
-export function createFileSystemProxy(port: MessagePort): KernelFileSystem {
+export function createFileSystemProxy(port: MessagePort): FileSystemProxy {
   let nextId = 0;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 
@@ -154,5 +162,14 @@ export function createFileSystemProxy(port: MessagePort): KernelFileSystem {
     stat: async (path: string) =>
       call('stat', [path]) as Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>,
     exists: async (path: string) => call('exists', [path]) as Promise<boolean>,
+    dispose() {
+      // eslint-disable-next-line unicorn/prefer-add-event-listener -- we set onmessage during setup, so we need to remove it here.
+      port.onmessage = null;
+      for (const [, entry] of pending) {
+        entry.reject(new Error('Filesystem proxy closed'));
+      }
+
+      pending.clear();
+    },
   };
 }

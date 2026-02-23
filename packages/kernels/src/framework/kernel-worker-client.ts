@@ -171,8 +171,15 @@ export class KernelWorkerClient {
     this.transport.send(command);
   }
 
-  /** Terminate the transport connection. */
+  /** Terminate the transport connection, rejecting any in-flight promises. */
   public terminate(): void {
+    const error = new Error('Kernel client terminated');
+    this.pendingInit?.reject(error);
+    this.pendingInit = undefined;
+    this.pendingRender?.reject(error);
+    this.pendingRender = undefined;
+    this.pendingExport?.reject(error);
+    this.pendingExport = undefined;
     this.transport.close();
   }
 

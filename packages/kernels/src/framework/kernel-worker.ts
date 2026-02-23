@@ -45,6 +45,7 @@ import type {
   AssetDependency,
 } from '#types/kernel-dependency.types.js';
 import type { PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
+import type { FileSystemProxy } from '#framework/kernel-filesystem-bridge.js';
 import { createFileSystemProxy } from '#framework/kernel-filesystem-bridge.js';
 import { createKernelError } from '#framework/kernel-helpers.js';
 import { hashBytes, hashString } from '#utils/hash.utils.js';
@@ -188,7 +189,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Backed by a MessagePort bridge to the file-manager worker.
    * Private - use the filesystem property for all filesystem operations.
    */
-  private fileManager: KernelFileSystem | undefined;
+  private fileSystem: FileSystemProxy | undefined;
 
   /**
    * Internal filesystem instance.
@@ -330,7 +331,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Register file manager and create filesystem if port is provided
     if (input.transferables.fileSystemPort) {
-      this.fileManager = createFileSystemProxy(input.transferables.fileSystemPort);
+      this.fileSystem = createFileSystemProxy(input.transferables.fileSystemPort);
       this._filesystem = this.createFilesystem();
     }
 
@@ -372,12 +373,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     this.telemetryCollector?.flush();
   }
 
-  /** Clean up worker state, native handles, and telemetry collector. */
+  /** Clean up worker state, native handles, telemetry collector, and filesystem proxy. */
   public async cleanup(): Promise<void> {
     this.assetHashCache.clear();
     this.nativeHandle = undefined;
     this.telemetryCollector?.dispose();
     this.telemetryCollector = undefined;
+    this.fileSystem?.dispose();
+    this.fileSystem = undefined;
     await this.onCleanup();
   }
 
@@ -1164,20 +1167,20 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Create the unified filesystem interface.
-   * Called during initialize() after fileManager is set up.
+   * Called during initialize() after fileSystem is set up.
    * All methods use absolute paths - callers use helper methods to construct paths.
    *
    * @returns KernelFileSystem instance with the 8 Node.js-compatible primitives
    */
   private createFilesystem(): KernelFileSystem {
-    const fileManager = this.fileManager!;
+    const fileSystem = this.fileSystem!;
     const { tracer } = this;
 
     function readFile(path: string, encoding: 'utf8'): Promise<string>;
     function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
     async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
       const span = tracer.startSpan('fs.read', { path });
-      const data = encoding ? await fileManager.readFile(path, encoding) : await fileManager.readFile(path);
+      const data = encoding ? await fileSystem.readFile(path, encoding) : await fileSystem.readFile(path);
       span.end();
       return data;
     }
@@ -1187,22 +1190,22 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
       async exists(path: string): Promise<boolean> {
         const span = tracer.startSpan('fs.exists', { path });
-        const fileExists = await fileManager.exists(path);
+        const fileExists = await fileSystem.exists(path);
         span.end();
         return fileExists;
       },
 
       async readdir(path: string): Promise<string[]> {
         const span = tracer.startSpan('fs.readdir', { path });
-        const entries = await fileManager.readdir(path);
+        const entries = await fileSystem.readdir(path);
         span.end();
         return entries;
       },
 
-      writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => fileManager.writeFile(path, data),
-      mkdir: async (path: string, options?: { recursive?: boolean }) => fileManager.mkdir(path, options),
-      unlink: async (path: string) => fileManager.unlink(path),
-      stat: async (path: string) => fileManager.stat(path),
+      writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => fileSystem.writeFile(path, data),
+      mkdir: async (path: string, options?: { recursive?: boolean }) => fileSystem.mkdir(path, options),
+      unlink: async (path: string) => fileSystem.unlink(path),
+      stat: async (path: string) => fileSystem.stat(path),
     };
   }
 

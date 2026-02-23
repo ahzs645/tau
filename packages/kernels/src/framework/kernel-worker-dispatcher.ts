@@ -129,6 +129,12 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
         }
 
         case 'cleanup': {
+          if (logFlushTimer) {
+            clearTimeout(logFlushTimer);
+            logFlushTimer = undefined;
+          }
+
+          flushLogs();
           await worker.cleanup();
           break;
         }
