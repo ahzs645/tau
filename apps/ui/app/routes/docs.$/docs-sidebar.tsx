@@ -1,5 +1,5 @@
 import type * as PageTree from 'fumadocs-core/page-tree';
-import { useMemo, useCallback, createContext, useContext, useEffect, useState } from 'react';
+import { useMemo, useCallback, createContext, useContext, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { cva } from 'class-variance-authority';
 import { XIcon, MenuIcon } from 'lucide-react';
