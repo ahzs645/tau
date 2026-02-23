@@ -50,6 +50,11 @@ globalThis.IntersectionObserver = class IntersectionObserver {
     return '0px';
   }
 
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/IntersectionObserver/scrollMargin) */
+  public get scrollMargin() {
+    return '0px';
+  }
+
   /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/IntersectionObserver/thresholds) */
   public readonly thresholds: readonly number[] = [0];
 
