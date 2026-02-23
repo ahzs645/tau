@@ -221,12 +221,14 @@ export class ChatRpcService implements OnModuleDestroy {
    * @param args - The input arguments (type-checked against RPC's input schema)
    * @returns The validated result (type-checked against RPC's result schema) or an RPC error object
    */
-  public async sendRpcRequest<T extends keyof RpcSchemasRegistry>(
-    chatId: string,
-    toolCallId: string,
-    rpcName: T,
-    args: RpcInput<T>,
-  ): Promise<RpcResult<T> | RpcExecutionError | RpcValidationError> {
+  public async sendRpcRequest<T extends keyof RpcSchemasRegistry>(request: {
+    chatId: string;
+    toolCallId: string;
+    rpcName: T;
+    args: RpcInput<T>;
+  }): Promise<RpcResult<T> | RpcExecutionError | RpcValidationError> {
+    const { chatId, toolCallId, rpcName, args } = request;
+
     // Reject immediately if this chat's request was already aborted
     if (this.abortedChats.has(chatId)) {
       const abortedError: RpcExecutionError = {

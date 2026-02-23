@@ -202,6 +202,7 @@ const customErrorObject = (
   _response: ServerResponse,
   _error: Error,
   _responseTime: number,
+  // eslint-disable-next-line max-params -- pino-http callback signature
 ) => {
   // We don't want to log the error object as it's handled in the `HttpExceptionFilter` logging.
   // Returning `undefined` will cause the error object to not be logged.

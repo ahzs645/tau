@@ -33,8 +33,11 @@ export const testModelTool: ChatTool<
   const { toolCallId } = runtime;
 
   // Step 1: Read test.json to get requirements
-  const testFileContent = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, {
-    targetFile: 'test.json',
+  const testFileContent = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.readFile,
+    args: { targetFile: 'test.json' },
   });
 
   // Assert infrastructure success - throws ToolError for timeout, disconnect, validation
@@ -147,10 +150,19 @@ export const testModelTool: ChatTool<
   }
 
   // Step 2: Capture observations from the frontend via RPC
-  const captureResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.captureObservations, {});
+  const captureResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.captureObservations,
+    args: {},
+  });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(captureResult, toolName.testModel, toolCallId, 'Failed to capture observations');
+  assertRpcSuccess(captureResult, {
+    toolName: toolName.testModel,
+    toolCallId,
+    clientErrorMessage: 'Failed to capture observations',
+  });
 
   const { observations } = captureResult;
 

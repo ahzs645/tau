@@ -56,8 +56,11 @@ export const editTestsTool: ChatTool<
   const { codeEdit } = args;
 
   // Step 1: Read the current test.json content via RPC
-  const readResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, {
-    targetFile: testFile,
+  const readResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.readFile,
+    args: { targetFile: testFile },
   });
 
   // Assert infrastructure success - throws ToolError for timeout, disconnect, validation
@@ -100,13 +103,19 @@ export const editTestsTool: ChatTool<
   }
 
   // Step 3: Write the edited content back via RPC
-  const writeResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.createFile, {
-    targetFile: testFile,
-    content: editResult.editedContent,
+  const writeResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.createFile,
+    args: { targetFile: testFile, content: editResult.editedContent },
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(writeResult, toolName.editTests, toolCallId, 'Cannot save test.json');
+  assertRpcSuccess(writeResult, {
+    toolName: toolName.editTests,
+    toolCallId,
+    clientErrorMessage: 'Cannot save test.json',
+  });
 
   const result: EditTestsOutput = {
     diffStats: {

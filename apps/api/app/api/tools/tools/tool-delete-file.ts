@@ -31,10 +31,14 @@ export const deleteFileTool: ChatTool<
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.deleteFile, args);
+  const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.deleteFile, args });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(result, toolName.deleteFile, toolCallId, `Cannot delete file "${args.targetFile}"`);
+  assertRpcSuccess(result, {
+    toolName: toolName.deleteFile,
+    toolCallId,
+    clientErrorMessage: `Cannot delete file "${args.targetFile}"`,
+  });
 
   // Return success output
   const output: DeleteFileOutput = {

@@ -31,10 +31,14 @@ export const globSearchTool: ChatTool<
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.globSearch, args);
+  const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.globSearch, args });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(result, toolName.globSearch, toolCallId, 'Glob search failed');
+  assertRpcSuccess(result, {
+    toolName: toolName.globSearch,
+    toolCallId,
+    clientErrorMessage: 'Glob search failed',
+  });
 
   // Return success output
   return {

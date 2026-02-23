@@ -30,10 +30,14 @@ export const grepTool: ChatTool<typeof grepInputSchema, GrepInput, GrepOutput, t
     const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
     const { toolCallId } = runtime;
 
-    const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.grep, args);
+    const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.grep, args });
 
     // Assert RPC success - throws ToolError for any infrastructure or client error
-    assertRpcSuccess(result, toolName.grep, toolCallId, 'Grep search failed');
+    assertRpcSuccess(result, {
+      toolName: toolName.grep,
+      toolCallId,
+      clientErrorMessage: 'Grep search failed',
+    });
 
     // Return success output
     return {

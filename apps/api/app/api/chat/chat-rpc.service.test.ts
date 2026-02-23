@@ -45,8 +45,11 @@ describe('ChatRpcService', () => {
   // ---------------------------------------------------------------------------
   describe('sendRpcRequest', () => {
     it('should return NO_CONNECTION RPC error when no socket is registered', async () => {
-      const result = await service.sendRpcRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
       });
 
       expect(result).toEqual({
@@ -60,8 +63,11 @@ describe('ChatRpcService', () => {
     it('should return NO_CONNECTION RPC error when socket is disconnected', async () => {
       service.registerConnection('chat_123', createMockSocket('s1', false));
 
-      const result = await service.sendRpcRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
       });
 
       expect(result).toEqual({
@@ -73,8 +79,11 @@ describe('ChatRpcService', () => {
     });
 
     it('should include rpcName in error metadata', async () => {
-      const result = await service.sendRpcRequest('chat_456', 'call_2', 'read_file', {
-        targetFile: 'another.txt',
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_456',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'another.txt' },
       });
 
       expect(result).toMatchObject({
@@ -87,7 +96,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      void service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       expect(socket.emit).toHaveBeenCalledWith(
         'rpc_request',
@@ -104,7 +118,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       vi.advanceTimersByTime(rpcExecutionTimeoutMs);
 
@@ -119,7 +138,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       // Respond before timeout
       service.handleRpcResponse({
@@ -175,7 +199,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       service.handleRpcResponse({
         type: 'rpc_response',
@@ -192,7 +221,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       service.handleRpcResponse({
         type: 'rpc_response',
@@ -232,8 +266,11 @@ describe('ChatRpcService', () => {
 
       service.registerAbortSignal('chat_123', controller.signal);
 
-      const result = await service.sendRpcRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
       });
 
       expect(result).toMatchObject({
@@ -248,8 +285,11 @@ describe('ChatRpcService', () => {
 
       service.registerAbortSignal('chat_123', controller.signal);
 
-      const resultBeforeCleanup = await service.sendRpcRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
+      const resultBeforeCleanup = await service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
       });
 
       expect(resultBeforeCleanup).toMatchObject({
@@ -261,7 +301,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_123', socket);
 
-      void service.sendRpcRequest('chat_123', 'call_2', 'read_file', { targetFile: 'test.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
+      });
 
       expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
@@ -274,8 +319,11 @@ describe('ChatRpcService', () => {
       service.registerAbortSignal('chat_123', controllerA.signal);
       controllerA.abort();
 
-      const blockedResult = await service.sendRpcRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
+      const blockedResult = await service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
       });
 
       expect(blockedResult).toMatchObject({
@@ -285,7 +333,12 @@ describe('ChatRpcService', () => {
       const controllerB = new AbortController();
       service.registerAbortSignal('chat_123', controllerB.signal);
 
-      void service.sendRpcRequest('chat_123', 'call_2', 'read_file', { targetFile: 'test.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
+      });
 
       expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
@@ -298,8 +351,11 @@ describe('ChatRpcService', () => {
       service.registerAbortSignal('chat_123', controllerA.signal);
       controllerA.abort();
 
-      const blockedResult = await service.sendRpcRequest('chat_123', 'call_1', 'read_file', {
-        targetFile: 'test.txt',
+      const blockedResult = await service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
       });
 
       expect(blockedResult).toMatchObject({
@@ -309,7 +365,12 @@ describe('ChatRpcService', () => {
       const controllerB = new AbortController();
       service.registerAbortSignal('chat_123', controllerB.signal);
 
-      void service.sendRpcRequest('chat_123', 'call_2', 'read_file', { targetFile: 'test.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_123',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'test.txt' },
+      });
 
       expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
@@ -321,7 +382,12 @@ describe('ChatRpcService', () => {
       const controller = new AbortController();
       service.registerAbortSignal('chat_1', controller.signal);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       controller.abort();
 
@@ -358,7 +424,12 @@ describe('ChatRpcService', () => {
       vi.advanceTimersByTime(3000);
 
       // RPCs should still be blocked because Timer A was cancelled
-      const result = await service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
       expect(result).toMatchObject({ errorCode: 'CLIENT_DISCONNECTED' });
     });
 
@@ -385,12 +456,22 @@ describe('ChatRpcService', () => {
       vi.advanceTimersByTime(2000);
 
       // RPCs should still be blocked (Timer B hasn't fired yet at t=5s)
-      const result = await service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
       expect(result).toMatchObject({ errorCode: 'CLIENT_DISCONNECTED' });
 
       // At t=8s — Timer B fires, abort entry is cleaned up
       vi.advanceTimersByTime(3000);
-      void service.sendRpcRequest('chat_1', 'call_2', 'read_file', { targetFile: 'a.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
       expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
 
@@ -420,14 +501,24 @@ describe('ChatRpcService', () => {
       vi.advanceTimersByTime(4000);
 
       // Still blocked (Timer C3 hasn't fired yet)
-      const result = await service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
       expect(result).toMatchObject({ errorCode: 'CLIENT_DISCONNECTED' });
 
       // Advance past Timer C3 (1 more second → t=6s total)
       vi.advanceTimersByTime(1000);
 
       // Now unblocked
-      void service.sendRpcRequest('chat_1', 'call_2', 'read_file', { targetFile: 'a.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
       expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
   });
@@ -440,7 +531,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       service.unregisterConnection('chat_1', socket);
 
@@ -457,7 +553,12 @@ describe('ChatRpcService', () => {
       service.registerConnection('chat_1', socket1);
       service.registerConnection('chat_1', socket2);
 
-      void service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       // Remove one socket — still one remaining
       service.unregisterConnection('chat_1', socket1);
@@ -470,7 +571,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       service.handleSocketDisconnect(socket);
 
@@ -487,8 +593,18 @@ describe('ChatRpcService', () => {
       service.registerConnection('chat_1', socket1);
       service.registerConnection('chat_2', socket2);
 
-      void service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
-      void service.sendRpcRequest('chat_2', 'call_2', 'read_file', { targetFile: 'b.txt' });
+      void service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
+      void service.sendRpcRequest({
+        chatId: 'chat_2',
+        toolCallId: 'call_2',
+        rpcName: 'read_file',
+        args: { targetFile: 'b.txt' },
+      });
 
       // Disconnect socket for chat_1 only
       service.handleSocketDisconnect(socket1);
@@ -517,7 +633,12 @@ describe('ChatRpcService', () => {
       const socket = createMockSocket('s1');
       service.registerConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
       service.onModuleDestroy();
 
@@ -552,7 +673,12 @@ describe('ChatRpcService', () => {
       vi.advanceTimersByTime(abortCleanupDelayMs);
 
       // The new service should have a clean state
-      void service2.sendRpcRequest('chat_1', 'call_1', 'read_file', { targetFile: 'a.txt' });
+      void service2.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
       expect(socket2.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
 
       service2.onModuleDestroy();
