@@ -7,6 +7,12 @@ import process from 'node:process';
 import ts from 'typescript';
 import type { ApiData, ApiEntry } from '#api-extraction.types.js';
 
+type TsExtractionContext = {
+  checker: ts.TypeChecker;
+  printer: ts.Printer;
+  program: ts.Program;
+};
+
 /**
  * Extract @jscad/modeling type declarations into a single bundled .d.ts file
  * using the TypeScript Compiler API.
@@ -170,14 +176,17 @@ function addExportModifier(text: string): string {
  * Returns `undefined` for node kinds that should be skipped (re-export specifiers, etc.).
  */
 function printDeclarationText(
-  decl: ts.Declaration,
-  resolved: ts.Symbol,
-  exportName: string,
-  sourceFile: ts.SourceFile,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
-  printedStatements: Set<ts.Node>,
+  input: {
+    decl: ts.Declaration;
+    resolved: ts.Symbol;
+    exportName: string;
+    sourceFile: ts.SourceFile;
+    printedStatements: Set<ts.Node>;
+  },
+  context: TsExtractionContext,
 ): string | undefined {
+  const { decl, resolved, exportName, sourceFile, printedStatements } = input;
+  const { checker, printer } = context;
   if (ts.isFunctionDeclaration(decl)) {
     return addExportModifier(printer.printNode(ts.EmitHint.Unspecified, decl, sourceFile).trim());
   }
@@ -266,7 +275,8 @@ function collectTypeReferences(node: ts.Node): Set<string> {
  * Also resolves file-local types (like `type Vec = Vec1 | Vec2 | Vec3`) that are
  * referenced by exported declarations but not themselves exported.
  */
-function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, printer: ts.Printer): ExtractionResult {
+function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionContext): ExtractionResult {
+  const { checker, printer } = context;
   const declarations: string[] = [];
   const nestedNamespaces = new Map<string, ExtractionResult>();
   const typeRefs = new Set<string>();
@@ -286,7 +296,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
 
     // Nested namespace: export * as X from './Y'
     if (isModuleSymbol(resolved)) {
-      const nested = extractModuleContent(resolved, checker, printer);
+      const nested = extractModuleContent(resolved, context);
       if (nested.declarations.length > 0 || nested.nestedNamespaces.size > 0) {
         nestedNamespaces.set(exportSymbol.name, nested);
         definedNames.add(exportSymbol.name);
@@ -324,13 +334,8 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
       }
 
       const text = printDeclarationText(
-        decl,
-        resolved,
-        exportSymbol.name,
-        sourceFile,
-        checker,
-        printer,
-        printedStatements,
+        { decl, resolved, exportName: exportSymbol.name, sourceFile, printedStatements },
+        context,
       );
 
       if (text) {
@@ -456,10 +461,9 @@ function buildFoundationTypeMap(
  */
 function resolveFoundationTypes(
   namespaces: Map<string, ExtractionResult>,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
-  program: ts.Program,
+  context: TsExtractionContext,
 ): FoundationType[] {
+  const { checker, printer, program } = context;
   const typeMap = buildFoundationTypeMap(checker, program);
   const resolved = new Map<string, FoundationType>();
   const pending = new Set<string>();
@@ -697,9 +701,9 @@ function classifyDeclaration(decl: ts.Declaration): ApiEntry['kind'] | undefined
 function extractStructuredEntries(
   moduleSymbol: ts.Symbol,
   modulePath: string,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
+  context: TsExtractionContext,
 ): ApiEntry[] {
+  const { checker, printer } = context;
   const entries: ApiEntry[] = [];
   const seenNames = new Set<string>();
 
@@ -716,7 +720,7 @@ function extractStructuredEntries(
     // Nested namespace
     if (isModuleSymbol(resolved)) {
       const nestedPath = modulePath ? `${modulePath}.${exportSymbol.name}` : exportSymbol.name;
-      entries.push(...extractStructuredEntries(resolved, nestedPath, checker, printer));
+      entries.push(...extractStructuredEntries(resolved, nestedPath, context));
       continue;
     }
 
@@ -804,13 +808,14 @@ export function buildApiData(): ApiData {
   const rootExports = checker.getExportsOfModule(mainModuleSymbol);
   const allEntries: ApiEntry[] = [];
 
+  const context: TsExtractionContext = { checker, printer, program };
   for (const nsExport of rootExports) {
     const resolved = resolveSymbol(nsExport, checker);
     if (!isModuleSymbol(resolved)) {
       continue;
     }
 
-    allEntries.push(...extractStructuredEntries(resolved, nsExport.name, checker, printer));
+    allEntries.push(...extractStructuredEntries(resolved, nsExport.name, context));
   }
 
   // Add foundation types as top-level entries
@@ -818,11 +823,9 @@ export function buildApiData(): ApiData {
     new Map(
       rootExports
         .filter((ns) => isModuleSymbol(resolveSymbol(ns, checker)))
-        .map((ns) => [ns.name, extractModuleContent(resolveSymbol(ns, checker), checker, printer)]),
+        .map((ns) => [ns.name, extractModuleContent(resolveSymbol(ns, checker), context)]),
     ),
-    checker,
-    printer,
-    program,
+    context,
   );
 
   for (const ft of foundationTypes) {
@@ -883,7 +886,7 @@ export function buildNamespaceBundle(): string {
   const rootExports = checker.getExportsOfModule(mainModuleSymbol);
   console.log(`Found ${rootExports.length} top-level namespace exports`);
 
-  // Extract each namespace
+  const context: TsExtractionContext = { checker, printer, program };
   const namespaces = new Map<string, ExtractionResult>();
 
   for (const nsExport of rootExports) {
@@ -895,7 +898,7 @@ export function buildNamespaceBundle(): string {
     }
 
     console.log(`  Processing namespace: ${nsExport.name}`);
-    const content = extractModuleContent(resolved, checker, printer);
+    const content = extractModuleContent(resolved, context);
     namespaces.set(nsExport.name, content);
 
     const declCount = content.declarations.length;
@@ -905,7 +908,7 @@ export function buildNamespaceBundle(): string {
 
   // Resolve foundation types
   console.log('\nResolving foundation types...');
-  const foundationTypes = resolveFoundationTypes(namespaces, checker, printer, program);
+  const foundationTypes = resolveFoundationTypes(namespaces, context);
   console.log(
     `Resolved ${foundationTypes.length} foundation types: ${foundationTypes.map((ft) => ft.name).join(', ')}`,
   );

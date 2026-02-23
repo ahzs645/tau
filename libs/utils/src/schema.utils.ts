@@ -43,6 +43,7 @@ export async function jsonSchemaFromJson(json: Record<string, unknown>): Promise
         };
       },
     },
+    // eslint-disable-next-line max-params -- implements PostProcessFunction callback interface
     postProcessFnc(type, generatedSchema, value, defaultFunction): JSONSchema7 {
       const processedSchema = defaultFunction(type, generatedSchema, value);
 

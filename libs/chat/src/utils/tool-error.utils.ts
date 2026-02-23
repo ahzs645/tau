@@ -297,32 +297,36 @@ export type ClientErrorMessageResolver = string | ((error: RpcClientError) => st
  * Use this for the common case where any error should fail the tool.
  *
  * @param result - The RPC result to check
- * @param toolName - The name of the tool (for error attribution)
- * @param toolCallId - The tool call ID (for tracking)
- * @param clientErrorMessage - Optional custom message for client errors.
+ * @param options - Context for error attribution
+ * @param options.toolName - The name of the tool (for error attribution)
+ * @param options.toolCallId - The tool call ID (for tracking)
+ * @param options.clientErrorMessage - Optional custom message for client errors.
  *   Can be a string or a function that receives the RpcClientError for dynamic messages.
  * @throws ToolError if result is any kind of error
  *
  * @example
  * ```typescript
  * // Static message
- * assertRpcSuccess(result, toolName.readFile, toolCallId, 'Cannot read file');
+ * assertRpcSuccess(result, { toolName: toolName.readFile, toolCallId, clientErrorMessage: 'Cannot read file' });
  *
  * // Dynamic message based on error code
- * assertRpcSuccess(result, toolName.readFile, toolCallId, (error) => {
- *   if (error.errorCode === 'FILE_NOT_FOUND') {
- *     return 'File not found';
- *   }
- *   return 'Cannot read file';
+ * assertRpcSuccess(result, {
+ *   toolName: toolName.readFile,
+ *   toolCallId,
+ *   clientErrorMessage: (error) => {
+ *     if (error.errorCode === 'FILE_NOT_FOUND') {
+ *       return 'File not found';
+ *     }
+ *     return 'Cannot read file';
+ *   },
  * });
  * ```
  */
 export function assertRpcSuccess<T extends { success: boolean }>(
   result: T | RpcExecutionError | RpcValidationError,
-  toolName: string,
-  toolCallId: string,
-  clientErrorMessage?: ClientErrorMessageResolver,
+  options: { toolName: string; toolCallId: string; clientErrorMessage?: ClientErrorMessageResolver },
 ): asserts result is Exclude<T, RpcExecutionError | RpcValidationError | RpcClientError> {
+  const { toolName, toolCallId, clientErrorMessage } = options;
   assertRpcExecution(result, toolName, toolCallId);
 
   if (isRpcClientError(result)) {
