@@ -13,11 +13,15 @@ import {
 import { esbuild } from '#plugins/bundler-factories.js';
 
 /**
- * Client options shape for presets.
+ * Client options shape returned by preset functions.
+ * Contains the full set of plugins required to configure a kernel client.
  */
 export type PresetOptions = {
+  /** Kernel plugins that handle specific CAD file formats and languages */
   kernels: KernelPlugin[];
+  /** Middleware plugins that intercept and transform kernel operations */
   middleware: MiddlewarePlugin[];
+  /** Bundler plugins that handle code bundling and execution */
   bundlers: BundlerPlugin[];
 };
 

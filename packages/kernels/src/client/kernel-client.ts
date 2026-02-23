@@ -10,7 +10,7 @@ import type { HashedGeometryResult, ExportGeometryResult, GetParametersResult } 
 import type { KernelFileSystem, Tessellation } from '#types/kernel-worker.types.js';
 import type { PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
 import { KernelWorkerClient } from '#framework/kernel-worker-client.js';
-import { createFileSystemPort } from '#framework/kernel-filesystem-bridge.js';
+import { createFileSystemServer } from '#framework/kernel-filesystem-bridge.js';
 import { createWorkerTransport } from '#transport/worker-transport.js';
 import type { KernelTransport } from '#transport/kernel-transport.js';
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
@@ -163,6 +163,7 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
 
   let workerClient: KernelWorkerClient | undefined;
   let transport: KernelTransport | undefined;
+  let fileSystemChannel: MessageChannel | undefined;
   let connected = false;
 
   const handlers: EventHandlers = {
@@ -223,8 +224,14 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
       options: b.options,
     }));
 
-    const fileSystemPort =
-      'port' in resolvedOptions ? resolvedOptions.port : createFileSystemPort(resolvedOptions.fileSystem);
+    let fileSystemPort: MessagePort;
+    if ('port' in resolvedOptions) {
+      fileSystemPort = resolvedOptions.port;
+    } else {
+      fileSystemChannel = new MessageChannel();
+      createFileSystemServer(resolvedOptions.fileSystem, fileSystemChannel.port1);
+      fileSystemPort = fileSystemChannel.port2;
+    }
 
     await workerClient.initialize({
       options: { kernelModules },
@@ -291,6 +298,12 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
     terminate(): void {
       workerClient?.cleanup();
       workerClient?.terminate();
+      if (fileSystemChannel) {
+        fileSystemChannel.port1.close();
+        fileSystemChannel.port2.close();
+        fileSystemChannel = undefined;
+      }
+
       workerClient = undefined;
       transport = undefined;
       connected = false;

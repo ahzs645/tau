@@ -8,6 +8,12 @@
     "build": {
       "dependsOn": ["copy-assets"],
       "outputs": ["{projectRoot}/src/assets/**"]
+    },
+    "benchmark": {
+      "command": "tsx --require ./scripts/cjs-compat.cjs scripts/benchmark-kernels.mts",
+      "options": {
+        "cwd": "{projectRoot}"
+      }
     }
   }
 }

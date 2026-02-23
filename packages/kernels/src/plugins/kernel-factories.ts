@@ -11,6 +11,8 @@ import type { KernelPlugin } from '#plugins/plugin-types.js';
 export type ReplicadOptions = {
   /** Enable OpenCASCADE exception messages for detailed error feedback. Slower when enabled. */
   withExceptions?: boolean;
+  /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
+  ocTracing?: 'off' | 'summary' | 'per-call';
 };
 
 /**

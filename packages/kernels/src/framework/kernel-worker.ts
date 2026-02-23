@@ -363,6 +363,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * telemetry before initialization. Creates the PerformanceObserver-based collector.
    */
   public setTelemetrySend(send: (entries: PerformanceEntryData[]) => void): void {
+    this.telemetryCollector?.dispose();
     this.telemetryCollector = new WorkerTelemetryCollector(send);
   }
 

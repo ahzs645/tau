@@ -238,7 +238,9 @@ export type KernelDefinition<
   NativeHandle = unknown,
   Options extends Record<string, unknown> = Record<string, unknown>,
 > = {
+  /** Human-readable kernel name, used in logs and error messages */
   name: string;
+  /** Semantic version string for cache-key computation and diagnostics */
   version: string;
 
   /** Zod schema for validating and typing kernel options. Options type is inferred from this schema. */
@@ -247,27 +249,37 @@ export type KernelDefinition<
   /** Initialize kernel with typed options. Options type is inferred from optionsSchema. */
   initialize(options: Options, runtime: KernelRuntime): Promise<Context>;
 
+  /** Optional guard that determines whether this kernel can process a given file. Called during kernel selection. */
   canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
 
+  /** Return absolute paths of all files the active file depends on, used for change-detection and cache invalidation. */
   getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: Context): Promise<string[]>;
+  /** Extract user-facing parameters (and their JSON Schema) from the active file. */
   getParameters(input: GetParametersInput, runtime: KernelRuntime, context: Context): Promise<GetParametersResult>;
+  /** Evaluate the active file and produce tessellated geometry plus a native handle for export. */
   createGeometry(
     input: CreateGeometryInput,
     runtime: KernelRuntime,
     context: Context,
   ): Promise<CreateGeometryOutput<NativeHandle>>;
+  /** Convert a previously created native geometry handle into one or more export file blobs. */
   exportGeometry(
     input: ExportGeometryInput<NativeHandle>,
     runtime: KernelRuntime,
     context: Context,
   ): Promise<ExportGeometryResult>;
 
+  /** Tear down kernel resources (WASM instances, temp files, etc.) when the worker is disposed. */
   cleanup?(context: Context): Promise<void>;
 };
 
 /**
- * Helper function to define a kernel module with proper type inference.
- * This is the primary API for kernel authors.
+ * Define a kernel module with proper type inference.
+ * This is the primary API for kernel authors -- it validates the definition
+ * shape at the type level and returns it unchanged at runtime.
+ *
+ * @param definition - The kernel definition object implementing all required lifecycle methods
+ * @returns The same definition, typed as {@link KernelDefinition}
  *
  * @example
  * ```typescript

@@ -22,6 +22,7 @@ import type {
   MiddlewareRegistrations,
   BundlerRegistrations,
 } from '#types/kernel.types.js';
+import type { PerformanceEntryData } from '#types/kernel-protocol.types.js';
 import type {
   KernelLogger,
   KernelRuntime,
@@ -100,6 +101,8 @@ export type InitializeWorkerOptions = {
   workerOptions?: Record<string, unknown>;
   /** Middleware configuration (defaults to empty array for tests that bypass dynamic loading) */
   middlewareEntries?: MiddlewareRegistrations;
+  /** Telemetry callback -- receives batched performance entries from the worker */
+  onTelemetry?: (entries: PerformanceEntryData[]) => void;
 };
 
 /**
@@ -119,6 +122,10 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
   worker: T,
   options?: InitializeWorkerOptions,
 ): Promise<T> {
+  if (options?.onTelemetry) {
+    worker.setTelemetrySend(options.onTelemetry);
+  }
+
   const port = createFileSystemPort(fromZenFS(fs));
 
   await worker.initialize({
@@ -411,6 +418,8 @@ export type CreateTestWorkerOptions = {
   bundlerDefinition?: BundlerDefinition;
   /** Skip automatic bundler loading for JS/TS kernels (default: false) */
   skipBundler?: boolean;
+  /** Telemetry callback -- receives batched performance entries from the worker */
+  onTelemetry?: (entries: PerformanceEntryData[]) => void;
 };
 
 /**
@@ -476,6 +485,7 @@ export async function createTestWorker(
   const detectImport = options?.detectImport ?? inferDetectImport(definition);
 
   await initializeWorkerForTesting(worker, {
+    onTelemetry: options?.onTelemetry,
     workerOptions: {
       kernelModules: [
         {

@@ -3033,4 +3033,129 @@ export function getShape() { return broken(); }
   });
 });
 
+// =============================================================================
+// Tests: OC API Call Tracing
+// =============================================================================
+
+describe('OC API Call Tracing', () => {
+  const boxCode = `
+    import { makeBaseBox } from 'replicad';
+    export default function main() {
+      return makeBaseBox(10, 20, 30);
+    }
+  `;
+
+  /** Wait for PerformanceObserver callbacks to fire and then flush. */
+  async function collectTelemetry(worker: Awaited<ReturnType<typeof createTestWorker>>): Promise<void> {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 200);
+    });
+    worker.flushTelemetry();
+  }
+
+  beforeEach(() => {
+    performance.clearMeasures();
+    performance.clearMarks();
+  });
+
+  it('emits an oc.summary span by default (summary mode)', async () => {
+    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+
+    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
+      onTelemetry: (entries) => telemetryBatches.push(entries),
+    });
+
+    const result = await worker.createGeometry({
+      file: createGeometryFile('box.ts'),
+      parameters: {},
+    });
+    await collectTelemetry(worker);
+
+    expect(result.success).toBe(true);
+
+    const allEntries = telemetryBatches.flat();
+    const summarySpan = allEntries.find((entry) => entry.name === 'oc.summary');
+    expect(summarySpan).toBeDefined();
+    expect(summarySpan!.detail).toBeDefined();
+    expect(summarySpan!.detail!['total.calls']).toBeGreaterThan(0);
+    expect(summarySpan!.detail!['total.ms']).toBeGreaterThanOrEqual(0);
+    expect(summarySpan!.detail!['classes']).toBeGreaterThan(0);
+  });
+
+  it('emits individual oc.* spans in per-call mode', async () => {
+    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+
+    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
+      workerOptions: { ocTracing: 'per-call' },
+      onTelemetry: (entries) => telemetryBatches.push(entries),
+    });
+
+    const result = await worker.createGeometry({
+      file: createGeometryFile('box.ts'),
+      parameters: {},
+    });
+    await collectTelemetry(worker);
+
+    expect(result.success).toBe(true);
+
+    const allEntries = telemetryBatches.flat();
+    const ocSpans = allEntries.filter((entry) => entry.name.startsWith('oc.') && entry.name !== 'oc.summary');
+    expect(ocSpans.length).toBeGreaterThan(0);
+
+    const summarySpan = allEntries.find((entry) => entry.name === 'oc.summary');
+    expect(summarySpan).toBeUndefined();
+  });
+
+  it('emits no oc spans when tracing is off', async () => {
+    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+
+    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
+      workerOptions: { ocTracing: 'off' },
+      onTelemetry: (entries) => telemetryBatches.push(entries),
+    });
+
+    const result = await worker.createGeometry({
+      file: createGeometryFile('box.ts'),
+      parameters: {},
+    });
+    await collectTelemetry(worker);
+
+    expect(result.success).toBe(true);
+
+    const allEntries = telemetryBatches.flat();
+    const ocSpans = allEntries.filter((entry) => entry.name.startsWith('oc.'));
+    expect(ocSpans).toHaveLength(0);
+  });
+
+  it('summary span contains per-class statistics', async () => {
+    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+
+    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
+      onTelemetry: (entries) => telemetryBatches.push(entries),
+    });
+
+    const result = await worker.createGeometry({
+      file: createGeometryFile('box.ts'),
+      parameters: {},
+    });
+    await collectTelemetry(worker);
+
+    expect(result.success).toBe(true);
+
+    const allEntries = telemetryBatches.flat();
+    const summarySpan = allEntries.find((entry) => entry.name === 'oc.summary');
+    expect(summarySpan).toBeDefined();
+
+    const detail = summarySpan!.detail!;
+    const classKeys = Object.keys(detail).filter((key) => key.endsWith('.calls'));
+    expect(classKeys.length).toBeGreaterThan(0);
+
+    for (const callsKey of classKeys) {
+      const className = callsKey.replace('.calls', '');
+      expect(detail[callsKey]).toBeGreaterThan(0);
+      expect(detail[`${className}.ms`]).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
 /* eslint-enable @typescript-eslint/naming-convention -- End of file */

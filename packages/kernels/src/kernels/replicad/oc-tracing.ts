@@ -1,0 +1,176 @@
+/**
+ * OpenCASCADE API Call Tracing
+ *
+ * Instruments OC instance method/constructor calls via a recursive JavaScript Proxy.
+ * Two modes:
+ * - summary: accumulates per-class call counts and durations, emits a single
+ *   `oc.summary` span at flush time. Low overhead (~2-5%).
+ * - per-call: creates individual `oc.{ClassName}` spans for every call via
+ *   the tracer. Higher overhead (~10-20%), used for deep profiling.
+ *
+ * When composed with oc-exceptions.ts, the tracing proxy wraps outermost
+ * so spans include exception handling time.
+ */
+
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
+
+/**
+ * Configuration for OC API call tracing.
+ */
+export type OcTracingConfig = {
+  mode: 'summary' | 'per-call';
+};
+
+/**
+ * Accumulated statistics for a single OC class in summary mode.
+ */
+type ClassStats = {
+  calls: number;
+  totalMs: number;
+};
+
+/**
+ * Handle for flushing accumulated summary data as a span.
+ */
+export type OcTracingSummary = {
+  /** Emit a single `oc.summary` span with aggregated per-class statistics. */
+  flush(): void;
+};
+
+/**
+ * Result of wrapping an OC instance with tracing.
+ */
+export type OcTracingResult = {
+  tracedInstance: Record<string, unknown>;
+  summary: OcTracingSummary;
+};
+
+/**
+ * Wrap an OpenCASCADE instance with tracing instrumentation.
+ *
+ * The proxy intercepts property access to resolve class names, then wraps
+ * function calls (constructors and methods) with timing instrumentation.
+ *
+ * @param oc - The OC instance (raw or already exception-wrapped)
+ * @param tracer - KernelSpanTracer for creating spans
+ * @param config - Tracing configuration (mode selection)
+ * @returns The traced instance and a summary handle for flushing
+ */
+export function wrapOcWithTracing(
+  oc: Record<string, unknown>,
+  tracer: KernelSpanTracer,
+  config: OcTracingConfig,
+): OcTracingResult {
+  const stats = new Map<string, ClassStats>();
+
+  function recordSummaryCall(className: string, durationMs: number): void {
+    const existing = stats.get(className);
+    if (existing) {
+      existing.calls++;
+      existing.totalMs += durationMs;
+    } else {
+      stats.set(className, { calls: 1, totalMs: durationMs });
+    }
+  }
+
+  function wrapFunctionForSummary(
+    fn: (...args: unknown[]) => unknown,
+    className: string,
+  ): (...args: unknown[]) => unknown {
+    return new Proxy(fn, {
+      construct(target, args, newTarget) {
+        const start = performance.now();
+        const result: unknown = Reflect.construct(target, args, newTarget);
+        recordSummaryCall(className, performance.now() - start);
+        return result as Record<string, unknown>;
+      },
+      apply(target, thisArg, args) {
+        const start = performance.now();
+        const result: unknown = Reflect.apply(target, thisArg, args);
+        recordSummaryCall(className, performance.now() - start);
+        return result;
+      },
+    });
+  }
+
+  function wrapFunctionForPerCall(
+    fn: (...args: unknown[]) => unknown,
+    className: string,
+  ): (...args: unknown[]) => unknown {
+    return new Proxy(fn, {
+      construct(target, args, newTarget) {
+        const span = tracer.startSpan(`oc.${className}`, { method: 'constructor' });
+        try {
+          return Reflect.construct(target, args, newTarget) as Record<string, unknown>;
+        } finally {
+          span.end();
+        }
+      },
+      apply(target, thisArg, args) {
+        const span = tracer.startSpan(`oc.${className}`, { method: 'apply' });
+        try {
+          return Reflect.apply(target, thisArg, args);
+        } finally {
+          span.end();
+        }
+      },
+    });
+  }
+
+  const wrapFunction = config.mode === 'summary' ? wrapFunctionForSummary : wrapFunctionForPerCall;
+
+  const classProxyCache = new Map<string, unknown>();
+
+  const tracedInstance: Record<string, unknown> = new Proxy(oc, {
+    get(target, property, receiver): unknown {
+      if (typeof property === 'symbol') {
+        return Reflect.get(target, property, receiver);
+      }
+
+      const cached = classProxyCache.get(property);
+      if (cached !== undefined) {
+        return cached;
+      }
+
+      const value: unknown = Reflect.get(target, property, receiver);
+
+      if (typeof value === 'function') {
+        const wrapped = wrapFunction(value as (...args: unknown[]) => unknown, property);
+        classProxyCache.set(property, wrapped);
+        return wrapped;
+      }
+
+      return value;
+    },
+  });
+
+  const summary: OcTracingSummary = {
+    flush() {
+      if (stats.size === 0) {
+        return;
+      }
+
+      const attributes: Record<string, string | number | boolean> = {};
+      let totalCalls = 0;
+      let totalMs = 0;
+
+      for (const [className, classStats] of stats) {
+        attributes[`${className}.calls`] = classStats.calls;
+        attributes[`${className}.ms`] = Math.round(classStats.totalMs * 100) / 100;
+        totalCalls += classStats.calls;
+        totalMs += classStats.totalMs;
+      }
+
+      attributes['total.calls'] = totalCalls;
+      attributes['total.ms'] = Math.round(totalMs * 100) / 100;
+      attributes['classes'] = stats.size;
+
+      const span = tracer.startSpan('oc.summary', attributes);
+      span.end();
+
+      stats.clear();
+    },
+  };
+
+  return { tracedInstance, summary };
+}

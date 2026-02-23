@@ -2,8 +2,12 @@
  * Worker Telemetry System
  *
  * Collects performance.mark()/measure() entries from within a worker using
- * PerformanceObserver, batches them, and flushes periodically via a callback.
+ * PerformanceObserver and flushes them on demand via explicit flush() calls.
  * The main thread aggregates data from all workers with timestamp correlation.
+ *
+ * Flushing is explicit only -- the dispatcher calls flush() after each render
+ * and export operation. No timers are used, so the collector adds zero overhead
+ * when idle and does not keep the event loop alive.
  *
  * See docs/kernel-telemetry-policy.md for the full telemetry policy.
  *
@@ -21,23 +25,18 @@
 
 import type { PerformanceEntryData } from '#types/kernel-protocol.types.js';
 
-const defaultFlushIntervalMs = 100;
-
 /**
  * Collects performance measure entries in a worker and flushes them in batches.
  * Zero overhead when no measures are recorded (observer is passive).
+ * No timers -- flush is called explicitly by the framework after each operation.
  */
 export class WorkerTelemetryCollector {
   // eslint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
   private readonly send: (entries: PerformanceEntryData[]) => void;
   private readonly pending: PerformanceEntryData[] = [];
   private readonly observer: PerformanceObserver;
-  private flushTimer: ReturnType<typeof setInterval> | undefined;
 
-  public constructor(
-    send: (entries: PerformanceEntryData[]) => void,
-    flushIntervalMs: number = defaultFlushIntervalMs,
-  ) {
+  public constructor(send: (entries: PerformanceEntryData[]) => void) {
     this.send = send;
     this.observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
@@ -51,14 +50,9 @@ export class WorkerTelemetryCollector {
       }
     });
     this.observer.observe({ type: 'measure', buffered: true });
-    this.flushTimer = setInterval(() => {
-      this.flush();
-    }, flushIntervalMs);
   }
 
-  /**
-   *
-   */
+  /** Send all pending entries to the main thread. No-op when empty. */
   public flush(): void {
     if (this.pending.length === 0) {
       return;
@@ -68,16 +62,9 @@ export class WorkerTelemetryCollector {
     this.send(batch);
   }
 
-  /**
-   *
-   */
+  /** Disconnect the observer and flush any remaining entries. */
   public dispose(): void {
     this.observer.disconnect();
-    if (this.flushTimer) {
-      clearInterval(this.flushTimer);
-      this.flushTimer = undefined;
-    }
-
     this.flush();
   }
 }

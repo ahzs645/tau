@@ -24,6 +24,8 @@ import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/kernel
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import { initOpenCascade, initOpenCascadeWithExceptions } from '#kernels/replicad/init-open-cascade.js';
 import { wrapOcInstance, formatRuntimeErrorWithOc } from '#kernels/replicad/oc-exceptions.js';
+import { wrapOcWithTracing } from '#kernels/replicad/oc-tracing.js';
+import type { OcTracingSummary } from '#kernels/replicad/oc-tracing.js';
 import {
   parseStackTrace,
   createFrameClassifier,
@@ -48,6 +50,7 @@ type ReplicadContext = {
   withExceptions: boolean;
   replicadInitialised: boolean;
   librarySourceMapCache: Map<string, SourceMapConsumer | undefined>;
+  tracingSummary?: OcTracingSummary;
 };
 
 type RuntimeModuleExports = {
@@ -235,6 +238,7 @@ function enrichIssueLocation(
 
 const replicadOptionsSchema = z.object({
   withExceptions: z.boolean().optional().default(false),
+  ocTracing: z.enum(['off', 'summary', 'per-call']).optional().default('summary'),
 });
 
 type ReplicadOptions = z.infer<typeof replicadOptionsSchema>;
@@ -250,22 +254,38 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
 
   async initialize(options, runtime) {
     const { logger, tracer } = runtime;
-    const { withExceptions } = options;
+    const { withExceptions, ocTracing } = options;
 
-    logger.debug(`Initializing OpenCASCADE WASM (withExceptions: ${withExceptions})`);
+    logger.debug(`Initializing OpenCASCADE WASM (withExceptions: ${withExceptions}, ocTracing: ${ocTracing})`);
 
     let openCascade: OpenCascadeInstance;
     let ocWithExceptions: OpenCascadeInstanceWithExceptions | undefined;
+    let tracingSummary: OcTracingSummary | undefined;
 
     const wasmSpan = tracer.startSpan('replicad.wasm-init', { withExceptions });
     if (withExceptions) {
       ocWithExceptions = await initOpenCascadeWithExceptions({ tracer });
       openCascade = ocWithExceptions as unknown as OpenCascadeInstance;
-      const wrappedOpenCascade = wrapOcInstance(ocWithExceptions);
-      replicad.setOC(wrappedOpenCascade as unknown as OpenCascadeInstance);
+      let ocToSet: OpenCascadeInstance = wrapOcInstance(ocWithExceptions) as unknown as OpenCascadeInstance;
+
+      if (ocTracing !== 'off') {
+        const traced = wrapOcWithTracing(ocToSet as unknown as Record<string, unknown>, tracer, { mode: ocTracing });
+        ocToSet = traced.tracedInstance as unknown as OpenCascadeInstance;
+        tracingSummary = traced.summary;
+      }
+
+      replicad.setOC(ocToSet);
     } else {
       openCascade = await initOpenCascade({ tracer });
-      replicad.setOC(openCascade);
+      let ocToSet: OpenCascadeInstance = openCascade;
+
+      if (ocTracing !== 'off') {
+        const traced = wrapOcWithTracing(ocToSet as unknown as Record<string, unknown>, tracer, { mode: ocTracing });
+        ocToSet = traced.tracedInstance as unknown as OpenCascadeInstance;
+        tracingSummary = traced.summary;
+      }
+
+      replicad.setOC(ocToSet);
     }
 
     wasmSpan.end();
@@ -288,6 +308,7 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
       withExceptions,
       replicadInitialised: true,
       librarySourceMapCache: new Map(),
+      tracingSummary,
     };
   },
 
@@ -364,6 +385,10 @@ export default defineKernel<ReplicadContext, InputShape[], ReplicadOptions>({
       projectPath: basePath,
     });
     mainSpan.end();
+
+    if (context.tracingSummary) {
+      context.tracingSummary.flush();
+    }
 
     if (!mainResult.success) {
       throw new ReplicadBuildError(mainResult.issues);
