@@ -137,6 +137,18 @@
   --chart-3: oklch(0.55 0.15 180deg); /* Teal - Cache */
   --chart-4: oklch(0.55 0.18 150deg); /* Green */
   --chart-5: oklch(0.55 0.20 30deg); /* Orange */
+
+  /* Diagram colors — derived from primary hue so they adapt automatically */
+  --diagram-node: oklch(0.95 0.03 var(--hue-primary));
+  --diagram-node-border: oklch(0.78 0.10 var(--hue-primary));
+  --diagram-node-text: var(--foreground);
+  --diagram-cluster: oklch(0.97 0.015 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.87 0.06 var(--hue-primary));
+  --diagram-line: oklch(0.55 0.10 var(--hue-primary));
+  --diagram-text: var(--muted-foreground);
+  --diagram-note: oklch(0.95 0.025 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.75 0.08 calc(var(--hue-primary) + 60deg));
+  --diagram-accent: var(--primary);
 }
 
 .dark,
@@ -179,6 +191,15 @@
   --chart-3: oklch(0.70 0.14 180deg); /* Teal - Cache */
   --chart-4: oklch(0.70 0.16 150deg); /* Green */
   --chart-5: oklch(0.70 0.18 30deg); /* Orange */
+
+  /* Diagram colors - dark mode */
+  --diagram-node: oklch(0.30 0.04 var(--hue-primary));
+  --diagram-node-border: oklch(0.42 0.06 var(--hue-primary));
+  --diagram-cluster: oklch(0.20 0.015 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.28 0.035 var(--hue-primary));
+  --diagram-line: oklch(0.50 0.06 var(--hue-primary));
+  --diagram-note: oklch(0.26 0.025 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.38 0.05 calc(var(--hue-primary) + 60deg));
 }
 
 @custom-variant dark (&:is(.dark *));
