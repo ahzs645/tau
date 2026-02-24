@@ -6,6 +6,7 @@
   "nxConsole.generateAiAgentRules": true,
   "typescript.tsdk": "node_modules/typescript/lib",
   "typescript.experimental.useTsgo": true,
+  "typescript.tsserver.useSyntaxServer": "never",
   "eslint.validate": [
     "javascript",
     "javascriptreact",
