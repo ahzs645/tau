@@ -372,6 +372,7 @@ describe('createKernelPlugin type inference', () => {
     it('should return a zero-arg factory', () => {
       const factory = createKernelPlugin(staticConfig);
       expectTypeOf(factory).toBeFunction();
+      // eslint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
       expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
       expectTypeOf(factory).returns.toEqualTypeOf<KernelPlugin>();
     });
@@ -492,6 +493,7 @@ describe('createMiddlewarePlugin type inference', () => {
 
   it('should return a zero-arg factory for static config', () => {
     const factory = createMiddlewarePlugin(staticConfig);
+    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
     expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
     expectTypeOf(factory).returns.toEqualTypeOf<MiddlewarePlugin>();
   });
@@ -528,6 +530,7 @@ describe('createBundlerPlugin type inference', () => {
 
   it('should return a zero-arg factory for static config', () => {
     const factory = createBundlerPlugin(staticConfig);
+    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
     expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
     expectTypeOf(factory).returns.toEqualTypeOf<BundlerPlugin>();
   });
@@ -591,8 +594,9 @@ describe('createKernelSuccess type inference', () => {
   });
 
   it('should preserve complex nested types', () => {
+    const defaultParameters: Record<string, unknown> = {};
     const result = createKernelSuccess({
-      defaultParameters: {} as Record<string, unknown>,
+      defaultParameters,
       jsonSchema: { type: 'object' } as unknown,
     });
     expectTypeOf(result.data).toEqualTypeOf<{
@@ -602,10 +606,10 @@ describe('createKernelSuccess type inference', () => {
   });
 
   it('should preserve array of objects', () => {
-    const result = createKernelSuccess([
-      { blob: new Blob(), name: 'model.stl' },
-    ]);
-    expectTypeOf(result.data).toEqualTypeOf<Array<{ blob: Blob; name: string }>>();
+    const result = createKernelSuccess([{ data: new Uint8Array(), name: 'model.stl', mimeType: 'model/stl' as const }]);
+    expectTypeOf(result.data).toEqualTypeOf<
+      Array<{ data: Uint8Array<ArrayBuffer>; name: string; mimeType: 'model/stl' }>
+    >();
   });
 
   it('should always include issues array', () => {
