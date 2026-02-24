@@ -44,7 +44,7 @@ The kernel API follows a three-layer design. Each layer has a distinct audience 
 
 | Entity | Purpose | Layer |
 |--------|---------|-------|
-| **KernelClient** | High-level facade. Lazy, Promise-based, event-subscribable. Created by `createKernelClient()`. | Consumer |
+| **KernelClient** | High-level facade. Lazy, Promise-based, event-subscribable. Supports inline code rendering (`CodeInput`) and filesystem rendering (`FileInput`). Emits `geometry` event on render completion. Auto-cancels superseded renders. Created by `createKernelClient()`. | Consumer |
 | **KernelTransport** | Event-driven message channel between realms. Default: `createWorkerTransport()`. | Framework |
 | **KernelWorkerClient** | Protocol client wrapping a Transport with request/response correlation and typed callbacks. | Framework |
 | **KernelRuntimeWorker** | Worker-side orchestrator. Manages kernel selection, middleware chain, bundler routing. | Worker |
@@ -113,12 +113,29 @@ Previously, all 5 kernels were loaded eagerly (~90 MB per CadMachine).
 ## KernelClient Lifecycle
 
 ```
-1. createKernelClient(options)     → KernelClient created, no Worker yet
-2. client.connect({ fileSystem })  → Worker + Transport created, protocol initialized
-3. client.render(file, params)     → Auto-connects if not yet connected (lazy)
-4. client.on('event', handler)     → Subscribable at any time during lifecycle
-5. client.terminate()              → Worker terminated, resources cleaned up
+1. createKernelClient(options)                          → KernelClient created, no Worker yet
+2. client.on('geometry', handler)                       → Subscribe to render results (any time)
+3. client.render({ code: { 'box.ts': '...' } })        → Auto-creates filesystem, auto-connects, renders
+4. client.render({ file, parameters, changedPaths })    → Invalidates caches, renders from filesystem
+5. client.connect({ port })                             → Explicit connection for worker bridges
+6. client.terminate()                                   → Worker terminated, resources cleaned up
 ```
+
+### RenderInput Type
+
+The `render()` method accepts two input shapes via generic overloads:
+
+**Inline code mode** (`CodeInput<T>`): A filename-to-content map. When the code object has a single key, `file` is optional (the runtime picks the only key). When multiple keys exist, `file` is required to specify the entry point. Auto-creates an in-memory filesystem, writes code, connects, and renders. Not compatible with port-based connections.
+
+**Filesystem mode** (`FileInput`): Renders from a connected filesystem. `file` can be a string shorthand (e.g., `'/src/main.ts'`) or a `GeometryFile` object. `changedPaths` absorbs the old `notifyFileChanged` pattern -- the client internally notifies the worker about changed files before rendering.
+
+### Geometry Event
+
+When any render completes (success or failure), the `geometry` event fires with the full `HashedGeometryResult`. This enables fire-and-forget render calls where the consumer subscribes once and receives all results reactively.
+
+### Auto-Cancellation (Latest-Wins)
+
+When `render()` is called while a previous render is in-flight, the previous render is cancelled via `cancelPendingRender()`. The cancelled render's Promise rejects with `RenderSupersededError`. Only the latest render's result fires the `geometry` event. For pull consumers (CLI), renders are sequential so cancellation never triggers.
 
 ## KernelFileSystem
 
@@ -173,10 +190,12 @@ type KernelTransport = {
    │
 6. KernelMachine pipeline:
    │  ├─ Lazily creates KernelClient (ensureKernelClient)
+   │  ├─ Subscribes to geometry/progress/parametersResolved events once
    │  ├─ KernelClient creates Worker + Transport on first connect
    │  ├─ Worker selects kernel via three-pass detection
    │  ├─ render: unified pipeline (deps → params → geometry)
-   │  └─ Streams progress events back via client.on('progress', ...)
+   │  ├─ changedPaths passed to render() for cache invalidation (no separate notifyFileChanged)
+   │  └─ Auto-cancellation: new render supersedes in-flight render
    │
 7. CadMachine receives geometryComputed → updates context.geometries
    │
@@ -269,7 +288,7 @@ This ensures all library modules are available at bundle time.
 
 ### Selection Cache Invalidation
 
-The selection cache is invalidated when `notifyFileChanged` is called, since changed imports may shift which kernel handles a file. The cache uses full file paths as keys to prevent collisions.
+The selection cache is invalidated when `changedPaths` is provided in the render input (or via the escape-hatch `notifyFileChanged`), since changed imports may shift which kernel handles a file. The cache uses full file paths as keys to prevent collisions.
 
 ## Plugin Architecture
 
@@ -309,7 +328,8 @@ The kernel machine communicates with the worker via typed MessagePort events thr
 
 - All request/response commands carry a `requestId` for correlation
 - Fire-and-forget commands (`fileChanged`, `configureMiddleware`, `cleanup`) have no requestId
-- `cancel` command allows in-flight operations to be stopped
+- `cancel` command is used by auto-cancellation (latest-wins semantics) when a new `render()` supersedes an in-flight one
+- `fileChanged` command is sent internally by the client when `changedPaths` is provided in the render input
 - `progress` events stream render phase transitions to the UI
 - `telemetry` events batch performance entries for the kernel panel
 
@@ -373,7 +393,7 @@ Two explicit slots (`preview` and `export`) make the quality distinction visible
 2. **Per-call overrides** — passed as `callOptions` to individual methods:
 
 ```typescript
-client.render(file, params, { tessellation: { linearTolerance: 0.05, angularTolerance: 15 } });
+client.render({ file, parameters, tessellation: { linearTolerance: 0.05, angularTolerance: 15 } });
 client.export('stl', { tessellation: { linearTolerance: 0.005, angularTolerance: 10 } });
 ```
 
@@ -395,8 +415,8 @@ If no tessellation is specified at any level, each kernel applies its own intern
 ### Threading Path
 
 ```
-KernelClient.render(file, params, callOptions?)
-  → resolves: callOptions.tessellation ?? options.tessellation.preview
+KernelClient.render({ file, parameters, tessellation?, changedPaths? })
+  → resolves: input.tessellation ?? options.tessellation.preview
     → KernelWorkerClient.render(..., tessellation?)
       → KernelCommand { type: 'render', tessellation? }
         → dispatcher → KernelWorker.render(..., tessellation?)
@@ -425,8 +445,8 @@ Consumer-facing input uses `options` naming; validated output uses `config` inte
 
 | Cache | Invalidation | Purpose |
 |-------|-------------|---------|
-| `fileHashCache` | Per-path via `notifyFileChanged` | Avoid re-hashing unchanged files |
-| `fileContentCache` | Per-path via `notifyFileChanged` | Avoid re-reading unchanged files |
+| `fileHashCache` | Per-path via `changedPaths` in render input (or `notifyFileChanged`) | Avoid re-hashing unchanged files |
+| `fileContentCache` | Per-path via `changedPaths` in render input (or `notifyFileChanged`) | Avoid re-reading unchanged files |
 | `bundleResultCache` | Dependency-aware: only entries whose deps overlap with changed files | Avoid re-bundling when deps haven't changed |
 | `selectionCache` | Cleared entirely on any file change | Ensure kernel detection re-runs when imports change |
 
