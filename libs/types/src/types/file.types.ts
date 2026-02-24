@@ -1,4 +1,5 @@
 import type { exportFormats } from '#constants/file.constants.js';
+import type { MimeType } from '#types/mime-types.types.js';
 
 export type ExportFormat = (typeof exportFormats)[number];
 
@@ -33,4 +34,20 @@ export type FileStat = {
   type: 'file' | 'dir';
   size: number;
   mtimeMs: number;
+};
+
+/** Named binary file used as input to conversion/import operations. */
+export type FileInput = {
+  name: string;
+  bytes: Uint8Array<ArrayBuffer>;
+};
+
+/**
+ * A named binary file produced by an export operation.
+ * Shared across @taucad/kernels (ExportGeometryResult) and @taucad/converter output.
+ */
+export type ExportFile = {
+  name: string;
+  bytes: Uint8Array<ArrayBuffer>;
+  mimeType: MimeType;
 };

@@ -13,3 +13,4 @@ export type * from '#types/logger.types.js';
 export type * from '#types/manufacturing.types.js';
 export type * from '#types/schema.types.js';
 export type * from '#types/json-value.types.js';
+export type * from '#types/mime-types.types.js';
