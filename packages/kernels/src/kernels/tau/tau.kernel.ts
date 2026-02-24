@@ -8,8 +8,7 @@
  */
 
 import { importToGlb, exportFromGlb, supportedImportFormats } from '@taucad/converter';
-import type { InputFormat, OutputFormat } from '@taucad/converter';
-import { asBuffer } from '@taucad/utils/file';
+import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
 import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelIssue } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
@@ -46,7 +45,7 @@ export default defineKernel({
   },
 
   async canHandle({ extension }) {
-    return supportedImportFormats.includes(extension as InputFormat);
+    return supportedImportFormats.includes(extension as SupportedImportFormat);
   },
 
   async getDependencies({ filePath }) {
@@ -69,7 +68,7 @@ export default defineKernel({
       const formattedFormat = String(format).toUpperCase();
       logger.log(`Converting ${formattedFormat} to GLB`);
 
-      const glbData = await importToGlb([{ name: filename, data }], format as InputFormat);
+      const glbData = await importToGlb([{ name: filename, bytes: data }], format as SupportedImportFormat);
 
       logger.log(`Successfully converted ${formattedFormat} to GLB`);
 
@@ -105,16 +104,11 @@ export default defineKernel({
 
       logger.log('Exporting geometry', { data: { format: fileType } });
 
-      const files = await exportFromGlb(nativeHandle, fileType as OutputFormat);
-
-      const results = files.map((file) => ({
-        blob: new Blob([asBuffer(file.data.buffer)]),
-        name: file.name,
-      }));
+      const files = await exportFromGlb(nativeHandle, fileType as SupportedExportFormat);
 
       logger.log('Successfully exported geometry');
 
-      return createKernelSuccess(results);
+      return createKernelSuccess(files);
     } catch (error) {
       logger.error('Error exporting geometry', { data: error });
       const errorMessage = error instanceof Error ? error.message : 'Failed to export geometry';

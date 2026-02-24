@@ -33,7 +33,7 @@ function calculateNormal(v1: number[], v2: number[], v3: number[]): number[] {
 /**
  * Create an ASCII STL string from mesh data
  */
-export function createStlAscii(meshData: IndexedPolyhedron): Blob {
+export function createStlAscii(meshData: IndexedPolyhedron): Uint8Array<ArrayBuffer> {
   const { vertices, faces } = meshData;
   let stlContent = 'solid model\n';
 
@@ -77,13 +77,13 @@ export function createStlAscii(meshData: IndexedPolyhedron): Blob {
 
   stlContent += 'endsolid model\n';
 
-  return new Blob([stlContent], { type: 'model/stl' });
+  return new TextEncoder().encode(stlContent);
 }
 
 /**
- * Create a binary STL blob from mesh data
+ * Create a binary STL from mesh data
  */
-export function createStlBinary(meshData: IndexedPolyhedron): Blob {
+export function createStlBinary(meshData: IndexedPolyhedron): Uint8Array<ArrayBuffer> {
   const { vertices, faces } = meshData;
 
   // Calculate total number of triangles
@@ -174,5 +174,5 @@ export function createStlBinary(meshData: IndexedPolyhedron): Blob {
     }
   }
 
-  return new Blob([buffer], { type: 'model/stl' });
+  return new Uint8Array(buffer);
 }

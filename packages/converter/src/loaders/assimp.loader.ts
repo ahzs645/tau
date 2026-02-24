@@ -28,14 +28,6 @@ export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOpti
     ase: true,
   };
 
-  /**
-   * USD formats use meters as the default unit; tau uses millimeters.
-   */
-  private static readonly scaleMetersToMillimetersRequired: Partial<Record<FileExtension, boolean>> = {
-    usda: true,
-    usdz: true,
-  };
-
   protected async parseAsync(files: FileInput[], options: AssimpOptions): Promise<Uint8Array<ArrayBuffer>> {
     const ajs = await assimpjs({
       locateFile() {
@@ -66,12 +58,11 @@ export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOpti
     const glbData = new Uint8Array(resultFile.GetContent());
 
     const transformYtoZup = AssimpLoader.transformYtoZupRequired[options.format] ?? false;
-    const scaleMetersToMillimeters = AssimpLoader.scaleMetersToMillimetersRequired[options.format] ?? false;
 
-    if (transformYtoZup || scaleMetersToMillimeters) {
+    if (transformYtoZup) {
       return applyGlbTransforms(glbData, {
         transformYtoZup,
-        scaleMetersToMillimeters,
+        scaleMetersToMillimeters: false,
       });
     }
 

@@ -1,6 +1,13 @@
 // Client
-export { createKernelClient } from '#client/kernel-client.js';
-export type { KernelClient, KernelClientOptions, ConnectOptions } from '#client/kernel-client.js';
+export { createKernelClient, RenderSupersededError } from '#client/kernel-client.js';
+export type {
+  KernelClient,
+  KernelClientOptions,
+  ConnectOptions,
+  CodeInput,
+  FileInput,
+  ExportResult,
+} from '#client/kernel-client.js';
 
 // Plugin types
 export type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';

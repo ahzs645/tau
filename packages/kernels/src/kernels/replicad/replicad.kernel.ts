@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { SourceMapConsumer } from 'source-map-js';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
+import { createExportFile } from '@taucad/types/constants';
 import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelRuntime } from '#types/kernel-worker.types.js';
 import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/kernel.types.js';
@@ -467,46 +468,64 @@ export default defineKernel({
         } satisfies GeometryReplicad;
       });
 
-      const gltfBlob = await convertReplicadGeometriesToGltf(temporaryShapes, fileType);
+      const gltfData = await convertReplicadGeometriesToGltf(temporaryShapes, fileType);
       return createKernelSuccess([
-        { blob: new Blob([asBuffer(gltfBlob.buffer)]), name: fileType === 'glb' ? 'model.glb' : 'model.gltf' },
+        createExportFile(fileType, fileType === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
       ]);
     }
 
     if (fileType === 'step-assembly') {
-      return createKernelSuccess([{ blob: replicad.exportSTEP(nativeHandle), name: 'assembly' }]);
+      const stepBlob: Blob = replicad.exportSTEP(nativeHandle);
+      const stepBytes = new Uint8Array(await stepBlob.arrayBuffer());
+      return createKernelSuccess([createExportFile('step-assembly', 'assembly', stepBytes)]);
     }
 
-    const result = nativeHandle.map(({ shape, name }) => ({
-      blob: buildBlob(shape, fileType, {
-        tolerance: resolvedTessellation.linearTolerance,
-        angularTolerance: resolvedTessellation.angularTolerance,
+    const result = await Promise.all(
+      nativeHandle.map(async ({ shape, name }) => {
+        const bytes = await buildExportBytes(shape, fileType, {
+          tolerance: resolvedTessellation.linearTolerance,
+          angularTolerance: resolvedTessellation.angularTolerance,
+        });
+        return createExportFile(fileType, name ?? 'Geometry', bytes);
       }),
-      name: name ?? 'Geometry',
-    }));
+    );
 
     return createKernelSuccess(result);
   },
 });
 
-function buildBlob(
+async function buildExportBytes(
   shape: replicad.AnyShape,
   fileType: string,
-  tessConfig: { tolerance: number; angularTolerance: number },
-): Blob {
-  if (fileType === 'stl') {
-    return shape.blobSTL(tessConfig);
+  tessellation: { tolerance: number; angularTolerance: number },
+): Promise<Uint8Array<ArrayBuffer>> {
+  let blob: Blob;
+
+  switch (fileType) {
+    case 'stl': {
+      blob = shape.blobSTL(tessellation);
+
+      break;
+    }
+
+    case 'stl-binary': {
+      blob = shape.blobSTL({ ...tessellation, binary: true });
+
+      break;
+    }
+
+    case 'step': {
+      blob = shape.blobSTEP();
+
+      break;
+    }
+
+    default: {
+      throw new Error(`Unsupported export format: ${fileType}`);
+    }
   }
 
-  if (fileType === 'stl-binary') {
-    return shape.blobSTL({ ...tessConfig, binary: true });
-  }
-
-  if (fileType === 'step') {
-    return shape.blobSTEP();
-  }
-
-  throw new Error(`Unsupported export format: ${fileType}`);
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 class ReplicadBuildError extends Error {

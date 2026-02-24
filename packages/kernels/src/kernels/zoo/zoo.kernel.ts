@@ -15,6 +15,7 @@ import { z } from 'zod';
 import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
 import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
+import { createExportFile } from '@taucad/types/constants';
 import type { KernelErrorResult, KernelIssue } from '#types/kernel.types.js';
 import type { KernelFileSystem, KernelLogger } from '#types/kernel-worker.types.js';
 import { defineKernel } from '#types/kernel-worker.types.js';
@@ -72,8 +73,8 @@ function mapCompilationErrorsToKernelIssues(errors: CompilationError[], code: st
         startLineNumber: errorPosition.line,
         startColumn: errorPosition.column,
       },
-      type: 'compilation' as const,
-      severity: error.severity === 'Warning' ? ('warning' as const) : ('error' as const),
+      type: 'compilation',
+      severity: error.severity === 'Warning' ? 'warning' : 'error',
     };
   });
 }
@@ -278,10 +279,7 @@ export default defineKernel({
             return createKernelError([{ message: 'No STL data received from KCL export', severity: 'error' }]);
           }
 
-          const blob = new Blob([asBuffer(stlResult[0].contents.buffer)], {
-            type: fileType === 'stl-binary' ? 'application/octet-stream' : 'text/plain',
-          });
-          return createKernelSuccess([{ blob, name: 'model.stl' }]);
+          return createKernelSuccess([createExportFile(fileType, 'model.stl', asBuffer(stlResult[0].contents))]);
         }
 
         case 'step': {
@@ -290,8 +288,7 @@ export default defineKernel({
             return createKernelError([{ message: 'No STEP data received from KCL export', severity: 'error' }]);
           }
 
-          const blob = new Blob([asBuffer(stepResult[0].contents.buffer)], { type: 'application/step' });
-          return createKernelSuccess([{ blob, name: 'model.step' }]);
+          return createKernelSuccess([createExportFile('step', 'model.step', asBuffer(stepResult[0].contents))]);
         }
 
         case 'glb': {
@@ -300,8 +297,7 @@ export default defineKernel({
             return createKernelError([{ message: 'No GLB data received from KCL export', severity: 'error' }]);
           }
 
-          const blob = new Blob([asBuffer(glbResult[0].contents.buffer)], { type: 'model/gltf-binary' });
-          return createKernelSuccess([{ blob, name: 'model.glb' }]);
+          return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(glbResult[0].contents))]);
         }
 
         case 'gltf': {
@@ -314,8 +310,7 @@ export default defineKernel({
             return createKernelError([{ message: 'No GLTF data received from KCL export', severity: 'error' }]);
           }
 
-          const blob = new Blob([asBuffer(gltfResult[0].contents.buffer)], { type: 'model/gltf-json' });
-          return createKernelSuccess([{ blob, name: 'model.gltf' }]);
+          return createKernelSuccess([createExportFile('gltf', 'model.gltf', asBuffer(gltfResult[0].contents))]);
         }
 
         default: {

@@ -398,21 +398,8 @@ const exportTestCases: ExportTestCase[] = [
     },
   }),
 
-  // USD formats: re-import applies meters->mm scaling so round-trip bounding box is 1000x larger
-  createExportTestCase('usda', {
-    expectations: {
-      geometry: {
-        boundingBoxTolerance: 3500,
-      },
-    },
-  }),
-  createExportTestCase('usdz', {
-    expectations: {
-      geometry: {
-        boundingBoxTolerance: 3500,
-      },
-    },
-  }),
+  createExportTestCase('usda'),
+  createExportTestCase('usdz'),
 
   // STP Format - CAD format with limited capabilities and may subdivide geometry
   createExportTestCase('step', {

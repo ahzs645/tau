@@ -655,7 +655,7 @@ export class MockKernelWorker extends KernelWorker {
       options.computeResult ?? createSuccessResult([{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }]);
     this.mockExportResult = options.exportResult ?? {
       success: true,
-      data: [{ blob: new Blob(), name: 'export.gltf' }],
+      data: [{ bytes: new Uint8Array(), name: 'export.gltf', mimeType: 'model/gltf+json' }],
       issues: [],
     };
 

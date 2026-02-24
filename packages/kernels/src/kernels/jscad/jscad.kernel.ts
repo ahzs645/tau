@@ -10,6 +10,7 @@ import * as jscadModeling from '@jscad/modeling';
 import type { GeometryResponse } from '@taucad/types';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
+import { createExportFile } from '@taucad/types/constants';
 import type { KernelIssue } from '#types/kernel.types.js';
 import type { KernelRuntime } from '#types/kernel-worker.types.js';
 import { defineKernel } from '#types/kernel-worker.types.js';
@@ -327,16 +328,16 @@ export default defineKernel({
     }
 
     if (fileType === 'glb' || fileType === 'gltf') {
-      const gltfBlobs = await Promise.all(nativeHandle.map(async (shape) => jscadToGltf(shape)));
-      const blob = gltfBlobs[0];
-      if (!blob) {
+      const gltfResults = await Promise.all(nativeHandle.map(async (shape) => jscadToGltf(shape)));
+      const gltfData = gltfResults[0];
+      if (!gltfData) {
         return createKernelError([
           { message: 'Failed to generate GLTF from computed geometry', type: 'runtime', severity: 'error' },
         ]);
       }
 
       return createKernelSuccess([
-        { blob: new Blob([asBuffer(blob.buffer)]), name: fileType === 'glb' ? 'model.glb' : 'model.gltf' },
+        createExportFile(fileType, fileType === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
       ]);
     }
 

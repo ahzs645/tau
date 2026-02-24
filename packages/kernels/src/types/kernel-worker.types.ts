@@ -307,7 +307,7 @@ export type KernelDefinition<
  *     return { geometry: [...], nativeHandle: myShapes };
  *   },
  *   async exportGeometry({ nativeHandle, ...input }, runtime, context) {
- *     return { success: true, data: [{ blob: ... }] };
+ *     return { success: true, data: [createExportFile('glb', 'model.glb', bytes)] };
  *   },
  * });
  * ```

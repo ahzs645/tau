@@ -15,7 +15,7 @@ import type { OpenSCAD } from 'openscad-wasm-prebuilt';
 import { jsonDefault } from 'json-schema-default';
 import type { JSONSchema7 } from 'json-schema';
 import type { GeometryGltf, LogLevel } from '@taucad/types';
-import { logLevels } from '@taucad/types/constants';
+import { logLevels, createExportFile } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
 import type { KernelIssue } from '#types/kernel.types.js';
@@ -557,28 +557,28 @@ export default defineKernel({
 
     switch (fileType) {
       case 'glb': {
-        const blob = await convertOffToGltf(nativeHandle, 'glb');
-        return createKernelSuccess([{ blob: new Blob([asBuffer(blob.buffer)]), name: 'model.glb' }]);
+        const glbData = await convertOffToGltf(nativeHandle, 'glb');
+        return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(glbData))]);
       }
 
       case 'gltf': {
-        const blob = await convertOffToGltf(nativeHandle, 'gltf');
-        return createKernelSuccess([{ blob: new Blob([asBuffer(blob.buffer)]), name: 'model.gltf' }]);
+        const gltfData = await convertOffToGltf(nativeHandle, 'gltf');
+        return createKernelSuccess([createExportFile('gltf', 'model.gltf', asBuffer(gltfData))]);
       }
 
       case 'stl': {
-        const blob = await convertOffToStl(nativeHandle, 'stl');
-        return createKernelSuccess([{ blob, name: 'model.stl' }]);
+        const stlData = await convertOffToStl(nativeHandle, 'stl');
+        return createKernelSuccess([createExportFile('stl', 'model.stl', stlData)]);
       }
 
       case 'stl-binary': {
-        const blob = await convertOffToStl(nativeHandle, 'stl-binary');
-        return createKernelSuccess([{ blob, name: 'model.stl' }]);
+        const stlData = await convertOffToStl(nativeHandle, 'stl-binary');
+        return createKernelSuccess([createExportFile('stl-binary', 'model.stl', stlData)]);
       }
 
       case '3mf': {
-        const blob = await convertOffTo3mf(nativeHandle);
-        return createKernelSuccess([{ blob, name: 'model.3mf' }]);
+        const threeMfData = await convertOffTo3mf(nativeHandle);
+        return createKernelSuccess([createExportFile('3mf', 'model.3mf', threeMfData)]);
       }
 
       default: {

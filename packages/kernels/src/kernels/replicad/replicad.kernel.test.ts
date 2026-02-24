@@ -11,6 +11,7 @@ import {
   seedTestFilesystem,
 } from '#testing/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
+import type { PerformanceEntryData } from '#types/index.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 
@@ -2073,7 +2074,8 @@ export function getShape() { return broken(); }
       if (exportResult.success) {
         expect(exportResult.data).toBeDefined();
         expect(exportResult.data.length).toBeGreaterThan(0);
-        expect(exportResult.data[0]?.blob).toBeInstanceOf(Blob);
+        expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
+        expect(exportResult.data[0]?.mimeType).toBe('application/step');
       }
     });
 
@@ -3059,11 +3061,15 @@ describe('OC API Call Tracing', () => {
   });
 
   it('emits an oc.summary span by default (summary mode)', async () => {
-    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+    const telemetryBatches: PerformanceEntryData[][] = [];
 
-    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
-      onTelemetry: (entries) => telemetryBatches.push(entries),
-    });
+    const worker = await createTestWorker(
+      replicadKernel,
+      { 'box.ts': boxCode },
+      {
+        onTelemetry: (entries) => telemetryBatches.push(entries),
+      },
+    );
 
     const result = await worker.createGeometry({
       file: createGeometryFile('box.ts'),
@@ -3083,12 +3089,16 @@ describe('OC API Call Tracing', () => {
   });
 
   it('emits individual oc.* spans in per-call mode', async () => {
-    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+    const telemetryBatches: PerformanceEntryData[][] = [];
 
-    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
-      workerOptions: { ocTracing: 'per-call' },
-      onTelemetry: (entries) => telemetryBatches.push(entries),
-    });
+    const worker = await createTestWorker(
+      replicadKernel,
+      { 'box.ts': boxCode },
+      {
+        workerOptions: { ocTracing: 'per-call' },
+        onTelemetry: (entries) => telemetryBatches.push(entries),
+      },
+    );
 
     const result = await worker.createGeometry({
       file: createGeometryFile('box.ts'),
@@ -3107,12 +3117,16 @@ describe('OC API Call Tracing', () => {
   });
 
   it('emits no oc spans when tracing is off', async () => {
-    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+    const telemetryBatches: PerformanceEntryData[][] = [];
 
-    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
-      workerOptions: { ocTracing: 'off' },
-      onTelemetry: (entries) => telemetryBatches.push(entries),
-    });
+    const worker = await createTestWorker(
+      replicadKernel,
+      { 'box.ts': boxCode },
+      {
+        workerOptions: { ocTracing: 'off' },
+        onTelemetry: (entries) => telemetryBatches.push(entries),
+      },
+    );
 
     const result = await worker.createGeometry({
       file: createGeometryFile('box.ts'),
@@ -3128,11 +3142,15 @@ describe('OC API Call Tracing', () => {
   });
 
   it('summary span contains per-class statistics', async () => {
-    const telemetryBatches: Array<import('#types/kernel-protocol.types.js').PerformanceEntryData[]> = [];
+    const telemetryBatches: PerformanceEntryData[][] = [];
 
-    const worker = await createTestWorker(replicadKernel, { 'box.ts': boxCode }, {
-      onTelemetry: (entries) => telemetryBatches.push(entries),
-    });
+    const worker = await createTestWorker(
+      replicadKernel,
+      { 'box.ts': boxCode },
+      {
+        onTelemetry: (entries) => telemetryBatches.push(entries),
+      },
+    );
 
     const result = await worker.createGeometry({
       file: createGeometryFile('box.ts'),

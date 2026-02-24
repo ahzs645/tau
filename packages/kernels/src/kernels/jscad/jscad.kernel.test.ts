@@ -1156,7 +1156,8 @@ module.exports = { main, getParameterDefinitions }
       if (exportResult.success) {
         expect(exportResult.data).toBeDefined();
         expect(exportResult.data.length).toBeGreaterThan(0);
-        expect(exportResult.data[0]?.blob).toBeInstanceOf(Blob);
+        expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
+        expect(exportResult.data[0]?.mimeType).toBe('model/gltf+json');
       }
     });
 

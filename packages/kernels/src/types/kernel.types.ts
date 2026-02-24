@@ -9,7 +9,7 @@
  */
 
 import type { backendProviders, kernelProviders } from '@taucad/types/constants';
-import type { Geometry, GeometryResponse } from '@taucad/types';
+import type { ExportFile, Geometry, GeometryResponse } from '@taucad/types';
 
 // =============================================================================
 // Error Types
@@ -276,4 +276,4 @@ export type ExtractNameResult = KernelResult<string | undefined>;
 /**
  *
  */
-export type ExportGeometryResult = KernelResult<Array<{ blob: Blob; name: string }>>;
+export type ExportGeometryResult = KernelResult<ExportFile[]>;

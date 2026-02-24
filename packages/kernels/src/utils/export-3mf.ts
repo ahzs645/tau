@@ -89,7 +89,10 @@ function triangulateFace(
 /**
  * Export IndexedPolyhedron to 3MF format
  */
-export function export3mf(data: IndexedPolyhedron, extruderColors?: Array<[number, number, number]>): Blob {
+export function export3mf(
+  data: IndexedPolyhedron,
+  extruderColors?: Array<[number, number, number]>,
+): Uint8Array<ArrayBuffer> {
   const objectUuid = crypto.randomUUID();
   const buildUuid = crypto.randomUUID();
 
@@ -211,8 +214,8 @@ export function export3mf(data: IndexedPolyhedron, extruderColors?: Array<[numbe
     '_rels/.rels': new TextEncoder().encode(relsXml),
   };
 
-  // Generate the ZIP buffer and return as blob
+  // Generate the ZIP buffer
 
   const zipBuffer = UZIP.encode(archive);
-  return new Blob([zipBuffer], { type: 'model/3mf' });
+  return new Uint8Array(zipBuffer);
 }

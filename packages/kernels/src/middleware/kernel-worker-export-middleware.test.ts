@@ -20,7 +20,7 @@ import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 describe('kernel-worker wrapExportGeometry middleware', () => {
   const defaultExportResult: ExportGeometryResult = {
     success: true,
-    data: [{ blob: new Blob(['test-content']), name: 'export.gltf' }],
+    data: [{ bytes: new TextEncoder().encode('test-content'), name: 'export.gltf', mimeType: 'model/gltf+json' }],
     issues: [],
   };
 
@@ -81,7 +81,7 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
   });
 
   it('should allow middleware to modify the export result', async () => {
-    const modifiedBlob = new Blob(['modified-content']);
+    const modifiedData = new TextEncoder().encode('modified-content');
 
     const middleware = defineMiddleware({
       name: 'TransformMiddleware',
@@ -90,7 +90,7 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
         if (result.success) {
           return {
             ...result,
-            data: result.data.map((entry) => ({ ...entry, blob: modifiedBlob })),
+            data: result.data.map((entry) => ({ ...entry, bytes: modifiedData })),
           };
         }
 
@@ -108,7 +108,7 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data[0]?.blob).toBe(modifiedBlob);
+      expect(result.data[0]?.bytes).toBe(modifiedData);
     }
   });
 
@@ -166,7 +166,7 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
   it('should allow middleware to short-circuit by not calling handler', async () => {
     const cachedResult: ExportGeometryResult = {
       success: true,
-      data: [{ blob: new Blob(['cached']), name: 'cached.stl' }],
+      data: [{ bytes: new TextEncoder().encode('cached'), name: 'cached.stl', mimeType: 'model/stl' }],
       issues: [],
     };
 
