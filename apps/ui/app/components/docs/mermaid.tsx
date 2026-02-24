@@ -1,4 +1,4 @@
-import { use, useEffect, useId, useState } from 'react';
+import { Suspense, use, useEffect, useId, useState } from 'react';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 
 const cache = new Map<string, Promise<unknown>>();
@@ -23,6 +23,7 @@ function MermaidRenderer({ chart }: { readonly chart: string }): React.JSX.Eleme
     startOnLoad: false,
     securityLevel: 'loose',
     fontFamily: 'inherit',
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- mermaid API.
     themeCSS: 'margin: 1.5rem auto 0;',
     theme: theme === Theme.DARK ? 'dark' : 'default',
   });
@@ -40,6 +41,7 @@ function MermaidRenderer({ chart }: { readonly chart: string }): React.JSX.Eleme
           bindFunctions?.(container);
         }
       }}
+      // eslint-disable-next-line react/no-danger -- mermaid API.
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
@@ -60,5 +62,9 @@ export function Mermaid({ chart }: { readonly chart: string }): React.JSX.Elemen
     return undefined;
   }
 
-  return <MermaidRenderer chart={chart} />;
+  return (
+    <Suspense>
+      <MermaidRenderer chart={chart} />
+    </Suspense>
+  );
 }
