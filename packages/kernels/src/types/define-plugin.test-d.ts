@@ -1,10 +1,12 @@
 /**
- * Type-level tests for defineKernel, defineBundler, and defineMiddleware.
+ * Type-level tests for all generic inference APIs in @taucad/kernels.
  *
- * Ensures all type parameters are correctly inferred from the definition
- * object without explicit type arguments. These tests are statically
- * analysed by the TypeScript compiler via vitest --typecheck and are
- * never executed at runtime.
+ * Covers: defineKernel, defineBundler, defineMiddleware,
+ *         createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin,
+ *         and createKernelSuccess.
+ *
+ * These tests are statically analysed by the TypeScript compiler via
+ * vitest --typecheck and are never executed at runtime.
  */
 
 import { describe, expectTypeOf, it } from 'vitest';
@@ -13,7 +15,10 @@ import { defineKernel } from '#types/kernel-worker.types.js';
 import { defineBundler } from '#types/kernel-bundler.types.js';
 import { defineMiddleware } from '#middleware/kernel-middleware.js';
 import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
-import { createKernelError } from '#framework/kernel-helpers.js';
+import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
+import type { KernelSuccessResult } from '#types/kernel.types.js';
+import { createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin } from '#plugins/plugin-helpers.js';
+import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
 
 // =============================================================================
 // defineKernel
@@ -353,5 +358,258 @@ describe('defineMiddleware type inference', () => {
     });
 
     expectTypeOf(middleware).toEqualTypeOf<KernelMiddleware>();
+  });
+});
+
+// =============================================================================
+// createKernelPlugin
+// =============================================================================
+
+describe('createKernelPlugin type inference', () => {
+  const staticConfig = { id: 'test', moduleUrl: 'test.js', extensions: ['ts'] };
+
+  describe('overload 1: no type param → zero-arg factory', () => {
+    it('should return a zero-arg factory', () => {
+      const factory = createKernelPlugin(staticConfig);
+      expectTypeOf(factory).toBeFunction();
+      expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
+      expectTypeOf(factory).returns.toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should produce a valid KernelPlugin when called', () => {
+      const factory = createKernelPlugin(staticConfig);
+      const plugin = factory();
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should reject arguments passed to a zero-arg factory', () => {
+      const factory = createKernelPlugin(staticConfig);
+      // @ts-expect-error -- zero-arg factory accepts no arguments
+      factory({ anything: true });
+    });
+  });
+
+  describe('overload 2: all-optional options → optional-arg factory', () => {
+    it('should return an optional-arg factory', () => {
+      const factory = createKernelPlugin<{ debug?: boolean; mode?: string }>(staticConfig);
+      expectTypeOf(factory).toBeFunction();
+      expectTypeOf(factory).returns.toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should allow calling without arguments', () => {
+      const factory = createKernelPlugin<{ debug?: boolean }>(staticConfig);
+      const plugin = factory();
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should allow calling with options', () => {
+      const factory = createKernelPlugin<{ debug?: boolean }>(staticConfig);
+      const plugin = factory({ debug: true });
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should reject unknown option keys', () => {
+      const factory = createKernelPlugin<{ debug?: boolean }>(staticConfig);
+      // @ts-expect-error -- 'unknownKey' is not in the options type
+      factory({ unknownKey: true });
+    });
+  });
+
+  describe('overload 2: required options → required-arg factory', () => {
+    it('should require the options argument', () => {
+      const factory = createKernelPlugin<{ baseUrl: string }>(staticConfig);
+      const plugin = factory({ baseUrl: 'wss://example.com' });
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should reject calling without required options', () => {
+      const factory = createKernelPlugin<{ baseUrl: string }>(staticConfig);
+      // @ts-expect-error -- required options must be provided
+      factory();
+    });
+
+    it('should reject missing required keys', () => {
+      const factory = createKernelPlugin<{ baseUrl: string; token: string }>(staticConfig);
+      // @ts-expect-error -- 'token' is missing
+      factory({ baseUrl: 'wss://example.com' });
+    });
+
+    it('should reject wrong option value types', () => {
+      const factory = createKernelPlugin<{ baseUrl: string }>(staticConfig);
+      // @ts-expect-error -- baseUrl must be a string, not a number
+      factory({ baseUrl: 123 });
+    });
+  });
+
+  describe('overload 2: mixed required and optional → required-arg factory', () => {
+    it('should require options when at least one key is required', () => {
+      const factory = createKernelPlugin<{ baseUrl: string; debug?: boolean }>(staticConfig);
+      const plugin = factory({ baseUrl: 'wss://example.com' });
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should reject calling without options', () => {
+      const factory = createKernelPlugin<{ baseUrl: string; debug?: boolean }>(staticConfig);
+      // @ts-expect-error -- options are required because baseUrl is required
+      factory();
+    });
+  });
+
+  describe('config-as-function', () => {
+    it('should accept a config builder function with optional options', () => {
+      const factory = createKernelPlugin<{ extensions?: string[] }>((options) => ({
+        id: 'test',
+        moduleUrl: 'test.js',
+        extensions: options?.extensions ?? ['ts', 'js'],
+      }));
+      const plugin = factory();
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+
+    it('should accept a config builder function with required options', () => {
+      const factory = createKernelPlugin<{ apiKey: string }>((options) => ({
+        id: 'test',
+        moduleUrl: 'test.js',
+        extensions: ['ts'],
+        builtinModuleNames: [options?.apiKey ?? ''],
+      }));
+
+      // @ts-expect-error -- apiKey is required
+      factory();
+
+      const plugin = factory({ apiKey: 'abc' });
+      expectTypeOf(plugin).toEqualTypeOf<KernelPlugin>();
+    });
+  });
+});
+
+// =============================================================================
+// createMiddlewarePlugin
+// =============================================================================
+
+describe('createMiddlewarePlugin type inference', () => {
+  const staticConfig = { id: 'test', moduleUrl: 'test.js' };
+
+  it('should return a zero-arg factory for static config', () => {
+    const factory = createMiddlewarePlugin(staticConfig);
+    expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
+    expectTypeOf(factory).returns.toEqualTypeOf<MiddlewarePlugin>();
+  });
+
+  it('should return an optional-arg factory for all-optional options', () => {
+    const factory = createMiddlewarePlugin<{ ttl?: number }>(staticConfig);
+    const noArgs = factory();
+    const withArgs = factory({ ttl: 60 });
+    expectTypeOf(noArgs).toEqualTypeOf<MiddlewarePlugin>();
+    expectTypeOf(withArgs).toEqualTypeOf<MiddlewarePlugin>();
+  });
+
+  it('should return a required-arg factory for required options', () => {
+    const factory = createMiddlewarePlugin<{ maxSize: number }>(staticConfig);
+    // @ts-expect-error -- maxSize is required
+    factory();
+    const plugin = factory({ maxSize: 100 });
+    expectTypeOf(plugin).toEqualTypeOf<MiddlewarePlugin>();
+  });
+
+  it('should reject arguments to a zero-arg factory', () => {
+    const factory = createMiddlewarePlugin(staticConfig);
+    // @ts-expect-error -- zero-arg factory accepts no arguments
+    factory({ anything: true });
+  });
+});
+
+// =============================================================================
+// createBundlerPlugin
+// =============================================================================
+
+describe('createBundlerPlugin type inference', () => {
+  const staticConfig = { id: 'test', moduleUrl: 'test.js', extensions: ['ts'] };
+
+  it('should return a zero-arg factory for static config', () => {
+    const factory = createBundlerPlugin(staticConfig);
+    expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
+    expectTypeOf(factory).returns.toEqualTypeOf<BundlerPlugin>();
+  });
+
+  it('should return an optional-arg factory for all-optional options', () => {
+    const factory = createBundlerPlugin<{ minify?: boolean }>(staticConfig);
+    const noArgs = factory();
+    const withArgs = factory({ minify: true });
+    expectTypeOf(noArgs).toEqualTypeOf<BundlerPlugin>();
+    expectTypeOf(withArgs).toEqualTypeOf<BundlerPlugin>();
+  });
+
+  it('should return a required-arg factory for required options', () => {
+    const factory = createBundlerPlugin<{ target: string }>(staticConfig);
+    // @ts-expect-error -- target is required
+    factory();
+    const plugin = factory({ target: 'es2022' });
+    expectTypeOf(plugin).toEqualTypeOf<BundlerPlugin>();
+  });
+
+  it('should accept config-as-function and preserve optionality', () => {
+    const factory = createBundlerPlugin<{ extensions?: string[] }>((options) => ({
+      id: 'test',
+      moduleUrl: 'test.js',
+      extensions: options?.extensions ?? ['ts', 'js'],
+    }));
+    const noArgs = factory();
+    const withArgs = factory({ extensions: ['tsx'] });
+    expectTypeOf(noArgs).toEqualTypeOf<BundlerPlugin>();
+    expectTypeOf(withArgs).toEqualTypeOf<BundlerPlugin>();
+  });
+
+  it('should reject arguments to a zero-arg factory', () => {
+    const factory = createBundlerPlugin(staticConfig);
+    // @ts-expect-error -- zero-arg factory accepts no arguments
+    factory({ anything: true });
+  });
+});
+
+// =============================================================================
+// createKernelSuccess
+// =============================================================================
+
+describe('createKernelSuccess type inference', () => {
+  it('should infer T from a plain object', () => {
+    const result = createKernelSuccess({ foo: 'bar', count: 42 });
+    expectTypeOf(result).toEqualTypeOf<KernelSuccessResult<{ foo: string; count: number }>>();
+    expectTypeOf(result.data).toEqualTypeOf<{ foo: string; count: number }>();
+    expectTypeOf(result.success).toEqualTypeOf<true>();
+  });
+
+  it('should infer T from an array', () => {
+    const result = createKernelSuccess([1, 2, 3]);
+    expectTypeOf(result).toEqualTypeOf<KernelSuccessResult<number[]>>();
+    expectTypeOf(result.data).toEqualTypeOf<number[]>();
+  });
+
+  it('should infer T from a string', () => {
+    const result = createKernelSuccess('hello' as string);
+    expectTypeOf(result).toEqualTypeOf<KernelSuccessResult<string>>();
+  });
+
+  it('should preserve complex nested types', () => {
+    const result = createKernelSuccess({
+      defaultParameters: {} as Record<string, unknown>,
+      jsonSchema: { type: 'object' } as unknown,
+    });
+    expectTypeOf(result.data).toEqualTypeOf<{
+      defaultParameters: Record<string, unknown>;
+      jsonSchema: unknown;
+    }>();
+  });
+
+  it('should preserve array of objects', () => {
+    const result = createKernelSuccess([
+      { blob: new Blob(), name: 'model.stl' },
+    ]);
+    expectTypeOf(result.data).toEqualTypeOf<Array<{ blob: Blob; name: string }>>();
+  });
+
+  it('should always include issues array', () => {
+    const result = createKernelSuccess('data');
+    expectTypeOf(result.issues).toBeArray();
   });
 });
