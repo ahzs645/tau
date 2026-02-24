@@ -1,9 +1,9 @@
-import type { InputFormat, OutputFormat } from '@taucad/converter';
+import type { FileExtension } from '@taucad/types';
 import { Badge } from '#components/ui/badge.js';
 
 type FormatsListMobileProps = {
   readonly title: string;
-  readonly formats: ReadonlyArray<InputFormat | OutputFormat>;
+  readonly formats: readonly FileExtension[];
 };
 
 export function FormatsListMobile({ title, formats }: FormatsListMobileProps): React.JSX.Element {

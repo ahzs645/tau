@@ -1,4 +1,5 @@
-import type { File } from '#types.js';
+import { lookupMimeType } from '@taucad/types/constants';
+import type { ExportFile } from '@taucad/types';
 
 /**
  * Base abstract class for 3D exporters.
@@ -29,21 +30,22 @@ export abstract class BaseExporter<Options = Record<string, never>> {
    * @param options - Optional runtime options that may override initialization options.
    * @returns A promise that resolves to an array of exported files.
    */
-  public abstract parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<Options>): Promise<File[]>;
+  public abstract parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<Options>): Promise<ExportFile[]>;
 
   /**
-   * Helper method to create an OutputFile with proper naming.
+   * Helper method to create an ExportFile with proper naming and auto-resolved MIME type.
    *
    * @param basename - The base name for the file (without extension).
    * @param extension - The file extension (with or without dot).
-   * @param data - The file data.
-   * @returns An OutputFile object.
+   * @param bytes - The file data.
+   * @returns An ExportFile object.
    */
-  protected createOutputFile(basename: string, extension: string, data: Uint8Array<ArrayBuffer>): File {
+  protected createOutputFile(basename: string, extension: string, bytes: Uint8Array<ArrayBuffer>): ExportFile {
     const cleanExtension = extension.startsWith('.') ? extension.slice(1) : extension;
     return {
       name: `${basename}.${cleanExtension}`,
-      data,
+      bytes,
+      mimeType: lookupMimeType(cleanExtension),
     };
   }
 

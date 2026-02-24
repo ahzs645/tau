@@ -22,13 +22,14 @@
     "stl",
     "dxf",
     "step",
-    "iges"
+    "iges",
+    "usda",
+    "usdz"
   ],
   "author": "Richard Fontein",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts",
-    "./constants": "./src/constants/index.ts"
+    ".": "./src/index.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -42,16 +43,6 @@
           "types": "./dist/esm/index.d.ts",
           "default": "./dist/esm/index.js"
         }
-      },
-      "./constants": {
-        "require": {
-          "types": "./dist/cjs/constants/index.d.cts",
-          "default": "./dist/cjs/constants/index.cjs"
-        },
-        "import": {
-          "types": "./dist/esm/constants/index.d.ts",
-          "default": "./dist/esm/constants/index.js"
-        }
       }
     }
   },
@@ -63,7 +54,7 @@
     "@gltf-transform/extensions": "catalog:",
     "@gltf-transform/functions": "catalog:",
     "@taucad/types": "workspace:*",
-    "assimpjs": "https://codeload.github.com/taucad/assimpjs/tar.gz/cf36dc8e4ef85f1153d041defac70bb1bc1c6454",
+    "assimpjs": "catalog:",
     "draco3dgltf": "^1.5.7",
     "occt-import-js": "^0.0.23",
     "rhino3dm": "^8.17.0"

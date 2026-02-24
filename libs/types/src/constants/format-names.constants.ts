@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- format names */
-import type { InputFormat, OutputFormat } from '#types.js';
+import type { FileExtension } from '#types/mime-types.types.js';
 
 type FormatConfiguration = {
   name: string;
@@ -206,4 +206,4 @@ export const formatConfigurations = {
     description:
       'Developed by RealityWave for use in web-based 3D visualization, providing an XML-based format for interactive 3D graphics.',
   },
-} as const satisfies Record<InputFormat | OutputFormat, FormatConfiguration>;
+} as const satisfies Partial<Record<FileExtension, FormatConfiguration>>;

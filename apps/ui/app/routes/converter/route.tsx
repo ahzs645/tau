@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { importToGlb, supportedImportFormats, supportedExportFormats, formatConfigurations } from '@taucad/converter';
-import type { InputFormat, OutputFormat } from '@taucad/converter';
+import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
 import { Download, Upload, RotateCcw, Package, Code2 } from 'lucide-react';
 import { fromPromise } from 'xstate';
 import type { Geometry, Build } from '@taucad/types';
@@ -66,7 +66,7 @@ export const handle: Handle = {
 
 type UploadedFileInfo = {
   name: string;
-  format: InputFormat;
+  format: SupportedImportFormat;
   size: number;
 };
 
@@ -130,7 +130,10 @@ const ConverterViewer = memo(function ({ glbData }: { readonly glbData: Uint8Arr
 function ConverterContentInner(): React.JSX.Element {
   const [uploadedFile, setUploadedFile] = useState<UploadedFileInfo | undefined>(undefined);
   const [glbData, setGlbData] = useState<Uint8Array<ArrayBuffer> | undefined>(undefined);
-  const [selectedFormats, setSelectedFormats] = useCookie<OutputFormat[]>(cookieName.converterOutputFormats, []);
+  const [selectedFormats, setSelectedFormats] = useCookie<SupportedExportFormat[]>(
+    cookieName.converterOutputFormats,
+    [],
+  );
   const [useZipForMultiple, setUseZipForMultiple] = useCookie<boolean>(cookieName.converterMultifileZip, true);
   const [isConverting, setIsConverting] = useState(false);
 
@@ -145,7 +148,7 @@ function ConverterContentInner(): React.JSX.Element {
 
       toast.promise(
         (async () => {
-          const glb = await importToGlb([{ name: file.name, data }], format);
+          const glb = await importToGlb([{ name: file.name, bytes: data }], format);
 
           setUploadedFile({
             name: file.name,
@@ -180,7 +183,7 @@ function ConverterContentInner(): React.JSX.Element {
   }, []);
 
   const handleFormatToggle = useCallback(
-    (format: OutputFormat) => {
+    (format: SupportedExportFormat) => {
       setSelectedFormats((previous) => {
         if (previous.includes(format)) {
           return previous.filter((f) => f !== format);

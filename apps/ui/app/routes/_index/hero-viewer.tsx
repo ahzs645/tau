@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { useSelector } from '@xstate/react';
 import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { exportFromGlb } from '@taucad/converter';
-import type { OutputFormat } from '@taucad/converter';
+import type { SupportedExportFormat } from '@taucad/converter';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
@@ -21,7 +21,7 @@ const heroBuildId = 'hero-qrcode-v2';
 const heroMainFile = 'main.scad';
 
 type ExportFormatOption = {
-  format: OutputFormat;
+  format: SupportedExportFormat;
   label: string;
 };
 
@@ -76,7 +76,7 @@ function HeroViewerInner(): React.JSX.Element {
           throw new Error('No file returned from export');
         }
 
-        const blob = new Blob([asBuffer(file.data.buffer)]);
+        const blob = new Blob([asBuffer(file.bytes.buffer)]);
         downloadBlob(blob, filename);
         return blob;
       })(),

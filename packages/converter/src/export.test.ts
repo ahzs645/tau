@@ -1,9 +1,9 @@
 import { expect, describe, it, beforeEach } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
+import type { ExportFile } from '@taucad/types';
 import { importFiles } from '#import.js';
 import { exportFiles, supportedExportFormats } from '#export.js';
 import type { SupportedExportFormat } from '#export.js';
-import type { File } from '#types.js';
 import { loadFixture } from '#test.utils.js';
 import { getInspectReport } from '#gltf.utils.js';
 
@@ -70,7 +70,7 @@ const performRoundTripTest = async (
   glbData: Uint8Array<ArrayBuffer>,
   format: SupportedExportFormat,
 ): Promise<{
-  exportedFiles: File[];
+  exportedFiles: ExportFile[];
   roundTripGlbData: Uint8Array<ArrayBuffer>;
   comparison: InspectComparison;
 }> => {
@@ -97,10 +97,9 @@ const performRoundTripTest = async (
     };
   }
 
-  // Convert OutputFiles to InputFiles for re-import
-  const inputFiles: File[] = exportedFiles.map((file) => ({
+  const inputFiles = exportedFiles.map((file) => ({
     name: file.name,
-    data: file.data,
+    bytes: file.bytes,
   }));
 
   // Re-import the exported files
@@ -399,6 +398,22 @@ const exportTestCases: ExportTestCase[] = [
     },
   }),
 
+  // USD formats: re-import applies meters->mm scaling so round-trip bounding box is 1000x larger
+  createExportTestCase('usda', {
+    expectations: {
+      geometry: {
+        boundingBoxTolerance: 3500,
+      },
+    },
+  }),
+  createExportTestCase('usdz', {
+    expectations: {
+      geometry: {
+        boundingBoxTolerance: 3500,
+      },
+    },
+  }),
+
   // STP Format - CAD format with limited capabilities and may subdivide geometry
   createExportTestCase('step', {
     expectations: {
@@ -429,7 +444,7 @@ describe('exportFiles', () => {
       }
 
       let glbData: Uint8Array<ArrayBuffer>;
-      let exportedFiles: File[];
+      let exportedFiles: ExportFile[];
       let roundTripGlbData: Uint8Array<ArrayBuffer>;
       let comparison: InspectComparison;
 
@@ -467,8 +482,8 @@ describe('exportFiles', () => {
       it('should have valid file data', () => {
         for (const file of exportedFiles) {
           expect(file.name).toBeTruthy();
-          expect(file.data).toBeInstanceOf(Uint8Array);
-          expect(file.data.length).toBeGreaterThan(0);
+          expect(file.bytes).toBeInstanceOf(Uint8Array);
+          expect(file.bytes.length).toBeGreaterThan(0);
         }
       });
 

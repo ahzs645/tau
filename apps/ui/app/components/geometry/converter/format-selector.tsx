@@ -1,13 +1,13 @@
 import { supportedExportFormats } from '@taucad/converter';
-import type { OutputFormat } from '@taucad/converter';
+import type { SupportedExportFormat } from '@taucad/converter';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
 import { Button } from '#components/ui/button.js';
 import { formatDisplayName } from '#components/geometry/converter/converter-utils.js';
 
 type FormatSelectorProperties = {
-  readonly selectedFormats: OutputFormat[];
-  readonly onFormatToggle: (format: OutputFormat) => void;
+  readonly selectedFormats: SupportedExportFormat[];
+  readonly onFormatToggle: (format: SupportedExportFormat) => void;
   readonly onClearSelection: () => void;
   readonly headingText?: string;
   readonly clearButtonText?: string;

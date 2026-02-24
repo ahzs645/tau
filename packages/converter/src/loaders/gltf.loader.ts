@@ -2,10 +2,10 @@ import type { Document, GLTF } from '@gltf-transform/core';
 import { NodeIO } from '@gltf-transform/core';
 import { unpartition } from '@gltf-transform/functions';
 import draco3d from 'draco3dgltf';
+import type { FileInput } from '@taucad/types';
 import { createCoordinateTransform, createScalingTransform } from '#gltf.transforms.js';
 import { BaseLoader } from '#loaders/base.loader.js';
 import type { BaseLoaderOptions } from '#loaders/base.loader.js';
-import type { File } from '#types.js';
 import { allExtensions } from '#gltf.extensions.js';
 
 type GltfLoaderOptions = {
@@ -13,15 +13,18 @@ type GltfLoaderOptions = {
   scaleMetersToMillimeters?: boolean;
 } & BaseLoaderOptions;
 
+/**
+ *
+ */
 export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOptions> {
-  protected async parseAsync(files: File[]): Promise<Uint8Array<ArrayBuffer>> {
+  protected async parseAsync(files: FileInput[]): Promise<Uint8Array<ArrayBuffer>> {
     const io = new NodeIO().registerExtensions(allExtensions).registerDependencies({
       // eslint-disable-next-line @typescript-eslint/naming-convention -- External library property names
       'draco3d.decoder': await draco3d.createDecoderModule(),
       // eslint-disable-next-line @typescript-eslint/naming-convention -- External library property names
       'draco3d.encoder': await draco3d.createEncoderModule(),
     });
-    const { data, name } = this.findPrimaryFile(files);
+    const { bytes, name } = this.findPrimaryFile(files);
 
     // Determine if this is a GLTF (JSON) or GLB (binary) file
     const isGltf = name.toLowerCase().endsWith('.gltf');
@@ -29,7 +32,7 @@ export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOp
 
     if (isGltf) {
       // For GLTF files, convert to text and use readJSON
-      const jsonText = new TextDecoder().decode(data);
+      const jsonText = new TextDecoder().decode(bytes);
       const json = JSON.parse(jsonText) as GLTF.IGLTF;
 
       // Extract URIs referenced in the GLTF file
@@ -40,14 +43,14 @@ export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOp
       for (const uri of referencedUris) {
         const matchedFile = this.findFileByUri(uri, files, name);
         if (matchedFile) {
-          resources[uri] = matchedFile.data;
+          resources[uri] = matchedFile.bytes;
         }
       }
 
       document = await io.readJSON({ json, resources });
     } else {
       // For GLB files, use readBinary
-      document = await io.readBinary(data);
+      document = await io.readBinary(bytes);
     }
 
     // Apply transformations
@@ -112,7 +115,7 @@ export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOp
    * Find a file that matches the given URI
    * Tries exact match first, then basename match
    */
-  private findFileByUri(uri: string, files: File[], primaryFileName: string): File | undefined {
+  private findFileByUri(uri: string, files: FileInput[], primaryFileName: string): FileInput | undefined {
     // Normalize URI by removing leading ./
     const normalizedUri = uri.replace(/^\.\//, '');
 

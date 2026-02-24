@@ -1,7 +1,7 @@
 import { XIcon, Download, Info } from 'lucide-react';
 import { useCallback, memo, useState, useMemo } from 'react';
 import { useSelector } from '@xstate/react';
-import type { OutputFormat } from '@taucad/converter';
+import type { SupportedExportFormat } from '@taucad/converter';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
   FloatingPanel,
@@ -86,7 +86,7 @@ export const ChatConverter = memo(function (properties: {
   );
 
   // Converter state
-  const [selectedFormats, setSelectedFormats] = useCookie<OutputFormat[]>(cookieName.converterOutputFormats, []);
+  const [selectedFormats, setSelectedFormats] = useCookie<SupportedExportFormat[]>(cookieName.converterOutputFormats, []);
   const [useZipForMultiple, setUseZipForMultiple] = useCookie<boolean>(cookieName.converterMultifileZip, true);
 
   // Lazy GLB provider sourced from CAD geometries
@@ -112,7 +112,7 @@ export const ChatConverter = memo(function (properties: {
   }, [glbData, geometries]);
 
   const handleFormatToggle = useCallback(
-    (format: OutputFormat) => {
+    (format: SupportedExportFormat) => {
       setSelectedFormats((previous) => {
         if (previous.includes(format)) {
           return previous.filter((f) => f !== format);

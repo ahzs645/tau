@@ -6,7 +6,7 @@
  */
 
 /* eslint-disable @typescript-eslint/naming-convention -- formats can be valid identifiers */
-import type { File, InputFormat } from '#types.js';
+import type { FileExtension, FileInput } from '@taucad/types';
 import type { BaseLoader } from '#loaders/base.loader.js';
 import { DracoLoader } from '#loaders/draco.loader.js';
 import { GltfLoader } from '#loaders/gltf.loader.js';
@@ -47,7 +47,6 @@ const loaderFromInputFormat = {
   stp: new OcctLoader(),
   smd: new AssimpLoader(),
   usda: new AssimpLoader(),
-  usdc: new AssimpLoader(),
   usdz: new AssimpLoader(),
   wrl: new AssimpLoader(),
   x: new AssimpLoader(),
@@ -76,13 +75,19 @@ const loaderFromInputFormat = {
   // skp: new UnimplementedLoader('SketchUp .skp files are not implemented. This proprietary format requires specialized SketchUp file parsing capabilities.'),
   // sldprt: new UnimplementedLoader('SolidWorks .sldprt files are not implemented. This proprietary format requires specialized CAD file parsing capabilities.'),
   // x_t: new UnimplementedLoader('Parasolid .x_t files are not implemented. This proprietary format requires specialized CAD kernel integration.'),
-} as const satisfies Partial<Record<InputFormat, BaseLoader>>;
+} as const satisfies Partial<Record<FileExtension, BaseLoader>>;
 
+/**
+ *
+ */
 export type SupportedImportFormat = keyof typeof loaderFromInputFormat;
 
 export const supportedImportFormats = Object.keys(loaderFromInputFormat) as SupportedImportFormat[];
 
-export const importFiles = async (files: File[], format: SupportedImportFormat): Promise<Uint8Array<ArrayBuffer>> => {
+export const importFiles = async (
+  files: FileInput[],
+  format: SupportedImportFormat,
+): Promise<Uint8Array<ArrayBuffer>> => {
   const loader = loaderFromInputFormat[format];
 
   loader.initialize({ format });

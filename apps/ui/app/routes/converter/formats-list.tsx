@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
+import type { FileExtension } from '@taucad/types';
 import { formatConfigurations } from '@taucad/converter';
-import type { InputFormat, OutputFormat } from '@taucad/converter';
 import { Badge } from '#components/ui/badge.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { SearchInput } from '#components/search-input.js';
@@ -11,7 +11,7 @@ type FormatsListProps = {
   readonly icon: LucideIcon;
   readonly title: string;
   readonly description: string;
-  readonly formats: ReadonlyArray<InputFormat | OutputFormat>;
+  readonly formats: readonly FileExtension[];
   readonly className?: string;
 };
 

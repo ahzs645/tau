@@ -4,8 +4,8 @@ import type { PartialDeep } from 'type-fest';
 // eslint-disable-next-line import-x/no-extraneous-dependencies -- test utils
 import { expect } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
+import type { FileInput } from '@taucad/types';
 import type { SupportedImportFormat } from '#import.js';
-import type { File } from '#types.js';
 import {
   getInspectReport,
   getGeometryStatsFromInspect,
@@ -20,6 +20,9 @@ import type { GltfSceneStructure } from '#gltf.utils.js';
 // Test Framework Types & Utilities
 // ============================================================================
 
+/**
+ *
+ */
 export type GeometryExpectation = {
   vertexCount: number;
   faceCount: number;
@@ -38,6 +41,9 @@ export type GeometryExpectation = {
   };
 };
 
+/**
+ *
+ */
 export type LoaderTestCase = {
   format: SupportedImportFormat;
   /**
@@ -99,16 +105,16 @@ export const createGeometryVariant = (
   },
 });
 
-export const loadTestData = async (testCase: LoaderTestCase): Promise<File[]> => {
+export const loadTestData = async (testCase: LoaderTestCase): Promise<FileInput[]> => {
   if (testCase.dataSource) {
     const data = await testCase.dataSource();
-    return [{ name: `input.${testCase.format}`, data }];
+    return [{ name: `input.${testCase.format}`, bytes: data }];
   }
 
   if (testCase.files) {
     return testCase.files.map((filename) => ({
       name: filename,
-      data: loadFixture(filename),
+      bytes: loadFixture(filename),
     }));
   }
 
@@ -116,7 +122,7 @@ export const loadTestData = async (testCase: LoaderTestCase): Promise<File[]> =>
     return [
       {
         name: testCase.fixtureName,
-        data: loadFixture(testCase.fixtureName),
+        bytes: loadFixture(testCase.fixtureName),
       },
     ];
   }
@@ -152,12 +158,13 @@ export const createInspectTestUtils = (): {
 } => {
   const epsilon = 1e-6;
 
-  const expectVector3ToBeCloseTo = (
-    actual: [number, number, number],
-    expected: [number, number, number],
-    subject: string,
-    precision = epsilon,
-  ): void => {
+  const expectVector3ToBeCloseTo = (options: {
+    actual: [number, number, number];
+    expected: [number, number, number];
+    subject: string;
+    precision?: number;
+  }): void => {
+    const { actual, expected, subject, precision = epsilon } = options;
     expect(
       Math.abs(actual[0] - expected[0]),
       `${subject}: Expected [X: ${expected[0]}]. Actual [X: ${actual[0]}]\n`,
@@ -225,7 +232,12 @@ export const createInspectTestUtils = (): {
       expect(boundingBox).toBeDefined();
 
       const actualTolerance = tolerance ?? epsilon;
-      expectVector3ToBeCloseTo(boundingBox!.size, expectedSize, 'bounding box size', actualTolerance);
+      expectVector3ToBeCloseTo({
+        actual: boundingBox!.size,
+        expected: expectedSize,
+        subject: 'bounding box size',
+        precision: actualTolerance,
+      });
     },
 
     expectBoundingBoxCenter(report: InspectReport, expectedCenter: [number, number, number], tolerance?: number): void {
@@ -233,7 +245,12 @@ export const createInspectTestUtils = (): {
       expect(boundingBox).toBeDefined();
 
       const actualTolerance = tolerance ?? epsilon;
-      expectVector3ToBeCloseTo(boundingBox!.center, expectedCenter, 'bounding box center', actualTolerance);
+      expectVector3ToBeCloseTo({
+        actual: boundingBox!.center,
+        expected: expectedCenter,
+        subject: 'bounding box center',
+        precision: actualTolerance,
+      });
     },
   });
 

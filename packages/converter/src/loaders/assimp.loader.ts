@@ -1,24 +1,25 @@
 /* eslint-disable @typescript-eslint/naming-convention -- some formats are named like this */
 /* eslint-disable new-cap -- External library uses PascalCase method names */
 import assimpjs from 'assimpjs/all';
-import type { InputFormat, File } from '#types.js';
+import type { FileExtension, FileInput } from '@taucad/types';
 import { applyGlbTransforms } from '#gltf.transforms.js';
 import { BaseLoader } from '#loaders/base.loader.js';
 
 type AssimpOptions = {
-  format: InputFormat;
+  format: FileExtension;
 };
 
+/**
+ *
+ */
 export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOptions> {
-  /**
-   * @description Whether the format requires a Y-to-Z up transformation.
-   */
-  private static readonly transformYtoZupRequired: Partial<Record<InputFormat, boolean>> = {
+  private static readonly transformYtoZupRequired: Partial<Record<FileExtension, boolean>> = {
     dxf: true,
     x: true,
     dae: true,
     '3ds': true,
     fbx: true,
+    usda: true,
     usdz: true,
     ifc: true,
     x3d: true,
@@ -27,45 +28,50 @@ export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOpti
     ase: true,
   };
 
-  protected async parseAsync(files: File[], options: AssimpOptions): Promise<Uint8Array<ArrayBuffer>> {
-    // Initialize assimpjs
+  /**
+   * USD formats use meters as the default unit; tau uses millimeters.
+   */
+  private static readonly scaleMetersToMillimetersRequired: Partial<Record<FileExtension, boolean>> = {
+    usda: true,
+    usdz: true,
+  };
+
+  protected async parseAsync(files: FileInput[], options: AssimpOptions): Promise<Uint8Array<ArrayBuffer>> {
     const ajs = await assimpjs({
       locateFile() {
-        // Universal pattern for browsers and bundlers
-        // @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
         const wasmPath = new URL('../assets/assimpjs/assimpjs-all.wasm', import.meta.url).href;
 
         return wasmPath;
       },
     });
 
-    // Create file list with all input files, preserving original filenames
     const fileList = new ajs.FileList();
 
     for (const file of files) {
-      fileList.AddFile(file.name, file.data);
+      fileList.AddFile(file.name, file.bytes);
     }
 
-    // Convert to GLB format using assimpjs
     const result = ajs.ConvertFileList(fileList, 'glb2');
 
-    // Check if conversion succeeded
     if (!result.IsSuccess() || result.FileCount() === 0) {
       throw new Error(`Failed to convert ${options.format} file: ${result.GetErrorCode()}`);
     }
 
-    // Get the GLB data, GLB only supports single file
     const resultFile = result.GetFile(0);
-    const glbData = resultFile.GetContent();
 
-    // Apply coordinate transformations for formats that require Y-to-Z up conversion
-    const transformYtoZup = this.getTransformYtoZup(options.format);
+    // GetContent() returns a typed_memory_view — a live view into WASM linear
+    // memory.  We must copy it to an independent buffer immediately: the view
+    // is invalidated the moment the WebAssembly.Memory grows (any later
+    // malloc/free in the same module detaches the underlying ArrayBuffer).
+    const glbData = new Uint8Array(resultFile.GetContent());
 
-    if (transformYtoZup) {
-      // Apply gltf-transform transformations to the GLB data
+    const transformYtoZup = AssimpLoader.transformYtoZupRequired[options.format] ?? false;
+    const scaleMetersToMillimeters = AssimpLoader.scaleMetersToMillimetersRequired[options.format] ?? false;
+
+    if (transformYtoZup || scaleMetersToMillimeters) {
       return applyGlbTransforms(glbData, {
-        transformYtoZup: true,
-        scaleMetersToMillimeters: false,
+        transformYtoZup,
+        scaleMetersToMillimeters,
       });
     }
 
@@ -74,9 +80,5 @@ export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOpti
 
   protected mapToGlb(parseResult: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
     return parseResult;
-  }
-
-  private getTransformYtoZup(format: InputFormat): boolean {
-    return AssimpLoader.transformYtoZupRequired[format] ?? false;
   }
 }

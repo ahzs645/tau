@@ -1,5 +1,5 @@
+import type { ExportFile, FileExtension } from '@taucad/types';
 import type { BaseExporter } from '#exporters/base.exporter.js';
-import type { OutputFormat, File } from '#types.js';
 import { GltfExporter } from '#exporters/gltf.exporter.js';
 import { AssimpExporter } from '#exporters/assimp.exporter.js';
 
@@ -20,13 +20,18 @@ const exportConfigs = {
   // These formats are intentionally different. `step` is the most widely used extension,
   // whilst `stp` is the format supported by assimp.
   step: { exporter: new AssimpExporter().initialize({ format: 'stp', targetExtension: 'step' }) },
+  usda: { exporter: new AssimpExporter().initialize({ format: 'usda' }) },
+  usdz: { exporter: new AssimpExporter().initialize({ format: 'usdz' }) },
   x: { exporter: new AssimpExporter().initialize({ format: 'x' }) },
   x3d: { exporter: new AssimpExporter().initialize({ format: 'x3d' }) },
 
   // '3mf': { exporter: new AssimpExporter().initialize({ format: '3mf' }) }, // Fix assimp 3mf exporter
   // '3dm': { exporter: new AssimpExporter().initialize({ format: '3dm' }) }, // Integrate 3dm exporter into assimp
-} as const satisfies Partial<Record<OutputFormat, ExportConfig>>;
+} as const satisfies Partial<Record<FileExtension, ExportConfig>>;
 
+/**
+ *
+ */
 export type SupportedExportFormat = keyof typeof exportConfigs;
 
 export const supportedExportFormats = Object.keys(exportConfigs) as SupportedExportFormat[];
@@ -38,7 +43,10 @@ export const supportedExportFormats = Object.keys(exportConfigs) as SupportedExp
  * @param format - The target export format.
  * @returns A promise that resolves to an array of exported files.
  */
-export const exportFiles = async (glbData: Uint8Array<ArrayBuffer>, format: SupportedExportFormat): Promise<File[]> => {
+export const exportFiles = async (
+  glbData: Uint8Array<ArrayBuffer>,
+  format: SupportedExportFormat,
+): Promise<ExportFile[]> => {
   const config = exportConfigs[format];
 
   try {

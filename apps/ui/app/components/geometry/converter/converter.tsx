@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useActorRef } from '@xstate/react';
 import { exportFromGlb } from '@taucad/converter';
-import type { InputFormat, OutputFormat } from '@taucad/converter';
+import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
 import { Download } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
@@ -16,22 +16,22 @@ import { cn } from '#utils/ui.utils.js';
 
 type UploadedFileInfo = {
   readonly name: string;
-  readonly format: InputFormat;
+  readonly format: SupportedImportFormat;
   readonly size: number;
 };
 
 export type ExportedFile = {
   readonly filename: string;
   readonly content: Uint8Array<ArrayBuffer>;
-  readonly format: OutputFormat;
+  readonly format: SupportedExportFormat;
 };
 
 type ConverterProperties = {
   readonly getGlbData: () => Promise<Uint8Array<ArrayBuffer>>;
-  readonly selectedFormats: OutputFormat[];
+  readonly selectedFormats: SupportedExportFormat[];
   readonly shouldUseZipForMultiple: boolean;
   readonly uploadedFile?: UploadedFileInfo;
-  readonly onFormatToggle: (format: OutputFormat) => void;
+  readonly onFormatToggle: (format: SupportedExportFormat) => void;
   readonly onClearSelection: () => void;
   readonly onZipToggle: (useZip: boolean) => void;
   readonly onExport?: (files: ExportedFile[]) => void;
@@ -129,7 +129,7 @@ export function Converter({
               ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
               : `model.${extension}`;
 
-            const blob = new Blob([asBuffer(file.data.buffer)]);
+            const blob = new Blob([asBuffer(file.bytes.buffer)]);
 
             if (shouldChooseLocation) {
               await saveFileWithPicker(blob, filename);
@@ -139,7 +139,7 @@ export function Converter({
 
             // Call onExport callback if provided and enabled
             if (onExport && shouldSaveToProject) {
-              onExport([{ filename, content: file.data, format }]);
+              onExport([{ filename, content: file.bytes, format }]);
             }
           })(),
           {
@@ -188,11 +188,11 @@ export function Converter({
                   : `model.${extension}`;
                 filesToZip.push({
                   filename,
-                  content: file.data,
+                  content: file.bytes,
                 });
                 exportedFiles.push({
                   filename,
-                  content: file.data,
+                  content: file.bytes,
                   format,
                 });
               }
@@ -269,7 +269,7 @@ export function Converter({
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;
-                const blob = new Blob([asBuffer(file.data.buffer)]);
+                const blob = new Blob([asBuffer(file.bytes.buffer)]);
 
                 if (shouldChooseLocation) {
                   // eslint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional
@@ -280,7 +280,7 @@ export function Converter({
 
                 exportedFiles.push({
                   filename,
-                  content: file.data,
+                  content: file.bytes,
                   format,
                 });
               }

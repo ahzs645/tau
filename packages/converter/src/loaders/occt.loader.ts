@@ -3,18 +3,21 @@ import { Document, NodeIO } from '@gltf-transform/core';
 import occtimportjs from 'occt-import-js';
 import type { ImportResult as OcctImportResult } from 'occt-import-js';
 import { cadMaterialDefaults } from '@taucad/types/constants';
-import type { InputFormat, File } from '#types.js';
+import type { FileExtension, FileInput } from '@taucad/types';
 import { BaseLoader } from '#loaders/base.loader.js';
 
 type OcctOptions = {
-  format: InputFormat;
+  format: FileExtension;
 };
 
+/**
+ *
+ */
 export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
   private readonly io = new NodeIO();
 
-  protected async parseAsync(files: File[], options: OcctOptions): Promise<OcctImportResult> {
-    const { data } = this.findPrimaryFile(files);
+  protected async parseAsync(files: FileInput[], options: OcctOptions): Promise<OcctImportResult> {
+    const { bytes } = this.findPrimaryFile(files);
 
     const occt = await occtimportjs({
       print() {
@@ -38,18 +41,18 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
     switch (options.format) {
       case 'step':
       case 'stp': {
-        result = occt.ReadStepFile(data, undefined);
+        result = occt.ReadStepFile(bytes, undefined);
         break;
       }
 
       case 'iges':
       case 'igs': {
-        result = occt.ReadIgesFile(data, undefined);
+        result = occt.ReadIgesFile(bytes, undefined);
         break;
       }
 
       case 'brep': {
-        result = occt.ReadBrepFile(data, undefined);
+        result = occt.ReadBrepFile(bytes, undefined);
         break;
       }
 
