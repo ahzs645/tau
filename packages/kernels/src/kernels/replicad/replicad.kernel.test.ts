@@ -1,8 +1,9 @@
 // @vitest-environment node
 /* eslint-disable max-lines -- comprehensive kernel test suite */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { NodeIO } from '@gltf-transform/core';
 import replicadKernel from '#kernels/replicad/replicad.kernel.js';
-import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
+import { createGeometryTestHelpers, extractGltfFromResult } from '#testing/kernel-geometry-testing.utils.js';
 import {
   createGeometryFile,
   createTestWorker,
@@ -3173,6 +3174,107 @@ describe('OC API Call Tracing', () => {
       expect(detail[callsKey]).toBeGreaterThan(0);
       expect(detail[`${className}.ms`]).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe('withBrepEdges option', () => {
+  const boxCode = `
+    import { drawRoundedRectangle } from 'replicad';
+    export default function main() {
+      return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+    }
+  `;
+
+  async function countLinePrimitives(result: Awaited<ReturnType<typeof createTestGeometry>>): Promise<number> {
+    const glbData = extractGltfFromResult(result);
+    if (!glbData) {
+      throw new Error('No GLTF data in result');
+    }
+
+    const document = await new NodeIO().readBinary(glbData);
+    let lineCount = 0;
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() === 1) {
+          lineCount++;
+        }
+      }
+    }
+
+    return lineCount;
+  }
+
+  it('should not include BRep edge lines when withBrepEdges is false (default)', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: { 'box.ts': boxCode },
+      mainFile: 'box.ts',
+      parameters: {},
+    });
+
+    expect(result.success).toBe(true);
+    const lineCount = await countLinePrimitives(result);
+    expect(lineCount).toBe(0);
+  });
+
+  it('should include BRep edge lines when withBrepEdges is true', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: { 'box.ts': boxCode },
+      mainFile: 'box.ts',
+      parameters: {},
+      options: { workerOptions: { withBrepEdges: true } },
+    });
+
+    expect(result.success).toBe(true);
+    const lineCount = await countLinePrimitives(result);
+    expect(lineCount).toBeGreaterThan(0);
+  });
+
+  it('should produce identical surface geometry regardless of withBrepEdges setting', async () => {
+    const withoutEdges = await createTestGeometry({
+      definition: replicadKernel,
+      files: { 'box.ts': boxCode },
+      mainFile: 'box.ts',
+      parameters: {},
+      options: { workerOptions: { withBrepEdges: false } },
+    });
+    const withEdges = await createTestGeometry({
+      definition: replicadKernel,
+      files: { 'box.ts': boxCode },
+      mainFile: 'box.ts',
+      parameters: {},
+      options: { workerOptions: { withBrepEdges: true } },
+    });
+
+    expect(withoutEdges.success).toBe(true);
+    expect(withEdges.success).toBe(true);
+
+    const glbWithout = extractGltfFromResult(withoutEdges)!;
+    const glbWith = extractGltfFromResult(withEdges)!;
+
+    const docWithout = await new NodeIO().readBinary(glbWithout);
+    const docWith = await new NodeIO().readBinary(glbWith);
+
+    let triangleVerticesWithout = 0;
+    for (const mesh of docWithout.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() === 4) {
+          triangleVerticesWithout += primitive.getAttribute('POSITION')!.getCount();
+        }
+      }
+    }
+
+    let triangleVerticesWith = 0;
+    for (const mesh of docWith.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() === 4) {
+          triangleVerticesWith += primitive.getAttribute('POSITION')!.getCount();
+        }
+      }
+    }
+
+    expect(triangleVerticesWithout).toBe(triangleVerticesWith);
   });
 });
 

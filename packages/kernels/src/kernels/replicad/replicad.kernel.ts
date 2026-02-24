@@ -49,6 +49,7 @@ type ReplicadContext = {
   openCascade: OpenCascadeInstance;
   ocWithExceptions: OpenCascadeInstanceWithExceptions | undefined;
   withExceptions: boolean;
+  withBrepEdges: boolean;
   replicadInitialised: boolean;
   librarySourceMapCache: Map<string, SourceMapConsumer | undefined>;
   tracingSummary?: OcTracingSummary;
@@ -240,6 +241,7 @@ function enrichIssueLocation(
 const replicadOptionsSchema = z.object({
   withExceptions: z.boolean().optional().default(false),
   ocTracing: z.enum(['off', 'summary', 'per-call']).optional().default('summary'),
+  withBrepEdges: z.boolean().optional().default(false),
 });
 
 // =============================================================================
@@ -253,7 +255,7 @@ export default defineKernel({
 
   async initialize(options, runtime) {
     const { logger, tracer } = runtime;
-    const { withExceptions, ocTracing } = options;
+    const { withExceptions, ocTracing, withBrepEdges } = options;
 
     logger.debug(`Initializing OpenCASCADE WASM (withExceptions: ${withExceptions}, ocTracing: ${ocTracing})`);
 
@@ -305,6 +307,7 @@ export default defineKernel({
       openCascade,
       ocWithExceptions,
       withExceptions,
+      withBrepEdges,
       replicadInitialised: true,
       librarySourceMapCache: new Map<string, SourceMapConsumer | undefined>(),
       tracingSummary,
@@ -421,6 +424,7 @@ export default defineKernel({
       },
       defaultName,
       tessellation,
+      withBrepEdges: context.withBrepEdges,
     });
 
     const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');

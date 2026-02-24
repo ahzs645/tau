@@ -28,13 +28,14 @@ export const defaultKernelOptions: KernelClientOptions = {
 /**
  * Debug kernel options for the editor.
  *
- * Identical to default but enables `withExceptions: true` on replicad
- * for detailed OpenCASCADE error messages during interactive editing.
+ * Identical to default but enables `withExceptions: true` and
+ * `withBrepEdges: true` on replicad for detailed OpenCASCADE error
+ * messages and visible BRep edge lines during interactive editing.
  * Slower than the default -- only use where rich error feedback matters.
  */
 export const debugKernelOptions: KernelClientOptions = {
   ...defaultKernelOptions,
   kernels: defaultKernelOptions.kernels.map((kernel) =>
-    kernel.id === 'replicad' ? replicad({ withExceptions: true }) : kernel,
+    kernel.id === 'replicad' ? replicad({ withExceptions: true, withBrepEdges: true }) : kernel,
   ),
 };

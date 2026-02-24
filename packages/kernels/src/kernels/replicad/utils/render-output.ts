@@ -122,7 +122,7 @@ function renderSvg(shapeConfig: SvgShapeConfiguration): GeometrySvg {
 
 const defaultPreviewTessellation: Tessellation = { linearTolerance: 0.1, angularTolerance: 30 };
 
-function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellation) {
+function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellation, withBrepEdges: boolean) {
   const { name, shape, color, opacity } = shapeConfig;
   const geometry: GeometryReplicad = {
     format: 'replicad',
@@ -145,10 +145,13 @@ function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellati
     tolerance: tessellation.linearTolerance,
     angularTolerance: tessellation.angularTolerance,
   });
-  geometry.edges = shape.meshEdges({
-    tolerance: tessellation.linearTolerance,
-    angularTolerance: tessellation.angularTolerance,
-  });
+
+  if (withBrepEdges) {
+    geometry.edges = shape.meshEdges({
+      tolerance: tessellation.linearTolerance,
+      angularTolerance: tessellation.angularTolerance,
+    });
+  }
 
   return geometry;
 }
@@ -157,6 +160,7 @@ function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellati
 export function render(
   shapes: InputShape[],
   tessellation: Tessellation = defaultPreviewTessellation,
+  withBrepEdges = false,
 ): Array<GeometrySvg | GeometryReplicad> {
   return shapes.map((shapeConfig) => {
     if (isSvgable(shapeConfig.shape)) {
@@ -166,7 +170,7 @@ export function render(
 
     if (isMeshable(shapeConfig.shape)) {
       // TODO: fix this type
-      return renderMesh(shapeConfig as unknown as MeshableConfiguration, tessellation);
+      return renderMesh(shapeConfig as unknown as MeshableConfiguration, tessellation, withBrepEdges);
     }
 
     throw new Error('Invalid shape');
@@ -179,15 +183,17 @@ export function renderOutput({
   beforeRender,
   defaultName = 'AnyShape',
   tessellation,
+  withBrepEdges = false,
 }: {
   shapes: MainResultShapes;
   beforeRender?: (shapes: InputShape[]) => InputShape[];
   defaultName?: string;
   tessellation?: Tessellation;
+  withBrepEdges?: boolean;
 }): Array<GeometrySvg | GeometryReplicad> {
   const baseShape = createBasicShapeConfig(shapes, defaultName).map((element) => normalizeColorAndOpacity(element));
 
   const config = beforeRender ? beforeRender(baseShape) : baseShape;
 
-  return render(config, tessellation);
+  return render(config, tessellation, withBrepEdges);
 }

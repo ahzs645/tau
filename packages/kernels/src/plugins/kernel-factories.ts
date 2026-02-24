@@ -13,6 +13,8 @@ export type ReplicadOptions = {
   withExceptions?: boolean;
   /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
   ocTracing?: 'off' | 'summary' | 'per-call';
+  /** Include Boundary Representation (BRep) edge lines in the generated GLTF geometry. Defaults to `false`. */
+  withBrepEdges?: boolean;
 };
 
 /**
