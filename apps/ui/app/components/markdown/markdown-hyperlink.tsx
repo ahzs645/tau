@@ -36,7 +36,11 @@ export function MarkdownHyperlink({
     <Link
       {...rest}
       to={href ?? ''}
-      className={cn(className, 'underline underline-offset-3 transition-all duration-200 hover:underline-offset-4')}
+      relative="path"
+      className={cn(
+        className,
+        'text-primary underline underline-offset-3 transition-all duration-200 hover:underline hover:underline-offset-4',
+      )}
     >
       {children}
     </Link>
