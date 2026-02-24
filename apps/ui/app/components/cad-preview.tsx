@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { Loader } from '#components/ui/loader.js';
 import { GraphicsProvider } from '#hooks/use-graphics.js';
@@ -56,7 +57,18 @@ export const CadPreviewViewer = memo(function ({
   stageOptions,
   graphicsOptions,
 }: CadPreviewViewerProps): React.JSX.Element {
-  const { geometries, graphicsRef } = useCadPreview();
+  const { geometries, graphicsRef, status, error } = useCadPreview();
+
+  if (status === 'error') {
+    return (
+      <div className={cn('flex size-full items-center justify-center', className)}>
+        <div className="flex flex-col items-center gap-3 text-destructive">
+          <AlertTriangle className="size-10 opacity-60" strokeWidth={1.5} />
+          <span className="max-w-sm text-center text-sm">{error?.message ?? 'Failed to render preview'}</span>
+        </div>
+      </div>
+    );
+  }
 
   if (geometries.length === 0) {
     return (
