@@ -6,6 +6,6 @@ import type { FileManager } from '#machines/file-manager.js';
 import { fs } from '#filesystem/zenfs-config.js';
 
 expose(fileManager);
-exposeFileSystem(fromZenFS(fs));
+export const cleanupFileSystem = exposeFileSystem(fromZenFS(fs));
 
 export type FileWorker = FileManager;
