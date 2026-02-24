@@ -1,5 +1,5 @@
-import { assign, assertEvent, setup, sendTo, fromPromise, fromCallback, waitFor } from 'xstate';
-import type { Snapshot, ActorRef, OutputFrom, DoneActorEvent, ActorRefFrom } from 'xstate';
+import { assign, assertEvent, setup, sendTo, fromPromise, waitFor } from 'xstate';
+import type { Snapshot, ActorRef, OutputFrom, DoneActorEvent, ActorRefFrom, AnyActorRef } from 'xstate';
 import type { Geometry, ExportFormat, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
 import { createKernelClient } from '@taucad/kernels';
@@ -18,8 +18,12 @@ import type { FileManagerMachine } from '#machines/file-manager.machine.js';
  * Lazily create and connect the KernelClient for this CU.
  * Uses the v2 createKernelClient factory with plugin factories.
  * No-op if the client already exists and is connected.
+ *
+ * Subscribes to all client events once on creation:
+ * - `geometry` / `progress` / `parametersResolved` -> forwarded to kernel machine (which forwards to parent)
+ * - `log` / `telemetry` -> forwarded directly to parent
  */
-async function ensureKernelClient(context: KernelContext): Promise<KernelClient> {
+async function ensureKernelClient(context: KernelContext, machineRef: AnyActorRef): Promise<KernelClient> {
   if (context.kernelClient) {
     return context.kernelClient;
   }
@@ -36,7 +40,38 @@ async function ensureKernelClient(context: KernelContext): Promise<KernelClient>
   const client = createKernelClient(context.kernelOptions);
   context.kernelClient = client;
 
-  // Subscribe to events and forward to parent machine
+  // Subscribe to events that the kernel machine handles (state transitions + parent forwarding)
+  context.eventCleanups.push(
+    client.on('geometry', (result) => {
+      if (result.success) {
+        machineRef.send({
+          type: 'geometryComputed',
+          geometries: result.data,
+          issues: result.issues,
+        });
+      } else {
+        machineRef.send({ type: 'kernelIssue', errors: result.issues });
+      }
+    }),
+    client.on('progress', (phase: RenderPhase) => {
+      machineRef.send({ type: 'kernelProgress', phase });
+    }),
+    client.on('parametersResolved', (parametersResult: GetParametersResult) => {
+      if (parametersResult.success) {
+        const data = parametersResult.data as {
+          defaultParameters: Record<string, unknown>;
+          jsonSchema: JSONSchema7;
+        };
+        machineRef.send({
+          type: 'parametersParsed',
+          defaultParameters: data.defaultParameters,
+          jsonSchema: data.jsonSchema,
+        });
+      }
+    }),
+  );
+
+  // Subscribe to events forwarded directly to parent
   if (context.parentRef) {
     const { parentRef } = context;
 
@@ -56,15 +91,13 @@ async function ensureKernelClient(context: KernelContext): Promise<KernelClient>
     );
   }
 
-  // Direct worker-to-worker bridge: main thread only creates the channel,
-  // filesystem calls go directly between kernel worker and FM worker.
   const port = createFileSystemBridge(snapshot.context.worker);
   await client.connect({ port });
 
   return client;
 }
 
-type RenderEvent =
+type KernelMachineEvent =
   | {
       type: 'parametersParsed';
       defaultParameters: Record<string, unknown>;
@@ -87,78 +120,6 @@ type RenderEvent =
       type: 'kernelTelemetry';
       entries: PerformanceEntryData[];
     };
-
-type RenderInput = {
-  context: KernelContext;
-  event: {
-    file: GeometryFile;
-    parameters: Record<string, unknown>;
-  };
-};
-
-const renderActor = fromCallback<RenderEvent, RenderInput>(({ input, sendBack }) => {
-  const { context, event } = input;
-  const { file, parameters } = event;
-
-  void (async () => {
-    let offProgress: (() => void) | undefined;
-    let offParameters: (() => void) | undefined;
-
-    try {
-      const client = await ensureKernelClient(context);
-
-      if (context.changedPaths.length > 0) {
-        client.notifyFileChanged(context.changedPaths);
-      }
-
-      offProgress = client.on('progress', (phase: RenderPhase) => {
-        sendBack({ type: 'kernelProgress', phase });
-      });
-
-      offParameters = client.on('parametersResolved', (parametersResult: GetParametersResult) => {
-        if (parametersResult.success) {
-          const data = parametersResult.data as {
-            defaultParameters: Record<string, unknown>;
-            jsonSchema: JSONSchema7;
-          };
-          sendBack({
-            type: 'parametersParsed',
-            defaultParameters: data.defaultParameters,
-            jsonSchema: data.jsonSchema,
-          });
-        }
-      });
-
-      const result = await client.render({ file, parameters });
-
-      if (result.success) {
-        sendBack({
-          type: 'geometryComputed',
-          geometries: result.data,
-          issues: result.issues,
-        });
-      } else {
-        sendBack({ type: 'kernelIssue', errors: result.issues });
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'error rendering geometry';
-      sendBack({
-        type: 'kernelIssue',
-        errors: [
-          {
-            message: errorMessage,
-            location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
-            type: 'runtime' as const,
-            severity: 'error' as const,
-          },
-        ],
-      });
-    } finally {
-      offProgress?.();
-      offParameters?.();
-    }
-  })();
-});
 
 const exportGeometryActor = fromPromise<
   | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
@@ -186,20 +147,8 @@ const exportGeometryActor = fromPromise<
 
     if (result.success) {
       const { data } = result;
-      if (Array.isArray(data) && data.length > 0 && data[0]?.blob) {
-        return { type: 'geometryExported', blob: data[0].blob, format };
-      }
-
-      return {
-        type: 'geometryExportFailed',
-        errors: [
-          {
-            message: 'No geometry data to export',
-            type: 'runtime',
-            severity: 'error' as const,
-          },
-        ],
-      };
+      const blob = new Blob([data.bytes], { type: data.mimeType });
+      return { type: 'geometryExported', blob, format };
     }
 
     return {
@@ -224,7 +173,6 @@ const exportGeometryActor = fromPromise<
 export type CadActor = ActorRef<Snapshot<unknown>, KernelEventExternal>;
 
 const kernelActors = {
-  renderActor,
   exportGeometryActor,
 } as const;
 type KernelActorNames = keyof typeof kernelActors;
@@ -242,23 +190,20 @@ type KernelEventWorker = {
   data?: unknown;
 };
 
-type PromiseActorNames = Exclude<KernelActorNames, 'renderActor'>;
-
 export type KernelEventExternal =
-  | OutputFrom<(typeof kernelActors)[PromiseActorNames]>
-  | RenderEvent
+  | OutputFrom<(typeof kernelActors)[KernelActorNames]>
+  | KernelMachineEvent
   | KernelEventWorker
   | { type: 'kernelInitialized' };
 type KernelEventExternalDone = DoneActorEvent<KernelEventExternal, KernelActorNames>;
 
-type KernelEvent = KernelEventExternalDone | KernelEventInternal | RenderEvent;
+type KernelEvent = KernelEventExternalDone | KernelEventInternal | KernelMachineEvent;
 
 type KernelContext = {
   kernelOptions: KernelClientOptions;
   kernelClient?: KernelClient;
   parentRef?: CadActor;
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
-  changedPaths: string[];
   eventCleanups: Array<() => void>;
 };
 
@@ -296,6 +241,40 @@ export const kernelMachine = setup({
       },
     }),
 
+    fireRender({ context, event, self }) {
+      assertEvent(event, 'createGeometry');
+      const { file, parameters, changedPaths } = event;
+
+      void (async () => {
+        try {
+          const client = await ensureKernelClient(context, self);
+          await client.render({
+            file,
+            parameters,
+            changedPaths: changedPaths && changedPaths.length > 0 ? changedPaths : undefined,
+          });
+        } catch (error) {
+          console.error('[KernelMachine] fireRender error:', error);
+          if (error instanceof Error && error.name === 'RenderSupersededError') {
+            return;
+          }
+
+          const errorMessage = error instanceof Error ? error.message : 'error rendering geometry';
+          self.send({
+            type: 'kernelIssue',
+            errors: [
+              {
+                message: errorMessage,
+                location: { fileName: file.filename, startLineNumber: 1, startColumn: 1 },
+                type: 'runtime' as const,
+                severity: 'error' as const,
+              },
+            ],
+          });
+        }
+      })();
+    },
+
     destroyWorkers({ context }) {
       for (const cleanup of context.eventCleanups) {
         cleanup();
@@ -316,7 +295,6 @@ export const kernelMachine = setup({
     kernelClient: undefined,
     parentRef: undefined,
     fileManagerRef: input.fileManagerRef,
-    changedPaths: [],
     eventCleanups: [],
   }),
   initial: 'initializing',
@@ -344,12 +322,6 @@ export const kernelMachine = setup({
       on: {
         createGeometry: {
           target: 'rendering',
-          actions: assign({
-            changedPaths({ event }) {
-              assertEvent(event, 'createGeometry');
-              return event.changedPaths ?? [];
-            },
-          }),
         },
         exportGeometry: {
           target: 'exporting',
@@ -358,15 +330,11 @@ export const kernelMachine = setup({
     },
 
     rendering: {
+      entry: 'fireRender',
       on: {
         createGeometry: {
           target: 'rendering',
-          actions: assign({
-            changedPaths({ event }) {
-              assertEvent(event, 'createGeometry');
-              return event.changedPaths ?? [];
-            },
-          }),
+          reenter: true,
         },
         exportGeometry: {
           target: 'exporting',
@@ -417,20 +385,6 @@ export const kernelMachine = setup({
               return event;
             },
           ),
-        },
-      },
-      invoke: {
-        id: 'renderActor',
-        src: 'renderActor',
-        input({ context, event }) {
-          assertEvent(event, 'createGeometry');
-          return {
-            context,
-            event: {
-              file: event.file,
-              parameters: event.parameters,
-            },
-          };
         },
       },
     },
