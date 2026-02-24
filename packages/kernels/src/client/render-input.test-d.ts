@@ -13,7 +13,8 @@
 
 import { describe, expectTypeOf, it } from 'vitest';
 import type { GeometryFile } from '@taucad/types';
-import type { KernelClient, CodeInput, FileInput } from '#index.js';
+import type { CodeInput, ExportResult, FileInput, KernelClient } from '#client/kernel-client.js';
+import type { Tessellation } from '#types/kernel-worker.types.js';
 
 // =============================================================================
 // CodeInput<T> -- single-key inline mode
@@ -28,14 +29,14 @@ describe('CodeInput single-key (file optional)', () => {
   });
 
   it('should compile with single-key code and explicit file', () => {
-    expectTypeOf<CodeInput<{ 'box.ts': string }>>().toMatchTypeOf<{
+    expectTypeOf<CodeInput<{ 'box.ts': string }>>().toMatchObjectType<{
       code: { 'box.ts': string };
       file?: string;
     }>();
   });
 
   it('should compile with single-key code and parameters', () => {
-    expectTypeOf<CodeInput<{ 'box.ts': string }>>().toMatchTypeOf<{
+    expectTypeOf<CodeInput<{ 'box.ts': string }>>().toExtend<{
       code: { 'box.ts': string };
       parameters?: Record<string, unknown>;
     }>();
@@ -152,7 +153,7 @@ describe('CodeInput dynamic Record (file required)', () => {
 
 describe('FileInput (filesystem mode)', () => {
   it('should compile with string file', () => {
-    expectTypeOf<FileInput>().toMatchTypeOf<{ file: string | GeometryFile }>();
+    expectTypeOf<FileInput>().toExtend<{ file: string | GeometryFile }>();
   });
 
   it('should compile with GeometryFile', () => {
@@ -171,7 +172,7 @@ describe('FileInput (filesystem mode)', () => {
   });
 
   it('should compile with parameters and tessellation', () => {
-    expectTypeOf<FileInput>().toMatchTypeOf<{
+    expectTypeOf<FileInput>().toExtend<{
       file: string | GeometryFile;
       parameters?: Record<string, unknown>;
     }>();
@@ -187,6 +188,7 @@ describe('FileInput (filesystem mode)', () => {
 // =============================================================================
 
 describe('KernelClient.render() overload resolution', () => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
   const client = {} as KernelClient;
 
   it('should accept single-key code (file inferred)', () => {
@@ -227,5 +229,48 @@ describe('KernelClient.render() overload resolution', () => {
   it('should reject only parameters', () => {
     // @ts-expect-error -- missing code or file
     void client.render({ parameters: { width: 50 } });
+  });
+});
+
+// =============================================================================
+// KernelClient.export() overload resolution
+// =============================================================================
+
+describe('KernelClient.export() overload resolution', () => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
+  const client: KernelClient = {} as KernelClient;
+
+  it('should accept format-only (export from last render)', () => {
+    expectTypeOf(client.export('step')).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should accept format with tessellation options', () => {
+    const tessellation: Tessellation = { linearTolerance: 0.1, angularTolerance: 30 };
+    expectTypeOf(client.export('step', { tessellation })).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should accept self-rendering with single-file inline code', () => {
+    expectTypeOf(client.export('step', { code: { 'box.ts': 'const x = 1;' } })).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should accept self-rendering with multi-file inline code', () => {
+    expectTypeOf(
+      client.export('step', {
+        code: { 'main.ts': 'import "./lib"', 'lib.ts': 'export const x = 1;' },
+        file: 'main.ts',
+      }),
+    ).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should accept self-rendering with filesystem file', () => {
+    expectTypeOf(client.export('step', { file: '/src/main.ts' })).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should accept self-rendering with GeometryFile', () => {
+    expectTypeOf(
+      client.export('step', {
+        file: { path: '/', filename: 'main.ts' },
+      }),
+    ).toEqualTypeOf<Promise<ExportResult>>();
   });
 });
