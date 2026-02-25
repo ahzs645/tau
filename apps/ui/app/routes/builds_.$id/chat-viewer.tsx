@@ -19,6 +19,7 @@ import { ChatInterfaceStatus } from '#routes/builds_.$id/chat-interface-status.j
 import { useIsTopRightPanel } from '#components/panes/use-is-top-right-group.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { cn } from '#utils/ui.utils.js';
+import { ChatArButton } from '#routes/builds_.$id/chat-ar-button.js';
 
 type ChatViewerProps = {
   /** Unique Dockview panel ID for this viewer instance */
@@ -336,6 +337,9 @@ const ViewerContent = memo(function ({
           gizmoContainer={`#viewport-gizmo-container-${viewId}`}
         />
       </div>
+
+      {/* AR button — mobile iOS only, positioned bottom-right above controls */}
+      <ChatArButton geometries={geometries} className="absolute right-3 bottom-14 z-10" />
 
       {/* Bottom controls */}
       <div className="absolute right-2 bottom-2 left-2 z-10 flex shrink-0 flex-col gap-2">
