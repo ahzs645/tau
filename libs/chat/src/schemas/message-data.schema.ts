@@ -9,6 +9,7 @@ export const usageDataSchema = z.object({
   model: z.string(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  reasoningTokens: z.number(),
   cacheReadTokens: z.number(),
   cacheWriteTokens: z.number(),
   inputTokensCost: z.number(),
