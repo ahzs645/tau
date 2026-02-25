@@ -27,17 +27,11 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
           'copy-assets': {
             executor: 'nx:run-commands',
             outputs,
-            cache: true,
+            cache: false,
             options: {
-              command: 'pnpm copy-files-from-to',
+              command: 'pnpm copy-files-from-to --when-file-exists overwrite',
               cwd: projectRoot,
             },
-            inputs: [
-              '{projectRoot}/copy-files-from-to.cjson',
-              {
-                externalDependencies: ['copy-files-from-to'],
-              },
-            ],
           },
         },
       },
