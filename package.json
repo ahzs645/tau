@@ -290,7 +290,7 @@
   "pnpm": {
     "patchedDependencies": {
       "@kittycad/lib": "patches/@kittycad__lib.patch",
-      "replicad": "patches/replicad.patch",
+      "replicad@0.20.5": "patches/replicad@0.20.5.patch",
       "@zenfs/core": "patches/@zenfs__core.patch"
     },
     "overrides": {

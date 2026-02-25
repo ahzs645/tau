@@ -223,11 +223,11 @@ catalogs:
       specifier: 7.12.0
       version: 7.12.0
     replicad:
-      specifier: ^0.19.1
-      version: 0.19.1
+      specifier: ^0.20.5
+      version: 0.20.5
     replicad-opencascadejs:
-      specifier: ^0.19.0
-      version: 0.19.0
+      specifier: ^0.20.2
+      version: 0.20.2
     source-map-js:
       specifier: ^1.2.1
       version: 1.2.1
@@ -276,9 +276,9 @@ patchedDependencies:
   '@zenfs/core':
     hash: d9d7cd937ff8ce80054e4317ec2f10a876f4cd7ccb5cb5e78c79b2400ab730f7
     path: patches/@zenfs__core.patch
-  replicad:
-    hash: d892cd946405dd7e2c89f1e05f3d193b9a5082ff449a14f59226eebcbe5b832b
-    path: patches/replicad.patch
+  replicad@0.20.5:
+    hash: f63ef6e2e1edb6b4f5aa099c936f0e1cbe525e9fa9767c7560a68a9cfe8a6963
+    path: patches/replicad@0.20.5.patch
 
 importers:
 
@@ -712,10 +712,10 @@ importers:
         version: 2.0.4(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))
       replicad:
         specifier: 'catalog:'
-        version: 0.19.1(patch_hash=d892cd946405dd7e2c89f1e05f3d193b9a5082ff449a14f59226eebcbe5b832b)
+        version: 0.20.5(patch_hash=f63ef6e2e1edb6b4f5aa099c936f0e1cbe525e9fa9767c7560a68a9cfe8a6963)
       replicad-opencascadejs:
         specifier: 'catalog:'
-        version: 0.19.0
+        version: 0.20.2
       rxjs:
         specifier: ^7.8.2
         version: 7.8.2
@@ -1218,10 +1218,10 @@ importers:
         version: 1.2.0
       replicad:
         specifier: 'catalog:'
-        version: 0.19.1(patch_hash=d892cd946405dd7e2c89f1e05f3d193b9a5082ff449a14f59226eebcbe5b832b)
+        version: 0.20.5(patch_hash=f63ef6e2e1edb6b4f5aa099c936f0e1cbe525e9fa9767c7560a68a9cfe8a6963)
       replicad-opencascadejs:
         specifier: 'catalog:'
-        version: 0.19.0
+        version: 0.20.2
       source-map-js:
         specifier: 'catalog:'
         version: 1.2.1
@@ -15011,11 +15011,11 @@ packages:
     resolution: {integrity: sha512-yD5BHCe7quCgBph4rMQ+0KkIRKwWCrHDOX1p1Gp6HwjPM5kVoCdKGNhN7ydqqsX6lJEnQDKZ/tFMiEdQ1dvPEw==}
     engines: {node: '>= 0.10'}
 
-  replicad-opencascadejs@0.19.0:
-    resolution: {integrity: sha512-Bslw6QsvDR2ctew4xPOI9OJchfo4eLbhvnQwtqMWA6QQjDCAtrT1nW28sBMTwygCT90KjzJWoJdQhvskuOTgQw==}
+  replicad-opencascadejs@0.20.2:
+    resolution: {integrity: sha512-scws/tSYeO3CxwRBVK264QbHcGZXQl1mNmRewczSO/Ac9BLDNQ6RAMk5NeB8jK7YQlRU04kwf+Ge0ydFRUO6ig==}
 
-  replicad@0.19.1:
-    resolution: {integrity: sha512-NdZ3R1M+dXZmTJZ4WtGnIvofnM6v1l1x6yydOoCmedBdopc+ZthsUMh2ps424YAoZz3k9faW+hMzIWpKPinHuA==}
+  replicad@0.20.5:
+    resolution: {integrity: sha512-6aDfqwo9yWWJc5w0IOzvbVTij9o/Edh1Qm619bxAcqhNvXB7m0e7JNlEkhXIJFyRACJjQR0KHD5b3DXtvKDkCQ==}
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
@@ -33117,9 +33117,9 @@ snapshots:
 
   replace-ext@1.0.1: {}
 
-  replicad-opencascadejs@0.19.0: {}
+  replicad-opencascadejs@0.20.2: {}
 
-  replicad@0.19.1(patch_hash=d892cd946405dd7e2c89f1e05f3d193b9a5082ff449a14f59226eebcbe5b832b):
+  replicad@0.20.5(patch_hash=f63ef6e2e1edb6b4f5aa099c936f0e1cbe525e9fa9767c7560a68a9cfe8a6963):
     dependencies:
       '@types/opentype.js': 1.3.4
       flatbush: 4.5.0
