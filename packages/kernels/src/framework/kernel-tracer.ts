@@ -15,18 +15,24 @@ type SpanAttributes = Record<string, string | number | boolean>;
  */
 export class KernelTracer implements KernelSpanTracer {
   private nextId = 0;
+  private epoch = 0;
   private activeSpanId: string | undefined;
 
   /** Starts a new tracing span, optionally nested under the currently active span. */
   public startSpan(name: string, attributes?: SpanAttributes): SpanHandle {
     const id = String(this.nextId++);
     const parentId = this.activeSpanId;
-    const markName = `tau:span:${id}`;
+    const spanEpoch = this.epoch;
+    const markName = `tau:span:${spanEpoch}:${id}`;
     performance.mark(markName);
     this.activeSpanId = id;
 
     return {
       end: () => {
+        if (spanEpoch !== this.epoch) {
+          return;
+        }
+
         const detail: Record<string, unknown> = {
           spanId: id,
           parentSpanId: parentId,
@@ -39,7 +45,12 @@ export class KernelTracer implements KernelSpanTracer {
           },
         };
 
-        performance.measure(name, { start: markName, detail });
+        try {
+          performance.measure(name, { start: markName, detail });
+        } catch {
+          // Mark was cleared by a concurrent reset -- safe to ignore
+        }
+
         this.activeSpanId = parentId;
       },
     };
@@ -47,7 +58,7 @@ export class KernelTracer implements KernelSpanTracer {
 
   /** Resets all tracer state and clears associated performance marks and measures. */
   public reset(): void {
-    this.nextId = 0;
+    this.epoch++;
     this.activeSpanId = undefined;
     performance.clearMarks();
     performance.clearMeasures();
