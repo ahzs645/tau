@@ -5,6 +5,7 @@ import opencascade from 'replicad-opencascadejs/src/replicad_single.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
 import opencascadeWithExceptions from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
+import { resolveCjsDefault } from '#kernels/replicad/utils/resolve-cjs-default.js';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { compileWasmStreaming } from '#framework/wasm-loader.js';
 
@@ -45,7 +46,7 @@ const noop = (): void => {};
 export async function initOpenCascade(options?: InitOpenCascadeOptions): Promise<OpenCascadeInstance> {
   const compiledModule = await compileWasmStreaming(opencascadeWasmUrl, options?.tracer);
 
-  const instance = await (opencascade as OpenCascadeModule)({
+  const instance = await (resolveCjsDefault(opencascade) as OpenCascadeModule)({
     instantiateWasm(imports: WebAssembly.Imports, successCallback: (instance: WebAssembly.Instance) => void) {
       void (async () => {
         try {
@@ -78,7 +79,7 @@ export async function initOpenCascadeWithExceptions(
 ): Promise<OpenCascadeInstanceWithExceptions> {
   const compiledModule = await compileWasmStreaming(opencascadeWithExceptionsWasmUrl, options?.tracer);
 
-  const instance = await (opencascadeWithExceptions as OpenCascadeModuleWithExceptions)({
+  const instance = await (resolveCjsDefault(opencascadeWithExceptions) as OpenCascadeModuleWithExceptions)({
     instantiateWasm(imports: WebAssembly.Imports, successCallback: (instance: WebAssembly.Instance) => void) {
       void (async () => {
         try {
