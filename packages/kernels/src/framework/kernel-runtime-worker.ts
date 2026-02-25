@@ -122,6 +122,10 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
+    if (!kernel) {
+      return [input.filePath];
+    }
+
     return kernel.definition.getDependencies(input, runtime, kernel.ctx);
   }
 
@@ -130,6 +134,10 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     runtime: KernelRuntime,
   ): Promise<GetParametersResult> {
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
+    if (!kernel) {
+      return { success: true, data: { defaultParameters: {}, jsonSchema: {} }, issues: [] };
+    }
+
     return kernel.definition.getParameters(input, runtime, kernel.ctx);
   }
 
@@ -138,6 +146,10 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
+    if (!kernel) {
+      return { success: true, data: [], issues: [] };
+    }
+
     try {
       const output = await kernel.definition.createGeometry(input, runtime, kernel.ctx);
 
@@ -190,7 +202,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   // Private methods
   // =====================================================================
 
-  private async ensureActiveKernel(filePath: string, runtime: KernelRuntime): Promise<LoadedKernel> {
+  private async ensureActiveKernel(filePath: string, runtime: KernelRuntime): Promise<LoadedKernel | undefined> {
     if (this.activeKernelId) {
       return this.getActiveKernel();
     }
@@ -199,7 +211,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     const selection = await this.selectKernel(filePath, runtime);
     if (!selection) {
       span.end();
-      throw new Error(`No kernel can handle file: ${filePath}`);
+      return undefined;
     }
 
     this.activeKernelId = selection.kernel.entry.id;
@@ -365,15 +377,36 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
     /* eslint-enable no-await-in-loop -- End sequential kernel selection */
 
-    // Pass 3: Catch-all fallback
+    // Pass 3: Catch-all fallback — guarded by canHandle when defined
     if (catchAllEntry) {
-      const kernel = await this.loadKernelModule(catchAllEntry);
-      await this.ensureKernelInitialized(kernel, runtime);
-      this.selectionCache.set(filePath, { id: catchAllEntry.id, method: 'catchall' });
-      return { kernel, method: 'catchall' };
+      return this.tryCatchAllKernel(catchAllEntry, { filePath, extension, runtime });
     }
 
     return undefined;
+  }
+
+  /** Attempt catch-all kernel selection, rejecting if the kernel's canHandle returns false. */
+  private async tryCatchAllKernel(
+    entry: KernelModuleEntry,
+    { filePath, extension, runtime }: { filePath: string; extension: string; runtime: KernelRuntime },
+  ): Promise<KernelSelection | undefined> {
+    const kernel = await this.loadKernelModule(entry);
+    await this.ensureKernelInitialized(kernel, runtime);
+
+    if (kernel.definition.canHandle) {
+      const canHandleInput: CanHandleInput = {
+        filePath,
+        basePath: filePath.slice(0, filePath.lastIndexOf('/')),
+        extension,
+      };
+      const accepted = await kernel.definition.canHandle(canHandleInput, runtime, kernel.ctx);
+      if (!accepted) {
+        return undefined;
+      }
+    }
+
+    this.selectionCache.set(filePath, { id: entry.id, method: 'catchall' });
+    return { kernel, method: 'catchall' };
   }
 
   private getActiveKernel(): LoadedKernel {
