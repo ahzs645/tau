@@ -16,6 +16,22 @@ import type { Tessellation } from '#types/kernel-worker.types.js';
 import type { KernelResponse, KernelCommand, PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
 import type { KernelTransport } from '#transport/kernel-transport.js';
 
+/**
+ * Error thrown when a render is superseded by a newer `render()` call.
+ * Used by the auto-cancellation (latest-wins) mechanism.
+ */
+export class RenderSupersededError extends Error {
+  public constructor() {
+    super('Render superseded by a newer render() call');
+    this.name = 'RenderSupersededError';
+  }
+}
+
+/** Realm-safe type guard — checks `error.name` instead of prototype chain. */
+export function isRenderSupersededError(error: unknown): error is RenderSupersededError {
+  return error instanceof Error && error.name === 'RenderSupersededError';
+}
+
 /** Callback for worker log events. */
 export type OnLogCallback = (log: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => void;
 
@@ -127,7 +143,7 @@ export class KernelWorkerClient {
     if (this.pendingRender && this.lastRenderRequestId) {
       const command: KernelCommand = { type: 'cancel', requestId: this.lastRenderRequestId };
       this.transport.send(command);
-      this.pendingRender.reject(new Error('Render cancelled'));
+      this.pendingRender.reject(new RenderSupersededError());
       this.pendingRender = undefined;
       this.lastRenderRequestId = undefined;
     }

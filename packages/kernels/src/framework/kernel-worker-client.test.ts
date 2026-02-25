@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { KernelWorkerClient } from '#framework/kernel-worker-client.js';
+import { KernelWorkerClient, RenderSupersededError, isRenderSupersededError } from '#framework/kernel-worker-client.js';
 import type { KernelTransport } from '#transport/kernel-transport.js';
 import type { KernelCommand, KernelResponse } from '#types/kernel-protocol.types.js';
 
@@ -103,6 +103,78 @@ describe('KernelWorkerClient', () => {
 
       expect(() => {
         client.terminate();
+      }).not.toThrow();
+    });
+  });
+
+  describe('cancelPendingRender()', () => {
+    it('should reject a pending render with RenderSupersededError', async () => {
+      const transport = createMockTransport();
+      const client = new KernelWorkerClient(transport, vi.fn());
+
+      const renderPromise = client.render({
+        file: { path: '/', filename: 'test.ts' },
+        parameters: {},
+      });
+
+      client.cancelPendingRender();
+
+      await expect(renderPromise).rejects.toThrow(RenderSupersededError);
+    });
+
+    it('should be detected by isRenderSupersededError type guard', async () => {
+      const transport = createMockTransport();
+      const client = new KernelWorkerClient(transport, vi.fn());
+
+      const renderPromise = client.render({
+        file: { path: '/', filename: 'test.ts' },
+        parameters: {},
+      });
+
+      client.cancelPendingRender();
+
+      try {
+        await renderPromise;
+      } catch (error) {
+        expect(isRenderSupersededError(error)).toBe(true);
+        return;
+      }
+
+      expect.fail('Expected renderPromise to reject');
+    });
+
+    it('should not match unrelated errors', () => {
+      expect(isRenderSupersededError(new Error('some other error'))).toBe(false);
+      expect(isRenderSupersededError(null)).toBe(false);
+      expect(isRenderSupersededError('string')).toBe(false);
+    });
+
+    it('should send a cancel command to the transport', async () => {
+      const transport = createMockTransport();
+      const client = new KernelWorkerClient(transport, vi.fn());
+
+      const renderPromise = client.render({
+        file: { path: '/', filename: 'test.ts' },
+        parameters: {},
+      });
+
+      client.cancelPendingRender();
+
+      try {
+        await renderPromise;
+      } catch {}
+
+      const { calls } = vi.mocked(transport.send).mock;
+      const cancelCommand = calls.find(([cmd]) => cmd.type === 'cancel');
+      expect(cancelCommand).toBeDefined();
+    });
+
+    it('should be a no-op when no render is pending', () => {
+      const transport = createMockTransport();
+      const client = new KernelWorkerClient(transport, vi.fn());
+
+      expect(() => {
+        client.cancelPendingRender();
       }).not.toThrow();
     });
   });

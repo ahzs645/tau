@@ -69,17 +69,6 @@ export type FileInput = {
 };
 
 /**
- * Error thrown when a render is superseded by a newer `render()` call.
- * Used by the auto-cancellation (latest-wins) mechanism.
- */
-export class RenderSupersededError extends Error {
-  public constructor() {
-    super('Render superseded by a newer render() call');
-    this.name = 'RenderSupersededError';
-  }
-}
-
-/**
  * Consumer-facing export result with a single `ExportFile` (unwrapped).
  *
  * Internally, the kernel pipeline produces `ExportFile[]`, but every current

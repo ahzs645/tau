@@ -2,7 +2,7 @@ import { assign, assertEvent, setup, sendTo, fromPromise, waitFor } from 'xstate
 import type { Snapshot, ActorRef, OutputFrom, DoneActorEvent, ActorRefFrom, AnyActorRef } from 'xstate';
 import type { Geometry, ExportFormat, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
 import type { JSONSchema7 } from 'json-schema';
-import { createKernelClient } from '@taucad/kernels';
+import { createKernelClient, isRenderSupersededError } from '@taucad/kernels';
 import type {
   KernelClient,
   KernelClientOptions,
@@ -254,11 +254,11 @@ export const kernelMachine = setup({
             changedPaths: changedPaths && changedPaths.length > 0 ? changedPaths : undefined,
           });
         } catch (error) {
-          console.error('[KernelMachine] fireRender error:', error);
-          if (error instanceof Error && error.name === 'RenderSupersededError') {
+          if (isRenderSupersededError(error)) {
             return;
           }
 
+          console.error('[KernelMachine] fireRender error:', error);
           const errorMessage = error instanceof Error ? error.message : 'error rendering geometry';
           self.send({
             type: 'kernelIssue',

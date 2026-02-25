@@ -1,5 +1,6 @@
 // Client
-export { createKernelClient, RenderSupersededError } from '#client/kernel-client.js';
+export { createKernelClient } from '#client/kernel-client.js';
+export { RenderSupersededError, isRenderSupersededError } from '#framework/kernel-worker-client.js';
 export type {
   KernelClient,
   KernelClientOptions,
