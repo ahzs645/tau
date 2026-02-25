@@ -15,7 +15,7 @@ import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { OpenCascadeInstance as OpenCascadeInstanceWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { GeometryGltf, GeometrySvg } from '@taucad/types';
 import { z } from 'zod';
-import type { SourceMapConsumer } from 'source-map-js';
+import { SourceMapConsumer } from 'source-map-js';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
 import { createExportFile } from '@taucad/types/constants';
@@ -40,6 +40,7 @@ import type { InputShape, MainResultShapes } from '#kernels/replicad/utils/rende
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
 
 const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href;
+const replicadSourceMapUrl = new URL('sourcemaps/replicad.js.map', import.meta.url).href;
 
 // =============================================================================
 // Types
@@ -97,14 +98,47 @@ function parseError(error: unknown, sourceMapJson?: string, projectPath?: string
 
 function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadContext): KernelStackFrame[] {
   return applyLibrarySourceMaps(frames, LIBRARY_PATTERNS, (moduleName) => {
-    if (context.librarySourceMapCache.has(moduleName)) {
-      return context.librarySourceMapCache.get(moduleName);
+    return context.librarySourceMapCache.get(moduleName);
+  });
+}
+
+async function loadReplicadSourceMap(): Promise<SourceMapConsumer | undefined> {
+  try {
+    const json = await loadTextFile(replicadSourceMapUrl);
+    if (!json) {
+      return undefined;
     }
 
-    // Library source maps are loaded lazily on first error
-    // For now, return undefined — the cache is populated synchronously if available
+    const rawMap: unknown = JSON.parse(json);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
+    return new SourceMapConsumer(rawMap as any);
+  } catch {
     return undefined;
-  });
+  }
+}
+
+async function loadTextFile(url: string): Promise<string | undefined> {
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      return await response.text();
+    }
+  } catch {
+    // Fetch failed — fall through to Node.js fs fallback
+  }
+
+  if (!url.startsWith('file:')) {
+    return undefined;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Node.js API
+    const { fileURLToPath } = await import('node:url');
+    const { readFile } = await import('node:fs/promises');
+    return await readFile(fileURLToPath(url), 'utf8');
+  } catch {
+    return undefined;
+  }
 }
 
 function deriveLocation(
@@ -242,6 +276,7 @@ const replicadOptionsSchema = z.object({
   withExceptions: z.boolean().optional().default(false),
   ocTracing: z.enum(['off', 'summary', 'per-call']).optional().default('summary'),
   withBrepEdges: z.boolean().optional().default(false),
+  withSourceMapping: z.boolean().optional().default(false),
 });
 
 // =============================================================================
@@ -255,7 +290,7 @@ export default defineKernel({
 
   async initialize(options, runtime) {
     const { logger, tracer } = runtime;
-    const { withExceptions, ocTracing, withBrepEdges } = options;
+    const { withExceptions, ocTracing, withBrepEdges, withSourceMapping } = options;
 
     logger.debug(`Initializing OpenCASCADE WASM (withExceptions: ${withExceptions}, ocTracing: ${ocTracing})`);
 
@@ -301,6 +336,23 @@ export default defineKernel({
     }
 
     registerReplicadModule(runtime);
+
+    const librarySourceMapCache = new Map<string, SourceMapConsumer | undefined>();
+    if (withSourceMapping) {
+      try {
+        const sourceMapSpan = tracer.startSpan('replicad.source-map-load');
+        const consumer = await loadReplicadSourceMap();
+        if (consumer) {
+          librarySourceMapCache.set('replicad', consumer);
+          logger.debug('Loaded replicad library source map for error diagnostics');
+        }
+
+        sourceMapSpan.end();
+      } catch {
+        // Source map loading is best-effort — errors are still enriched without it
+      }
+    }
+
     logger.debug('Replicad kernel initialized');
 
     return {
@@ -309,7 +361,7 @@ export default defineKernel({
       withExceptions,
       withBrepEdges,
       replicadInitialised: true,
-      librarySourceMapCache: new Map<string, SourceMapConsumer | undefined>(),
+      librarySourceMapCache,
       tracingSummary,
     };
   },

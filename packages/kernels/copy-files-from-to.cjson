@@ -32,6 +32,11 @@
     {
       "from": "./node_modules/geist/dist/fonts/geist-sans/Geist-Regular.ttf",
       "to": "src/kernels/replicad/fonts/Geist-Regular.ttf"
+    },
+    // Replicad source map for library stack frame resolution
+    {
+      "from": "./node_modules/replicad/dist/replicad.js.map",
+      "to": "src/kernels/replicad/sourcemaps/replicad.js.map"
     }
   ],
   // Always overwrite files

@@ -15,6 +15,8 @@ export type ReplicadOptions = {
   ocTracing?: 'off' | 'summary' | 'per-call';
   /** Include Boundary Representation (BRep) edge lines in the generated GLTF geometry. Defaults to `false`. */
   withBrepEdges?: boolean;
+  /** Load library source maps for enriched error stack traces. Adds ~50ms to init. Defaults to `false`. */
+  withSourceMapping?: boolean;
 };
 
 /**

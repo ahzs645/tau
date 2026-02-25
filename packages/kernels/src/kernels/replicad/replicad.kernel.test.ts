@@ -1666,7 +1666,7 @@ export default function main() {
           files: { 'fluent.ts': code },
           mainFile: 'fluent.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { withExceptions: true, withSourceMapping: true } },
         });
 
         expect(result.success).toBe(false);
@@ -1948,6 +1948,88 @@ export function getShape() { return broken(); }
             location: expect.objectContaining({ fileName: 'lib/bad.ts', startLineNumber: 1 }),
           }),
         );
+      });
+    });
+
+    describe('withSourceMapping option', () => {
+      const extrudeZeroCode = `import { draw } from 'replicad';
+
+export default function main() {
+  return draw()
+    .hLine(10)
+    .vLine(10)
+    .hLine(-10)
+    .close()
+    .sketchOnPlane()
+    .extrude(0);
+}
+`;
+
+      it('should show compiled library paths when withSourceMapping is false (default)', async () => {
+        const result = await createGeometry({
+          files: { 'box.ts': extrudeZeroCode },
+          mainFile: 'box.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true } },
+        });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
+          expect(libraryFrames).toBeDefined();
+          expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
+
+          expect(libraryFrames).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'Sketch.extrude',
+                fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/) as string,
+                context: 'library',
+              }),
+              expect.objectContaining({
+                functionName: 'basicFaceExtrusion',
+                fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/) as string,
+                context: 'library',
+              }),
+            ]),
+          );
+
+          for (const frame of libraryFrames!) {
+            expect(frame.fileName).not.toMatch(/replicad\/src\//);
+          }
+        }
+      });
+
+      it('should show source-mapped library paths when withSourceMapping is true', async () => {
+        const result = await createGeometry({
+          files: { 'box.ts': extrudeZeroCode },
+          mainFile: 'box.ts',
+          parameters: {},
+          options: { workerOptions: { withExceptions: true, withSourceMapping: true } },
+        });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          const issue = result.issues[0]!;
+          const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
+          expect(libraryFrames).toBeDefined();
+          expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
+
+          expect(libraryFrames).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'Sketch.extrude',
+                fileName: 'replicad/src/sketches/Sketch.ts',
+                context: 'library',
+              }),
+            ]),
+          );
+
+          for (const frame of libraryFrames!) {
+            expect(frame.fileName).toMatch(/replicad\/src\//);
+          }
+        }
       });
     });
 
@@ -3275,6 +3357,24 @@ describe('withBrepEdges option', () => {
     }
 
     expect(triangleVerticesWithout).toBe(triangleVerticesWith);
+  });
+});
+
+describe('No kernel matched', () => {
+  it('should return empty geometry for an empty file when no kernel can handle it', async () => {
+    const result = await createGeometry({
+      files: { 'empty.ts': '' },
+      mainFile: 'empty.ts',
+      options: {
+        builtinModuleNames: ['replicad'],
+        detectImport: String.raw`import.*from\s+['"]replicad['"]`,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual([]);
+    }
   });
 });
 
