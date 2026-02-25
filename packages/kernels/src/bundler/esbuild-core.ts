@@ -342,6 +342,7 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // -----------------------------------------------------------------
       // onResolve: all imports
       // -----------------------------------------------------------------
+      // eslint-disable-next-line complexity -- TOOD: refactor
       build.onResolve({ filter: /.*/ }, async (args) => {
         // Entry point: convert to project-relative path in zenfs namespace
         if (args.kind === 'entry-point') {
@@ -408,6 +409,13 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
         // Reconstruct the importer's absolute path for resolution, since
         // project files use relative paths in esbuild
         const importerAbsolute = toAbsolute(args.importer || relativeEntryPath);
+
+        // CDN-relative paths: when a cached CDN module (under /node_modules/)
+        // imports an absolute path like /@thi.ng/vectors@^8.6.20/..., resolve
+        // it against the esm.sh CDN origin rather than the local filesystem.
+        if (args.path.startsWith('/') && importerAbsolute.startsWith('/node_modules/')) {
+          return { path: `https://esm.sh${args.path}`, namespace: 'http-url' };
+        }
 
         try {
           const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
