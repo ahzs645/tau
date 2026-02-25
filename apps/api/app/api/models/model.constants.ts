@@ -252,25 +252,25 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
   },
 
   vertexai: {
-    'gemini-3-pro': {
-      id: 'google-gemini-3-pro',
-      name: 'Gemini 3 Pro',
-      slug: 'gemini-3-pro',
-      description: "Google's most capable model with a large context window, great for complex design tasks.",
+    'gemini-3.1-pro': {
+      id: 'google-gemini-3.1-pro',
+      name: 'Gemini 3.1 Pro',
+      slug: 'gemini-3.1-pro',
+      description: "Google's most advanced Pro-tier model with deep reasoning and parallel tool call streaming.",
       provider: {
         id: 'vertexai',
         name: 'Google',
       },
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3.1-pro-preview',
       details: {
         family: 'gemini',
         families: ['gemini'],
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         cost: {
-          inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
-          outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
-          cacheReadTokens: 0.2, // $0.2 / 1M cached input tokens
+          inputTokens: 2,
+          outputTokens: 12,
+          cacheReadTokens: 0.2,
           cacheWriteTokens: 0,
         },
       },
