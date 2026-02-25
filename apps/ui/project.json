@@ -6,7 +6,7 @@
   "tags": ["scope:ui", "type:app"],
   "targets": {
     "build": {
-      "dependsOn": ["copy-assets"],
+      "dependsOn": ["copy-assets", "^copy-assets"],
       "outputs": ["{projectRoot}/build", "{projectRoot}/.netlify"],
       "options": {
         "env": {

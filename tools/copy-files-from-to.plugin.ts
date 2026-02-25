@@ -20,6 +20,8 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
     return join('{projectRoot}', to).replaceAll('\\', '/');
   });
 
+  const copyAssetsDependsOn = { dependsOn: ['copy-assets', '^copy-assets'] };
+
   return {
     projects: {
       [projectRoot]: {
@@ -33,6 +35,8 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
               cwd: projectRoot,
             },
           },
+          build: copyAssetsDependsOn,
+          dev: copyAssetsDependsOn,
         },
       },
     },
