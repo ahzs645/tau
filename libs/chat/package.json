@@ -19,6 +19,11 @@
       "types": "./src/utils/index.ts",
       "import": "./src/utils/index.ts",
       "default": "./src/utils/index.ts"
+    },
+    "./rpc": {
+      "types": "./src/rpc/index.ts",
+      "import": "./src/rpc/index.ts",
+      "default": "./src/rpc/index.ts"
     }
   },
   "dependencies": {
