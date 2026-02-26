@@ -17,7 +17,7 @@ export const defaultKernelOptions: KernelClientOptions = {
   kernels: [
     openscad(),
     zoo({ baseUrl: `${ENV.TAU_WEBSOCKET_URL}/v1/kernels/zoo` }),
-    replicad(),
+    replicad({ withBrepEdges: true }),
     manifold(),
     jscad(),
     tau(),
