@@ -35,16 +35,27 @@ export type BenchmarkResult = {
   ocSummary?: Record<string, { calls: number; totalMs: number }>;
 };
 
+/** WASM binary size metadata for tracking size regressions. */
+export type WasmSizeInfo = {
+  singleWasmBytes: number;
+  singleJsBytes: number;
+  exceptionsWasmBytes?: number;
+  exceptionsJsBytes?: number;
+};
+
 /** Result of a complete benchmark run across all cases. */
 export type BenchmarkRunResult = {
   timestamp: string;
   results: BenchmarkResult[];
   totalDurationMs: number;
+  wasmSizes?: WasmSizeInfo;
 };
 
 /** Options for configuring a benchmark run. */
 export type BenchmarkRunnerOptions = {
   iterations: number;
+  variant?: 'single' | 'multi';
+  ocTracing?: 'off' | 'summary' | 'per-call';
   onProgress?: (completed: number, total: number, caseName: string) => void;
 };
 
@@ -123,7 +134,7 @@ export async function runBenchmarks(
   cases: BenchmarkCase[],
   options: BenchmarkRunnerOptions,
 ): Promise<BenchmarkRunResult> {
-  const { iterations, onProgress } = options;
+  const { iterations, variant = 'single', ocTracing = 'summary', onProgress } = options;
   const totalWork = cases.length;
   const results: BenchmarkResult[] = [];
   const runStart = performance.now();
@@ -140,9 +151,11 @@ export async function runBenchmarks(
       absoluteFiles[`${basePath}/${filename}`] = content;
     }
 
+    const kernelOptions = variant === 'multi' ? { ocTracing, withMultithreading: true } : { ocTracing };
+
     const fileSystem = fromMemoryFS(absoluteFiles);
     const client = createKernelClient({
-      kernels: [replicad({ ocTracing: 'summary' })],
+      kernels: [replicad(kernelOptions)],
       bundlers: [esbuild()],
       fileSystem,
       transport: createInProcessTransport(),
@@ -199,9 +212,52 @@ export async function runBenchmarks(
 
   onProgress?.(totalWork, totalWork, 'done');
 
+  const wasmSizes = await collectWasmSizes();
+
   return {
     timestamp: new Date().toISOString(),
     results,
     totalDurationMs: performance.now() - runStart,
+    wasmSizes,
   };
+}
+
+async function collectWasmSizes(): Promise<WasmSizeInfo | undefined> {
+  try {
+    const { statSync } = await import('node:fs');
+    const { resolve, dirname } = await import('node:path');
+    const { fileURLToPath: toFilePath } = await import('node:url');
+
+    const wasmDir = resolve(dirname(toFilePath(import.meta.url)), 'kernels', 'replicad', 'wasm');
+    const stat = (name: string): number | undefined => {
+      try {
+        return statSync(resolve(wasmDir, name)).size;
+      } catch {
+        return undefined;
+      }
+    };
+
+    const singleWasm = stat('replicad_single.wasm');
+    if (!singleWasm) {
+      return undefined;
+    }
+
+    const jsDir = resolve(dirname(toFilePath(import.meta.url)), 'kernels', 'replicad');
+    const jsSize = (name: string): number => {
+      try {
+        return statSync(resolve(jsDir, '..', '..', '..', 'node_modules', 'replicad-opencascadejs', 'src', name)).size;
+      } catch {
+        return 0;
+      }
+    };
+
+    return {
+      singleWasmBytes: singleWasm,
+      singleJsBytes: jsSize('replicad_single.js'),
+      exceptionsWasmBytes: stat('replicad_with_exceptions.wasm'),
+      exceptionsJsBytes: jsSize('replicad_with_exceptions.js'),
+    };
+  } catch {
+    return undefined;
+  }
 }

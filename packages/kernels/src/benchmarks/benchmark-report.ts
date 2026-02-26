@@ -216,6 +216,7 @@ export function serializeRunResult(run: BenchmarkRunResult): string {
       stddev: r.stddev,
       ocSummary: r.ocSummary,
     })),
+    wasmSizes: run.wasmSizes,
   };
   return JSON.stringify(stripped, undefined, 2);
 }
