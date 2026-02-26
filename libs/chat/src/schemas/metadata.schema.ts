@@ -1,5 +1,4 @@
 import z from 'zod';
-import type { FileTreeEntry } from '@taucad/types';
 import { kernelProviders, manufacturingMethods, engineeringDisciplines } from '@taucad/types/constants';
 import { toolNames, toolModes } from '#constants/tool.constants.js';
 import { messageStatuses } from '#constants/message.constants.js';
@@ -8,7 +7,7 @@ import { messageStatuses } from '#constants/message.constants.js';
  * Schema for a file entry in the project filesystem.
  * Constrained to match the FileTreeEntry type from @taucad/types.
  */
-const fileTreeEntrySchema: z.ZodType<FileTreeEntry> = z.object({
+const fileTreeEntrySchema = z.object({
   path: z.string(),
   name: z.string(),
   type: z.enum(['file', 'dir']),
