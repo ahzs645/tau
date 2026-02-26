@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
 import replicadKernel from '#kernels/replicad/replicad.kernel.js';
+import { exampleFixtures } from '#kernels/replicad/replicad.test-fixtures.js';
 import { createGeometryTestHelpers, extractGltfFromResult } from '#testing/kernel-geometry-testing.utils.js';
 import {
   assertFailure,
@@ -37,7 +38,7 @@ const getParameters = async (
 const createGeometry = async ({
   files,
   mainFile,
-  parameters = {},
+  parameters,
   options,
 }: {
   files: Record<string, string>;
@@ -3304,6 +3305,26 @@ describe('withBrepEdges option', () => {
 
     expect(triangleVerticesWithout).toBe(triangleVerticesWith);
   });
+});
+
+// =============================================================================
+// Example models with exceptions enabled
+// =============================================================================
+
+describe('Example models (withExceptions)', () => {
+  for (const fixture of exampleFixtures) {
+    it(`should produce valid geometry for ${fixture.name}`, async () => {
+      const result = await createGeometry({
+        files: fixture.files,
+        mainFile: fixture.mainFile,
+        options: { workerOptions: { withExceptions: true } },
+      });
+
+      assertSuccess(result);
+      await geometryHelpers.expectValidGltf(result);
+      await geometryHelpers.expectMeshCount(result, 1);
+    });
+  }
 });
 
 describe('No kernel matched', () => {
