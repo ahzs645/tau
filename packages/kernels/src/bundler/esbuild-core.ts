@@ -20,6 +20,7 @@ import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 import type { ExecuteResult } from '#types/kernel-bundler.types.js';
 import type { BuiltinModule } from '#bundler/module-manager.js';
 import { ModuleManager } from '#bundler/module-manager.js';
+import { isNode } from '#framework/environment.js';
 
 // =============================================================================
 // Types
@@ -81,9 +82,7 @@ export const httpFetchMaxSizeBytes = 10 * 1024 * 1024;
 // @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
 const esbuildWasmUrl = new URL('wasm/esbuild.wasm', import.meta.url).href;
 
-// Detect Node.js environment (process.versions.node exists in Node.js)
-// eslint-disable-next-line n/prefer-global/process, @typescript-eslint/no-unnecessary-condition -- process may be undefined in browser
-const isNodejs = typeof process !== 'undefined' && Boolean(process.versions?.node);
+const isNodejs = isNode();
 
 // =============================================================================
 // State
@@ -953,8 +952,7 @@ export function extractExternalImports(metafile: Metafile | undefined): string[]
  * Browser uses Blob URL, Node.js uses data URL.
  */
 export async function executeCode(code: string): Promise<ExecuteResult> {
-  // eslint-disable-next-line n/prefer-global/process, @typescript-eslint/no-unnecessary-condition -- process may be undefined in browser
-  const isNodejsRuntime = typeof process !== 'undefined' && Boolean(process.versions?.node);
+  const isNodejsRuntime = isNode();
 
   try {
     let url: string;

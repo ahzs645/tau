@@ -1,5 +1,6 @@
 import { asBuffer } from '@taucad/utils/file';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
+import { isNode, resolveFileUrl } from '#framework/environment.js';
 
 /**
  * Compile a WASM module from a URL using streaming compilation when possible.
@@ -60,17 +61,12 @@ export async function loadWasmBinary(url: string): Promise<ArrayBuffer> {
 
     return await response.arrayBuffer();
   } catch (error) {
-    // Only attempt Node.js fs fallback for file:// URLs
-    if (!url.startsWith('file:')) {
+    if (!isNode() || !url.startsWith('file:')) {
       throw error;
     }
 
-    // Fallback: use Node.js fs for file:// URLs
-    // Dynamic imports avoid bundler issues in browser builds
-    // eslint-disable-next-line @typescript-eslint/naming-convention -- Node.js API
-    const { fileURLToPath } = await import('node:url');
+    const filePath = await resolveFileUrl(url);
     const { readFile } = await import('node:fs/promises');
-    const filePath = fileURLToPath(url);
     const buffer = await readFile(filePath);
     return asBuffer(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
   }
