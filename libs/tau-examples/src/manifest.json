@@ -145,6 +145,14 @@
   },
   {
     "kernel": "replicad",
+    "name": "stress-test",
+    "mainFile": "main.ts",
+    "files": [
+      "main.ts"
+    ]
+  },
+  {
+    "kernel": "replicad",
     "name": "t-slot-rail",
     "mainFile": "main.ts",
     "files": [

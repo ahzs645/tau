@@ -5,7 +5,7 @@
 /** Map of kernel names to their available example fixture names. */
 export type ExampleManifest = {
   jscad: 'cube' | 'cylinder' | 'gear';
-  replicad: 'birdhouse' | 'bottle' | 'card-holder' | 'chair' | 'cycloidal-gear' | 'decorated-box' | 'drinking-glass' | 'gridfinity-box' | 'hex-screwdriver' | 'hollow-box' | 'ibeam' | 'lego' | 'pot-plant' | 'simple-tray' | 'staircase' | 't-slot-rail' | 'table' | 'tray' | 'vase' | 'wavy-vase';
+  replicad: 'birdhouse' | 'bottle' | 'card-holder' | 'chair' | 'cycloidal-gear' | 'decorated-box' | 'drinking-glass' | 'gridfinity-box' | 'hex-screwdriver' | 'hollow-box' | 'ibeam' | 'lego' | 'pot-plant' | 'simple-tray' | 'staircase' | 'stress-test' | 't-slot-rail' | 'table' | 'tray' | 'vase' | 'wavy-vase';
 };
 
 /** Available kernel names. */
