@@ -39,7 +39,7 @@ export type ManifoldOptions = {};
  *
  * @example
  * ```typescript
- * replicad({ withExceptions: true })
+ * replicad({ withBrepEdges: true })
  * ```
  */
 export const replicad = createKernelPlugin<ReplicadOptions>({

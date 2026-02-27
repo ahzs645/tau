@@ -53,7 +53,7 @@ A [KernelPlugin](/docs/api/kernels) describes a CAD engine. Factory functions li
 - `builtinModuleNames` — Module names for bundler-assisted transitive import detection
 - `options` — Kernel-specific options passed to `initialize()`
 
-The factory accepts options and merges them into the plugin. For example, `replicad({ withExceptions: true })` produces a plugin with `options: { withExceptions: true }`.
+The factory accepts options and merges them into the plugin. For example, `replicad({ withBrepEdges: true })` produces a plugin with `options: { withBrepEdges: true }`.
 
 ### MiddlewarePlugin
 
@@ -95,7 +95,7 @@ Each plugin type uses a factory rather than a constructor or static method. Bene
 - **Immutability** — The returned object is a snapshot. Callers cannot mutate shared state.
 - **Tree-shaking** — Unused plugins are never imported; the factory is the single entry point.
 
-Example: `replicad({ withExceptions: true })` returns `{ id: 'replicad', moduleUrl: '...', extensions: ['ts','js'], detectImport: /.../, builtinModuleNames: ['replicad'], options: { withExceptions: true } }`. The options flow to the kernel's `initialize(options, runtime)` after Zod validation (if `optionsSchema` is defined).
+Example: `replicad({ withBrepEdges: true })` returns `{ id: 'replicad', moduleUrl: '...', extensions: ['ts','js'], detectImport: /.../, builtinModuleNames: ['replicad'], options: { withBrepEdges: true } }`. The options flow to the kernel's `initialize(options, runtime)` after Zod validation (if `optionsSchema` is defined).
 
 ## Why Zod Schemas for Validation
 

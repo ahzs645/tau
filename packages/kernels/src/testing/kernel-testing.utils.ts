@@ -101,7 +101,7 @@ export async function clearTestFilesystem(): Promise<void> {
 export type InitializeWorkerOptions = {
   /** Custom log handler */
   onLog?: OnWorkerLog;
-  /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withExceptions: true }) */
+  /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withBrepEdges: true }) */
   workerOptions?: Record<string, unknown>;
   /** Middleware configuration (defaults to empty array for tests that bypass dynamic loading) */
   middlewareEntries?: MiddlewareRegistrations;
@@ -119,7 +119,7 @@ export type InitializeWorkerOptions = {
  * so the fileManager's ensureFilesystemConfigured('indexeddb') just waits.
  *
  * @param worker - The kernel worker instance to initialize
- * @param options - Optional configuration (onLog, workerOptions for kernel-specific settings like withExceptions)
+ * @param options - Optional configuration (onLog, workerOptions for kernel-specific settings like withBrepEdges)
  * @returns Promise resolving to the initialized worker
  */
 export async function initializeWorkerForTesting<T extends KernelWorker>(
@@ -440,7 +440,7 @@ export function createGeometryFile(filename: string, basePath = '/builds/test'):
  * Options for createTestWorker.
  */
 export type CreateTestWorkerOptions = {
-  /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withExceptions: true }) */
+  /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withBrepEdges: true }) */
   workerOptions?: Record<string, unknown>;
   /** Extensions the kernel handles (defaults to ['ts', 'js', 'scad', 'kcl', '*']) */
   extensions?: string[];

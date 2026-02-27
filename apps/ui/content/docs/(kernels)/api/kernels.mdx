@@ -37,7 +37,7 @@ import { replicad, manifold, openscad, jscad, zoo, tau } from '@taucad/kernels/k
 
 const client = createKernelClient({
   kernels: [
-    replicad({ withExceptions: true }),
+    replicad({ withBrepEdges: true }),
     manifold(),
     openscad(),
     jscad(),
