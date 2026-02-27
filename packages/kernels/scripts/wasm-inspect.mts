@@ -134,7 +134,7 @@ function parseFunctionOffsets(wasmPath: string): FunctionSize[] {
 
     sizes.push({
       index: entry.index,
-      size: entry.offset - nextEntry.offset,
+      size: nextEntry.offset - entry.offset,
     });
   }
 
