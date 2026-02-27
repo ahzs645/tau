@@ -54,7 +54,6 @@ export type BenchmarkRunResult = {
 /** Options for configuring a benchmark run. */
 export type BenchmarkRunnerOptions = {
   iterations: number;
-  variant?: 'single' | 'multi';
   ocTracing?: 'off' | 'summary' | 'per-call';
   onProgress?: (completed: number, total: number, caseName: string) => void;
 };
@@ -134,7 +133,7 @@ export async function runBenchmarks(
   cases: BenchmarkCase[],
   options: BenchmarkRunnerOptions,
 ): Promise<BenchmarkRunResult> {
-  const { iterations, variant = 'single', ocTracing = 'summary', onProgress } = options;
+  const { iterations, ocTracing = 'summary', onProgress } = options;
   const totalWork = cases.length;
   const results: BenchmarkResult[] = [];
   const runStart = performance.now();
@@ -151,7 +150,7 @@ export async function runBenchmarks(
       absoluteFiles[`${basePath}/${filename}`] = content;
     }
 
-    const kernelOptions = variant === 'multi' ? { ocTracing, withMultithreading: true } : { ocTracing };
+    const kernelOptions = { ocTracing };
 
     const fileSystem = fromMemoryFS(absoluteFiles);
     const client = createKernelClient({
@@ -255,7 +254,7 @@ async function collectWasmSizes(): Promise<WasmSizeInfo | undefined> {
       singleWasmBytes: singleWasm,
       singleJsBytes: jsSize('replicad_single.js'),
       exceptionsWasmBytes: stat('replicad_with_exceptions.wasm'),
-      exceptionsJsBytes: jsSize('replicad_with_exceptions.js'),
+      exceptionsJsBytes: jsSize('replicad_with_exceptions.js') || undefined,
     };
   } catch {
     return undefined;

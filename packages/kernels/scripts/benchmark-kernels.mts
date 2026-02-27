@@ -23,7 +23,6 @@ const { values } = parseArgs({
   options: {
     iterations: { type: 'string', short: 'n', default: '5' },
     filter: { type: 'string', short: 'f' },
-    variant: { type: 'string', short: 'v', default: 'single' },
     compare: { type: 'string', short: 'c', multiple: true },
     output: { type: 'string', short: 'o', default: 'reports' },
     ocProfile: { type: 'boolean', default: false },
@@ -44,7 +43,6 @@ Usage:
 Options:
   -n, --iterations <n>    Number of iterations per benchmark (default: 5)
   -f, --filter <cats>     Comma-separated categories: ${benchmarkCategories.join(', ')}
-  -v, --variant <type>    Kernel variant: single (default), multi
   -c, --compare <files>   Compare two JSON report files (provide two paths)
   -o, --output <dir>      Output directory (default: reports)
       --ocProfile         Use per-call OC tracing for deep profiling
@@ -73,19 +71,15 @@ async function runSuite(): Promise<void> {
     process.exit(1);
   }
 
-  const variant = (values.variant ?? 'single') as 'single' | 'multi';
   const ocTracing = values.noTracing
     ? ('off' as const)
     : values.ocProfile
       ? ('per-call' as const)
       : ('summary' as const);
-  console.log(
-    `\nRunning ${cases.length} benchmarks × ${iterations} iterations (variant: ${variant}, tracing: ${ocTracing})\n`,
-  );
+  console.log(`\nRunning ${cases.length} benchmarks × ${iterations} iterations (tracing: ${ocTracing})\n`);
 
   const result = await runBenchmarks(cases, {
     iterations,
-    variant,
     ocTracing,
     onProgress(completed, total, caseName) {
       if (caseName === 'done') {
@@ -177,7 +171,9 @@ function printComparisonTable(before: BenchmarkRunResult, after: BenchmarkRunRes
     const formatSize = (b: number): string =>
       b > 1024 * 1024 ? `${(b / (1024 * 1024)).toFixed(1)} MB` : `${(b / 1024).toFixed(0)} kB`;
 
-    console.log(`\n  WASM Size: ${formatSize(bSize)} -> ${formatSize(aSize)} (${sizeDelta > 0 ? '+' : ''}${sizeDelta.toFixed(1)}%)`);
+    console.log(
+      `\n  WASM Size: ${formatSize(bSize)} -> ${formatSize(aSize)} (${sizeDelta > 0 ? '+' : ''}${sizeDelta.toFixed(1)}%)`,
+    );
   }
 
   console.log(`${'═'.repeat(90)}\n`);
