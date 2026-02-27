@@ -29,13 +29,94 @@ export class OcExceptionError extends Error {
   }
 }
 
+// =============================================================================
+// Reusable WASM Type Guards
+// =============================================================================
+
+/** Emscripten wrapper object with WASM memory management via `delete()`. */
+export type EmscriptenObject = Record<string, unknown> & { delete(): void };
+
 /**
- * Rethrow a numeric exception as an OcExceptionError.
- * This preserves the JS call stack at the point of the WASM call.
+ * Emscripten 5.x CppException — Error subclass with an `excPtr` property
+ * pointing to the C++ exception in WASM memory.
  */
-function rethrowIfNumeric(error: unknown): never {
+export type CppException = Error & { excPtr: number };
+
+/**
+ * Extracted WASM exception info: the numeric pointer and, when available,
+ * the original Error that preserves the JS call-site stack trace.
+ */
+export type WasmExceptionInfo = {
+  pointer: number;
+  sourceError: Error | undefined;
+};
+
+/**
+ * Type guard for Emscripten wrapper objects (any WASM-allocated C++ object).
+ * These always expose a `delete()` method for freeing WASM memory.
+ */
+export function isEmscriptenObject(value: unknown): value is EmscriptenObject {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'delete' in value &&
+    typeof (value as Record<string, unknown>)['delete'] === 'function'
+  );
+}
+
+/**
+ * Type guard for Emscripten 5.x CppException.
+ */
+export function isCppException(error: unknown): error is CppException {
+  return (
+    error instanceof Error && 'excPtr' in error && typeof (error as Record<string, unknown>)['excPtr'] === 'number'
+  );
+}
+
+/**
+ * Execute a callback with a WASM object, ensuring `delete()` is called
+ * to free WASM memory even if the callback throws.
+ */
+export function withWasmObject<T extends { delete(): void }, R>(object: T, callback: (object: T) => R): R {
+  try {
+    return callback(object);
+  } finally {
+    object.delete();
+  }
+}
+
+/**
+ * Extract a WASM exception pointer from any Emscripten throw form:
+ * - OcExceptionError (our wrapper — preserves JS stack from call site)
+ * - bare number (legacy Emscripten — JS stack is unwound)
+ * - CppException (Emscripten 5.x Error with excPtr)
+ *
+ * Returns the pointer and the source Error for stack traces,
+ * or undefined if the value is not a WASM exception.
+ */
+export function extractWasmException(error: unknown): WasmExceptionInfo | undefined {
+  if (error instanceof OcExceptionError) {
+    return { pointer: error.ocExceptionPointer, sourceError: error };
+  }
+
   if (typeof error === 'number') {
-    throw new OcExceptionError(error);
+    return { pointer: error, sourceError: undefined };
+  }
+
+  if (isCppException(error)) {
+    return { pointer: error.excPtr, sourceError: error };
+  }
+
+  return undefined;
+}
+
+/**
+ * Rethrow a WASM exception as an OcExceptionError, preserving the call-site stack.
+ */
+function rethrowIfOcException(error: unknown): never {
+  const wasmException = extractWasmException(error);
+  if (wasmException) {
+    throw new OcExceptionError(wasmException.pointer);
   }
 
   throw error;
@@ -109,19 +190,6 @@ export function formatOcExceptionMessage(typeName: string, rawMessage: string): 
 // =============================================================================
 
 /**
- * Check whether an object looks like an Emscripten-generated C++ wrapper instance.
- * These objects always have a `delete()` method for freeing WASM memory.
- */
-function isEmscriptenObject(value: unknown): value is Record<string, unknown> {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    'delete' in value &&
-    typeof (value as Record<string, unknown>)['delete'] === 'function'
-  );
-}
-
-/**
  * Wrap an OpenCASCADE WASM instance with a deep Proxy that intercepts all
  * function/constructor calls. When a call throws a numeric exception (Emscripten's
  * representation of a C++ exception), the Proxy catches it and re-throws an
@@ -171,7 +239,7 @@ export function wrapOcInstance<T extends Record<string, unknown>>(instance: T): 
           const result: unknown = Reflect.construct(target, arguments_, newTarget);
           return maybeWrapResult(result) as Record<string, unknown>;
         } catch (error) {
-          rethrowIfNumeric(error);
+          rethrowIfOcException(error);
         }
       },
       apply(target, thisArgument: unknown, arguments_: unknown[]) {
@@ -179,7 +247,7 @@ export function wrapOcInstance<T extends Record<string, unknown>>(instance: T): 
           const result: unknown = Reflect.apply(target, thisArgument, arguments_);
           return maybeWrapResult(result);
         } catch (error) {
-          rethrowIfNumeric(error);
+          rethrowIfOcException(error);
         }
       },
     });
@@ -200,13 +268,9 @@ function extractExceptionTypeName(
 ): string {
   try {
     // eslint-disable-next-line new-cap, @typescript-eslint/naming-convention -- C++ method with PascalCase convention
-    const dynType = errorData.DynamicType() as unknown as { Name(): string; delete(): void };
-    try {
-      // eslint-disable-next-line new-cap -- C++ method Name() is PascalCase in OpenCASCADE
-      return dynType.Name();
-    } finally {
-      dynType.delete();
-    }
+    const dynType = errorData.ExceptionType() as unknown as { Name(): string; delete(): void };
+    // eslint-disable-next-line new-cap -- C++ method Name() is PascalCase in OpenCASCADE
+    return withWasmObject(dynType, (dt) => dt.Name());
   } catch {
     return '';
   }
@@ -220,17 +284,14 @@ function extractStandardFailureData(
   ocInstance: OpenCascadeInstanceWithExceptions,
   errorPointer: number,
 ): { message: string; typeName: string; cppStack: string } {
-  const errorData = ocInstance.OCJS.getStandard_FailureData(errorPointer);
-  try {
+  return withWasmObject(ocInstance.OCJS.getStandard_FailureData(errorPointer), (errorData) => {
     // eslint-disable-next-line new-cap -- C++ method
     const errorMessage = errorData.GetMessageString();
     // eslint-disable-next-line new-cap -- C++ method
     const cppStack = errorData.GetStackString();
     const typeName = extractExceptionTypeName(errorData);
     return { message: errorMessage, typeName, cppStack };
-  } finally {
-    errorData.delete();
-  }
+  });
 }
 
 /**
@@ -292,17 +353,11 @@ export function formatRuntimeErrorWithOc({
   /** Optional source map JSON string */
   sourceMap?: string;
 }): KernelIssue {
-  if (error instanceof OcExceptionError) {
-    const { message, cppStack } = decodeOcException(error.ocExceptionPointer, ocInstance);
-    const stackFrames = applySourceMaps(parseStackTrace(error));
-    const location = deriveLocation(stackFrames, sourceMap);
-    return { message, location, type: 'kernel', severity: 'error', stack: cppStack, stackFrames };
-  }
-
-  if (typeof error === 'number') {
-    const { message, cppStack } = decodeOcException(error, ocInstance);
-    const syntheticError = new Error(message);
-    const stackFrames = applySourceMaps(parseStackTrace(syntheticError));
+  const wasmException = extractWasmException(error);
+  if (wasmException) {
+    const { message, cppStack } = decodeOcException(wasmException.pointer, ocInstance);
+    const errorForStack = wasmException.sourceError ?? new Error(message);
+    const stackFrames = applySourceMaps(parseStackTrace(errorForStack));
     const location = deriveLocation(stackFrames, sourceMap);
     return { message, location, type: 'kernel', severity: 'error', stack: cppStack, stackFrames };
   }
