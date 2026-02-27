@@ -5,7 +5,7 @@
       "from": "./node_modules/esbuild-wasm/esbuild.wasm",
       "to": "src/bundler/wasm/esbuild.wasm"
     },
-    // OpenCascade WASM files for Replicad kernel
+    // OpenCascade WASM files for Replicad kernel (single = fast/compact, with_exceptions = OC error decoding)
     {
       "from": "./node_modules/replicad-opencascadejs/src/replicad_single.wasm",
       "to": "src/kernels/replicad/wasm/replicad_single.wasm"
