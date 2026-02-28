@@ -28,6 +28,12 @@
       "options": {
         "cwd": "{projectRoot}"
       }
+    },
+    "compare-benchmarks": {
+      "command": "tsx scripts/compare-benchmarks.mts",
+      "options": {
+        "cwd": "{projectRoot}"
+      }
     }
   }
 }
