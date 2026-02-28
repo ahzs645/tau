@@ -167,7 +167,7 @@ Kernel selection order follows the order in the `kernels` array. The first kerne
 ## Variations
 
 - **Tau kernel**: Use the `tau()` kernel for importing CAD files (STEP, STL, OBJ, etc.) to glTF without writing code. It handles format conversion only.
-- **Replicad options**: Pass `{ withExceptions: true }` to `replicad()` for detailed OpenCASCADE error messages during development.
+- **Replicad options**: Pass `{ wasm: 'single-exceptions' }` to `replicad()` for detailed OpenCASCADE error messages during development.
 - **Manifold options**: `manifold()` currently has no runtime options; behavior is controlled by your model code.
 - **Zoo options**: Zoo requires `baseUrl` for the WebSocket connection to the Zoo engine.
 

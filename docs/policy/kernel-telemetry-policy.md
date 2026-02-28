@@ -113,7 +113,7 @@ Attributes are `Record<string, string | number | boolean>` only. No objects, no 
 | `fs.readdir` | `{ path }` | -- |
 | `wasm.compile` | `{ url }` | -- |
 | `middleware.wrap(...)` | `{ middleware, phase }` | -- |
-| `{kernelId}.wasm-init` | -- | `{ withExceptions }` |
+| `{kernelId}.wasm-init` | -- | `{ wasm }` |
 | `{kernelId}.run-main` | -- | -- |
 | `{kernelId}.mesh-to-gltf` | -- | `{ shapeCount }` |
 | `oc.summary` | `{ total.calls, total.ms, classes }` | `{ {ClassName}.calls, {ClassName}.ms }` per class |
