@@ -17,6 +17,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSy
 import { join, resolve, basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { BenchmarkRunResult, BuildProvenance } from '#benchmarks/benchmark-runner.js';
+import { benchmarkSuite } from '#benchmarks/benchmark-suite.js';
 
 const { values } = parseArgs({
   options: {
@@ -69,15 +70,17 @@ function loadExperiment(dir: string): ExperimentData | undefined {
   }
 
   const benchDir = join(dir, 'benchmarks');
-  const benchRoot = existsSync(benchDir) ? benchDir : dir;
+  if (!existsSync(benchDir)) {
+    return data;
+  }
 
-  const benchFiles = readdirSync(benchRoot).filter(
+  const benchFiles = readdirSync(benchDir).filter(
     (f) => f.startsWith('benchmark-') && f.endsWith('.json') && !f.includes('comparison'),
   );
 
   if (benchFiles.length > 0) {
     const latestBench = benchFiles.sort().at(-1)!;
-    data.benchmark = JSON.parse(readFileSync(join(benchRoot, latestBench), 'utf8')) as BenchmarkRunResult;
+    data.benchmark = JSON.parse(readFileSync(join(benchDir, latestBench), 'utf8')) as BenchmarkRunResult;
   }
 
   const unpackedDir = join(dir, 'unpacked');
@@ -130,13 +133,8 @@ function formatMb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function geometricMean(input: number[]): number {
-  if (input.length === 0) {
-    return 0;
-  }
-
-  const product = input.reduce((acc, v) => acc * v, 1);
-  return product ** (1 / input.length);
+function totalTime(input: number[]): number {
+  return input.reduce((acc, v) => acc + v, 0);
 }
 
 function stripTimestampPrefix(name: string): string {
@@ -176,7 +174,7 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
     .map((experiment) => ({
       name: experiment.name,
       sizeMb: experiment.wasmSizeBytes / (1024 * 1024),
-      medianMs: geometricMean(experiment.benchmark!.results.map((r) => r.median)),
+      medianMs: totalTime(experiment.benchmark!.results.map((r) => r.median)),
     }));
 
   if (dataPoints.length === 0) {
@@ -243,7 +241,7 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
     <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="#D1D5DB" stroke-width="1"/>
     <line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="#D1D5DB" stroke-width="1"/>
     <text x="${padL + plotW / 2}" y="${chartH - 5}" text-anchor="middle" font-size="12" fill="#6B7280">WASM Size (MB)</text>
-    <text x="15" y="${padT + plotH / 2}" text-anchor="middle" font-size="12" fill="#6B7280" transform="rotate(-90, 15, ${padT + plotH / 2})">Geo-Mean Median (ms)</text>
+    <text x="15" y="${padT + plotH / 2}" text-anchor="middle" font-size="12" fill="#6B7280" transform="rotate(-90, 15, ${padT + plotH / 2})">Total Wall Time (ms)</text>
   `;
 
   const gridLines: string[] = [];
@@ -338,24 +336,32 @@ function buildExperimentRecord(experiment: ExperimentData): EmbeddedExperiment {
 }
 
 function buildReportData(experiments: ExperimentData[], baseline?: ExperimentData): ReportData {
-  const benchmarks = new Set<string>();
-  const categories = new Set<string>();
+  const benchmarkSet = new Set<string>();
+  const categorySet = new Set<string>();
 
   const allExperiments = baseline ? [...experiments, baseline] : experiments;
   for (const experiment of allExperiments) {
     if (experiment.benchmark) {
       for (const r of experiment.benchmark.results) {
-        benchmarks.add(r.name);
-        categories.add(r.category);
+        benchmarkSet.add(r.name);
+        categorySet.add(r.category);
       }
+    }
+  }
+
+  const suiteOrder = benchmarkSuite.map((c) => c.name);
+  const orderedBenchmarks = suiteOrder.filter((name) => benchmarkSet.has(name));
+  for (const name of benchmarkSet) {
+    if (!orderedBenchmarks.includes(name)) {
+      orderedBenchmarks.push(name);
     }
   }
 
   return {
     experiments: experiments.map((experiment) => buildExperimentRecord(experiment)),
     baseline: baseline ? buildExperimentRecord(baseline) : undefined,
-    benchmarks: [...benchmarks].sort(),
-    categories: [...categories].sort(),
+    benchmarks: orderedBenchmarks,
+    categories: [...categorySet].sort(),
   };
 }
 
@@ -431,7 +437,7 @@ document.addEventListener('alpine:init', function() {
 
   window._fmt = {
     mb: function(bytes) { return (bytes / (1024 * 1024)).toFixed(2) + ' MB'; },
-    ms: function(v) { return v < 1 ? (v * 1000).toFixed(0) + 'µs' : v.toFixed(2) + 'ms'; },
+    ms: function(v) { if (v < 1) return (v * 1000).toFixed(0) + 'µs'; if (v >= 1000) return (v / 1000).toFixed(2) + 's'; return v.toFixed(1) + 'ms'; },
     pct: function(v) { return (v > 0 ? '+' : '') + v.toFixed(1) + '%'; },
     deltaColor: function(d) {
       if (d === null) return '';
@@ -446,13 +452,13 @@ document.addEventListener('alpine:init', function() {
       if (Math.abs(d) < 2) return '#6B7280';
       return d < 0 ? '#10B981' : '#EF4444';
     },
-    geoMean: function(exp, category) {
+    totalTime: function(exp, category) {
       var vals = Object.keys(exp.medians)
         .filter(function(b) { return category === 'all' || exp.categories[b] === category; })
         .map(function(b) { return exp.medians[b]; })
         .filter(function(v) { return v > 0; });
       if (vals.length === 0) return 0;
-      return Math.pow(vals.reduce(function(a, b) { return a * b; }, 1), 1 / vals.length);
+      return vals.reduce(function(a, b) { return a + b; }, 0);
     }
   };
 
@@ -471,8 +477,8 @@ document.addEventListener('alpine:init', function() {
         return this.sortAsc ? '▲' : '▼';
       },
 
-      gm: function(exp) {
-        return _fmt.geoMean(exp, this.$store.filter.category);
+      tt: function(exp) {
+        return _fmt.totalTime(exp, this.$store.filter.category);
       },
 
       getValue: function(exp, col) {
@@ -487,7 +493,7 @@ document.addEventListener('alpine:init', function() {
           case 'symbols': return exp.boundSymbols || 0;
           case 'emscripten': return exp.emscripten;
           case 'wasmSize': return exp.wasmSizeBytes;
-          case 'geoMean': return this.gm(exp);
+          case 'totalTime': return this.tt(exp);
           case 'sizeDelta': { var d = this.sizeDelta(exp); return d !== null ? d : 0; }
           case 'speedDelta': { var d = this.speedDelta(exp); return d !== null ? d : 0; }
           default: return '';
@@ -517,9 +523,28 @@ document.addEventListener('alpine:init', function() {
       speedDelta: function(exp) {
         var bl = this.$store.data.baseline;
         if (!bl) return null;
-        var blGm = _fmt.geoMean(bl, this.$store.filter.category);
-        if (blGm === 0) return null;
-        return ((this.gm(exp) - blGm) / blGm) * 100;
+        var blTt = _fmt.totalTime(bl, this.$store.filter.category);
+        if (blTt === 0) return null;
+        return ((this.tt(exp) - blTt) / blTt) * 100;
+      },
+
+      benchWins: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl) return { faster: 0, slower: 0 };
+        var cat = this.$store.filter.category;
+        var faster = 0; var slower = 0;
+        var benchmarks = Object.keys(exp.medians);
+        for (var i = 0; i < benchmarks.length; i++) {
+          var b = benchmarks[i];
+          if (cat !== 'all' && exp.categories[b] !== cat) continue;
+          var refVal = bl.medians[b];
+          var expVal = exp.medians[b];
+          if (!refVal || !expVal) continue;
+          var d = ((expVal - refVal) / refVal) * 100;
+          if (d < -2) faster++;
+          else if (d > 2) slower++;
+        }
+        return { faster: faster, slower: slower };
       }
     };
   });
@@ -527,6 +552,7 @@ document.addEventListener('alpine:init', function() {
   Alpine.data('heatmap', function() {
     return {
       refIndex: -1,
+      display: 'both',
 
       setRef: function(idx) {
         this.refIndex = (this.refIndex === idx) ? -1 : idx;
@@ -547,6 +573,17 @@ document.addEventListener('alpine:init', function() {
         return false;
       },
 
+      refTime: function(bench) {
+        var r = this.ref();
+        if (!r || r.medians[bench] === undefined) return null;
+        return r.medians[bench];
+      },
+
+      expTime: function(exp, bench) {
+        if (exp.medians[bench] === undefined) return null;
+        return exp.medians[bench];
+      },
+
       delta: function(exp, bench) {
         var r = this.ref();
         if (!r || !r.medians[bench]) return null;
@@ -554,6 +591,19 @@ document.addEventListener('alpine:init', function() {
         var expVal = exp.medians[bench];
         if (expVal === undefined || refVal === 0) return null;
         return ((expVal - refVal) / refVal) * 100;
+      },
+
+      showPct: function() { return this.display === 'both' || this.display === 'percentage'; },
+      showTime: function() { return this.display === 'both' || this.display === 'time'; },
+
+      cellText: function(exp, bench) {
+        var d = this.delta(exp, bench);
+        var t = this.expTime(exp, bench);
+        if (d === null && t === null) return '\u2014';
+        var parts = [];
+        if (this.showPct() && d !== null) parts.push(_fmt.pct(d));
+        if (this.showTime() && t !== null) parts.push(_fmt.ms(t));
+        return parts.join(' ');
       },
 
       benchmarks: function() {
@@ -633,7 +683,7 @@ ${generateAlpineScript()}
 
   <div class="section">
     <h2>Configuration Matrix</h2>
-    <p class="explanation">Click any column header to sort. <strong>WASM Size</strong> is the post-optimization binary size. <strong>Geo-Mean</strong> is the geometric mean of all benchmark median times &mdash; it is used instead of the arithmetic mean because benchmark times span different orders of magnitude (microseconds to milliseconds). The geometric mean gives equal weight to proportional changes: a 2&times; speedup on a 10ms test counts the same as a 2&times; speedup on a 100ms test. Use the category filter below to recalculate the Geo-Mean for a subset of benchmarks.</p>
+    <p class="explanation">Click any column header to sort. <strong>WASM Size</strong> is the post-optimization binary size. <strong>Total Time</strong> is the sum of all benchmark median times &mdash; it represents the total wall-clock time to execute the entire suite. Use the category filter below to recalculate the Total Time for a subset of benchmarks.</p>
     <div x-data="configMatrix()">
       <div class="filter-bar">
         <button class="filter-btn" :class="{ 'active': $store.filter.category === 'all' }" @click="$store.filter.category = 'all'">All</button>
@@ -654,9 +704,10 @@ ${generateAlpineScript()}
             <th class="sortable-th" @click="toggleSort('symbols')">Symbols <span class="sort-arrow" x-text="sortArrow('symbols')"></span></th>
             <th class="sortable-th" @click="toggleSort('emscripten')">Emscripten <span class="sort-arrow" x-text="sortArrow('emscripten')"></span></th>
             <th class="sortable-th" @click="toggleSort('wasmSize')">WASM Size <span class="sort-arrow" x-text="sortArrow('wasmSize')"></span></th>
-            <th class="sortable-th" @click="toggleSort('geoMean')">Geo-Mean <span class="sort-arrow" x-text="sortArrow('geoMean')"></span></th>
-            <th class="sortable-th" @click="toggleSort('sizeDelta')">vs Baseline (Size) <span class="sort-arrow" x-text="sortArrow('sizeDelta')"></span></th>
-            <th class="sortable-th" @click="toggleSort('speedDelta')">vs Baseline (Speed) <span class="sort-arrow" x-text="sortArrow('speedDelta')"></span></th>
+            <th class="sortable-th" @click="toggleSort('totalTime')">Total Time <span class="sort-arrow" x-text="sortArrow('totalTime')"></span></th>
+            <th class="sortable-th" @click="toggleSort('sizeDelta')">Size Δ <span class="sort-arrow" x-text="sortArrow('sizeDelta')"></span></th>
+            <th class="sortable-th" @click="toggleSort('speedDelta')">Time Δ <span class="sort-arrow" x-text="sortArrow('speedDelta')"></span></th>
+            <th>Faster / Slower</th>
           </tr>
         </thead>
         <tbody>
@@ -672,33 +723,42 @@ ${generateAlpineScript()}
               <td x-text="exp.boundSymbols !== null ? exp.boundSymbols : '—'"></td>
               <td x-text="exp.emscripten || '—'"></td>
               <td x-text="exp.wasmSizeBytes > 0 ? _fmt.mb(exp.wasmSizeBytes) : '—'"></td>
-              <td x-text="gm(exp) > 0 ? _fmt.ms(gm(exp)) : '—'"></td>
-              <td :style="'color:' + _fmt.deltaTextColor(sizeDelta(exp))" x-text="sizeDelta(exp) !== null ? _fmt.pct(sizeDelta(exp)) + ' size' : '—'"></td>
-              <td :style="'color:' + _fmt.deltaTextColor(speedDelta(exp))" x-text="speedDelta(exp) !== null ? _fmt.pct(speedDelta(exp)) + ' speed' : '—'"></td>
+              <td x-text="tt(exp) > 0 ? _fmt.ms(tt(exp)) : '—'"></td>
+              <td :style="'color:' + _fmt.deltaTextColor(sizeDelta(exp))" x-text="sizeDelta(exp) !== null ? _fmt.pct(sizeDelta(exp)) : '—'"></td>
+              <td :style="'color:' + _fmt.deltaTextColor(speedDelta(exp))" x-text="speedDelta(exp) !== null ? _fmt.pct(speedDelta(exp)) : '—'"></td>
+              <td><span style="color:#10B981" x-text="benchWins(exp).faster + '↑'"></span> / <span style="color:#EF4444" x-text="benchWins(exp).slower + '↓'"></span></td>
             </tr>
           </template>
         </tbody>
       </table>
     </div>
-    <p class="explanation"><strong>Delta columns:</strong> Size delta compares WASM binary size against the baseline. Speed delta compares geometric mean of median benchmark times. <span style="color:#10B981">Green = improvement</span>, <span style="color:#EF4444">red = regression</span>. Deltas within &plusmn;2% are shown in gray.</p>
+    <p class="explanation"><strong>Delta columns:</strong> <strong>Size &Delta;</strong> compares WASM binary size (positive = larger). <strong>Time &Delta;</strong> compares total wall-clock execution time (positive = slower). <strong>Faster/Slower</strong> shows how many individual benchmarks improved (&gt;2% faster) vs regressed (&gt;2% slower) compared to the baseline. <span style="color:#10B981">Green = improvement</span>, <span style="color:#EF4444">red = regression</span>. Deltas within &plusmn;2% are shown in gray.</p>
   </div>
 
   <div class="section">
     <h2>Per-Benchmark Heatmap</h2>
     <div x-data="heatmap()">
-      <p class="explanation">Each cell shows the percentage change in median time relative to the reference experiment. <span style="color:#10B981">Green = faster</span>, <span style="color:#EF4444">red = slower</span>. <strong>Click any column header</strong> to set it as the reference for delta computation. Click the active reference again to reset to the ${baseline ? 'baseline' : 'first experiment'}. Currently comparing against: <strong x-text="refLabel()"></strong></p>
-      <div class="legend">
-        <span class="legend-item"><span class="legend-swatch" style="background:#D1FAE5"></span> &gt;10% faster</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:#ECFDF5"></span> 2-10% faster</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:#F9FAFB"></span> Within 2%</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:#FEF2F2"></span> 2-10% slower</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:#FEE2E2"></span> &gt;10% slower</span>
+      <p class="explanation">Each cell shows the change in median time relative to the reference. <span style="color:#10B981">Green = faster</span>, <span style="color:#EF4444">red = slower</span>. <strong>Click any experiment column header</strong> to set it as the reference. Currently comparing against: <strong x-text="refLabel()"></strong></p>
+      <div style="display:flex;align-items:center;gap:1.5rem;margin:0.75rem 0 1rem;flex-wrap:wrap">
+        <div class="legend" style="margin:0">
+          <span class="legend-item"><span class="legend-swatch" style="background:#D1FAE5"></span> &gt;10% faster</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#ECFDF5"></span> 2-10% faster</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#F9FAFB"></span> Within 2%</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#FEF2F2"></span> 2-10% slower</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#FEE2E2"></span> &gt;10% slower</span>
+        </div>
+        <div class="filter-bar" style="margin:0">
+          <button class="filter-btn" :class="{ 'active': display === 'both' }" @click="display = 'both'">Both</button>
+          <button class="filter-btn" :class="{ 'active': display === 'time' }" @click="display = 'time'">Time</button>
+          <button class="filter-btn" :class="{ 'active': display === 'percentage' }" @click="display = 'percentage'">Percentage</button>
+        </div>
       </div>
       <div style="overflow-x:auto">
         <table id="heatmap-table">
           <thead>
             <tr>
               <th>Benchmark</th>
+              <th class="ref-th" style="text-align:center" x-text="refLabel() + ' (ref)'"></th>
               <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name">
                 <th class="heatmap-th" :class="{ 'ref-th': isRef(idx) }" @click="setRef(idx)" x-text="exp.shortName"></th>
               </template>
@@ -708,10 +768,11 @@ ${generateAlpineScript()}
             <template x-for="bench in benchmarks()" :key="bench">
               <tr>
                 <td><strong x-text="bench"></strong></td>
+                <td style="text-align:center;font-size:0.8rem;background:#F3F4F6;font-weight:500" x-text="refTime(bench) !== null ? _fmt.ms(refTime(bench)) : '—'"></td>
                 <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name + '-' + bench">
                   <td style="text-align:center;font-size:0.8rem"
                       :style="'background:' + _fmt.deltaColor(delta(exp, bench))"
-                      x-text="delta(exp, bench) !== null ? _fmt.pct(delta(exp, bench)) : '—'"></td>
+                      x-text="cellText(exp, bench)"></td>
                 </template>
               </tr>
             </template>
