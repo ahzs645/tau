@@ -1,5 +1,5 @@
 /**
- * OpenCASCADE API Call Tracing
+ * OpenCASCADE API Call Tracing & Exception Capture
  *
  * Instruments OC instance method/constructor calls via a recursive JavaScript Proxy.
  * Two modes:
@@ -8,12 +8,32 @@
  * - per-call: creates individual `oc.{ClassName}` spans for every call via
  *   the tracer. Higher overhead (~10-20%), used for deep profiling.
  *
- * When composed with oc-exceptions.ts, the tracing proxy wraps outermost
- * so spans include exception handling time.
+ * Also catches WebAssembly.Exception at the proxy boundary, converting it to a
+ * standard Error with the decoded OC message and the JS stack trace from the
+ * call site (which includes user code frames).
  */
 
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
+import { formatOcExceptionMessage } from '#kernels/replicad/oc-exceptions.js';
+
+/**
+ * Error subclass thrown when a WebAssembly.Exception from OC is caught at the
+ * tracing proxy boundary. Preserves the decoded OC message and the JS call
+ * stack from the user code call site.
+ */
+export class OcKernelError extends Error {
+  public override readonly name = 'OcKernelError';
+  public readonly typeName: string;
+  public readonly rawMessage: string;
+
+  public constructor(typeName: string, rawMessage: string) {
+    const formatted = formatOcExceptionMessage(typeName, rawMessage);
+    super(formatted);
+    this.typeName = typeName;
+    this.rawMessage = rawMessage;
+  }
+}
 
 /**
  * Configuration for OC API call tracing.
@@ -64,6 +84,36 @@ export function wrapOcWithTracing(
 ): OcTracingResult {
   const stats = new Map<string, ClassStats>();
 
+  type ExceptionDecoder = (ex: WebAssembly.Exception) => [string, string];
+  const getExceptionMessage = (oc as unknown as Record<string, unknown>)['getExceptionMessage'] as
+    | ExceptionDecoder
+    | undefined;
+
+  /**
+   * If the error is a WebAssembly.Exception, decode it and rethrow as an
+   * OcKernelError (Error subclass) so the JS stack trace is captured at
+   * the proxy call site — which includes user code frames.
+   */
+  function rethrowIfWasmException(error: unknown): never {
+    if (
+      typeof getExceptionMessage === 'function' &&
+      typeof WebAssembly !== 'undefined' &&
+      typeof WebAssembly.Exception === 'function' &&
+      error instanceof WebAssembly.Exception
+    ) {
+      try {
+        const [typeName, rawMessage] = getExceptionMessage(error);
+        throw new OcKernelError(typeName, rawMessage);
+      } catch (decodeError: unknown) {
+        if (decodeError instanceof OcKernelError) {
+          throw decodeError;
+        }
+      }
+    }
+
+    throw error;
+  }
+
   function recordSummaryCall(className: string, durationMs: number): void {
     const existing = stats.get(className);
     if (existing) {
@@ -81,15 +131,25 @@ export function wrapOcWithTracing(
     return new Proxy(fn, {
       construct(target, args, newTarget) {
         const start = performance.now();
-        const result: unknown = Reflect.construct(target, args, newTarget);
-        recordSummaryCall(className, performance.now() - start);
-        return result as Record<string, unknown>;
+        try {
+          const result: unknown = Reflect.construct(target, args, newTarget);
+          recordSummaryCall(className, performance.now() - start);
+          return result as Record<string, unknown>;
+        } catch (error: unknown) {
+          recordSummaryCall(className, performance.now() - start);
+          rethrowIfWasmException(error);
+        }
       },
       apply(target, thisArg, args) {
         const start = performance.now();
-        const result: unknown = Reflect.apply(target, thisArg, args);
-        recordSummaryCall(className, performance.now() - start);
-        return result;
+        try {
+          const result: unknown = Reflect.apply(target, thisArg, args);
+          recordSummaryCall(className, performance.now() - start);
+          return result;
+        } catch (error: unknown) {
+          recordSummaryCall(className, performance.now() - start);
+          rethrowIfWasmException(error);
+        }
       },
     });
   }
@@ -103,6 +163,8 @@ export function wrapOcWithTracing(
         const span = tracer.startSpan(`oc.${className}`, { method: 'constructor' });
         try {
           return Reflect.construct(target, args, newTarget) as Record<string, unknown>;
+        } catch (error: unknown) {
+          rethrowIfWasmException(error);
         } finally {
           span.end();
         }
@@ -111,6 +173,8 @@ export function wrapOcWithTracing(
         const span = tracer.startSpan(`oc.${className}`, { method: 'apply' });
         try {
           return Reflect.apply(target, thisArg, args);
+        } catch (error: unknown) {
+          rethrowIfWasmException(error);
         } finally {
           span.end();
         }

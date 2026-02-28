@@ -1340,7 +1340,7 @@ describe('ReplicadWorker', () => {
         expect(typeof result.success).toBe('boolean');
       });
 
-      it('should decode OpenCASCADE numeric exceptions into human-readable messages when withExceptions is true', async () => {
+      it('should decode OpenCASCADE numeric exceptions into human-readable messages when wasm is single-exceptions', async () => {
         const result = await createGeometry({
           files: {
             'oc_exception.ts': `
@@ -1351,7 +1351,7 @@ describe('ReplicadWorker', () => {
           },
           mainFile: 'oc_exception.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { wasm: 'single-exceptions' } },
         });
 
         assertFailure(result);
@@ -1383,7 +1383,7 @@ describe('ReplicadWorker', () => {
           },
           mainFile: 'zero_extrude.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { wasm: 'single-exceptions' } },
         });
 
         assertFailure(result);
@@ -1419,7 +1419,7 @@ export default function main() {
           files: { 'extrude_stack.ts': code },
           mainFile: 'extrude_stack.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { wasm: 'single-exceptions' } },
         });
 
         assertFailure(result);
@@ -1494,7 +1494,7 @@ export default function main() {
           files: { 'nested_helpers.ts': code },
           mainFile: 'nested_helpers.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { wasm: 'single-exceptions' } },
         });
 
         assertFailure(result);
@@ -1567,7 +1567,7 @@ export function buildGeometry() {
           },
           mainFile: 'main.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { wasm: 'single-exceptions' } },
         });
 
         assertFailure(result);
@@ -1640,7 +1640,7 @@ export default function main() {
           files: { 'fluent.ts': code },
           mainFile: 'fluent.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true, withSourceMapping: true } },
+          options: { workerOptions: { wasm: 'single-exceptions', withSourceMapping: true } },
         });
 
         assertFailure(result);
@@ -1696,7 +1696,16 @@ export default function main() {
         const frameworkNames = issue.stackFrames
           ?.filter((frame) => frame.context === 'framework')
           .map((frame) => frame.functionName);
-        expect(frameworkNames).toEqual(expect.arrayContaining(['rethrowIfNumeric']));
+        expect(frameworkNames).toEqual(
+          expect.arrayContaining([
+            'rethrowIfWasmException',
+            'Object.construct',
+            'runMainRaw',
+            'runMain',
+            'Object.createGeometry',
+            'KernelRuntimeWorker.onCreateGeometry',
+          ]),
+        );
 
         // --- Fluent API calls before extrude are NOT in the stack ---
         // This is a JavaScript limitation: completed calls are not on the stack.
@@ -1936,7 +1945,7 @@ export default function main() {
           files: { 'box.ts': extrudeZeroCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true } },
+          options: { workerOptions: { wasm: 'single-exceptions' } },
         });
 
         assertFailure(result);
@@ -1970,7 +1979,7 @@ export default function main() {
           files: { 'box.ts': extrudeZeroCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { withExceptions: true, withSourceMapping: true } },
+          options: { workerOptions: { wasm: 'single-exceptions', withSourceMapping: true } },
         });
 
         assertFailure(result);
@@ -3311,13 +3320,13 @@ describe('withBrepEdges option', () => {
 // Example models with exceptions enabled
 // =============================================================================
 
-describe('Example models (withExceptions)', () => {
+describe('Example models (single-exceptions)', () => {
   for (const fixture of exampleFixtures) {
     it(`should produce valid geometry for ${fixture.name}`, async () => {
       const result = await createGeometry({
         files: fixture.files,
         mainFile: fixture.mainFile,
-        options: { workerOptions: { withExceptions: true } },
+        options: { workerOptions: { wasm: 'single-exceptions' } },
       });
 
       assertSuccess(result);

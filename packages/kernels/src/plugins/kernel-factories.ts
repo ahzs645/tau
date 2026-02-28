@@ -6,11 +6,47 @@
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
 
 /**
+ * Custom WASM configuration for injecting non-standard builds at runtime.
+ * Primarily used for Node.js tooling (benchmarks, CI) via `file://` URLs.
+ *
+ * @example
+ * ```typescript
+ * replicad({
+ *   wasm: {
+ *     wasmUrl: 'file:///path/to/replicad_single.wasm',
+ *     wasmBindingsUrl: 'file:///path/to/replicad_single.js',
+ *   },
+ * })
+ * ```
+ */
+type ReplicadWasmConfig = {
+  /** Absolute URL to the `.wasm` binary (typically `file://` in Node.js). */
+  wasmUrl: string;
+  /** Absolute URL to the Emscripten JS glue module (typically `file://` in Node.js). */
+  wasmBindingsUrl: string;
+};
+
+/**
  * Replicad kernel options.
  */
 export type ReplicadOptions = {
-  /** Enable OpenCASCADE exception messages for detailed error feedback. Slower geometry computation when enabled. */
-  withExceptions?: boolean;
+  /**
+   * WASM build variant or custom build configuration.
+   *
+   * - `'single'` (default) -- compact build (~17 MB), OC errors abort rather than throw
+   * - `'single-exceptions'` -- exceptions-enabled build (~20 MB) with human-readable OC error messages
+   * - `ReplicadWasmConfig` -- custom WASM/JS URLs for runtime injection (Node.js tooling)
+   *
+   * @example
+   * ```typescript
+   * replicad()                                          // default: 'single'
+   * replicad({ wasm: 'single-exceptions' })               // exceptions variant
+   * replicad({ wasm: { wasmUrl, wasmBindingsUrl } })    // custom build
+   * ```
+   *
+   * @default 'single'
+   */
+  wasm?: 'single' | 'single-exceptions' | ReplicadWasmConfig;
   /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
   ocTracing?: 'off' | 'summary' | 'per-call';
   /** Include Boundary Representation (BRep) edge lines in the generated GLTF geometry. Defaults to `false`. */
@@ -39,7 +75,9 @@ export type ManifoldOptions = {};
  *
  * @example
  * ```typescript
- * replicad({ withBrepEdges: true })
+ * replicad()                                          // single WASM (~17 MB)
+ * replicad({ wasm: 'single-exceptions' })               // exceptions WASM (~20 MB)
+ * replicad({ wasm: { wasmUrl, wasmBindingsUrl } })    // custom build injection
  * ```
  */
 export const replicad = createKernelPlugin<ReplicadOptions>({
