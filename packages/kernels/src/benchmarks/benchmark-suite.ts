@@ -218,7 +218,6 @@ const examples: BenchmarkCase[] = [
   { name: 'bottle', category: 'examples', ...loadFixture('replicad', 'bottle') },
   { name: 'gridfinity-box', category: 'examples', ...loadFixture('replicad', 'gridfinity-box') },
   { name: 'vase', category: 'examples', ...loadFixture('replicad', 'vase') },
-  { name: 'stress-test', category: 'examples', ...loadFixture('replicad', 'stress-test') },
 ];
 
 const stress: BenchmarkCase[] = [

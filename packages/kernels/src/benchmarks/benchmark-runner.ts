@@ -43,18 +43,36 @@ export type WasmSizeInfo = {
   exceptionsJsBytes?: number;
 };
 
+/** Build provenance metadata linking benchmark results to build configuration. */
+export type BuildProvenance = {
+  schema: string;
+  buildId: string;
+  timestamp: string;
+  toolchain: Record<string, string>;
+  source: Record<string, string>;
+  compilation: Record<string, unknown>;
+  linking: Record<string, unknown>;
+  postProcessing: Record<string, unknown>;
+  output: Record<string, unknown>;
+  sections: Record<string, unknown>;
+  filtering: Record<string, unknown>;
+};
+
 /** Result of a complete benchmark run across all cases. */
 export type BenchmarkRunResult = {
   timestamp: string;
   results: BenchmarkResult[];
   totalDurationMs: number;
   wasmSizes?: WasmSizeInfo;
+  provenance?: BuildProvenance;
 };
 
 /** Options for configuring a benchmark run. */
 export type BenchmarkRunnerOptions = {
   iterations: number;
   ocTracing?: 'off' | 'summary' | 'per-call';
+  /** WASM variant or custom config. Defaults to `'single'`. */
+  wasm?: 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindingsUrl: string };
   onProgress?: (completed: number, total: number, caseName: string) => void;
 };
 
@@ -133,7 +151,7 @@ export async function runBenchmarks(
   cases: BenchmarkCase[],
   options: BenchmarkRunnerOptions,
 ): Promise<BenchmarkRunResult> {
-  const { iterations, ocTracing = 'summary', onProgress } = options;
+  const { iterations, ocTracing = 'summary', wasm = 'single', onProgress } = options;
   const totalWork = cases.length;
   const results: BenchmarkResult[] = [];
   const runStart = performance.now();
@@ -150,7 +168,7 @@ export async function runBenchmarks(
       absoluteFiles[`${basePath}/${filename}`] = content;
     }
 
-    const kernelOptions = { ocTracing };
+    const kernelOptions = { ocTracing, wasm };
 
     const fileSystem = fromMemoryFS(absoluteFiles);
     const client = createKernelClient({

@@ -22,6 +22,12 @@
       "options": {
         "cwd": "{projectRoot}"
       }
+    },
+    "build-matrix": {
+      "command": "tsx scripts/build-matrix-report.mts",
+      "options": {
+        "cwd": "{projectRoot}"
+      }
     }
   }
 }
