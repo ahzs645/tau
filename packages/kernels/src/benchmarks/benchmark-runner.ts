@@ -197,11 +197,16 @@ export async function runBenchmarks(
       }
 
       const start = performance.now();
-      await client.render({
+      const renderResult = await client.render({
         file: { filename: benchCase.mainFile, path: basePath },
         parameters: {},
       });
       const elapsed = performance.now() - start;
+
+      if (!renderResult.success) {
+        const messages = renderResult.issues.map((i) => i.message).join('; ');
+        throw new Error(`Benchmark "${benchCase.name}" render failed (iteration ${iter}): ${messages}`);
+      }
 
       if (iter === 0) {
         continue; // Discard warmup iteration to avoid cold-start skew
