@@ -68,13 +68,16 @@ function loadExperiment(dir: string): ExperimentData | undefined {
     data.provenance = JSON.parse(readFileSync(provPath, 'utf8')) as BuildProvenance;
   }
 
-  const benchFiles = readdirSync(dir).filter(
+  const benchDir = join(dir, 'benchmarks');
+  const benchRoot = existsSync(benchDir) ? benchDir : dir;
+
+  const benchFiles = readdirSync(benchRoot).filter(
     (f) => f.startsWith('benchmark-') && f.endsWith('.json') && !f.includes('comparison'),
   );
 
   if (benchFiles.length > 0) {
     const latestBench = benchFiles.sort().at(-1)!;
-    data.benchmark = JSON.parse(readFileSync(join(dir, latestBench), 'utf8')) as BenchmarkRunResult;
+    data.benchmark = JSON.parse(readFileSync(join(benchRoot, latestBench), 'utf8')) as BenchmarkRunResult;
   }
 
   const unpackedDir = join(dir, 'unpacked');
