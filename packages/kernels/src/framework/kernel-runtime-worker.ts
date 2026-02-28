@@ -14,6 +14,8 @@
  * file caching, middleware chain, telemetry, and the MessagePort dispatcher.
  */
 
+// eslint-disable-next-line import-x/no-unassigned-import -- side-effect: stubs `document` before any bundler modulepreload code runs
+import '#framework/worker-preload-polyfill.js';
 import type {
   CreateGeometryResult,
   ExportGeometryResult,
@@ -29,6 +31,7 @@ import type {
   KernelDefinition,
   KernelRuntime,
 } from '#types/kernel-worker.types.js';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
 import { isWorkerContext, getWorkerMessagePort } from '#framework/kernel-message-adapter.js';
 import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
@@ -219,7 +222,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return selection.kernel;
   }
 
-  private async loadKernelModule(config: KernelModuleEntry): Promise<LoadedKernel> {
+  private async loadKernelModule(config: KernelModuleEntry, tracer: KernelSpanTracer): Promise<LoadedKernel> {
     const existing = this.loadedKernels.get(config.id);
     if (existing) {
       return existing;
@@ -229,9 +232,11 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     if (config.definition) {
       definition = config.definition;
     } else {
+      const importSpan = tracer.startSpan('kernel.load-module', { id: config.id });
       this.logger.debug(`Loading kernel module: ${config.id} from ${config.moduleUrl}`);
       const module = (await import(/* @vite-ignore */ config.moduleUrl)) as { default: KernelDefinition };
       definition = module.default;
+      importSpan.end();
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Runtime guard for dynamic import
@@ -313,7 +318,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       }
 
       if (!config.detectImport) {
-        const kernel = await this.loadKernelModule(config);
+        const kernel = await this.loadKernelModule(config, runtime.tracer);
         await this.ensureKernelInitialized(kernel, runtime);
         this.selectionCache.set(filePath, { id: config.id, method: 'extension' });
         return { kernel, method: 'extension' };
@@ -325,7 +330,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
         detectSpan.end();
         const importRegex = new RegExp(config.detectImport, 's');
         if (importRegex.test(code)) {
-          const kernel = await this.loadKernelModule(config);
+          const kernel = await this.loadKernelModule(config, runtime.tracer);
           await this.ensureKernelInitialized(kernel, runtime);
           this.selectionCache.set(filePath, { id: config.id, method: 'regex' });
           return { kernel, method: 'regex' };
@@ -361,11 +366,11 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
         if (matchingConfigs.length > 0) {
           const primaryConfig = matchingConfigs[0]!;
-          const primaryKernel = await this.loadKernelModule(primaryConfig);
+          const primaryKernel = await this.loadKernelModule(primaryConfig, runtime.tracer);
           await this.ensureKernelInitialized(primaryKernel, runtime);
 
           for (const config of matchingConfigs.slice(1)) {
-            const kernel = await this.loadKernelModule(config);
+            const kernel = await this.loadKernelModule(config, runtime.tracer);
             await this.ensureKernelInitialized(kernel, runtime);
           }
 
@@ -390,7 +395,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     entry: KernelModuleEntry,
     { filePath, extension, runtime }: { filePath: string; extension: string; runtime: KernelRuntime },
   ): Promise<KernelSelection | undefined> {
-    const kernel = await this.loadKernelModule(entry);
+    const kernel = await this.loadKernelModule(entry, runtime.tracer);
     await this.ensureKernelInitialized(kernel, runtime);
 
     if (kernel.definition.canHandle) {

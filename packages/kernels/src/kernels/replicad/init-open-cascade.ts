@@ -42,15 +42,20 @@ export async function initOpenCascade(
   bindingsFactory: OpenCascadeModuleFactory,
   options?: InitOpenCascadeOptions,
 ): Promise<OpenCascadeInstance> {
-  const compiledModule = await compileWasmStreaming(wasmUrl, options?.tracer);
+  const { tracer } = options ?? {};
+  const compiledModule = await compileWasmStreaming(wasmUrl, tracer);
 
+  const instantiateSpan = tracer?.startSpan('wasm.emscripten-init');
   const instance = await bindingsFactory({
     instantiateWasm(imports: WebAssembly.Imports, successCallback: (instance: WebAssembly.Instance) => void) {
+      const instSpan = tracer?.startSpan('wasm.instantiate');
       void (async () => {
         try {
           const wasmInstance = await WebAssembly.instantiate(compiledModule, imports);
+          instSpan?.end();
           successCallback(wasmInstance);
         } catch (error: unknown) {
+          instSpan?.end();
           throw error instanceof Error ? error : new Error(String(error));
         }
       })();
@@ -60,6 +65,7 @@ export async function initOpenCascade(
     print: options?.print ?? noop,
     printErr: options?.printErr ?? noop,
   });
+  instantiateSpan?.end();
 
   return instance;
 }

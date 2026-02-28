@@ -22,6 +22,7 @@ import { jsonSchemaFromJson } from '@taucad/utils/schema';
 import { createExportFile } from '@taucad/types/constants';
 import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelRuntime } from '#types/kernel-worker.types.js';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import { isNode, resolveFileUrl } from '#framework/environment.js';
@@ -73,30 +74,38 @@ type WasmOption = string | { wasmUrl: string; wasmBindingsUrl: string };
  * - **Custom config** (`{ wasmUrl, wasmBindingsUrl }`): Uses variable `import()` with
  *   `@vite-ignore` to bypass bundler analysis. Works in Node.js for any module format.
  */
-async function resolveWasm(wasm: WasmOption): Promise<ResolvedWasm> {
-  if (typeof wasm === 'string') {
-    if (wasm === 'single-exceptions') {
-      const mod = await import('replicad-opencascadejs/src/replicad_with_exceptions.js');
+async function resolveWasm(wasm: WasmOption, tracer?: KernelSpanTracer): Promise<ResolvedWasm> {
+  const span = tracer?.startSpan('replicad.resolve-bindings', {
+    variant: typeof wasm === 'string' ? wasm : 'custom',
+  });
+
+  try {
+    if (typeof wasm === 'string') {
+      if (wasm === 'single-exceptions') {
+        const mod = await import('replicad-opencascadejs/src/replicad_with_exceptions.js');
+        return {
+          wasmUrl: exceptionsWasmUrl,
+          bindingsFactory: resolveCjsDefault(mod.default) as OpenCascadeModuleFactory,
+        };
+      }
+
+      const mod = await import('replicad-opencascadejs/src/replicad_single.js');
       return {
-        wasmUrl: exceptionsWasmUrl,
+        wasmUrl: singleWasmUrl,
         bindingsFactory: resolveCjsDefault(mod.default) as OpenCascadeModuleFactory,
       };
     }
 
-    const mod = await import('replicad-opencascadejs/src/replicad_single.js');
+    // Custom WASM config -- runtime import bypasses bundler
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- dynamic import() with variable URL returns any
+    const mod: Record<string, unknown> = await import(/* @vite-ignore */ wasm.wasmBindingsUrl);
     return {
-      wasmUrl: singleWasmUrl,
-      bindingsFactory: resolveCjsDefault(mod.default) as OpenCascadeModuleFactory,
+      wasmUrl: wasm.wasmUrl,
+      bindingsFactory: resolveCjsDefault(mod['default'] ?? mod) as OpenCascadeModuleFactory,
     };
+  } finally {
+    span?.end();
   }
-
-  // Custom WASM config -- runtime import bypasses bundler
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- dynamic import() with variable URL returns any
-  const mod: Record<string, unknown> = await import(/* @vite-ignore */ wasm.wasmBindingsUrl);
-  return {
-    wasmUrl: wasm.wasmUrl,
-    bindingsFactory: resolveCjsDefault(mod['default'] ?? mod) as OpenCascadeModuleFactory,
-  };
 }
 
 // =============================================================================
@@ -391,7 +400,7 @@ export default defineKernel({
     logger.debug(`Initializing OpenCASCADE WASM (ocTracing: ${ocTracing}, wasm: ${wasmLabel})`);
 
     const wasmSpan = tracer.startSpan('replicad.wasm-init');
-    const resolved = await resolveWasm(wasm);
+    const resolved = await resolveWasm(wasm, tracer);
     let openCascade = await initOpenCascade(resolved.wasmUrl, resolved.bindingsFactory, { tracer });
     let tracingSummary: OcTracingSummary | undefined;
 
