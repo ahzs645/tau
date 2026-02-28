@@ -1,73 +1,14 @@
 /**
  * Consumer-facing kernel plugin factory functions.
  * Each factory returns a KernelPlugin registration object with resolved module URL.
+ *
+ * Option types are co-located with their kernel implementations and re-exported here.
  */
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
-
-/**
- * Custom WASM configuration for injecting non-standard builds at runtime.
- * Primarily used for Node.js tooling (benchmarks, CI) via `file://` URLs.
- *
- * @example
- * ```typescript
- * replicad({
- *   wasm: {
- *     wasmUrl: 'file:///path/to/replicad_single.wasm',
- *     wasmBindingsUrl: 'file:///path/to/replicad_single.js',
- *   },
- * })
- * ```
- */
-type ReplicadWasmConfig = {
-  /** Absolute URL to the `.wasm` binary (typically `file://` in Node.js). */
-  wasmUrl: string;
-  /** Absolute URL to the Emscripten JS glue module (typically `file://` in Node.js). */
-  wasmBindingsUrl: string;
-};
-
-/**
- * Replicad kernel options.
- */
-export type ReplicadOptions = {
-  /**
-   * WASM build variant or custom build configuration.
-   *
-   * - `'single'` (default) -- compact build (~17 MB), OC errors abort rather than throw
-   * - `'single-exceptions'` -- exceptions-enabled build (~20 MB) with human-readable OC error messages
-   * - `ReplicadWasmConfig` -- custom WASM/JS URLs for runtime injection (Node.js tooling)
-   *
-   * @example
-   * ```typescript
-   * replicad()                                          // default: 'single'
-   * replicad({ wasm: 'single-exceptions' })               // exceptions variant
-   * replicad({ wasm: { wasmUrl, wasmBindingsUrl } })    // custom build
-   * ```
-   *
-   * @default 'single'
-   */
-  wasm?: 'single' | 'single-exceptions' | ReplicadWasmConfig;
-  /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
-  ocTracing?: 'off' | 'summary' | 'per-call';
-  /** Include Boundary Representation (BRep) edge lines in the generated GLTF geometry. Defaults to `false`. */
-  withBrepEdges?: boolean;
-  /** Load library source maps for enriched error stack traces. Adds ~50ms to init. Defaults to `false`. */
-  withSourceMapping?: boolean;
-};
-
-/**
- * Zoo (KCL) kernel options.
- */
-export type ZooOptions = {
-  /** WebSocket base URL for the Zoo engine connection. Defaults to 'wss://api.zoo.dev'. */
-  baseUrl?: string;
-};
-
-/**
- * Manifold kernel options.
- */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Manifold currently exposes no runtime options
-export type ManifoldOptions = {};
+import type { ReplicadOptions } from '#kernels/replicad/replicad.kernel.js';
+import type { ZooOptions } from '#kernels/zoo/zoo.kernel.js';
+import type { ManifoldOptions } from '#kernels/manifold/manifold.kernel.js';
 
 /**
  * Create a Replicad kernel plugin registration.

@@ -11,6 +11,7 @@ import type { Document } from '@gltf-transform/core';
 import { createExportFile } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
+import { z } from 'zod';
 import type { KernelIssue } from '#types/kernel.types.js';
 import type { KernelRuntime } from '#types/kernel-worker.types.js';
 import { defineKernel } from '#types/kernel-worker.types.js';
@@ -237,15 +238,32 @@ function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): K
 }
 
 // =============================================================================
+// Options schema
+// =============================================================================
+
+/**
+ * Manifold kernel options.
+ */
+export type ManifoldOptions = {
+  /** Override the default Manifold WASM URL for custom builds or benchmarking. */
+  wasmUrl?: string;
+};
+
+const optionsSchema = z.object({
+  wasmUrl: z.string().optional(),
+}) satisfies z.ZodType<ManifoldOptions>;
+
+// =============================================================================
 // Kernel module definition
 // =============================================================================
 
 export default defineKernel({
   name: 'ManifoldKernel',
   version: '1.0.0',
+  optionsSchema,
 
-  async initialize(_options, runtime) {
-    initManifoldWasm();
+  async initialize(options, runtime) {
+    initManifoldWasm(options.wasmUrl);
     const manifoldCadModule = await registerManifoldModules(runtime);
     runtime.logger.debug('Initialized Manifold kernel with manifold-3d modules');
     return { manifoldCadModule };

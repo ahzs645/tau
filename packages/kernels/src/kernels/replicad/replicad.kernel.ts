@@ -326,10 +326,43 @@ function enrichIssueLocation(
 // Options schema
 // =============================================================================
 
+/**
+ * Custom WASM configuration for injecting non-standard builds at runtime.
+ * Primarily used for Node.js tooling (benchmarks, CI) via `file://` URLs.
+ */
+export type ReplicadWasmConfig = {
+  /** Absolute URL to the `.wasm` binary (typically `file://` in Node.js). */
+  wasmUrl: string;
+  /** Absolute URL to the Emscripten JS glue module (typically `file://` in Node.js). */
+  wasmBindingsUrl: string;
+};
+
+/**
+ * Replicad kernel options.
+ */
+export type ReplicadOptions = {
+  /**
+   * WASM build variant or custom build configuration.
+   *
+   * - `'single'` (default) -- compact build (~17 MB), OC errors abort rather than throw
+   * - `'single-exceptions'` -- exceptions-enabled build (~20 MB) with human-readable OC error messages
+   * - `ReplicadWasmConfig` -- custom WASM/JS URLs for runtime injection (Node.js tooling)
+   *
+   * @default 'single'
+   */
+  wasm?: 'single' | 'single-exceptions' | ReplicadWasmConfig;
+  /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
+  ocTracing?: 'off' | 'summary' | 'per-call';
+  /** Include Boundary Representation (BRep) edge lines in the generated GLTF geometry. Defaults to `false`. */
+  withBrepEdges?: boolean;
+  /** Load library source maps for enriched error stack traces. Adds ~50ms to init. Defaults to `false`. */
+  withSourceMapping?: boolean;
+};
+
 const wasmConfigSchema = z.object({
   wasmUrl: z.string(),
   wasmBindingsUrl: z.string(),
-});
+}) satisfies z.ZodType<ReplicadWasmConfig>;
 
 const replicadOptionsSchema = z.object({
   wasm: z
@@ -339,7 +372,7 @@ const replicadOptionsSchema = z.object({
   ocTracing: z.enum(['off', 'summary', 'per-call']).optional().default('summary'),
   withBrepEdges: z.boolean().optional().default(false),
   withSourceMapping: z.boolean().optional().default(false),
-});
+}) satisfies z.ZodType<Required<ReplicadOptions>>;
 
 // =============================================================================
 // Kernel module definition
