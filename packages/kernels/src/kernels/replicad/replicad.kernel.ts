@@ -29,7 +29,7 @@ import { initOpenCascade } from '#kernels/replicad/init-open-cascade.js';
 import type { OpenCascadeModuleFactory } from '#kernels/replicad/init-open-cascade.js';
 import { resolveCjsDefault } from '#kernels/replicad/utils/resolve-cjs-default.js';
 import { formatRuntimeErrorWithOc } from '#kernels/replicad/oc-exceptions.js';
-import { wrapOcWithTracing } from '#kernels/replicad/oc-tracing.js';
+import { wrapOcWithTracing, wrapOcForExceptions } from '#kernels/replicad/oc-tracing.js';
 import type { OcTracingSummary } from '#kernels/replicad/oc-tracing.js';
 import {
   parseStackTrace,
@@ -399,6 +399,8 @@ export default defineKernel({
       const traced = wrapOcWithTracing(openCascade, tracer, { mode: ocTracing });
       openCascade = traced.tracedInstance;
       tracingSummary = traced.summary;
+    } else if (wasm !== 'single') {
+      openCascade = wrapOcForExceptions(openCascade);
     }
 
     replicad.setOC(openCascade);

@@ -66,11 +66,184 @@ export type OcTracingResult = {
   summary: OcTracingSummary;
 };
 
+// =============================================================================
+// Shared type guards
+// =============================================================================
+
+type GenericFunction = (...args: unknown[]) => unknown;
+type ExceptionDecoder = (ex: WebAssembly.Exception) => [string, string];
+
+function isCallable(value: unknown): value is GenericFunction {
+  return typeof value === 'function';
+}
+
+/** V8-only `Error.captureStackTrace` — not present in all runtimes. */
+type V8ErrorConstructor = {
+  captureStackTrace?(target: Error, constructorOpt: GenericFunction): void;
+};
+
+// =============================================================================
+// Shared exception interception helpers
+// =============================================================================
+
+/** Runtime-only Emscripten export — not in the generated .d.ts. */
+type OcWithExceptionHelpers = OpenCascadeInstance & {
+  getExceptionMessage?: ExceptionDecoder;
+};
+
+function getExceptionDecoder(oc: OpenCascadeInstance): ExceptionDecoder | undefined {
+  const candidate = (oc as OcWithExceptionHelpers).getExceptionMessage;
+  return typeof candidate === 'function' ? candidate : undefined;
+}
+
+/**
+ * Create a `rethrowIfWasmException` function bound to the given OC instance.
+ * Converts `WebAssembly.Exception` to `OcKernelError` at the call site so the
+ * JS stack trace includes user code frames.
+ */
+function createRethrowFn(decoder: ExceptionDecoder | undefined): (error: unknown) => never {
+  return function rethrowIfWasmException(error: unknown): never {
+    if (
+      typeof decoder === 'function' &&
+      typeof WebAssembly !== 'undefined' &&
+      typeof WebAssembly.Exception === 'function' &&
+      error instanceof WebAssembly.Exception
+    ) {
+      try {
+        const [typeName, rawMessage] = decoder(error);
+        const kernelError = new OcKernelError(typeName, rawMessage);
+        (Error as V8ErrorConstructor).captureStackTrace?.(kernelError, rethrowIfWasmException);
+        throw kernelError;
+      } catch (decodeError: unknown) {
+        if (decodeError instanceof OcKernelError) {
+          throw decodeError;
+        }
+      }
+    }
+
+    throw error;
+  };
+}
+
+/**
+ * Create a wrapper that recursively proxies Emscripten objects so their method
+ * calls are intercepted for exception conversion.
+ */
+function isEmscriptenRecord(value: unknown): value is Record<string, unknown> & { delete(): void } {
+  // eslint-disable-next-line @typescript-eslint/dot-notation -- 'delete' is a reserved keyword, dot notation fails
+  return typeof value === 'object' && value !== null && 'delete' in value && typeof value['delete'] === 'function';
+}
+
+function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => never): (value: unknown) => unknown {
+  const wrappedObjects = new WeakSet<Record<string, unknown>>();
+
+  function wrapEmscriptenResult(value: unknown): unknown {
+    if (!isEmscriptenRecord(value) || wrappedObjects.has(value)) {
+      return value;
+    }
+
+    wrappedObjects.add(value);
+    return new Proxy(value, {
+      get(target, property, receiver): unknown {
+        const member: unknown = Reflect.get(target, property, receiver);
+        if (typeof member !== 'function') {
+          return member;
+        }
+
+        const wrapper = function (this: unknown, ...methodArgs: unknown[]): unknown {
+          try {
+            return wrapEmscriptenResult(Reflect.apply(member, target, methodArgs));
+          } catch (error: unknown) {
+            return rethrowIfWasmException(error);
+          }
+        };
+
+        const className = (target as { constructor?: { name?: string } }).constructor?.name ?? 'OC';
+        Object.defineProperty(wrapper, 'name', { value: `${className}.${String(property)}` });
+        return wrapper;
+      },
+    });
+  }
+
+  return wrapEmscriptenResult;
+}
+
+// =============================================================================
+// Exception-only proxy (no tracing overhead)
+// =============================================================================
+
+/**
+ * Wrap an OpenCASCADE instance with exception handling only.
+ *
+ * Intercepts `WebAssembly.Exception` from both top-level OC function calls and
+ * methods on returned Emscripten objects, converting them to `OcKernelError`
+ * with a JS stack trace that includes user code frames.
+ *
+ * Use when OC tracing is disabled but the WASM build has exceptions enabled.
+ * Negligible runtime overhead — only adds Proxy get-traps and a WeakSet lookup.
+ */
+export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstance {
+  const decoder = getExceptionDecoder(oc);
+  if (!decoder) {
+    return oc;
+  }
+
+  const rethrowIfWasmException = createRethrowFn(decoder);
+  const wrapEmscriptenResult = createEmscriptenWrapper(rethrowIfWasmException);
+
+  const cache = new Map<string, unknown>();
+  return new Proxy(oc, {
+    get(target, property, receiver): unknown {
+      if (typeof property === 'symbol') {
+        return Reflect.get(target, property, receiver);
+      }
+
+      const cached = cache.get(property);
+      if (cached !== undefined) {
+        return cached;
+      }
+
+      const value: unknown = Reflect.get(target, property, receiver);
+
+      if (isCallable(value)) {
+        const wrapped = new Proxy(value, {
+          construct(constructTarget, args, newTarget) {
+            try {
+              return wrapEmscriptenResult(Reflect.construct(constructTarget, args, newTarget)) as Record<
+                string,
+                unknown
+              >;
+            } catch (error: unknown) {
+              return rethrowIfWasmException(error);
+            }
+          },
+          apply(applyTarget, thisArg, args) {
+            try {
+              return wrapEmscriptenResult(Reflect.apply(applyTarget, thisArg, args));
+            } catch (error: unknown) {
+              return rethrowIfWasmException(error);
+            }
+          },
+        });
+        cache.set(property, wrapped);
+        return wrapped;
+      }
+
+      return value;
+    },
+  });
+}
+
+// =============================================================================
+// Tracing proxy (full instrumentation + exception handling)
+// =============================================================================
+
 /**
  * Wrap an OpenCASCADE instance with tracing instrumentation.
  *
  * The proxy intercepts property access to resolve class names, then wraps
  * function calls (constructors and methods) with timing instrumentation.
+ * Also handles exception conversion via the shared helpers.
  *
  * @param oc - The OC instance (raw or already exception-wrapped)
  * @param tracer - KernelSpanTracer for creating spans
@@ -84,35 +257,9 @@ export function wrapOcWithTracing(
 ): OcTracingResult {
   const stats = new Map<string, ClassStats>();
 
-  type ExceptionDecoder = (ex: WebAssembly.Exception) => [string, string];
-  const getExceptionMessage = (oc as unknown as Record<string, unknown>)['getExceptionMessage'] as
-    | ExceptionDecoder
-    | undefined;
-
-  /**
-   * If the error is a WebAssembly.Exception, decode it and rethrow as an
-   * OcKernelError (Error subclass) so the JS stack trace is captured at
-   * the proxy call site — which includes user code frames.
-   */
-  function rethrowIfWasmException(error: unknown): never {
-    if (
-      typeof getExceptionMessage === 'function' &&
-      typeof WebAssembly !== 'undefined' &&
-      typeof WebAssembly.Exception === 'function' &&
-      error instanceof WebAssembly.Exception
-    ) {
-      try {
-        const [typeName, rawMessage] = getExceptionMessage(error);
-        throw new OcKernelError(typeName, rawMessage);
-      } catch (decodeError: unknown) {
-        if (decodeError instanceof OcKernelError) {
-          throw decodeError;
-        }
-      }
-    }
-
-    throw error;
-  }
+  const decoder = getExceptionDecoder(oc);
+  const rethrowIfWasmException = createRethrowFn(decoder);
+  const wrapEmscriptenResult = createEmscriptenWrapper(rethrowIfWasmException);
 
   function recordSummaryCall(className: string, durationMs: number): void {
     const existing = stats.get(className);
@@ -124,20 +271,17 @@ export function wrapOcWithTracing(
     }
   }
 
-  function wrapFunctionForSummary(
-    fn: (...args: unknown[]) => unknown,
-    className: string,
-  ): (...args: unknown[]) => unknown {
+  function wrapFunctionForSummary(fn: GenericFunction, className: string): GenericFunction {
     return new Proxy(fn, {
       construct(target, args, newTarget) {
         const start = performance.now();
         try {
           const result: unknown = Reflect.construct(target, args, newTarget);
           recordSummaryCall(className, performance.now() - start);
-          return result as Record<string, unknown>;
+          return wrapEmscriptenResult(result) as Record<string, unknown>;
         } catch (error: unknown) {
           recordSummaryCall(className, performance.now() - start);
-          rethrowIfWasmException(error);
+          return rethrowIfWasmException(error);
         }
       },
       apply(target, thisArg, args) {
@@ -145,26 +289,23 @@ export function wrapOcWithTracing(
         try {
           const result: unknown = Reflect.apply(target, thisArg, args);
           recordSummaryCall(className, performance.now() - start);
-          return result;
+          return wrapEmscriptenResult(result);
         } catch (error: unknown) {
           recordSummaryCall(className, performance.now() - start);
-          rethrowIfWasmException(error);
+          return rethrowIfWasmException(error);
         }
       },
     });
   }
 
-  function wrapFunctionForPerCall(
-    fn: (...args: unknown[]) => unknown,
-    className: string,
-  ): (...args: unknown[]) => unknown {
+  function wrapFunctionForPerCall(fn: GenericFunction, className: string): GenericFunction {
     return new Proxy(fn, {
       construct(target, args, newTarget) {
         const span = tracer.startSpan(`oc.${className}`, { method: 'constructor' });
         try {
-          return Reflect.construct(target, args, newTarget) as Record<string, unknown>;
+          return wrapEmscriptenResult(Reflect.construct(target, args, newTarget)) as Record<string, unknown>;
         } catch (error: unknown) {
-          rethrowIfWasmException(error);
+          return rethrowIfWasmException(error);
         } finally {
           span.end();
         }
@@ -172,9 +313,9 @@ export function wrapOcWithTracing(
       apply(target, thisArg, args) {
         const span = tracer.startSpan(`oc.${className}`, { method: 'apply' });
         try {
-          return Reflect.apply(target, thisArg, args);
+          return wrapEmscriptenResult(Reflect.apply(target, thisArg, args));
         } catch (error: unknown) {
-          rethrowIfWasmException(error);
+          return rethrowIfWasmException(error);
         } finally {
           span.end();
         }
@@ -199,8 +340,8 @@ export function wrapOcWithTracing(
 
       const value: unknown = Reflect.get(target, property, receiver);
 
-      if (typeof value === 'function') {
-        const wrapped = wrapFunction(value as (...args: unknown[]) => unknown, property);
+      if (isCallable(value)) {
+        const wrapped = wrapFunction(value, property);
         classProxyCache.set(property, wrapped);
         return wrapped;
       }
