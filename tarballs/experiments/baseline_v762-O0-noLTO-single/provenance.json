@@ -11,11 +11,14 @@
   "source": {
     "occtVersion": "V7_6_2",
     "occtCommit": "unknown",
+    "opencascadejsVersion": "donalffons/opencascade.js (pre-v2.0)",
     "opencascadejsCommit": "unknown",
+    "replicadOpencascadejsVersion": "0.20.2",
+    "replicadVersion": "0.20.5",
     "filterPackagesHash": "unknown"
   },
   "compilation": {
-    "cacheKey": "O0-noLTO-noExc-single-v762",
+    "cacheKey": "O0-noLTO-noExc-single-v762-npm",
     "cacheHit": false,
     "optimization": "-O0",
     "lto": false,
@@ -30,9 +33,9 @@
   "linking": {
     "yamlConfig": "custom_build_single.yml",
     "yamlConfigHash": "unknown",
-    "boundSymbols": 262,
+    "boundSymbols": 240,
     "symbolList": [],
-    "emccFlags": ["-flto", "-fexceptions", "-O3", "-sDISABLE_EXCEPTION_CATCHING=1"],
+    "emccFlags": ["-flto", "-O3", "-sDISABLE_EXCEPTION_CATCHING=1"],
     "linkDuration_s": 0
   },
   "postProcessing": {
@@ -45,15 +48,30 @@
   "output": {
     "replicad_single.wasm": {
       "size": 10800306,
-      "sha256": "unknown"
+      "sha256": "c6c37587645e4915"
+    },
+    "replicad_with_exceptions.wasm": {
+      "size": 19173755,
+      "sha256": "c86c79ad136217bf"
+    },
+    "replicad_single.js": {
+      "size": 135504
+    },
+    "replicad_with_exceptions.js": {
+      "size": 262589
+    },
+    "replicad_single.d.ts": {
+      "size": 406908,
+      "lines": 9006
+    },
+    "replicad_with_exceptions.d.ts": {
+      "size": 408804,
+      "lines": 9056
     }
   },
-  "sections": {
-    "code": 7737360,
-    "data": 2578872,
-    "functionCount": 31607
-  },
+  "sections": {},
   "filtering": {
     "excludedPackages": []
-  }
+  },
+  "notes": "Extracted from npm replicad-opencascadejs@0.20.2 (replicad@0.20.5). Original build was compiled with Docker-based opencascade.js toolchain (donalffons). Exact compile flags and toolchain versions are approximations based on the opencascade.js Dockerfile defaults for that era."
 }

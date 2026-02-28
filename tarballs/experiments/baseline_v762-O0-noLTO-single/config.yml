@@ -1,5 +1,5 @@
 name: "v762-O0-noLTO-single"
-description: "OCCT v7.6.2 baseline: -O0 compile (Docker default), no LTO, no exceptions, binaryen -O3"
+description: "OCCT v7.6.2 baseline from npm replicad-opencascadejs@0.20.2, Docker default build"
 
 compilation:
   optimization: "-O0"
@@ -12,5 +12,5 @@ linking:
   wasmOptLevel: "-O3"
 
 benchmark:
-  iterations: 5
+  iterations: 10
   filter: ["primitives", "booleans", "fillets", "extrusions", "complex", "examples", "stress"]
