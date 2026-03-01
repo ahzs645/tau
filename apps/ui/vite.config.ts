@@ -100,8 +100,19 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true,
       assetsInlineLimit(file) {
-        // Don't inline SVGs
-        return !file.endsWith('.svg');
+        if (file.endsWith('.svg')) {
+          return false;
+        }
+
+        if (file.endsWith('.wasm')) {
+          // WASM must not be inlined to ensure workers can cache the WASM files via Node V8 bytecode cache,
+          // thus enabling WASM compilation caching to ensure fast worker startup times.
+          // @see docs/research/dynamic-es-modules.md#42-the-assetsinlinelimit-callback-trap
+          return false;
+        }
+
+        // Returning `undefined` sets the default 4KB threshold
+        return undefined;
       },
       target: 'es2022',
     },
