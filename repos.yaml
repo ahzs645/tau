@@ -51,6 +51,7 @@ groups:
       - headless-tree
       - fumadocs
       - zod
+      - v8
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -294,3 +295,6 @@ repos:
   zod:
     upstream: colinhacks/zod
     description: TypeScript-first schema validation with static type inference
+  v8:
+    upstream: v8/v8
+    description: The official mirror of the V8 Git repository
