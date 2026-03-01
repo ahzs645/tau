@@ -19,22 +19,21 @@ export async function compileWasmStreaming(url: string, tracer?: KernelSpanTrace
   const span = tracer?.startSpan('wasm.compile', { url });
   try {
     const module = await WebAssembly.compileStreaming(fetch(url));
-    span?.end();
     return module;
   } catch (streamingError) {
     try {
       const wasmBinary = await loadWasmBinary(url);
       const module = await WebAssembly.compile(wasmBinary);
-      span?.end();
       return module;
     } catch (compileError) {
-      span?.end();
       const streamingMessage = streamingError instanceof Error ? streamingError.message : String(streamingError);
       const compileMessage = compileError instanceof Error ? compileError.message : String(compileError);
       throw new Error(
         `Failed to compile WASM module from ${url}. Streaming error: ${streamingMessage}. Fallback error: ${compileMessage}`,
       );
     }
+  } finally {
+    span?.end();
   }
 }
 
