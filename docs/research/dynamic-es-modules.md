@@ -533,7 +533,182 @@ transfer the `WebAssembly.Module` directly (Strategy 2).
 
 ---
 
-## 9. Conclusion
+## 9. Industry Research and External Validation
+
+The optimization strategies identified in Section 8 are validated by published
+research from V8 engineers, Google's web.dev team, and production WASM users.
+
+### 9.1 Google's Official Recommendation (web.dev)
+
+The [WebAssembly Performance Patterns](https://web.dev/articles/webassembly-performance-patterns-for-web-apps)
+guide (Thomas Steiner, reviewed by V8/Chrome engineers Andreas Haas, Jakob
+Kummerow, Deepti Gandluri) presents an escalating series of worker+WASM
+patterns:
+
+| Pattern | Approach | Our Status |
+|---|---|---|
+| Bad | Worker compiles on-demand, racy messages | N/A |
+| Better | Worker compiles on startup, stores promise | **Current** |
+| **Good** | Main thread compiles once, transfers `Module` to worker via `postMessage` | **Recommended** |
+| **Perfect** | Same as Good, worker inlined as `blob:` URL | Optional |
+
+The "Good" pattern directly maps to our Strategy 2. Key quote:
+
+> "The Wasm module can be loaded and compiled just once in the main thread
+> (or even another Web Worker purely concerned with loading and compiling),
+> and then be transferred to the Web Worker responsible for the CPU-intensive
+> task."
+
+The guide also explicitly discusses the keep-alive vs. ad-hoc worker trade-off
+(our Strategy 1) and recommends measuring with the User Timing API.
+
+### 9.2 V8's NativeModuleCache: Process-Global Sharing
+
+V8's `WasmEngine` maintains a process-global `NativeModuleCache` that maps
+wire bytes to compiled `NativeModule` objects via `shared_ptr`. This is
+confirmed in V8 source (`src/wasm/wasm-engine.cc`):
+
+- `CompiledWasmModule` wraps a `shared_ptr<NativeModule>` that can be
+  "potentially shared by different WasmModuleObjects"
+  ([V8 API reference](https://v8.github.io/api/head/classv8_1_1CompiledWasmModule.html))
+- When `WebAssembly.Module` is sent via `postMessage`, V8 performs structured
+  clone serialization/deserialization (`src/wasm/wasm-serialization.cc`). The
+  receiving isolate looks up the NativeModuleCache by wire bytes hash and
+  gets a reference to the **same compiled code** — zero-copy, no recompilation.
+- This explains our trace findings: NativeModuleCache hits at 0.02-1.3ms
+  even after worker termination. The bottleneck is not recompilation — it is
+  the `compileStreaming(fetch())` streaming pipeline overhead (55ms Mojo IPC
+  + 20ms finalization) that runs before the cache is consulted.
+
+**Key implication**: transferring a `WebAssembly.Module` via `postMessage`
+bypasses the entire streaming pipeline. The receiving worker calls
+`WebAssembly.instantiate(module, imports)` directly — no fetch, no streaming
+decoder, no Mojo data pipe. This is why Strategy 2 saves ~79ms.
+
+### 9.3 PSPDFKit's Production Experience (8 MB+ WASM)
+
+[PSPDFKit](https://pspdfkit.com/blog/2018/optimize-webassembly-startup-performance/)
+— one of the earliest large-scale WASM production deployments — documents
+four key optimizations for their 8 MB+ `pspdfkit.wasm`:
+
+1. **HTTP Cache-Control headers** — we have this via Vite content-hashed assets
+2. **Streaming instantiation** — we use `compileStreaming`
+3. **IndexedDB module caching** — **deprecated** (see Section 9.4)
+4. **Object pooling of WASM backends** — they pool their entire WebAssembly
+   worker backend, reusing initialized instances across document opens.
+   This directly validates our Strategy 1 (keep workers alive).
+
+PSPDFKit specifically notes that in SPA scenarios, "creating and destroying
+`WebAssembly.Module` instances multiple times during the lifecycle of an
+application" causes significant overhead, and their object pool of warmed-up
+WASM worker backends is the primary mitigation. They report best-case
+startup times of 200-300ms with these optimizations combined.
+
+### 9.4 IndexedDB Caching: Deprecated
+
+Explicit `WebAssembly.Module` caching via IndexedDB is deprecated and should
+not be used:
+
+- Firefox removed structured clone support for `WebAssembly.Module` in
+  IndexedDB in v63 (October 2018)
+- The WebAssembly Community Group decided browsers should handle caching
+  implicitly rather than requiring explicit developer intervention
+- MDN marks this approach as experimental/deprecated
+- The recommended path is relying on browser-implicit caching via the
+  streaming APIs and HTTP cache
+
+**This rules out IndexedDB-based module caching as a viable strategy.**
+
+### 9.5 Emscripten's `instantiateWasm` Hook
+
+Emscripten [officially documents](https://emscripten.org/docs/api_reference/module.html)
+`Module.instantiateWasm()` as the supported mechanism for injecting
+pre-compiled modules:
+
+```javascript
+Module['instantiateWasm'] = function(imports, successCallback) {
+  var instance = new WebAssembly.Instance(precompiledModule, imports);
+  successCallback(instance);
+  return instance.exports;
+};
+```
+
+Our `init-open-cascade.ts` already uses this hook. The only change needed for
+Strategy 2 is accepting a pre-compiled `WebAssembly.Module` argument instead
+of always calling `compileStreaming(fetch(url))`.
+
+**Reuse constraint**: Emscripten discussions confirm that C++ global
+constructors only execute once per instance. OpenCASCADE's global state
+(memory allocator, shape factory tables, etc.) is initialized during these
+constructors. This means:
+
+- **A single Emscripten instance cannot be re-initialized** — you cannot call
+  the factory function again on the same instance to reset state
+- **The compiled `WebAssembly.Module` can be reused** across instances — each
+  call to `WebAssembly.instantiate(module, imports)` creates fresh memory
+  and re-runs constructors
+- **Keeping the worker alive** (Strategy 1) preserves the existing instance;
+  state cleanup must happen at the application level (e.g., deleting shapes)
+
+### 9.6 V8 Compilation Pipeline Details
+
+From [V8's documentation](https://v8.dev/docs/wasm-compilation-pipeline):
+
+- **Liftoff** (baseline): One-pass compiler, compiles lazily on first function
+  call. Tens of MB/s throughput. Code is not cached because Liftoff
+  compilation is as fast as loading from cache.
+- **TurboFan** (optimizing): Multi-pass compiler for hot functions. Code IS
+  cached to disk via `GeneratedCodeCache` (for `compileStreaming` only).
+- **Code caching only works with `compileStreaming`** — not `compile()`. This
+  confirms our `compileWasmStreaming` approach is correct for cold starts.
+  However, once a `WebAssembly.Module` has been compiled, transferring it
+  via `postMessage` avoids the need for disk cache entirely.
+- **Lazy compilation** (`chrome://flags/#enable-webassembly-lazy-compilation`):
+  Functions are only compiled on first call, reducing upfront compile cost.
+  May help with Emscripten init (~37ms) if many OpenCASCADE functions are
+  compiled eagerly but not called during init.
+
+### 9.7 WASM ESM Integration (Future)
+
+The [esm-integration proposal](https://github.com/WebAssembly/esm-integration)
+(Phase 3) will eventually allow static WASM imports:
+
+```javascript
+import { run } from "./module.wasm";
+```
+
+Mozilla's [February 2026 blog post](https://hacks.mozilla.org/2026/02/making-webassembly-a-first-class-language-on-the-web/)
+confirms active implementation in Firefox. This would let browsers handle
+WASM compilation, caching, and loading natively through the module graph,
+potentially eliminating the streaming pipeline overhead entirely. However,
+this is not yet available in browsers and does not help short-term.
+
+### 9.8 Strategies Ruled Out by Research
+
+| Strategy | Reason |
+|---|---|
+| IndexedDB `WebAssembly.Module` cache | Deprecated, being removed from browsers |
+| Sharing `WebAssembly.Instance` via `postMessage` | Instances are not structured-cloneable |
+| `SharedArrayBuffer` for WASM memory | Does not help with compilation overhead; adds COOP/COEP header requirements |
+| `WebAssembly.compile(arrayBuffer)` for code caching | V8 only code-caches from `compileStreaming`, not `compile()` |
+
+### 9.9 Validated Strategy Ranking
+
+| Strategy | Savings | Industry Validation | Residual Cost |
+|---|---|---|---|
+| **Keep worker alive** (Strategy 1) | ~123ms | PSPDFKit object pooling, web.dev "permanent worker" | 0ms |
+| **Transfer pre-compiled Module** (Strategy 2) | ~79ms | web.dev "Good/Perfect" pattern, V8 NativeModuleCache | ~44ms (Emscripten init) |
+| **Pre-warm at app startup** (Strategy 3) | First-load latency | web.dev `<link rel="preload">` | Full per-worker cost remains |
+| **Combined: 1 + 2** | ~123ms nominal, ~79ms on forced restart | — | 0ms / 44ms fallback |
+
+The strongest approach is **Strategy 1 + 2 combined**: keep workers alive for
+same-kernel switches (0ms WASM overhead), and when a worker must restart
+(crash recovery, different kernel type), transfer the pre-compiled module via
+`postMessage` to save 79ms of streaming pipeline overhead.
+
+---
+
+## 10. Conclusion
 
 The ES module dependency injection pattern is **not** the performance problem.
 The primary root cause was a Vite configuration bug that force-inlined large
@@ -544,4 +719,20 @@ to ~229ms.
 A secondary optimization opportunity exists: the residual ~131ms WASM init
 cost (79ms compile + 44ms emscripten init) on kernel restarts can be
 eliminated by keeping workers alive across project switches rather than
-terminating and recreating them.
+terminating and recreating them. This approach is validated by Google's
+official web.dev guidance, PSPDFKit's production experience with 8 MB+ WASM
+modules, and V8's architecture where `WebAssembly.Module` transfer via
+`postMessage` maps to the process-global NativeModuleCache for zero-copy
+sharing.
+
+## References
+
+- [WebAssembly Performance Patterns for Web Apps](https://web.dev/articles/webassembly-performance-patterns-for-web-apps) — Google (web.dev)
+- [WebAssembly Compilation Pipeline](https://v8.dev/docs/wasm-compilation-pipeline) — V8 Team
+- [Code Caching for WebAssembly Developers](https://v8.dev/blog/wasm-code-caching) — V8 Team
+- [Optimizing WebAssembly Startup Time](https://pspdfkit.com/blog/2018/optimize-webassembly-startup-performance/) — PSPDFKit/Nutrient
+- [Loading WebAssembly Modules Efficiently](https://web.dev/articles/loading-wasm) — Google (web.dev)
+- [Emscripten Module.instantiateWasm](https://emscripten.org/docs/api_reference/module.html) — Emscripten docs
+- [V8 CompiledWasmModule API](https://v8.github.io/api/head/classv8_1_1CompiledWasmModule.html) — V8 API reference
+- [Restricting Wasm Module Sharing to Same-Origin](https://developer.chrome.com/blog/wasm-module-sharing-restricted-to-same-origin) — Chrome DevRel
+- [Making WebAssembly a First-Class Language on the Web](https://hacks.mozilla.org/2026/02/making-webassembly-a-first-class-language-on-the-web/) — Mozilla Hacks

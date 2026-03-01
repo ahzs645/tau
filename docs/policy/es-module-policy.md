@@ -188,6 +188,8 @@ V8's NativeModuleCache (process-level) caches compiled WASM across workers, but 
 
 When users switch between projects that use the same kernel, **do not terminate the worker**. Send a reset command instead. The WASM module, Emscripten instance, and initialized state all survive, reducing WASM init from ~123ms to 0ms.
 
+This is the same "object pooling" approach used by [PSPDFKit](https://pspdfkit.com/blog/2018/optimize-webassembly-startup-performance/) for their 8 MB+ WASM backend — they pool initialized worker instances and recycle them across document opens rather than recreating them.
+
 ```typescript
 // WRONG: destroys V8 isolate, all WASM state lost
 worker.terminate();
@@ -198,9 +200,11 @@ worker.postMessage({ type: 'reset' });
 // WASM stays warm → 0ms init overhead
 ```
 
+**Emscripten constraint**: C++ global constructors only run once per instance. OpenCASCADE's global state is initialized during these constructors and cannot be re-run. State cleanup must happen at the application level (e.g., deleting shapes), not by re-creating the Emscripten instance.
+
 ### When workers must restart: transfer pre-compiled modules
 
-If a worker must be recreated (crash recovery, kernel type change), avoid `compileStreaming(fetch())` by transferring a pre-compiled `WebAssembly.Module` from the main thread:
+If a worker must be recreated (crash recovery, kernel type change), avoid `compileStreaming(fetch())` by transferring a pre-compiled `WebAssembly.Module` from the main thread. This is Google's officially recommended pattern from [WebAssembly Performance Patterns](https://web.dev/articles/webassembly-performance-patterns-for-web-apps) (reviewed by V8 engineers):
 
 ```typescript
 // Main thread: compile once at startup, hold reference
@@ -213,7 +217,19 @@ worker.postMessage({ type: 'init', wasmModule });
 const instance = await WebAssembly.instantiate(wasmModule, imports);
 ```
 
-`WebAssembly.Module` is structured-cloneable. V8 internally shares compiled code via the NativeModuleCache — no actual byte copying occurs.
+`WebAssembly.Module` is structured-cloneable. V8 internally shares compiled code via the process-global `NativeModuleCache` (`shared_ptr<NativeModule>` in `wasm-engine.cc`) — no byte copying or recompilation occurs. The receiving isolate gets a reference to the same compiled native code.
+
+For Emscripten modules, inject the pre-compiled module via the [`instantiateWasm` hook](https://emscripten.org/docs/api_reference/module.html):
+
+```typescript
+bindingsFactory({
+  instantiateWasm(imports, successCallback) {
+    WebAssembly.instantiate(preCompiledModule, imports)
+      .then(instance => successCallback(instance));
+    return {};
+  },
+});
+```
 
 ### V8 isolate cache boundaries
 
@@ -223,7 +239,13 @@ const instance = await WebAssembly.instantiate(wasmModule, imports);
 | GeneratedCodeCache (disk) | Browser profile | Yes |
 | Compiled instance (in-isolate) | Worker V8 isolate | **No** |
 
-> For the full trace analysis, see [Dynamic ES Module Research](../research/dynamic-es-modules.md#8-residual-wasm-init-cost-post-fix).
+### Deprecated approaches
+
+**Do not** cache `WebAssembly.Module` in IndexedDB. Firefox removed structured clone support for `WebAssembly.Module` in IndexedDB in v63 (October 2018), and the WebAssembly Community Group decided browsers should handle caching implicitly. This approach is deprecated across all browsers.
+
+**Do not** use `WebAssembly.compile(arrayBuffer)` expecting code caching — V8 only caches TurboFan code produced via `compileStreaming`. Use `compileStreaming` for initial compilation, and `postMessage` transfer for subsequent worker creations.
+
+> For the full trace analysis and external research, see [Dynamic ES Module Research](../research/dynamic-es-modules.md#8-residual-wasm-init-cost-post-fix).
 
 ## Anti-patterns
 
