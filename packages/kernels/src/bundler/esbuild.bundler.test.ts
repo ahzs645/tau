@@ -8,35 +8,16 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { PluginBuild } from 'esbuild-wasm';
-import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 import { createZenFsPlugin, httpFetchMaxSizeBytes } from '#bundler/esbuild-core.js';
 import { ModuleManager } from '#bundler/module-manager.js';
+import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
+import type { MockFileSystem } from '#testing/kernel-testing.utils.js';
 
 // Mock esbuild-wasm to prevent its environment invariant check from failing in jsdom
 vi.mock('esbuild-wasm', () => ({
   initialize: vi.fn(),
   build: vi.fn(),
 }));
-
-// =============================================================================
-// Mock Filesystem
-// =============================================================================
-
-type MockFilesystem = {
-  [K in keyof KernelFileSystem]: ReturnType<typeof vi.fn>;
-};
-
-function createMockFilesystem(): MockFilesystem {
-  return {
-    readFile: vi.fn<KernelFileSystem['readFile']>().mockRejectedValue(new Error('File not found')),
-    exists: vi.fn<KernelFileSystem['exists']>().mockResolvedValue(false),
-    readdir: vi.fn<KernelFileSystem['readdir']>().mockResolvedValue([]),
-    writeFile: vi.fn<KernelFileSystem['writeFile']>().mockResolvedValue(undefined),
-    mkdir: vi.fn<KernelFileSystem['mkdir']>().mockResolvedValue(undefined),
-    unlink: vi.fn<KernelFileSystem['unlink']>().mockResolvedValue(undefined),
-    stat: vi.fn<KernelFileSystem['stat']>().mockRejectedValue(new Error('Not found')),
-  };
-}
 
 // =============================================================================
 // Mock Fetch Helpers
@@ -98,7 +79,7 @@ type CapturedHandlers = {
  * Create the ZenFS plugin with mocks and capture key handlers
  * so they can be invoked directly in tests without requiring esbuild-wasm.
  */
-function capturePluginHandlers(filesystem: MockFilesystem): CapturedHandlers {
+function capturePluginHandlers(filesystem: MockFileSystem): CapturedHandlers {
   let httpUrlOnLoad: CapturedHandler | undefined;
   let mainOnResolve: CapturedResolveHandler | undefined;
 
@@ -124,8 +105,8 @@ function capturePluginHandlers(filesystem: MockFilesystem): CapturedHandlers {
   };
 
   const plugin = createZenFsPlugin({
-    filesystem: filesystem as unknown as KernelFileSystem,
-    moduleManager: new ModuleManager(filesystem as unknown as KernelFileSystem),
+    filesystem,
+    moduleManager: new ModuleManager(filesystem),
     builtinModules: new Map(),
     projectPath: '/project',
     entryPath: '/project/main.ts',
@@ -150,12 +131,12 @@ function capturePluginHandlers(filesystem: MockFilesystem): CapturedHandlers {
 // =============================================================================
 
 describe('ESBuild Bundler – http-url onLoad handler', () => {
-  let filesystem: MockFilesystem;
+  let filesystem: MockFileSystem;
   let handler: CapturedHandler;
 
   beforeEach(() => {
     vi.stubGlobal('fetch', mockFetch);
-    filesystem = createMockFilesystem();
+    filesystem = createMockFileSystem();
     handler = capturePluginHandlers(filesystem).httpUrlOnLoad;
   });
 
@@ -268,12 +249,12 @@ describe('ESBuild Bundler – http-url onLoad handler', () => {
 // =============================================================================
 
 describe('ESBuild Bundler – CDN absolute-path resolution', () => {
-  let filesystem: MockFilesystem;
+  let filesystem: MockFileSystem;
   let mainOnResolve: CapturedResolveHandler;
 
   beforeEach(() => {
     vi.stubGlobal('fetch', mockFetch);
-    filesystem = createMockFilesystem();
+    filesystem = createMockFileSystem();
     const handlers = capturePluginHandlers(filesystem);
     mainOnResolve = handlers.mainOnResolve;
   });
@@ -331,8 +312,8 @@ describe('ESBuild Bundler – CDN absolute-path resolution', () => {
   });
 
   it('should NOT redirect absolute-path imports from project files', async () => {
-    filesystem.exists.mockResolvedValue(true);
-    filesystem.readFile.mockResolvedValue('export default 42;');
+    filesystem.mocks.exists.mockResolvedValue(true);
+    filesystem.mocks.readFile.mockResolvedValue('export default 42;');
 
     const result = (await mainOnResolve({
       path: '/utils/helpers.ts',

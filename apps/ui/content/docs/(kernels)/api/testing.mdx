@@ -18,10 +18,10 @@ Use the testing API when writing unit tests for custom kernels, middleware, or k
 |----------|--------------|
 | `createTestWorker` | Create and initialize a `KernelRuntimeWorker` with kernel definition and seeded files |
 | `initializeWorkerForTesting` | Initialize an existing worker with MessageChannel-based filesystem bridge |
-| `seedTestFilesystem` | Seed ZenFS with files; resets to clean state first |
-| `clearTestFilesystem` | Reset ZenFS to empty in-memory backend |
+| `seedTestFileSystem` | Seed ZenFS with files; resets to clean state first |
+| `clearTestFileSystem` | Reset ZenFS to empty in-memory backend |
 | `createMockLogger` | Create a mock logger for testing |
-| `createMockFilesystem` | Create a mock filesystem implementation |
+| `createMockFileSystem` | Create a mock filesystem implementation |
 | `createMockRuntime` | Create a mock kernel runtime with stubbed methods |
 | `createSuccessResult` | Create a successful CreateGeometryResult for middleware tests |
 | `createErrorResult` | Create a failed CreateGeometryResult for middleware tests |
@@ -41,7 +41,7 @@ Use the testing API when writing unit tests for custom kernels, middleware, or k
 import { describe, it, expect } from 'vitest';
 import {
   createTestWorker,
-  clearTestFilesystem,
+  clearTestFileSystem,
   extractGltfFromResult,
   validateGlbData,
 } from '@taucad/kernels/testing';
@@ -60,7 +60,7 @@ describe('kernel test', () => {
     expect(result.success).toBe(true);
     const glb = extractGltfFromResult(result);
     if (glb) validateGlbData(glb);
-    await clearTestFilesystem();
+    await clearTestFileSystem();
   });
 });
 ```

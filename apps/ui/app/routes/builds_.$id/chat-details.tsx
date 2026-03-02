@@ -1,7 +1,7 @@
 import { XIcon, Info, Database, HardDrive, FolderOpen, MemoryStick } from 'lucide-react';
 import { useCallback } from 'react';
 import { useSelector } from '@xstate/react';
-import type { FilesystemBackend } from '@taucad/types';
+import type { FileSystemBackend } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
@@ -30,7 +30,7 @@ const keyCombinationEditor = {
   ctrlKey: true,
 } as const satisfies KeyCombination;
 
-const backendIcons: Record<FilesystemBackend, typeof Database> = {
+const backendIcons: Record<FileSystemBackend, typeof Database> = {
   indexeddb: Database,
   opfs: HardDrive,
   webaccess: FolderOpen,
@@ -40,11 +40,11 @@ const backendIcons: Record<FilesystemBackend, typeof Database> = {
 /**
  * Displays the filesystem backend info for the current build.
  */
-function FilesystemInfo({
+function FileSystemInfo({
   backendType,
   connectedDirectoryName,
 }: {
-  readonly backendType: FilesystemBackend;
+  readonly backendType: FileSystemBackend;
   readonly connectedDirectoryName: string | undefined;
 }): React.JSX.Element {
   const meta = filesystemBackendMeta[backendType];
@@ -204,7 +204,7 @@ export function ChatDetails({
             </div>
 
             {/* Filesystem Info */}
-            <FilesystemInfo backendType={backendType} connectedDirectoryName={connectedDirectoryName} />
+            <FileSystemInfo backendType={backendType} connectedDirectoryName={connectedDirectoryName} />
 
             {/* Usage Statistics */}
             <ChatDetailsUsage />

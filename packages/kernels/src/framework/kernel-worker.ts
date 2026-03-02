@@ -12,6 +12,7 @@ import type {
 } from '#types/kernel.types.js';
 import type {
   KernelFileSystem,
+  KernelFileSystemBase,
   KernelRuntime,
   KernelLogger,
   Tessellation,
@@ -46,10 +47,10 @@ import type {
 } from '#types/kernel-dependency.types.js';
 import type { PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
 import type { FileSystemProxy } from '#framework/kernel-filesystem-bridge.js';
-import { createFileSystemProxy } from '#framework/kernel-filesystem-bridge.js';
+import { createBridgeProxy } from '#framework/kernel-filesystem-bridge.js';
+import { createKernelFileSystem } from '#filesystem/create-kernel-filesystem.js';
 import { createKernelError } from '#framework/kernel-helpers.js';
 import { hashBytes, hashString } from '#utils/hash.utils.js';
-import { readFiles as fsReadFiles } from '#framework/filesystem-helpers.js';
 import { KernelTracer } from '#framework/kernel-tracer.js';
 import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
 import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
@@ -331,8 +332,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Register file manager and create filesystem if port is provided
     if (input.transferables.fileSystemPort) {
-      this.fileSystem = createFileSystemProxy(input.transferables.fileSystemPort);
-      this._filesystem = this.createFilesystem();
+      this.fileSystem = createBridgeProxy<KernelFileSystemBase>(input.transferables.fileSystemPort);
+      this._filesystem = this.createFileSystem();
     }
 
     const bootstrapSpan = this.tracer.startSpan('kernel.bootstrap');
@@ -1168,11 +1169,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Create the unified filesystem interface.
    * Called during initialize() after fileSystem is set up.
-   * All methods use absolute paths - callers use helper methods to construct paths.
+   * Wraps the raw proxy with tracing, then enhances with helper methods
+   * via `createKernelFileSystem`.
    *
-   * @returns KernelFileSystem instance with the 8 Node.js-compatible primitives
+   * @returns KernelFileSystem with 11 base primitives + enhanced helper methods
    */
-  private createFilesystem(): KernelFileSystem {
+  private createFileSystem(): KernelFileSystem {
     const fileSystem = this.fileSystem!;
     const { tracer } = this;
 
@@ -1185,7 +1187,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       return data;
     }
 
-    return {
+    return createKernelFileSystem({
       readFile,
 
       async exists(path: string): Promise<boolean> {
@@ -1205,8 +1207,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => fileSystem.writeFile(path, data),
       mkdir: async (path: string, options?: { recursive?: boolean }) => fileSystem.mkdir(path, options),
       unlink: async (path: string) => fileSystem.unlink(path),
+      rmdir: async (path: string) => fileSystem.rmdir(path),
+      rename: async (oldPath: string, newPath: string) => fileSystem.rename(oldPath, newPath),
       stat: async (path: string) => fileSystem.stat(path),
-    };
+      lstat: async (path: string) => fileSystem.lstat(path),
+    });
   }
 
   /**
@@ -1261,7 +1266,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const uncachedPaths = absolutePaths.filter((p) => !this.fileHashCache.has(p));
     if (uncachedPaths.length > 0) {
       const readSpan = this.tracer.startSpan('deps.read', { fileCount: uncachedPaths.length });
-      const contentMap = await fsReadFiles(this.filesystem, uncachedPaths);
+      const contentMap = await this.filesystem.readFiles(uncachedPaths);
       readSpan.end();
 
       const hashSpan = this.tracer.startSpan('deps.hash', { fileCount: uncachedPaths.length });

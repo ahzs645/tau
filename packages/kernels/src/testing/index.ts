@@ -1,10 +1,10 @@
 export {
   createTestWorker,
   initializeWorkerForTesting,
-  seedTestFilesystem,
-  clearTestFilesystem,
+  seedTestFileSystem,
+  clearTestFileSystem,
   createMockLogger,
-  createMockFilesystem,
+  createMockFileSystem,
   createMockRuntime,
   createSuccessResult,
   createErrorResult,

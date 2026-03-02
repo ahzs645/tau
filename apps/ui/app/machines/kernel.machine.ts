@@ -33,6 +33,11 @@ async function ensureKernelClient(context: KernelContext, machineRef: AnyActorRe
   }
 
   const snapshot = await waitFor(context.fileManagerRef, (state) => state.matches('ready'));
+
+  if (context.destroyed) {
+    throw new Error('Kernel machine was stopped during initialization');
+  }
+
   if (!snapshot.context.worker) {
     throw new Error('File manager worker not available');
   }
@@ -91,7 +96,8 @@ async function ensureKernelClient(context: KernelContext, machineRef: AnyActorRe
     );
   }
 
-  const port = createFileSystemBridge(snapshot.context.worker);
+  const { port, dispose } = createFileSystemBridge(snapshot.context.worker);
+  context.eventCleanups.push(dispose);
   await client.connect({ port });
 
   return client;
@@ -205,6 +211,7 @@ type KernelContext = {
   parentRef?: CadActor;
   fileManagerRef?: ActorRefFrom<FileManagerMachine>;
   eventCleanups: Array<() => void>;
+  destroyed: boolean;
 };
 
 type KernelInput = {
@@ -276,6 +283,8 @@ export const kernelMachine = setup({
     },
 
     destroyWorkers({ context }) {
+      context.destroyed = true;
+
       for (const cleanup of context.eventCleanups) {
         cleanup();
       }
@@ -296,6 +305,7 @@ export const kernelMachine = setup({
     parentRef: undefined,
     fileManagerRef: input.fileManagerRef,
     eventCleanups: [],
+    destroyed: false,
   }),
   initial: 'initializing',
   exit: ['destroyWorkers'],

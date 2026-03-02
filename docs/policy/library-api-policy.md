@@ -66,7 +66,7 @@ render(file, parameters, tessellation)
 // Good: clear subject + optional config
 exposeFileSystem(fileSystem, options?)
 on(event, handler)
-fromZenFS(zenfs, rootPath?)
+fromFsLike(fsLike, rootPath?)
 ```
 
 **3 params (distinct architectural concerns)** -- Only when each parameter represents a genuinely different concern in a consistent interface contract. All methods on the same interface must use the same positional convention.
@@ -182,10 +182,10 @@ Each naming prefix signals a specific role:
 
 | Prefix | Role | Examples |
 |---|---|---|
-| `create*` | Factory function | `createKernelClient`, `createFileSystemPort` |
+| `create*` | Factory function | `createKernelClient`, `createBridgePort` |
 | `define*` | Plugin definition | `defineKernel`, `defineMiddleware`, `defineBundler` |
 | `is*` | Type guard | `isGeometryFile`, `isKernelPlugin` |
-| `from*` | Conversion constructor | `fromNodeFS`, `fromMemoryFS`, `fromZenFS` |
+| `from*` | Conversion constructor | `fromNodeFS`, `fromMemoryFS`, `fromFsLike` |
 | `on*` | Framework hook / event callback | `onInitialize`, `onLog`, `onProgress` |
 
 ### Callback and hook naming

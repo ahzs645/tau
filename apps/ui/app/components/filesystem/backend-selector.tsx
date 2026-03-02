@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 import { Check, ChevronDown, Database, FolderOpen, HardDrive, MemoryStick } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { FilesystemBackend } from '@taucad/types';
+import type { FileSystemBackend } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -19,7 +19,7 @@ import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
  * Backend option for the selector dropdown.
  */
 export type BackendOption = {
-  value: FilesystemBackend;
+  value: FileSystemBackend;
   label: string;
   description: string;
   icon: LucideIcon;
@@ -52,7 +52,7 @@ export const backendOptions: BackendOption[] = [
 ];
 
 type BackendSelectorProps = {
-  readonly value: FilesystemBackend;
+  readonly value: FileSystemBackend;
   readonly onSelect: (backend: string) => void | Promise<void>;
   readonly isLoading?: boolean;
   /** Whether to hide internal-only backends like memory. Defaults to false. */

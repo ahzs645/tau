@@ -14,3 +14,4 @@ export type * from '#types/manufacturing.types.js';
 export type * from '#types/schema.types.js';
 export type * from '#types/json-value.types.js';
 export type * from '#types/mime-types.types.js';
+export type * from '#types/fs-utils.types.js';

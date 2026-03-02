@@ -24,7 +24,6 @@ import { joinPath } from '@taucad/utils/path';
 import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 import type { KernelSuccessResult } from '#types/kernel.types.js';
 import { defineMiddleware } from '#middleware/kernel-middleware.js';
-import { getDirectoryStat, ensureDirectoryExists } from '#framework/filesystem-helpers.js';
 
 /**
  * Cache entry structure for MessagePack serialization.
@@ -136,7 +135,7 @@ async function cleanupOldCacheEntries({
   maxEntries: number;
 }): Promise<void> {
   try {
-    const files = await getDirectoryStat(filesystem, cacheDir);
+    const files = await filesystem.readdirStat(cacheDir);
 
     // Filter to only .bin cache files (MessagePack binary format)
     const cacheFiles = files.filter((file) => file.type === 'file' && file.name.endsWith('.bin'));
@@ -152,15 +151,12 @@ async function cleanupOldCacheEntries({
     for (const file of cacheFiles) {
       const age = now - file.mtimeMs;
       if (age > maxAgeMs) {
-        filesToDelete.push(joinPath(cacheDir, file.path));
+        filesToDelete.push(file.path);
       }
     }
 
     // Second pass: if still over maxEntries, delete oldest files
-    const remainingFiles = cacheFiles.filter((file) => {
-      const fullPath = joinPath(cacheDir, file.path);
-      return !filesToDelete.includes(fullPath);
-    });
+    const remainingFiles = cacheFiles.filter((file) => !filesToDelete.includes(file.path));
 
     if (remainingFiles.length > maxEntries) {
       // Sort by modification time (oldest first)
@@ -171,7 +167,7 @@ async function cleanupOldCacheEntries({
       for (let index = 0; index < excessCount; index++) {
         const file = remainingFiles[index];
         if (file) {
-          filesToDelete.push(joinPath(cacheDir, file.path));
+          filesToDelete.push(file.path);
         }
       }
     }
@@ -235,7 +231,7 @@ export const geometryCacheMiddleware = defineMiddleware({
         try {
           // Ensure cache directory exists
           const cacheDir = getCacheDir(basePath);
-          await ensureDirectoryExists(filesystem, cacheDir);
+          await filesystem.ensureDir(cacheDir);
 
           const serialized = serializeResult(result);
           await filesystem.writeFile(cachePath, serialized);

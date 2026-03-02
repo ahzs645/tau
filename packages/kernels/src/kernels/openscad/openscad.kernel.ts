@@ -26,7 +26,6 @@ import { processOpenScadParameters, flattenParametersForInjection } from '#kerne
 import { convertOffToGltf } from '#utils/off-to-gltf.js';
 import { convertOffToStl } from '#utils/off-to-stl.js';
 import { convertOffTo3mf } from '#utils/off-to-3mf.js';
-import { readFiles } from '#framework/filesystem-helpers.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
 import type { AddErrorFn, GetFileContentsFn } from '#kernels/openscad/parse-output.js';
 import { OpenScadStderrParser } from '#kernels/openscad/parse-output.js';
@@ -220,7 +219,7 @@ function ensureDirectoryForFile(instance: OpenSCAD, filePath: string): void {
   }
 }
 
-async function mountFilesystem(
+async function mountFileSystem(
   instance: OpenSCAD,
   options: {
     mainFile: string;
@@ -245,7 +244,7 @@ async function mountFilesystem(
 
   if (uncachedAbsolutePaths.length > 0) {
     logger.debug(`Batch-reading ${uncachedAbsolutePaths.length} uncached files`);
-    await readFiles(filesystem, uncachedAbsolutePaths);
+    await filesystem.readFiles(uncachedAbsolutePaths);
   }
 
   for (const relativePath of referencedFiles) {
@@ -321,7 +320,7 @@ async function getParametersFromFile(
 
   try {
     const instance = await createInstance({ logger });
-    await mountFilesystem(instance, { mainFile: filePath, basePath, filesystem, logger, fileContentCache });
+    await mountFileSystem(instance, { mainFile: filePath, basePath, filesystem, logger, fileContentCache });
     await mountFonts(instance, { fontCache }, logger);
 
     const result = instance.callMain([filePath, '-o', parameterFile, '--export-format=param']);
@@ -478,7 +477,7 @@ export default defineKernel({
       const instance = await createInstance({ logger, addError, getFileContents, mainFilePath: relativeFilePath });
       wasmSpan.end();
 
-      await mountFilesystem(instance, {
+      await mountFileSystem(instance, {
         mainFile: relativeFilePath,
         basePath,
         filesystem,

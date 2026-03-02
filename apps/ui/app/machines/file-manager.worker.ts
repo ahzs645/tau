@@ -1,11 +1,14 @@
-import { expose } from 'comlink';
+/**
+ * File-Manager Worker
+ *
+ * Single entry point for all filesystem access. Every connection (main thread,
+ * kernel workers, git) receives a MessagePort that is served by the same
+ * fileManager handler map -- sharing one ZenFS instance and one serialization
+ * queue. This prevents the TOCTOU race condition in ZenFS's commitNew
+ * (zen-fs/core#256).
+ */
+
 import { exposeFileSystem } from '@taucad/kernels/filesystem';
-import { fromZenFS } from '@taucad/kernels';
 import { fileManager } from '#machines/file-manager.js';
-import type { FileManager } from '#machines/file-manager.js';
-import { fs } from '#filesystem/zenfs-config.js';
 
-expose(fileManager);
-export const cleanupFileSystem = exposeFileSystem(fromZenFS(fs));
-
-export type FileWorker = FileManager;
+exposeFileSystem(fileManager);

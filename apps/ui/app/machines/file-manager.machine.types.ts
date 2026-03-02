@@ -10,8 +10,9 @@
  */
 
 import type { ActorRefFrom } from 'xstate';
-import type { FileStat } from '@taucad/types';
+import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
+import type { FileTreeNode, MkdirOptions } from '#machines/file-manager.js';
 
 /**
  * The source of the file write operation.
@@ -45,5 +46,41 @@ export type FileManagerApi = {
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
-  getDirectoryStat: (path: string) => Promise<FileStat[]>;
+  getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
 };
+
+/**
+ * Full FileManager protocol served over MessagePort.
+ * Superset of KernelFileSystem -- includes higher-level operations
+ * and worker control methods (reconfigure, setDirectoryHandle).
+ */
+export type FileManagerProtocol = {
+  readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
+  readFile(filepath: string, options?: Record<string, never>): Promise<Uint8Array<ArrayBuffer>>;
+  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
+  writeFile(filepath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
+  writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void>;
+  mkdir(path: string, options?: MkdirOptions): Promise<void>;
+  readdir(path: string): Promise<string[]>;
+  stat(path: string): Promise<FileStat>;
+  lstat(path: string): Promise<FileStat>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+  unlink(path: string): Promise<void>;
+  rmdir(path: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  batchExists(paths: string[]): Promise<Record<string, boolean>>;
+  ensureDirectoryExists(path: string): Promise<void>;
+  getDirectoryStat(path: string): Promise<FileStatEntry[]>;
+  getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
+  duplicateFile(sourcePath: string, destinationPath: string): Promise<void>;
+  copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
+  getZippedDirectory(path: string): Promise<Blob>;
+  reconfigure(backend: FileSystemBackend): Promise<void>;
+  setDirectoryHandle(handle: FileSystemDirectoryHandle): void;
+  readBackendFileTree(backend: FileSystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]>;
+};
+
+/**
+ * FileManagerProtocol proxy with dispose method for cleanup.
+ */
+export type FileManagerProxy = FileManagerProtocol & { dispose(): void };

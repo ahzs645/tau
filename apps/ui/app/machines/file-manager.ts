@@ -2,8 +2,9 @@ import JSZip from 'jszip';
 import { resolveMountConfig, isDirectory } from '@zenfs/core';
 import { IndexedDB, WebAccess } from '@zenfs/dom';
 import type { FileSystem } from '@zenfs/core';
-import type { FileStat, FilesystemBackend } from '@taucad/types';
-import { fs, ensureFilesystemConfigured, reconfigureFilesystem, setWebAccessHandle } from '#filesystem/zenfs-config.js';
+import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
+import { toFileStat } from '@taucad/types/constants';
+import { fs, ensureFileSystemConfigured, reconfigureFileSystem, setWebAccessHandle } from '#filesystem/zenfs-config.js';
 import { metaConfig } from '#constants/meta.constants.js';
 import { asBuffer } from '#utils/file.utils.js';
 import { joinPath } from '#utils/path.utils.js';
@@ -17,7 +18,7 @@ const fsp = fs.promises;
  * the ZenFS backend is initialized before any filesystem operations.
  */
 async function ensureReady(): Promise<void> {
-  await ensureFilesystemConfigured('indexeddb');
+  await ensureFileSystemConfigured('indexeddb');
 }
 
 /**
@@ -35,12 +36,16 @@ async function ensureReady(): Promise<void> {
  */
 let writeQueue: Promise<void> = Promise.resolve();
 
+let serializedQueueDepth = 0;
+
 /**
  * Serialize a mutating filesystem operation through the global write queue.
  * Operations are executed one at a time in FIFO order. If a previous
  * operation failed, the next one still runs (errors don't block the queue).
  */
 async function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  serializedQueueDepth++;
+
   const result = writeQueue
     // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
     .catch(() => {
@@ -56,7 +61,7 @@ async function serialized<T>(operation: () => Promise<T>): Promise<T> {
     })
     // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
     .then(() => {
-      // No-op
+      serializedQueueDepth--;
     });
   return result;
 }
@@ -85,26 +90,23 @@ export type FileManager = {
   writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void>;
   mkdir(path: string, options?: MkdirOptions): Promise<void>;
   readdir(path: string): Promise<string[]>;
-  stat(path: string): Promise<{
-    type: 'file' | 'dir';
-    size: number;
-    mtimeMs: number;
-  }>;
+  stat(path: string): Promise<FileStat>;
+  lstat(path: string): Promise<FileStat>;
   rename(oldPath: string, newPath: string): Promise<void>;
   unlink(path: string): Promise<void>;
   rmdir(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   batchExists(paths: string[]): Promise<Record<string, boolean>>;
   ensureDirectoryExists(path: string): Promise<void>;
-  getDirectoryStat(path: string): Promise<FileStat[]>;
+  getDirectoryStat(path: string): Promise<FileStatEntry[]>;
   getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   duplicateFile(sourcePath: string, destinationPath: string): Promise<void>;
   copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
   getZippedDirectory(path: string): Promise<Blob>;
-  reconfigure(backend: FilesystemBackend): Promise<void>;
+  reconfigure(backend: FileSystemBackend): Promise<void>;
   /**
    * Set the FileSystemDirectoryHandle for the webaccess backend.
-   * The handle is transferred from the main thread via Comlink's structured cloning.
+   * The handle is transferred from the main thread via structured cloning.
    * Must be called before reconfigure('webaccess').
    */
   setDirectoryHandle(handle: FileSystemDirectoryHandle): void;
@@ -113,7 +115,7 @@ export type FileManager = {
    * Does not affect the main mounted filesystem.
    * Used by the /files route grid view to show all backends in parallel.
    */
-  readBackendFileTree(backend: FilesystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]>;
+  readBackendFileTree(backend: FileSystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]>;
 };
 
 // Internal implementation for readFile with proper overload handling
@@ -133,7 +135,6 @@ async function readFile(
     return fsp.readFile(filepath, 'utf8');
   }
 
-  // Return as Uint8Array
   const buffer = await fsp.readFile(filepath);
   return new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
 }
@@ -168,7 +169,6 @@ async function ensureDirectoryExistsInternal(targetPath: string): Promise<void> 
       // eslint-disable-next-line no-await-in-loop -- Need to create directories sequentially
       await fsp.mkdir(currentPath);
     } catch (error) {
-      // Ignore if directory already exists
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw error;
       }
@@ -186,7 +186,11 @@ export const fileManager: FileManager = {
     try {
       await fsp.stat(path);
       return true;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+
       return false;
     }
   },
@@ -221,7 +225,6 @@ export const fileManager: FileManager = {
   async writeFile(path: string, content: Uint8Array<ArrayBuffer> | string): Promise<void> {
     return serialized(async () => {
       await ensureReady();
-      // Ensure parent directory exists before writing
       const lastSlashIndex = path.lastIndexOf('/');
       if (lastSlashIndex > 0) {
         const directoryPath = path.slice(0, lastSlashIndex);
@@ -268,20 +271,15 @@ export const fileManager: FileManager = {
     return fsp.readdir(path);
   },
 
-  // Get file/directory metadata
-  async stat(path: string): Promise<{
-    type: 'file' | 'dir';
-    size: number;
-    mtimeMs: number;
-  }> {
+  async stat(path: string): Promise<FileStat> {
     await ensureReady();
     const stats = await fsp.stat(path);
-    return {
-      // ZenFS uses Node.js-style isFile()/isDirectory() methods
-      type: stats.isFile() ? 'file' : 'dir',
-      size: stats.size,
-      mtimeMs: stats.mtimeMs,
-    };
+
+    return toFileStat(stats);
+  },
+
+  async lstat(path: string): Promise<FileStat> {
+    return this.stat(path);
   },
 
   // Rename a file or directory (serialized to prevent ZenFS race conditions)
@@ -309,10 +307,10 @@ export const fileManager: FileManager = {
   },
 
   // Get all file stats in a directory recursively as an array of file stat objects
-  async getDirectoryStat(path: string): Promise<FileStat[]> {
+  async getDirectoryStat(path: string): Promise<FileStatEntry[]> {
     await ensureReady();
 
-    const fileStats: FileStat[] = [];
+    const fileStats: FileStatEntry[] = [];
 
     const collectStatsRecursive = async (currentPath: string, basePath: string): Promise<void> => {
       const entries = await fsp.readdir(currentPath);
@@ -344,11 +342,7 @@ export const fileManager: FileManager = {
       }
     };
 
-    try {
-      await collectStatsRecursive(path, path);
-    } catch {
-      return [];
-    }
+    await collectStatsRecursive(path, path);
 
     return fileStats;
   },
@@ -440,15 +434,15 @@ export const fileManager: FileManager = {
 
   /**
    * Reconfigure the filesystem with a different backend.
-   * This is called from the main thread via Comlink.
+   * Called from the main thread via the MessagePort bridge.
    */
-  async reconfigure(backend: FilesystemBackend): Promise<void> {
-    await reconfigureFilesystem(backend);
+  async reconfigure(backend: FileSystemBackend): Promise<void> {
+    await reconfigureFileSystem(backend);
   },
 
   /**
    * Set the FileSystemDirectoryHandle for the webaccess backend.
-   * Called from the main thread via Comlink before reconfigure('webaccess').
+   * Called from the main thread before reconfigure('webaccess').
    * The handle is automatically structured-cloned by postMessage.
    */
   setDirectoryHandle(handle: FileSystemDirectoryHandle): void {
@@ -464,7 +458,7 @@ export const fileManager: FileManager = {
    * @param handle - Optional FileSystemDirectoryHandle for webaccess backend
    * @returns Tree of FileTreeNode objects, sorted folders-first then alphabetically
    */
-  async readBackendFileTree(backend: FilesystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]> {
+  async readBackendFileTree(backend: FileSystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]> {
     if (backend === 'memory') {
       return [];
     }

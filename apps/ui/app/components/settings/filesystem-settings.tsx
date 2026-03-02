@@ -8,7 +8,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { FolderOpen } from 'lucide-react';
-import type { FilesystemBackend } from '@taucad/types';
+import type { FileSystemBackend } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '#components/ui/card.js';
 import { BackendSelector } from '#components/filesystem/backend-selector.js';
@@ -25,8 +25,8 @@ import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 /**
  * Filesystem settings pane for the Settings dialog.
  */
-export function FilesystemSettings(): React.JSX.Element {
-  const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
+export function FileSystemSettings(): React.JSX.Element {
+  const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
   const [workspaceDirectoryName, setWorkspaceDirectoryName] = useState<string | undefined>(undefined);
   const [isWorkspaceConnected, setIsWorkspaceConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -51,7 +51,7 @@ export function FilesystemSettings(): React.JSX.Element {
 
   const handleBackendChange = useCallback(
     (value: string) => {
-      setBackendCookie(value as FilesystemBackend);
+      setBackendCookie(value as FileSystemBackend);
     },
     [setBackendCookie],
   );

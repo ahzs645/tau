@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Link } from 'react-router';
 import { Database, Download, FolderArchive, FolderOpen, MoreHorizontal, RefreshCw, Star, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { FilesystemBackend, Build } from '@taucad/types';
+import type { FileSystemBackend, Build } from '@taucad/types';
 import { ExternalLink } from '#components/external-link.js';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -39,7 +39,7 @@ export const handle: Handle = {
  * Backend column metadata.
  */
 type BackendColumnMeta = {
-  key: FilesystemBackend;
+  key: FileSystemBackend;
   label: string;
   icon: LucideIcon;
   description: string;
@@ -546,7 +546,7 @@ function WebAccessDirectoryPanel({
 // ============ Main Route Component ============
 
 export default function FilesRoute(): React.JSX.Element {
-  const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
+  const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
   const { fileManagerRef, readFile, deleteFile, getZippedDirectory, readBackendFileTree } = useFileManager();
   const { builds } = useBuilds();
 
@@ -586,7 +586,7 @@ export default function FilesRoute(): React.JSX.Element {
 
   // Load a single backend's file tree
   const loadColumnTree = useCallback(
-    async (backend: FilesystemBackend): Promise<void> => {
+    async (backend: FileSystemBackend): Promise<void> => {
       setColumnLoading((previous) => ({ ...previous, [backend]: true }));
       try {
         const nodes = await readBackendFileTree(backend);
@@ -619,7 +619,7 @@ export default function FilesRoute(): React.JSX.Element {
 
   // Set default backend (just updates cookie, no directory picker prompt)
   const handleSetDefault = useCallback(
-    (backend: FilesystemBackend) => {
+    (backend: FileSystemBackend) => {
       setBackendCookie(backend);
     },
     [setBackendCookie],
@@ -677,7 +677,7 @@ export default function FilesRoute(): React.JSX.Element {
   const deleteDirectory = useCallback(
     async (path: string): Promise<void> => {
       const snapshot = fileManagerRef.getSnapshot();
-      const worker = snapshot.context.wrappedWorker;
+      const worker = snapshot.context.proxy;
       if (!worker) {
         throw new Error('Worker not ready');
       }

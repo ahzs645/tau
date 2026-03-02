@@ -7,11 +7,12 @@
 
 import type { GeometryFile, ExportFormat, ExportFile, LogOrigin } from '@taucad/types';
 import type { HashedGeometryResult, GetParametersResult, KernelResult } from '#types/kernel.types.js';
-import type { KernelFileSystem, Tessellation } from '#types/kernel-worker.types.js';
+import type { KernelFileSystemBase, Tessellation } from '#types/kernel-worker.types.js';
 import type { PerformanceEntryData, RenderPhase } from '#types/kernel-protocol.types.js';
 import { KernelWorkerClient } from '#framework/kernel-worker-client.js';
-import { createFileSystemServer } from '#framework/kernel-filesystem-bridge.js';
-import { fromMemoryFS } from '#client/filesystem-constructors.js';
+import type { BridgeHandle } from '#framework/kernel-filesystem-bridge.js';
+import { createBridgePort } from '#framework/kernel-filesystem-bridge.js';
+import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
 import { createWorkerTransport } from '#transport/worker-transport.js';
 import type { KernelTransport } from '#transport/kernel-transport.js';
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
@@ -110,10 +111,10 @@ export type KernelClientOptions = {
   /** Custom transport. Defaults to a Web Worker transport using the built-in worker URL. */
   transport?: KernelTransport;
   /**
-   * Default KernelFileSystem, used when `connect()` is not called explicitly.
+   * Default KernelFileSystemBase, used when `connect()` is not called explicitly.
    * For browser apps that need deferred connection, use `client.connect()` instead.
    */
-  fileSystem?: KernelFileSystem;
+  fileSystem?: KernelFileSystemBase;
   /**
    * Tessellation quality defaults for preview and export pipelines.
    * When undefined, each kernel applies its own built-in defaults.
@@ -135,7 +136,7 @@ export type KernelClientOptions = {
  */
 export type ConnectOptions =
   //
-  { fileSystem: KernelFileSystem } | { port: MessagePort };
+  { fileSystem: KernelFileSystemBase } | { port: MessagePort };
 
 type LogEntry = { level: string; message: string; origin?: LogOrigin; data?: unknown };
 
@@ -269,10 +270,10 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
 
   let workerClient: KernelWorkerClient | undefined;
   let transport: KernelTransport | undefined;
-  let fileSystemChannel: MessageChannel | undefined;
+  let fileSystemBridge: BridgeHandle | undefined;
   let connected = false;
   let connectedViaPort = false;
-  let managedFileSystem: KernelFileSystem | undefined;
+  let managedFileSystem: KernelFileSystemBase | undefined;
 
   const handlers: EventHandlers = {
     log: new Set(),
@@ -338,9 +339,8 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
       fileSystemPort = resolvedOptions.port;
       connectedViaPort = true;
     } else {
-      fileSystemChannel = new MessageChannel();
-      createFileSystemServer(resolvedOptions.fileSystem, fileSystemChannel.port1);
-      fileSystemPort = fileSystemChannel.port2;
+      fileSystemBridge = createBridgePort(resolvedOptions.fileSystem);
+      fileSystemPort = fileSystemBridge.port;
     }
 
     await workerClient.initialize({
@@ -495,10 +495,9 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
     terminate(): void {
       workerClient?.cleanup();
       workerClient?.terminate();
-      if (fileSystemChannel) {
-        fileSystemChannel.port1.close();
-        fileSystemChannel.port2.close();
-        fileSystemChannel = undefined;
+      if (fileSystemBridge) {
+        fileSystemBridge.dispose();
+        fileSystemBridge = undefined;
       }
 
       for (const set of Object.values(handlers)) {

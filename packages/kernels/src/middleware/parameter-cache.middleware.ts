@@ -13,7 +13,6 @@
 import { joinPath } from '@taucad/utils/path';
 import type { GetParametersResult } from '#types/kernel.types.js';
 import { defineMiddleware } from '#middleware/kernel-middleware.js';
-import { ensureDirectoryExists } from '#framework/filesystem-helpers.js';
 
 /**
  * Get the cache file path for a given cache key.
@@ -76,7 +75,7 @@ export const parameterCacheMiddleware = defineMiddleware({
       try {
         // Ensure cache directory exists
         const cacheDir = getCacheDir(basePath);
-        await ensureDirectoryExists(filesystem, cacheDir);
+        await filesystem.ensureDir(cacheDir);
 
         await filesystem.writeFile(cachePath, JSON.stringify(result));
         logger.debug(`Cached parameters at ${cacheKey}`);

@@ -28,10 +28,10 @@ All testing helpers are exported from the testing subpath:
 import {
   createTestWorker,
   initializeWorkerForTesting,
-  seedTestFilesystem,
-  clearTestFilesystem,
+  seedTestFileSystem,
+  clearTestFileSystem,
   createMockLogger,
-  createMockFilesystem,
+  createMockFileSystem,
   createMockRuntime,
   validateGlbData,
   getInspectReport,
@@ -75,7 +75,7 @@ describe('Replicad kernel', () => {
 });
 ```
 
-Call `seedTestFilesystem` before `initializeWorkerForTesting` if you need to set up files separately.
+Call `seedTestFileSystem` before `initializeWorkerForTesting` if you need to set up files separately.
 
 ### 3. Use initializeWorkerForTesting for Custom Worker Setup
 
@@ -83,9 +83,9 @@ When you need more control over worker initialization (e.g., custom middleware, 
 
 ```typescript
 import { KernelRuntimeWorker } from '@taucad/kernels/worker';
-import { initializeWorkerForTesting, seedTestFilesystem } from '@taucad/kernels/testing';
+import { initializeWorkerForTesting, seedTestFileSystem } from '@taucad/kernels/testing';
 
-await seedTestFilesystem({
+await seedTestFileSystem({
   '/builds/test/main.ts': `export default function main() { return null; }`,
 });
 
@@ -98,38 +98,38 @@ await initializeWorkerForTesting(worker, {
 
 ### 4. Seed and Clear the Test Filesystem
 
-`seedTestFilesystem` resets the ZenFS in-memory backend and writes files. `clearTestFilesystem` resets without seeding:
+`seedTestFileSystem` resets the ZenFS in-memory backend and writes files. `clearTestFileSystem` resets without seeding:
 
 ```typescript
-import { seedTestFilesystem, clearTestFilesystem } from '@taucad/kernels/testing';
+import { seedTestFileSystem, clearTestFileSystem } from '@taucad/kernels/testing';
 
 beforeEach(async () => {
-  await seedTestFilesystem({
+  await seedTestFileSystem({
     '/builds/test/main.ts': 'export default function main() { return null; }',
     '/builds/test/lib/utils.ts': 'export const x = 1;',
   });
 });
 
 afterEach(async () => {
-  await clearTestFilesystem();
+  await clearTestFileSystem();
 });
 ```
 
 Paths can be absolute or relative; relative paths are normalized to start with `/`.
 
-### 5. Use createMockLogger, createMockFilesystem, createMockRuntime
+### 5. Use createMockLogger, createMockFileSystem, createMockRuntime
 
 For middleware unit tests, use mocks to avoid a real worker:
 
 ```typescript
 import {
   createMockLogger,
-  createMockFilesystem,
+  createMockFileSystem,
   createMockRuntime,
 } from '@taucad/kernels/testing';
 
 const logger = createMockLogger();
-const filesystem = createMockFilesystem({
+const filesystem = createMockFileSystem({
   existsResult: true,
   readFileResult: (path) => Promise.resolve(new TextEncoder().encode('content')),
 });
@@ -144,7 +144,7 @@ const runtime = createMockRuntime({
 expect(filesystem.mocks.readFile).toHaveBeenCalledWith('/path/to/file');
 ```
 
-`createMockFilesystem` returns a `KernelFileSystem` with a `mocks` property for vitest assertions.
+`createMockFileSystem` returns a `KernelFileSystem` with a `mocks` property for vitest assertions.
 
 ### 6. Validate Geometry with validateGlbData and getInspectReport
 

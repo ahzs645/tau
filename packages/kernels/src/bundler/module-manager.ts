@@ -23,7 +23,6 @@
 
 import { getCdnCachePath, getNodeModulesPath } from '@taucad/utils/import';
 import type { KernelFileSystem } from '#types/kernel-worker.types.js';
-import { ensureDirectoryExists } from '#framework/filesystem-helpers.js';
 
 // =============================================================================
 // Types
@@ -264,12 +263,12 @@ export class ModuleManager {
     const packageDir = getNodeModulesPath(name);
 
     // Ensure directory exists
-    await ensureDirectoryExists(this.filesystem, packageDir);
+    await this.filesystem.ensureDir(packageDir);
 
     // If subpath has nested directories (e.g., 'utils/debounce'), ensure parent dirs
     if (subpath?.includes('/')) {
       const subpathDir = `${packageDir}/${subpath.slice(0, subpath.lastIndexOf('/'))}`;
-      await ensureDirectoryExists(this.filesystem, subpathDir);
+      await this.filesystem.ensureDir(subpathDir);
     }
 
     // Write code file FIRST

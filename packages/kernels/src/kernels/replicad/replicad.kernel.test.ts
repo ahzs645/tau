@@ -12,7 +12,7 @@ import {
   createTestWorker,
   createTestGeometry,
   getTestParameters,
-  seedTestFilesystem,
+  seedTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
 import type { PerformanceEntryData } from '#types/index.js';
@@ -322,7 +322,7 @@ describe('ReplicadWorker', () => {
 
         // Step 3: Agent replaces scaffold with multi-file project
         // main.ts now imports from ./lib/cube (no direct 'replicad' import)
-        await seedTestFilesystem({
+        await seedTestFileSystem({
           '/builds/test/main.ts': `
             import { createCube } from './lib/cube';
             import { createCylinder } from './lib/cylinder';
@@ -2995,7 +2995,7 @@ export default function main() {
       await geometryHelpers.expectValidGltf(result1);
 
       // Modify file content: change to 20x20x20 box
-      await seedTestFilesystem({
+      await seedTestFileSystem({
         '/builds/test/main.ts': `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {
@@ -3034,7 +3034,7 @@ export default function main() {
       assertSuccess(result1);
 
       // Modify file content
-      await seedTestFilesystem({
+      await seedTestFileSystem({
         '/builds/test/main.ts': `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {

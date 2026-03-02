@@ -57,7 +57,7 @@ const defaultTabsListTransition = {
   type: 'spring',
   stiffness: 200,
   damping: 25,
-};
+} satisfies Transition;
 
 function TabsList({
   ref,
@@ -160,7 +160,7 @@ type TabsContentProps = React.ComponentProps<typeof TabsPrimitive.Content> &
 const defaultTabsContentTransition = {
   duration: 0.5,
   ease: 'easeInOut',
-};
+} satisfies Transition;
 
 function TabsContent({
   className,
@@ -206,7 +206,7 @@ const defaultTabsContentsTransition = {
   type: 'spring',
   stiffness: 200,
   damping: 25,
-};
+} satisfies Transition;
 
 function TabsContents({
   children,

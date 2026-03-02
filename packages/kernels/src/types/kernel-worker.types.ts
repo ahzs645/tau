@@ -12,7 +12,7 @@
  */
 
 import type { z } from 'zod';
-import type { ExportFormat, LogLevel, GeometryResponse } from '@taucad/types';
+import type { ExportFormat, LogLevel, GeometryResponse, FileStat, FileStatEntry } from '@taucad/types';
 import type { ExportGeometryResult, GetParametersResult, KernelIssue } from '#types/kernel.types.js';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import type { ExecuteResult, KernelBundler } from '#types/kernel-bundler.types.js';
@@ -56,16 +56,11 @@ export type KernelLogger = {
 // =============================================================================
 
 /**
- * Node.js-compatible filesystem interface for kernel workers.
- * 8 required methods matching `fs.promises.*`. All paths are absolute.
- *
- * The framework builds higher-level operations from these primitives:
- * - `ensureDirectoryExists(path)` via `mkdir(path, { recursive: true })`
- * - `readFiles(paths)` via `Promise.all(paths.map(readFile))`
- * - `getDirectoryContents(dir)` via `readdir(dir)` + `Promise.all(names.map(readFile))`
- * - `getDirectoryStat(dir)` via `readdir(dir)` + `Promise.all(names.map(stat))`
+ * Base filesystem interface -- 11 Node.js `fs.promises`-compatible primitives.
+ * All paths are absolute. This is the minimal surface that filesystem backends
+ * must implement (e.g. fromFsLike, fromMemoryFS, fromNodeFS).
  */
-export type KernelFileSystem = {
+export type KernelFileSystemBase = {
   /** Read file as text. */
   readFile(path: string, encoding: 'utf8'): Promise<string>;
   /** Read file as binary. */
@@ -78,10 +73,33 @@ export type KernelFileSystem = {
   readdir(path: string): Promise<string[]>;
   /** Delete file. */
   unlink(path: string): Promise<void>;
+  /** Remove an empty directory. */
+  rmdir(path: string): Promise<void>;
+  /** Rename / move a file or directory. */
+  rename(oldPath: string, newPath: string): Promise<void>;
   /** Get file or directory metadata. */
-  stat(path: string): Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>;
+  stat(path: string): Promise<FileStat>;
+  /** Get file or directory metadata without following symlinks. */
+  lstat(path: string): Promise<FileStat>;
   /** Check if path exists. */
   exists(path: string): Promise<boolean>;
+};
+
+/**
+ * Enhanced filesystem interface for kernel workers.
+ * Extends the 11 base primitives with higher-level helper methods that have
+ * default implementations built from the primitives (via `createKernelFileSystem`).
+ * Backends may supply optimized overrides for any of the enhanced methods.
+ */
+export type KernelFileSystem = KernelFileSystemBase & {
+  /** Batch-read multiple files as binary. Default: `Promise.all(paths.map(readFile))`. */
+  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
+  /** Read all file contents in a directory (skips subdirectories). */
+  readdirContents(dirPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
+  /** Get stat information for all entries in a directory. */
+  readdirStat(dirPath: string): Promise<FileStatEntry[]>;
+  /** Ensure a directory exists, creating parents as needed. Default: `mkdir(path, { recursive: true })`. */
+  ensureDir(path: string): Promise<void>;
 };
 
 // =============================================================================

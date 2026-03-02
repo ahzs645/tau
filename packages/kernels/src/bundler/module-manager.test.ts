@@ -13,28 +13,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 import { ModuleManager } from '#bundler/module-manager.js';
-
-// =============================================================================
-// Mock Filesystem
-// =============================================================================
-
-type MockFilesystem = {
-  [K in keyof KernelFileSystem]: ReturnType<typeof vi.fn>;
-};
-
-function createMockFilesystem(): MockFilesystem {
-  return {
-    readFile: vi.fn<KernelFileSystem['readFile']>().mockRejectedValue(new Error('File not found')),
-    exists: vi.fn<KernelFileSystem['exists']>().mockResolvedValue(false),
-    readdir: vi.fn<KernelFileSystem['readdir']>().mockResolvedValue([]),
-    writeFile: vi.fn<KernelFileSystem['writeFile']>().mockResolvedValue(undefined),
-    mkdir: vi.fn<KernelFileSystem['mkdir']>().mockResolvedValue(undefined),
-    unlink: vi.fn<KernelFileSystem['unlink']>().mockResolvedValue(undefined),
-    stat: vi.fn<KernelFileSystem['stat']>().mockRejectedValue(new Error('Not found')),
-  };
-}
+import { createMockFileSystem, type MockFileSystem } from '#testing/kernel-testing.utils.js';
 
 // =============================================================================
 // Mock Fetch Helpers
@@ -69,15 +49,15 @@ function createSuccessResponse(body: string, headers?: Record<string, string>): 
 // =============================================================================
 
 describe('ModuleManager', () => {
-  let filesystem: MockFilesystem;
+  let filesystem: MockFileSystem;
   let manager: ModuleManager;
 
   beforeEach(() => {
     vi.useFakeTimers();
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
-    filesystem = createMockFilesystem();
-    manager = new ModuleManager(filesystem as unknown as KernelFileSystem);
+    filesystem = createMockFileSystem();
+    manager = new ModuleManager(filesystem);
   });
 
   afterEach(() => {
@@ -93,16 +73,16 @@ describe('ModuleManager', () => {
   describe('cache hit / miss', () => {
     it('should skip fetch when module is already cached', async () => {
       // Module file already exists
-      filesystem.exists.mockResolvedValue(true);
+      filesystem.mocks.exists.mockResolvedValue(true);
 
       await manager.ensureCdnModule('lodash');
 
       expect(mockFetch).not.toHaveBeenCalled();
-      expect(filesystem.writeFile).not.toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).not.toHaveBeenCalled();
     });
 
     it('should fetch and cache when module is not cached', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash');
@@ -115,20 +95,20 @@ describe('ModuleManager', () => {
       );
 
       // Should have written code file and package.json
-      expect(filesystem.writeFile).toHaveBeenCalledWith('/node_modules/lodash/index.js', expect.any(String));
-      expect(filesystem.writeFile).toHaveBeenCalledWith('/node_modules/lodash/package.json', expect.any(String));
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/node_modules/lodash/index.js', expect.any(String));
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/node_modules/lodash/package.json', expect.any(String));
     });
 
     it('should skip fetch on subsequent calls after caching', async () => {
       // First call: not cached
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash');
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
       // Second call: now cached
-      filesystem.exists.mockResolvedValue(true);
+      filesystem.mocks.exists.mockResolvedValue(true);
       await manager.ensureCdnModule('lodash');
 
       // Should NOT have fetched again
@@ -142,7 +122,7 @@ describe('ModuleManager', () => {
 
   describe('subpath caching', () => {
     it('should cache subpath modules independently from main module', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash', 'debounce');
@@ -155,11 +135,11 @@ describe('ModuleManager', () => {
       );
 
       // Should write to the subpath-specific cache path
-      expect(filesystem.writeFile).toHaveBeenCalledWith('/node_modules/lodash/debounce.js', expect.any(String));
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/node_modules/lodash/debounce.js', expect.any(String));
     });
 
     it('should handle scoped packages with subpaths', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - @jscad/modeling@2.12.6 */\nexport {};'));
 
       await manager.ensureCdnModule('@jscad/modeling', 'primitives');
@@ -170,22 +150,21 @@ describe('ModuleManager', () => {
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 
-      expect(filesystem.writeFile).toHaveBeenCalledWith(
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith(
         '/node_modules/@jscad/modeling/primitives.js',
         expect.any(String),
       );
     });
 
     it('should handle nested subpaths and ensure parent directories', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - three@0.160.0 */\nexport {};'));
 
       await manager.ensureCdnModule('three', 'examples/jsm/controls/OrbitControls');
 
-      // Should ensure the nested subdirectory exists via mkdir with recursive
-      expect(filesystem.mkdir).toHaveBeenCalledWith('/node_modules/three/examples/jsm/controls', { recursive: true });
+      expect(filesystem.mocks.ensureDir).toHaveBeenCalledWith('/node_modules/three/examples/jsm/controls');
 
-      expect(filesystem.writeFile).toHaveBeenCalledWith(
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith(
         '/node_modules/three/examples/jsm/controls/OrbitControls.js',
         expect.any(String),
       );
@@ -198,7 +177,7 @@ describe('ModuleManager', () => {
 
   describe('concurrent deduplication', () => {
     it('should deduplicate concurrent requests for the same package', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
 
       // Create a delayed fetch that we can control
       let fetchResolve!: (value: Response) => void;
@@ -221,7 +200,7 @@ describe('ModuleManager', () => {
     });
 
     it('should NOT deduplicate requests for different packages', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - pkg@1.0.0 */\nexport {};'));
 
       await Promise.all([manager.ensureCdnModule('lodash'), manager.ensureCdnModule('three')]);
@@ -231,7 +210,7 @@ describe('ModuleManager', () => {
     });
 
     it('should NOT deduplicate subpath vs main module', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport {};'));
 
       await Promise.all([manager.ensureCdnModule('lodash'), manager.ensureCdnModule('lodash', 'debounce')]);
@@ -247,7 +226,7 @@ describe('ModuleManager', () => {
 
   describe('retry backoff', () => {
     it('should skip fetch for recently failed packages', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       // First call: fails (esm.sh + jsdelivr fallback = 2 fetches)
@@ -261,7 +240,7 @@ describe('ModuleManager', () => {
     });
 
     it('should allow retry after retry delay expires', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       // First call: fails (esm.sh + jsdelivr fallback)
@@ -280,7 +259,7 @@ describe('ModuleManager', () => {
     });
 
     it('should clear failed state on successful fetch after retry', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       // First call: fails
@@ -298,7 +277,7 @@ describe('ModuleManager', () => {
       expect(secondCallCount).toBe(firstCallCount + 1);
 
       // Now the file should be cached, so next call should check FS
-      filesystem.exists.mockResolvedValue(true);
+      filesystem.mocks.exists.mockResolvedValue(true);
       await manager.ensureCdnModule('recovered-package');
 
       // Should not have fetched again
@@ -312,7 +291,7 @@ describe('ModuleManager', () => {
 
   describe('fetch timeout', () => {
     it('should pass an AbortSignal to fetch for timeout control', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
 
       // Record the signal passed to fetch, then reject immediately
       let capturedSignal: AbortSignal | undefined;
@@ -329,7 +308,7 @@ describe('ModuleManager', () => {
     });
 
     it('should handle aborted fetch gracefully', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
 
       // Simulate an abort error (what happens when timeout fires)
       mockFetch.mockRejectedValue(new DOMException('The operation was aborted', 'AbortError'));
@@ -338,7 +317,7 @@ describe('ModuleManager', () => {
       await expect(manager.ensureCdnModule('aborted-package')).resolves.toBeUndefined();
 
       // Should not have written anything
-      expect(filesystem.writeFile).not.toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).not.toHaveBeenCalled();
     });
   });
 
@@ -348,7 +327,7 @@ describe('ModuleManager', () => {
 
   describe('response size limit', () => {
     it('should reject responses exceeding size limit', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
 
       // Respond with Content-Length exceeding 10 MB
       mockFetch.mockResolvedValue(createSuccessResponse('huge module', { 'Content-Length': '20000000' }));
@@ -356,7 +335,7 @@ describe('ModuleManager', () => {
       await manager.ensureCdnModule('huge-package');
 
       // Should not have written anything (both esm.sh and jsdelivr will fail)
-      expect(filesystem.writeFile).not.toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).not.toHaveBeenCalled();
     });
   });
 
@@ -369,14 +348,14 @@ describe('ModuleManager', () => {
       // The ModuleManager constructs URLs internally using esm.sh and jsdelivr,
       // which are in the allowlist. This test verifies the safeFetch validation
       // works by checking that esm.sh URLs pass validation.
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport {};'));
 
       await manager.ensureCdnModule('lodash');
 
       // Should have successfully fetched
       expect(mockFetch).toHaveBeenCalled();
-      expect(filesystem.writeFile).toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).toHaveBeenCalled();
     });
   });
 
@@ -386,7 +365,7 @@ describe('ModuleManager', () => {
 
   describe('offline resilience', () => {
     it('should not throw when fetch fails', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
 
       // Should not throw
@@ -394,16 +373,16 @@ describe('ModuleManager', () => {
     });
 
     it('should not write to filesystem when fetch fails', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
 
       await manager.ensureCdnModule('offline-package');
 
-      expect(filesystem.writeFile).not.toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).not.toHaveBeenCalled();
     });
 
     it('should record failure for retry backoff', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
 
       await manager.ensureCdnModule('offline-package');
@@ -421,7 +400,7 @@ describe('ModuleManager', () => {
 
   describe('CDN fallback', () => {
     it('should fall back to jsdelivr when esm.sh fails', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
 
       // First call (esm.sh) fails
       mockFetch
@@ -447,18 +426,18 @@ describe('ModuleManager', () => {
       );
 
       // Should have written the module from jsdelivr
-      expect(filesystem.writeFile).toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).toHaveBeenCalled();
     });
 
     it('should record failure when both CDNs fail', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
 
       mockFetch.mockRejectedValueOnce(new Error('esm.sh down')).mockRejectedValueOnce(new Error('jsdelivr down'));
 
       await manager.ensureCdnModule('unreachable-package');
 
       // Should not have written anything
-      expect(filesystem.writeFile).not.toHaveBeenCalled();
+      expect(filesystem.mocks.writeFile).not.toHaveBeenCalled();
 
       // Immediate retry should be skipped
       mockFetch.mockClear();
@@ -473,11 +452,11 @@ describe('ModuleManager', () => {
 
   describe('atomic write ordering', () => {
     it('should write code file before package.json', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       const writeOrder: string[] = [];
-      filesystem.writeFile.mockImplementation(async (path: string) => {
+      filesystem.mocks.writeFile.mockImplementation(async (path: string) => {
         writeOrder.push(path);
       });
 
@@ -489,13 +468,13 @@ describe('ModuleManager', () => {
 
     it('should not overwrite package.json for subpath fetches', async () => {
       // First fetch the main module
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash');
 
       // Now package.json exists
-      filesystem.exists.mockImplementation(async (path: string) => {
+      filesystem.mocks.exists.mockImplementation(async (path: string) => {
         if (path === '/node_modules/lodash/package.json') {
           return true;
         }
@@ -507,7 +486,7 @@ describe('ModuleManager', () => {
       await manager.ensureCdnModule('lodash', 'debounce');
 
       // Package.json should only have been written once (during main fetch)
-      const packageJsonWrites = filesystem.writeFile.mock.calls.filter(
+      const packageJsonWrites = filesystem.mocks.writeFile.mock.calls.filter(
         (call) => call[0] === '/node_modules/lodash/package.json',
       );
       expect(packageJsonWrites).toHaveLength(1);
@@ -520,7 +499,7 @@ describe('ModuleManager', () => {
 
   describe('clearCaches', () => {
     it('should allow retrying after clearCaches', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       // First call: fails (esm.sh + jsdelivr fallback)
@@ -546,7 +525,7 @@ describe('ModuleManager', () => {
 
   describe('version extraction', () => {
     it('should extract version from esm.sh comment', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(
         createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nconst x = 1;\nexport default x;'),
       );
@@ -554,7 +533,7 @@ describe('ModuleManager', () => {
       await manager.ensureCdnModule('lodash');
 
       // Verify the package.json contains the extracted version
-      const packageJsonCall = filesystem.writeFile.mock.calls.find((call) =>
+      const packageJsonCall = filesystem.mocks.writeFile.mock.calls.find((call) =>
         (call[0] as string).endsWith('package.json'),
       );
       expect(packageJsonCall).toBeDefined();
@@ -563,14 +542,14 @@ describe('ModuleManager', () => {
     });
 
     it('should use "unknown" when version cannot be extracted', async () => {
-      filesystem.exists.mockResolvedValue(false);
+      filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(
         createSuccessResponse('export default {};'), // No version comment
       );
 
       await manager.ensureCdnModule('no-version');
 
-      const packageJsonCall = filesystem.writeFile.mock.calls.find((call) =>
+      const packageJsonCall = filesystem.mocks.writeFile.mock.calls.find((call) =>
         (call[0] as string).endsWith('package.json'),
       );
       expect(packageJsonCall).toBeDefined();

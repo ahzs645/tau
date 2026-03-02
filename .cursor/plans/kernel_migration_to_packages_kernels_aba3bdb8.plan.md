@@ -303,10 +303,10 @@ For kernel/middleware authors writing tests:
 export {
   createTestWorker,
   initializeWorkerForTesting,
-  seedTestFilesystem,
-  clearTestFilesystem,
+  seedTestFileSystem,
+  clearTestFileSystem,
   createMockLogger,
-  createMockFilesystem,
+  createMockFileSystem,
   createMockRuntime,
   createSuccessResult,
   createErrorResult,
@@ -581,7 +581,7 @@ Beyond the unit/integration tests above, add these validation gates:
 
 ### 6.4 Test Adaptation
 
-- `kernel-testing.utils.ts`: Replace `#filesystem/zenfs-config.js` imports with a self-contained in-memory ZenFS configuration. The function `seedTestFilesystem()` will configure ZenFS with `InMemory` backend directly, removing the dependency on the UI app's filesystem configuration.
+- `kernel-testing.utils.ts`: Replace `#filesystem/zenfs-config.js` imports with a self-contained in-memory ZenFS configuration. The function `seedTestFileSystem()` will configure ZenFS with `InMemory` backend directly, removing the dependency on the UI app's filesystem configuration.
 - `kernel-geometry-testing.utils.ts`: Only needs import path updates.
 - All test files: Rewrite `#components/geometry/kernel/...` imports to `#framework/...`, `#middleware/...`, `#kernels/...`, etc.
 
@@ -750,8 +750,8 @@ packages/kernels/
 - **3b**: Copy files per the directory structure above
 - **3c**: Rewrite all imports:
   - `#components/geometry/kernel/utils/`* → `#framework/`* or `#utils/`*
-  - `#components/geometry/kernel/middleware/`* → `#middleware/*`
-  - `#components/geometry/kernel/bundlers/*` → `#bundler/*`
+  - `#components/geometry/kernel/middleware/`* → `#middleware/`*
+  - `#components/geometry/kernel/bundlers/`* → `#bundler/`*
   - `#components/geometry/kernel/*/` → `#kernels/*/`
   - `#utils/path.utils.js` → `@taucad/utils/path`
   - `#utils/file.utils.js` → `@taucad/utils/file`

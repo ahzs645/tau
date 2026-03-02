@@ -28,12 +28,24 @@ export type FileEntry = FileTreeEntry & {
   isLoaded: boolean;
 };
 
+/**
+ * Stat result returned by filesystem `stat`/`lstat` operations.
+ * Matches the shape of Node.js `fs.Stats` reduced to the fields
+ * relevant for virtual filesystem operations.
+ */
 export type FileStat = {
-  path: string;
-  name: string;
   type: 'file' | 'dir';
   size: number;
   mtimeMs: number;
+};
+
+/**
+ * Stat result enriched with path and name for directory listing operations.
+ * Returned by `readdirStat` and similar directory enumeration APIs.
+ */
+export type FileStatEntry = FileStat & {
+  path: string;
+  name: string;
 };
 
 /** Named binary file used as input to conversion/import operations. */

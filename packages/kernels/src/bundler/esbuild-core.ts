@@ -114,7 +114,6 @@ export async function initializeEsbuild(): Promise<void> {
 
   initializationPromise = (async (): Promise<void> => {
     try {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- esbuild API uses wasmURL
       await esbuild.initialize(isNodejs ? {} : { wasmURL: esbuildWasmUrl });
 
       esbuildInitialized = true;

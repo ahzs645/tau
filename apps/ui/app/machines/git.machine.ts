@@ -1,19 +1,110 @@
-import { assign, assertEvent, setup, fromPromise, emit, fromCallback } from 'xstate';
-import type { OutputFrom, DoneActorEvent, AnyActorRef } from 'xstate';
+import { assign, assertEvent, setup, fromPromise, emit, fromCallback, waitFor } from 'xstate';
+import type { OutputFrom, DoneActorEvent, AnyActorRef, ActorRefFrom } from 'xstate';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/web';
-import { gitFs, ensureGitFsConfigured } from '#db/storage.js';
+import type { FileStat } from '@taucad/types';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import { gitAttributesTemplate } from '#constants/gitattributes-template.js';
-import { gitMountPoint } from '#filesystem/zenfs-config.js';
 import { joinPath } from '#utils/path.utils.js';
+import type { FileManagerMachine } from '#machines/file-manager.machine.js';
+import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
+
+/** Git mount point prefix for git operations within the filesystem. */
+const gitMountPrefix = '/git';
 
 /**
  * Get the directory path for a build in the git virtual filesystem.
- * Uses the /git mount point for isolated git storage.
+ * Uses the /git prefix for isolated git storage.
  */
 export function getBuildDirectory(buildId: string): string {
-  return joinPath(gitMountPoint, 'builds', buildId);
+  return joinPath(gitMountPrefix, 'builds', buildId);
+}
+
+/**
+ * Wrap a simplified stat result into an isomorphic-git-compatible stat object.
+ */
+function wrapStat(s: FileStat): {
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+  size: number;
+  mode: number;
+  mtimeMs: number;
+} {
+  return {
+    isFile: () => s.type === 'file',
+    isDirectory: () => s.type === 'dir',
+    isSymbolicLink: () => false,
+    size: s.size,
+    mode: s.type === 'dir' ? 0o40755 : 0o100644,
+    mtimeMs: s.mtimeMs,
+  };
+}
+
+type GitFsAdapter = {
+  promises: {
+    readFile(path: string, options?: { encoding?: string }): Promise<unknown>;
+    writeFile(path: string, data: unknown, encoding?: string): Promise<void>;
+    stat(path: string): Promise<ReturnType<typeof wrapStat>>;
+    lstat(path: string): Promise<ReturnType<typeof wrapStat>>;
+    mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+    readdir(path: string): Promise<string[]>;
+    unlink(path: string): Promise<void>;
+    rmdir(path: string): Promise<void>;
+  };
+};
+
+/**
+ * Create an isomorphic-git-compatible `fs` adapter from a FileManagerProxy.
+ * Wraps stat/lstat return values so they include isFile()/isDirectory()/isSymbolicLink().
+ */
+function createGitFsAdapter(proxy: FileManagerProxy): GitFsAdapter {
+  return {
+    promises: {
+      async readFile(path: string, options?: { encoding?: string }): Promise<unknown> {
+        if (options?.encoding === 'utf8') {
+          return proxy.readFile(path, 'utf8');
+        }
+
+        return proxy.readFile(path);
+      },
+      async writeFile(path: string, data: unknown): Promise<void> {
+        return proxy.writeFile(path, data as Uint8Array<ArrayBuffer> | string);
+      },
+      async stat(path: string): Promise<ReturnType<typeof wrapStat>> {
+        return wrapStat(await proxy.stat(path));
+      },
+      async lstat(path: string): Promise<ReturnType<typeof wrapStat>> {
+        return wrapStat(await proxy.lstat(path));
+      },
+      async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+        return proxy.mkdir(path, options);
+      },
+      async readdir(path: string): Promise<string[]> {
+        return proxy.readdir(path);
+      },
+      async unlink(path: string): Promise<void> {
+        return proxy.unlink(path);
+      },
+      async rmdir(path: string): Promise<void> {
+        return proxy.rmdir(path);
+      },
+    },
+  };
+}
+
+/**
+ * Obtain a git-compatible fs adapter from a file manager actor ref.
+ * Waits for the file manager to enter the 'ready' state, then wraps its proxy.
+ */
+async function getGitFs(fileManagerRef: ActorRefFrom<FileManagerMachine>): Promise<GitFsAdapter> {
+  const snapshot = await waitFor(fileManagerRef, (state) => state.matches('ready'));
+  const proxy = snapshot.context.proxy;
+  if (!proxy) {
+    throw new Error('File manager proxy not available');
+  }
+
+  return createGitFsAdapter(proxy);
 }
 
 /**
@@ -51,6 +142,7 @@ export type GitContext = {
   isInitialized: boolean;
   username: string | undefined;
   email: string | undefined;
+  fileManagerRef: ActorRefFrom<FileManagerMachine>;
 };
 
 /**
@@ -59,23 +151,20 @@ export type GitContext = {
 type GitInput = {
   buildId?: string;
   parentRef?: AnyActorRef;
+  fileManagerRef: ActorRefFrom<FileManagerMachine>;
 };
 
-// Define the actors that the machine can invoke
-const initGitActor = fromPromise<{ buildId: string }, { buildId: string; repository: GitRepository }>(
-  async ({ input }) => {
-    await ensureGitFsConfigured();
-    if (!gitFs) {
-      throw new Error('ZenFS not initialized');
-    }
+type GitActorInput = {
+  fileManagerRef: ActorRefFrom<FileManagerMachine>;
+};
 
-    const fs = gitFs;
+const initGitActor = fromPromise<{ buildId: string }, GitActorInput & { buildId: string; repository: GitRepository }>(
+  async ({ input }) => {
+    const fs = await getGitFs(input.fileManagerRef);
     const dir = getBuildDirectory(input.buildId);
 
-    // Initialize git repository
     await git.init({ fs, dir, defaultBranch: input.repository.branch });
 
-    // Add remote
     await git.addRemote({
       fs,
       dir,
@@ -86,10 +175,8 @@ const initGitActor = fromPromise<{ buildId: string }, { buildId: string; reposit
     // Create .gitattributes file for binary file handling
     const gitAttributesPath = joinPath(dir, '.gitattributes');
     try {
-      // Check if .gitattributes already exists
       await fs.promises.stat(gitAttributesPath);
     } catch {
-      // Doesn't exist, create it
       await fs.promises.writeFile(gitAttributesPath, gitAttributesTemplate, 'utf8');
     }
 
@@ -99,14 +186,9 @@ const initGitActor = fromPromise<{ buildId: string }, { buildId: string; reposit
 
 const cloneRepositoryActor = fromPromise<
   { buildId: string },
-  { buildId: string; repository: GitRepository; accessToken: string; username: string }
+  GitActorInput & { buildId: string; repository: GitRepository; accessToken: string; username: string }
 >(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
+  const fs = await getGitFs(input.fileManagerRef);
   const dir = getBuildDirectory(input.buildId);
 
   await git.clone({
@@ -126,13 +208,8 @@ const cloneRepositoryActor = fromPromise<
   return { buildId: input.buildId };
 });
 
-const stageFileActor = fromPromise<string, { buildId: string; path: string }>(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
+const stageFileActor = fromPromise<string, GitActorInput & { buildId: string; path: string }>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
   const dir = getBuildDirectory(input.buildId);
 
   await git.add({
@@ -144,13 +221,8 @@ const stageFileActor = fromPromise<string, { buildId: string; path: string }>(as
   return input.path;
 });
 
-const unstageFileActor = fromPromise<string, { buildId: string; path: string }>(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
+const unstageFileActor = fromPromise<string, GitActorInput & { buildId: string; path: string }>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
   const dir = getBuildDirectory(input.buildId);
 
   await git.remove({
@@ -162,40 +234,31 @@ const unstageFileActor = fromPromise<string, { buildId: string; path: string }>(
   return input.path;
 });
 
-const commitChangesActor = fromPromise<string, { buildId: string; message: string; username: string; email: string }>(
-  async ({ input }) => {
-    await ensureGitFsConfigured();
-    if (!gitFs) {
-      throw new Error('ZenFS not initialized');
-    }
+const commitChangesActor = fromPromise<
+  string,
+  GitActorInput & { buildId: string; message: string; username: string; email: string }
+>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const dir = getBuildDirectory(input.buildId);
 
-    const fs = gitFs;
-    const dir = getBuildDirectory(input.buildId);
+  const sha = await git.commit({
+    fs,
+    dir,
+    message: input.message,
+    author: {
+      name: input.username,
+      email: input.email,
+    },
+  });
 
-    const sha = await git.commit({
-      fs,
-      dir,
-      message: input.message,
-      author: {
-        name: input.username,
-        email: input.email,
-      },
-    });
-
-    return sha;
-  },
-);
+  return sha;
+});
 
 const pushChangesActor = fromPromise<
   boolean,
-  { buildId: string; repository: GitRepository; accessToken: string; username: string }
+  GitActorInput & { buildId: string; repository: GitRepository; accessToken: string; username: string }
 >(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
+  const fs = await getGitFs(input.fileManagerRef);
   const dir = getBuildDirectory(input.buildId);
 
   await git.push({
@@ -215,14 +278,9 @@ const pushChangesActor = fromPromise<
 
 const pullChangesActor = fromPromise<
   boolean,
-  { buildId: string; repository: GitRepository; accessToken: string; username: string }
+  GitActorInput & { buildId: string; repository: GitRepository; accessToken: string; username: string }
 >(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
+  const fs = await getGitFs(input.fileManagerRef);
   const dir = getBuildDirectory(input.buildId);
 
   await git.pull({
@@ -244,57 +302,54 @@ const pullChangesActor = fromPromise<
 });
 
 // eslint-disable-next-line complexity -- TODO: address
-const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, { buildId: string }>(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
+const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, GitActorInput & { buildId: string }>(
+  async ({ input }) => {
+    const fs = await getGitFs(input.fileManagerRef);
+    const dir = getBuildDirectory(input.buildId);
 
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+    try {
+      // Get list of all files in the working directory
+      const statusMatrix = await git.statusMatrix({ fs, dir });
+      const fileStatuses = new Map<string, GitFileStatus>();
 
-  try {
-    // Get list of all files in the working directory
-    const statusMatrix = await git.statusMatrix({ fs, dir });
-    const fileStatuses = new Map<string, GitFileStatus>();
+      for (const [filepath, headStatus, workdirStatus, stageStatus] of statusMatrix) {
+        let status: 'clean' | 'modified' | 'added' | 'deleted' | 'untracked' = 'clean';
+        let staged = false;
 
-    for (const [filepath, headStatus, workdirStatus, stageStatus] of statusMatrix) {
-      let status: 'clean' | 'modified' | 'added' | 'deleted' | 'untracked' = 'clean';
-      let staged = false;
-
-      // Determine file status based on statusMatrix values
-      if (headStatus === 0 && workdirStatus === 2 && stageStatus === 0) {
-        status = 'untracked';
-      } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
-        status = 'clean';
-      } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 1) {
-        status = 'modified';
-        staged = false;
-      } else if (headStatus === 0 && workdirStatus === 2 && stageStatus === 2) {
-        status = 'added';
-        staged = true;
-      } else if (headStatus === 1 && workdirStatus === 0) {
-        status = 'deleted';
-      } else if (stageStatus === 2) {
-        staged = true;
-        if (headStatus === 1 && workdirStatus === 2) {
+        // Determine file status based on statusMatrix values
+        if (headStatus === 0 && workdirStatus === 2 && stageStatus === 0) {
+          status = 'untracked';
+        } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
+          status = 'clean';
+        } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 1) {
           status = 'modified';
+          staged = false;
+        } else if (headStatus === 0 && workdirStatus === 2 && stageStatus === 2) {
+          status = 'added';
+          staged = true;
+        } else if (headStatus === 1 && workdirStatus === 0) {
+          status = 'deleted';
+        } else if (stageStatus === 2) {
+          staged = true;
+          if (headStatus === 1 && workdirStatus === 2) {
+            status = 'modified';
+          }
         }
+
+        fileStatuses.set(filepath, {
+          path: filepath,
+          status,
+          staged,
+        });
       }
 
-      fileStatuses.set(filepath, {
-        path: filepath,
-        status,
-        staged,
-      });
+      return fileStatuses;
+    } catch {
+      // Git not initialized or other error
+      return new Map<string, GitFileStatus>();
     }
-
-    return fileStatuses;
-  } catch {
-    // Git not initialized or other error
-    return new Map<string, GitFileStatus>();
-  }
-});
+  },
+);
 
 const buildListenerActor = fromCallback<{ type: 'refreshStatus' }, { parentRef: AnyActorRef | undefined }>(
   ({ input, sendBack }) => {
@@ -531,6 +586,7 @@ export const gitMachine = setup({
     isInitialized: false,
     username: undefined,
     email: undefined,
+    fileManagerRef: input.fileManagerRef,
   }),
   initial: 'disconnected',
   states: {
@@ -607,6 +663,7 @@ export const gitMachine = setup({
       invoke: {
         src: 'cloneRepositoryActor',
         input: ({ context }) => ({
+          fileManagerRef: context.fileManagerRef,
           buildId: context.buildId!,
           repository: context.repository!,
           accessToken: context.accessToken!,
@@ -653,7 +710,7 @@ export const gitMachine = setup({
         src: 'stageFileActor',
         input({ context, event }) {
           assertEvent(event, 'stageFile');
-          return { buildId: context.buildId!, path: event.path };
+          return { fileManagerRef: context.fileManagerRef, buildId: context.buildId!, path: event.path };
         },
         onDone: {
           target: 'refreshingStatus',
@@ -686,7 +743,7 @@ export const gitMachine = setup({
         src: 'unstageFileActor',
         input({ context, event }) {
           assertEvent(event, 'unstageFile');
-          return { buildId: context.buildId!, path: event.path };
+          return { fileManagerRef: context.fileManagerRef, buildId: context.buildId!, path: event.path };
         },
         onDone: {
           target: 'refreshingStatus',
@@ -718,6 +775,7 @@ export const gitMachine = setup({
       invoke: {
         src: 'commitChangesActor',
         input: ({ context }) => ({
+          fileManagerRef: context.fileManagerRef,
           buildId: context.buildId!,
           message: context.commitMessage!,
           username: context.username!,
@@ -753,6 +811,7 @@ export const gitMachine = setup({
       invoke: {
         src: 'pushChangesActor',
         input: ({ context }) => ({
+          fileManagerRef: context.fileManagerRef,
           buildId: context.buildId!,
           repository: context.repository!,
           accessToken: context.accessToken!,
@@ -779,6 +838,7 @@ export const gitMachine = setup({
       invoke: {
         src: 'pullChangesActor',
         input: ({ context }) => ({
+          fileManagerRef: context.fileManagerRef,
           buildId: context.buildId!,
           repository: context.repository!,
           accessToken: context.accessToken!,
@@ -804,6 +864,7 @@ export const gitMachine = setup({
       invoke: {
         src: 'refreshGitStatusActor',
         input: ({ context }) => ({
+          fileManagerRef: context.fileManagerRef,
           buildId: context.buildId!,
         }),
         onDone: {

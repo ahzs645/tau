@@ -68,8 +68,8 @@ sequenceDiagram
 - **WASM recompilation on every page load**: All kernel workers use `fetch()` + `arrayBuffer()` instead of `WebAssembly.instantiateStreaming()`, bypassing V8's automatic compiled-code caching. OpenCASCADE recompiles ~48MB of WASM from scratch on every load
 - **Filesystem reads are unbatched and unoptimized**: Each `readFile()` is a separate Comlink RPC with structured cloning. A 10-file dependency resolution triggers 10 round-trips with 10 copies
 - **Broken geometry export on cache hit**: Every worker independently manages a `*Memory` record (`shapesMemory`, `offDataMemory`, `gltfDataMemory`, `glbDataMemory`). When geometry is cached at the framework level, `createGeometry` is never called, the memory record is never populated, and export fails with "Geometry not computed yet"
-- **OpenSCAD copies ALL project files on every render**: `mountFilesystem()` calls `getDirectoryContents()` which bulk-reads every file in the project via Comlink, then copies them all into Emscripten MEMFS with `FS.writeFile()` -- and creates a fresh WASM instance per operation, so this happens twice per cycle
-- **Eager trace logging on every filesystem operation**: `createFilesystem()` eagerly allocates timing strings and `performance.now()` for every read/exists/readdir, even at trace level
+- **OpenSCAD copies ALL project files on every render**: `mountFileSystem()` calls `getDirectoryContents()` which bulk-reads every file in the project via Comlink, then copies them all into Emscripten MEMFS with `FS.writeFile()` -- and creates a fresh WASM instance per operation, so this happens twice per cycle
+- **Eager trace logging on every filesystem operation**: `createFileSystem()` eagerly allocates timing strings and `performance.now()` for every read/exists/readdir, even at trace level
 
 ---
 
@@ -263,10 +263,10 @@ async function readFiles(paths: string[]): Promise<Map<string, Uint8Array<ArrayB
 }
 ```
 
-**[kernel-worker.types.ts](libs/types/src/types/kernel-worker.types.ts)**: Add to `KernelFilesystem`:
+**[kernel-worker.types.ts](libs/types/src/types/kernel-worker.types.ts)**: Add to `KernelFileSystem`:
 
 ```typescript
-export type KernelFilesystem = {
+export type KernelFileSystem = {
   readFile(path: string, encoding: 'utf8'): Promise<string>;
   readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   readFiles(paths: string[]): Promise<Map<string, Uint8Array<ArrayBuffer>>>; // NEW
@@ -291,11 +291,11 @@ const fileDeps: FileDependency[] = await Promise.all(
 
 ### 0E. Replace Eager Filesystem Timing with Performance Marks
 
-The current `createFilesystem()` eagerly calls `performance.now()` and constructs timing strings on every `readFile`, `exists`, and `readdir` -- even at trace level. This adds ~40 string allocations per dependency resolution.
+The current `createFileSystem()` eagerly calls `performance.now()` and constructs timing strings on every `readFile`, `exists`, and `readdir` -- even at trace level. This adds ~40 string allocations per dependency resolution.
 
 Replace with `performance.mark()` / `performance.measure()` which the browser manages internally with zero allocation overhead, and which appear automatically in Chrome DevTools Performance panel:
 
-**[kernel-worker.ts](apps/ui/app/components/geometry/kernel/utils/kernel-worker.ts)**: Update `createFilesystem()`:
+**[kernel-worker.ts](apps/ui/app/components/geometry/kernel/utils/kernel-worker.ts)**: Update `createFileSystem()`:
 
 ```typescript
 async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
@@ -326,12 +326,12 @@ Apply the same pattern to `exists`, `readdir`, and all kernel-level operations. 
 
 ### 0F. OpenSCAD Targeted Filesystem Mounting
 
-OpenSCAD's `mountFilesystem()` currently calls `getDirectoryContents(basePath)` which reads **every file** in the project, then copies all of them into MEMFS. For a project with 50 files where OpenSCAD uses 5, this is 10x more I/O than necessary.
+OpenSCAD's `mountFileSystem()` currently calls `getDirectoryContents(basePath)` which reads **every file** in the project, then copies all of them into MEMFS. For a project with 50 files where OpenSCAD uses 5, this is 10x more I/O than necessary.
 
 **[openscad.worker.ts](apps/ui/app/components/geometry/kernel/openscad/openscad.worker.ts)**: Replace the bulk mount with targeted mounting using the dependency list from `getReferencedScadFiles()`:
 
 ```typescript
-private async mountFilesystem(instance: OpenSCAD, options: MountOptions): Promise<void> {
+private async mountFileSystem(instance: OpenSCAD, options: MountOptions): Promise<void> {
   const { basePath, filesystem, logger } = options;
   instance.FS.chdir('/');
   instance.FS.mkdir('/locale');
@@ -962,7 +962,7 @@ The worker runtime provides shared services to all kernel modules:
 
 ```typescript
 type KernelRuntime = {
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   logger: KernelLogger;
   bundler: {
     bundle(entryPath: string): Promise<BundleResult>;
@@ -1059,7 +1059,7 @@ async createGeometry(input, runtime, ctx) {
 
 Any Emscripten-compiled kernel that needs filesystem access can use this pattern. The `createContentCacheFS` utility is generic -- it only needs a `ReadonlyMap<string, Uint8Array | string>` and a base path.
 
-**Impact**: Eliminates the `mountFilesystem()` bulk copy entirely. For a 50-file project where OpenSCAD uses 5, the content cache already has those 5 files from dependency resolution. Mount is instant.
+**Impact**: Eliminates the `mountFileSystem()` bulk copy entirely. For a 50-file project where OpenSCAD uses 5, the content cache already has those 5 files from dependency resolution. Mount is instant.
 
 ### 5G. Mountable data sources
 
@@ -1086,9 +1086,9 @@ The file manager worker handles mount resolution. When a kernel worker reads `/l
 
 1. Recognizes the path falls under a mounted data source
 2. Resolves the file from the appropriate source (zip entry, remote fetch)
-3. Returns the content through the normal `KernelFilesystem` interface
+3. Returns the content through the normal `KernelFileSystem` interface
 
-Kernel workers don't need to know whether a file came from IndexedDB, a zip archive, or a remote URL -- the `KernelFilesystem` interface is the same regardless.
+Kernel workers don't need to know whether a file came from IndexedDB, a zip archive, or a remote URL -- the `KernelFileSystem` interface is the same regardless.
 
 #### Mount types
 

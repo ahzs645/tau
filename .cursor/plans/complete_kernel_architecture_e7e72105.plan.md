@@ -78,7 +78,7 @@ New types in [kernel-worker.types.ts](libs/types/src/types/kernel-worker.types.t
 
 ```typescript
 export type BundlerInitOptions = {
-  filesystem: KernelFilesystem;
+  filesystem: KernelFileSystem;
   projectPath: string;
 };
 

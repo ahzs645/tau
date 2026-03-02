@@ -241,9 +241,9 @@ describe('parameterCacheMiddleware', () => {
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
 
-        expect(runtime.filesystem.mocks.mkdir).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.ensureDir).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = runtime.filesystem.mocks.mkdir.mock.calls[0]?.[0];
+        const dirPath = runtime.filesystem.mocks.ensureDir.mock.calls[0]?.[0];
         expect(dirPath).toContain('.tau/cache/parameters');
       });
 

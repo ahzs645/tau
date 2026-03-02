@@ -1,18 +1,44 @@
 /**
  * FileSystem MessagePort Bridge
  *
- * Creates a MessageChannel-based bridge between a KernelFileSystem implementation
- * and a kernel worker. Proxies only the 8 required KernelFileSystem methods.
+ * Creates a MessageChannel-based bridge between a filesystem implementation
+ * and a consumer (kernel worker, main thread, git, etc.). The bridge uses a
+ * generic `{ id, method, args }` request/response protocol over MessagePort,
+ * dispatching to any method on the served object.
  *
  * Production: the bridge proxies calls from kernel worker -> file-manager worker.
  * Tests: the bridge proxies calls from kernel worker -> in-process filesystem directly.
  */
 
-import type { KernelFileSystem } from '#types/kernel-worker.types.js';
+import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
 
-type FileSystemPortable = {
-  [K in keyof KernelFileSystem]: (...args: never[]) => Promise<unknown> | void;
-};
+/**
+ * Walk an arbitrarily nested value and collect every unique `ArrayBuffer`
+ * that backs a typed array, plus standalone `ArrayBuffer` instances.
+ * The returned list is de-duplicated so the same buffer is never
+ * transferred twice (which would throw a `DataCloneError`).
+ */
+export function extractTransferables(value: unknown): Transferable[] {
+  const seen = new Set<ArrayBuffer>();
+  function walk(v: unknown): void {
+    if (v instanceof ArrayBuffer) {
+      seen.add(v);
+    } else if (ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer) {
+      seen.add(v.buffer);
+    } else if (Array.isArray(v)) {
+      for (const item of v) {
+        walk(item);
+      }
+    } else if (v !== null && typeof v === 'object') {
+      for (const prop of Object.values(v)) {
+        walk(prop);
+      }
+    }
+  }
+
+  walk(value);
+  return [...seen];
+}
 
 type BridgeRequest = {
   id: number;
@@ -20,10 +46,23 @@ type BridgeRequest = {
   args: unknown[];
 };
 
+/**
+ * Structured error sent over the bridge. Preserves the worker-side
+ * error name, stack trace, errno code, and optional metadata so the
+ * main-thread consumer can reconstruct a meaningful Error.
+ */
+export type BridgeError = {
+  message: string;
+  name: string;
+  stack?: string;
+  code?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type BridgeResponse = {
   id: number;
   result?: unknown;
-  error?: string;
+  error?: BridgeError;
 };
 
 /**
@@ -32,71 +71,141 @@ type BridgeResponse = {
 const messagePortCallTimeoutMs = 30_000;
 
 /**
- * Serve a KernelFileSystem over a MessagePort.
+ * Serve an object's methods over a MessagePort.
  *
  * Sets up a message handler on the given port. Incoming `{ id, method, args }`
- * messages are dispatched to the filesystem and responded to with `{ id, result }`
- * or `{ id, error }`. Can run in any context: main thread, worker, or Node.js.
+ * messages are dispatched to the served object and responded to with
+ * `{ id, result }` or `{ id, error }`. Can run in any context: main thread,
+ * worker, or Node.js.
  *
- * @param fileSystem - A KernelFileSystem implementation to serve
+ * Errors are serialized as {@link BridgeError} objects so the consumer can
+ * reconstruct the original error with name, stack, errno code, and metadata.
+ *
+ * @param handlers - Object whose methods are served (e.g. a KernelFileSystemBase or FileManager)
  * @param port - MessagePort to listen on
  */
-export function createFileSystemServer(fileSystem: FileSystemPortable, port: MessagePort): void {
+export function createBridgeServer<T extends Record<string, unknown>>(handlers: T, port: MessagePort): void {
   // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
   port.onmessage = async (event: MessageEvent<BridgeRequest>): Promise<void> => {
     const { id, method, args } = event.data;
 
-    const fn = fileSystem[method as keyof KernelFileSystem] as ((...fnArgs: unknown[]) => Promise<unknown>) | undefined;
+    const fn = handlers[method] as ((...fnArgs: unknown[]) => Promise<unknown>) | undefined;
     if (!fn) {
-      port.postMessage({ id, error: `Unknown method: ${method}` } satisfies BridgeResponse);
+      port.postMessage({
+        id,
+        error: { message: `Unknown method: ${method}`, name: 'Error' },
+      } satisfies BridgeResponse);
       return;
     }
 
     try {
       const result: unknown = await fn(...args);
-      port.postMessage({ id, result } satisfies BridgeResponse);
+      const response = { id, result } satisfies BridgeResponse;
+      const transferables = extractTransferables(result);
+      port.postMessage(response, transferables);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      port.postMessage({ id, error: message } satisfies BridgeResponse);
+      const bridgeError: BridgeError = {
+        message: error instanceof Error ? error.message : String(error),
+        name: error instanceof Error ? error.constructor.name : 'Error',
+        stack: error instanceof Error ? error.stack : undefined,
+        code: (error as NodeJS.ErrnoException).code,
+        metadata: (error as Record<string, unknown>)['metadata'] as Record<string, unknown> | undefined,
+      };
+      port.postMessage({ id, error: bridgeError } satisfies BridgeResponse);
     }
   };
 }
 
 /**
- * Create a MessagePort that bridges to a KernelFileSystem implementation.
- *
- * Convenience wrapper: creates a MessageChannel, serves the filesystem on port1
- * via `createFileSystemServer`, and returns port2 for the consumer.
- *
- * @param fileSystem - A KernelFileSystem implementation (all methods are async-compatible)
- * @returns MessagePort to pass to the kernel worker
+ * Handle returned by bridge creation functions. Provides the consumer-side
+ * MessagePort and a `dispose()` method that closes the bridge and releases
+ * both ports.
  */
-export function createFileSystemPort(fileSystem: FileSystemPortable): MessagePort {
-  const channel = new MessageChannel();
-  createFileSystemServer(fileSystem, channel.port1);
-  return channel.port2;
-}
-
-/**
- * A KernelFileSystem proxy backed by a MessagePort, with an explicit dispose method
- * to reject pending calls and detach the message handler.
- */
-export type FileSystemProxy = KernelFileSystem & {
+export type BridgeHandle = {
+  /** Consumer-side MessagePort for use with createBridgeProxy or client.connect(). */
+  port: MessagePort;
+  /** Close the bridge and release ports. */
   dispose(): void;
 };
 
 /**
- * Create a KernelFileSystem proxy backed by a MessagePort.
+ * Create a MessagePort that bridges to a filesystem implementation.
  *
- * Each method call sends a `{ id, method, args }` message and waits for
- * the matching `{ id, result }` or `{ id, error }` response.
+ * Convenience wrapper: creates a MessageChannel, serves the object on port1
+ * via `createBridgeServer`, and returns port2 for the consumer.
  *
- * Used inside the kernel worker to consume a filesystem served over a MessagePort.
- *
- * @param port - MessagePort connected to a filesystem bridge
- * @returns FileSystemProxy interface backed by the port
+ * @param handlers - Object whose methods are served (e.g. a KernelFileSystemBase or FileManager)
+ * @returns BridgeHandle with the consumer port and a dispose function
  */
-export function createFileSystemProxy(port: MessagePort): FileSystemProxy {
+export function createBridgePort<T extends Record<string, unknown>>(handlers: T): BridgeHandle {
+  const channel = new MessageChannel();
+  createBridgeServer(handlers, channel.port1);
+  return {
+    port: channel.port2,
+    dispose() {
+      channel.port1.close();
+      channel.port2.close();
+    },
+  };
+}
+
+/**
+ * A KernelFileSystemBase proxy backed by a MessagePort, with an explicit dispose
+ * method to reject pending calls and detach the message handler.
+ */
+export type FileSystemProxy = KernelFileSystemBase & {
+  dispose(): void;
+};
+
+/**
+ * Reconstruct an Error from a {@link BridgeError} received over the bridge.
+ * Preserves the original error name, stack trace, errno code, and metadata.
+ */
+function reconstructError(bridgeError: BridgeError): Error & {
+  code?: string;
+  metadata?: Record<string, unknown>;
+} {
+  const error = Object.assign(new Error(bridgeError.message), {
+    name: bridgeError.name,
+    code: bridgeError.code,
+    metadata: bridgeError.metadata,
+  });
+
+  if (bridgeError.stack) {
+    error.stack = bridgeError.stack;
+  }
+
+  return error;
+}
+
+/**
+ * Create a low-level RPC call/dispose pair backed by a MessagePort.
+ *
+ * Sends `{ id, method, args }` messages and returns promises that resolve with
+ * the result or reject with a reconstructed {@link BridgeError}. Used by
+ * {@link createBridgeProxy} and application-level proxies that need to call
+ * arbitrary methods on a bridge-served object.
+ *
+ * @param port - MessagePort connected to a {@link createBridgeServer} endpoint
+ * @returns Object with a `call` function for RPC invocation and a `dispose` function
+ *   that rejects all pending calls and detaches the message handler
+ *
+ * @example
+ * ```typescript
+ * import { createBridgeCall, createBridgeServer } from '@taucad/kernels/filesystem';
+ *
+ * const channel = new MessageChannel();
+ * createBridgeServer(myHandlers, channel.port1);
+ *
+ * const { call, dispose } = createBridgeCall(channel.port2);
+ * const entries = await call('readdir', ['/']);
+ * dispose();
+ * ```
+ */
+export function createBridgeCall(port: MessagePort): {
+  call: (method: string, args: unknown[]) => Promise<unknown>;
+  dispose: () => void;
+} {
   let nextId = 0;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 
@@ -112,7 +221,7 @@ export function createFileSystemProxy(port: MessagePort): FileSystemProxy {
     if (error === undefined) {
       entry.resolve(result);
     } else {
-      entry.reject(new Error(error));
+      entry.reject(reconstructError(error));
     }
   };
 
@@ -120,56 +229,112 @@ export function createFileSystemProxy(port: MessagePort): FileSystemProxy {
     (port as unknown as { unref: () => void }).unref();
   }
 
-  async function call(method: string, args: unknown[]): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const id = nextId++;
-      const timer = setTimeout(() => {
-        if (pending.delete(id)) {
-          reject(new Error(`Filesystem call '${method}' timed out`));
-        }
-      }, messagePortCallTimeoutMs);
-      pending.set(id, {
-        resolve(value) {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject(error) {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-      port.postMessage({ id, method, args } satisfies BridgeRequest);
-    });
-  }
-
-  function readFile(path: string, encoding: 'utf8'): Promise<string>;
-  function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
-  async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
-    if (encoding) {
-      return call('readFile', [path, encoding]) as Promise<string>;
-    }
-
-    return call('readFile', [path]) as Promise<Uint8Array<ArrayBuffer>>;
-  }
-
   return {
-    readFile,
-    writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) =>
-      call('writeFile', [path, data]) as Promise<void>,
-    mkdir: async (path: string, options?: { recursive?: boolean }) => call('mkdir', [path, options]) as Promise<void>,
-    readdir: async (path: string) => call('readdir', [path]) as Promise<string[]>,
-    unlink: async (path: string) => call('unlink', [path]) as Promise<void>,
-    stat: async (path: string) =>
-      call('stat', [path]) as Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>,
-    exists: async (path: string) => call('exists', [path]) as Promise<boolean>,
+    async call(method: string, args: unknown[]): Promise<unknown> {
+      return new Promise((resolve, reject) => {
+        const id = nextId++;
+        const timer = setTimeout(() => {
+          if (pending.delete(id)) {
+            reject(new Error(`Bridge call '${method}' timed out`));
+          }
+        }, messagePortCallTimeoutMs);
+        pending.set(id, {
+          resolve(value) {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          reject(error) {
+            clearTimeout(timer);
+            reject(error);
+          },
+        });
+        const request = { id, method, args } satisfies BridgeRequest;
+        const transferables = extractTransferables(args);
+        port.postMessage(request, transferables);
+      });
+    },
     dispose() {
       // eslint-disable-next-line unicorn/prefer-add-event-listener -- we set onmessage during setup, so we need to remove it here.
       port.onmessage = null;
       for (const [, entry] of pending) {
-        entry.reject(new Error('Filesystem proxy closed'));
+        entry.reject(new Error('Bridge proxy closed'));
       }
 
       pending.clear();
+      port.close();
     },
+  };
+}
+
+/**
+ * Create a generic `Proxy`-based RPC client backed by a MessagePort.
+ *
+ * Every property access (except `dispose`) returns a function that
+ * forwards the call over the bridge as `{ id, method, args }`. This
+ * eliminates the need for hand-written per-method stubs.
+ *
+ * @param port - MessagePort connected to a {@link createBridgeServer} endpoint
+ * @returns Proxy whose method calls are forwarded over the bridge
+ *
+ * @example
+ * ```typescript
+ * import { createBridgeProxy } from '@taucad/kernels/filesystem';
+ *
+ * const proxy = createBridgeProxy<FileManagerProtocol>(channel.port2);
+ * const entries = await proxy.readdir('/');
+ * proxy.dispose();
+ * ```
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
+export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
+  port: MessagePort,
+): T & { dispose(): void } {
+  const { call, dispose } = createBridgeCall(port);
+  return new Proxy({} as T & { dispose(): void }, {
+    get(_, method: string) {
+      if (method === 'dispose') {
+        return dispose;
+      }
+
+      return async (...args: unknown[]) => call(method, args);
+    },
+  });
+}
+
+/**
+ * Buffer incoming messages on a MessagePort during initialization.
+ *
+ * Call this immediately after receiving a port, before the server handler
+ * is set up. The returned function stops buffering and replays all
+ * captured messages in order, so no requests are lost during the
+ * initialization window.
+ *
+ * Adopted from ZenFS's `catchMessages` pattern.
+ *
+ * @param port - MessagePort to buffer messages on
+ * @returns A function that stops buffering and replays captured messages
+ *
+ * @example
+ * ```typescript
+ * const stopAndReplayMessages = catchMessages(port);
+ * await initializeFileSystem();
+ * createBridgeServer(handlers, port);
+ * stopAndReplayMessages();
+ * ```
+ */
+export function catchMessages(port: MessagePort): () => void {
+  const buffered: MessageEvent[] = [];
+  const handler = (event: MessageEvent): void => {
+    buffered.push(event);
+  };
+
+  port.addEventListener('message', handler);
+  port.start();
+
+  return () => {
+    port.removeEventListener('message', handler);
+    for (const event of buffered) {
+      port.dispatchEvent(new MessageEvent('message', { data: event.data as unknown }));
+    }
   };
 }

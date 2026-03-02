@@ -7,47 +7,55 @@
  * Together they form an expose/wrap pair for the KernelFileSystem MessagePort bridge protocol.
  */
 
-import type { KernelFileSystem } from '#types/kernel-worker.types.js';
-import { createFileSystemServer } from '#framework/kernel-filesystem-bridge.js';
+import type { BridgeHandle } from '#framework/kernel-filesystem-bridge.js';
+import { createBridgeServer, catchMessages } from '#framework/kernel-filesystem-bridge.js';
 
 /** Default message type used by exposeFileSystem and createFileSystemBridge. */
-const defaultBridgeMessageType = 'kernelBridge';
+const defaultBridgeMessageType = 'connect';
 
 /**
  * Options for filesystem bridge wrappers.
  */
 export type FileSystemBridgeOptions = {
-  /** Custom message type for the bridge handshake (default: 'kernelBridge'). */
+  /** Custom message type for the bridge handshake (default: 'connect'). */
   messageType?: string;
 };
 
 /**
- * Expose a KernelFileSystem to incoming kernel bridge connections.
+ * Expose a filesystem to incoming bridge connections.
  *
  * Listens on the worker's global scope for messages with the specified type
- * and a transferred MessagePort. For each received port, sets up a
- * `createFileSystemServer` to serve the filesystem over that port.
+ * and a transferred MessagePort. For each received port, buffers any incoming
+ * messages via `catchMessages`, sets up a `createBridgeServer`, then replays
+ * the buffered messages. This ensures no messages are lost if the caller
+ * starts sending before the server is fully wired.
  *
  * Returns a cleanup function that removes the listener.
  *
- * @param fileSystem - KernelFileSystem implementation to serve
+ * @param handlers - Object whose methods are served over each incoming port
  * @param options - Optional configuration
  * @returns Cleanup function that removes the message listener
  *
  * @example
  * ```typescript
- * import { exposeFileSystem, fromZenFS } from '@taucad/kernels/filesystem';
- * import { fs } from '@zenfs/core';
+ * import { exposeFileSystem } from '@taucad/kernels/filesystem';
+ * import { fileManager } from './file-manager.js';
  *
- * exposeFileSystem(fromZenFS(fs));
+ * exposeFileSystem(fileManager);
  * ```
  */
-export function exposeFileSystem(fileSystem: KernelFileSystem, options?: FileSystemBridgeOptions): () => void {
+export function exposeFileSystem<T extends Record<string, unknown>>(
+  handlers: T,
+  options?: FileSystemBridgeOptions,
+): () => void {
   const messageType = options?.messageType ?? defaultBridgeMessageType;
 
   const handler = (event: MessageEvent): void => {
     if (event.data?.type === messageType && event.data.port instanceof MessagePort) {
-      createFileSystemServer(fileSystem, event.data.port as MessagePort);
+      const port = event.data.port as MessagePort;
+      const stopAndReplayMessages = catchMessages(port);
+      createBridgeServer(handlers, port);
+      stopAndReplayMessages();
     }
   };
 
@@ -58,7 +66,7 @@ export function exposeFileSystem(fileSystem: KernelFileSystem, options?: FileSys
 }
 
 /**
- * Create a filesystem bridge to a worker exposing a KernelFileSystem.
+ * Create a filesystem bridge to a worker.
  *
  * Creates a MessageChannel, transfers port1 to the target worker via
  * postMessage, and returns port2 for use with `client.connect({ port })`.
@@ -68,19 +76,26 @@ export function exposeFileSystem(fileSystem: KernelFileSystem, options?: FileSys
  *
  * @param worker - Target worker (must have `exposeFileSystem` set up)
  * @param options - Optional configuration
- * @returns MessagePort to pass to `client.connect({ port })`
+ * @returns BridgeHandle with the consumer port and a dispose function
  *
  * @example
  * ```typescript
  * import { createFileSystemBridge } from '@taucad/kernels/filesystem';
  *
- * const port = createFileSystemBridge(fmWorker);
+ * const { port, dispose } = createFileSystemBridge(fmWorker);
  * await client.connect({ port });
+ * // later...
+ * dispose();
  * ```
  */
-export function createFileSystemBridge(worker: Worker, options?: FileSystemBridgeOptions): MessagePort {
+export function createFileSystemBridge(worker: Worker, options?: FileSystemBridgeOptions): BridgeHandle {
   const messageType = options?.messageType ?? defaultBridgeMessageType;
   const channel = new MessageChannel();
   worker.postMessage({ type: messageType, port: channel.port1 }, [channel.port1]);
-  return channel.port2;
+  return {
+    port: channel.port2,
+    dispose() {
+      channel.port2.close();
+    },
+  };
 }

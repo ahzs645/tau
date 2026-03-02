@@ -55,7 +55,7 @@ See `docs/library-api-best-practices.md` (section 5) for full rationale and exam
 
 | Prefix | Role | Examples |
 |---|---|---|
-| `create*` | Factory | `createKernelClient`, `createFileSystemPort` |
+| `create*` | Factory | `createKernelClient`, `createBridgePort` |
 | `define*` | Plugin definition | `defineKernel`, `defineMiddleware` |
 | `is*` | Type guard | `isGeometryFile`, `isKernelPlugin` |
 | `from*` | Conversion | `fromNodeFS`, `fromMemoryFS` |

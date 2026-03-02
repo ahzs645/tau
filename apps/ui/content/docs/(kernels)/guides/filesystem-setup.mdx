@@ -6,7 +6,7 @@ icon: lucide:folder-cog
 
 # Filesystem Setup
 
-Configure the filesystem backend that kernels use to read project files. The framework provides three built-in constructors: `fromNodeFS` for disk access, `fromMemoryFS` for in-memory content, and `fromZenFS` for browser-based virtual filesystems.
+Configure the filesystem backend that kernels use to read project files. The framework provides three built-in constructors: `fromNodeFS` for disk access, `fromMemoryFS` for in-memory content, and `fromFsLike` for any fs-compatible object (ZenFS, BrowserFS, memfs, polyfills).
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ Choose and configure a `KernelFileSystem` implementation so your kernel client c
 All three constructors are exported from the main package:
 
 ```typescript
-import { fromNodeFS, fromMemoryFS, fromZenFS } from '@taucad/kernels';
+import { fromNodeFS, fromMemoryFS, fromFsLike } from '@taucad/kernels';
 ```
 
 ### 2. Use fromNodeFS for Disk-Based Projects
@@ -73,15 +73,15 @@ const client = createKernelClient({
 
 When you call `client.render({ file: 'main.ts', code: '...' })`, the `code` is written to the in-memory store before the kernel runs. Use `fromMemoryFS()` with no args for an empty store that you populate via `render`/`connect`.
 
-### 4. Use fromZenFS for Browser Virtual Filesystems
+### 4. Use fromFsLike for Any fs-Compatible Object
 
-Use `fromZenFS` when running in the browser with a ZenFS-backed virtual filesystem (e.g., IndexedDB, in-memory). Pass the ZenFS `fs` instance:
+Use `fromFsLike` when you have an fs-compatible object with a `promises` namespace (e.g., ZenFS, BrowserFS, memfs, or any polyfill). Pass the fs instance:
 
 ```typescript
-import { createKernelClient, fromZenFS } from '@taucad/kernels';
+import { createKernelClient, fromFsLike } from '@taucad/kernels';
 import { fs } from '@zenfs/core';
 
-const filesystem = fromZenFS(fs, '/');
+const filesystem = fromFsLike(fs, '/');
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -90,11 +90,11 @@ const client = createKernelClient({
 });
 ```
 
-Use this when you need a persistent browser filesystem (IndexedDB) or when integrating with ZenFS-based tooling.
+Use this when you have a `node:fs`-compatible object in any environment -- browser virtual filesystems (ZenFS IndexedDB, BrowserFS), in-memory polyfills (memfs), or any library that provides `fs.promises`.
 
 ### 5. Understand the KernelFileSystem Interface
 
-Any filesystem implementation must implement the `KernelFileSystem` interface. It exposes eight methods matching `fs.promises` semantics:
+Filesystem backends implement `KernelFileSystemBase` -- 11 primitives matching `fs.promises` semantics:
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -103,10 +103,22 @@ Any filesystem implementation must implement the `KernelFileSystem` interface. I
 | `mkdir` | `(path, options?) => Promise<void>` | Create directory (supports `{ recursive: true }`) |
 | `readdir` | `(path) => Promise<string[]>` | List directory entries |
 | `unlink` | `(path) => Promise<void>` | Delete file |
-| `stat` | `(path) => Promise<{ type, size, mtimeMs }>` | Get file/dir metadata |
+| `rmdir` | `(path) => Promise<void>` | Remove directory |
+| `rename` | `(oldPath, newPath) => Promise<void>` | Rename/move file or directory |
+| `stat` | `(path) => Promise<FileStat>` | Get file/dir metadata (`FileStat` from `@taucad/types`) |
+| `lstat` | `(path) => Promise<FileStat>` | Like stat, but does not follow symlinks |
 | `exists` | `(path) => Promise<boolean>` | Check if path exists |
 
-All paths are absolute. The framework builds higher-level operations (e.g., `ensureDirectoryExists`, batch reads) from these primitives.
+The framework wraps the base with `createKernelFileSystem(base)` to add enhanced helper methods with default implementations:
+
+| Method | Signature | Default Implementation |
+|--------|-----------|----------------------|
+| `readFiles` | `(paths) => Promise<Record<string, Uint8Array>>` | `Promise.all(paths.map(readFile))` |
+| `readdirContents` | `(dirPath) => Promise<Record<string, Uint8Array>>` | `readdir` + `stat` + `readFile` (files only) |
+| `readdirStat` | `(dirPath) => Promise<FileStatEntry[]>` | `readdir` + `stat` per entry |
+| `ensureDir` | `(path) => Promise<void>` | `mkdir(path, { recursive: true })` |
+
+All paths are absolute. Backends can supply optimized overrides for any enhanced method (e.g., batch reads at the storage layer).
 
 ## When to Use Each
 
@@ -114,13 +126,13 @@ All paths are absolute. The framework builds higher-level operations (e.g., `ens
 |-------------|----------|
 | `fromNodeFS(basePath)` | Node.js environment, disk-based projects, persistent cache |
 | `fromMemoryFS(files?)` | Editor-driven content, tests, no disk I/O, ephemeral cache |
-| `fromZenFS(fs, rootPath?)` | Browser with ZenFS (IndexedDB, in-memory), same-thread worker serving |
+| `fromFsLike(fs, rootPath?)` | Any fs-compatible object (ZenFS, BrowserFS, memfs, polyfills) |
 
 ## Variations
 
 - **Reading files from disk vs in-memory**: With `fromNodeFS`, kernels read from the real filesystem. With `fromMemoryFS`, they read from the in-memory Map. The bundler and kernels use the same interface; only the backend differs.
 - **Custom implementation**: Implement `KernelFileSystem` directly for custom backends (e.g., cloud storage, virtual mounts). See [API Reference: Types](/docs/api/types) for the full interface.
-- **Filesystem bridge**: For advanced setups (e.g., UI exposing a filesystem to a worker), use `createFileSystemPort` and `exposeFileSystem` from `@taucad/kernels/filesystem`.
+- **Filesystem bridge**: For advanced setups (e.g., UI exposing a filesystem to a worker), use `createBridgePort` and `exposeFileSystem` from `@taucad/kernels/filesystem`. Both `createBridgePort` and `createFileSystemBridge` return a `BridgeHandle` with `{ port, dispose() }` -- call `dispose()` when the bridge is no longer needed to release the underlying MessagePort resources.
 
 ## Related
 

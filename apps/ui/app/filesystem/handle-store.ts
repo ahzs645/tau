@@ -20,7 +20,7 @@
  * @see https://developer.mozilla.org/en-US/docs/Web/API/FileSystemDirectoryHandle
  */
 
-import type { FilesystemBackend } from '@taucad/types';
+import type { FileSystemBackend } from '@taucad/types';
 import { metaConfig } from '#constants/meta.constants.js';
 
 const dbName = `${metaConfig.databasePrefix}fs-handles`;
@@ -33,9 +33,9 @@ const dbVersion = 2;
  * Per-build filesystem configuration.
  * Architected for future mount support (zip libraries, etc.).
  */
-export type BuildFilesystemConfig = {
+export type BuildFileSystemConfig = {
   buildId: string;
-  backend: FilesystemBackend;
+  backend: FileSystemBackend;
   // Future: mounts?: Array<{ path: string; type: 'zip'; source: string }>;
 };
 
@@ -182,10 +182,10 @@ export async function requestHandlePermission(handle: FileSystemDirectoryHandle)
  * This records which backend a build's files are stored in, so the correct
  * backend is used when loading the build in the future.
  */
-export async function setBuildFilesystemConfig(buildId: string, backend: FilesystemBackend): Promise<void> {
+export async function setBuildFileSystemConfig(buildId: string, backend: FileSystemBackend): Promise<void> {
   const db = await openHandleDb();
 
-  const config: BuildFilesystemConfig = { buildId, backend };
+  const config: BuildFileSystemConfig = { buildId, backend };
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(configsStoreName, 'readwrite');
@@ -210,7 +210,7 @@ export async function setBuildFilesystemConfig(buildId: string, backend: Filesys
  * Retrieve the filesystem backend for a build.
  * Returns undefined if no config has been stored (legacy builds default to 'indexeddb').
  */
-export async function getBuildFilesystemConfig(buildId: string): Promise<FilesystemBackend | undefined> {
+export async function getBuildFileSystemConfig(buildId: string): Promise<FileSystemBackend | undefined> {
   const db = await openHandleDb();
 
   return new Promise((resolve, reject) => {
@@ -219,7 +219,7 @@ export async function getBuildFilesystemConfig(buildId: string): Promise<Filesys
     const request = store.get(buildId);
 
     request.addEventListener('success', () => {
-      const config = request.result as BuildFilesystemConfig | undefined;
+      const config = request.result as BuildFileSystemConfig | undefined;
       resolve(config?.backend);
     });
 
@@ -237,7 +237,7 @@ export async function getBuildFilesystemConfig(buildId: string): Promise<Filesys
  * Remove the filesystem config for a build.
  * Should be called when a build is deleted.
  */
-export async function deleteBuildFilesystemConfig(buildId: string): Promise<void> {
+export async function deleteBuildFileSystemConfig(buildId: string): Promise<void> {
   const db = await openHandleDb();
 
   return new Promise((resolve, reject) => {
@@ -263,7 +263,7 @@ export async function deleteBuildFilesystemConfig(buildId: string): Promise<void
  * Retrieve all build filesystem configs.
  * Used by the /files route to enumerate builds across all backends.
  */
-export async function getAllBuildFilesystemConfigs(): Promise<BuildFilesystemConfig[]> {
+export async function getAllBuildFileSystemConfigs(): Promise<BuildFileSystemConfig[]> {
   const db = await openHandleDb();
 
   return new Promise((resolve, reject) => {
@@ -272,7 +272,7 @@ export async function getAllBuildFilesystemConfigs(): Promise<BuildFilesystemCon
     const request = store.getAll();
 
     request.addEventListener('success', () => {
-      const configs = request.result as BuildFilesystemConfig[];
+      const configs = request.result as BuildFileSystemConfig[];
       resolve(configs);
     });
 

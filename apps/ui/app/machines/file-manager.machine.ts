@@ -10,15 +10,18 @@ import {
   stopChild,
 } from 'xstate';
 import type { OutputFrom, DoneActorEvent, AnyEventObject } from 'xstate';
-import { wrap } from 'comlink';
-import type { Remote } from 'comlink';
-import type { FileEntry, FilesystemBackend } from '@taucad/types';
+import type { FileEntry, FileSystemBackend } from '@taucad/types';
+import { createBridgeProxy, createFileSystemBridge } from '@taucad/kernels/filesystem';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
-import type { FileManager as FileWorker } from '#machines/file-manager.js';
-import { getStoredDirectoryHandle, getBuildFilesystemConfig, checkHandlePermission } from '#filesystem/handle-store.js';
+import { getStoredDirectoryHandle, getBuildFileSystemConfig, checkHandlePermission } from '#filesystem/handle-store.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import { normalizePath, joinPath } from '#utils/path.utils.js';
-import type { FileWriteSource, FileManagerEmitted } from '#machines/file-manager.machine.types.js';
+import type {
+  FileWriteSource,
+  FileManagerEmitted,
+  FileManagerProxy,
+  FileManagerProtocol,
+} from '#machines/file-manager.machine.types.js';
 
 /**
  * Polling interval for file watching (in milliseconds).
@@ -34,7 +37,9 @@ const watchIntervalBlurredMs = 10_000;
  */
 type FileManagerContext = {
   worker: Worker | undefined;
-  wrappedWorker: Remote<FileWorker> | undefined;
+  proxy: FileManagerProxy | undefined;
+  /** Cleanup function for the bridge MessagePort. */
+  bridgeDispose?: () => void;
   fileTree: Map<string, FileEntry>;
   openFiles: Map<string, Uint8Array<ArrayBuffer>>;
   error: Error | undefined;
@@ -43,11 +48,13 @@ type FileManagerContext = {
   /** Whether file watching (polling) is active for the webaccess backend */
   isWatching: boolean;
   /** Current filesystem backend type */
-  backendType: FilesystemBackend;
+  backendType: FileSystemBackend;
   /** Whether the webaccess handle exists but needs a user gesture to re-grant permission */
   webAccessNeedsPermission: boolean;
   /** Build ID for per-build backend config resolution */
   buildId: string | undefined;
+  /** Shared worker instance from parent provider (singleton pattern) */
+  sharedWorker: Worker | undefined;
 };
 
 // ============ Lifecycle Actors (kept) ============
@@ -55,7 +62,7 @@ type FileManagerContext = {
 const initializeWorkerActor = fromPromise<
   | {
       type: 'workerInitialized';
-      configuredBackend: FilesystemBackend;
+      configuredBackend: FileSystemBackend;
       webAccessNeedsPermission: boolean;
     }
   | { type: 'workerInitializationFailed'; error: Error },
@@ -63,23 +70,33 @@ const initializeWorkerActor = fromPromise<
 >(async ({ input }) => {
   const { context } = input;
 
-  // Clean up any existing worker
-  if (context.worker) {
+  // Clean up any existing bridge and proxy
+  if (context.proxy) {
+    context.proxy.dispose();
+  }
+
+  context.bridgeDispose?.();
+
+  // Only terminate worker if we own it (not shared)
+  if (context.worker && !context.sharedWorker) {
     context.worker.terminate();
   }
 
   try {
-    const worker = new FileManagerWorker({ name: `fm-${context.rootDirectory}` });
-    const wrappedWorker = wrap<FileWorker>(worker);
+    // Reuse shared worker from parent provider, or create a new one (root case)
+    const worker = context.sharedWorker ?? new FileManagerWorker({ name: `fm-root` });
+    const { port, dispose: bridgeDispose } = createFileSystemBridge(worker);
+    const proxy = createBridgeProxy<FileManagerProtocol>(port);
 
     // Store references
     context.worker = worker;
-    context.wrappedWorker = wrappedWorker;
+    context.proxy = proxy;
+    context.bridgeDispose = bridgeDispose;
 
     // Resolve the backend -- if buildId is provided, read per-build config
     let backend = context.backendType;
     if (context.buildId) {
-      const buildBackend = await getBuildFilesystemConfig(context.buildId);
+      const buildBackend = await getBuildFileSystemConfig(context.buildId);
       // Legacy builds (created before per-build configs) have no entry;
       // they historically used indexeddb, so default to that rather than
       // falling through to the cookie-driven backendType.
@@ -100,8 +117,8 @@ const initializeWorkerActor = fromPromise<
           // Use workspace root directly -- no per-build scoping.
           // Path-level isolation via /builds/{buildId}/ prefix handles build separation,
           // consistent with how indexeddb and opfs backends work.
-          await wrappedWorker.setDirectoryHandle(workspaceHandle);
-          await wrappedWorker.reconfigure('webaccess');
+          proxy.setDirectoryHandle(workspaceHandle);
+          await proxy.reconfigure('webaccess');
           return { type: 'workerInitialized', configuredBackend: 'webaccess', webAccessNeedsPermission: false };
         }
       }
@@ -110,17 +127,17 @@ const initializeWorkerActor = fromPromise<
       return { type: 'workerInitialized', configuredBackend: 'indexeddb', webAccessNeedsPermission: true };
     }
 
-    // For non-default backends (opfs, memory), reconfigure the worker
+    // For non-default backends (opfs, memory), reconfigure
     if (backend !== 'indexeddb') {
-      await wrappedWorker.reconfigure(backend);
+      await proxy.reconfigure(backend);
     }
 
     return { type: 'workerInitialized', configuredBackend: backend, webAccessNeedsPermission: false };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to initialize worker';
+    console.error('[ZenFS] Worker initialization failed', error);
     return {
       type: 'workerInitializationFailed',
-      error: new Error(errorMessage),
+      error: error instanceof Error ? error : new Error('Failed to initialize worker'),
     };
   }
 });
@@ -131,7 +148,7 @@ const readDirectoryActor = fromPromise<
 >(async ({ input }) => {
   const { context, path } = input;
 
-  if (!context.wrappedWorker) {
+  if (!context.proxy) {
     return {
       type: 'directoryReadFailed',
       error: new Error('Worker not initialized'),
@@ -141,7 +158,7 @@ const readDirectoryActor = fromPromise<
   try {
     // Empty path means root directory
     const absolutePath = path === '' ? normalizePath(context.rootDirectory) : joinPath(context.rootDirectory, path);
-    const fileStats = await context.wrappedWorker.getDirectoryStat(absolutePath);
+    const fileStats = await context.proxy.getDirectoryStat(absolutePath);
     const entries: FileEntry[] = [];
 
     for (const fileStat of fileStats) {
@@ -159,10 +176,9 @@ const readDirectoryActor = fromPromise<
 
     return { type: 'directoryRead', entries };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to read directory';
     return {
       type: 'directoryReadFailed',
-      error: new Error(errorMessage),
+      error: error instanceof Error ? error : new Error('Failed to read directory'),
     };
   }
 });
@@ -227,7 +243,7 @@ type PromiseActorNames = 'initializeWorkerActor' | 'readDirectoryActor';
 type FileManagerEventLifecycle =
   | { type: 'initialize' }
   | { type: 'setRoot'; path: string; buildId?: string }
-  | { type: 'setBackendType'; backendType: FilesystemBackend }
+  | { type: 'setBackendType'; backendType: FileSystemBackend }
   | { type: 'startWatching' }
   | { type: 'stopWatching' }
   | { type: 'pollFileSystem' };
@@ -253,9 +269,11 @@ type FileManagerInput = {
   rootDirectory: string;
   shouldInitializeOnStart?: boolean;
   /** Which filesystem backend to use on initialization. Defaults to 'indexeddb'. */
-  initialBackend?: FilesystemBackend;
+  initialBackend?: FileSystemBackend;
   /** Build ID for per-build backend config resolution. */
   buildId?: string;
+  /** Shared worker from parent FileManagerProvider (singleton pattern). */
+  sharedWorker?: Worker;
 };
 
 /**
@@ -298,6 +316,7 @@ export const fileManagerMachine = setup({
       error({ event }) {
         assertActorDoneEvent(event);
         if ('error' in event.output && event.output.error instanceof Error) {
+          console.error('[ZenFS] File manager error:', event.output.error);
           return event.output.error;
         }
 
@@ -310,10 +329,18 @@ export const fileManagerMachine = setup({
     }),
 
     destroyWorker({ context }) {
-      if (context.worker) {
+      if (context.proxy) {
+        context.proxy.dispose();
+        context.proxy = undefined;
+      }
+
+      context.bridgeDispose?.();
+      context.bridgeDispose = undefined;
+
+      // Only terminate the worker if we own it (not shared from parent)
+      if (context.worker && !context.sharedWorker) {
         context.worker.terminate();
         context.worker = undefined;
-        context.wrappedWorker = undefined;
       }
     },
 
@@ -578,7 +605,7 @@ export const fileManagerMachine = setup({
   }),
   context: ({ input }) => ({
     worker: undefined,
-    wrappedWorker: undefined,
+    proxy: undefined,
     fileTree: new Map(),
     openFiles: new Map(),
     error: undefined,
@@ -588,6 +615,7 @@ export const fileManagerMachine = setup({
     backendType: input.initialBackend ?? 'indexeddb',
     webAccessNeedsPermission: false,
     buildId: input.buildId,
+    sharedWorker: input.sharedWorker,
   }),
   initial: 'initializing',
   exit: ['stopFileWatcher', 'destroyWorker'],

@@ -11,7 +11,7 @@ import {
   openSettingsDialog,
 } from '#hooks/use-settings-dialog.js';
 import type { SettingsSection } from '#hooks/use-settings-dialog.js';
-import { FilesystemSettings } from '#components/settings/filesystem-settings.js';
+import { FileSystemSettings } from '#components/settings/filesystem-settings.js';
 import { GeneralSettings } from '#components/settings/general-settings.js';
 import { ExperimentalSettings } from '#components/settings/experimental-settings.js';
 import { SettingsAuthGate } from '#components/settings/settings-auth-gate.js';
@@ -141,7 +141,7 @@ export function SettingsDialog(): React.JSX.Element {
               <GeneralSettings />
             </TabsContent>
             <TabsContent enableAnimation={false} value="Filesystem">
-              <FilesystemSettings />
+              <FileSystemSettings />
             </TabsContent>
             <TabsContent enableAnimation={false} value="Billing">
               <SettingsAuthGate>

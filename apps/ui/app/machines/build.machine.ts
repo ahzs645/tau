@@ -294,7 +294,7 @@ export const buildMachine = setup({
       gitRef({ context, spawn, self }) {
         return spawn('git', {
           id: `git-${context.buildId}`,
-          input: { buildId: context.buildId, parentRef: self },
+          input: { buildId: context.buildId, parentRef: self, fileManagerRef: context.fileManagerRef },
         });
       },
       // Reset compilation units - the primary one will be created during initializeKernelIfNeeded after build load
@@ -553,7 +553,7 @@ export const buildMachine = setup({
 
     const gitRef = spawn('git', {
       id: `git-${buildId}`,
-      input: { buildId, parentRef: self },
+      input: { buildId, parentRef: self, fileManagerRef },
     });
 
     const logRef = spawn('logs', {

@@ -13,23 +13,16 @@
  */
 import { configure, InMemory, fs as zenfs } from '@zenfs/core';
 import { IndexedDB, WebAccess } from '@zenfs/dom';
-import type { FilesystemBackend, FilesystemBackendConfig } from '@taucad/types';
+import type { FileSystemBackend, FileSystemBackendConfig } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
 import { isOpfsSupported } from '#constants/browser.constants.js';
 import { metaConfig } from '#constants/meta.constants.js';
 
 /**
- * Git filesystem mount point.
- * All git operations should use paths under this mount.
- */
-export const gitMountPoint = '/git';
-
-/**
  * Track if filesystem has been configured to avoid re-initialization.
  */
-let currentBackend: FilesystemBackend | undefined;
+let currentBackend: FileSystemBackend | undefined;
 let configurationPromise: Promise<void> | undefined;
-let gitMountConfigured = false;
 
 /**
  * Backend registry - defines configuration for each backend type.
@@ -53,37 +46,11 @@ const indexedDbBackend = {
     try {
       await configure(mountConfig);
     } catch (error) {
-      // Detect IndexedDB corruption (e.g. from prior ZenFS race conditions) and recover
-      // by deleting the corrupt database and retrying with a fresh store.
-      if (error instanceof SyntaxError && error.message.includes('is not valid JSON')) {
-        console.warn(
-          '[FileManager:ZenFS] Corrupt IndexedDB detected, deleting database and retrying with fresh store...',
-        );
-        await deleteIndexedDatabase(storeName);
-        await configure(mountConfig);
-        return;
-      }
-
+      console.error('[ZenFS] IndexedDB configuration failed', error);
       throw error;
     }
   },
-} as const satisfies FilesystemBackendConfig;
-
-/**
- * Delete an IndexedDB database by name.
- * Used for corruption recovery when the stored data is invalid.
- */
-async function deleteIndexedDatabase(name: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(name);
-    request.addEventListener('success', () => {
-      resolve();
-    });
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error(`Failed to delete IndexedDB database: ${name}`));
-    });
-  });
-}
+} as const satisfies FileSystemBackendConfig;
 
 const opfsBackend = {
   name: 'opfs',
@@ -98,7 +65,7 @@ const opfsBackend = {
       },
     });
   },
-} as const satisfies FilesystemBackendConfig;
+} as const satisfies FileSystemBackendConfig;
 
 /**
  * WebAccess (File System Access API) backend state.
@@ -142,7 +109,7 @@ const webAccessBackend = {
       },
     });
   },
-} as const satisfies FilesystemBackendConfig;
+} as const satisfies FileSystemBackendConfig;
 
 const memoryBackend = {
   name: 'memory',
@@ -156,13 +123,13 @@ const memoryBackend = {
       },
     });
   },
-} as const satisfies FilesystemBackendConfig;
+} as const satisfies FileSystemBackendConfig;
 
 /** Registry of all available backends */
 export const filesystemBackends = [indexedDbBackend, opfsBackend, webAccessBackend, memoryBackend] as const;
 
 /** Get backend config by name */
-export function getBackendConfig(name: FilesystemBackend): FilesystemBackendConfig {
+export function getBackendConfig(name: FileSystemBackend): FileSystemBackendConfig {
   const backend = filesystemBackends.find((b) => b.name === name);
   if (!backend) {
     throw new Error(`Unknown backend: ${name}`);
@@ -178,14 +145,11 @@ export function getBackendConfig(name: FilesystemBackend): FilesystemBackendConf
  * @param backend - The backend type to use ('indexeddb' or 'opfs' for production, 'memory' for tests)
  * @throws Error if the backend is not supported by the browser
  */
-export async function configureFilesystem(backend: FilesystemBackend = 'indexeddb'): Promise<void> {
-  // If already configured with the same backend, return the existing promise
+export async function configureFileSystem(backend: FileSystemBackend = 'indexeddb'): Promise<void> {
   if (currentBackend === backend && configurationPromise) {
     return configurationPromise;
   }
 
-  // If there's an existing configuration in progress, await it before starting a new one
-  // This prevents concurrent reconfiguration races
   if (configurationPromise) {
     try {
       await configurationPromise;
@@ -193,7 +157,6 @@ export async function configureFilesystem(backend: FilesystemBackend = 'indexedd
       // Previous configuration failed, proceed with new configuration
     }
 
-    // After awaiting, check again if we're now configured with the desired backend
     if (currentBackend === backend) {
       return;
     }
@@ -204,15 +167,11 @@ export async function configureFilesystem(backend: FilesystemBackend = 'indexedd
     throw new Error(`Backend "${backend}" is not supported in this browser.`);
   }
 
-  // Create a new configuration promise with error handling to allow retries
   configurationPromise = (async (): Promise<void> => {
     try {
       await config.create();
-      // Only set currentBackend after successful configure() completes
       currentBackend = backend;
-      gitMountConfigured = true;
     } catch (error) {
-      // Clear the promise on failure so retries are possible
       configurationPromise = undefined;
       throw error;
     }
@@ -228,7 +187,7 @@ export async function configureFilesystem(backend: FilesystemBackend = 'indexedd
  * @param backend - The new backend type to use
  * @throws Error if the backend is not supported by the browser
  */
-export async function reconfigureFilesystem(backend: FilesystemBackend): Promise<void> {
+export async function reconfigureFileSystem(backend: FileSystemBackend): Promise<void> {
   const config = getBackendConfig(backend);
   if (!config.canHandle()) {
     throw new Error(`Backend "${backend}" is not supported in this browser.`);
@@ -237,9 +196,8 @@ export async function reconfigureFilesystem(backend: FilesystemBackend): Promise
   // Clear state to allow reconfiguration
   currentBackend = undefined;
   configurationPromise = undefined;
-  gitMountConfigured = false;
 
-  await configureFilesystem(backend);
+  await configureFileSystem(backend);
 }
 
 /**
@@ -249,7 +207,7 @@ export async function reconfigureFilesystem(backend: FilesystemBackend): Promise
  *
  * @param backend - The backend type to configure if not already configured
  */
-export async function ensureFilesystemConfigured(backend: FilesystemBackend): Promise<void> {
+export async function ensureFileSystemConfigured(backend: FileSystemBackend): Promise<void> {
   if (configurationPromise) {
     // Already configured or configuring - just wait, ignore passed backend
     await configurationPromise;
@@ -257,17 +215,16 @@ export async function ensureFilesystemConfigured(backend: FilesystemBackend): Pr
   }
 
   // Not configured yet - configure with the specified backend
-  await configureFilesystem(backend);
+  await configureFileSystem(backend);
 }
 
 /**
  * Reset the filesystem configuration.
  * Used in tests to start with a fresh InMemory filesystem.
  */
-export async function resetFilesystem(): Promise<void> {
+export async function resetFileSystem(): Promise<void> {
   currentBackend = undefined;
   configurationPromise = undefined;
-  gitMountConfigured = false;
   await configure({
     mounts: {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- ZenFS uses '/' as mount point key
@@ -275,57 +232,25 @@ export async function resetFilesystem(): Promise<void> {
     },
   });
   currentBackend = 'memory';
-  gitMountConfigured = true;
   configurationPromise = Promise.resolve();
 }
 
 /**
  * Ensure git filesystem mount is configured.
  * This is idempotent - if already configured or in-flight, waits for completion.
- *
- * Note: Git mount is automatically configured with the main filesystem.
- * This function is provided for explicit initialization in git operations.
- *
- * Handles:
- * - Already configured: returns immediately
- * - In-flight configuration: waits for the existing promise
- * - Failed configuration: allows retry by calling configureFilesystem()
  */
-export async function ensureGitMountConfigured(): Promise<void> {
-  // If there's an in-flight or completed configuration, wait for it
-  if (configurationPromise) {
-    await configurationPromise;
-    // After awaiting, check if git mount was successfully configured
-    if (gitMountConfigured) {
-      return;
-    }
-    // Configuration completed but git mount not configured (shouldn't happen
-    // in normal flow, but handle it by reconfiguring)
-  }
-
-  // Configure filesystem with IndexedDB backend which includes git mount.
-  // Keep this explicit so git operations never fall back to OPFS.
-  await configureFilesystem('indexeddb');
-}
-
-/**
- * Check if the git mount has been configured.
- */
-export function isGitMountConfigured(): boolean {
-  return gitMountConfigured;
-}
 
 /**
  * Get whether the filesystem has been configured.
  */
-export function isFilesystemConfigured(): boolean {
+export function isFileSystemConfigured(): boolean {
   return currentBackend !== undefined;
 }
 
 /**
  * Get the current backend type.
  */
-export function getCurrentBackend(): FilesystemBackend | undefined {
+export function getCurrentBackend(): FileSystemBackend | undefined {
   return currentBackend;
 }
 

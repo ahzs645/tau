@@ -66,13 +66,17 @@ The protocol is intentionally low-level so that performance-critical paths stay 
 
 When the worker returns geometry (e.g., glTF as `ArrayBuffer`), the dispatcher calls `port.postMessage(response, [buffer])`. The second argument is the transfer list. The buffer is transferred to the main thread; the worker can no longer access it. No copy occurs. For large meshes, this significantly reduces latency and memory pressure.
 
-The framework extracts transferables from `HashedGeometryResult` when the format is `gltf` and the content is an `ArrayBuffer`. Other formats (e.g., STL blob) may use different transfer strategies.
+The framework extracts transferables from `HashedGeometryResult` when the format is `gltf` and the content is an `ArrayBuffer`. The filesystem bridge also uses `extractTransferables()` to transfer `Uint8Array` buffers for file read/write operations, ensuring large CAD files are moved zero-copy between the filesystem worker and kernel workers.
+
+### Generic Bridge Proxy
+
+For application-level RPC (e.g., the `FileManager` protocol), `createBridgeProxy<T>(port)` provides a generic `Proxy`-based client that auto-dispatches method calls over the MessagePort bridge. This eliminates hand-written per-method stubs while preserving full type safety and control over transferables.
 
 ## Key Relationships
 
 - **Transport and Client** — The client creates or receives a transport and passes it to `KernelWorkerClient`. Custom transports enable testing (mock) or alternative channels (WebSocket for remote workers).
 - **Dispatcher and Worker** — The dispatcher is the worker-side message handler. It receives `KernelCommand`, invokes `KernelWorker` methods, and sends `KernelResponse`. It runs inside the worker.
-- **FileSystem and MessagePort** — The filesystem is often in a separate worker or the main thread. A `MessagePort` bridges the kernel worker to the filesystem. The client creates this port via `createFileSystemPort(fileSystem)` and transfers it during `initialize`.
+- **FileSystem and MessagePort** — The filesystem is often in a separate worker or the main thread. A `MessagePort` bridges the kernel worker to the filesystem. The client creates this port via `createBridgePort(fileSystem)` (which returns a `BridgeHandle` with `{ port, dispose() }`) and transfers it during `initialize`. For worker-to-worker bridges, `createFileSystemBridge(worker)` similarly returns a `BridgeHandle`. Call `dispose()` when the bridge is no longer needed to close the underlying ports.
 
 ## Implications
 

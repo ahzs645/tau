@@ -46,7 +46,7 @@ export function ChatHistorySettings(): React.ReactNode {
   const [showModelCost, setShowModelCost] = useCookie(cookieName.chatModelCost, true);
   const [showCodePreview, setShowCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
   const [showAnalysisImages, setShowAnalysisImages] = useCookie(cookieName.chatToolAnalysisImages, true);
-  const [includeFilesystem, setIncludeFilesystem] = useCookie(cookieName.chatCtxFs, true);
+  const [includeFileSystem, setIncludeFileSystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile, setIncludeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles, setIncludeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
   const [testingEnabled, setTestingEnabled] = useCookie(cookieName.chatTestingEnabled, true);
@@ -74,11 +74,11 @@ export function ChatHistorySettings(): React.ReactNode {
     [setShowAnalysisImages],
   );
 
-  const handleIncludeFilesystemToggle = useCallback(
+  const handleIncludeFileSystemToggle = useCallback(
     (checked: boolean) => {
-      setIncludeFilesystem(checked);
+      setIncludeFileSystem(checked);
     },
-    [setIncludeFilesystem],
+    [setIncludeFileSystem],
   );
 
   const handleIncludeActiveFileToggle = useCallback(
@@ -155,7 +155,7 @@ export function ChatHistorySettings(): React.ReactNode {
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52">
-            <DropdownMenuSwitchItem isChecked={includeFilesystem} onIsCheckedChange={handleIncludeFilesystemToggle}>
+            <DropdownMenuSwitchItem isChecked={includeFileSystem} onIsCheckedChange={handleIncludeFileSystemToggle}>
               <FolderTree />
               Filesystem
             </DropdownMenuSwitchItem>

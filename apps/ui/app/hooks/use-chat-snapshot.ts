@@ -48,7 +48,7 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
   );
 
   // Read user preferences from cookies (default to true for all)
-  const [includeFilesystem] = useCookie(cookieName.chatCtxFs, true);
+  const [includeFileSystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
 
@@ -57,7 +57,7 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
     const snapshot: ChatSnapshot = {};
 
     // Add file tree if enabled and available
-    if (includeFilesystem && fileTree) {
+    if (includeFileSystem && fileTree) {
       snapshot.fileTree = fileTree;
     }
 
@@ -84,7 +84,7 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
 
     return snapshot;
   }, [
-    includeFilesystem,
+    includeFileSystem,
     fileTree,
     includeActiveFile,
     editorState.activeFilePath,

@@ -7,7 +7,7 @@
 
 import deepmerge from 'deepmerge';
 import type { PartialDeep } from 'type-fest';
-import type { ExportFormat, GeometryResponse, GeometryFile, OnWorkerLog } from '@taucad/types';
+import type { ExportFormat, GeometryResponse, GeometryFile, OnWorkerLog, FileStat, FileStatEntry } from '@taucad/types';
 import { dirname } from '@zenfs/core/path';
 import type { Mock } from 'vitest';
 import { expect, vi } from 'vitest';
@@ -45,10 +45,10 @@ import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#framework/kernel-worker.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
-import { createFileSystemPort } from '#framework/kernel-filesystem-bridge.js';
-import { fromZenFS } from '#client/filesystem-constructors.js';
+import { createBridgePort } from '#framework/kernel-filesystem-bridge.js';
+import { fromFsLike } from '#filesystem/from-fs-like.js';
 
-async function resetFilesystem(): Promise<void> {
+async function resetFileSystem(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem mount point requires '/' as key
   await configure({ mounts: { '/': InMemory } });
 }
@@ -64,10 +64,10 @@ async function resetFilesystem(): Promise<void> {
  *
  * @param files - Record of absolute paths to file contents
  */
-export async function seedTestFilesystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
+export async function seedTestFileSystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
   // Reset to a clean in-memory filesystem to prevent stale files from prior tests
   // (e.g., a leftover shapes.ts blocking resolution of shapes/index.ts barrel imports)
-  await resetFilesystem();
+  await resetFileSystem();
 
   // Write files to the filesystem
   for (const [path, content] of Object.entries(files)) {
@@ -87,8 +87,8 @@ export async function seedTestFilesystem(files: Record<string, string | Uint8Arr
 /**
  * Clear the test filesystem by resetting to a fresh in-memory backend.
  */
-export async function clearTestFilesystem(): Promise<void> {
-  await resetFilesystem();
+export async function clearTestFileSystem(): Promise<void> {
+  await resetFileSystem();
 }
 
 // =============================================================================
@@ -114,9 +114,9 @@ export type InitializeWorkerOptions = {
  * Uses MessageChannel to connect to the real fileManager, ensuring tests
  * exercise the same code path as production.
  *
- * IMPORTANT: Call seedTestFilesystem() before this to configure InMemory backend.
+ * IMPORTANT: Call seedTestFileSystem() before this to configure InMemory backend.
  * The first call to configure the filesystem "wins" - tests configure InMemory,
- * so the fileManager's ensureFilesystemConfigured('indexeddb') just waits.
+ * so the fileManager's ensureFileSystemConfigured('indexeddb') just waits.
  *
  * @param worker - The kernel worker instance to initialize
  * @param options - Optional configuration (onLog, workerOptions for kernel-specific settings like withBrepEdges)
@@ -130,7 +130,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
     worker.setTelemetrySend(options.onTelemetry);
   }
 
-  const port = createFileSystemPort(fromZenFS(fs));
+  const { port } = createBridgePort(fromFsLike(fs));
 
   await worker.initialize({
     callbacks: {
@@ -172,7 +172,7 @@ export function createMockLogger(): KernelLogger & MockKernelLogger {
 /**
  * Options for creating a mock filesystem with vitest mocks.
  */
-export type MockFilesystemOptions = {
+export type MockFileSystemOptions = {
   /** Result for exists calls */
   existsResult?: boolean | ((path: string) => boolean | Promise<boolean>);
   /** Result for readFile calls */
@@ -185,23 +185,30 @@ export type MockFilesystemOptions = {
 /**
  * Mock functions exposed for test assertions and setup.
  */
-export type MockFilesystemMocks = {
+export type MockFileSystemMocks = {
   readFile: ReturnType<typeof vi.fn>;
   exists: ReturnType<typeof vi.fn>;
   readdir: ReturnType<typeof vi.fn>;
   writeFile: ReturnType<typeof vi.fn>;
   mkdir: ReturnType<typeof vi.fn>;
   unlink: ReturnType<typeof vi.fn>;
+  rmdir: ReturnType<typeof vi.fn>;
+  rename: ReturnType<typeof vi.fn>;
   stat: ReturnType<typeof vi.fn>;
+  lstat: ReturnType<typeof vi.fn>;
+  readFiles: ReturnType<typeof vi.fn>;
+  readdirContents: ReturnType<typeof vi.fn>;
+  readdirStat: ReturnType<typeof vi.fn>;
+  ensureDir: ReturnType<typeof vi.fn>;
 };
 
 /**
  * A mock KernelFileSystem with vitest mock functions for verification.
  * Use the `mocks` property to access mock functions for test setup.
  */
-export type MockFilesystem = KernelFileSystem & {
+export type MockFileSystem = KernelFileSystem & {
   /** Access underlying mock functions for test assertions and setup */
-  mocks: MockFilesystemMocks;
+  mocks: MockFileSystemMocks;
 };
 
 /**
@@ -210,14 +217,14 @@ export type MockFilesystem = KernelFileSystem & {
  *
  * @example
  * ```typescript
- * const filesystem = createMockFilesystem({ existsResult: true });
+ * const filesystem = createMockFileSystem({ existsResult: true });
  * // Configure mock behavior
  * filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
  * // Verify calls
  * expect(filesystem.mocks.writeFile).toHaveBeenCalledWith(path, data);
  * ```
  */
-export function createMockFilesystem(options?: MockFilesystemOptions): MockFilesystem {
+export function createMockFileSystem(options?: MockFileSystemOptions): MockFileSystem {
   const existsFn = vi.fn().mockImplementation(async (path: string) => {
     if (typeof options?.existsResult === 'function') {
       return options.existsResult(path);
@@ -234,41 +241,67 @@ export function createMockFilesystem(options?: MockFilesystemOptions): MockFiles
     return options?.readFileResult ?? new Uint8Array();
   });
 
-  // Create base mock functions
-  const writeFileFn = vi.fn().mockResolvedValue(undefined);
-  const mkdirFn = vi.fn().mockResolvedValue(undefined);
-  const unlinkFn = vi.fn().mockResolvedValue(undefined);
-  const readdirFn = vi.fn().mockResolvedValue([]);
-  const statFn = vi.fn().mockRejectedValue(new Error('Not found'));
+  const writeFileFn = vi
+    .fn<(path: string, data: Uint8Array<ArrayBuffer> | string) => Promise<void>>()
+    .mockResolvedValue(undefined);
+  const mkdirFn = vi
+    .fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>()
+    .mockResolvedValue(undefined);
+  const unlinkFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
+  const readdirFn = vi.fn<(path: string) => Promise<string[]>>().mockResolvedValue([]);
+  const rmdirFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
+  const renameFn = vi.fn<(oldPath: string, newPath: string) => Promise<void>>().mockResolvedValue(undefined);
+  const statFn = vi.fn<(path: string) => Promise<FileStat>>().mockRejectedValue(new Error('Not found'));
+  const lstatFn = vi.fn<(path: string) => Promise<FileStat>>().mockRejectedValue(new Error('Not found'));
+  const readFilesFn = vi
+    .fn<(paths: string[]) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
+    .mockResolvedValue({});
+  const readdirContentsFn = vi
+    .fn<(dirPath: string) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
+    .mockResolvedValue({});
+  const readdirStatFn = vi.fn<(dirPath: string) => Promise<FileStatEntry[]>>().mockResolvedValue([]);
+  const ensureDirFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
 
-  // Define readFile with overload signatures - delegates to mock
   function readFile(path: string, encoding: 'utf8'): Promise<string>;
   function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
-    return readFileFn(path, encoding) as Promise<string | Uint8Array<ArrayBuffer>>;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- mock delegate; readFileFn is untyped to support both string and Uint8Array overloads
+    return readFileFn(path, encoding);
   }
 
   // Mocks object for test assertions
-  const mocks: MockFilesystemMocks = {
+  const mocks: MockFileSystemMocks = {
     readFile: readFileFn,
     exists: existsFn,
     readdir: readdirFn,
     writeFile: writeFileFn,
     mkdir: mkdirFn,
     unlink: unlinkFn,
+    rmdir: rmdirFn,
+    rename: renameFn,
     stat: statFn,
+    lstat: lstatFn,
+    readFiles: readFilesFn,
+    readdirContents: readdirContentsFn,
+    readdirStat: readdirStatFn,
+    ensureDir: ensureDirFn,
   };
 
   return {
     readFile,
-    exists: async (path: string) => existsFn(path) as Promise<boolean>,
-    readdir: async (path: string) => readdirFn(path) as Promise<string[]>,
-    writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data) as Promise<void>,
-    mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFn(path, options_) as Promise<void>,
-    unlink: async (path: string) => unlinkFn(path) as Promise<void>,
-    stat: async (path: string) => statFn(path) as Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>,
-
-    // Expose mocks for test assertions
+    exists: async (path: string): Promise<boolean> => existsFn(path) as boolean,
+    readdir: async (path: string) => readdirFn(path),
+    writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data),
+    mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFn(path, options_),
+    unlink: async (path: string) => unlinkFn(path),
+    rmdir: async (path: string) => rmdirFn(path),
+    rename: async (oldPath: string, newPath: string) => renameFn(oldPath, newPath),
+    stat: async (path: string) => statFn(path),
+    lstat: async (path: string) => lstatFn(path),
+    readFiles: async (paths: string[]) => readFilesFn(paths),
+    readdirContents: async (dirPath: string) => readdirContentsFn(dirPath),
+    readdirStat: async (dirPath: string) => readdirStatFn(dirPath),
+    ensureDir: async (path: string) => ensureDirFn(path),
     mocks,
   };
 }
@@ -314,18 +347,18 @@ export function createMockRuntime<
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   Options extends Record<string, unknown> = {},
 >(mockOptions?: {
-  filesystemOverrides?: MockFilesystemOptions;
+  filesystemOverrides?: MockFileSystemOptions;
   dependencies?: readonly Dependency[];
   dependencyHash?: string;
   options?: Options;
 }): KernelMiddlewareRuntime<State, Options> & {
   logger: ReturnType<typeof createMockLogger>;
-  filesystem: MockFilesystem;
+  filesystem: MockFileSystem;
   state: ReturnType<typeof createMockState<State>>;
 } {
   return {
     logger: createMockLogger(),
-    filesystem: createMockFilesystem(mockOptions?.filesystemOverrides),
+    filesystem: createMockFileSystem(mockOptions?.filesystemOverrides),
     state: createMockState<State>(),
 
     options: (mockOptions?.options ?? {}) as Options,
@@ -528,7 +561,7 @@ export async function createTestWorker(
     absoluteFiles[joinPath(basePath, path)] = content;
   }
 
-  await seedTestFilesystem(absoluteFiles);
+  await seedTestFileSystem(absoluteFiles);
 
   const worker = new KernelRuntimeWorker();
   const extensions = options?.extensions ?? inferExtensions(definition);
@@ -639,9 +672,9 @@ export async function createTestGeometry(input: {
  * Create a mock KernelRuntime for kernel method testing.
  * Uses the same filesystem and logger patterns as middleware runtime.
  */
-export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFilesystemOptions }): KernelRuntime & {
+export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFileSystemOptions }): KernelRuntime & {
   logger: ReturnType<typeof createMockLogger>;
-  filesystem: MockFilesystem;
+  filesystem: MockFileSystem;
 } {
   const noopBundler: KernelRuntime['bundler'] = {
     async bundle(): Promise<{ code: string; issues: never[]; success: false; dependencies: never[] }> {
@@ -661,7 +694,7 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
 
   return {
     logger: createMockLogger(),
-    filesystem: createMockFilesystem(options?.filesystemOverrides),
+    filesystem: createMockFileSystem(options?.filesystemOverrides),
     fileContentCache: new Map(),
     bundler: noopBundler,
     async execute(): Promise<{ success: false; issues: Array<{ message: string; severity: 'error' }> }> {
@@ -729,7 +762,7 @@ export class MockKernelWorker extends KernelWorker {
 
     // Set up the internal _filesystem property directly
     // @ts-expect-error - Test utility accessing internals
-    this._filesystem = options.filesystem ?? createMockFilesystem();
+    this._filesystem = options.filesystem ?? createMockFileSystem();
 
     // Set up the internal _logger property directly (uses createLogger which depends on onLog)
     // @ts-expect-error - Test utility accessing internals

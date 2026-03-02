@@ -48,7 +48,7 @@ The kernel API follows a three-layer design. Each layer has a distinct audience 
 | **KernelTransport** | Event-driven message channel between realms. Default: `createWorkerTransport()`. | Framework |
 | **KernelWorkerClient** | Protocol client wrapping a Transport with request/response correlation and typed callbacks. | Framework |
 | **KernelRuntimeWorker** | Worker-side orchestrator. Manages kernel selection, middleware chain, bundler routing. | Worker |
-| **KernelFileSystem** | 8-method Node.js `fs.promises`-compatible interface. Bridged from main thread → worker via MessagePort. | Consumer |
+| **KernelFileSystem** | 10-method Node.js `fs.promises`-compatible interface. Bridged from main thread → worker via MessagePort. | Consumer |
 | **KernelDefinition** | Kernel plugin contract (author API, via `defineKernel`). Runs in worker. | Plugin Author |
 | **BundlerDefinition** | Bundler plugin contract (author API, via `defineBundler`). Declares supported `extensions`. | Plugin Author |
 | **KernelMiddleware** | Middleware plugin contract (author API, via `defineMiddleware`). Wraps kernel operations. | Plugin Author |
@@ -140,7 +140,7 @@ When `render()` is called while a previous render is in-flight, the previous ren
 
 ## KernelFileSystem
 
-7 required methods matching Node.js `fs.promises.*`. All paths are absolute.
+10 required methods matching Node.js `fs.promises.*`. All paths are absolute.
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
@@ -149,7 +149,10 @@ When `render()` is called while a previous render is in-flight, the previous ren
 | `mkdir` | `(path, options?) → Promise<void>` | Create directory (optionally recursive) |
 | `readdir` | `(path) → Promise<string[]>` | List directory entries |
 | `unlink` | `(path) → Promise<void>` | Delete file |
+| `rmdir` | `(path) → Promise<void>` | Remove directory |
+| `rename` | `(oldPath, newPath) → Promise<void>` | Rename/move file or directory |
 | `stat` | `(path) → Promise<{ type, size, mtimeMs }>` | Get file/directory metadata |
+| `lstat` | `(path) → Promise<{ type, size, mtimeMs }>` | Like stat, but does not follow symlinks |
 | `exists` | `(path) → Promise<boolean>` | Check if path exists |
 
 The framework builds higher-level operations from these primitives internally:
@@ -158,7 +161,7 @@ The framework builds higher-level operations from these primitives internally:
 - `getDirectoryContents(dir)` via `readdir(dir)` + `Promise.all(names.map(readFile))`
 - `getDirectoryStat(dir)` via `readdir(dir)` + `Promise.all(names.map(stat))`
 
-Convenience constructors: `fromNodeFS(fs)`, `fromMemoryFS()`.
+Convenience constructors: `fromNodeFS(basePath)`, `fromMemoryFS()`, `fromFsLike(fsLike, rootPath?)`.
 
 ## Transport Abstraction
 
@@ -351,7 +354,7 @@ During detection, bare specifiers appear as external imports in `metafile.output
 ## Package Exports
 
 ```
-@taucad/kernels          → createKernelClient, types, presets, fromNodeFS, fromMemoryFS
+@taucad/kernels          → createKernelClient, types, presets, fromNodeFS, fromMemoryFS, fromFsLike
 @taucad/kernels/kernels  → replicad(), manifold(), zoo(), openscad(), jscad(), tau()
 @taucad/kernels/middleware → parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()
 @taucad/kernels/bundler  → esbuild()

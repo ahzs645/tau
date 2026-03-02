@@ -1,12 +1,6 @@
 import type { UIMessage } from 'ai';
 import type { ChatSnapshot } from '@taucad/chat';
-
-type FileTreeEntry = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-};
+import type { FileTreeEntry } from '@taucad/types';
 
 type TreeNode = {
   name: string;
@@ -118,7 +112,7 @@ function renderTree(node: TreeNode, indent = ''): string {
  *   - main.scad (5KB)
  * ```
  */
-function generateFilesystemSnapshot(entries: FileTreeEntry[], rootPath = '/project/'): string {
+function generateFileSystemSnapshot(entries: FileTreeEntry[], rootPath = '/project/'): string {
   if (entries.length === 0) {
     return `${rootPath}\n  (empty)`;
   }
@@ -174,7 +168,7 @@ Files currently open in the editor tabs: ${fileList}
 
   // Add filesystem context - generate tree from file entries
   if (snapshot.fileTree && snapshot.fileTree.length > 0) {
-    const filesystemSnapshot = generateFilesystemSnapshot(snapshot.fileTree);
+    const filesystemSnapshot = generateFileSystemSnapshot(snapshot.fileTree);
     contextParts.push(`<project_layout>
 Below is a snapshot of the current project's file structure:
 

@@ -9,14 +9,14 @@ import type { filesystemBackends } from '#constants/filesystem.constants.js';
 /**
  * Available filesystem backend types.
  */
-export type FilesystemBackend = (typeof filesystemBackends)[number];
+export type FileSystemBackend = (typeof filesystemBackends)[number];
 
 /**
  * Filesystem backend configuration.
  * Used to define backend implementations with canHandle/create pattern.
  */
-export type FilesystemBackendConfig = {
-  readonly name: FilesystemBackend;
+export type FileSystemBackendConfig = {
+  readonly name: FileSystemBackend;
   readonly label: string;
   readonly description: string;
   readonly canHandle: () => boolean;

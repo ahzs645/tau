@@ -12,20 +12,19 @@ describe('Browser compatibility (jsdom)', () => {
   it('should import the main entry point without errors', async () => {
     const mod = await import('#index.js');
     expect(mod.presets).toBeDefined();
-    expect(mod.createFileSystemPort).toBeTypeOf('function');
+    expect(mod.createBridgePort).toBeTypeOf('function');
     expect(mod.createKernelSuccess).toBeTypeOf('function');
     expect(mod.createKernelError).toBeTypeOf('function');
-    expect(mod.fromZenFS).toBeTypeOf('function');
+    expect(mod.fromFsLike).toBeTypeOf('function');
   });
 
   it('should import the filesystem subpath without errors', async () => {
     const mod = await import('#filesystem/index.js');
     expect(mod.exposeFileSystem).toBeTypeOf('function');
     expect(mod.createFileSystemBridge).toBeTypeOf('function');
-    expect(mod.createFileSystemServer).toBeTypeOf('function');
-    expect(mod.createFileSystemProxy).toBeTypeOf('function');
-    expect(mod.createFileSystemPort).toBeTypeOf('function');
-    expect(mod.fromProxy).toBeTypeOf('function');
+    expect(mod.createBridgeServer).toBeTypeOf('function');
+    expect(mod.createBridgeProxy).toBeTypeOf('function');
+    expect(mod.createBridgePort).toBeTypeOf('function');
   });
 
   it('should import the middleware entry point without errors', async () => {

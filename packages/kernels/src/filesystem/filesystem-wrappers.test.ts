@@ -3,8 +3,9 @@
  */
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { fromMemoryFS } from '#client/filesystem-constructors.js';
-import { createFileSystemProxy } from '#framework/kernel-filesystem-bridge.js';
+import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
+import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
+import { createBridgeProxy } from '#framework/kernel-filesystem-bridge.js';
 import { exposeFileSystem, createFileSystemBridge } from '#filesystem/filesystem-bridge.js';
 
 describe('filesystem high-level wrappers', () => {
@@ -23,22 +24,47 @@ describe('filesystem high-level wrappers', () => {
       activeCleanup = exposeFileSystem(fs);
 
       const channel = new MessageChannel();
-      const proxy = createFileSystemProxy(channel.port2);
+      const proxy = createBridgeProxy<KernelFileSystemBase>(channel.port2);
 
-      // Simulate a bridge message arriving at the worker global
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'kernelBridge', port: channel.port1 },
+          data: { type: 'connect', port: channel.port1 },
         }),
       );
 
-      // Allow the event loop to process the message
       await new Promise<void>((resolve) => {
         queueMicrotask(resolve);
       });
 
       const content = await proxy.readFile('/hello.txt', 'utf8');
       expect(content).toBe('world');
+    });
+
+    it('should buffer messages sent before server is wired (catchMessages)', async () => {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
+      const fs = fromMemoryFS({ '/early.txt': 'buffered' });
+
+      const channel = new MessageChannel();
+      const proxy = createBridgeProxy<KernelFileSystemBase>(channel.port2);
+
+      // Send a request BEFORE exposeFileSystem processes the connect message.
+      // The proxy sends immediately on port2; port1 isn't served yet.
+      const resultPromise = proxy.readFile('/early.txt', 'utf8');
+
+      activeCleanup = exposeFileSystem(fs);
+
+      self.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'connect', port: channel.port1 },
+        }),
+      );
+
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+
+      const content = await resultPromise;
+      expect(content).toBe('buffered');
     });
 
     it('should stop listening after cleanup is called', async () => {
@@ -51,7 +77,7 @@ describe('filesystem high-level wrappers', () => {
       // Post a message after cleanup -- no server should be set up
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'kernelBridge', port: channel.port1 },
+          data: { type: 'connect', port: channel.port1 },
         }),
       );
 
@@ -74,7 +100,7 @@ describe('filesystem high-level wrappers', () => {
       // Default type should be ignored
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'kernelBridge', port: channel.port1 },
+          data: { type: 'connect', port: channel.port1 },
         }),
       );
 
@@ -86,7 +112,7 @@ describe('filesystem high-level wrappers', () => {
 
       // Custom type should work
       const channel2 = new MessageChannel();
-      const proxy2 = createFileSystemProxy(channel2.port2);
+      const proxy2 = createBridgeProxy<KernelFileSystemBase>(channel2.port2);
 
       self.dispatchEvent(
         new MessageEvent('message', {
@@ -108,7 +134,7 @@ describe('filesystem high-level wrappers', () => {
       const postMessageSpy = vi.fn();
       const mockWorker = { postMessage: postMessageSpy } as unknown as Worker;
 
-      const port = createFileSystemBridge(mockWorker);
+      const { port } = createFileSystemBridge(mockWorker);
 
       expect(port).toBeInstanceOf(MessagePort);
       expect(postMessageSpy).toHaveBeenCalledOnce();
@@ -117,7 +143,7 @@ describe('filesystem high-level wrappers', () => {
         { type: string; port: MessagePort },
         MessagePort[],
       ];
-      expect(message.type).toBe('kernelBridge');
+      expect(message.type).toBe('connect');
       expect(message.port).toBeInstanceOf(MessagePort);
       expect(transferables).toHaveLength(1);
       expect(transferables[0]).toBe(message.port);
@@ -137,10 +163,22 @@ describe('filesystem high-level wrappers', () => {
       const postMessageSpy = vi.fn();
       const mockWorker = { postMessage: postMessageSpy } as unknown as Worker;
 
-      const returnedPort = createFileSystemBridge(mockWorker);
+      const { port: returnedPort } = createFileSystemBridge(mockWorker);
 
       const [message] = postMessageSpy.mock.calls[0] as [{ type: string; port: MessagePort }];
       expect(returnedPort).not.toBe(message.port);
+    });
+
+    it('should close consumer port on dispose', () => {
+      const postMessageSpy = vi.fn();
+      const mockWorker = { postMessage: postMessageSpy } as unknown as Worker;
+
+      const handle = createFileSystemBridge(mockWorker);
+      expect(handle.port).toBeInstanceOf(MessagePort);
+
+      expect(() => {
+        handle.dispose();
+      }).not.toThrow();
     });
   });
 });

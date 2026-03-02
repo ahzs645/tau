@@ -12,7 +12,7 @@ import {
   createMiddlewareState,
   createMiddlewareRuntime,
 } from '#middleware/kernel-middleware.js';
-import { createMockFilesystem } from '#testing/kernel-testing.utils.js';
+import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
 
 // Mock dependencies for testing
 const mockDependencies: readonly Dependency[] = [
@@ -240,7 +240,7 @@ describe('createMiddlewareRuntime', () => {
 
   it('should create a runtime with logger, filesystem, state, dependencies, and hash', () => {
     const onLog = vi.fn();
-    const filesystem = createMockFilesystem();
+    const filesystem = createMockFileSystem();
 
     const runtime = createMiddlewareRuntime({
       onLog: onLog as OnWorkerLog,
@@ -260,7 +260,7 @@ describe('createMiddlewareRuntime', () => {
 
   it('should create a runtime with state schema validation', () => {
     const onLog = vi.fn();
-    const filesystem = createMockFilesystem();
+    const filesystem = createMockFileSystem();
     const stateSchema = z.object({
       count: z.number(),
     });
@@ -283,7 +283,7 @@ describe('createMiddlewareRuntime', () => {
 
   it('should configure logger with middleware name', () => {
     const onLog = vi.fn();
-    const filesystem = createMockFilesystem();
+    const filesystem = createMockFileSystem();
 
     const runtime = createMiddlewareRuntime({
       onLog: onLog as OnWorkerLog,
@@ -331,7 +331,7 @@ describe('wrap hook behavior', () => {
     const runtime = createMiddlewareRuntime({
       onLog: vi.fn() as OnWorkerLog,
       middlewareName: 'Test',
-      filesystem: createMockFilesystem(),
+      filesystem: createMockFileSystem(),
       dependencies: mockDependencies,
       dependencyHash: 'a'.repeat(64),
     });
@@ -374,7 +374,7 @@ describe('wrap hook behavior', () => {
     const runtime = createMiddlewareRuntime({
       onLog: vi.fn() as OnWorkerLog,
       middlewareName: 'Test',
-      filesystem: createMockFilesystem(),
+      filesystem: createMockFileSystem(),
       dependencies: mockDependencies,
       dependencyHash: 'a'.repeat(64),
     });
@@ -424,7 +424,7 @@ describe('wrap hook behavior', () => {
     const runtime = createMiddlewareRuntime<TestState>({
       onLog: vi.fn() as OnWorkerLog,
       middlewareName: 'Test',
-      filesystem: createMockFilesystem(),
+      filesystem: createMockFileSystem(),
       dependencies: mockDependencies,
       dependencyHash: 'a'.repeat(64),
       stateSchema,

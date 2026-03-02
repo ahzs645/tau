@@ -4,7 +4,7 @@ import { createContext, useContext, useMemo, useCallback, useEffect } from 'reac
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { Build, FilesystemBackend } from '@taucad/types';
+import type { Build, FileSystemBackend } from '@taucad/types';
 import type { KernelProvider } from '@taucad/kernels';
 import type { Chat } from '@taucad/chat';
 import type { Remote } from 'comlink';
@@ -12,7 +12,7 @@ import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { buildManagerMachine } from '#hooks/build-manager.machine.js';
 import type { ObjectStoreWorker, InitialEditorState } from '#hooks/object-store.worker.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { setBuildFilesystemConfig, getStoredDirectoryHandle, checkHandlePermission } from '#filesystem/handle-store.js';
+import { setBuildFileSystemConfig, getStoredDirectoryHandle, checkHandlePermission } from '#filesystem/handle-store.js';
 import { createInitialBuild } from '#constants/build.constants.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -107,7 +107,7 @@ const BuildManagerContext = createContext<BuildManagerContextType | undefined>(u
 export function BuildManagerProvider({ children }: { readonly children: ReactNode }): React.JSX.Element {
   const actorRef = useActorRef(buildManagerMachine);
   const fileManager = useFileManager();
-  const [defaultBackend] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
+  const [defaultBackend] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
 
   // Select state from the machine
   const error = useSelector(actorRef, (state) => state.context.error);
@@ -190,7 +190,7 @@ export function BuildManagerProvider({ children }: { readonly children: ReactNod
       });
 
       // Persist the per-build filesystem config
-      let resolvedBackend: FilesystemBackend = defaultBackend;
+      let resolvedBackend: FileSystemBackend = defaultBackend;
 
       if (defaultBackend === 'webaccess') {
         // Verify workspace handle exists and has permission before using webaccess
@@ -212,7 +212,7 @@ export function BuildManagerProvider({ children }: { readonly children: ReactNod
         }
       }
 
-      await setBuildFilesystemConfig(build.id, resolvedBackend);
+      await setBuildFileSystemConfig(build.id, resolvedBackend);
 
       // Write files to filesystem (separate worker, can't consolidate)
       const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};

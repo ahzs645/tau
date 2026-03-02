@@ -227,9 +227,9 @@ describe('geometryCacheMiddleware', () => {
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(runtime.filesystem.mocks.mkdir).toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.ensureDir).toHaveBeenCalled();
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = runtime.filesystem.mocks.mkdir.mock.calls[0]?.[0];
+        const dirPath = runtime.filesystem.mocks.ensureDir.mock.calls[0]?.[0];
         expect(dirPath).toContain('.tau/cache/geometry');
       });
 
@@ -422,8 +422,8 @@ describe('geometryCacheMiddleware', () => {
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
-        // Readdir should be called for cleanup (getDirectoryStat calls readdir + stat)
-        expect(runtime.filesystem.mocks.readdir).toHaveBeenCalled();
+        // `readdirStat` should be called for cleanup
+        expect(runtime.filesystem.mocks.readdirStat).toHaveBeenCalled();
       });
 
       it('should delete old cache entries', async () => {
@@ -431,9 +431,15 @@ describe('geometryCacheMiddleware', () => {
         const oldMtimeMs = now - 8 * 24 * 60 * 60 * 1000; // 8 days ago (older than 7 day max age)
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
-        // Mock readdir + stat to return old cache files (getDirectoryStat uses these primitives)
-        runtime.filesystem.mocks.readdir.mockResolvedValue(['old-cache.bin']);
-        runtime.filesystem.mocks.stat.mockResolvedValue({ type: 'file', size: 100, mtimeMs: oldMtimeMs });
+        runtime.filesystem.mocks.readdirStat.mockResolvedValue([
+          {
+            path: '/builds/test-build/.tau/cache/geometry/old-cache.bin',
+            name: 'old-cache.bin',
+            type: 'file',
+            size: 100,
+            mtimeMs: oldMtimeMs,
+          },
+        ]);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
@@ -449,17 +455,16 @@ describe('geometryCacheMiddleware', () => {
         const now = Date.now();
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
-        // Create 102 files (2 over the 100 max)
-        const fileNames = Array.from({ length: 102 }, (_, index) => `cache-${index}.bin`);
-        runtime.filesystem.mocks.readdir.mockResolvedValue(fileNames);
-
-        // Stagger mtimeMs so we can predict which get deleted (oldest first)
-        let callIndex = 0;
-        runtime.filesystem.mocks.stat.mockImplementation(async () => ({
+        // Create 102 files (2 over the 100 max), stagger mtimeMs oldest first
+        const cacheDir = '/builds/test-build/.tau/cache/geometry';
+        const entries = Array.from({ length: 102 }, (_, index) => ({
+          path: `${cacheDir}/cache-${index}.bin`,
+          name: `cache-${index}.bin`,
           type: 'file' as const,
           size: 100,
-          mtimeMs: now - callIndex++ * 1000,
+          mtimeMs: now - index * 1000,
         }));
+        runtime.filesystem.mocks.readdirStat.mockResolvedValue(entries);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
@@ -474,8 +479,7 @@ describe('geometryCacheMiddleware', () => {
       it('should handle cleanup errors gracefully', async () => {
         const { input, runtime } = createCacheTestContext({ cacheExists: false });
 
-        // Make readdir throw an error (getDirectoryStat calls readdir internally)
-        runtime.filesystem.mocks.readdir.mockRejectedValue(new Error('Readdir error'));
+        runtime.filesystem.mocks.readdirStat.mockRejectedValue(new Error('Readdir error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);

@@ -11,8 +11,8 @@ describe('ESM import smoke tests', () => {
     expect(mod).toBeDefined();
     expect(mod.presets).toBeDefined();
     expect(mod.KernelWorkerClient).toBeTypeOf('function');
-    expect(mod.createFileSystemPort).toBeTypeOf('function');
-    expect(mod.fromZenFS).toBeTypeOf('function');
+    expect(mod.createBridgePort).toBeTypeOf('function');
+    expect(mod.fromFsLike).toBeTypeOf('function');
     expect(mod.createKernelSuccess).toBeTypeOf('function');
     expect(mod.createKernelError).toBeTypeOf('function');
     expect(mod.defineKernel).toBeTypeOf('function');
@@ -24,10 +24,9 @@ describe('ESM import smoke tests', () => {
     expect(mod).toBeDefined();
     expect(mod.exposeFileSystem).toBeTypeOf('function');
     expect(mod.createFileSystemBridge).toBeTypeOf('function');
-    expect(mod.createFileSystemServer).toBeTypeOf('function');
-    expect(mod.createFileSystemProxy).toBeTypeOf('function');
-    expect(mod.createFileSystemPort).toBeTypeOf('function');
-    expect(mod.fromProxy).toBeTypeOf('function');
+    expect(mod.createBridgeServer).toBeTypeOf('function');
+    expect(mod.createBridgeProxy).toBeTypeOf('function');
+    expect(mod.createBridgePort).toBeTypeOf('function');
   });
 
   it('should resolve the middleware entry point', async () => {
@@ -77,7 +76,7 @@ describe('ESM import smoke tests', () => {
     const mod = await import('#testing/index.js');
     expect(mod).toBeDefined();
     expect(mod.createMockLogger).toBeTypeOf('function');
-    expect(mod.createMockFilesystem).toBeTypeOf('function');
+    expect(mod.createMockFileSystem).toBeTypeOf('function');
     expect(mod.createSuccessResult).toBeTypeOf('function');
     expect(mod.createErrorResult).toBeTypeOf('function');
   });

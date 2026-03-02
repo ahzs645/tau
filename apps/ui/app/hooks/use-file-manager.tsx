@@ -3,11 +3,10 @@ import { createContext, useContext, useMemo, useCallback, useEffect, useRef, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { SnapshotFrom } from 'xstate';
-import type { Remote } from 'comlink';
-import type { FileTreeEntry, FilesystemBackend, FileStat } from '@taucad/types';
+import type { FileTreeEntry, FileSystemBackend, FileStatEntry } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
-import type { FileWriteSource, FileManagerRef } from '#machines/file-manager.machine.types.js';
-import type { FileManager as FileWorker, FileTreeNode } from '#machines/file-manager.js';
+import type { FileWriteSource, FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
+import type { FileTreeNode } from '#machines/file-manager.js';
 import { storeDirectoryHandle, getStoredDirectoryHandle, requestHandlePermission } from '#filesystem/handle-store.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -36,8 +35,7 @@ function createErrorAwareWaitPredicate(
  */
 function assertNotErrorState(snapshot: FileManagerSnapshot, fallbackMessage: string): void {
   if (snapshot.matches('error')) {
-    const errorMessage = snapshot.context.error?.message ?? fallbackMessage;
-    throw new Error(errorMessage);
+    throw new Error(snapshot.context.error?.message ?? fallbackMessage);
   }
 }
 
@@ -67,10 +65,10 @@ type FileManagerContextType = {
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
-  getDirectoryStat: (path: string) => Promise<FileStat[]>;
+  getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
-  reconfigureBackend: (backend: FilesystemBackend) => Promise<void>;
+  reconfigureBackend: (backend: FileSystemBackend) => Promise<void>;
   /** Open a directory picker, store the handle, and reconfigure to webaccess backend. */
   selectDirectory: () => Promise<void>;
   /** Re-request permission on a stored directory handle. Must be called from a user gesture. */
@@ -83,10 +81,19 @@ type FileManagerContextType = {
    * Read a file tree from a specific backend using a standalone FileSystem instance.
    * Used by the /files grid view to show all backends in parallel without affecting the main mount.
    */
-  readBackendFileTree: (backend: FilesystemBackend) => Promise<FileTreeNode[]>;
+  readBackendFileTree: (backend: FileSystemBackend) => Promise<FileTreeNode[]>;
 };
 
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
+
+/**
+ * Shared worker context for the singleton worker pattern.
+ * The root FileManagerProvider creates the Worker and provides it here.
+ * Nested providers (build, preview routes) read from this context to
+ * reuse the same Worker, ensuring all filesystem operations share one
+ * ZenFS instance and one serialization queue.
+ */
+const SharedWorkerContext = createContext<Worker | undefined>(undefined);
 
 export function FileManagerProvider({
   children,
@@ -100,7 +107,8 @@ export function FileManagerProvider({
   readonly buildId?: string;
   readonly shouldInitializeOnStart?: boolean;
 }): React.JSX.Element {
-  const [backendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
+  const [backendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
+  const parentWorker = useContext(SharedWorkerContext);
 
   // Use per-build config when buildId is provided; resolved async during machine init
   const fileManagerRef = useActorRef(fileManagerMachine, {
@@ -109,6 +117,7 @@ export function FileManagerProvider({
       shouldInitializeOnStart,
       initialBackend: backendCookie,
       buildId,
+      sharedWorker: parentWorker,
     },
   });
 
@@ -124,22 +133,23 @@ export function FileManagerProvider({
   }, [fileManagerRef, rootDirectory, buildId]);
 
   /**
-   * Wait for the file manager to be ready and return the wrapped worker.
+   * Wait for the file manager to be ready and return the proxy.
    * This follows the established buildManagerMachine pattern.
    */
-  const getReadiedWorker = useCallback(async (): Promise<Remote<FileWorker>> => {
+  const getReadiedWorker = useCallback(async (): Promise<FileManagerProxy> => {
     const snapshot = await waitFor(
       fileManagerRef,
       createErrorAwareWaitPredicate((state) => state.matches('ready')),
     );
+
     assertNotErrorState(snapshot, 'File manager initialization failed');
 
-    const worker = snapshot.context.wrappedWorker;
-    if (!worker) {
+    const { proxy } = snapshot.context;
+    if (!proxy) {
       throw new Error('File manager worker not initialized');
     }
 
-    return worker;
+    return proxy;
   }, [fileManagerRef]);
 
   /**
@@ -152,10 +162,8 @@ export function FileManagerProvider({
       const worker = await getReadiedWorker();
       const absolutePath = joinPath(rootDirectoryRef.current, path);
 
-      // Call worker directly - this is the operation confirmation
       await worker.writeFile(absolutePath, data);
 
-      // Single consolidated event - machine handles context update, emit, and refresh
       fileManagerRef.send({ type: 'fileWritten', path, data, source: options.source });
     },
     [fileManagerRef, getReadiedWorker],
@@ -170,7 +178,6 @@ export function FileManagerProvider({
     async (files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void> => {
       const worker = await getReadiedWorker();
 
-      // Convert to absolute paths
       const absoluteFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       const paths: string[] = [];
 
@@ -180,10 +187,8 @@ export function FileManagerProvider({
         paths.push(path);
       }
 
-      // Call worker directly - batch write
       await worker.writeFiles(absoluteFiles);
 
-      // Single consolidated event - machine spawns background refresh
       fileManagerRef.send({ type: 'filesWritten', paths });
     },
     [fileManagerRef, getReadiedWorker],
@@ -303,7 +308,7 @@ export function FileManagerProvider({
    * Get all file stats in a directory recursively.
    */
   const getDirectoryStat = useCallback(
-    async (path: string): Promise<FileStat[]> => {
+    async (path: string): Promise<FileStatEntry[]> => {
       const worker = await getReadiedWorker();
       const absolutePath = joinPath(rootDirectoryRef.current, path);
       return worker.getDirectoryStat(absolutePath);
@@ -342,7 +347,7 @@ export function FileManagerProvider({
    * Calls the worker to reconfigure and triggers a file tree refresh.
    */
   const reconfigureBackend = useCallback(
-    async (backend: FilesystemBackend): Promise<void> => {
+    async (backend: FileSystemBackend): Promise<void> => {
       const worker = await getReadiedWorker();
 
       // Stop file watching when switching away from webaccess
@@ -405,7 +410,7 @@ export function FileManagerProvider({
 
     // Pass handle to worker and reconfigure
     const worker = await getReadiedWorker();
-    await worker.setDirectoryHandle(handle);
+    worker.setDirectoryHandle(handle);
     await worker.reconfigure('webaccess');
 
     // Update directory name and track backend type
@@ -438,7 +443,7 @@ export function FileManagerProvider({
 
     // Pass handle to worker and reconfigure
     const worker = await getReadiedWorker();
-    await worker.setDirectoryHandle(handle);
+    worker.setDirectoryHandle(handle);
     await worker.reconfigure('webaccess');
 
     // Update directory name and track backend type
@@ -457,10 +462,10 @@ export function FileManagerProvider({
   /**
    * Read the file tree from a specific backend using a standalone FileSystem instance.
    * For webaccess, retrieves the workspace handle from the main-thread handle store
-   * and passes it to the worker (Comlink handles structured cloning).
+   * and passes it to the worker (postMessage handles structured cloning).
    */
   const readBackendFileTree = useCallback(
-    async (backend: FilesystemBackend): Promise<FileTreeNode[]> => {
+    async (backend: FileSystemBackend): Promise<FileTreeNode[]> => {
       const worker = await getReadiedWorker();
       // For webaccess, retrieve the workspace handle on the main thread and pass it
       const handle = backend === 'webaccess' ? await getStoredDirectoryHandle() : undefined;
@@ -532,7 +537,17 @@ export function FileManagerProvider({
     ],
   );
 
-  return <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
+  const isRoot = parentWorker === undefined;
+  const workerForChildren = useSelector(fileManagerRef, (state) => state.context.worker);
+
+  const provider = <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
+
+  // Root provider shares the worker with nested providers
+  if (isRoot) {
+    return <SharedWorkerContext.Provider value={workerForChildren}>{provider}</SharedWorkerContext.Provider>;
+  }
+
+  return provider;
 }
 
 export function useFileManager(): FileManagerContextType {

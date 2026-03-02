@@ -20,12 +20,15 @@ export { createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin } from 
 export { presets } from '#plugins/presets.js';
 
 // Filesystem constructors
-export { fromNodeFS, fromMemoryFS, fromZenFS } from '#client/filesystem-constructors.js';
+export { fromNodeFS } from '#filesystem/from-node-fs.js';
+export { fromMemoryFS } from '#filesystem/from-memory-fs.js';
+export { fromFsLike } from '#filesystem/from-fs-like.js';
 
 // Filesystem bridge (for advanced usage / UI consumption)
 export { KernelWorkerClient } from '#framework/kernel-worker-client.js';
 export type { OnLogCallback, OnTelemetryCallback, OnProgressCallback } from '#framework/kernel-worker-client.js';
-export { createFileSystemPort } from '#framework/kernel-filesystem-bridge.js';
+export { createBridgePort } from '#framework/kernel-filesystem-bridge.js';
+export type { BridgeHandle } from '#framework/kernel-filesystem-bridge.js';
 
 // Plugin author APIs
 export { defineKernel } from '#types/kernel-worker.types.js';
