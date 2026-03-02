@@ -36,25 +36,13 @@ const baseTestRequirementSchema = z.object({
 });
 
 /**
- * Visual test requirement - verified by LLM analyzing model screenshots.
- */
-export const visualTestRequirementSchema = baseTestRequirementSchema.extend({
-  type: z.literal('visual'),
-});
-export type VisualTestRequirement = z.infer<typeof visualTestRequirementSchema>;
-
-/**
  * Expected value schema for bounding box checks.
  */
+const axesSchema = z.object({ x: z.number(), y: z.number(), z: z.number() }).partial();
+
 export const boundingBoxExpectedSchema = z.object({
-  size: z
-    .object({ x: z.number(), y: z.number(), z: z.number() })
-    .optional()
-    .describe('Expected bounding box dimensions in mm'),
-  center: z
-    .object({ x: z.number(), y: z.number(), z: z.number() })
-    .optional()
-    .describe('Expected bounding box center position'),
+  size: axesSchema.optional().describe('Expected bounding box dimensions in mm (specify any subset of axes)'),
+  center: axesSchema.optional().describe('Expected bounding box center position (specify any subset of axes)'),
 });
 export type BoundingBoxExpected = z.infer<typeof boundingBoxExpectedSchema>;
 
@@ -71,12 +59,9 @@ export const measurementTestRequirementSchema = baseTestRequirementSchema.extend
 export type MeasurementTestRequirement = z.infer<typeof measurementTestRequirementSchema>;
 
 /**
- * Union of all test requirement types.
+ * Test requirement schema (only measurement type is supported).
  */
-export const testRequirementSchema = z.discriminatedUnion('type', [
-  visualTestRequirementSchema,
-  measurementTestRequirementSchema,
-]);
+export const testRequirementSchema = measurementTestRequirementSchema;
 export type TestRequirement = z.infer<typeof testRequirementSchema>;
 
 /**

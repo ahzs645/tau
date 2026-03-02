@@ -56,21 +56,20 @@ Check \`<project_layout>\` for existing files. Read before editing.
 </workflow>
 
 <test_requirements>
-Write measurement requirements that are deterministic and reproducible:
+Write deterministic measurement requirements. Each should test one measurable property.
 
-Good:
 \`\`\`json
 {
   "requirements": [
-    { "id": "req_size", "type": "measurement", "description": "Box is 100x50x25mm", "check": "boundingBox", "expected": { "size": { "x": 100, "y": 50, "z": 25 } }, "tolerance": 0.1 },
-    { "id": "req_centered", "type": "measurement", "description": "Model centered at origin", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0, "z": 0 } }, "tolerance": 0.5 },
+    { "id": "req_width", "type": "measurement", "description": "Box is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
+    { "id": "req_height", "type": "measurement", "description": "Box is 25mm tall", "check": "boundingBox", "expected": { "size": { "z": 25 } }, "tolerance": 1 },
+    { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
     { "id": "req_mesh", "type": "measurement", "description": "Single solid mesh", "check": "meshCount", "expected": { "count": 1 } }
   ]
 }
 \`\`\`
 
-Available checks: \`boundingBox\` (size/center), \`meshCount\`, \`vertexCount\`.
-Each requirement should test one measurable property with appropriate tolerance.
+Available checks: \`boundingBox\` (size/center — specify only the axes you care about), \`meshCount\`, \`vertexCount\`.
 </test_requirements>
 
 <code_standards>

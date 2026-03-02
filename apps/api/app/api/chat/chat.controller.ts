@@ -24,11 +24,13 @@ type LangChainMessages = Awaited<ReturnType<typeof toBaseMessages>>;
 
 type ChatRequestConfig = {
   modelId: string;
-  selectedToolChoice: ToolSelection;
-  selectedKernel: KernelProvider;
+  kernel: KernelProvider;
   snapshot: ChatSnapshot | undefined;
   mode: 'agent' | 'plan';
-  testingEnabled: boolean;
+  tools: {
+    choice: ToolSelection;
+    testingEnabled: boolean;
+  };
 };
 
 @UseFilters(ChatExceptionFilter)
@@ -49,8 +51,7 @@ export class ChatController {
   public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
-    const { modelId, selectedToolChoice, selectedKernel, snapshot, mode, testingEnabled } =
-      this.extractRequestConfig(body);
+    const { modelId, kernel, snapshot, mode, tools } = this.extractRequestConfig(body);
 
     // Handle simple model streams (name generator, commit generator).
     // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages.
@@ -67,7 +68,7 @@ export class ChatController {
     }
 
     const langchainMessages = await this.prepareMessages(body.messages, snapshot);
-    const agent = await this.chatService.createAgent(modelId, selectedToolChoice, selectedKernel, mode, testingEnabled);
+    const agent = await this.chatService.createAgent({ modelId, kernel, mode, tools });
 
     return this.streamAgentResponse({
       chatId: body.id,
@@ -96,11 +97,13 @@ export class ChatController {
 
     return {
       modelId: messageModel,
-      selectedToolChoice: lastHumanMessage.metadata?.toolChoice ?? 'auto',
-      selectedKernel: lastHumanMessage.metadata?.kernel ?? 'openscad',
+      kernel: lastHumanMessage.metadata?.kernel ?? 'openscad',
       snapshot: lastHumanMessage.metadata?.snapshot,
       mode: lastHumanMessage.metadata?.mode ?? 'agent',
-      testingEnabled: lastHumanMessage.metadata?.testingEnabled ?? true,
+      tools: {
+        choice: lastHumanMessage.metadata?.toolChoice ?? 'auto',
+        testingEnabled: lastHumanMessage.metadata?.testingEnabled ?? true,
+      },
     };
   }
 

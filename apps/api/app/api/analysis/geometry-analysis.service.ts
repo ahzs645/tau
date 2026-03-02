@@ -79,7 +79,16 @@ export class GeometryAnalysisService {
 
   private async analyzeGlb(glb: Uint8Array): Promise<GeometryStats> {
     const io = new NodeIO();
-    const document = await io.readBinary(glb);
+    // Node.js Buffers from Socket.IO may have a non-zero byteOffset into a
+    // shared pool ArrayBuffer (https://github.com/nodejs/node/issues/2888).
+    // gltf-transform's GLB parser creates Uint32Array views at glb.byteOffset,
+    // which requires 4-byte alignment. Copying into a fresh Uint8Array
+    // guarantees byteOffset === 0.
+    //
+    // See also: https://github.com/donmccurdy/glTF-Transform/pull/447
+    // See also: https://stackoverflow.com/a/31483629
+    const aligned = glb.byteOffset % 4 === 0 ? glb : new Uint8Array(glb);
+    const document = await io.readBinary(aligned);
     const report = inspect(document);
 
     const vertexCount = report.meshes.properties.reduce((sum, mesh) => sum + mesh.vertices, 0);
@@ -177,10 +186,13 @@ export class GeometryAnalysisService {
 
     const parseResult = boundingBoxExpectedSchema.safeParse(requirement.expected);
     if (!parseResult.success) {
+      const zodErrors = parseResult.error.issues.map((issue) => issue.message).join('; ');
       return {
         passed: false,
-        reason: 'Invalid expected value for boundingBox check',
-        suggestion: 'Use expected: { size: { x, y, z }, center: { x, y, z } }',
+        reason: `Invalid expected value for boundingBox check: ${zodErrors}`,
+        suggestion:
+          'Use expected: { size: { x, y, z }, center: { x, y, z } }. ' +
+          'Each axis is optional — specify only the axes you want to check.',
       };
     }
 
@@ -190,8 +202,12 @@ export class GeometryAnalysisService {
     if (expected.size) {
       const axes = ['x', 'y', 'z'] as const;
       for (const [i, axis] of axes.entries()) {
-        const actual = stats.boundingBox.size[i]!;
         const exp = expected.size[axis];
+        if (exp === undefined) {
+          continue;
+        }
+
+        const actual = stats.boundingBox.size[i]!;
         if (Math.abs(actual - exp) > tolerance) {
           reasons.push(`size.${axis}: expected ${exp} (±${tolerance}), got ${actual.toFixed(3)}`);
         }
@@ -201,8 +217,12 @@ export class GeometryAnalysisService {
     if (expected.center) {
       const axes = ['x', 'y', 'z'] as const;
       for (const [i, axis] of axes.entries()) {
-        const actual = stats.boundingBox.center[i]!;
         const exp = expected.center[axis];
+        if (exp === undefined) {
+          continue;
+        }
+
+        const actual = stats.boundingBox.center[i]!;
         if (Math.abs(actual - exp) > tolerance) {
           reasons.push(`center.${axis}: expected ${exp} (±${tolerance}), got ${actual.toFixed(3)}`);
         }

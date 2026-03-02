@@ -2,14 +2,7 @@ import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
 import { testModelInputSchema, testFileSchema, isRpcClientError } from '@taucad/chat';
 import { assertRpcExecution, assertRpcSuccess } from '@taucad/chat/utils';
-import type {
-  ChatTool,
-  TestModelInput,
-  TestModelOutput,
-  MeasurementTestRequirement,
-  TestFailure,
-  TestPass,
-} from '@taucad/chat';
+import type { ChatTool, TestModelInput, TestModelOutput } from '@taucad/chat';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -108,13 +101,9 @@ export const testModelTool: ChatTool<
     return result;
   }
 
-  const measurementRequirements = testFile.requirements.filter(
-    (r): r is MeasurementTestRequirement => r.type === 'measurement',
-  );
+  const { requirements } = testFile;
 
-  const unsupportedRequirements = testFile.requirements.filter((r) => r.type !== 'measurement');
-
-  if (measurementRequirements.length === 0 && unsupportedRequirements.length === 0) {
+  if (requirements.length === 0) {
     const result: TestModelOutput = {
       failures: [
         {
@@ -132,50 +121,28 @@ export const testModelTool: ChatTool<
     return result;
   }
 
-  const allFailures: TestFailure[] = [];
-  const allPasses: TestPass[] = [];
-
-  // Handle unsupported requirement types
-  for (const r of unsupportedRequirements) {
-    allFailures.push({
-      id: r.id,
-      requirement: r.description,
-      reason: `Requirement type '${r.type}' is deprecated. Use 'measurement' type instead.`,
-      suggestion: 'Convert to a measurement requirement with check: boundingBox, meshCount, or vertexCount.',
-    });
-  }
-
   // Step 2: Fetch geometry from the client via RPC
-  let geometryArtifactPath: string | undefined;
+  const geometryResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.fetchGeometry,
+    args: { artifactId: toolCallId },
+  });
 
-  if (measurementRequirements.length > 0) {
-    const geometryResult = await chatRpcService.sendRpcRequest({
-      chatId,
-      toolCallId,
-      rpcName: rpcName.fetchGeometry,
-      args: { artifactId: toolCallId },
-    });
+  assertRpcSuccess(geometryResult, {
+    toolName: toolName.testModel,
+    toolCallId,
+    clientErrorMessage: 'Failed to fetch geometry for testing',
+  });
 
-    assertRpcSuccess(geometryResult, {
-      toolName: toolName.testModel,
-      toolCallId,
-      clientErrorMessage: 'Failed to fetch geometry for testing',
-    });
-
-    geometryArtifactPath = geometryResult.artifactPath;
-
-    // Step 3: Run measurement tests via GeometryAnalysisService
-    const result = await geometryAnalysisService.runMeasurementTests(geometryResult.glb, measurementRequirements);
-
-    allFailures.push(...result.failures);
-    allPasses.push(...result.passes);
-  }
+  // Step 3: Run measurement tests via GeometryAnalysisService
+  const result = await geometryAnalysisService.runMeasurementTests(geometryResult.glb, requirements);
 
   return {
-    failures: allFailures,
-    passes: allPasses,
-    passed: allPasses.length,
-    total: allFailures.length + allPasses.length,
-    geometryArtifactPath,
+    failures: result.failures,
+    passes: result.passes,
+    passed: result.passes.length,
+    total: result.failures.length + result.passes.length,
+    geometryArtifactPath: geometryResult.artifactPath,
   };
 }, testModelToolDefinition);

@@ -45,14 +45,18 @@ export class ChatService {
     });
   }
 
-  public async createAgent(
-    modelId: string,
-    selectedToolChoice: ToolSelection,
-    selectedKernel: KernelProvider,
-    mode: ChatMode = 'agent',
-    testingEnabled = true,
-  ): Promise<ReactAgent> {
-    const { tools } = this.toolService.getTools(selectedToolChoice);
+  public async createAgent(options: {
+    modelId: string;
+    kernel: KernelProvider;
+    mode?: ChatMode;
+    tools: {
+      choice: ToolSelection;
+      testingEnabled?: boolean;
+    };
+  }): Promise<ReactAgent> {
+    const { modelId, kernel, mode = 'agent' } = options;
+    const { choice, testingEnabled = true } = options.tools;
+    const { tools } = this.toolService.getTools(choice);
 
     const checkpointer = this.checkpointerService.getCheckpointer();
 
@@ -97,7 +101,7 @@ export class ChatService {
     // strategy ensures the stable system prompt is cached separately from
     // the dynamic conversation, maximizing cache hits.
     // ==========================================================================
-    const systemPromptText = await getCadSystemPrompt(selectedKernel, mode);
+    const systemPromptText = await getCadSystemPrompt(kernel, mode);
     const systemPrompt = createCachedSystemMessage(systemPromptText);
 
     const agent = createAgent({

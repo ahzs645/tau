@@ -39,7 +39,7 @@ const toolMetadata: Partial<Record<ToolName, ToolMetadata>> = {
   },
   [toolName.testModel]: {
     label: 'Test Model',
-    description: 'Run visual tests on the 3D model',
+    description: 'Run measurement tests on the 3D model',
     icon: Image,
   },
   [toolName.editTests]: {

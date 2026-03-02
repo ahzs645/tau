@@ -213,7 +213,12 @@ describe('ChatController', () => {
       await controller.createChat(body, mockResponse);
 
       // Assert
-      expect(chatService.createAgent).toHaveBeenCalledWith('test-model', 'auto', 'openscad');
+      expect(chatService.createAgent).toHaveBeenCalledWith({
+        modelId: 'test-model',
+        kernel: 'openscad',
+        mode: 'agent',
+        tools: { choice: 'auto', testingEnabled: true },
+      });
       expect(mockAgent.graph.stream).toHaveBeenCalledTimes(1);
 
       // Verify stream was called with messages and correct config
@@ -248,7 +253,12 @@ describe('ChatController', () => {
       await controller.createChat(body, mockResponse);
 
       // Assert
-      expect(chatService.createAgent).toHaveBeenCalledWith('test-model', 'none', 'openscad');
+      expect(chatService.createAgent).toHaveBeenCalledWith({
+        modelId: 'test-model',
+        kernel: 'openscad',
+        mode: 'agent',
+        tools: { choice: 'none', testingEnabled: true },
+      });
     });
   });
 
