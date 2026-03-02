@@ -354,6 +354,20 @@ export function createGltfSuccessResult(content: Uint8Array<ArrayBuffer>): Creat
 }
 
 /**
+ * Create a successful CreateGeometryResultInternal with a single GLTF geometry and issues.
+ */
+export function createGltfSuccessResultWithIssues(
+  content: Uint8Array<ArrayBuffer>,
+  issues: KernelIssue[],
+): CreateGeometryResult {
+  return {
+    success: true,
+    data: [{ format: 'gltf', content }],
+    issues,
+  };
+}
+
+/**
  * Create a failed CreateGeometryResultInternal.
  */
 export function createErrorResult(issues?: KernelIssue[]): CreateGeometryResult {
