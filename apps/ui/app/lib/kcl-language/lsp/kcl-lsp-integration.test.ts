@@ -102,7 +102,7 @@ describe('KCL LSP Integration (Real WASM)', () => {
       );
     }
 
-    const wasmSource = await fs.promises.readFile(wasmPath);
+    const wasmSource = new Uint8Array(await fs.promises.readFile(wasmPath));
     const wasmModule = await WebAssembly.compile(wasmSource);
 
     const kclWasm = await import('@taucad/kcl-wasm-lib');
