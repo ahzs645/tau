@@ -460,53 +460,86 @@ bootstrap:
   inherent to the library and executes every time a new Emscripten instance
   is created.
 
-### 8.4 Why Worker Recreation Pays Full Cost
+### 8.4 Existing Worker Pooling
 
-The kernel lifecycle currently terminates the Web Worker when switching
-projects:
+The application already implements worker pooling **within a build session**.
+The architecture in `apps/ui/app/hooks/use-build.tsx` and
+`apps/ui/app/machines/build.machine.ts` manages "compilation units" — each
+a `cadMachine` actor that owns a `kernelMachine` actor, which owns the Web
+Worker and `KernelClient`. Within a build:
+
+- **File changes**: trigger `setFile` on the existing compilation unit — the
+  worker stays alive and reprocesses with the warm WASM instance.
+- **Parameter changes**: trigger `setParameters` — same worker, no init cost.
+- **Same-file reload**: the compilation unit is reused if it already exists
+  for the entry file (`compilationUnits.has(mainFile)` check in
+  `initializeKernelIfNeeded`).
+
+This means the ~56ms WASM init cost is paid **once per build session**, not
+per render. During iterative development (the primary workflow), the worker
+stays alive and `wasm.compile` + `wasm.emscripten-init` cost is zero.
+
+### 8.5 When Worker Recreation Occurs
+
+Workers are destroyed and recreated when **switching between builds**
+(projects). The build machine's `loadBuild` transition with a different
+`buildId` triggers:
 
 ```
-cad.machine exit → kernel.machine exit → destroyWorkers → kernelClient.terminate()
-  → workerClient.cleanup() → workerClient.terminate() → transport.close()
-    → worker.terminate()  ← destroys V8 isolate, all WASM state lost
+build.machine (loadBuild, isBuildIdChanging)
+  → stopStatefulActors: stop all compilation units (enqueue.stopChild)
+  → respawnStatefulActors: compilationUnits = new Map()
+
+cadMachine stopped → kernelMachine exit → destroyWorkers
+  → kernelClient.terminate() → workerClient.terminate()
+    → worker.terminate()  ← V8 isolate destroyed, WASM state lost
 ```
 
-When the next project opens, a new Worker is created. Even though V8's
-process-level NativeModuleCache still holds the compiled module, the
-streaming pipeline must run in full:
+When the new build loads, `initializeKernelIfNeeded` spawns a fresh
+`cadMachine` → `kernelMachine` → new Worker → full WASM init (~56ms with
+warm caches).
 
-```
-New Worker → load JS modules → fetch WASM → streaming pipeline → instantiate → emscripten init
-               14ms (cached)     55ms (pipe)    20ms (finalize)    2.4ms          44ms (C++ ctors)
-```
+### 8.6 Optimization Strategies
 
-### 8.5 Optimization Strategies
+**Strategy 1: Keep workers alive across build switches (future improvement)**
 
-**Strategy 1: Keep workers alive across project switches (saves ~123ms)**
-
-Instead of `worker.terminate()` when switching between projects that use
-the same kernel, send a reset command. The WASM module, Emscripten instance,
-and OpenCASCADE state all stay alive. `KernelRuntimeWorker` already loads
+Instead of destroying compilation units when the `buildId` changes, the
+build machine could detach and reattach them. When the new build uses the
+same kernel type (e.g., Replicad), the existing worker stays alive and
+only the file/parameters are updated. `KernelRuntimeWorker` already loads
 kernels lazily and caches them; the missing piece is not destroying the
-worker at the `kernel.machine` level.
+worker at the `build.machine` level.
 
-Expected: `wasm.compile` (79ms) + `wasm.emscripten-init` (44ms) → **0ms**.
+This would eliminate the ~56ms WASM init cost on project switches. Given
+that this cost is small relative to geometry computation (100-500ms+) and
+only occurs once per project switch (not per render), this is a low-priority
+future improvement. The primary workflow — iterating on files within a
+single build — already benefits from the existing within-build pooling.
+
+Expected: `wasm.compile` (24ms) + `wasm.emscripten-init` (30ms) → **0ms**.
 
 **Strategy 2: Transfer pre-compiled `WebAssembly.Module` via `postMessage`
-(saves ~77ms when worker must restart)**
+(future improvement — deferred)**
 
-`WebAssembly.Module` is structured-cloneable. A long-lived coordinator
-(main thread or a persistent worker) compiles the module once and holds a
-reference. When a new kernel worker is created, the module is transferred
-via `postMessage`, bypassing the entire fetch→stream→finalize pipeline.
+Google's [web.dev guide](https://web.dev/articles/webassembly-performance-patterns-for-web-apps)
+recommends compiling WASM once on the main thread and transferring the
+`WebAssembly.Module` to workers via `postMessage`. V8 internally shares
+compiled code through the NativeModuleCache (`shared_ptr<NativeModule>`),
+so no actual copy or recompilation occurs.
 
-V8 internally shares compiled code through the NativeModuleCache, so no
-actual copy occurs — the receiving isolate gets a reference to the same
-compiled native code. `wasm-loader.ts` would need a code path that accepts
-a pre-compiled `WebAssembly.Module` instead of calling
-`compileStreaming(fetch(url))`.
-
-Expected: `wasm.compile` → **< 1ms**. `wasm.emscripten-init` still 44ms.
+**Deferred justification**: With V8's caching layers working correctly
+(NativeModuleCache + GeneratedCodeCache), `wasm.compile` is consistently
+20-30ms in practice. At this level the cost is negligible compared to
+geometry computation (typically 100-500ms+). The `postMessage` transfer
+pattern requires a round-trip to the main thread: the worker must request
+the module, the main thread must respond, and the worker must receive and
+instantiate it. This round-trip latency (message queue contention,
+structured clone overhead, event loop scheduling on both sides) would
+consume a significant portion of the 20-30ms savings, making the net
+benefit marginal. V8's `compileStreaming(fetch(url))` already deserializes
+cached TurboFan code in ~8ms and performs NativeModuleCache lookup in <1ms
+— the remaining time is HTTP cache fetch IPC which the `postMessage`
+approach merely trades for a different IPC path.
 
 **Strategy 3: Pre-warm WASM at app startup (moves cost off critical path)**
 
@@ -515,7 +548,7 @@ immediately at app load, before any project is opened. This populates both
 the HTTP cache and V8's NativeModuleCache. The per-worker cost remains but
 the first render is faster since all caches are warm.
 
-### 8.6 V8 Isolate Boundary Summary
+### 8.7 V8 Isolate Boundary Summary
 
 Each Web Worker has its own V8 isolate. WASM caching operates at two levels:
 
@@ -527,9 +560,10 @@ Each Web Worker has its own V8 isolate. WASM caching operates at two levels:
 
 When a worker is terminated and recreated, the in-isolate compiled instance
 is lost. V8 must deserialize from disk cache (3-11ms) or NativeModuleCache
-(0.02-1.3ms) and re-run the streaming pipeline (55ms fetch + 20ms finalize).
-The only way to avoid this is to keep the worker alive (Strategy 1) or
-transfer the `WebAssembly.Module` directly (Strategy 2).
+(0.02-1.3ms) and re-run the streaming pipeline. With warm caches, this
+totals ~20-30ms for `wasm.compile` — fast enough that the primary
+optimization lever is keeping the worker alive (either within-build pooling,
+which we already do, or cross-build pooling as a future improvement).
 
 ---
 
@@ -694,17 +728,40 @@ this is not yet available in browsers and does not help short-term.
 
 ### 9.9 Validated Strategy Ranking
 
-| Strategy | Savings | Industry Validation | Residual Cost |
+| Strategy | Savings | Industry Validation | Status |
 |---|---|---|---|
-| **Keep worker alive** (Strategy 1) | ~123ms | PSPDFKit object pooling, web.dev "permanent worker" | 0ms |
-| **Transfer pre-compiled Module** (Strategy 2) | ~79ms | web.dev "Good/Perfect" pattern, V8 NativeModuleCache | ~44ms (Emscripten init) |
-| **Pre-warm at app startup** (Strategy 3) | First-load latency | web.dev `<link rel="preload">` | Full per-worker cost remains |
-| **Combined: 1 + 2** | ~123ms nominal, ~79ms on forced restart | — | 0ms / 44ms fallback |
+| **Within-build worker pooling** | Full WASM init avoided per render | PSPDFKit object pooling, web.dev "permanent worker" | **Already implemented** |
+| **Cross-build worker pooling** (Strategy 1) | ~56ms per project switch | PSPDFKit object pooling | Future (low priority) |
+| **Pre-warm at app startup** (Strategy 3) | First-load latency | web.dev `<link rel="preload">` | Future (low-cost complement) |
+| **Transfer pre-compiled Module** (Strategy 2) | ~20-30ms theoretical | web.dev "Good/Perfect" pattern | **Deferred** (see below) |
 
-The strongest approach is **Strategy 1 + 2 combined**: keep workers alive for
-same-kernel switches (0ms WASM overhead), and when a worker must restart
-(crash recovery, different kernel type), transfer the pre-compiled module via
-`postMessage` to save 79ms of streaming pipeline overhead.
+**Current state**: The application already keeps workers alive within a
+build session. File changes, parameter changes, and re-renders all reuse
+the same worker and WASM instance — the ~56ms init cost is paid once per
+build session, not per render. This is the most important optimization
+and it is already in place.
+
+**Why Strategy 1 (cross-build) is low priority**: The ~56ms cost only
+occurs when the user navigates to a different project (build ID change).
+This is an infrequent navigation event, not part of the iterative
+edit→render loop. The cost is also small relative to the build loading,
+file system initialization, and geometry computation that follow.
+
+**Why Strategy 2 is deferred**: With V8's NativeModuleCache and
+GeneratedCodeCache both working correctly after the `assetsInlineLimit`
+fix, `wasm.compile` consistently measures 20-30ms on warm caches. This
+is negligible compared to typical geometry computation (100-500ms+).
+The `postMessage` module transfer approach would replace
+`compileStreaming(fetch())` with a main-thread round-trip (worker →
+request module → main thread responds → worker receives → instantiate).
+This round-trip involves message queue scheduling on both sides,
+structured clone serialization, and event loop contention — overhead
+that would consume a significant fraction of the 20-30ms savings. The
+implementation complexity (coordinator lifecycle, message protocol,
+error handling, fallback when main thread hasn't compiled yet) is not
+justified by the marginal improvement. V8 already handles the heavy
+lifting: TurboFan code is deserialized from disk cache in ~8ms and
+NativeModuleCache lookup takes <1ms.
 
 ---
 
@@ -716,14 +773,22 @@ WASM binaries into JavaScript chunks, exceeding V8's bytecode cache limits.
 With the one-line fix to `assetsInlineLimit`, kernel startup drops from 1.3s
 to ~229ms.
 
-A secondary optimization opportunity exists: the residual ~131ms WASM init
-cost (79ms compile + 44ms emscripten init) on kernel restarts can be
-eliminated by keeping workers alive across project switches rather than
-terminating and recreating them. This approach is validated by Google's
-official web.dev guidance, PSPDFKit's production experience with 8 MB+ WASM
-modules, and V8's architecture where `WebAssembly.Module` transfer via
-`postMessage` maps to the process-global NativeModuleCache for zero-copy
-sharing.
+The application already implements the most impactful optimization: **worker
+pooling within a build session**. The `BuildProvider` → `buildMachine` →
+`cadMachine` → `kernelMachine` hierarchy keeps the Web Worker alive across
+file changes, parameter changes, and re-renders. The ~56ms WASM init cost
+(24ms compile + 30ms emscripten init with warm caches) is paid once per
+build session, not per render.
+
+Two low-priority future improvements exist:
+1. **Cross-build worker pooling** — keep workers alive when navigating between
+   projects that use the same kernel type. Saves ~56ms per project switch,
+   but this is an infrequent navigation event and the cost is small relative
+   to build loading and geometry computation.
+2. **Pre-compiled module transfer** via `postMessage` (web.dev's
+   "Good/Perfect" pattern) — deferred because V8's caching layers already
+   reduce `wasm.compile` to 20-30ms, and the main-thread round-trip overhead
+   of the transfer would consume much of the savings.
 
 ## References
 

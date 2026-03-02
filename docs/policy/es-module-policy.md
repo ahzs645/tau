@@ -174,62 +174,50 @@ To ensure V8 bytecode caching works reliably across browsers and cache configura
 
 ## WASM Module Reuse Across Workers
 
-Even with WASM files correctly emitted as separate assets, there is an inherent per-worker-creation cost due to V8's streaming pipeline:
+### Current: within-build worker pooling (already implemented)
 
-| Cost | Duration | Cause |
+The application already keeps kernel workers alive within a build session. The `BuildProvider` → `buildMachine` → `cadMachine` → `kernelMachine` hierarchy reuses the same worker across file changes, parameter changes, and re-renders. The WASM init cost is paid **once per build session**, not per render.
+
+This is the same "object pooling" approach used by [PSPDFKit](https://pspdfkit.com/blog/2018/optimize-webassembly-startup-performance/) for their 8 MB+ WASM backend — they pool initialized worker instances and recycle them across document opens.
+
+### Per-worker-creation cost (on build switches)
+
+When the user navigates to a different build (project), workers are destroyed and recreated. With V8's caching layers working correctly, the init cost is modest:
+
+| Cost | Duration (warm caches) | Cause |
 |---|---|---|
-| `wasm.compile` | ~79ms | Fetching 22 MB through data pipe + streaming finalization, even with cache hits |
-| `wasm.emscripten-init` | ~44ms | C++ global constructors + Emscripten FS setup |
-| **Total per restart** | **~123ms** | Unavoidable when a worker is terminated and recreated |
+| `wasm.compile` | ~20-30ms | Streaming pipeline: HTTP cache fetch via Mojo IPC + NativeModuleCache lookup + TurboFan deserialization |
+| `wasm.emscripten-init` | ~27-30ms | C++ global constructors + Emscripten FS setup |
+| **Total per build switch** | **~50-60ms** | Negligible compared to geometry computation (100-500ms+) |
 
-V8's NativeModuleCache (process-level) caches compiled WASM across workers, but `WebAssembly.compileStreaming(fetch(url))` cannot short-circuit the fetch — all bytes must flow through Chrome's Mojo data pipe even on a cache hit.
+V8's caching layers handle compilation efficiently:
+- **NativeModuleCache** (process-global): Shares compiled `NativeModule` across isolates. Lookup takes <1ms.
+- **GeneratedCodeCache** (disk): Persists TurboFan-optimized code across browser sessions. Deserialization takes ~8ms.
+- **`compileStreaming(fetch(url))`** leverages both caches automatically. The remaining ~20-30ms is the irreducible cost of the HTTP cache fetch IPC and streaming finalization — not recompilation.
 
-### Prefer keeping workers alive
+### Future: cross-build worker pooling (low priority)
 
-When users switch between projects that use the same kernel, **do not terminate the worker**. Send a reset command instead. The WASM module, Emscripten instance, and initialized state all survive, reducing WASM init from ~123ms to 0ms.
-
-This is the same "object pooling" approach used by [PSPDFKit](https://pspdfkit.com/blog/2018/optimize-webassembly-startup-performance/) for their 8 MB+ WASM backend — they pool initialized worker instances and recycle them across document opens rather than recreating them.
-
-```typescript
-// WRONG: destroys V8 isolate, all WASM state lost
-worker.terminate();
-// Then later: new Worker(url) → full WASM init pipeline (~123ms)
-
-// RIGHT: keep worker alive, reset kernel state
-worker.postMessage({ type: 'reset' });
-// WASM stays warm → 0ms init overhead
-```
+When switching between builds that use the same kernel type, the worker could be kept alive instead of terminated. The build machine would detach and reattach compilation units rather than destroying them.
 
 **Emscripten constraint**: C++ global constructors only run once per instance. OpenCASCADE's global state is initialized during these constructors and cannot be re-run. State cleanup must happen at the application level (e.g., deleting shapes), not by re-creating the Emscripten instance.
 
-### When workers must restart: transfer pre-compiled modules
+This is low priority because:
+- The ~56ms init cost only occurs on project navigation, not during the iterative edit→render loop
+- The cost is small relative to build loading, file system initialization, and geometry computation that follow
+- The existing within-build pooling already covers the primary workflow
 
-If a worker must be recreated (crash recovery, kernel type change), avoid `compileStreaming(fetch())` by transferring a pre-compiled `WebAssembly.Module` from the main thread. This is Google's officially recommended pattern from [WebAssembly Performance Patterns](https://web.dev/articles/webassembly-performance-patterns-for-web-apps) (reviewed by V8 engineers):
+### Future: transfer pre-compiled modules via `postMessage` (deferred)
 
-```typescript
-// Main thread: compile once at startup, hold reference
-const wasmModule = await WebAssembly.compileStreaming(fetch(wasmUrl));
+Google's [WebAssembly Performance Patterns](https://web.dev/articles/webassembly-performance-patterns-for-web-apps) guide (reviewed by V8 engineers) recommends compiling WASM once on the main thread and transferring the `WebAssembly.Module` to workers via `postMessage` to bypass the streaming pipeline entirely. `WebAssembly.Module` is structured-cloneable and V8 shares compiled code via the process-global `NativeModuleCache` — no byte copying or recompilation occurs.
 
-// Transfer to new worker (structured-cloneable, no copy in V8)
-worker.postMessage({ type: 'init', wasmModule });
+**This optimization is deferred** because:
 
-// Worker side: instantiate directly, skip fetch+streaming
-const instance = await WebAssembly.instantiate(wasmModule, imports);
-```
+1. **Marginal savings**: With V8's caching layers working correctly, `wasm.compile` is only 20-30ms — negligible compared to geometry computation (typically 100-500ms+).
+2. **Round-trip overhead offsets savings**: The transfer pattern requires the worker to request the module from the main thread, wait for the response, then instantiate. This round-trip (message queue scheduling on both sides, structured clone serialization, event loop contention) would consume a significant portion of the 20-30ms savings.
+3. **Caching already handles the hard work**: V8 deserializes cached TurboFan code in ~8ms and performs NativeModuleCache lookup in <1ms. The remaining time is HTTP cache IPC, which the `postMessage` approach merely trades for a different IPC path.
+4. **Implementation complexity**: Requires a coordinator lifecycle on the main thread, a request/response message protocol, error handling for races (worker starts before main thread has compiled), and a fallback path to `compileStreaming`.
 
-`WebAssembly.Module` is structured-cloneable. V8 internally shares compiled code via the process-global `NativeModuleCache` (`shared_ptr<NativeModule>` in `wasm-engine.cc`) — no byte copying or recompilation occurs. The receiving isolate gets a reference to the same compiled native code.
-
-For Emscripten modules, inject the pre-compiled module via the [`instantiateWasm` hook](https://emscripten.org/docs/api_reference/module.html):
-
-```typescript
-bindingsFactory({
-  instantiateWasm(imports, successCallback) {
-    WebAssembly.instantiate(preCompiledModule, imports)
-      .then(instance => successCallback(instance));
-    return {};
-  },
-});
-```
+If `wasm.compile` costs grow (e.g., larger WASM binaries or degraded cache behavior), this can be revisited. For Emscripten modules, the [`instantiateWasm` hook](https://emscripten.org/docs/api_reference/module.html) provides the injection point.
 
 ### V8 isolate cache boundaries
 
@@ -243,7 +231,7 @@ bindingsFactory({
 
 **Do not** cache `WebAssembly.Module` in IndexedDB. Firefox removed structured clone support for `WebAssembly.Module` in IndexedDB in v63 (October 2018), and the WebAssembly Community Group decided browsers should handle caching implicitly. This approach is deprecated across all browsers.
 
-**Do not** use `WebAssembly.compile(arrayBuffer)` expecting code caching — V8 only caches TurboFan code produced via `compileStreaming`. Use `compileStreaming` for initial compilation, and `postMessage` transfer for subsequent worker creations.
+**Do not** use `WebAssembly.compile(arrayBuffer)` expecting code caching — V8 only caches TurboFan code produced via `compileStreaming`. Always use `compileStreaming` for compilation to ensure disk caching.
 
 > For the full trace analysis and external research, see [Dynamic ES Module Research](../research/dynamic-es-modules.md#8-residual-wasm-init-cost-post-fix).
 
@@ -256,5 +244,4 @@ bindingsFactory({
 - **Assuming CJS works with browser `import()`** -- it does not; only Node.js handles CJS via `import()`
 - **`assetsInlineLimit` returning `true` for WASM files** -- inlines multi-MB binaries into JS, breaking V8 bytecode cache and disabling streaming compilation
 - **JS chunks > 20 MB containing inlined binary data** -- exceeds Chrome's `GeneratedCodeCache` per-entry limit, causing silent cache rejection and full recompilation on every page load
-- **Terminating workers between same-kernel project switches** -- destroys the V8 isolate and forces full WASM re-init (~123ms) even when the same WASM module is needed
-- **Calling `compileStreaming(fetch(url))` when a `WebAssembly.Module` is already available** -- the streaming pipeline has ~79ms of inherent overhead even on cache hits; transfer pre-compiled modules via `postMessage` instead
+- **Terminating workers within a build session** -- destroys the V8 isolate and forces full WASM re-init (~56ms); keep workers alive across file/parameter changes (already implemented). Cross-build termination is acceptable given the low cost with warm caches
