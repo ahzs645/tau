@@ -52,6 +52,7 @@ groups:
       - fumadocs
       - zod
       - v8
+      - motion
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -298,3 +299,6 @@ repos:
   v8:
     upstream: v8/v8
     description: The official mirror of the V8 Git repository
+  motion:
+    upstream: motiondivision/motion
+    description: A modern animation library for React and JavaScript
