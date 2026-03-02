@@ -2,8 +2,6 @@ import type { InferPageType } from 'fumadocs-core/source';
 import { source } from '#lib/fumadocs/source.js';
 
 export async function getLlmText(page: InferPageType<typeof source>): Promise<string> {
-  // @ts-expect-error - getText is not typed correctly
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- TODO: find a better way to type this.
   const processed = await page.data.getText('processed');
 
   return `# ${page.data.title}
