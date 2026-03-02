@@ -6,13 +6,13 @@ function createMockStorage(initial?: Record<string, string>): Storage {
   const store = new Map<string, string>(Object.entries(initial ?? {}));
   return {
     getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => {
+    setItem(key: string, value: string) {
       store.set(key, value);
     },
-    removeItem: (key: string) => {
+    removeItem(key: string) {
       store.delete(key);
     },
-    clear: () => {
+    clear() {
       store.clear();
     },
     get length() {
@@ -157,7 +157,7 @@ describe('setFlagOverrides', () => {
     const raw = storage.getItem('tau:flags');
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw!) as Record<string, unknown>;
-    expect(parsed.planMode).toBe(true);
+    expect(parsed['planMode']).toBe(true);
   });
 
   it('should reset internal cache after writing', () => {
