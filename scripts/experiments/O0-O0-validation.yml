@@ -1,0 +1,16 @@
+name: "v8-O0-noLTO-wasmOptO0-validation"
+description: "Fastest possible build for symbol validation (no optimization)"
+
+compilation:
+  optimization: "-O0"
+  lto: false
+  exceptions: "none"
+  threading: "single-threaded"
+
+linking:
+  yaml: "custom_build_single_v8.yml"
+  wasmOptLevel: "-O0"
+
+benchmark:
+  iterations: 3
+  filter: ["primitives"]

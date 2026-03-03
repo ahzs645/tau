@@ -1,0 +1,16 @@
+name: "O2-noLTO-wasmExc-single"
+description: "With native WASM exceptions: -O2 compile, noLTO, wasm-exceptions, single-threaded"
+
+compilation:
+  optimization: "-O2"
+  lto: false
+  exceptions: "wasm-native"
+  threading: "single-threaded"
+
+linking:
+  yaml: "custom_build_with_exceptions_v8.yml"
+  wasmOptLevel: "-O3"
+
+benchmark:
+  iterations: 10
+  filter: ["primitives", "booleans", "fillets", "extrusions", "complex", "examples", "stress"]
