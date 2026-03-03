@@ -1,0 +1,28 @@
+{
+  "schema": "wasm-build-provenance-v1",
+  "buildId": "v762-npm-single",
+  "occtVersion": "V7_6_2",
+  "toolchain": {
+    "emscripten": "unknown",
+    "llvm": "unknown"
+  },
+  "compilation": {
+    "cacheKey": "npm-published-0.20.2",
+    "cacheHit": false,
+    "optimization": "unknown",
+    "exceptions": "none",
+    "sourceFiles": 0,
+    "bindingFiles": 0
+  },
+  "linking": {
+    "boundSymbols": 0,
+    "symbolList": [],
+    "emccFlags": []
+  },
+  "postProcessing": {
+    "preOptSize": 10800306,
+    "postOptSize": 10800306,
+    "optReduction": "0.0%"
+  },
+  "source": "npm:replicad-opencascadejs@0.20.2"
+}
