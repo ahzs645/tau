@@ -1,7 +1,6 @@
 ---
+name: langgraph
 description: for ANY question about LangGraph and agentic AI
-globs: 
-alwaysApply: false
 ---
 for ANY question about LangGraph, use the langgraph-docs-mcp server to help answer -- 
 + call list_doc_sources tool to get the available llms.txt file

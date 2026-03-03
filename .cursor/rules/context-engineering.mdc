@@ -17,6 +17,8 @@ A comprehensive guide to optimizing system prompts and tool descriptions for LLM
 - [Jiang & Nam: Empirical Study on Developer-Provided Context](https://arxiv.org/abs/2512.18925) (Dec 2025)
 - [Gartner: Context Engineering as Strategic Priority](https://www.gartner.com/en/articles/context-engineering) (Oct 2025)
 - [InfoWorld: Four Important Lessons About Context Engineering](https://www.infoworld.com/article/4085355/four-important-lessons-about-context-engineering.html) (Jan 2026)
+- [Cursor: Dynamic Context Discovery](https://cursor.com/blog/dynamic-context-discovery) (Feb 2026)
+- [Cursor: Best Practices for Coding with Agents](https://cursor.com/blog/agent-best-practices) (Jan 2026)
 
 ---
 
@@ -332,6 +334,47 @@ Treat context as an evolving "playbook" that accumulates strategies:
 
 Prevents "context collapse" where repeated patterns degrade into noise.
 
+### Dynamic Context Discovery (Cursor, 2026)
+
+Instead of injecting all context upfront, let agents discover what they need via files and search:
+
+| Static (old) | Dynamic (new) |
+|--------------|---------------|
+| Tool schemas in every request | Tool descriptions as files, loaded on demand |
+| Full terminal output in context | Terminal sessions as files, agent greps for relevant output |
+| Truncated long tool responses | Tool output written to files, agent reads what it needs |
+| All MCP tools in prompt | MCP tool descriptors as files, agent discovers relevant ones |
+| Full chat history in context | Chat history as files, searchable during summarization |
+
+**Key insight**: Files are the universal abstraction for dynamic context. Every agent already knows how to read, search, and navigate files. Convert any large or conditionally-useful context into files rather than injecting it statically.
+
+**Impact**: Cursor measured 46.9% total agent token reduction in runs that called MCP tools by switching to file-based tool discovery (Cursor, 2026).
+
+### Progressive Disclosure at Scale
+
+Progressive disclosure has emerged as the dominant pattern across independent agent platforms. Give agents minimal context upfront and let them pull what they need.
+
+**Industry results**:
+
+| Company | Technique | Token Reduction |
+|---------|-----------|-----------------|
+| Cloudflare (Sep 2025) | Convert MCP schemas to TypeScript APIs; let models write code instead of reasoning over static schemas | 98.7% |
+| Anthropic (2025) | Tool search: show only tools relevant to current task, discover others on demand | 85% |
+| Cursor (Feb 2026) | On-demand MCP tool loading via file-based descriptors | 46.9% |
+
+**Design principle**: Ask "what should the agent be able to *discover*?" rather than "what should I put into the prompt?"
+
+### Model-Specific Harness Tuning (Cursor, 2026)
+
+Different models respond differently to the same prompts and tool configurations. An agent harness must be tuned per model:
+
+- Some models prefer `grep` over dedicated search tools
+- Some need explicit instructions to call linters after edits
+- Tool call format preferences vary across model families
+- Instruction density tolerance differs (some degrade with verbose prompts, others need explicitness)
+
+**Implication**: When supporting multiple models, maintain per-model instruction variants or use conditional sections. Test prompt changes against all supported models, not just the primary one.
+
 ---
 
 ## Part 7: Anti-Patterns
@@ -392,76 +435,7 @@ When reviewing prompts or tool descriptions:
 
 ---
 
-## Appendix A: Optimization Recommendations for `chat-prompt-cad.ts`
-
-Based on the audit of the 864-line system prompt (~18,000 tokens):
-
-### High Priority: Remove Tool Re-explanations (~2000 tokens)
-
-**Location**: Lines 741-860 (`<implementation_workflow>` section)
-
-| Section | Lines | Issue | Action |
-|---------|-------|-------|--------|
-| Filesystem Tools | 741-754 | Re-explains 7 tools | Remove; tools self-document |
-| Reasoning Tool | 765-774 | Duplicates description | Remove; reference only |
-| Kernel Result Tool | 776-790 | Duplicates description | Keep 2-3 lines workflow context |
-| Image Analysis Tool | 792-860 | 70 lines for 16-line tool | Reduce to 10 lines max |
-
-**Recommended replacement**:
-```
-## Tools
-Sequence: reasoning → editFile/createFile → getKernelResult → imageAnalysis
-
-- Plan with reasoning before coding
-- Verify with getKernelResult after ALL file changes (required)
-- Validate visually with imageAnalysis for assemblies (required)
-
-File tools: readFile, listDirectory, globSearch, grep
-```
-
-### Medium Priority: Consolidate Duplicated Concepts (~1500 tokens)
-
-| Concept | Current Locations | Action |
-|---------|-------------------|--------|
-| Feature Tree planning | 3 sections | Keep in `<feature_tree_planning>` only |
-| reasoning tool usage | 3 sections | Reference, don't re-explain |
-| File organization | 2 verbose sections per mode | Reduce to essential rules |
-
-### Medium Priority: Condense Prescriptive Sections (~1000 tokens)
-
-**`<iterative_process>` (30 lines → 5 lines)**:
-```
-<error_handling>
-Errors are expected. Analyze root cause, fix incrementally, preserve working code.
-Visual feedback: compare to requirements, fix discrepancies, re-validate.
-</error_handling>
-```
-
-**`<realistic_geometry>` (28 lines)**: Keep domain value, reduce by 50%.
-
-### Low Priority: Language Tightening (~500 tokens)
-
-| Pattern | Action |
-|---------|--------|
-| "This transparency ensures..." | Remove entirely |
-| "CRITICAL/MUST/NEVER/IMPORTANT" | State once without emphasis |
-| "The goal is to achieve..." | "Goal: X" |
-
-### Estimated Impact
-
-| Optimization | Savings |
-|--------------|---------|
-| Tool re-explanations | ~2000 tokens |
-| Duplicated concepts | ~1500 tokens |
-| Prescriptive lists | ~1000 tokens |
-| Language tightening | ~500 tokens |
-| **Total** | **~5000 tokens (28%)** |
-
-**Note**: Kernel-specific content already conditionally loaded via `getKernelSpecificContent()`. Good architecture—only active kernel enters context.
-
----
-
-## Appendix B: Research Sources
+## Appendix: Research Sources
 
 ### Primary Sources (2025-2026)
 
@@ -483,6 +457,9 @@ Visual feedback: compare to requirements, fix discrepancies, re-validate.
 16. ResearchGate - Comprehensive Contextual Management for LLMs
 17. Emergent Mind - Context Engineering Foundations and Techniques
 18. Frontiers in AI (Nov 2025) - Context-Aware RAG in Engineering Research
+19. Cursor (Feb 2026) - Dynamic Context Discovery
+20. Cursor (Jan 2026) - Best Practices for Coding with Agents
+21. Cloudflare (Sep 2025) - MCP to Code: Token Reduction via TypeScript APIs
 
 ### Key Repositories
 

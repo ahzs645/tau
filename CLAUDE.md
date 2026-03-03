@@ -4,126 +4,68 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture Overview
 
-Tau is the AI-powered CAD platform built as a monorepo using Nx with the following architecture:
+Tau is the AI-native CAD platform for the web (`tau.new`), built as an Nx monorepo.
 
-- **Frontend**: React Router v7 app with React 19, TypeScript, and Tailwind CSS
-- **Backend**: NestJS API with Fastify, PostgreSQL database via Drizzle ORM
-- **CAD Engine**: Integration with Replicad (OpenCASCADE) and KCL WASM
-- **AI Integration**: LangGraph for agent orchestration, supporting multiple LLM providers (OpenAI, Anthropic, Ollama)
-- **Package Manager**: pnpm with workspace configuration
-- **Build System**: Nx monorepo with Vite for frontend and TypeScript compilation
+- **Frontend**: React Router v7, React 19, TypeScript, Tailwind CSS, Fumadocs
+- **Backend**: NestJS API with Fastify, PostgreSQL (Drizzle ORM), Redis, Better Auth
+- **CAD Engine**: Multi-kernel runtime supporting Replicad, JSCAD, Manifold, OpenSCAD, and KCL
+- **AI Integration**: LangGraph agent with tool-use, supporting OpenAI, Anthropic, Vertex AI, Ollama
+- **Build System**: Nx monorepo, pnpm workspaces, Vite
 
-### Key Applications
-- `apps/ui` - Main web application built with React Router v7
-- `apps/api` - NestJS backend API with authentication and database
-- `apps/ui-e2e` - End-to-end tests for the UI
-- `apps/api-e2e` - End-to-end tests for the API
+### Applications
+- `apps/ui` - React Router v7 web app (CAD editor, file manager, AI chat, docs site)
+- `apps/api` - NestJS API (auth, database, chat WebSocket, LangGraph agent)
+- `apps/ui-e2e` - Playwright E2E tests for UI
+- `apps/api-e2e` - API E2E tests
 
-### Libraries
+### Published Packages (`@taucad/*`)
+- `packages/kernels` - Multi-kernel CAD runtime (Replicad/JSCAD/Manifold/OpenSCAD/Zoo), worker client, middleware
+- `packages/converter` - CAD file conversion (STL, STEP, IGES, DXF, glTF, USDZ)
+- `packages/json-schema` - JSON to JSON Schema inference
+- `packages/js` - Tau JavaScript API (early stage)
+
+### Internal Libraries
+- `libs/chat` - AI chat tool schemas, message schemas, RPC definitions
+- `libs/types` - Shared TypeScript types (API, build, CAD, file, graphics, manufacturing)
+- `libs/utils` - Shared utilities (ID generation, path, file, schema, dispose)
+- `libs/units` - Units of measurement and conversions
+- `libs/api-extractor` - Extracts API type definitions from CAD libraries for LLM context
 - `libs/tau-examples` - Example CAD projects and templates
-- `libs/api-extractor` - API analysis and extraction utilities
+
+### Documentation Site
+Docs live in `apps/ui/content/docs/` using Fumadocs, organized into two sections:
+- **Kernels** (`(kernels)/`) - Full docs for `@taucad/kernels`: getting started, guides, concepts, API reference
+- **Editor** (`(editor)/`) - Editor documentation (early stage)
 
 ## Development Commands
 
 ```bash
-# Development
-pnpm dev                    # Start all development servers
-pnpm start                  # Start production servers
-pnpm build                  # Build all projects
-pnpm test                   # Run all tests
-pnpm lint                   # Lint all projects
-pnpm typecheck              # Type check all projects
-
 # Infrastructure (PostgreSQL + Redis via Docker)
 pnpm infra:up               # Start all infrastructure
 pnpm infra:down             # Stop all infrastructure
 pnpm infra:reset            # Reset infrastructure (destroys data)
-pnpm infra:logs             # View all logs
-pnpm infra:logs:postgres    # View Postgres logs
-pnpm infra:logs:redis       # View Redis logs
 
 # Database (Drizzle ORM)
 pnpm db:generate            # Generate Drizzle migrations
 pnpm db:migrate             # Run migrations
 pnpm db:studio              # Open Drizzle Studio
 
-# CI/Testing
+# CI
 pnpm ci:affected            # Run affected tests, builds, lint, typecheck
 pnpm ci:all                 # Run all tests, builds, lint, typecheck
-
-# Nx-specific commands
-nx run <app>:<target>       # Run specific target for app
-nx run-many -t <target>     # Run target for all projects
-nx affected -t <target>     # Run target for affected projects only
 ```
 
-## Code Style and Linting
-
-This project uses extremely strict linting via XO + ESLint with the following key requirements:
-
-### TypeScript Rules
-- Use `import type` for type-only imports
-- All exported/public functions must have explicit return types (including React components). Private/internal functions don't require explicit return types.
-- Use `type` instead of `interface`
-- Use `undefined` instead of `null`
-- No `any` type - use `unknown` instead
-- Always include `.js` extensions for local imports with `#` prefix
-- Maximum 3 parameters per function/method; prefer single options object for 3+ args. See docs/library-api-best-practices.md section 4
-- Naming in packages/*: `create*` (factory), `define*` (plugin), `is*` (guard), `from*` (conversion), `on*` (hook/callback). No abbreviations. For apps/libs, prefer descriptive names following framework conventions. See docs/library-api-best-practices.md section 5
-
-### Code Style
-- Always use curly braces for control flow statements
-- Explicit class member accessibility (`public`, `private`)
-- Use absolute imports with `#` prefix (e.g., `#utils/helper.js`)
-- Descriptive variable names (e.g., `properties` not `props`, `event` not `e`)
+## Code Preferences
+- Early returns to reduce nesting
+- Composition over inheritance
+- Const declarations over function declarations
+- Conditional class utilities (cn/clsx) over ternary for className
 - Functional programming patterns preferred
 
 ## Testing
 
-The project uses Vitest with separate configurations for UI (jsdom) and API (node) environments:
-
-```bash
-# Run specific project tests
-nx test ui                  # UI tests
-nx test api                 # API tests
-
-# Single test file
-nx test ui -- src/utils/test.spec.ts
-```
-
-## Environment Setup
-
-1. Copy environment files:
-   ```bash
-   cp apps/ui/.env.example apps/ui/.env.local
-   cp apps/api/.env.example apps/api/.env.local
-   ```
-
-2. Start infrastructure: `pnpm infra:up`
-
-3. Start development: `pnpm dev`
-
-## AI Integration
-
-The project includes sophisticated AI agent orchestration using:
-- **LangGraph**: State machine-based agent workflows
-- **Multiple LLM Support**: OpenAI, Anthropic, Google Vertex AI, Ollama
-- **Vector Database**: pgvector for embeddings storage
-- **Chat Interface**: Real-time WebSocket communication
+Vitest with separate configurations for UI (jsdom) and API (node) environments.
 
 ## Database
 
-Uses PostgreSQL with Drizzle ORM:
-- Schema files in `apps/api/app/database/`
-- Migrations auto-generated via `pnpm db:generate`
-- Connection via connection pooling
-- Authentication tables managed by Better Auth
-
-## Key Technologies
-
-- **Frontend**: React 19, React Router v7, Tailwind CSS, Radix UI
-- **Backend**: NestJS, Fastify, Drizzle ORM, PostgreSQL
-- **CAD**: Replicad, OpenCASCADE, KCL WASM, Three.js
-- **AI**: LangChain, LangGraph, OpenAI SDK, Anthropic SDK
-- **Development**: Nx, Vite, TypeScript, pnpm, Docker
-- **Testing**: Vitest, Playwright, Testing Library
+PostgreSQL with Drizzle ORM. Schema in `apps/api/app/database/`, migrations via `pnpm db:generate`. Auth tables managed by Better Auth.
