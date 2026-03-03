@@ -9,7 +9,8 @@ import {
   Terminal,
   XIcon,
 } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import type { LogEntry } from '@taucad/types';
@@ -430,6 +431,37 @@ function flattenSpanTree(roots: SpanNode[], collapsedSet: Set<string>): SpanNode
 }
 
 // ---------------------------------------------------------------------------
+// Standard tree flattening for virtualization
+// ---------------------------------------------------------------------------
+
+type FlatSpanRow = {
+  node: SpanNode;
+  isLast: boolean;
+  ancestorIsLast: boolean[];
+};
+
+function flattenForStandardView(roots: SpanNode[], collapsedSet: Set<string>): FlatSpanRow[] {
+  const result: FlatSpanRow[] = [];
+
+  function walk(node: SpanNode, isLast: boolean, ancestorIsLast: boolean[]): void {
+    result.push({ node, isLast, ancestorIsLast });
+    const spanId = getSpanId(node.entry);
+    const isCollapsed = spanId ? collapsedSet.has(spanId) : false;
+    if (!isCollapsed) {
+      for (let i = 0; i < node.children.length; i++) {
+        walk(node.children[i]!, i === node.children.length - 1, [...ancestorIsLast, isLast]);
+      }
+    }
+  }
+
+  for (let i = 0; i < roots.length; i++) {
+    walk(roots[i]!, i === roots.length - 1, []);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------
 
@@ -455,6 +487,43 @@ function PipelineTimingBar({
       </div>
       <span className="w-14 shrink-0 text-right font-mono text-muted-foreground">{formatDuration(duration)}</span>
     </div>
+  );
+}
+
+function VirtualizedLogList({
+  filteredLogs,
+  filter,
+}: {
+  readonly filteredLogs: LogEntry[];
+  readonly filter: string;
+}): React.JSX.Element {
+  const renderLogItem = useCallback(
+    (index: number) => {
+      const log = filteredLogs[index];
+      if (!log) {
+        return undefined;
+      }
+
+      return (
+        <div className="group flex items-start gap-1.5 py-[3px] pr-2 text-xs hover:bg-muted/30">
+          <span className="shrink-0 font-mono text-[10px] leading-4 text-muted-foreground/40">
+            {formatTimestamp(log.timestamp)}
+          </span>
+          <span className={cn('flex-1 leading-4 break-all', logLevelColors[log.level] ?? 'text-foreground')}>
+            <HighlightText text={log.message} searchTerm={filter} />
+          </span>
+        </div>
+      );
+    },
+    [filteredLogs, filter],
+  );
+
+  return (
+    <Virtuoso
+      totalCount={filteredLogs.length}
+      itemContent={renderLogItem}
+      style={{ height: Math.min(192, filteredLogs.length * 22) }}
+    />
   );
 }
 
@@ -532,18 +601,7 @@ function CompilationUnitLogs({ entryFile }: { readonly entryFile: string }): Rea
       ) : undefined}
 
       {filteredLogs.length > 0 ? (
-        <div className="flex max-h-48 flex-col overflow-y-auto">
-          {filteredLogs.map((log: LogEntry) => (
-            <div key={log.id} className="group flex items-start gap-1.5 py-[3px] pr-2 text-xs hover:bg-muted/30">
-              <span className="shrink-0 font-mono text-[10px] leading-4 text-muted-foreground/40">
-                {formatTimestamp(log.timestamp)}
-              </span>
-              <span className={cn('flex-1 leading-4 break-all', logLevelColors[log.level] ?? 'text-foreground')}>
-                <HighlightText text={log.message} searchTerm={filter} />
-              </span>
-            </div>
-          ))}
-        </div>
+        <VirtualizedLogList filteredLogs={filteredLogs} filter={filter} />
       ) : (
         <p className="py-2 text-center text-[11px] text-muted-foreground/60">
           {cuLogs.length > 0 ? 'No matching logs.' : 'No logs yet.'}
@@ -580,28 +638,25 @@ function SpanAttributeBadges({ entry }: { readonly entry: PerformanceEntryData }
   );
 }
 
-function StandardSpanNode({
-  node,
+function StandardSpanRow({
+  row,
   collapsedSet,
   onToggle,
   displaySettings,
-  isLast,
-  ancestorIsLast,
 }: {
-  readonly node: SpanNode;
+  readonly row: FlatSpanRow;
   readonly collapsedSet: Set<string>;
   readonly onToggle: (spanId: string) => void;
   readonly displaySettings: DisplaySettings;
-  readonly isLast: boolean;
-  readonly ancestorIsLast: boolean[];
 }): React.JSX.Element {
+  const { node, isLast, ancestorIsLast } = row;
   const spanId = getSpanId(node.entry);
   const hasChildren = node.children.length > 0;
   const isCollapsed = spanId ? collapsedSet.has(spanId) : false;
   const category = getSpanCategory(node.entry.name);
 
   return (
-    <>
+    <div>
       <div
         className={cn('group relative flex items-center py-[3px] pr-2 text-xs', hasChildren && 'cursor-pointer')}
         onClick={
@@ -612,7 +667,6 @@ function StandardSpanNode({
             : undefined
         }
       >
-        {/* Tree connector lines */}
         {Array.from({ length: node.depth }, (_, i) => (
           <span key={String(i)} className="relative flex h-full w-5 shrink-0 items-center justify-center">
             {ancestorIsLast[i] ? undefined : <span className="absolute inset-y-0 left-2.5 w-px bg-border" />}
@@ -632,7 +686,6 @@ function StandardSpanNode({
           </span>
         )}
 
-        {/* Category dot or chevron */}
         <span className="inline-flex w-5 shrink-0 items-center justify-center">
           {hasChildren ? (
             isCollapsed ? (
@@ -645,17 +698,14 @@ function StandardSpanNode({
           )}
         </span>
 
-        {/* Span name */}
         <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={node.entry.name}>
           {node.entry.name}
         </span>
 
-        {/* Latency */}
         {displaySettings.showLatency ? (
           <span className="ml-2 shrink-0 font-mono text-muted-foreground">{formatDuration(node.entry.duration)}</span>
         ) : undefined}
 
-        {/* Self Time */}
         {displaySettings.showSelfTime && hasChildren && node.selfTime < node.entry.duration * 0.95 ? (
           <span className="ml-1 shrink-0 font-mono text-muted-foreground/50" title="Self time">
             ({formatDuration(node.selfTime)})
@@ -663,7 +713,6 @@ function StandardSpanNode({
         ) : undefined}
       </div>
 
-      {/* Attributes */}
       {displaySettings.showAttributes ? (
         <div className="flex items-center pb-0.5 text-xs">
           {Array.from({ length: node.depth }, (_, i) => (
@@ -673,22 +722,7 @@ function StandardSpanNode({
           <SpanAttributeBadges entry={node.entry} />
         </div>
       ) : undefined}
-
-      {/* Children */}
-      {hasChildren && !isCollapsed
-        ? node.children.map((child, index) => (
-            <StandardSpanNode
-              key={`${child.entry.name}-${String(index)}`}
-              node={child}
-              collapsedSet={collapsedSet}
-              displaySettings={displaySettings}
-              isLast={index === node.children.length - 1}
-              ancestorIsLast={[...ancestorIsLast, isLast]}
-              onToggle={onToggle}
-            />
-          ))
-        : undefined}
-    </>
+    </div>
   );
 }
 
@@ -703,30 +737,38 @@ function StandardTreeView({
   readonly onToggle: (spanId: string) => void;
   readonly displaySettings: DisplaySettings;
 }): React.JSX.Element {
+  const flatRows = useMemo(() => flattenForStandardView(spanTree, collapsedSet), [spanTree, collapsedSet]);
+
+  const renderSpanItem = useCallback(
+    (index: number) => {
+      const row = flatRows[index];
+      if (!row) {
+        return undefined;
+      }
+
+      return (
+        <StandardSpanRow row={row} collapsedSet={collapsedSet} displaySettings={displaySettings} onToggle={onToggle} />
+      );
+    },
+    [flatRows, collapsedSet, displaySettings, onToggle],
+  );
+
   return (
-    <div className="flex flex-col">
-      {spanTree.map((node, index) => (
-        <StandardSpanNode
-          key={`${node.entry.name}-${String(index)}`}
-          node={node}
-          collapsedSet={collapsedSet}
-          displaySettings={displaySettings}
-          isLast={index === spanTree.length - 1}
-          ancestorIsLast={[]}
-          onToggle={onToggle}
-        />
-      ))}
-    </div>
+    <Virtuoso
+      totalCount={flatRows.length}
+      itemContent={renderSpanItem}
+      style={{ height: Math.min(384, flatRows.length * 22) }}
+    />
   );
 }
 
 // ---------------------------------------------------------------------------
-// Waterfall SVG View
+// Waterfall View
 // ---------------------------------------------------------------------------
 
 const waterfallRowHeight = 28;
 const waterfallBarHeight = 14;
-const waterfallNameOffset = -3;
+const waterfallLabelOffset = -3;
 const waterfallLeftPadding = 8;
 
 function generateTicks(durationMs: number, availableWidth: number): number[] {
@@ -754,6 +796,133 @@ function generateTicks(durationMs: number, availableWidth: number): number[] {
   return ticks;
 }
 
+function WaterfallAxisBar({ renderDuration }: { readonly renderDuration: number }): React.JSX.Element {
+  const ticks = useMemo(() => generateTicks(renderDuration, 400), [renderDuration]);
+
+  return (
+    <div className="relative border-b border-border" style={{ height: waterfallRowHeight }}>
+      {ticks.map((tick) => {
+        const xPercent = renderDuration > 0 ? (tick / renderDuration) * 100 : 0;
+        return (
+          <span
+            key={tick}
+            className="absolute -translate-x-1/2 text-[10px] text-muted-foreground"
+            style={{ left: `${String(xPercent)}%`, top: 4 }}
+          >
+            {formatDuration(tick)}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function WaterfallGridLines({ renderDuration }: { readonly renderDuration: number }): React.JSX.Element {
+  const ticks = useMemo(() => generateTicks(renderDuration, 400), [renderDuration]);
+
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10">
+      {ticks.map((tick) => {
+        const xPercent = renderDuration > 0 ? (tick / renderDuration) * 100 : 0;
+        return (
+          <div
+            key={tick}
+            className="absolute top-0 bottom-0 border-l border-dashed border-border/30"
+            style={{ left: `${String(xPercent)}%` }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function WaterfallHtmlRow({
+  node,
+  renderStart,
+  renderDuration,
+  hasChildren,
+  isCollapsed,
+  spanId,
+  onToggle,
+  displaySettings,
+}: {
+  readonly node: SpanNode;
+  readonly renderStart: number;
+  readonly renderDuration: number;
+  readonly hasChildren: boolean;
+  readonly isCollapsed: boolean;
+  readonly spanId: string | undefined;
+  readonly onToggle: (spanId: string) => void;
+  readonly displaySettings: DisplaySettings;
+}): React.JSX.Element {
+  const leftPercent = renderDuration > 0 ? ((node.entry.startTime - renderStart) / renderDuration) * 100 : 0;
+  const widthPercent = renderDuration > 0 ? (node.entry.duration / renderDuration) * 100 : 0;
+  const clampedLeft = Math.max(0, leftPercent);
+  const clampedWidth = Math.max(0.5, Math.min(100 - clampedLeft, widthPercent));
+  const category = getSpanCategory(node.entry.name);
+  const fillColor = categorySvgColors[category];
+  const barTop = (waterfallRowHeight - waterfallBarHeight) / 2;
+  const depthPad = node.depth * 12 + waterfallLeftPadding;
+
+  const labelParts = [node.entry.name];
+  if (displaySettings.showLatency) {
+    labelParts.push(formatDuration(node.entry.duration));
+  }
+
+  const label = labelParts.join('  ');
+
+  return (
+    <div
+      className={cn('group/row relative hover:bg-muted/30', hasChildren && 'cursor-pointer')}
+      style={{ height: waterfallRowHeight }}
+      onClick={
+        hasChildren && spanId
+          ? () => {
+              onToggle(spanId);
+            }
+          : undefined
+      }
+    >
+      <div
+        className="absolute rounded-sm"
+        style={{
+          left: `${String(clampedLeft)}%`,
+          width: `${String(clampedWidth)}%`,
+          top: barTop,
+          height: waterfallBarHeight,
+          backgroundColor: fillColor,
+          opacity: 0.35,
+        }}
+      />
+      <div
+        className="absolute rounded-sm"
+        style={{
+          left: `${String(clampedLeft)}%`,
+          width: `${String(clampedWidth)}%`,
+          top: barTop,
+          height: waterfallBarHeight,
+          border: `1px solid ${fillColor}`,
+          opacity: 0.6,
+        }}
+      />
+      <span
+        className="absolute truncate font-mono text-[11px] text-foreground"
+        style={{ left: depthPad, top: waterfallLabelOffset + barTop, maxWidth: `${String(clampedLeft - 1)}%` }}
+      >
+        {label}
+      </span>
+      {hasChildren && spanId ? (
+        <span
+          className="absolute right-2 text-[10px] text-muted-foreground"
+          style={{ top: waterfallRowHeight / 2 - 5 }}
+        >
+          {isCollapsed ? '▸' : '▾'}
+        </span>
+      ) : undefined}
+    </div>
+  );
+}
+
 function WaterfallView({
   spanTree,
   renderStart,
@@ -769,209 +938,45 @@ function WaterfallView({
   readonly onToggle: (spanId: string) => void;
   readonly displaySettings: DisplaySettings;
 }): React.JSX.Element {
-  const containerRef = useRef<HTMLDivElement>(null);
   const flatNodes = useMemo(() => flattenSpanTree(spanTree, collapsedSet), [spanTree, collapsedSet]);
 
-  const svgHeight = flatNodes.length * waterfallRowHeight + waterfallRowHeight;
-  const svgWidth = '100%';
+  const renderWaterfallItem = useCallback(
+    (index: number) => {
+      const node = flatNodes[index];
+      if (!node) {
+        return undefined;
+      }
+
+      const spanId = getSpanId(node.entry);
+      return (
+        <WaterfallHtmlRow
+          node={node}
+          renderStart={renderStart}
+          renderDuration={renderDuration}
+          hasChildren={node.children.length > 0}
+          isCollapsed={spanId ? collapsedSet.has(spanId) : false}
+          spanId={spanId}
+          displaySettings={displaySettings}
+          onToggle={onToggle}
+        />
+      );
+    },
+    [flatNodes, renderStart, renderDuration, collapsedSet, displaySettings, onToggle],
+  );
 
   return (
-    <div ref={containerRef} className="flex flex-col overflow-x-auto overflow-y-auto">
-      <svg width={svgWidth} height={svgHeight} className="min-w-full" style={{ minHeight: svgHeight }}>
-        <WaterfallAxis renderDuration={renderDuration} />
-        <WaterfallGrid renderDuration={renderDuration} height={svgHeight} />
-
-        {flatNodes.map((node, index) => {
-          const spanId = getSpanId(node.entry);
-          const hasChildren = node.children.length > 0;
-          const isCollapsed = spanId ? collapsedSet.has(spanId) : false;
-          const y = (index + 1) * waterfallRowHeight;
-          const category = getSpanCategory(node.entry.name);
-
-          return (
-            <WaterfallRow
-              key={spanId ?? `${node.entry.name}-${String(index)}`}
-              node={node}
-              y={y}
-              renderStart={renderStart}
-              renderDuration={renderDuration}
-              category={category}
-              hasChildren={hasChildren}
-              isCollapsed={isCollapsed}
-              spanId={spanId}
-              displaySettings={displaySettings}
-              onToggle={onToggle}
-            />
-          );
-        })}
-      </svg>
+    <div className="flex flex-col">
+      <WaterfallAxisBar renderDuration={renderDuration} />
+      <div className="relative">
+        <WaterfallGridLines renderDuration={renderDuration} />
+        <Virtuoso
+          totalCount={flatNodes.length}
+          itemContent={renderWaterfallItem}
+          fixedItemHeight={waterfallRowHeight}
+          style={{ height: Math.min(384, flatNodes.length * waterfallRowHeight) }}
+        />
+      </div>
     </div>
-  );
-}
-
-function WaterfallAxis({ renderDuration }: { readonly renderDuration: number }): React.JSX.Element {
-  const ticks = useMemo(() => generateTicks(renderDuration, 400), [renderDuration]);
-
-  return (
-    <g className="text-[10px]">
-      {ticks.map((tick) => {
-        const xPercent = renderDuration > 0 ? (tick / renderDuration) * 100 : 0;
-        return (
-          <text
-            key={tick}
-            x={`${xPercent}%`}
-            y={14}
-            textAnchor="middle"
-            className="fill-muted-foreground"
-            style={{ fontSize: 10 }}
-          >
-            {formatDuration(tick)}
-          </text>
-        );
-      })}
-      <line
-        x1="0"
-        y1={waterfallRowHeight - 2}
-        x2="100%"
-        y2={waterfallRowHeight - 2}
-        className="stroke-border"
-        strokeWidth={1}
-      />
-    </g>
-  );
-}
-
-function WaterfallGrid({
-  renderDuration,
-  height,
-}: {
-  readonly renderDuration: number;
-  readonly height: number;
-}): React.JSX.Element {
-  const ticks = useMemo(() => generateTicks(renderDuration, 400), [renderDuration]);
-
-  return (
-    <g>
-      {ticks.map((tick) => {
-        const xPercent = renderDuration > 0 ? (tick / renderDuration) * 100 : 0;
-        return (
-          <line
-            key={tick}
-            x1={`${xPercent}%`}
-            y1={waterfallRowHeight}
-            x2={`${xPercent}%`}
-            y2={height}
-            className="stroke-border/30"
-            strokeWidth={1}
-            strokeDasharray="2,4"
-          />
-        );
-      })}
-    </g>
-  );
-}
-
-function WaterfallRow({
-  node,
-  y,
-  renderStart,
-  renderDuration,
-  category,
-  hasChildren,
-  isCollapsed,
-  spanId,
-  onToggle,
-  displaySettings,
-}: {
-  readonly node: SpanNode;
-  readonly y: number;
-  readonly renderStart: number;
-  readonly renderDuration: number;
-  readonly category: SpanCategory;
-  readonly hasChildren: boolean;
-  readonly isCollapsed: boolean;
-  readonly spanId: string | undefined;
-  readonly onToggle: (spanId: string) => void;
-  readonly displaySettings: DisplaySettings;
-}): React.JSX.Element {
-  const leftPercent = renderDuration > 0 ? ((node.entry.startTime - renderStart) / renderDuration) * 100 : 0;
-  const widthPercent = renderDuration > 0 ? (node.entry.duration / renderDuration) * 100 : 0;
-  const barX = `${Math.max(0, leftPercent)}%`;
-  const barW = `${Math.max(0.5, Math.min(100 - Math.max(0, leftPercent), widthPercent))}%`;
-  const barY = y + (waterfallRowHeight - waterfallBarHeight) / 2;
-
-  const labelParts = [node.entry.name];
-  if (displaySettings.showLatency) {
-    labelParts.push(formatDuration(node.entry.duration));
-  }
-
-  const label = labelParts.join('  ');
-  const fillColor = categorySvgColors[category];
-  const depthPad = node.depth * 12 + waterfallLeftPadding;
-
-  return (
-    <g className="group/row">
-      {/* Hover background */}
-      <rect
-        x={0}
-        y={y}
-        width="100%"
-        height={waterfallRowHeight}
-        className="fill-transparent group-hover/row:fill-muted/30"
-        style={hasChildren ? { cursor: 'pointer' } : undefined}
-        onClick={
-          hasChildren && spanId
-            ? () => {
-                onToggle(spanId);
-              }
-            : undefined
-        }
-      />
-
-      {/* Bar */}
-      <rect x={barX} y={barY} width={barW} height={waterfallBarHeight} rx={3} fill={fillColor} opacity={0.35} />
-      <rect
-        x={barX}
-        y={barY}
-        width={barW}
-        height={waterfallBarHeight}
-        rx={3}
-        fill="none"
-        stroke={fillColor}
-        strokeWidth={1}
-        opacity={0.6}
-      />
-
-      {/* Label above bar */}
-      <text
-        x={depthPad}
-        y={y + waterfallNameOffset + (waterfallRowHeight - waterfallBarHeight) / 2}
-        className="fill-foreground"
-        style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}
-      >
-        {label}
-      </text>
-
-      {/* Collapse chevron */}
-      {hasChildren && spanId ? (
-        <g
-          style={{ cursor: 'pointer' }}
-          onClick={() => {
-            onToggle(spanId);
-          }}
-        >
-          <text
-            x="97%"
-            y={y + waterfallRowHeight / 2 + 4}
-            textAnchor="end"
-            className="fill-muted-foreground"
-            style={{ fontSize: 10 }}
-          >
-            {isCollapsed ? '▸' : '▾'}
-          </text>
-        </g>
-      ) : undefined}
-    </g>
   );
 }
 
@@ -1392,14 +1397,14 @@ function KernelCompilationUnits(): React.JSX.Element {
   );
 }
 
-export const ChatKernelTrigger = memo(function ({
-  isOpen,
-  onToggle,
-}: {
-  readonly isOpen: boolean;
-  readonly onToggle: () => void;
-}): React.JSX.Element {
-  return (
+export const ChatKernelTrigger = memo(
+  ({
+    isOpen,
+    onToggle,
+  }: {
+    readonly isOpen: boolean;
+    readonly onToggle: () => void;
+  }): React.JSX.Element => (
     <FloatingPanelTrigger
       icon={Activity}
       tooltipContent={<div className="flex items-center gap-2">{isOpen ? 'Close' : 'Open'} Kernel</div>}
@@ -1407,19 +1412,19 @@ export const ChatKernelTrigger = memo(function ({
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
-  );
-});
+  ),
+);
 
-export const ChatKernel = memo(function ({
-  isExpanded,
-  setIsExpanded,
-  className,
-}: {
-  readonly isExpanded: boolean;
-  readonly setIsExpanded: (isExpanded: boolean | ((previous: boolean) => boolean)) => void;
-  readonly className?: string;
-}): React.JSX.Element {
-  return (
+export const ChatKernel = memo(
+  ({
+    isExpanded,
+    setIsExpanded,
+    className,
+  }: {
+    readonly isExpanded: boolean;
+    readonly setIsExpanded: (isExpanded: boolean | ((previous: boolean) => boolean)) => void;
+    readonly className?: string;
+  }): React.JSX.Element => (
     <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
       <FloatingPanelContent className={cn('flex h-full flex-col', className)}>
         <FloatingPanelContentHeader>
@@ -1439,5 +1444,5 @@ export const ChatKernel = memo(function ({
         </FloatingPanelContentBody>
       </FloatingPanelContent>
     </FloatingPanel>
-  );
-});
+  ),
+);
