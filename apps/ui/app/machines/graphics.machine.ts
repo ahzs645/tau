@@ -1,4 +1,4 @@
-import { assign, assertEvent, setup, sendTo, emit, enqueueActions } from 'xstate';
+import { assign, assertEvent, setup, emit, enqueueActions } from 'xstate';
 import type { AnyActorRef } from 'xstate';
 import type { GridSizes, ScreenshotOptions, Geometry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
@@ -720,16 +720,15 @@ export const graphicsMachine = setup({
       });
     }),
 
-    requestCameraReset: sendTo(
-      ({ context }) => context.cameraCapability!,
-      ({ event }) => {
-        assertEvent(event, 'resetCamera');
-        return {
+    requestCameraReset: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'resetCamera');
+      if (context.cameraCapability) {
+        enqueue.sendTo(context.cameraCapability, {
           type: 'reset',
           options: event.options,
-        };
-      },
-    ),
+        });
+      }
+    }),
 
     completeCameraReset: emit({
       type: 'cameraResetCompleted' as const,
