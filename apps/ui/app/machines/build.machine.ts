@@ -583,6 +583,7 @@ export const buildMachine = setup({
     };
   },
   on: {},
+  exit: ['stopStatefulActors'],
   initial: 'checkEnvironment',
   states: {
     checkEnvironment: {
