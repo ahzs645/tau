@@ -467,6 +467,7 @@ export function FileManagerProvider({
   const readBackendFileTree = useCallback(
     async (backend: FileSystemBackend): Promise<FileTreeNode[]> => {
       const worker = await getReadiedWorker();
+
       // For webaccess, retrieve the workspace handle on the main thread and pass it
       const handle = backend === 'webaccess' ? await getStoredDirectoryHandle() : undefined;
       return worker.readBackendFileTree(backend, handle);
