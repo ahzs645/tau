@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WASM Build Matrix Report</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1F2937; background: #F9FAFB; padding: 2rem; max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 1.75rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.25rem; margin: 2rem 0 1rem; border-bottom: 1px solid #E5E7EB; padding-bottom: 0.5rem; }
+  .meta { color: #6B7280; font-size: 0.875rem; margin-bottom: 1.5rem; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.8rem; }
+  th, td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid #E5E7EB; }
+  th { background: #F3F4F6; font-weight: 600; color: #374151; position: sticky; top: 0; }
+  tr:hover { background: #F9FAFB; }
+  .chart-container { margin: 1.5rem 0; overflow-x: auto; }
+  code { background: #F3F4F6; padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
+  .section { margin: 2rem 0; }
+  .legend { display: flex; gap: 1rem; margin: 0.5rem 0; font-size: 0.75rem; color: #6B7280; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+  .footer { margin-top: 3rem; color: #9CA3AF; font-size: 0.75rem; border-top: 1px solid #E5E7EB; padding-top: 1rem; }
+  .explanation { color: #6B7280; font-size: 0.8rem; margin: 0.5rem 0 1rem; line-height: 1.5; max-width: 80ch; }
+  .sortable-th { cursor: pointer; user-select: none; }
+  .sortable-th:hover { background: #E5E7EB; }
+  .sort-arrow { font-size: 0.65rem; margin-left: 3px; opacity: 0.5; }
+  .filter-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0 1rem; }
+  .filter-btn { padding: 0.3rem 0.7rem; border: 1px solid #D1D5DB; border-radius: 6px; background: white; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+  .filter-btn:hover { border-color: #9CA3AF; }
+  .filter-btn.active { background: #3B82F6; color: white; border-color: #3B82F6; }
+  .compile-flags { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.7rem; display: inline-block; }
+  .compile-flags:hover { white-space: normal; overflow: visible; }
+  .pareto-star { fill: #F59E0B; stroke: #D97706; stroke-width: 1; }
+  .ref-th { background: #DBEAFE !important; }
+  .heatmap-th { cursor: pointer; user-select: none; transition: background 0.15s; }
+  .heatmap-th:hover { background: #E5E7EB; }
+</style>
+<script>window.__DATA__={"experiments":[{"name":"20260228T062629_O2-noLTO-single","shortName":"O2-noLTO-single","wasmSizeBytes":18531825,"optimization":"-O2","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":26.10887550000001,"cylinder":15.356583500000056,"sphere":12.95150000000001,"fuse-two-boxes":12.003958499999953,"cut-cylinder-from-box":12.416687499999966,"n-body-fuse":14.196770499999957,"box-fillet-all":13.877916999999798,"box-chamfer-all":14.203416500000003,"sketch-extrude":19.16856249999978,"sketch-revolve":19.222354499999938,"bracket":17.30637550000006,"enclosure":16.290479000000005,"multi-hole-plate":15.650000499999805,"tray":15.681166999999732,"birdhouse":15.386250499999733,"bottle":15.245957999999973,"gridfinity-box":19.13270799999964,"vase":14.821978999999828,"deep-boolean-chain":14.491749499999969},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T063136_O2-noLTO-Oz-link","shortName":"O2-noLTO-Oz-link","wasmSizeBytes":17952695,"optimization":"-O2","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-Oz","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":24.50441699999999,"cylinder":13.545145500000046,"sphere":11.46745850000002,"fuse-two-boxes":11.538624499999969,"cut-cylinder-from-box":10.896666500000038,"n-body-fuse":10.724166500000024,"box-fillet-all":11.157229499999858,"box-chamfer-all":10.639124999999922,"sketch-extrude":12.079729499999985,"sketch-revolve":13.474353999999948,"bracket":11.11983350000014,"enclosure":12.988395999999739,"multi-hole-plate":10.764853500000072,"tray":15.102249999999913,"birdhouse":15.445895499999779,"bottle":13.268062999999984,"gridfinity-box":19.00027050000017,"vase":14.703145499999664,"deep-boolean-chain":12.809707999999773},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T063720_O3-noLTO-single","shortName":"O3-noLTO-single","wasmSizeBytes":18532448,"optimization":"-O3","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":25.40141699999998,"cylinder":14.563312499999938,"sphere":12.32016699999997,"fuse-two-boxes":13.679354499999931,"cut-cylinder-from-box":12.109771000000023,"n-body-fuse":13.19758349999995,"box-fillet-all":12.215937499999882,"box-chamfer-all":12.543771000000106,"sketch-extrude":11.063354499999832,"sketch-revolve":11.774166500000092,"bracket":12.25866649999989,"enclosure":12.032146000000012,"multi-hole-plate":13.744061999999758,"tray":14.718791999999667,"birdhouse":15.422624999999925,"bottle":14.941311999999925,"gridfinity-box":18.632186999999703,"vase":15.237916999999925,"deep-boolean-chain":13.84097950000023},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T064207_O3-noLTO-Oz-link","shortName":"O3-noLTO-Oz-link","wasmSizeBytes":17953316,"optimization":"-O3","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-Oz","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":24.232249999999965,"cylinder":12.540270499999963,"sphere":15.357229000000189,"fuse-two-boxes":12.38822899999991,"cut-cylinder-from-box":10.541187000000036,"n-body-fuse":10.969000000000051,"box-fillet-all":11.024625500000184,"box-chamfer-all":10.699187500000107,"sketch-extrude":13.871374999999944,"sketch-revolve":10.673896000000013,"bracket":13.102916999999934,"enclosure":13.187374999999975,"multi-hole-plate":13.642312999999831,"tray":13.215250000000196,"birdhouse":15.97524999999996,"bottle":14.132729499999868,"gridfinity-box":19.76672950000011,"vase":15.167562000000089,"deep-boolean-chain":13.008229499999743},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T064647_Os-noLTO-single","shortName":"Os-noLTO-single","wasmSizeBytes":17951901,"optimization":"-Os","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-Oz","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":25.38435450000003,"cylinder":13.995937499999968,"sphere":18.200646000000006,"fuse-two-boxes":15.052562500000022,"cut-cylinder-from-box":12.571604499999921,"n-body-fuse":13.257875499999955,"box-fillet-all":10.853625500000135,"box-chamfer-all":12.01539600000001,"sketch-extrude":11.612416499999881,"sketch-revolve":12.992020999999795,"bracket":11.87131249999993,"enclosure":11.652166500000021,"multi-hole-plate":13.348728999999821,"tray":13.436104500000056,"birdhouse":16.426603999999998,"bottle":15.565374999999676,"gridfinity-box":19.5898959999995,"vase":15.027291500000047,"deep-boolean-chain":12.09302050000042},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T065333_O2-LTO-single","shortName":"O2-LTO-single","wasmSizeBytes":18534876,"optimization":"-O2","lto":true,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":24.425687500000038,"cylinder":15.85620849999998,"sphere":13.045063000000027,"fuse-two-boxes":12.585375000000113,"cut-cylinder-from-box":14.866687500000012,"n-body-fuse":12.769625000000019,"box-fillet-all":11.241729000000078,"box-chamfer-all":11.550812499999893,"sketch-extrude":14.686479499999905,"sketch-revolve":11.602395999999771,"bracket":12.239937499999996,"enclosure":12.527541500000098,"multi-hole-plate":12.412290999999868,"tray":14.571270999999797,"birdhouse":15.73764600000004,"bottle":15.908708500000103,"gridfinity-box":19.513979500000005,"vase":15.371437499999956,"deep-boolean-chain":11.845957999999882},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T065824_O3-LTO-single","shortName":"O3-LTO-single","wasmSizeBytes":18535673,"optimization":"-O3","lto":true,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":25.093833000000018,"cylinder":16.20018749999997,"sphere":12.428354000000013,"fuse-two-boxes":13.93464599999993,"cut-cylinder-from-box":11.588688000000047,"n-body-fuse":14.01808300000016,"box-fillet-all":11.266458499999999,"box-chamfer-all":12.332896000000119,"sketch-extrude":14.057729000000108,"sketch-revolve":13.2055620000001,"bracket":13.103103999999803,"enclosure":11.245812499999829,"multi-hole-plate":12.655187500000011,"tray":15.199729500000103,"birdhouse":15.74572900000021,"bottle":14.98110399999996,"gridfinity-box":20.328750000000127,"vase":15.68731250000019,"deep-boolean-chain":13.75708349999968},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"20260228T070319_O3-LTO-Oz-link","shortName":"O3-LTO-Oz-link","wasmSizeBytes":17956533,"optimization":"-O3","lto":true,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-Oz","emccCompileFlags":[],"boundSymbols":237,"emscripten":"5.0.1","medians":{"box":24.571687999999995,"cylinder":14.32989600000002,"sphere":11.7720415,"fuse-two-boxes":12.919833499999982,"cut-cylinder-from-box":13.656396000000086,"n-body-fuse":11.73581200000001,"box-fillet-all":11.057854000000134,"box-chamfer-all":12.031000499999891,"sketch-extrude":11.180082999999968,"sketch-revolve":12.460375499999827,"bracket":10.710667000000285,"enclosure":13.229062500000055,"multi-hole-plate":14.242083500000035,"tray":15.05339600000002,"birdhouse":18.35460400000011,"bottle":16.65460449999955,"gridfinity-box":24.140124999999898,"vase":16.371541999999863,"deep-boolean-chain":12.230271000000357},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},{"name":"v762-npm-single","shortName":"v762-npm-single","wasmSizeBytes":10800306,"optimization":"unknown","lto":false,"exceptions":"none","threading":"","wasmOptLevel":"","emccCompileFlags":[],"boundSymbols":0,"emscripten":"unknown","medians":{"box":23.60656249999988,"cylinder":20.971271,"sphere":47.02802099999997,"fuse-two-boxes":35.714270499999884,"cut-cylinder-from-box":29.348437500000045,"n-body-fuse":80.41687500000035,"box-fillet-all":56.70643749999999,"box-chamfer-all":43.6830829999999,"sketch-extrude":19.450229000000036,"sketch-revolve":22.62281249999978,"multi-hole-plate":283.4041040000002,"tray":43.11270799999875,"birdhouse":285.55129149999993,"bottle":395.0250619999997,"gridfinity-box":312.16762500000186,"vase":298.4213540000019,"cycloidal-gear":972.7724584999996,"deep-boolean-chain":224.03066649999892},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O0-wasmOpt-O2","shortName":"v8-O0-wasmOpt-O2","wasmSizeBytes":17924912,"optimization":"-O0","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O2","emccCompileFlags":["-O0","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":229,"emscripten":"5.0.1","medians":{"box":69.51799949999986,"cylinder":62.173250499999995,"sphere":88.28360450000037,"fuse-two-boxes":70.43612499999972,"cut-cylinder-from-box":45.016333499999746,"n-body-fuse":206.28204149999965,"box-fillet-all":130.93285450000076,"box-chamfer-all":123.08310450000045,"sketch-extrude":21.620625000000473,"sketch-revolve":29.878937499999665,"multi-hole-plate":810.3000414999988,"tray":89.25162499999897,"birdhouse":1123.3106874999976,"bottle":1679.4731670000037,"gridfinity-box":945.6663335000012,"vase":908.3279169999951,"cycloidal-gear":5081.539458500003,"deep-boolean-chain":451.0200210000039},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O0-wasmOpt-O3","shortName":"v8-O0-wasmOpt-O3","wasmSizeBytes":17796159,"optimization":"-O0","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O0","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":229,"emscripten":"5.0.1","medians":{"box":56.35787549999998,"cylinder":28.340833500000144,"sphere":81.80235399999992,"fuse-two-boxes":85.74968749999994,"cut-cylinder-from-box":55.899020999999266,"n-body-fuse":212.1070625000002,"box-fillet-all":133.28539550000096,"box-chamfer-all":125.12931200000003,"sketch-extrude":24.013833499999237,"sketch-revolve":32.36693749999904,"multi-hole-plate":820.3801670000012,"tray":89.35912499999904,"birdhouse":1125.173562,"bottle":1673.0687709999984,"gridfinity-box":958.7357709999997,"vase":888.800416500002,"cycloidal-gear":4787.065021000002,"deep-boolean-chain":448.23193750000064},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O2-handle-fix","shortName":"v8-O2-handle-fix","wasmSizeBytes":18619628,"optimization":"-O2","lto":false,"exceptions":"wasm-native","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O2","-fwasm-exceptions"],"boundSymbols":241,"emscripten":"5.0.1","medians":{"box":23.20739599999996,"cylinder":21.879291500000022,"sphere":31.094250500000044,"fuse-two-boxes":31.344104499999958,"cut-cylinder-from-box":26.242937500000153,"n-body-fuse":60.36116650000008,"box-fillet-all":45.15543700000012,"box-chamfer-all":40.477020499999526,"sketch-extrude":17.80581200000006,"sketch-revolve":23.921687000000475,"multi-hole-plate":211.35991699999977,"tray":45.826437499999884,"birdhouse":225.05074950000107,"bottle":289.54112500000065,"gridfinity-box":237.20370850000018,"vase":175.04693800000132,"cycloidal-gear":537.7710625000018,"deep-boolean-chain":103.13895849999972},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O2-wasmOpt-O2","shortName":"v8-O2-wasmOpt-O2","wasmSizeBytes":18835328,"optimization":"-O2","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O2","emccCompileFlags":["-O2","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":229,"emscripten":"5.0.1","medians":{"box":21.262125000000083,"cylinder":15.717604500000107,"sphere":27.555729000000042,"fuse-two-boxes":27.86387499999978,"cut-cylinder-from-box":21.72614550000003,"n-body-fuse":52.59637499999985,"box-fillet-all":39.36670849999996,"box-chamfer-all":36.255854,"sketch-extrude":16.944354000000203,"sketch-revolve":16.440562499999942,"multi-hole-plate":199.26175000000012,"tray":40.313437499999964,"birdhouse":204.37645799999973,"bottle":259.27587549999953,"gridfinity-box":213.78270800000064,"vase":163.62341650000144,"cycloidal-gear":517.8754790000003,"deep-boolean-chain":91.75097900000037},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O2-wasmOpt-O3","shortName":"v8-O2-wasmOpt-O3","wasmSizeBytes":18795477,"optimization":"-O2","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O2","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":229,"emscripten":"5.0.1","medians":{"box":21.83575000000002,"cylinder":16.32414600000004,"sphere":26.763187500000072,"fuse-two-boxes":26.927562999999964,"cut-cylinder-from-box":19.09256249999987,"n-body-fuse":48.816729500000065,"box-fillet-all":37.23962499999993,"box-chamfer-all":33.78972950000025,"sketch-extrude":14.840749999999844,"sketch-revolve":16.079625000000078,"multi-hole-plate":194.2827500000003,"tray":39.827187500000036,"birdhouse":210.17127099999925,"bottle":266.507208,"gridfinity-box":220.5117910000008,"vase":167.5439794999993,"cycloidal-gear":527.6731040000013,"deep-boolean-chain":94.68516649999947},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O3-noLTO-single","shortName":"v8-O3-noLTO-single","wasmSizeBytes":20164519,"optimization":"-O3","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O3","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":229,"emscripten":"5.0.1","medians":{"box":41.84364550000009,"cylinder":18.376353999999992,"sphere":35.710270500000206,"fuse-two-boxes":32.922083500000326,"cut-cylinder-from-box":22.41443800000002,"n-body-fuse":56.322187500000155,"box-fillet-all":43.12120850000019,"box-chamfer-all":38.90558299999975,"sketch-extrude":18.022958500000186,"sketch-revolve":18.14195800000016,"multi-hole-plate":208.05681249999998,"tray":46.237082999999075,"birdhouse":225.7748329999995,"bottle":281.79543699999977,"gridfinity-box":235.80649950000043,"vase":177.3796044999999,"cycloidal-gear":555.581958499999,"deep-boolean-chain":103.13572899999781},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-tier1-removed","shortName":"v8-tier1-removed","wasmSizeBytes":19063280,"optimization":"-O0","lto":false,"exceptions":"wasm-native","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O0","-fwasm-exceptions"],"boundSymbols":231,"emscripten":"5.0.1","medians":{"box":23.585437500000012,"cylinder":18.114270999999917,"sphere":31.499208000000067,"fuse-two-boxes":30.217687999999953,"cut-cylinder-from-box":24.21939550000002,"n-body-fuse":55.37858300000016,"box-fillet-all":42.42791699999998,"box-chamfer-all":38.66266650000034,"sketch-extrude":18.08047899999974,"sketch-revolve":21.435457999999926,"multi-hole-plate":209.0094165000005,"tray":43.96716649999962,"birdhouse":222.70649999999932,"bottle":276.42662500000006,"gridfinity-box":233.82052100000055,"vase":175.69252050000068,"cycloidal-gear":548.9346454999995,"deep-boolean-chain":104.16849999999977},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}}],"baseline":{"name":"baseline_v762-O0-noLTO-single","shortName":"baseline_v762-O0-noLTO-single","wasmSizeBytes":10800306,"optimization":"-O0","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O0","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":262,"emscripten":"3.1.14","medians":{"box":24.77704200000005,"cylinder":15.219729499999971,"sphere":28.61295849999999,"fuse-two-boxes":31.804604500000096,"cut-cylinder-from-box":24.523729499999945,"n-body-fuse":71.56185449999998,"box-fillet-all":45.22074999999995,"box-chamfer-all":42.70289599999978,"sketch-extrude":14.792916499999592,"sketch-revolve":15.307749500000227,"bracket":67.29306299999962,"enclosure":29.337375000000065,"multi-hole-plate":239.76812550000022,"tray":34.20106300000043,"birdhouse":279.5989374999999,"bottle":346.08037500000046,"gridfinity-box":259.90793699999995,"vase":221.55693750000137,"deep-boolean-chain":132.01218749999862},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","bracket":"complex","enclosure":"complex","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","deep-boolean-chain":"stress"}},"benchmarks":["box","cylinder","sphere","fuse-two-boxes","cut-cylinder-from-box","n-body-fuse","box-fillet-all","box-chamfer-all","sketch-extrude","sketch-revolve","multi-hole-plate","tray","birdhouse","bottle","gridfinity-box","vase","cycloidal-gear","deep-boolean-chain","bracket","enclosure"],"categories":["booleans","complex","examples","extrusions","fillets","primitives","stress"]};</script>
+<script>
+document.addEventListener('alpine:init', function() {
+  var D = window.__DATA__;
+  Alpine.store('data', D);
+  Alpine.store('filter', { category: 'all' });
+
+  window._fmt = {
+    mb: function(bytes) { return (bytes / (1024 * 1024)).toFixed(2) + ' MB'; },
+    ms: function(v) { if (v < 1) return (v * 1000).toFixed(0) + 'µs'; if (v >= 1000) return (v / 1000).toFixed(2) + 's'; return v.toFixed(1) + 'ms'; },
+    pct: function(v) { return (v > 0 ? '+' : '') + v.toFixed(1) + '%'; },
+    deltaColor: function(d) {
+      if (d === null) return '';
+      var a = Math.abs(d);
+      if (a < 2) return '#F9FAFB';
+      if (d < -10) return '#D1FAE5';
+      if (d < 0) return '#ECFDF5';
+      return d > 10 ? '#FEE2E2' : '#FEF2F2';
+    },
+    deltaTextColor: function(d) {
+      if (d === null) return '#6B7280';
+      if (Math.abs(d) < 2) return '#6B7280';
+      return d < 0 ? '#10B981' : '#EF4444';
+    },
+    totalTime: function(exp, category) {
+      var vals = Object.keys(exp.medians)
+        .filter(function(b) { return category === 'all' || exp.categories[b] === category; })
+        .map(function(b) { return exp.medians[b]; })
+        .filter(function(v) { return v > 0; });
+      if (vals.length === 0) return 0;
+      return vals.reduce(function(a, b) { return a + b; }, 0);
+    }
+  };
+
+  Alpine.data('configMatrix', function() {
+    return {
+      sortCol: null,
+      sortAsc: true,
+
+      toggleSort: function(col) {
+        if (this.sortCol === col) { this.sortAsc = !this.sortAsc; }
+        else { this.sortCol = col; this.sortAsc = true; }
+      },
+
+      sortArrow: function(col) {
+        if (this.sortCol !== col) return '▲▼';
+        return this.sortAsc ? '▲' : '▼';
+      },
+
+      tt: function(exp) {
+        return _fmt.totalTime(exp, this.$store.filter.category);
+      },
+
+      getValue: function(exp, col) {
+        switch (col) {
+          case 'name': return exp.shortName;
+          case 'optimization': return exp.optimization;
+          case 'lto': return exp.lto ? 'Yes' : 'No';
+          case 'exceptions': return exp.exceptions;
+          case 'threading': return exp.threading;
+          case 'wasmOptLevel': return exp.wasmOptLevel;
+          case 'flags': return exp.emccCompileFlags.join(' ');
+          case 'symbols': return exp.boundSymbols || 0;
+          case 'emscripten': return exp.emscripten;
+          case 'wasmSize': return exp.wasmSizeBytes;
+          case 'totalTime': return this.tt(exp);
+          case 'sizeDelta': { var d = this.sizeDelta(exp); return d !== null ? d : 0; }
+          case 'speedDelta': { var d = this.speedDelta(exp); return d !== null ? d : 0; }
+          default: return '';
+        }
+      },
+
+      sorted: function() {
+        var exps = this.$store.data.experiments.slice();
+        if (!this.sortCol) return exps;
+        var col = this.sortCol;
+        var dir = this.sortAsc ? 1 : -1;
+        var self = this;
+        return exps.sort(function(a, b) {
+          var va = self.getValue(a, col);
+          var vb = self.getValue(b, col);
+          if (typeof va === 'string') return dir * va.localeCompare(vb);
+          return dir * ((va || 0) - (vb || 0));
+        });
+      },
+
+      sizeDelta: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl || bl.wasmSizeBytes === 0) return null;
+        return ((exp.wasmSizeBytes - bl.wasmSizeBytes) / bl.wasmSizeBytes) * 100;
+      },
+
+      speedDelta: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl) return null;
+        var blTt = _fmt.totalTime(bl, this.$store.filter.category);
+        if (blTt === 0) return null;
+        return ((this.tt(exp) - blTt) / blTt) * 100;
+      },
+
+      benchWins: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl) return { faster: 0, slower: 0 };
+        var cat = this.$store.filter.category;
+        var faster = 0; var slower = 0;
+        var benchmarks = Object.keys(exp.medians);
+        for (var i = 0; i < benchmarks.length; i++) {
+          var b = benchmarks[i];
+          if (cat !== 'all' && exp.categories[b] !== cat) continue;
+          var refVal = bl.medians[b];
+          var expVal = exp.medians[b];
+          if (!refVal || !expVal) continue;
+          var d = ((expVal - refVal) / refVal) * 100;
+          if (d < -2) faster++;
+          else if (d > 2) slower++;
+        }
+        return { faster: faster, slower: slower };
+      }
+    };
+  });
+
+  Alpine.data('heatmap', function() {
+    return {
+      refIndex: -1,
+      display: 'both',
+
+      setRef: function(idx) {
+        this.refIndex = (this.refIndex === idx) ? -1 : idx;
+      },
+
+      ref: function() {
+        if (this.refIndex >= 0) return this.$store.data.experiments[this.refIndex];
+        return this.$store.data.baseline || this.$store.data.experiments[0];
+      },
+
+      refLabel: function() {
+        var r = this.ref();
+        return r ? r.shortName : '';
+      },
+
+      isRef: function(idx) {
+        if (this.refIndex >= 0) return idx === this.refIndex;
+        return false;
+      },
+
+      refTime: function(bench) {
+        var r = this.ref();
+        if (!r || r.medians[bench] === undefined) return null;
+        return r.medians[bench];
+      },
+
+      expTime: function(exp, bench) {
+        if (exp.medians[bench] === undefined) return null;
+        return exp.medians[bench];
+      },
+
+      delta: function(exp, bench) {
+        var r = this.ref();
+        if (!r || !r.medians[bench]) return null;
+        var refVal = r.medians[bench];
+        var expVal = exp.medians[bench];
+        if (expVal === undefined || refVal === 0) return null;
+        return ((expVal - refVal) / refVal) * 100;
+      },
+
+      showPct: function() { return this.display === 'both' || this.display === 'percentage'; },
+      showTime: function() { return this.display === 'both' || this.display === 'time'; },
+
+      cellText: function(exp, bench) {
+        var d = this.delta(exp, bench);
+        var t = this.expTime(exp, bench);
+        if (d === null && t === null) return '—';
+        var parts = [];
+        if (this.showPct() && d !== null) parts.push(_fmt.pct(d));
+        if (this.showTime() && t !== null) parts.push(_fmt.ms(t));
+        return parts.join(' ');
+      },
+
+      benchmarks: function() {
+        var cat = this.$store.filter.category;
+        var exps = this.$store.data.experiments;
+        return this.$store.data.benchmarks.filter(function(b) {
+          if (cat === 'all') return true;
+          for (var i = 0; i < exps.length; i++) {
+            if (exps[i].categories[b] === cat) return true;
+          }
+          return false;
+        });
+      }
+    };
+  });
+});
+</script>
+</head>
+<body>
+  <h1>WASM Build Matrix Report</h1>
+  <p class="meta">Generated 2026-03-03T09:22:33.069Z &bull; 16 experiments &bull; Baseline: <strong>baseline_v762-O0-noLTO-single</strong></p>
+
+  <div class="section">
+    <h2>Size vs Speed</h2>
+    <p class="explanation">Each point represents a build experiment. The ideal position is the <strong>lower-left corner</strong> (smaller binary AND faster execution). Experiments marked with a ★ star lie on the <strong>Pareto frontier</strong> &mdash; no other experiment is both smaller AND faster. The dashed gold line connects these optimal points. Any experiment above or to the right of the frontier is &ldquo;dominated&rdquo; by at least one frontier experiment.</p>
+    <div class="chart-container">
+      <svg xmlns="http://www.w3.org/2000/svg" width="700" height="400" viewBox="0 0 700 400">
+    <rect width="700" height="400" fill="white" rx="8"/>
+    <line x1="70" y1="20" x2="70" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="70" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">9.8</text>
+<line x1="191.99999999999997" y1="20" x2="191.99999999999997" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="191.99999999999997" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">11.9</text>
+<line x1="313.99999999999994" y1="20" x2="313.99999999999994" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="313.99999999999994" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">13.9</text>
+<line x1="436.00000000000006" y1="20" x2="436.00000000000006" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="436.00000000000006" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">16.0</text>
+<line x1="558.0000000000001" y1="20" x2="558.0000000000001" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="558.0000000000001" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">18.1</text>
+<line x1="680" y1="20" x2="680" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="680" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">20.2</text>
+<line x1="70" y1="350" x2="680" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="354" text-anchor="end" font-size="10" fill="#9CA3AF">229.7</text>
+<line x1="70" y1="284" x2="680" y2="284" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="288" text-anchor="end" font-size="10" fill="#9CA3AF">2809.7</text>
+<line x1="70" y1="218" x2="680" y2="218" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="222" text-anchor="end" font-size="10" fill="#9CA3AF">5389.7</text>
+<line x1="70" y1="151.99999999999997" x2="680" y2="151.99999999999997" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="155.99999999999997" text-anchor="end" font-size="10" fill="#9CA3AF">7969.7</text>
+<line x1="70" y1="86" x2="680" y2="86" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="90" text-anchor="end" font-size="10" fill="#9CA3AF">10549.7</text>
+<line x1="70" y1="20" x2="680" y2="20" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="24" text-anchor="end" font-size="10" fill="#9CA3AF">13129.7</text>
+    
+    <line x1="70" y1="20" x2="70" y2="350" stroke="#D1D5DB" stroke-width="1"/>
+    <line x1="70" y1="350" x2="680" y2="350" stroke="#D1D5DB" stroke-width="1"/>
+    <text x="375" y="395" text-anchor="middle" font-size="12" fill="#6B7280">WASM Size (MB)</text>
+    <text x="15" y="185" text-anchor="middle" font-size="12" fill="#6B7280" transform="rotate(-90, 15, 185)">Total Wall Time (ms)</text>
+  
+    <path d="M 100.18654882333188 274.1684949083144 L 499.95665095228236 274.1684949083144 L 499.95665095228236 348.8426855725612 L 500.00103510170504 348.8426855725612 L 500.00103510170504 349.3470887241325" fill="none" stroke="#F59E0B" stroke-width="2" stroke-dasharray="6 3" opacity="0.6"/>
+    <circle cx="532.3740734583149" cy="348.1119194615164" r="6" fill="#3B82F6" stroke="white" stroke-width="2"/><text x="542.3740734583149" y="352.1119194615164" font-size="10" fill="#374151">O2-noLTO-single</text><circle cx="500.00103510170504" cy="349.3470887241325" r="6" fill="#10B981" stroke="white" stroke-width="2"/><polygon points="500.00103510170504,339.3470887241325 494.00103510170504,347.3470887241325 496.00103510170504,357.3470887241325 504.00103510170504,357.3470887241325 506.00103510170504,347.3470887241325" class="pareto-star"/><text x="510.00103510170504" y="353.3470887241325" font-size="10" fill="#374151">O2-noLTO-Oz-link ★</text><circle cx="532.4088988047763" cy="348.976972784935" r="6" fill="#F59E0B" stroke="white" stroke-width="2"/><text x="542.4088988047763" y="352.976972784935" font-size="10" fill="#374151">O3-noLTO-single</text><circle cx="500.03574864930135" cy="349.13562624022416" r="6" fill="#EF4444" stroke="white" stroke-width="2"/><text x="510.03574864930135" y="353.13562624022416" font-size="10" fill="#374151">O3-noLTO-Oz-link</text><circle cx="499.95665095228236" cy="348.8426855725612" r="6" fill="#8B5CF6" stroke="white" stroke-width="2"/><polygon points="499.95665095228236,338.8426855725612 493.95665095228236,346.8426855725612 495.95665095228236,356.8426855725612 503.95665095228236,356.8426855725612 505.95665095228236,346.8426855725612" class="pareto-star"/><text x="509.95665095228236" y="352.8426855725612" font-size="10" fill="#374151">Os-noLTO-single ★</text><circle cx="532.5446226269403" cy="348.89866026857624" r="6" fill="#EC4899" stroke="white" stroke-width="2"/><text x="542.5446226269403" y="352.89866026857624" font-size="10" fill="#374151">O2-LTO-single</text><circle cx="532.5891744746605" cy="348.7945079335816" r="6" fill="#06B6D4" stroke="white" stroke-width="2"/><text x="542.5891744746605" y="352.7945079335816" font-size="10" fill="#374151">O3-LTO-single</text><circle cx="500.21557712372544" cy="348.7978057286884" r="6" fill="#84CC16" stroke="white" stroke-width="2"/><text x="510.21557712372544" y="352.7978057286884" font-size="10" fill="#374151">O3-LTO-Oz-link</text><circle cx="100.18654882333188" cy="274.1684949083144" r="6" fill="#3B82F6" stroke="white" stroke-width="2"/><polygon points="100.18654882333188,264.1684949083144 94.18654882333188,272.1684949083144 96.18654882333188,282.1684949083144 104.18654882333188,282.1684949083144 106.18654882333188,272.1684949083144" class="pareto-star"/><text x="110.18654882333188" y="278.1684949083144" font-size="10" fill="#374151">v762-npm-single ★</text><circle cx="498.4479811679394" cy="50.5342001348007" r="6" fill="#10B981" stroke="white" stroke-width="2"/><text x="508.4479811679394" y="54.5342001348007" font-size="10" fill="#374151">v8-O0-wasmOpt-O2</text><circle cx="491.25076153240235" cy="58.47074063421718" r="6" fill="#F59E0B" stroke="white" stroke-width="2"/><text x="501.25076153240235" y="62.47074063421718" font-size="10" fill="#374151">v8-O0-wasmOpt-O3</text><circle cx="537.2822113320658" cy="300.9676597125675" r="6" fill="#EF4444" stroke="white" stroke-width="2"/><text x="547.2822113320658" y="304.9676597125675" font-size="10" fill="#374151">v8-O2-handle-fix</text><circle cx="549.3397189271149" cy="305.5835230798715" r="6" fill="#8B5CF6" stroke="white" stroke-width="2"/><text x="559.3397189271149" y="309.5835230798715" font-size="10" fill="#374151">v8-O2-wasmOpt-O2</text><circle cx="547.1120706416708" cy="305.15061772453805" r="6" fill="#EC4899" stroke="white" stroke-width="2"/><text x="557.1120706416708" y="309.15061772453805" font-size="10" fill="#374151">v8-O2-wasmOpt-O3</text><circle cx="623.640741540795" cy="300.6320158164069" r="6" fill="#06B6D4" stroke="white" stroke-width="2"/><text x="633.640741540795" y="304.6320158164069" font-size="10" fill="#374151">v8-O3-noLTO-single</text><circle cx="562.0821063694266" cy="301.6860098350585" r="6" fill="#84CC16" stroke="white" stroke-width="2"/><text x="572.0821063694266" y="305.6860098350585" font-size="10" fill="#374151">v8-tier1-removed</text>
+  </svg>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Configuration Matrix</h2>
+    <p class="explanation">Click any column header to sort. <strong>WASM Size</strong> is the post-optimization binary size. <strong>Total Time</strong> is the sum of all benchmark median times &mdash; it represents the total wall-clock time to execute the entire suite. Use the category filter below to recalculate the Total Time for a subset of benchmarks.</p>
+    <div x-data="configMatrix()">
+      <div class="filter-bar">
+        <button class="filter-btn" :class="{ 'active': $store.filter.category === 'all' }" @click="$store.filter.category = 'all'">All</button>
+        <template x-for="cat in $store.data.categories" :key="cat">
+          <button class="filter-btn" :class="{ 'active': $store.filter.category === cat }" @click="$store.filter.category = cat" x-text="cat"></button>
+        </template>
+      </div>
+      <table id="config-matrix">
+        <thead>
+          <tr>
+            <th class="sortable-th" @click="toggleSort('name')">Experiment <span class="sort-arrow" x-text="sortArrow('name')"></span></th>
+            <th class="sortable-th" @click="toggleSort('optimization')">Compile <span class="sort-arrow" x-text="sortArrow('optimization')"></span></th>
+            <th class="sortable-th" @click="toggleSort('lto')">LTO <span class="sort-arrow" x-text="sortArrow('lto')"></span></th>
+            <th class="sortable-th" @click="toggleSort('exceptions')">Exceptions <span class="sort-arrow" x-text="sortArrow('exceptions')"></span></th>
+            <th class="sortable-th" @click="toggleSort('threading')">Threading <span class="sort-arrow" x-text="sortArrow('threading')"></span></th>
+            <th class="sortable-th" @click="toggleSort('wasmOptLevel')">wasm-opt <span class="sort-arrow" x-text="sortArrow('wasmOptLevel')"></span></th>
+            <th class="sortable-th" @click="toggleSort('flags')">Compile Flags <span class="sort-arrow" x-text="sortArrow('flags')"></span></th>
+            <th class="sortable-th" @click="toggleSort('symbols')">Symbols <span class="sort-arrow" x-text="sortArrow('symbols')"></span></th>
+            <th class="sortable-th" @click="toggleSort('emscripten')">Emscripten <span class="sort-arrow" x-text="sortArrow('emscripten')"></span></th>
+            <th class="sortable-th" @click="toggleSort('wasmSize')">WASM Size <span class="sort-arrow" x-text="sortArrow('wasmSize')"></span></th>
+            <th class="sortable-th" @click="toggleSort('totalTime')">Total Time <span class="sort-arrow" x-text="sortArrow('totalTime')"></span></th>
+            <th class="sortable-th" @click="toggleSort('sizeDelta')">Size Δ <span class="sort-arrow" x-text="sortArrow('sizeDelta')"></span></th>
+            <th class="sortable-th" @click="toggleSort('speedDelta')">Time Δ <span class="sort-arrow" x-text="sortArrow('speedDelta')"></span></th>
+            <th>Faster / Slower</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="exp in sorted()" :key="exp.name">
+            <tr>
+              <td><strong x-text="exp.shortName"></strong></td>
+              <td><code x-text="exp.optimization"></code></td>
+              <td x-text="exp.lto ? 'Yes' : 'No'"></td>
+              <td x-text="exp.exceptions"></td>
+              <td x-text="exp.threading"></td>
+              <td><code x-text="exp.wasmOptLevel || '—'"></code></td>
+              <td :title="exp.emccCompileFlags.join(' ')"><span class="compile-flags" x-text="exp.emccCompileFlags.length > 0 ? exp.emccCompileFlags.join(' ') : '—'"></span></td>
+              <td x-text="exp.boundSymbols !== null ? exp.boundSymbols : '—'"></td>
+              <td x-text="exp.emscripten || '—'"></td>
+              <td x-text="exp.wasmSizeBytes > 0 ? _fmt.mb(exp.wasmSizeBytes) : '—'"></td>
+              <td x-text="tt(exp) > 0 ? _fmt.ms(tt(exp)) : '—'"></td>
+              <td :style="'color:' + _fmt.deltaTextColor(sizeDelta(exp))" x-text="sizeDelta(exp) !== null ? _fmt.pct(sizeDelta(exp)) : '—'"></td>
+              <td :style="'color:' + _fmt.deltaTextColor(speedDelta(exp))" x-text="speedDelta(exp) !== null ? _fmt.pct(speedDelta(exp)) : '—'"></td>
+              <td><span style="color:#10B981" x-text="benchWins(exp).faster + '↑'"></span> / <span style="color:#EF4444" x-text="benchWins(exp).slower + '↓'"></span></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="explanation"><strong>Delta columns:</strong> <strong>Size &Delta;</strong> compares WASM binary size (positive = larger). <strong>Time &Delta;</strong> compares total wall-clock execution time (positive = slower). <strong>Faster/Slower</strong> shows how many individual benchmarks improved (&gt;2% faster) vs regressed (&gt;2% slower) compared to the baseline. <span style="color:#10B981">Green = improvement</span>, <span style="color:#EF4444">red = regression</span>. Deltas within &plusmn;2% are shown in gray.</p>
+  </div>
+
+  <div class="section">
+    <h2>Per-Benchmark Heatmap</h2>
+    <div x-data="heatmap()">
+      <p class="explanation">Each cell shows the change in median time relative to the reference. <span style="color:#10B981">Green = faster</span>, <span style="color:#EF4444">red = slower</span>. <strong>Click any experiment column header</strong> to set it as the reference. Currently comparing against: <strong x-text="refLabel()"></strong></p>
+      <div style="display:flex;align-items:center;gap:1.5rem;margin:0.75rem 0 1rem;flex-wrap:wrap">
+        <div class="legend" style="margin:0">
+          <span class="legend-item"><span class="legend-swatch" style="background:#D1FAE5"></span> &gt;10% faster</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#ECFDF5"></span> 2-10% faster</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#F9FAFB"></span> Within 2%</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#FEF2F2"></span> 2-10% slower</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#FEE2E2"></span> &gt;10% slower</span>
+        </div>
+        <div class="filter-bar" style="margin:0">
+          <button class="filter-btn" :class="{ 'active': display === 'both' }" @click="display = 'both'">Both</button>
+          <button class="filter-btn" :class="{ 'active': display === 'time' }" @click="display = 'time'">Time</button>
+          <button class="filter-btn" :class="{ 'active': display === 'percentage' }" @click="display = 'percentage'">Percentage</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="heatmap-table">
+          <thead>
+            <tr>
+              <th>Benchmark</th>
+              <th class="ref-th" style="text-align:center" x-text="refLabel() + ' (ref)'"></th>
+              <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name">
+                <th class="heatmap-th" :class="{ 'ref-th': isRef(idx) }" @click="setRef(idx)" x-text="exp.shortName"></th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="bench in benchmarks()" :key="bench">
+              <tr>
+                <td><strong x-text="bench"></strong></td>
+                <td style="text-align:center;font-size:0.8rem;background:#F3F4F6;font-weight:500" x-text="refTime(bench) !== null ? _fmt.ms(refTime(bench)) : '—'"></td>
+                <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name + '-' + bench">
+                  <td style="text-align:center;font-size:0.8rem"
+                      :style="'background:' + _fmt.deltaColor(delta(exp, bench))"
+                      x-text="cellText(exp, bench)"></td>
+                </template>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Size Breakdown</h2>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background:#3B82F6"></span> Post wasm-opt</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#E5E7EB"></span> Pre wasm-opt</span>
+    </div>
+    <div class="chart-container">
+      <svg xmlns="http://www.w3.org/2000/svg" width="1360" height="400" viewBox="0 0 1360 400">
+    <rect width="1360" height="400" fill="white" rx="8"/>
+    <line x1="60" y1="320" x2="1340" y2="320" stroke="#F3F4F6"/><text x="52" y="324" text-anchor="end" font-size="9" fill="#9CA3AF">0.00 MB</text><line x1="60" y1="260" x2="1340" y2="260" stroke="#F3F4F6"/><text x="52" y="264" text-anchor="end" font-size="9" fill="#9CA3AF">3.85 MB</text><line x1="60" y1="200" x2="1340" y2="200" stroke="#F3F4F6"/><text x="52" y="204" text-anchor="end" font-size="9" fill="#9CA3AF">7.69 MB</text><line x1="60" y1="140" x2="1340" y2="140" stroke="#F3F4F6"/><text x="52" y="144" text-anchor="end" font-size="9" fill="#9CA3AF">11.54 MB</text><line x1="60" y1="80.00000000000003" x2="1340" y2="80.00000000000003" stroke="#F3F4F6"/><text x="52" y="84.00000000000003" text-anchor="end" font-size="9" fill="#9CA3AF">15.38 MB</text><line x1="60" y1="20" x2="1340" y2="20" stroke="#F3F4F6"/><text x="52" y="24" text-anchor="end" font-size="9" fill="#9CA3AF">19.23 MB</text>
+    <line x1="60" y1="20" x2="60" y2="320" stroke="#D1D5DB"/>
+    <rect x="60" y="44.215211877853335" width="60" height="275.78478812214667" fill="#E5E7EB" rx="4"/><rect x="60" y="44.29059676553652" width="60" height="275.7094032344635" fill="#3B82F6" rx="4"/><text x="90" y="38.29059676553652" text-anchor="middle" font-size="10" fill="#374151">17.67 MB</text><text x="90" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 90, 336)">O2-noLTO-single</text><text x="90" y="26.29059676553652" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="140" y="44.215211877853335" width="60" height="275.78478812214667" fill="#E5E7EB" rx="4"/><rect x="140" y="52.90667136667133" width="60" height="267.09332863332867" fill="#3B82F6" rx="4"/><text x="170" y="46.90667136667133" text-anchor="middle" font-size="10" fill="#374151">17.12 MB</text><text x="170" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 170, 336)">O2-noLTO-Oz-link</text><text x="170" y="34.90667136667133" text-anchor="middle" font-size="8" fill="#10B981">-3.2%</text><rect x="220" y="44.205943122174176" width="60" height="275.7940568778258" fill="#E5E7EB" rx="4"/><rect x="220" y="44.281328009857305" width="60" height="275.7186719901427" fill="#3B82F6" rx="4"/><text x="250" y="38.281328009857305" text-anchor="middle" font-size="10" fill="#374151">17.67 MB</text><text x="250" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 250, 336)">O3-noLTO-single</text><text x="250" y="26.281328009857305" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="300" y="44.205943122174176" width="60" height="275.7940568778258" fill="#E5E7EB" rx="4"/><rect x="300" y="52.897432366227065" width="60" height="267.10256763377294" fill="#3B82F6" rx="4"/><text x="330" y="46.897432366227065" text-anchor="middle" font-size="10" fill="#374151">17.12 MB</text><text x="330" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 330, 336)">O3-noLTO-Oz-link</text><text x="330" y="34.897432366227065" text-anchor="middle" font-size="8" fill="#10B981">-3.2%</text><rect x="380" y="44.22699495088381" width="60" height="275.7730050491162" fill="#E5E7EB" rx="4"/><rect x="380" y="52.918484194936696" width="60" height="267.0815158050633" fill="#3B82F6" rx="4"/><text x="410" y="46.918484194936696" text-anchor="middle" font-size="10" fill="#374151">17.12 MB</text><text x="410" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 410, 336)">Os-noLTO-single</text><text x="410" y="34.918484194936696" text-anchor="middle" font-size="8" fill="#10B981">-3.2%</text><rect x="460" y="44.16982026697485" width="60" height="275.83017973302515" fill="#E5E7EB" rx="4"/><rect x="460" y="44.24520515465804" width="60" height="275.75479484534196" fill="#3B82F6" rx="4"/><text x="490" y="38.24520515465804" text-anchor="middle" font-size="10" fill="#374151">17.68 MB</text><text x="490" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 490, 336)">O2-LTO-single</text><text x="490" y="26.245205154658038" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="540" y="44.15796280585715" width="60" height="275.84203719414285" fill="#E5E7EB" rx="4"/><rect x="540" y="44.23334769354028" width="60" height="275.7666523064597" fill="#3B82F6" rx="4"/><text x="570" y="38.23334769354028" text-anchor="middle" font-size="10" fill="#374151">17.68 MB</text><text x="570" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 570, 336)">O3-LTO-single</text><text x="570" y="26.23334769354028" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="620" y="44.15796280585715" width="60" height="275.84203719414285" fill="#E5E7EB" rx="4"/><rect x="620" y="52.84957107084972" width="60" height="267.1504289291503" fill="#3B82F6" rx="4"/><text x="650" y="46.84957107084972" text-anchor="middle" font-size="10" fill="#374151">17.12 MB</text><text x="650" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 650, 336)">O3-LTO-Oz-link</text><text x="650" y="34.84957107084972" text-anchor="middle" font-size="8" fill="#10B981">-3.2%</text><rect x="700" y="159.3171788526173" width="60" height="160.6828211473827" fill="#3B82F6" rx="4"/><text x="730" y="153.3171788526173" text-anchor="middle" font-size="10" fill="#374151">10.30 MB</text><text x="730" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 730, 336)">v762-npm-single</text><rect x="780" y="55.59127792733369" width="60" height="264.4087220726663" fill="#E5E7EB" rx="4"/><rect x="780" y="53.320016212635664" width="60" height="266.67998378736434" fill="#3B82F6" rx="4"/><text x="810" y="47.320016212635664" text-anchor="middle" font-size="10" fill="#374151">17.09 MB</text><text x="810" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 810, 336)">v8-O0-wasmOpt-O2</text><rect x="860" y="55.59127792733369" width="60" height="264.4087220726663" fill="#E5E7EB" rx="4"/><rect x="860" y="55.23555409380208" width="60" height="264.7644459061979" fill="#3B82F6" rx="4"/><text x="890" y="49.23555409380208" text-anchor="middle" font-size="10" fill="#374151">16.97 MB</text><text x="890" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 890, 336)">v8-O0-wasmOpt-O3</text><rect x="940" y="42.90993898738674" width="60" height="277.09006101261326" fill="#E5E7EB" rx="4"/><rect x="940" y="42.98429731946493" width="60" height="277.01570268053507" fill="#3B82F6" rx="4"/><text x="970" y="36.98429731946493" text-anchor="middle" font-size="10" fill="#374151">17.76 MB</text><text x="970" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 970, 336)">v8-O2-handle-fix</text><text x="970" y="24.98429731946493" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="1020" y="40.29751862665307" width="60" height="279.7024813733469" fill="#E5E7EB" rx="4"/><rect x="1020" y="39.77519523277499" width="60" height="280.224804767225" fill="#3B82F6" rx="4"/><text x="1050" y="33.77519523277499" text-anchor="middle" font-size="10" fill="#374151">17.96 MB</text><text x="1050" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 1050, 336)">v8-O2-wasmOpt-O2</text><rect x="1100" y="40.29751862665307" width="60" height="279.7024813733469" fill="#E5E7EB" rx="4"/><rect x="1100" y="40.368083166278325" width="60" height="279.6319168337217" fill="#3B82F6" rx="4"/><text x="1130" y="34.368083166278325" text-anchor="middle" font-size="10" fill="#374151">17.92 MB</text><text x="1130" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 1130, 336)">v8-O2-wasmOpt-O3</text><text x="1130" y="22.368083166278325" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="1180" y="19.93647257343457" width="60" height="300.06352742656543" fill="#E5E7EB" rx="4"/><rect x="1180" y="20" width="60" height="300" fill="#3B82F6" rx="4"/><text x="1210" y="14" text-anchor="middle" font-size="10" fill="#374151">19.23 MB</text><text x="1210" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 1210, 336)">v8-O3-noLTO-single</text><text x="1210" y="2" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="1260" y="36.31909494097033" width="60" height="283.68090505902967" fill="#E5E7EB" rx="4"/><rect x="1260" y="36.38381257693277" width="60" height="283.61618742306723" fill="#3B82F6" rx="4"/><text x="1290" y="30.38381257693277" text-anchor="middle" font-size="10" fill="#374151">18.18 MB</text><text x="1290" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 1290, 336)">v8-tier1-removed</text><text x="1290" y="18.38381257693277" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text>
+  </svg>
+    </div>
+  </div>
+
+  <div class="footer">
+    Generated by Tau WASM Build Matrix Reporter &bull; 16 experiments &bull; 2026-03-03T09:22:33.069Z
+  </div>
+</body>
+</html>
