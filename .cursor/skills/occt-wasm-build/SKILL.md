@@ -16,7 +16,7 @@ The harness consists of four interconnected systems:
 
 1. **Build Cache** (`repos/opencascade.js/src/build-cache.py`) — Config-keyed compilation cache
 2. **Provenance Tracking** (`repos/opencascade.js/src/provenance.py`) — Build metadata sidecar
-3. **Experiment Orchestrator** (`repos/opencascade.js/wasm-experiment.sh`) — Full lifecycle runner
+3. **Experiment Orchestrator** (`scripts/wasm-experiment.sh`) — Full lifecycle runner
 4. **Comparison Reporting** (`packages/kernels/scripts/build-matrix-report.mts`) — Visual dashboard
 
 All build operations go through `repos/opencascade.js/build-wasm.sh` as the single entry point.
@@ -26,16 +26,14 @@ All build operations go through `repos/opencascade.js/build-wasm.sh` as the sing
 ### Run an Experiment
 
 ```bash
-cd repos/opencascade.js
-
 # Run a preset experiment (build + pack + install + benchmark)
-./wasm-experiment.sh experiments/O2-noLTO-single.yml
+./scripts/wasm-experiment.sh scripts/experiments/O2-noLTO-single.yml
 
 # Build only (skip benchmarks)
-./wasm-experiment.sh experiments/O3-noLTO-single.yml --skip-benchmark
+./scripts/wasm-experiment.sh scripts/experiments/O3-noLTO-single.yml --skip-benchmark
 
 # Compare against a baseline
-./wasm-experiment.sh experiments/Os-noLTO-single.yml --baseline ../../tarballs/baselines/v8-rc4-O2-single
+./scripts/wasm-experiment.sh scripts/experiments/Os-noLTO-single.yml --baseline tarballs/baselines/v8-rc4-O2-single
 ```
 
 ### Just Build WASM
@@ -68,7 +66,7 @@ pnpm nx build-matrix kernels -- --experiments ../../tarballs/experiments/ --base
 
 ## Experiment Config Reference
 
-Experiment configs live in `repos/opencascade.js/experiments/*.yml`:
+Experiment configs live in `scripts/experiments/*.yml`:
 
 ```yaml
 name: "O2-noLTO-single"
@@ -103,10 +101,10 @@ benchmark:
 ### Cache Key Format
 
 ```
-<OPT>-<lto|noLTO>-<noExc|wasmExc>-<single|multi>-<filterHash6>-<occtHash6>
+<OPT>-<lto|noLTO>-<noExc|wasmExc>-<single|multi>-<filterHash8>-<occtHash6>-em<emscriptenVersion>
 ```
 
-Example: `O2-noLTO-noExc-single-a3f2b1-c7d4e9`
+Example: `O2-noLTO-noExc-single-a3f2b1cd-c7d4e9-em5.0.1`
 
 ### Cache Commands
 
@@ -124,7 +122,7 @@ cd repos/opencascade.js
 
 ```
 repos/opencascade.js/cache/
-├── O2-noLTO-noExc-single-a3f2b1-c7d4e9/
+├── O2-noLTO-noExc-single-a3f2b1cd-c7d4e9-em5.0.1/
 │   ├── manifest.json        # Config snapshot, stats
 │   ├── bindings/            # Compiled binding .o files
 │   ├── sources/             # Compiled source .o files
@@ -142,6 +140,7 @@ The cache key changes when any of these change:
 - `THREADING` (thread mode)
 - `filterPackages.py` content (SHA-256)
 - OCCT commit hash
+- Emscripten version (e.g. `5.0.1`)
 
 Changing the YAML config or wasm-opt flags does NOT invalidate the cache — those only affect the linking step.
 
@@ -199,6 +198,119 @@ tarballs/
 └── active -> experiments/latest/         # Symlink to active build
 ```
 
+## Testing & Benchmarking
+
+### Running Kernel Tests
+
+Example model tests validate that the WASM build can produce geometry for curated fixtures:
+
+```bash
+# Run all example model tests
+pnpm nx test kernels --testNamePattern="Example models" --watch=false
+
+# Run a specific fixture
+pnpm nx test kernels --testNamePattern="cycloidal-gear" --watch=false
+```
+
+Test fixtures are defined in `packages/kernels/src/kernels/replicad/replicad.test-fixtures.ts`.
+Benchmark cases are defined in `packages/kernels/src/benchmarks/benchmark-suite.ts`.
+
+### Running Benchmarks
+
+```bash
+# Run benchmarks with the installed WASM (default: single variant)
+pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single
+
+# Run benchmarks and save output to a specific directory
+pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single --output /abs/path/to/output/
+
+# Run with a custom WASM directory (must contain replicad_single.wasm + replicad_single.js)
+pnpm nx benchmark kernels -- --iterations 10 --wasm-dir /abs/path/to/wasm/ --wasm-variant single
+```
+
+**Important:** `--wasm-dir` and `--output` paths are resolved relative to `packages/kernels/` (the project root). Use absolute paths to avoid confusion.
+
+### Cross-Version Benchmarking (e.g. v7.6.2 vs v8)
+
+WASM-only injection (`--wasm-dir`) does NOT work for cross-version comparison because Emscripten constructor numbering (e.g. `gp_Dir_4`) differs between OCCT versions. You must fully swap the npm packages:
+
+```bash
+# 1. Swap pnpm-workspace.yaml to v7.6.2 packages
+#    replicad: /path/to/replicad-0.20.5.tgz
+#    replicad-opencascadejs: /path/to/replicad-opencascadejs-0.20.2.tgz
+
+# 2. Install + copy WASM assets
+pnpm install --no-frozen-lockfile
+cd packages/kernels && rm -f src/kernels/replicad/wasm/replicad_*.wasm
+npx copy-files-from-to --config copy-files-from-to.cjson
+
+# 3. Run benchmarks
+pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single \
+  --output /abs/path/to/experiments/v762/benchmarks
+
+# 4. Swap pnpm-workspace.yaml back to v8 packages
+#    replicad: /path/to/replicad-0.21.0-v8.7.tgz
+#    replicad-opencascadejs: /path/to/replicad-opencascadejs-0.21.0-v8.25.tgz
+
+# 5. Install + copy WASM assets (same as step 2)
+
+# 6. Run benchmarks for v8
+pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single \
+  --output /abs/path/to/experiments/v8/benchmarks
+
+# 7. Generate comparison report
+pnpm nx build-matrix kernels -- \
+  --compare /abs/path/to/experiments/v762 \
+  --compare /abs/path/to/experiments/v8
+```
+
+The v7.6.2 packages can be downloaded from npm: `npm pack replicad@0.20.5` and `npm pack replicad-opencascadejs@0.20.2`.
+
+### Experiment Directory Requirements for Reporting
+
+Each experiment directory must contain:
+- `provenance.json` — build metadata (used for WASM size, variant detection)
+- `benchmarks/` subdirectory — containing `benchmark-*.json` files from benchmark runs
+
+### Adding New Benchmark Fixtures
+
+1. Create the fixture in `libs/tau-examples/src/kernels/replicad/<name>/main.ts`
+2. Add to test fixtures: `packages/kernels/src/kernels/replicad/replicad.test-fixtures.ts`
+3. Add to benchmark suite: `packages/kernels/src/benchmarks/benchmark-suite.ts`
+4. Run tests to validate: `pnpm nx test kernels --testNamePattern="<name>" --watch=false`
+
+### Diagnosing Unbound Symbol Errors
+
+When a model fails with `Cannot call X due to unbound types: N11opencascade6handleI...`, this means a handle wrapper type is missing from the YAML build config.
+
+1. Decode the mangled name: `N11opencascade6handleI12Law_FunctionEE` → `opencascade::handle<Law_Function>`
+2. Add the handle to **both** YAML configs (`custom_build_single_v8.yml` and `custom_build_with_exceptions_v8.yml`):
+   - Binding: `- symbol: Handle_Law_Function`
+   - Typedef: `typedef opencascade::handle<Law_Function> Handle_Law_Function;`
+3. Rebuild with fastest flags to validate: `OCJS_OPT="-O2" OCJS_LTO=0 ./build-wasm.sh full <yaml>`
+4. Copy built files from `build-config/` to `src/`, re-pack, re-install
+
+### Deploying Rebuilt WASM to the Workspace
+
+After `build-wasm.sh` finishes, the output lands in `repos/replicad/packages/replicad-opencascadejs/build-config/`. To use it:
+
+```bash
+# Copy build output to the package source directory
+cd repos/replicad/packages/replicad-opencascadejs
+cp build-config/replicad_single.{wasm,js,d.ts} src/
+cp build-config/replicad_with_exceptions.{wasm,js,d.ts} src/
+
+# Re-pack and install
+npm pack --pack-destination /path/to/tarballs/
+# Update pnpm-workspace.yaml to point to new tarball
+pnpm install --no-frozen-lockfile
+
+# Copy WASM to kernels package
+cd packages/kernels
+rm -f src/kernels/replicad/wasm/replicad_*.wasm
+npx copy-files-from-to --config copy-files-from-to.cjson
+```
+
 ## Troubleshooting
 
 ### Stale cache after modifying OCCT source
@@ -216,10 +328,86 @@ Check the cache: `./build-wasm.sh cache-list`. If compilation is cached, the `fu
 ### wasm-opt not found
 Ensure `EMSDK` is set and activated: `source "$EMSDK/emsdk_env.sh"`. The build script does this automatically.
 
+### Switching optimization levels produces wrong binaries
+Fixed: `build-wasm.sh` now purges `build/sources/` and `build/bindings/` on cache miss before recompiling. Previously, `compileSources.py` and `compileBindings.py` would skip files with existing `.o` output, silently reusing object files from a prior optimization level. If you suspect a stale build, manually `rm -rf repos/opencascade.js/build/sources repos/opencascade.js/build/bindings` and rebuild.
+
+### Interrupted build left corrupted cache
+Cache store/restore operations are now atomic (copy to staging dir, then rename). If you see `*.storing` or `*.restoring` directories in `cache/`, they are incomplete artifacts from interrupted builds — `cache-gc` will clean them automatically.
+
+### Orphan cache directories consuming disk space
+`cache-gc` now detects and removes directories in `cache/` that are not tracked in `index.json`.
+
+## Symbol Management
+
+The YAML `bindings` list is a whitelist of OCCT classes exposed to JavaScript via Embind. Every symbol adds WASM binary size (embind registration + C++ implementation) and JS glue code.
+
+### Auditing Symbols
+
+Cross-reference bound symbols against actual usage in `repos/replicad/packages/replicad/src/`:
+
+```bash
+# Find all OCCT classes used at runtime
+rg "oc\.\w+" --type ts repos/replicad/packages/replicad/src/ -o | sort -u
+
+# Compare against YAML bindings
+rg "symbol:" repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_single_v8.yml
+```
+
+Full audit results: [Replicad OCCT Symbol Usage Audit](docs/research/replicad-occt-usage-refinement.md)
+
+### Known Gaps (as of 2026-03-03)
+
+| Missing Symbol | Impact | Status |
+|---------------|--------|--------|
+| `HLRBRep_Algo` | 2D projection broken | Fixed 2026-03-03 |
+| `HLRBRep_InternalAlgo` | 2D projection (base class) | Fixed 2026-03-03 |
+| `HLRAlgo_Projector` | 2D projection broken | Fixed 2026-03-03 |
+| `HLRBRep_HLRToShape` | 2D projection broken | Fixed 2026-03-03 |
+| `Handle_HLRBRep_Algo` | 2D projection broken | Fixed 2026-03-03 |
+| `Handle_Law_Function` | Wavy vase / sweep profiles | Fixed 2026-03-03 |
+| `Handle_Geom2d_BSplineCurve` | Cycloidal gear / parametric curves | Fixed 2026-03-03 |
+
+**Note**: HLR also required un-excluding `TKHLR`, `HLRTopoBRep`, `HLRBRep`, `HLRAlgo`, `HLRAppli`, `Intrv`, and `Contap` from `filterPackages.py` (previously excluded as "not used").
+
+### Adding a New Handle Type
+
+When adding a handle type, you must update **both** the bindings list and `additionalCppCode`:
+
+```yaml
+# In bindings:
+  - symbol: Handle_NewType
+
+# In additionalCppCode:
+  typedef opencascade::handle<NewType> Handle_NewType;
+```
+
+Both `custom_build_single_v8.yml` and `custom_build_with_exceptions_v8.yml` must be updated.
+
+### Symbol Categories
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| Directly used by replicad | ~120 | Core API surface |
+| Required base classes | ~40 | Embind type hierarchy |
+| Return/param type deps | ~33 | Needed for method signatures |
+| Unused (removal candidates) | ~29 | See audit doc for details |
+| **Total bound** | ~231 | In `custom_build_single_v8.yml` |
+
+### Adding Symbols for New Features
+
+When replicad adds new OCCT API usage:
+
+1. Check the `.d.ts` for the class and its constructor overloads
+2. Add `- symbol: ClassName` to the YAML bindings
+3. If the class uses `opencascade::handle<T>`, also add the Handle typedef
+4. Rebuild with `./build-wasm.sh link` (fastest — reuses cached .o files)
+5. Run tests: `pnpm nx test kernels --testNamePattern="Example models" --watch=false`
+
 ## Related Documentation
 
 - [OCCT V8 Migration](docs/research/occt-v8-migration.md)
 - [WASM Size Analysis V7.6.2 vs V8RC4](docs/research/wasm-size-analysis-v762-vs-v8rc4.md)
+- [Replicad Symbol Audit](docs/research/replicad-occt-usage-refinement.md)
 - [Build Harness Plan](.cursor/plans/wasm_build_harness_903e2d7f.plan.md)
 
 ## Key Build Variables and Their Impact
