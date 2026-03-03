@@ -349,3 +349,193 @@ type WasmOption = 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindin
 This allows zero-config consumers to benefit from code-split presets, while advanced consumers can inject custom builds at runtime.
 
 See [ES Module Policy](es-module-policy.md) for the full pattern, bundler compatibility matrix, serialization constraints, and anti-patterns.
+
+## 17. Resource Cleanup Conventions
+
+Use a **layered vocabulary** where each term maps to a specific resource scope. The terminology aligns with TC39 Explicit Resource Management, Web APIs, and the Monaco/Three.js ecosystems already used in this project.
+
+### Vocabulary
+
+| Term | Scope | Web/TC39 alignment | Example |
+|------|-------|---------------------|---------|
+| `dispose()` | General resource release on an object | TC39 `Symbol.dispose`, Monaco `IDisposable`, Three.js | `bridge.dispose()`, `collector.dispose()` |
+| `close()` | Connections, transports, streams | `WebSocket.close()`, `MessagePort.close()`, `IDBDatabase.close()` | `transport.close()`, `port.close()` |
+| `terminate()` | Workers and processes | `Worker.terminate()` | `client.terminate()`, `worker.terminate()` |
+| `stop()` | Running computations, actors | XState `actor.stop()`, AI SDK `chat.stop()` | `actor.stop()` |
+| Return `() => void` | Subscriptions and one-time registrations | React `useEffect` cleanup, RxJS `unsubscribe` | `client.on('progress', handler)` returns `() => void` |
+
+**`dispose` is the default.** When none of the specific terms (`close`, `terminate`, `stop`) apply, use `dispose`.
+
+### Choosing the right term
+
+Use this decision tree:
+
+1. **Is the resource a connection, transport, or stream?** → `close()`
+2. **Is the resource a Worker or subprocess?** → `terminate()`
+3. **Is the resource a running computation or actor?** → `stop()`
+4. **Is the resource an event subscription?** → return `() => void` (see Section 7)
+5. **Everything else** → `dispose()`
+
+### Patterns
+
+**Objects that own resources** — add a `dispose()` method:
+
+```typescript
+// Factory returning a handle with dispose
+function createFileSystemBridge(worker: Worker): BridgeHandle {
+  const channel = new MessageChannel();
+  worker.postMessage({ type: 'bridge', port: channel.port1 }, [channel.port1]);
+  return {
+    port: channel.port2,
+    dispose() {
+      channel.port2.close();
+    },
+  };
+}
+```
+
+**Listener registrations** — return a bare cleanup function:
+
+```typescript
+// exposeFileSystem returns () => void, not { dispose }
+function exposeFileSystem(handlers: FileSystemHandlers): () => void {
+  self.addEventListener('message', handler);
+  return () => {
+    self.removeEventListener('message', handler);
+  };
+}
+```
+
+**Orchestration methods** that tear down multiple sub-resources use `dispose()` as the method name and call the appropriate term on each sub-resource:
+
+```typescript
+// Good: orchestration method is named dispose, calls correct term on each sub-resource
+public async dispose(): Promise<void> {
+  this.telemetryCollector?.dispose();  // dispose sub-resource
+  this.fileSystem?.dispose();          // dispose sub-resource
+  this.transport?.close();             // close connection
+  await this.onDispose();              // framework hook
+}
+```
+
+### Framework lifecycle hooks
+
+Lifecycle hooks called by the framework follow the `on*` prefix convention (Section 5). The cleanup hook is `onDispose`, not `cleanup`:
+
+```typescript
+// Good: follows on* convention
+type KernelDefinition = {
+  onInitialize(input, runtime): Promise<Context>;
+  onCreateGeometry(input, runtime, context): Promise<Result>;
+  onDispose?(context): Promise<void>;
+};
+
+// Good: protected hook for subclasses
+protected async onDispose(): Promise<void> {
+  // Override in subclass for custom cleanup
+}
+
+// Avoid: breaks on* convention
+type KernelDefinition = {
+  cleanup?(context): Promise<void>;  // should be onDispose
+};
+```
+
+### Naming stored cleanup references
+
+When storing a cleanup function in state (e.g., XState machine context, React refs), use the noun form matching the resource:
+
+```typescript
+// Good: name describes the resource, not the action
+type MachineContext = {
+  bridge?: BridgeHandle;       // has .dispose()
+  worker?: Worker;             // has .terminate()
+  subscriptions: (() => void)[]; // array of unsubscribe functions
+};
+
+// Good: destructure and store the handle
+const bridge = createFileSystemBridge(worker);
+context.bridge = bridge;
+// later: context.bridge.dispose();
+
+// Avoid: storing bare functions with action-verb names
+type MachineContext = {
+  bridgeDispose?: () => void;    // loses the resource identity
+  eventCleanups: (() => void)[]; // vague, mixes concerns
+};
+```
+
+When multiple unrelated cleanup functions must be stored together, use `subscriptions` (for event/subscription cleanups) or keep the full handle objects and call their cleanup methods individually.
+
+### The `cleanup` term
+
+**Do not use `cleanup` as a method name for resource release.** It is not aligned with any standard (TC39, Web APIs, Monaco, Three.js) and creates ambiguity with `dispose`.
+
+Permitted uses of `cleanup`:
+- **Domain-specific maintenance** that is not lifecycle teardown: `cleanupOldCacheEntries()`, `cleanupStaleSessions()`. These are operational housekeeping, not resource disposal.
+- **Internal implementation detail** inside a function body (local variable name in a `finally` block) where no public API is exposed.
+
+Migrate existing `cleanup` methods:
+- `KernelDefinition.cleanup?()` → `KernelDefinition.onDispose?()`
+- `BundlerDefinition.cleanup?()` → `BundlerDefinition.onDispose?()`
+- `KernelWorker.cleanup()` → `KernelWorker.dispose()`
+- `KernelWorker.onCleanup()` → `KernelWorker.onDispose()`
+- `KernelWorkerClient.cleanup()` → `KernelWorkerClient.dispose()`
+- `ErrorTrap.cleanup` → `ErrorTrap.dispose`
+- `EngineConnection.cleanup()` → `EngineConnection.dispose()`
+
+### Async dispose
+
+When disposal requires async work (closing WebSocket, flushing buffers, WASM teardown), use an async `dispose()` method. Prefer `Promise<void>` return type over `Symbol.asyncDispose` until the TC39 proposal reaches broader runtime support:
+
+```typescript
+// Good: async dispose for resources requiring teardown
+public async dispose(): Promise<void> {
+  await this.flushBuffers();
+  this.websocket.close();
+  this.removeAllListeners();
+}
+
+// Future: when Symbol.asyncDispose is widely supported
+async [Symbol.asyncDispose](): Promise<void> {
+  await this.dispose();
+}
+```
+
+### Anti-patterns
+
+```typescript
+// Bad: cleanup as method name (use dispose)
+public async cleanup(): Promise<void> { ... }
+
+// Bad: destroy as method name (use dispose or terminate)
+public destroy(): void { ... }
+
+// Bad: teardown as method name (use dispose)
+public teardown(): void { ... }
+
+// Bad: release as method name (use dispose, unless it's releaseLock on streams)
+public release(): void { ... }
+
+// Bad: storing bare cleanup functions with verb names
+context.bridgeDispose?.();
+
+// Bad: mixing dispose and cleanup on the same object
+class Worker {
+  dispose(): void { ... }   // which one releases resources?
+  cleanup(): void { ... }   // confusing
+}
+```
+
+### Summary table
+
+| Situation | Name | Returns |
+|-----------|------|---------|
+| Release an object's resources | `dispose()` | `void` or `Promise<void>` |
+| Close a connection/transport/stream | `close()` | `void` |
+| Stop a worker/process | `terminate()` | `void` |
+| Stop a computation/actor | `stop()` | `void` |
+| Event subscription | `on(event, handler)` | `() => void` |
+| One-time listener setup | `exposeX()` / `listenX()` | `() => void` |
+| Framework lifecycle hook | `onDispose()` | `Promise<void>` |
+| Domain housekeeping (not lifecycle) | descriptive verb, e.g. `cleanupStaleEntries()` | varies |
