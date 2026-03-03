@@ -53,7 +53,7 @@ export const cameraCapabilityMachine = setup({
   actions: {
     registerWithGraphics: enqueueActions(({ enqueue, context, event, self }) => {
       assertEvent(event, 'registerReset');
-      context.resetFunction = event.reset;
+      enqueue.assign({ resetFunction: () => event.reset });
       enqueue.sendTo(context.graphicsRef, {
         type: 'registerCameraCapability',
         actorRef: self,
