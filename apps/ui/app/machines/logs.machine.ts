@@ -37,6 +37,8 @@ export const logMachine = setup({
         addLog: {
           actions: assign({
             logVersion({ context, event }) {
+              // Intentional mutation: LogRingBuffer is a mutable data structure by design.
+              // The logVersion counter is the reactive trigger for re-renders.
               context.logBuffer.push({
                 id: `log_${String(logIdCounter++)}`,
                 timestamp: Date.now(),
