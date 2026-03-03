@@ -18,4 +18,7 @@ export const exampleFixtures: ExampleFixture[] = [
   { name: 'bottle', ...loadFixture('replicad', 'bottle') },
   { name: 'gridfinity-box', ...loadFixture('replicad', 'gridfinity-box') },
   { name: 'vase', ...loadFixture('replicad', 'vase') },
+  { name: 'wavy-vase', ...loadFixture('replicad', 'wavy-vase') },
+  { name: 'cycloidal-gear', ...loadFixture('replicad', 'cycloidal-gear') },
+  { name: 'projection-test', ...loadFixture('replicad', 'projection-test') },
 ];
