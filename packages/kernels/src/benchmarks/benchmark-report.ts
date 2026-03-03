@@ -225,7 +225,7 @@ function generateProvenanceSection(run: BenchmarkRunResult): string {
   detailRows += `<tr><td>Post-opt Size</td><td>${formatProvSize(post.postOptSize)}</td></tr>`;
   detailRows += `<tr><td>Emscripten</td><td>${escapeHtml(toolchain['emscripten'] ?? '—')}</td></tr>`;
   detailRows += `<tr><td>LLVM</td><td>${escapeHtml(toolchain['llvm'] ?? '—')}</td></tr>`;
-  detailRows += `<tr><td>Timestamp</td><td>${escapeHtml(prov.timestamp)}</td></tr>`;
+  detailRows += `<tr><td>Timestamp</td><td>${escapeHtml(prov.timestamp || '—')}</td></tr>`;
 
   return `<h2>Build Provenance</h2>
     ${configCards}
