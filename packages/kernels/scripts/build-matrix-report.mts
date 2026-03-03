@@ -366,13 +366,13 @@ function buildReportData(experiments: ExperimentData[], baseline?: ExperimentDat
 }
 
 function generateSizeBreakdown(experiments: ExperimentData[]): string {
-  const barWidth = 60;
-  const barGap = 20;
+  const barWidth = 200;
+  const barGap = 60;
   const maxHeight = 300;
-  const padL = 60;
-  const padB = 80;
-  const padT = 20;
-  const padR = 20;
+  const padL = 70;
+  const padB = 140;
+  const padT = 30;
+  const padR = 30;
 
   const chartW = padL + (barWidth + barGap) * experiments.length + padR;
   const chartH = maxHeight + padT + padB;
@@ -387,6 +387,8 @@ function generateSizeBreakdown(experiments: ExperimentData[]): string {
     const y = padT + maxHeight - sizePx;
 
     const postProcessing = experiment.provenance?.postProcessing ?? {};
+    const compilation = experiment.provenance?.compilation ?? {};
+    const toolchain = experiment.provenance?.toolchain ?? {};
     const preOpt = Number(postProcessing['preOptSize'] ?? 0);
     const postOpt = Number(postProcessing['postOptSize'] ?? experiment.wasmSizeBytes);
 
@@ -397,14 +399,34 @@ function generateSizeBreakdown(experiments: ExperimentData[]): string {
     }
 
     bars += `<rect x="${x}" y="${y}" width="${barWidth}" height="${sizePx}" fill="#3B82F6" rx="4"/>`;
-    bars += `<text x="${x + barWidth / 2}" y="${y - 6}" text-anchor="middle" font-size="10" fill="#374151">${formatMb(experiment.wasmSizeBytes)}</text>`;
-
-    const shortName = stripTimestampPrefix(experiment.name);
-    bars += `<text x="${x + barWidth / 2}" y="${padT + maxHeight + 16}" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, ${x + barWidth / 2}, ${padT + maxHeight + 16})">${escapeHtml(shortName)}</text>`;
+    bars += `<text x="${x + barWidth / 2}" y="${y - 8}" text-anchor="middle" font-size="13" font-weight="600" fill="#374151">${formatMb(experiment.wasmSizeBytes)}</text>`;
 
     if (preOpt > 0 && preOpt > postOpt) {
       const reduction = ((1 - postOpt / preOpt) * 100).toFixed(1);
-      bars += `<text x="${x + barWidth / 2}" y="${y - 18}" text-anchor="middle" font-size="8" fill="#10B981">-${reduction}%</text>`;
+      bars += `<text x="${x + barWidth / 2}" y="${y - 24}" text-anchor="middle" font-size="11" fill="#10B981">-${reduction}%</text>`;
+    }
+
+    const labelX = x + barWidth / 2;
+    const labelY = padT + maxHeight + 18;
+    const lineHeight = 16;
+
+    const shortName = stripTimestampPrefix(experiment.name);
+    bars += `<text x="${labelX}" y="${labelY}" text-anchor="middle" font-size="12" font-weight="600" fill="#1F2937">${escapeHtml(shortName)}</text>`;
+
+    const opt = asString(compilation['optimization'], '?');
+    const lto = compilation['lto'] ? 'LTO' : 'noLTO';
+    const exc = asString(compilation['exceptions'], 'none');
+    const wasmOpt = asString(compilation['wasmOptLevel'], '?');
+    const emVer = asString(toolchain['emscripten'], '?');
+    const symbols =
+      typeof experiment.provenance?.linking?.['boundSymbols'] === 'number'
+        ? `${experiment.provenance.linking['boundSymbols']} symbols`
+        : '';
+
+    bars += `<text x="${labelX}" y="${labelY + lineHeight}" text-anchor="middle" font-size="11" fill="#6B7280">compile: ${opt} | ${lto} | exc: ${exc}</text>`;
+    bars += `<text x="${labelX}" y="${labelY + lineHeight * 2}" text-anchor="middle" font-size="11" fill="#6B7280">wasm-opt: ${wasmOpt} | em: ${emVer}</text>`;
+    if (symbols) {
+      bars += `<text x="${labelX}" y="${labelY + lineHeight * 3}" text-anchor="middle" font-size="11" fill="#9CA3AF">${symbols}</text>`;
     }
 
     idx++;
@@ -417,7 +439,7 @@ function generateSizeBreakdown(experiments: ExperimentData[]): string {
     const gridValue = (maxSize * i) / gridSteps;
     const gridY = padT + maxHeight - (gridValue / maxSize) * maxHeight;
     gridLines += `<line x1="${padL}" y1="${gridY}" x2="${chartW - padR}" y2="${gridY}" stroke="#F3F4F6"/>`;
-    gridLines += `<text x="${padL - 8}" y="${gridY + 4}" text-anchor="end" font-size="9" fill="#9CA3AF">${formatMb(gridValue)}</text>`;
+    gridLines += `<text x="${padL - 8}" y="${gridY + 4}" text-anchor="end" font-size="10" fill="#9CA3AF">${formatMb(gridValue)}</text>`;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${chartW}" height="${chartH}" viewBox="0 0 ${chartW} ${chartH}">
