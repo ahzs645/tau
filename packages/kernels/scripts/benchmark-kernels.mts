@@ -207,7 +207,7 @@ function onBenchmarkProgress(completed: number, total: number, caseName: string)
 }
 
 function writeResults(result: BenchmarkRunResult): void {
-  const outputDir = resolve(values.output ?? 'reports');
+  const outputDir = resolve(values.output);
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
   }
@@ -249,7 +249,7 @@ async function main(): Promise<void> {
 }
 
 async function runSuite(): Promise<void> {
-  const iterations = Number.parseInt(values.iterations ?? '5', 10);
+  const iterations = Number.parseInt(values.iterations, 10);
   const filterCats = values.filter?.split(',').map((s) => s.trim());
   const cases = filterBenchmarks(filterCats);
 
@@ -298,7 +298,7 @@ function runComparison(beforePath: string, afterPath: string): void {
   const before = JSON.parse(readFileSync(resolve(beforePath), 'utf8')) as BenchmarkRunResult;
   const after = JSON.parse(readFileSync(resolve(afterPath), 'utf8')) as BenchmarkRunResult;
 
-  const outputDir = resolve(values.output ?? 'reports');
+  const outputDir = resolve(values.output);
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
   }

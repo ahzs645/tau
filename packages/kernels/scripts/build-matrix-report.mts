@@ -419,7 +419,7 @@ function generateSizeBreakdown(experiments: ExperimentData[]): string {
     const wasmOpt = asString(compilation['wasmOptLevel'], '?');
     const emVer = asString(toolchain['emscripten'], '?');
     const symbols =
-      typeof experiment.provenance?.linking?.['boundSymbols'] === 'number'
+      typeof experiment.provenance?.linking['boundSymbols'] === 'number'
         ? `${experiment.provenance.linking['boundSymbols']} symbols`
         : '';
 
@@ -865,7 +865,7 @@ function main(): void {
     process.exit(1);
   }
 
-  const outputDir = resolve(values.output ?? '../../tarballs/comparisons');
+  const outputDir = resolve(values.output);
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
   }

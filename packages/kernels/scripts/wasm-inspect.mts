@@ -538,7 +538,7 @@ async function main(): Promise<void> {
 
   const report = generateReport(wasmPath, sections, funcSizes, symbols);
 
-  const outputDir = resolve(values.output ?? 'reports');
+  const outputDir = resolve(values.output);
   mkdirSync(outputDir, { recursive: true });
 
   if (values.json) {
