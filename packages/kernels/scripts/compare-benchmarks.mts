@@ -1,5 +1,5 @@
 /* eslint-disable n/prefer-global/process -- CLI script requires direct process access */
-/* eslint-disable unicorn/no-process-exit -- CLI script uses process.exit for error codes */
+
 /**
  * Terminal benchmark comparison — prints a table comparing the latest
  * benchmark run from each experiment directory.
@@ -171,12 +171,12 @@ function main(): void {
 
   const benchmarkNames = experiments[0]!.benchmark.results.map((r) => r.name);
   const nameColW = Math.max(20, ...benchmarkNames.map((n) => n.length)) + 2;
-  const colW = Math.max(...experiments.map((e) => e.shortName.length), 10) + 2;
+  const colW = Math.max(...experiments.map((experiment) => experiment.shortName.length), 10) + 2;
 
   const header = [
     'Benchmark'.padEnd(nameColW),
     ...(baseline ? [`${baseline.shortName}`.padStart(colW)] : []),
-    ...experiments.map((e) => e.shortName.padStart(colW)),
+    ...experiments.map((experiment) => experiment.shortName.padStart(colW)),
   ];
 
   const sep = '─'.repeat(header.join('│').length);
@@ -190,7 +190,7 @@ function main(): void {
   const sizeRow = [
     '  wasm size'.padEnd(nameColW),
     ...(baseline ? [formatMb(baseline.wasmSizeBytes).padStart(colW)] : []),
-    ...experiments.map((e) => formatMb(e.wasmSizeBytes).padStart(colW)),
+    ...experiments.map((experiment) => formatMb(experiment.wasmSizeBytes).padStart(colW)),
   ];
   console.log(sizeRow.join('│'));
 
@@ -198,7 +198,7 @@ function main(): void {
     const deltaRow = [
       '  vs baseline'.padEnd(nameColW),
       '(ref)'.padStart(colW),
-      ...experiments.map((e) => formatDelta(e.wasmSizeBytes, baseline.wasmSizeBytes).padStart(colW)),
+      ...experiments.map((experiment) => formatDelta(experiment.wasmSizeBytes, baseline.wasmSizeBytes).padStart(colW)),
     ];
     console.log(deltaRow.join('│'));
   }
@@ -234,8 +234,8 @@ function main(): void {
         : baseline
           ? ['—'.padStart(colW)]
           : []),
-      ...experiments.map((e) => {
-        const r = e.benchmark.results.find((r) => r.name === benchName);
+      ...experiments.map((experiment) => {
+        const r = experiment.benchmark.results.find((r) => r.name === benchName);
         if (!r) {
           return '—'.padStart(colW);
         }
@@ -249,8 +249,8 @@ function main(): void {
       const deltaRow = [
         ''.padEnd(nameColW),
         ''.padStart(colW),
-        ...experiments.map((e) => {
-          const r = e.benchmark.results.find((r) => r.name === benchName);
+        ...experiments.map((experiment) => {
+          const r = experiment.benchmark.results.find((r) => r.name === benchName);
           if (!r) {
             return ''.padStart(colW);
           }
@@ -270,8 +270,8 @@ function main(): void {
   const geoRow = [
     `  \u001B[1mGeo-Mean\u001B[0m`.padEnd(nameColW + 4), // +4 for ANSI codes
     ...(baseline ? [formatMs(baselineGeoMean).padStart(colW)] : []),
-    ...experiments.map((e) => {
-      const gm = geometricMean(e.benchmark.results.map((r) => r.median));
+    ...experiments.map((experiment) => {
+      const gm = geometricMean(experiment.benchmark.results.map((r) => r.median));
       return formatMs(gm).padStart(colW);
     }),
   ];
@@ -281,8 +281,8 @@ function main(): void {
     const gmDeltaRow = [
       ''.padEnd(nameColW),
       '(ref)'.padStart(colW),
-      ...experiments.map((e) => {
-        const gm = geometricMean(e.benchmark.results.map((r) => r.median));
+      ...experiments.map((experiment) => {
+        const gm = geometricMean(experiment.benchmark.results.map((r) => r.median));
         return formatDelta(gm, baselineGeoMean).padStart(colW);
       }),
     ];
@@ -293,7 +293,7 @@ function main(): void {
   const totalRow = [
     `  Total (ms)`.padEnd(nameColW),
     ...(baseline ? [formatMs(baseline.benchmark.totalDurationMs).padStart(colW)] : []),
-    ...experiments.map((e) => formatMs(e.benchmark.totalDurationMs).padStart(colW)),
+    ...experiments.map((experiment) => formatMs(experiment.benchmark.totalDurationMs).padStart(colW)),
   ];
   console.log(totalRow.join('│'));
   console.log(`  ${sep}`);
@@ -303,10 +303,10 @@ function main(): void {
   console.log('\u001B[1m  Ranking (by Geo-Mean, fastest first):\u001B[0m');
   const allExperiments = baseline ? [baseline, ...experiments] : experiments;
   const ranked = allExperiments
-    .map((e) => ({
-      name: e.shortName,
-      geoMean: geometricMean(e.benchmark.results.map((r) => r.median)),
-      size: e.wasmSizeBytes,
+    .map((experiment) => ({
+      name: experiment.shortName,
+      geoMean: geometricMean(experiment.benchmark.results.map((r) => r.median)),
+      size: experiment.wasmSizeBytes,
     }))
     .sort((a, b) => a.geoMean - b.geoMean);
 
