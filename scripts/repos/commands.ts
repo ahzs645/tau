@@ -1,4 +1,4 @@
-/* eslint-disable no-restricted-imports -- standalone scripts use relative imports */
+/* oxlint-disable no-restricted-imports -- standalone scripts use relative imports */
 
 import process from 'node:process';
 import { execSync } from 'node:child_process';
@@ -370,9 +370,9 @@ function cmdRemove(positional: string[]): void {
   manifest.repos = remainingRepos;
 
   for (const group of Object.values(manifest.groups)) {
-    const idx = group.repos.indexOf(name);
-    if (idx !== -1) {
-      group.repos.splice(idx, 1);
+    const index = group.repos.indexOf(name);
+    if (index !== -1) {
+      group.repos.splice(index, 1);
     }
   }
 

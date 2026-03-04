@@ -1,4 +1,4 @@
-/* eslint-disable no-restricted-imports -- standalone scripts use relative imports */
+/* oxlint-disable no-restricted-imports -- standalone scripts use relative imports */
 
 import process from 'node:process';
 import React, { useState, useMemo } from 'react';
@@ -61,9 +61,9 @@ function StatusBar({
   readonly groups: string[];
 }): React.ReactElement {
   return (
-    <Box flexDirection="column" marginBottom={1}>
+    <Box flexDirection='column' marginBottom={1}>
       <Box>
-        <Text bold color="cyan">
+        <Text bold color='cyan'>
           Tau Repos
         </Text>
         <Text> </Text>
@@ -123,7 +123,7 @@ function RepoRow({
   const { name, config, status } = repo;
 
   const indicator = isSelected ? '>' : ' ';
-  const clonedBadge = status.cloned ? <Text color="green">cloned</Text> : <Text dimColor> ─ </Text>;
+  const clonedBadge = status.cloned ? <Text color='green'>cloned</Text> : <Text dimColor> ─ </Text>;
 
   const upstreamOwner = config.upstream.split('/')[0]!;
   const originLabel = config.fork ? owner : upstreamOwner;
@@ -131,7 +131,7 @@ function RepoRow({
   const branch = status.branch ?? config.branch ?? '─';
   const branchDisplay = branch.length > 16 ? branch.slice(0, 15) + '…' : branch;
 
-  const dirtyIndicator = status.dirty ? <Text color="red">*</Text> : <Text> </Text>;
+  const dirtyIndicator = status.dirty ? <Text color='red'>*</Text> : <Text> </Text>;
 
   return (
     <Box>
@@ -151,7 +151,7 @@ function RepoRow({
         <Text dimColor={!config.fork}>{originLabel}</Text>
       </Box>
       <Box width={18}>
-        <Text color="blue">{branchDisplay}</Text>
+        <Text color='blue'>{branchDisplay}</Text>
       </Box>
       {dirtyIndicator}
     </Box>
@@ -226,7 +226,7 @@ function useNavigationInput(options: {
     exit,
   } = options;
 
-  // eslint-disable-next-line complexity -- sequential key handlers are inherently branchy
+  // oxlint-disable-next-line complexity -- sequential key handlers are inherently branchy
   useInput((input, key) => {
     if (mode !== 'list') {
       return;
@@ -265,10 +265,10 @@ function useNavigationInput(options: {
 
     if (key.tab) {
       const allGroups = ['all', ...groupNames];
-      const currentIdx = allGroups.indexOf(group);
+      const currentIndex = allGroups.indexOf(group);
       const direction = key.shift ? -1 : 1;
-      const nextIdx = (currentIdx + direction + allGroups.length) % allGroups.length;
-      setGroup(allGroups[nextIdx]!);
+      const nextIndex = (currentIndex + direction + allGroups.length) % allGroups.length;
+      setGroup(allGroups[nextIndex]!);
       setCursor(() => 0);
       setMessage('');
       return;
@@ -442,14 +442,14 @@ function App(): React.ReactElement {
   const selectedRepo = filteredRepos[cursor];
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection='column'>
       <StatusBar total={repos.length} clonedCount={clonedCount} group={group} groups={groupNames} />
 
       {showFilter ? (
         <Box marginBottom={1}>
           <Text>Filter: </Text>
           <TextInput
-            placeholder="type to filter..."
+            placeholder='type to filter...'
             onChange={(value) => {
               setFilter(value);
               setCursor(() => 0);
@@ -463,11 +463,11 @@ function App(): React.ReactElement {
       <Header nameWidth={nameWidth} />
       <Text dimColor>{'─'.repeat(nameWidth + 55)}</Text>
 
-      {visibleRepos.map((repo, idx) => (
+      {visibleRepos.map((repo, index) => (
         <RepoRow
           key={repo.name}
           repo={repo}
-          isSelected={idx + scrollOffset === cursor}
+          isSelected={index + scrollOffset === cursor}
           nameWidth={nameWidth}
           owner={manifest.owner}
         />
@@ -484,11 +484,11 @@ function App(): React.ReactElement {
         <Box marginTop={1}>
           <Text>
             Fork{' '}
-            <Text bold color="yellow">
+            <Text bold color='yellow'>
               {selectedRepo.config.upstream}
             </Text>{' '}
             to{' '}
-            <Text bold color="green">
+            <Text bold color='green'>
               {manifest.owner}
             </Text>
             ?{' '}
@@ -516,7 +516,7 @@ function App(): React.ReactElement {
         <Box marginTop={1}>
           <Text>
             Remove fork config for{' '}
-            <Text bold color="yellow">
+            <Text bold color='yellow'>
               {selectedRepo.name}
             </Text>
             ? (revert to upstream only){' '}
