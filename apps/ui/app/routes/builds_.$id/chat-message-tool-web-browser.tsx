@@ -21,11 +21,11 @@ function BrowseSourceItem({ url }: { readonly url: string }): React.JSX.Element 
   return (
     <ExternalLink
       href={url}
-      arrowSize="xs"
-      className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline"
+      arrowSize='xs'
+      className='flex items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline'
     >
-      <img src={faviconUrl} alt={domain} className="size-3.5 shrink-0 rounded-sm" />
-      <span className="min-w-0 truncate font-medium">{domain}</span>
+      <img src={faviconUrl} alt={domain} className='size-3.5 shrink-0 rounded-sm' />
+      <span className='min-w-0 truncate font-medium'>{domain}</span>
     </ExternalLink>
   );
 }
@@ -52,14 +52,14 @@ export function ChatMessageToolWebBrowser({
         .filter((domain): domain is string => domain !== undefined);
 
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
               {domains.length > 0 ? (
                 <>
                   <ChatToolAction>Visiting</ChatToolAction>{' '}
-                  <span className="text-muted-foreground">{domains.join(', ')}...</span>
+                  <span className='text-muted-foreground'>{domains.join(', ')}...</span>
                 </>
               ) : (
                 'Visiting pages...'
@@ -82,12 +82,12 @@ export function ChatMessageToolWebBrowser({
       const shouldBeOpen = !hasContent || isOpen;
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
+        <ChatToolCard variant='minimal' status='ready' isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
           <ChatToolCardHeader>
-            <img src={faviconUrl} alt={firstDomain} className="size-3 shrink-0 rounded-sm" />
+            <img src={faviconUrl} alt={firstDomain} className='size-3 shrink-0 rounded-sm' />
             <ChatToolCardTitle>
               <ChatToolAction>Visited</ChatToolAction>{' '}
-              <span className="text-muted-foreground">
+              <span className='text-muted-foreground'>
                 {firstDomain}
                 {remainingCount > 0 && (
                   <>
@@ -99,9 +99,9 @@ export function ChatMessageToolWebBrowser({
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           {urls.length > 0 && (
-            <ChatToolCardContent className="border-l-0">
-              <div className="border-l border-foreground/20 pl-4">
-                <div className="flex flex-col">
+            <ChatToolCardContent className='border-l-0'>
+              <div className='border-l border-foreground/20 pl-4'>
+                <div className='flex flex-col'>
                   {urls.map((url) => (
                     <BrowseSourceItem key={url} url={url} />
                   ))}
@@ -114,7 +114,7 @@ export function ChatMessageToolWebBrowser({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle="Web browser failed" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle='Web browser failed' />;
     }
 
     case 'approval-requested':

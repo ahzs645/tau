@@ -57,9 +57,9 @@ export function CopyButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button size={size} variant="ghost" onClick={handleCopy} {...properties}>
-          {size !== 'icon' && <span data-slot="label">{copied ? copiedText : readyToCopyText}</span>}
-          {copied ? <Check className="text-success" /> : <Copy />}
+        <Button size={size} variant='ghost' onClick={handleCopy} {...properties}>
+          {size !== 'icon' && <span data-slot='label'>{copied ? copiedText : readyToCopyText}</span>}
+          {copied ? <Check className='text-success' /> : <Copy />}
         </Button>
       </TooltipTrigger>
       <TooltipContent {...tooltipContentProperties}>{tooltip}</TooltipContent>

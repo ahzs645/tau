@@ -8,7 +8,7 @@ import type {
 import { LanguageContributionRegistry } from '#lib/monaco-language-registry.js';
 
 function createMockContext(): ActivationContext {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Minimal mock for testing
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Minimal mock for testing
   return {} as ActivationContext;
 }
 

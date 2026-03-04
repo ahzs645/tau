@@ -39,13 +39,13 @@ export function ChatExplorerTrigger({
     <FloatingPanelTrigger
       icon={FileBox}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Explorer
-          <KeyShortcut variant="tooltip">{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
         </div>
       }
       className={isOpen ? 'text-primary' : undefined}
-      tooltipSide="right"
+      tooltipSide='right'
       onClick={onToggle}
     />
   );
@@ -75,31 +75,31 @@ export function ChatExplorerTree({
   const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleEditor);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
-      <FloatingPanelContent className="text-sm">
+    <FloatingPanel isOpen={isExpanded} side='right' className={className} onOpenChange={setIsExpanded}>
+      <FloatingPanelContent className='text-sm'>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Explorer</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Explorer
-                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedEditorKeyCombination}</KeyShortcut>
                 </div>
               )}
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <FloatingPanelContentBody className="flex flex-col px-0 py-0">
+        <FloatingPanelContentBody className='flex flex-col px-0 py-0'>
           {/* Files Section */}
-          <ExplorerCollapsibleSection title="Files" count={1} isOpen={isFilesOpen} onOpenChange={setIsFilesOpen}>
+          <ExplorerCollapsibleSection title='Files' count={1} isOpen={isFilesOpen} onOpenChange={setIsFilesOpen}>
             <ChatEditorExplorerFiles />
           </ExplorerCollapsibleSection>
 
           {/* Materials Section */}
           <ExplorerCollapsibleSection
-            title="Materials"
+            title='Materials'
             count={3}
             isOpen={isMaterialsOpen}
             onOpenChange={setIsMaterialsOpen}
@@ -108,13 +108,13 @@ export function ChatExplorerTree({
           </ExplorerCollapsibleSection>
 
           {/* Meshes Section */}
-          <ExplorerCollapsibleSection title="Meshes" count={9} isOpen={isMeshesOpen} onOpenChange={setIsMeshesOpen}>
+          <ExplorerCollapsibleSection title='Meshes' count={9} isOpen={isMeshesOpen} onOpenChange={setIsMeshesOpen}>
             <ChatEditorExplorerMeshes />
           </ExplorerCollapsibleSection>
 
           {/* Animations Section */}
           <ExplorerCollapsibleSection
-            title="Animations"
+            title='Animations'
             count={3}
             isOpen={isAnimationsOpen}
             onOpenChange={setIsAnimationsOpen}
@@ -123,13 +123,13 @@ export function ChatExplorerTree({
           </ExplorerCollapsibleSection>
 
           {/* Objects Section */}
-          <ExplorerCollapsibleSection title="Objects" count={10} isOpen={isObjectsOpen} onOpenChange={setIsObjectsOpen}>
+          <ExplorerCollapsibleSection title='Objects' count={10} isOpen={isObjectsOpen} onOpenChange={setIsObjectsOpen}>
             <ChatEditorExplorerObjects />
           </ExplorerCollapsibleSection>
 
           {/* Environment Section */}
           <ExplorerCollapsibleSection
-            title="Environment"
+            title='Environment'
             count={1}
             isOpen={isEnvironmentOpen}
             onOpenChange={setIsEnvironmentOpen}
@@ -158,16 +158,16 @@ function ExplorerCollapsibleSection({
   children,
 }: ExplorerCollapsibleSectionProps): React.JSX.Element {
   return (
-    <Collapsible open={isOpen} className="w-full border-b border-border/50 last:border-b-0" onOpenChange={onOpenChange}>
-      <CollapsibleTrigger className="group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/50">
-        <h3 className="flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          <span className="truncate">{title}</span>
-          <span className="ml-1.5 shrink-0 text-muted-foreground/50">({count})</span>
+    <Collapsible open={isOpen} className='w-full border-b border-border/50 last:border-b-0' onOpenChange={onOpenChange}>
+      <CollapsibleTrigger className='group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/50'>
+        <h3 className='flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase'>
+          <span className='truncate'>{title}</span>
+          <span className='ml-1.5 shrink-0 text-muted-foreground/50'>({count})</span>
         </h3>
-        <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
+        <ChevronRight className='size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
       </CollapsibleTrigger>
 
-      <CollapsibleContent className="px-0 py-1">{children}</CollapsibleContent>
+      <CollapsibleContent className='px-0 py-1'>{children}</CollapsibleContent>
     </Collapsible>
   );
 }

@@ -25,7 +25,7 @@ type ToolbarOverflowOptions = {
 
 type ToolbarOverflowResult = {
   /** Ref to attach to the toolbar container element */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref requires null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref requires null
   readonly containerRef: RefObject<HTMLDivElement | null>;
   /** Set of item IDs that should be rendered inline */
   readonly visibleIds: Set<string>;
@@ -85,7 +85,7 @@ export function useToolbarOverflow(
  * Given toolbar items, the measured container width, gap, and reserved width,
  * determines which items are visible vs overflowed and whether compact mode is active.
  */
-// eslint-disable-next-line max-params -- pure function with 25+ test call sites; wrapping would add noise for simple numeric args
+// oxlint-disable-next-line max-params -- pure function with 25+ test call sites; wrapping would add noise for simple numeric args
 export function computeToolbarOverflow(
   items: readonly ToolbarItemConfig[],
   containerWidth: number | undefined,

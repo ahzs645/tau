@@ -22,7 +22,7 @@ export function ExplorerFile({ id, name, icon, isSelected, onClick }: ExplorerFi
       data-selected={isSelected}
       onClick={onClick}
     >
-      <span className="truncate">{name}</span>
+      <span className='truncate'>{name}</span>
     </File>
   );
 }

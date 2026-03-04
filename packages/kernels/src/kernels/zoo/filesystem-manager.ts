@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/parameter-properties -- parameter properties are non-erasable TypeScript */
 import { joinPath } from '@taucad/utils/path';
 import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 
@@ -8,7 +7,9 @@ import type { KernelFileSystem } from '#types/kernel-worker.types.js';
  *
  */
 export class FileSystemManager {
+  /* oxlint-disable-next-line @typescript-eslint/parameter-properties -- parameter properties are non-erasable TypeScript */
   private readonly filesystem: KernelFileSystem;
+  /* oxlint-disable-next-line @typescript-eslint/parameter-properties -- parameter properties are non-erasable TypeScript */
   private readonly basePath: string;
 
   public constructor(filesystem: KernelFileSystem, basePath: string) {

@@ -28,13 +28,13 @@ export const toTitleCase = (string_: string): string => {
       // Convert snake_case and kebab-case separators to spaces
       .replaceAll(/[_-]/g, ' ')
       // Add space before uppercase letters when preceded by lowercase letters or digits
-      .replaceAll(/(?<=[a-z\d])([A-Z])/g, ' $1')
+      .replaceAll(/(?<=[\da-z])([A-Z])/g, ' $1')
       // Add space between letters and digits (e.g., 'test123' -> 'test 123')
-      .replaceAll(/(?<=[a-zA-Z])(\d)/g, ' $1')
+      .replaceAll(/(?<=[A-Za-z])(\d)/g, ' $1')
       // Add space between digits and letters (e.g., '123test' -> '123 test')
-      .replaceAll(/(?<=\d)([a-zA-Z])/g, ' $1')
+      .replaceAll(/(?<=\d)([A-Za-z])/g, ' $1')
       // Add space after special characters when followed by alphanumeric
-      .replaceAll(/([^\s\w])([a-zA-Z\d])/g, '$1 $2')
+      .replaceAll(/([^\s\w])([\dA-Za-z])/g, '$1 $2')
       // Remove extra spaces
       .replaceAll(/\s+/g, ' ')
       .trim()
@@ -56,7 +56,7 @@ export const toTitleCase = (string_: string): string => {
 export const toSnakeCase = (string_: string): string => {
   return string_
     .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-    .replaceAll(/([a-z\d])([A-Z])/g, '$1_$2')
+    .replaceAll(/([\da-z])([A-Z])/g, '$1_$2')
     .replaceAll(/[\s-]+/g, '_')
     .toLowerCase();
 };

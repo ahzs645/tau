@@ -11,23 +11,23 @@ export function NavInfoTrigger({ isOpen }: { readonly isOpen: boolean }): React.
       <TooltipTrigger asChild>
         <CollapsibleTrigger asChild>
           <SidebarMenuButton className={cn('size-7', isOpen && 'text-primary')}>
-            <Info className="size-4" />
-            <span className="sr-only">Toggle app info</span>
+            <Info className='size-4' />
+            <span className='sr-only'>Toggle app info</span>
           </SidebarMenuButton>
         </CollapsibleTrigger>
       </TooltipTrigger>
-      <TooltipContent side="top">App info</TooltipContent>
+      <TooltipContent side='top'>App info</TooltipContent>
     </Tooltip>
   );
 }
 
 export function NavInfoContent(): React.JSX.Element {
   return (
-    <CollapsibleContent className="data-[state=closed]:animate-collapse-up data-[state=open]:animate-collapse-down overflow-hidden">
-      <div className="mb-0.5 flex w-full flex-col gap-2 border-b border-border px-2 py-2">
-        <div className="flex w-full items-center justify-between">
-          <span className="text-xs text-muted-foreground">Version</span>
-          <span className="text-xs font-medium">v{metaConfig.version}</span>
+    <CollapsibleContent className='data-[state=closed]:animate-collapse-up data-[state=open]:animate-collapse-down overflow-hidden'>
+      <div className='mb-0.5 flex w-full flex-col gap-2 border-b border-border px-2 py-2'>
+        <div className='flex w-full items-center justify-between'>
+          <span className='text-xs text-muted-foreground'>Version</span>
+          <span className='text-xs font-medium'>v{metaConfig.version}</span>
         </div>
       </div>
     </CollapsibleContent>

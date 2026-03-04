@@ -111,35 +111,35 @@ function StackFrame({ frame, index }: { readonly frame: KernelStackFrame; readon
 
   const locationContent = (
     <>
-      <span className="shrink-0 text-muted-foreground">(</span>
-      <span className="min-w-0 truncate text-muted-foreground" dir="rtl" title={fileName}>
+      <span className='shrink-0 text-muted-foreground'>(</span>
+      <span className='min-w-0 truncate text-muted-foreground' dir='rtl' title={fileName}>
         {fileName}
       </span>
       {frame.lineNumber !== undefined && frame.columnNumber !== undefined ? (
-        <span className="shrink-0 text-muted-foreground">
+        <span className='shrink-0 text-muted-foreground'>
           :{frame.lineNumber}:{frame.columnNumber}
         </span>
       ) : null}
-      <span className="shrink-0 text-muted-foreground">)</span>
+      <span className='shrink-0 text-muted-foreground'>)</span>
     </>
   );
 
   return (
-    <div className="flex min-w-0 items-center gap-2 font-mono text-[0.625rem]">
-      <span className="w-3 shrink-0 text-right text-muted-foreground">{index + 1}</span>
-      <span className="shrink-0 text-muted-foreground">|</span>
-      <span className="shrink-0 text-foreground">{frame.functionName ?? '<anonymous>'}</span>
+    <div className='flex min-w-0 items-center gap-2 font-mono text-[0.625rem]'>
+      <span className='w-3 shrink-0 text-right text-muted-foreground'>{index + 1}</span>
+      <span className='shrink-0 text-muted-foreground'>|</span>
+      <span className='shrink-0 text-foreground'>{frame.functionName ?? '<anonymous>'}</span>
       {isClickable ? (
         <FileLink
           path={frame.fileName!}
           lineNumber={frame.lineNumber}
           column={frame.columnNumber}
-          className="flex min-w-0 hover:text-foreground"
+          className='flex min-w-0 hover:text-foreground'
         >
           {locationContent}
         </FileLink>
       ) : (
-        <div className="flex min-w-0">{locationContent}</div>
+        <div className='flex min-w-0'>{locationContent}</div>
       )}
     </div>
   );
@@ -165,8 +165,8 @@ function StackTraceSection({
   const visibleFrames = showInternal ? stackFrames : userFrames;
 
   return (
-    <div className="space-y-1">
-      <div className="font-medium text-muted-foreground">Stack trace:</div>
+    <div className='space-y-1'>
+      <div className='font-medium text-muted-foreground'>Stack trace:</div>
       <div className={cn('space-y-0.5 rounded border bg-background/80 p-2', styles.stackBorder)}>
         {visibleFrames.map((frame, index) => (
           <StackFrame
@@ -177,8 +177,8 @@ function StackTraceSection({
         ))}
         {hasInternalFrames ? (
           <button
-            type="button"
-            className="mt-1 cursor-pointer font-mono text-[0.625rem] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+            type='button'
+            className='mt-1 cursor-pointer font-mono text-[0.625rem] text-muted-foreground/60 transition-colors hover:text-muted-foreground'
             onClick={() => {
               setShowInternal(!showInternal);
             }}
@@ -299,7 +299,7 @@ function ErrorStackTrace({
       )}
     >
       {/* Error message with Fix button */}
-      <div className="flex flex-row items-start justify-between gap-2">
+      <div className='flex flex-row items-start justify-between gap-2'>
         <div className={cn('flex flex-wrap items-baseline gap-x-1.5 font-medium', styles.text)}>
           <MarkdownViewer
             className={cn('inline w-auto! text-xs text-inherit', styles.code, '[&_code]:bg-background/80')}
@@ -307,14 +307,14 @@ function ErrorStackTrace({
             {message}
           </MarkdownViewer>
           {locationText ? (
-            <span className="font-mono font-normal text-muted-foreground">
+            <span className='font-mono font-normal text-muted-foreground'>
               (
               {isLocationClickable ? (
                 <FileLink
                   path={fileName!}
                   lineNumber={startLineNumber}
                   column={startColumn}
-                  className="hover:text-foreground"
+                  className='hover:text-foreground'
                 >
                   {locationText}
                 </FileLink>
@@ -329,20 +329,20 @@ function ErrorStackTrace({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                size="icon"
-                variant="outline"
+                size='icon'
+                variant='outline'
                 className={cn('size-6 shrink-0 bg-background/80 hover:bg-background', styles.buttonBorder)}
                 onClick={() => {
                   onFixWithAi(isShiftHeld);
                 }}
               >
-                <Sparkles className="size-3" />
+                <Sparkles className='size-3' />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top" className="flex flex-col gap-1">
+            <TooltipContent side='top' className='flex flex-col gap-1'>
               <span>{isShiftHeld ? 'Fix in new chat' : 'Fix with AI'}</span>
-              <span className="flex items-center gap-1 text-xs opacity-70">
-                <KeyShortcut variant="tooltip">{shiftKey}</KeyShortcut> for new chat
+              <span className='flex items-center gap-1 text-xs opacity-70'>
+                <KeyShortcut variant='tooltip'>{shiftKey}</KeyShortcut> for new chat
               </span>
             </TooltipContent>
           </Tooltip>
@@ -390,7 +390,7 @@ function IssuesSummary({ counts }: { readonly counts: IssueCounts }): React.JSX.
     parts.push({
       key: 'error',
       element: (
-        <span className="text-destructive">
+        <span className='text-destructive'>
           {counts.error} error{counts.error > 1 ? 's' : ''}
         </span>
       ),
@@ -401,7 +401,7 @@ function IssuesSummary({ counts }: { readonly counts: IssueCounts }): React.JSX.
     parts.push({
       key: 'warning',
       element: (
-        <span className="text-warning">
+        <span className='text-warning'>
           {counts.warning} warning{counts.warning > 1 ? 's' : ''}
         </span>
       ),
@@ -411,7 +411,7 @@ function IssuesSummary({ counts }: { readonly counts: IssueCounts }): React.JSX.
   if (counts.info > 0) {
     parts.push({
       key: 'info',
-      element: <span className="text-info">{counts.info} info</span>,
+      element: <span className='text-info'>{counts.info} info</span>,
     });
   }
 
@@ -419,7 +419,7 @@ function IssuesSummary({ counts }: { readonly counts: IssueCounts }): React.JSX.
     <>
       {parts.map((part, index) => (
         <span key={part.key}>
-          {index > 0 ? <span className="text-muted-foreground">, </span> : null}
+          {index > 0 ? <span className='text-muted-foreground'>, </span> : null}
           {part.element}
         </span>
       ))}
@@ -485,7 +485,10 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
       });
 
       // Open the chat panel via editorMachine
-      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { chat: true } } });
+      editorRef.send({
+        type: 'setPanelState',
+        panelState: { openPanels: { chat: true } },
+      });
 
       // Create the error fixing message
       const message = createMessage({
@@ -540,7 +543,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
         'group/collapsible flex h-8 w-full items-center justify-between border-border bg-sidebar px-2 py-1.5 transition-colors hover:bg-accent',
       )}
     >
-      <span className="flex items-center gap-1.5 text-xs font-medium">
+      <span className='flex items-center gap-1.5 text-xs font-medium'>
         <span>Issues</span>
         <span>
           <span>(</span>
@@ -562,7 +565,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
 
   const content = (
     <CollapsibleContent className={cn('border-border', side === 'bottom' && 'border-b', side === 'top' && 'border-b')}>
-      <div className="flex flex-col">
+      <div className='flex flex-col'>
         {errors.map((error, errorIndex) => {
           // Create a unique key from error properties
           const errorKey = `${error.message}-${error.location?.startLineNumber ?? 'unknown'}-${error.location?.startColumn ?? 'unknown'}`;

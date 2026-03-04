@@ -62,7 +62,6 @@ export class ProviderService {
       ollama: {
         provider: 'ollama',
         configuration: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
           baseURL: 'http://localhost:11434',
         },
         inputTokensIncludesCacheReadTokens: false,
@@ -74,7 +73,6 @@ export class ProviderService {
         provider: 'sambanova',
         configuration: {
           apiKey: configService.get('SAMBA_API_KEY', { infer: true }),
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
           baseURL: 'https://api.sambanova.ai/v1',
         },
         inputTokensIncludesCacheReadTokens: false,

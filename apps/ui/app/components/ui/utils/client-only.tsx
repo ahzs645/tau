@@ -8,7 +8,8 @@ import type { ReactNode } from 'react';
  *
  * This is achieved by only mounting children after a `useEffect` hook has run.
  *
- * @param children - The children to render.
+ * @param props - The component props.
+ * @param props.children - The children to render.
  * @returns The children if the component has mounted, otherwise null.
  */
 export function ClientOnly({ children }: { readonly children: ReactNode }): ReactNode {

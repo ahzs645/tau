@@ -104,11 +104,11 @@ export function PreviewFiles({ files }: PreviewFilesProps): React.JSX.Element {
   const fileTree = useMemo(() => buildTreeFromFiles(files), [files]);
 
   if (files.length === 0) {
-    return <p className="p-6 text-center text-muted-foreground">No files available</p>;
+    return <p className='p-6 text-center text-muted-foreground'>No files available</p>;
   }
 
   return (
-    <div className="h-full rounded-md border text-sm">
+    <div className='h-full rounded-md border text-sm'>
       <Tree elements={fileTree}>{renderTree(fileTree)}</Tree>
     </div>
   );

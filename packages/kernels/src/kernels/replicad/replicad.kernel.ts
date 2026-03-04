@@ -82,26 +82,26 @@ async function resolveWasm(wasm: WasmOption, tracer?: KernelSpanTracer): Promise
   try {
     if (typeof wasm === 'string') {
       if (wasm === 'single-exceptions') {
-        const mod = await import('replicad-opencascadejs/src/replicad_with_exceptions.js');
+        const module_ = await import('replicad-opencascadejs/src/replicad_with_exceptions.js');
         return {
           wasmUrl: exceptionsWasmUrl,
-          bindingsFactory: resolveCjsDefault(mod.default) as OpenCascadeModuleFactory,
+          bindingsFactory: resolveCjsDefault(module_.default) as OpenCascadeModuleFactory,
         };
       }
 
-      const mod = await import('replicad-opencascadejs/src/replicad_single.js');
+      const module_ = await import('replicad-opencascadejs/src/replicad_single.js');
       return {
         wasmUrl: singleWasmUrl,
-        bindingsFactory: resolveCjsDefault(mod.default) as OpenCascadeModuleFactory,
+        bindingsFactory: resolveCjsDefault(module_.default) as OpenCascadeModuleFactory,
       };
     }
 
     // Custom WASM config -- runtime import bypasses bundler
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- dynamic import() with variable URL returns any
-    const mod: Record<string, unknown> = await import(/* @vite-ignore */ wasm.wasmBindingsUrl);
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- dynamic import() with variable URL returns any
+    const module_: Record<string, unknown> = await import(/* @vite-ignore */ wasm.wasmBindingsUrl);
     return {
       wasmUrl: wasm.wasmUrl,
-      bindingsFactory: resolveCjsDefault(mod['default'] ?? mod) as OpenCascadeModuleFactory,
+      bindingsFactory: resolveCjsDefault(module_['default'] ?? module_) as OpenCascadeModuleFactory,
     };
   } finally {
     span?.end();
@@ -121,8 +121,8 @@ type ReplicadContext = {
 };
 
 type RuntimeModuleExports = {
-  default?: (...args: unknown[]) => unknown;
-  main?: (...args: unknown[]) => unknown;
+  default?: (...arguments_: unknown[]) => unknown;
+  main?: (...arguments_: unknown[]) => unknown;
   defaultParams?: Record<string, unknown>;
   defaultParameters?: Record<string, unknown>;
   defaultName?: string;
@@ -174,7 +174,7 @@ async function loadReplicadSourceMap(): Promise<SourceMapConsumer | undefined> {
     }
 
     const rawMap: unknown = JSON.parse(json);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
     return new SourceMapConsumer(rawMap as any);
   } catch {
     return undefined;
@@ -233,7 +233,7 @@ function registerReplicadModule(runtime: KernelRuntime): void {
   const registry = getModuleRegistry();
   registry.set('replicad', exports);
 
-  const exportNames = Object.keys(exports).filter((key) => /^[a-z_$][\w$]*$/i.test(key));
+  const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
   const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('replicad');\n${namedExports}\nexport default __mod;\n`;
 
@@ -257,13 +257,13 @@ function extractDefaultParameters(module: unknown): Record<string, unknown> {
     return {};
   }
 
-  /* eslint-disable @typescript-eslint/no-unnecessary-condition -- runtime guard for untyped module */
+  /* oxlint-disable @typescript-eslint/no-unnecessary-condition -- runtime guard for untyped module */
   return (
     (module['defaultParams'] as Record<string, unknown>) ??
     (module['defaultParameters'] as Record<string, unknown>) ??
     {}
   );
-  /* eslint-enable @typescript-eslint/no-unnecessary-condition -- end of runtime guard */
+  /* oxlint-enable @typescript-eslint/no-unnecessary-condition -- end of runtime guard */
 }
 
 function extractDefaultName(module: unknown): string | undefined {
@@ -405,7 +405,9 @@ export default defineKernel({
     let tracingSummary: OcTracingSummary | undefined;
 
     if (ocTracing !== 'off') {
-      const traced = wrapOcWithTracing(openCascade, tracer, { mode: ocTracing });
+      const traced = wrapOcWithTracing(openCascade, tracer, {
+        mode: ocTracing,
+      });
       openCascade = traced.tracedInstance;
       tracingSummary = traced.summary;
     } else if (wasm !== 'single') {
@@ -460,11 +462,11 @@ export default defineKernel({
 
     const code = await filesystem.readFile(filePath, 'utf8');
 
-    const hasImport = /import.*from\s+['"]replicad['"]/s.test(code);
-    const hasRequire = /require\s*\(['"]replicad['"]\)/.test(code);
-    const hasDestructure = /\bconst\s*{\s*[\w\s,]*}\s*=\s*replicad\s*;/.test(code);
-    const hasTypedef = /@typedef.*import\s*\(\s*['"]replicad['"]\s*\)/.test(code);
-    const hasCdnImport = /import.*from\s+['"]https?:\/\/[^'"]*replicad[^'"]*['"]/s.test(code);
+    const hasImport = /import.*from\s+["']replicad["']/s.test(code);
+    const hasRequire = /require\s*\(["']replicad["']\)/.test(code);
+    const hasDestructure = /\bconst\s*{\s*[\s\w,]*}\s*=\s*replicad\s*;/.test(code);
+    const hasTypedef = /@typedef.*import\s*\(\s*["']replicad["']\s*\)/.test(code);
+    const hasCdnImport = /import.*from\s+["']https?:\/\/[^"']*replicad[^"']*["']/s.test(code);
 
     return hasImport || hasRequire || hasDestructure || hasTypedef || hasCdnImport;
   },
@@ -517,7 +519,9 @@ export default defineKernel({
     }
 
     const module = executeResult.value as RuntimeModuleExports;
-    const mainSpan = tracer.startSpan('replicad.run-main', { phase: 'computingGeometry' });
+    const mainSpan = tracer.startSpan('replicad.run-main', {
+      phase: 'computingGeometry',
+    });
     const mainResult = await runMain<MainResultShapes>({
       module,
       parameters,
@@ -544,7 +548,11 @@ export default defineKernel({
         issues: [
           {
             message: 'main() did not return any shapes. Did you forget to add a return statement?',
-            location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+            location: {
+              fileName: relativeFilePath,
+              startLineNumber: 1,
+              startColumn: 1,
+            },
             type: 'runtime',
             severity: 'warning',
           },
@@ -588,10 +596,19 @@ export default defineKernel({
   },
 
   async exportGeometry({ fileType, tessellation, nativeHandle }, _runtime, _context) {
-    const resolvedTessellation = tessellation ?? { linearTolerance: 0.01, angularTolerance: 30 };
+    const resolvedTessellation = tessellation ?? {
+      linearTolerance: 0.01,
+      angularTolerance: 30,
+    };
 
     if (nativeHandle.length === 0) {
-      return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
+      return createKernelError([
+        {
+          message: 'No geometry available for export',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
     }
 
     if (fileType === 'glb' || fileType === 'gltf') {
@@ -674,7 +691,7 @@ async function buildExportBytes(
 class ReplicadBuildError extends Error {
   public readonly issues: KernelIssue[];
   public constructor(issues: KernelIssue[]) {
-    super(issues.map((i) => i.message).join('; '));
+    super(issues.map((index) => index.message).join('; '));
     this.issues = issues;
   }
 }

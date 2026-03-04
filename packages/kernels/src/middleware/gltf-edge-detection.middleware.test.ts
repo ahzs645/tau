@@ -41,27 +41,73 @@ async function createCubeGltfWithoutLines(): Promise<Uint8Array<ArrayBuffer>> {
   const buffer = document.createBuffer();
 
   // Unit cube: 8 vertices
-  // prettier-ignore
+  // prettier-ignore -- preserve vertex coordinate alignment
   const positions = new Float32Array([
-    0, 0, 1,  // 0 - front bottom left
-    1, 0, 1,  // 1 - front bottom right
-    1, 1, 1,  // 2 - front top right
-    0, 1, 1,  // 3 - front top left
-    0, 0, 0,  // 4 - back bottom left
-    1, 0, 0,  // 5 - back bottom right
-    1, 1, 0,  // 6 - back top right
-    0, 1, 0,  // 7 - back top left
+    0,
+    0,
+    1, // 0 - front bottom left
+    1,
+    0,
+    1, // 1 - front bottom right
+    1,
+    1,
+    1, // 2 - front top right
+    0,
+    1,
+    1, // 3 - front top left
+    0,
+    0,
+    0, // 4 - back bottom left
+    1,
+    0,
+    0, // 5 - back bottom right
+    1,
+    1,
+    0, // 6 - back top right
+    0,
+    1,
+    0, // 7 - back top left
   ]);
 
   // 12 triangles for 6 faces
-  // prettier-ignore
+  // prettier-ignore -- preserve triangle index grouping
   const indices = new Uint16Array([
-    0, 1, 2,  2, 3, 0, // Front
-    5, 4, 7,  7, 6, 5, // Back
-    3, 2, 6,  6, 7, 3, // Top
-    4, 5, 1,  1, 0, 4, // Bottom
-    1, 5, 6,  6, 2, 1, // Right
-    4, 0, 3,  3, 7, 4, // Left
+    0,
+    1,
+    2,
+    2,
+    3,
+    0, // Front
+    5,
+    4,
+    7,
+    7,
+    6,
+    5, // Back
+    3,
+    2,
+    6,
+    6,
+    7,
+    3, // Top
+    4,
+    5,
+    1,
+    1,
+    0,
+    4, // Bottom
+    1,
+    5,
+    6,
+    6,
+    2,
+    1, // Right
+    4,
+    0,
+    3,
+    3,
+    7,
+    4, // Left
   ]);
 
   const positionAccessor = document
@@ -97,20 +143,12 @@ async function createCubeGltfWithLines(): Promise<Uint8Array<ArrayBuffer>> {
   const buffer = document.createBuffer();
 
   // Cube triangle data (same as above)
-  // prettier-ignore
-  const positions = new Float32Array([
-    0, 0, 1,  1, 0, 1,  1, 1, 1,  0, 1, 1,
-    0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0,
-  ]);
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions = new Float32Array([0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
 
-  // prettier-ignore
+  // prettier-ignore -- preserve triangle index grouping
   const indices = new Uint16Array([
-    0, 1, 2,  2, 3, 0,
-    5, 4, 7,  7, 6, 5,
-    3, 2, 6,  6, 7, 3,
-    4, 5, 1,  1, 0, 4,
-    1, 5, 6,  6, 2, 1,
-    4, 0, 3,  3, 7, 4,
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
   ]);
 
   const positionAccessor = document
@@ -167,19 +205,11 @@ async function createMixedMeshGltf(): Promise<Uint8Array<ArrayBuffer>> {
   const buffer = document.createBuffer();
 
   // --- Mesh 1: cube WITH existing line primitive ---
-  // prettier-ignore
-  const positions1 = new Float32Array([
-    0, 0, 1,  1, 0, 1,  1, 1, 1,  0, 1, 1,
-    0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0,
-  ]);
-  // prettier-ignore
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions1 = new Float32Array([0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  // prettier-ignore -- preserve triangle index grouping
   const indices1 = new Uint16Array([
-    0, 1, 2,  2, 3, 0,
-    5, 4, 7,  7, 6, 5,
-    3, 2, 6,  6, 7, 3,
-    4, 5, 1,  1, 0, 4,
-    1, 5, 6,  6, 2, 1,
-    4, 0, 3,  3, 7, 4,
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
   ]);
 
   const trianglePrimitive1 = document
@@ -211,19 +241,11 @@ async function createMixedMeshGltf(): Promise<Uint8Array<ArrayBuffer>> {
 
   // --- Mesh 2: cube WITHOUT line primitive ---
   // Offset cube at (2,0,0)
-  // prettier-ignore
-  const positions2 = new Float32Array([
-    2, 0, 1,  3, 0, 1,  3, 1, 1,  2, 1, 1,
-    2, 0, 0,  3, 0, 0,  3, 1, 0,  2, 1, 0,
-  ]);
-  // prettier-ignore
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions2 = new Float32Array([2, 0, 1, 3, 0, 1, 3, 1, 1, 2, 1, 1, 2, 0, 0, 3, 0, 0, 3, 1, 0, 2, 1, 0]);
+  // prettier-ignore -- preserve triangle index grouping
   const indices2 = new Uint16Array([
-    0, 1, 2,  2, 3, 0,
-    5, 4, 7,  7, 6, 5,
-    3, 2, 6,  6, 7, 3,
-    4, 5, 1,  1, 0, 4,
-    1, 5, 6,  6, 2, 1,
-    4, 0, 3,  3, 7, 4,
+    0, 1, 2, 2, 3, 0, 5, 4, 7, 7, 6, 5, 3, 2, 6, 6, 7, 3, 4, 5, 1, 1, 0, 4, 1, 5, 6, 6, 2, 1, 4, 0, 3, 3, 7, 4,
   ]);
 
   const trianglePrimitive2 = document
@@ -427,7 +449,10 @@ describe('gltfEdgeDetectionMiddleware', () => {
 
       it('should return the original geometry object when no edges are added', async () => {
         const gltfData = await createCubeGltfWithLines();
-        const originalGeometry: GeometryGltf = { format: 'gltf', content: gltfData };
+        const originalGeometry: GeometryGltf = {
+          format: 'gltf',
+          content: gltfData,
+        };
         const handlerResult = createSuccessResult([originalGeometry]);
         const { input, runtime } = createEdgeDetectionContext();
         const handler = createMockHandler(handlerResult);

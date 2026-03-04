@@ -11,8 +11,8 @@ export function GitTrigger({ onClick, className }: GitTriggerProperties): React.
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="outline" size="icon" className={className} onClick={onClick}>
-          <GitBranch className="size-4" />
+        <Button variant='outline' size='icon' className={className} onClick={onClick}>
+          <GitBranch className='size-4' />
         </Button>
       </TooltipTrigger>
       <TooltipContent>Connect to Git</TooltipContent>

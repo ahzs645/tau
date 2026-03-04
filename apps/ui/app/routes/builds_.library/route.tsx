@@ -91,8 +91,8 @@ const categoryIconsFromEngineeringDiscipline = {
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/builds/library">Library</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/builds/library'>Library</Link>
       </Button>
     );
   },
@@ -199,11 +199,11 @@ export default function PersonalCadProjects(): React.JSX.Element {
   );
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Builds</h1>
+    <div className='container mx-auto px-4 py-8'>
+      <div className='mb-6 flex items-center justify-between'>
+        <h1 className='text-3xl font-bold'>Builds</h1>
         <Button asChild>
-          <NavLink to="/">{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
+          <NavLink to='/'>{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
         </Button>
       </div>
 
@@ -213,32 +213,32 @@ export default function PersonalCadProjects(): React.JSX.Element {
           setActiveFilter(value as 'all' | EngineeringDiscipline);
         }}
       >
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <TabsList className="">
-            <TabsTrigger value="all" className="flex items-center gap-2">
-              <Layout className="size-4" />
-              <span className="hidden sm:inline">All</span>
+        <div className='mb-4 flex flex-wrap items-center justify-between gap-2'>
+          <TabsList className=''>
+            <TabsTrigger value='all' className='flex items-center gap-2'>
+              <Layout className='size-4' />
+              <span className='hidden sm:inline'>All</span>
             </TabsTrigger>
             {Object.entries(engineeringDisciplines).map(([key, discipline]) => {
               const Icon = categoryIconsFromEngineeringDiscipline[key as EngineeringDiscipline];
               return (
-                <TabsTrigger key={key} value={key} className="flex items-center gap-2 capitalize">
-                  <Icon className="size-4" />
-                  <span className="hidden sm:inline">{discipline.name}</span>
+                <TabsTrigger key={key} value={key} className='flex items-center gap-2 capitalize'>
+                  <Icon className='size-4' />
+                  <span className='hidden sm:inline'>{discipline.name}</span>
                 </TabsTrigger>
               );
             })}
           </TabsList>
-          <div className="flex items-center gap-2">
+          <div className='flex items-center gap-2'>
             {/* View mode toggle */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon">
+                <Button variant='outline' size='icon'>
                   {viewMode === 'grid' ? <Grid /> : <TableIcon />}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
-                align="end"
+                align='end'
                 onCloseAutoFocus={(event) => {
                   event.preventDefault();
                 }}
@@ -255,7 +255,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
                   }}
                 >
                   <span>Grid</span>
-                  <Grid className="ml-auto" />
+                  <Grid className='ml-auto' />
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem
                   checked={viewMode === 'table'}
@@ -269,7 +269,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
                   }}
                 >
                   <span>Table</span>
-                  <TableIcon className="ml-auto" />
+                  <TableIcon className='ml-auto' />
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -277,11 +277,11 @@ export default function PersonalCadProjects(): React.JSX.Element {
             {/* Settings menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon">
-                  <Cog className="size-4" />
+                <Button variant='outline' size='icon'>
+                  <Cog className='size-4' />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align='end'>
                 <DropdownMenuLabel>Settings</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuCheckboxItem
@@ -297,7 +297,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             </DropdownMenu>
           </div>
         </div>
-        <TabsContent enableAnimation={false} value="all">
+        <TabsContent enableAnimation={false} value='all'>
           <UnifiedBuildList
             projects={filteredBuilds}
             viewMode={viewMode}
@@ -307,7 +307,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             onSubmit={onSubmit}
           />
         </TabsContent>
-        <TabsContent enableAnimation={false} value="mechanical">
+        <TabsContent enableAnimation={false} value='mechanical'>
           <UnifiedBuildList
             projects={filteredBuilds.filter((p) => Object.keys(p.assets).includes('mechanical'))}
             viewMode={viewMode}
@@ -317,7 +317,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             onSubmit={onSubmit}
           />
         </TabsContent>
-        <TabsContent enableAnimation={false} value="electrical">
+        <TabsContent enableAnimation={false} value='electrical'>
           <UnifiedBuildList
             projects={filteredBuilds.filter((p) => Object.keys(p.assets).includes('electrical'))}
             viewMode={viewMode}
@@ -327,7 +327,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             onSubmit={onSubmit}
           />
         </TabsContent>
-        <TabsContent enableAnimation={false} value="firmware">
+        <TabsContent enableAnimation={false} value='firmware'>
           <UnifiedBuildList
             projects={filteredBuilds.filter((p) => Object.keys(p.assets).includes('firmware'))}
             viewMode={viewMode}
@@ -337,7 +337,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             onSubmit={onSubmit}
           />
         </TabsContent>
-        <TabsContent enableAnimation={false} value="software">
+        <TabsContent enableAnimation={false} value='software'>
           <UnifiedBuildList
             projects={filteredBuilds.filter((p) => Object.keys(p.assets).includes('software'))}
             viewMode={viewMode}
@@ -433,36 +433,36 @@ function UnifiedBuildList({
   // Show empty state if no projects at all
   if (projects.length === 0) {
     return (
-      <EmptyItems className="min-h-[60vh]">
+      <EmptyItems className='min-h-[60vh]'>
         <ChatProvider>
-          <div className="mx-auto max-w-2xl space-y-6">
-            <div className="flex flex-col items-center space-y-4 text-center">
-              <PackageX className="size-16 text-muted-foreground" strokeWidth={1} />
-              <div className="space-y-2">
-                <h2 className="text-xl font-semibold">No builds yet</h2>
-                <p className="text-sm">Start by describing what you want to build, or create from code</p>
+          <div className='mx-auto max-w-2xl space-y-6'>
+            <div className='flex flex-col items-center space-y-4 text-center'>
+              <PackageX className='size-16 text-muted-foreground' strokeWidth={1} />
+              <div className='space-y-2'>
+                <h2 className='text-xl font-semibold'>No builds yet</h2>
+                <p className='text-sm'>Start by describing what you want to build, or create from code</p>
               </div>
             </div>
-            <div className="space-y-4">
-              <div className="flex justify-center">
+            <div className='space-y-4'>
+              <div className='flex justify-center'>
                 <KernelSelector selectedKernel={selectedKernel} onKernelChange={onKernelChange} />
               </div>
               <ChatTextarea
                 enableContextActions={false}
                 enableKernelSelector={false}
-                className="pt-1 shadow-none"
+                className='pt-1 shadow-none'
                 onSubmit={onSubmit}
               />
             </div>
-            <div className="flex items-center justify-center gap-4 text-sm text-muted-foreground">
-              <div className="h-px flex-1 bg-border" />
+            <div className='flex items-center justify-center gap-4 text-sm text-muted-foreground'>
+              <div className='h-px flex-1 bg-border' />
               <span>or</span>
-              <div className="h-px flex-1 bg-border" />
+              <div className='h-px flex-1 bg-border' />
             </div>
-            <div className="flex justify-center">
-              <NavLink to="/builds/new" tabIndex={-1}>
+            <div className='flex justify-center'>
+              <NavLink to='/builds/new' tabIndex={-1}>
                 {({ isPending }) => (
-                  <InteractiveHoverButton className="flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1">
+                  <InteractiveHoverButton className='flex items-center gap-2 font-light [&_svg]:size-4 [&_svg]:stroke-1'>
                     {isPending ? <Loader /> : 'Build from code'}
                   </InteractiveHoverButton>
                 )}
@@ -477,10 +477,10 @@ function UnifiedBuildList({
   const columns = createColumns(actions);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <DataTableSearch table={table} placeholder="Search builds..." containerClassName="grow" />
-        <div className="flex items-center gap-2">
+    <div className='space-y-4'>
+      <div className='flex items-center justify-between gap-2'>
+        <DataTableSearch table={table} placeholder='Search builds...' containerClassName='grow' />
+        <div className='flex items-center gap-2'>
           {/* Add bulk actions when rows are selected */}
           {table.getFilteredSelectedRowModel().rows.length > 0 && (
             <BulkActions table={table} deleteBuild={actions.handleDelete} />
@@ -495,7 +495,7 @@ function UnifiedBuildList({
         <DataTable table={table} columns={columns} />
       ) : (
         // Grid View
-        <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+        <div className='grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'>
           {table.getRowModel().rows.map((row) => (
             <BuildLibraryCard
               key={row.original.id}
@@ -513,7 +513,7 @@ function UnifiedBuildList({
       <DataTablePagination
         table={table}
         pageSizeOptions={viewMode === 'grid' ? gridPageSizes : tablePageSizes}
-        itemName="build"
+        itemName='build'
       />
     </div>
   );
@@ -538,21 +538,21 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
 
   return (
     <Card className={cn('group relative flex flex-col overflow-hidden pt-0', isSelected && 'ring-3 ring-primary')}>
-      <div className="absolute top-2 left-2 z-10">
-        <Checkbox size="large" checked={isSelected} onCheckedChange={() => onSelect?.()} />
+      <div className='absolute top-2 left-2 z-10'>
+        <Checkbox size='large' checked={isSelected} onCheckedChange={() => onSelect?.()} />
       </div>
-      <div className="relative aspect-video h-fit w-full overflow-hidden bg-muted">
+      <div className='relative aspect-video h-fit w-full overflow-hidden bg-muted'>
         {!showPreview && (
           <img
             src={build.thumbnail || '/placeholder.svg'}
             alt={build.name}
-            className="size-full origin-center object-cover transition-transform group-hover:scale-120"
-            loading="lazy"
+            className='size-full origin-center object-cover transition-transform group-hover:scale-120'
+            loading='lazy'
           />
         )}
         {showPreview ? (
           <div
-            className="size-full origin-center scale-80 object-cover transition-transform group-hover:scale-100"
+            className='size-full origin-center scale-80 object-cover transition-transform group-hover:scale-100'
             onClick={(event) => {
               event.stopPropagation();
               event.preventDefault();
@@ -562,14 +562,17 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
               <CadPreviewViewer
                 enablePan={false}
                 stageOptions={{ zoomLevel: 1.5 }}
-                graphicsOptions={{ enableLines: false, viewerClassName: 'bg-muted' }}
+                graphicsOptions={{
+                  enableLines: false,
+                  viewerClassName: 'bg-muted',
+                }}
               />
             </CadPreviewProvider>
           </div>
         ) : null}
         <Button
-          variant="outline"
-          size="icon"
+          variant='outline'
+          size='icon'
           className={cn('absolute top-2 right-2', showPreview && 'text-primary')}
           onClick={(event) => {
             event.stopPropagation();
@@ -577,34 +580,34 @@ function BuildLibraryCard({ build, actions, isSelected, onSelect }: BuildLibrary
             setShowPreview(!showPreview);
           }}
         >
-          <Eye className="size-4" />
+          <Eye className='size-4' />
         </Button>
       </div>
       <CardHeader>
-        <div className="-mx-2 flex flex-1 items-start justify-start overflow-hidden py-1">
+        <div className='-mx-2 flex flex-1 items-start justify-start overflow-hidden py-1'>
           <InlineTextEditor
             value={build.name}
-            className="h-7 w-full [&_[data-slot=button]]:w-full [&_[data-slot=button]]:max-w-full [&_[data-slot=button]]:text-base [&_[data-slot=button]]:font-semibold"
+            className='h-7 w-full [&_[data-slot=button]]:w-full [&_[data-slot=button]]:max-w-full [&_[data-slot=button]]:text-base [&_[data-slot=button]]:font-semibold'
             onSave={async (value) => actions.handleRename(build.id, value)}
           />
         </div>
-        <CardDescription className="line-clamp-2">{build.description}</CardDescription>
+        <CardDescription className='line-clamp-2'>{build.description}</CardDescription>
       </CardHeader>
-      <CardContent className="grow">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap gap-2">
+      <CardContent className='grow'>
+        <div className='flex flex-wrap items-center justify-between gap-4'>
+          <div className='flex flex-wrap gap-2'>
             {Object.keys(build.assets).map((cat) => (
               <CategoryBadge key={cat} category={cat as EngineeringDiscipline} />
             ))}
           </div>
         </div>
       </CardContent>
-      <CardFooter className="flex items-center justify-between">
-        <Button asChild variant="outline">
+      <CardFooter className='flex items-center justify-between'>
+        <Button asChild variant='outline'>
           <NavLink to={`/builds/${build.id}`} tabIndex={-1}>
             {({ isPending }) => (
               <>
-                {isPending ? <Loader /> : <ArrowRight className="size-4" />}
+                {isPending ? <Loader /> : <ArrowRight className='size-4' />}
                 <span>Open</span>
               </>
             )}
@@ -665,18 +668,18 @@ function BulkActions({ table, deleteBuild }: BulkActionsProps) {
 
   return (
     <>
-      <div className="flex items-center gap-2">
+      <div className='flex items-center gap-2'>
         <Button
-          variant="outline"
-          size="sm"
-          className="gap-1 border-destructive text-destructive hover:bg-destructive/10"
+          variant='outline'
+          size='sm'
+          className='gap-1 border-destructive text-destructive hover:bg-destructive/10'
           onClick={() => {
             setShowDeleteDialog(true);
           }}
         >
-          <Trash className="h-4 w-4" />
+          <Trash className='h-4 w-4' />
           Delete
-          <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-xs">{selectedCount}</span>
+          <span className='ml-1 rounded-full bg-muted px-1.5 py-0.5 text-xs'>{selectedCount}</span>
         </Button>
       </div>
 
@@ -684,19 +687,19 @@ function BulkActions({ table, deleteBuild }: BulkActionsProps) {
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
+            <AlertDialogTitle className='flex items-center gap-2'>
+              <AlertCircle className='h-5 w-5 text-destructive' />
               Delete {selectedCount} build{selectedCount === 1 ? '' : 's'}?
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
+            <AlertDialogDescription className='space-y-2'>
               <p>The following builds will be moved to the trash:</p>
-              <ul className="max-h-40 list-disc overflow-y-auto pl-6 text-sm">
+              <ul className='max-h-40 list-disc overflow-y-auto pl-6 text-sm'>
                 {selectedRows.map((row) => {
                   const build = row.original;
                   return (
                     <li key={row.id}>
                       {build.name}{' '}
-                      <span className="text-muted-foreground/70 italic">
+                      <span className='text-muted-foreground/70 italic'>
                         (modified {formatRelativeTime(build.updatedAt)})
                       </span>
                     </li>

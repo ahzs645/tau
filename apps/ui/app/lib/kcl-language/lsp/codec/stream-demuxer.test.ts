@@ -8,11 +8,20 @@ function makeResponse(id: number, result: unknown): Uint8Array<ArrayBuffer> {
 }
 
 function makeNotification(method: string, parameters?: unknown): Uint8Array<ArrayBuffer> {
-  return encodeMessage({ jsonrpc: '2.0', method, params: parameters } as unknown as JSONRPCRequest);
+  return encodeMessage({
+    jsonrpc: '2.0',
+    method,
+    params: parameters,
+  } as unknown as JSONRPCRequest);
 }
 
 function makeRequest(id: number, method: string, parameters?: unknown): Uint8Array<ArrayBuffer> {
-  return encodeMessage({ jsonrpc: '2.0', id, method, params: parameters } as JSONRPCRequest);
+  return encodeMessage({
+    jsonrpc: '2.0',
+    id,
+    method,
+    params: parameters,
+  } as JSONRPCRequest);
 }
 
 describe('StreamDemuxer', () => {
@@ -35,7 +44,13 @@ describe('StreamDemuxer', () => {
       makeNotification('textDocument/publishDiagnostics', {
         uri: 'file:///test.kcl',
         diagnostics: [
-          { message: 'error', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } } },
+          {
+            message: 'error',
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 5 },
+            },
+          },
         ],
       }),
     );
@@ -60,7 +75,10 @@ describe('StreamDemuxer', () => {
     const responsePromise = demuxer.responses.get(1);
 
     const bytes1 = makeResponse(1, 'first');
-    const bytes2 = makeNotification('window/logMessage', { type: 3, message: 'hello' });
+    const bytes2 = makeNotification('window/logMessage', {
+      type: 3,
+      message: 'hello',
+    });
 
     const combined = new Uint8Array(bytes1.length + bytes2.length);
     combined.set(bytes1, 0);

@@ -6,7 +6,7 @@ export function ChatMessageText({ part }: { readonly part: TextUIPart }): React.
   const isStreaming = useChatSelector((state) => state.status === 'streaming');
 
   return (
-    <MarkdownViewerChat className="my-1" isStreaming={isStreaming}>
+    <MarkdownViewerChat className='my-1' isStreaming={isStreaming}>
       {part.text}
     </MarkdownViewerChat>
   );

@@ -215,10 +215,11 @@ export class ChatRpcService implements OnModuleDestroy {
    * The tool layer should convert RPC errors to tool errors using rpcErrorToToolError().
    *
    * @template T - The RPC name (must be a key in RpcSchemasRegistry)
-   * @param chatId - The chat room ID
-   * @param toolCallId - The tool call ID (passed through to RpcRequest for client tracking)
-   * @param rpcName - The name of the RPC operation to execute
-   * @param args - The input arguments (type-checked against RPC's input schema)
+   * @param request - The RPC request object
+   * @param request.chatId - The chat room ID
+   * @param request.toolCallId - The tool call ID (passed through to RpcRequest for client tracking)
+   * @param request.rpcName - The name of the RPC operation to execute
+   * @param request.args - The input arguments (type-checked against RPC's input schema)
    * @returns The validated result (type-checked against RPC's result schema) or an RPC error object
    */
   public async sendRpcRequest<T extends keyof RpcSchemasRegistry>(request: {

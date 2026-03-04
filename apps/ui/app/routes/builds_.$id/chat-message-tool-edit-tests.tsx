@@ -37,8 +37,8 @@ export function ChatMessageToolEditTests({
           diffStats={diffStats}
           actions={
             <CopyButton
-              size="xs"
-              className="**:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex"
+              size='xs'
+              className='**:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex'
               getText={() => displayContent}
             />
           }
@@ -47,7 +47,7 @@ export function ChatMessageToolEditTests({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={FlaskConical} fallbackTitle="Edit tests failed" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FlaskConical} fallbackTitle='Edit tests failed' />;
     }
 
     case 'approval-requested':

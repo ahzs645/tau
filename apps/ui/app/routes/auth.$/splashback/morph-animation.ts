@@ -1,4 +1,4 @@
-import type { MutableRefObject } from 'react';
+import type { RefObject } from 'react';
 
 /** Threshold for considering morph animation complete */
 export const morphCompleteThreshold = 0.01;
@@ -8,11 +8,11 @@ export const morphCompleteThreshold = 0.01;
  */
 export type MorphAnimationState = {
   /** Current progress ref (0 to 1) */
-  progressRef: MutableRefObject<number>;
+  progressRef: RefObject<number>;
   /** Whether the animation has reached the target */
-  hasReachedTargetRef: MutableRefObject<boolean>;
+  hasReachedTargetRef: RefObject<boolean>;
   /** Previous target value for detecting changes */
-  previousTargetRef: MutableRefObject<number>;
+  previousTargetRef: RefObject<number>;
 };
 
 /**
@@ -25,11 +25,12 @@ export function lerp(start: number, end: number, t: number): number {
 /**
  * Updates morph animation state for one frame.
  *
- * @param state - The morph animation state refs
- * @param targetProgress - The target progress value (0 to 1)
- * @param delta - Frame delta time in seconds
- * @param animationSpeed - Speed multiplier for the animation
- * @param onComplete - Optional callback when animation reaches target
+ * @param root0 - The morph animation update parameters
+ * @param root0.state - The morph animation state refs
+ * @param root0.targetProgress - The target progress value (0 to 1)
+ * @param root0.delta - Frame delta time in seconds
+ * @param root0.animationSpeed - Speed multiplier for the animation
+ * @param root0.onComplete - Optional callback when animation reaches target
  * @returns The current progress value
  */
 export function updateMorphAnimation({

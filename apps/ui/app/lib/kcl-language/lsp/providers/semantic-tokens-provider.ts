@@ -33,7 +33,7 @@ export function createSemanticTokensProvider(
 
     async provideDocumentSemanticTokens(
       model: Monaco.editor.ITextModel,
-      // eslint-disable-next-line @typescript-eslint/no-restricted-types -- lastResultId is optional
+      // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- lastResultId is optional
       _lastResultId: string | null,
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.SemanticTokens | undefined> {

@@ -48,12 +48,12 @@ export const ChatConverterTrigger = memo(function ({
     <FloatingPanelTrigger
       icon={Download}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Exporter
-          <KeyShortcut variant="tooltip">{formatKeyCombination(toggleConverterKeyCombination)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(toggleConverterKeyCombination)}</KeyShortcut>
         </div>
       }
-      tooltipSide="left"
+      tooltipSide='left'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -164,7 +164,7 @@ export const ChatConverter = memo(function (properties: {
   );
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Exporter</FloatingPanelContentTitle>
@@ -172,27 +172,27 @@ export const ChatConverter = memo(function (properties: {
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Exporter
-                  <KeyShortcut variant="tooltip">{formattedConverterKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedConverterKeyCombination}</KeyShortcut>
                 </div>
               )}
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
-        <FloatingPanelContentBody className="p-2">
+        <FloatingPanelContentBody className='p-2'>
           {geometries.length === 0 ? (
-            <EmptyItems className="m-0">
-              <div className="mb-3 rounded-full bg-muted/50 p-2">
-                <Info className="size-6 text-muted-foreground" strokeWidth={1.5} />
+            <EmptyItems className='m-0'>
+              <div className='mb-3 rounded-full bg-muted/50 p-2'>
+                <Info className='size-6 text-muted-foreground' strokeWidth={1.5} />
               </div>
-              <h3 className="mb-1 text-base font-medium">No geometry to export</h3>
-              <p className="text-muted-foreground">Generate or compute geometry first to enable export options</p>
+              <h3 className='mb-1 text-base font-medium'>No geometry to export</h3>
+              <p className='text-muted-foreground'>Generate or compute geometry first to enable export options</p>
             </EmptyItems>
           ) : (
             <Converter
-              className="px-1"
+              className='px-1'
               getGlbData={getGlbData}
               selectedFormats={selectedFormats}
               shouldUseZipForMultiple={useZipForMultiple}

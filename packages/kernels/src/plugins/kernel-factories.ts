@@ -25,7 +25,7 @@ export const replicad = createKernelPlugin<ReplicadOptions>({
   id: 'replicad',
   moduleUrl: new URL('../kernels/replicad/replicad.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
-  detectImport: /import.*from\s+['"]replicad['"]/s,
+  detectImport: /import.*from\s+["']replicad["']/s,
   builtinModuleNames: ['replicad'],
 });
 
@@ -70,7 +70,7 @@ export const jscad = createKernelPlugin({
   id: 'jscad',
   moduleUrl: new URL('../kernels/jscad/jscad.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
-  detectImport: /import\s+.*from\s+['"]@jscad\/modeling(\/[^'"]*)?['"]/,
+  detectImport: /import\s+.*from\s+["']@jscad\/modeling(\/[^"']*)?["']/,
   builtinModuleNames: ['@jscad/modeling'],
 });
 
@@ -86,7 +86,7 @@ export const manifold = createKernelPlugin<ManifoldOptions>({
   id: 'manifold',
   moduleUrl: new URL('../kernels/manifold/manifold.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
-  detectImport: /import\s+.*from\s+['"]manifold-3d(\/[^'"]*)?['"]/,
+  detectImport: /import\s+.*from\s+["']manifold-3d(\/[^"']*)?["']/,
   builtinModuleNames: ['manifold-3d', 'manifold-3d/manifoldCAD'],
 });
 

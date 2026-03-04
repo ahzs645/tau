@@ -1,5 +1,5 @@
-/* eslint-disable n/prefer-global/process -- CLI script requires direct process access */
-/* eslint-disable unicorn/no-process-exit -- CLI script uses process.exit for error codes */
+/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
+
 /**
  * Kernel Benchmarking CLI
  *
@@ -17,7 +17,8 @@ import { join, resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { filterBenchmarks, benchmarkCategories } from '#benchmarks/benchmark-suite.js';
-import { runBenchmarks, type BenchmarkRunResult, type BuildProvenance } from '#benchmarks/benchmark-runner.js';
+import { runBenchmarks } from '#benchmarks/benchmark-runner.js';
+import type { BenchmarkRunResult, BuildProvenance } from '#benchmarks/benchmark-runner.js';
 import { generateHtmlReport, serializeRunResult } from '#benchmarks/benchmark-report.js';
 
 // ── ANSI color helpers ──────────────────────────────────────────────
@@ -141,21 +142,21 @@ type WasmOptionResult = 'single' | 'single-exceptions' | { wasmUrl: string; wasm
 
 function resolveWasmOption(): WasmOptionResult {
   const wasmVariant = values['wasm-variant'] as 'single' | 'single-exceptions' | undefined;
-  const wasmDir = values['wasm-dir'];
+  const wasmDirectory = values['wasm-dir'];
 
-  if (!wasmDir) {
+  if (!wasmDirectory) {
     return wasmVariant ?? 'single';
   }
 
-  const absDir = resolve(wasmDir);
-  if (!existsSync(absDir)) {
-    console.error(`${c.red}WASM directory not found: ${absDir}${c.reset}`);
+  const absDirectory = resolve(wasmDirectory);
+  if (!existsSync(absDirectory)) {
+    console.error(`${c.red}WASM directory not found: ${absDirectory}${c.reset}`);
     process.exit(1);
   }
 
   const variant = wasmVariant === 'single-exceptions' ? 'replicad_with_exceptions' : 'replicad_single';
-  const wasmPath = join(absDir, `${variant}.wasm`);
-  const jsPath = join(absDir, `${variant}.js`);
+  const wasmPath = join(absDirectory, `${variant}.wasm`);
+  const jsPath = join(absDirectory, `${variant}.js`);
 
   if (!existsSync(wasmPath)) {
     console.error(`${c.red}WASM binary not found: ${wasmPath}${c.reset}`);
@@ -168,7 +169,7 @@ function resolveWasmOption(): WasmOptionResult {
   }
 
   heading('WASM Injection');
-  label('Directory', absDir);
+  label('Directory', absDirectory);
   const wasmSize = formatFileSize(statSync(wasmPath).size);
   const jsSize = formatFileSize(statSync(jsPath).size);
   label('Binary', `${variant}.wasm ${c.dim}(${wasmSize})${c.reset}`);
@@ -207,14 +208,14 @@ function onBenchmarkProgress(completed: number, total: number, caseName: string)
 }
 
 function writeResults(result: BenchmarkRunResult): void {
-  const outputDir = resolve(values.output);
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true });
+  const outputDirectory = resolve(values.output);
+  if (!existsSync(outputDirectory)) {
+    mkdirSync(outputDirectory, { recursive: true });
   }
 
-  const timestamp = result.timestamp.replaceAll(/[:.]/g, '-');
-  const htmlPath = join(outputDir, `benchmark-${timestamp}.html`);
-  const jsonPath = join(outputDir, `benchmark-${timestamp}.json`);
+  const timestamp = result.timestamp.replaceAll(/[.:]/g, '-');
+  const htmlPath = join(outputDirectory, `benchmark-${timestamp}.html`);
+  const jsonPath = join(outputDirectory, `benchmark-${timestamp}.json`);
 
   writeFileSync(jsonPath, serializeRunResult(result));
   writeFileSync(htmlPath, generateHtmlReport(result));
@@ -298,12 +299,15 @@ function runComparison(beforePath: string, afterPath: string): void {
   const before = JSON.parse(readFileSync(resolve(beforePath), 'utf8')) as BenchmarkRunResult;
   const after = JSON.parse(readFileSync(resolve(afterPath), 'utf8')) as BenchmarkRunResult;
 
-  const outputDir = resolve(values.output);
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true });
+  const outputDirectory = resolve(values.output);
+  if (!existsSync(outputDirectory)) {
+    mkdirSync(outputDirectory, { recursive: true });
   }
 
-  const htmlPath = join(outputDir, `benchmark-comparison-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.html`);
+  const htmlPath = join(
+    outputDirectory,
+    `benchmark-comparison-${new Date().toISOString().replaceAll(/[.:]/g, '-')}.html`,
+  );
   writeFileSync(htmlPath, generateHtmlReport(after, before));
 
   printComparisonTable(before, after);

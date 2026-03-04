@@ -1,4 +1,5 @@
-/* eslint-disable new-cap, @typescript-eslint/naming-convention -- decorators are not constructors */
+/* eslint-disable @typescript-eslint/naming-convention -- decorators are not constructors */
+/* oxlint-disable new-cap -- decorators are not constructors */
 import { applyDecorators, createParamDecorator, SetMetadata, UseGuards } from '@nestjs/common';
 import type { ExecutionContext } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';

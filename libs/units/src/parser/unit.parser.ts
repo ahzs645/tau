@@ -35,7 +35,7 @@ function buildUnitPatternForQuantity(quantity: UnitQuantity): {
   pattern: string;
   matchMap: Map<string, UnitMatchInfo>;
 } {
-  const quantityDef = standardInternationalBaseUnits[quantity];
+  const quantityDefinition = standardInternationalBaseUnits[quantity];
   const patterns: string[] = [];
   const matchMap = new Map<string, UnitMatchInfo>();
 
@@ -47,19 +47,19 @@ function buildUnitPatternForQuantity(quantity: UnitQuantity): {
   };
 
   // Base unit symbol and name
-  addPattern(quantityDef.symbol, quantityDef.unit, quantityDef.symbol);
-  addPattern(quantityDef.unit, quantityDef.unit, quantityDef.symbol);
+  addPattern(quantityDefinition.symbol, quantityDefinition.unit, quantityDefinition.symbol);
+  addPattern(quantityDefinition.unit, quantityDefinition.unit, quantityDefinition.symbol);
 
   // Add SI magnitude prefixes for base unit
   for (const magnitude of siMagnitudes) {
-    const prefixedSymbol = magnitude.symbol + quantityDef.symbol;
-    const prefixedUnit = magnitude.name + quantityDef.unit;
+    const prefixedSymbol = magnitude.symbol + quantityDefinition.symbol;
+    const prefixedUnit = magnitude.name + quantityDefinition.unit;
     addPattern(prefixedSymbol, prefixedUnit, prefixedSymbol);
     addPattern(prefixedUnit, prefixedUnit, prefixedSymbol);
   }
 
   // Add all variant symbols, names, and aliases
-  for (const variant of quantityDef.variants) {
+  for (const variant of quantityDefinition.variants) {
     addPattern(variant.symbol, variant.unit, variant.symbol);
     addPattern(variant.unit, variant.unit, variant.symbol);
 
@@ -75,12 +75,12 @@ function buildUnitPatternForQuantity(quantity: UnitQuantity): {
   }
 
   // Add base unit aliases if present
-  if ('aliases' in quantityDef) {
-    const aliases = quantityDef.aliases as string[] | undefined;
+  if ('aliases' in quantityDefinition) {
+    const aliases = quantityDefinition.aliases as string[] | undefined;
 
     if (aliases) {
       for (const alias of aliases) {
-        addPattern(alias, quantityDef.unit, quantityDef.symbol);
+        addPattern(alias, quantityDefinition.unit, quantityDefinition.symbol);
       }
     }
   }
@@ -123,9 +123,9 @@ function getUnitPattern(quantity: UnitQuantity): { pattern: RegExp; matchMap: Ma
   return { pattern, matchMap };
 }
 
-const lengthDef = standardInternationalBaseUnits.length;
-const footVariant = lengthDef.variants.find((v) => v.unit === 'foot');
-const inchVariant = lengthDef.variants.find((v) => v.unit === 'inch');
+const lengthDefinition = standardInternationalBaseUnits.length;
+const footVariant = lengthDefinition.variants.find((v) => v.unit === 'foot');
+const inchVariant = lengthDefinition.variants.find((v) => v.unit === 'inch');
 
 /**
  * Parse a length input string that may contain units and fractions.
@@ -137,7 +137,7 @@ const inchVariant = lengthDef.variants.find((v) => v.unit === 'inch');
  * @param input - The input string to parse
  * @returns Parsed value and detected unit and symbol, or undefined if invalid
  */
-// eslint-disable-next-line complexity -- Complex input parsing requires multiple format checks
+// oxlint-disable-next-line complexity -- Complex input parsing requires multiple format checks
 export function parseLengthInput(input: string): ParsedUnit<'length'> | undefined {
   if (!input || typeof input !== 'string') {
     return undefined;
@@ -249,7 +249,7 @@ export function parseLengthInput(input: string): ParsedUnit<'length'> | undefine
   }
 
   // Pattern for mixed fraction: 1 1/2 in, 2-3/4 mm
-  const mixedFractionMatch = /^(-?\d+)\s*[-\s]\s*(\d+)\s*\/\s*(\d+)(?:\s*([a-z]+))?$/i.exec(trimmed);
+  const mixedFractionMatch = /^(-?\d+)\s*[\s-]\s*(\d+)\s*\/\s*(\d+)(?:\s*([a-z]+))?$/i.exec(trimmed);
 
   if (mixedFractionMatch?.[1] && mixedFractionMatch[2] && mixedFractionMatch[3]) {
     const whole = Number.parseInt(mixedFractionMatch[1], 10);

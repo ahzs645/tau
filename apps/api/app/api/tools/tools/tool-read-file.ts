@@ -27,7 +27,7 @@ Use this tool when you need to:
  */
 function addLineNumbers(content: string, startLine: number): string {
   const lines = content.split('\n');
-  return lines.map((line, idx) => `${startLine + idx}|${line}`).join('\n');
+  return lines.map((line, index) => `${startLine + index}|${line}`).join('\n');
 }
 
 export const readFileTool: ChatTool<

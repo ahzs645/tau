@@ -36,8 +36,8 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputPropert
     <div className={cn('relative w-full', containerClassName)}>
       <Input
         ref={reference}
-        autoComplete="off"
-        type="text"
+        autoComplete='off'
+        type='text'
         placeholder={placeholder}
         value={value}
         className={cn(
@@ -47,22 +47,22 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputPropert
         )}
         {...properties}
       />
-      <Search className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Search className='pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground' />
       {keyboardShortcut ? (
-        <KeyShortcut className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 peer-not-placeholder-shown/search-input:invisible peer-focus-within/search-input:invisible">
+        <KeyShortcut className='pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 peer-not-placeholder-shown/search-input:invisible peer-focus-within/search-input:invisible'>
           {keyboardShortcut}
         </KeyShortcut>
       ) : null}
       <Button
-        variant="secondary"
-        size="icon"
-        className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground peer-placeholder-shown/search-input:invisible hover:bg-neutral/20 hover:text-foreground"
-        type="button"
-        aria-label="Clear search"
+        variant='secondary'
+        size='icon'
+        className='absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground peer-placeholder-shown/search-input:invisible hover:bg-neutral/20 hover:text-foreground'
+        type='button'
+        aria-label='Clear search'
         onClick={onClear}
         onPointerDown={handlePointerDown}
       >
-        <X className="size-3.5" />
+        <X className='size-3.5' />
       </Button>
     </div>
   );

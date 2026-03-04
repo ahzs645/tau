@@ -143,10 +143,10 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
       continue;
     }
 
-    for (let i = 1; i < polyVertices.length - 1; i++) {
+    for (let index = 1; index < polyVertices.length - 1; index++) {
       const vert1 = firstVertex;
-      const vert2 = polyVertices[i];
-      const vert3 = polyVertices[i + 1];
+      const vert2 = polyVertices[index];
+      const vert3 = polyVertices[index + 1];
 
       if (!vert2 || !vert3) {
         continue;
@@ -291,7 +291,12 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
     // Only create mesh if we have geometry
     if (vertices.length > 0 && indices.length > 0) {
       const mesh = document.createMesh();
-      const primitive = createPrimitiveFromJscadMesh(document, { vertices, normals, indices, color });
+      const primitive = createPrimitiveFromJscadMesh(document, {
+        vertices,
+        normals,
+        indices,
+        color,
+      });
       mesh.addPrimitive(primitive);
 
       // Create a descriptive node name

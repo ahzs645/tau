@@ -33,27 +33,45 @@ describe('defineKernel type inference', () => {
         return { contextValue: 'hello', count: 42 };
       },
       async canHandle(_input, _runtime, context) {
-        expectTypeOf(context).toEqualTypeOf<{ contextValue: string; count: number }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          contextValue: string;
+          count: number;
+        }>();
         return true;
       },
       async getDependencies(_input, _runtime, context) {
-        expectTypeOf(context).toEqualTypeOf<{ contextValue: string; count: number }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          contextValue: string;
+          count: number;
+        }>();
         return [];
       },
       async getParameters(_input, _runtime, context) {
-        expectTypeOf(context).toEqualTypeOf<{ contextValue: string; count: number }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          contextValue: string;
+          count: number;
+        }>();
         return createKernelError([]);
       },
       async createGeometry(_input, _runtime, context) {
-        expectTypeOf(context).toEqualTypeOf<{ contextValue: string; count: number }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          contextValue: string;
+          count: number;
+        }>();
         return { geometry: [], nativeHandle: undefined };
       },
       async exportGeometry(_input, _runtime, context) {
-        expectTypeOf(context).toEqualTypeOf<{ contextValue: string; count: number }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          contextValue: string;
+          count: number;
+        }>();
         return createKernelError([]);
       },
       async cleanup(context) {
-        expectTypeOf(context).toEqualTypeOf<{ contextValue: string; count: number }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          contextValue: string;
+          count: number;
+        }>();
       },
     });
   });
@@ -101,21 +119,30 @@ describe('defineKernel type inference', () => {
         };
       },
       async exportGeometry({ nativeHandle }) {
-        expectTypeOf(nativeHandle).toEqualTypeOf<{ meshData: Float32Array<ArrayBuffer>; id: string }>();
+        expectTypeOf(nativeHandle).toEqualTypeOf<{
+          meshData: Float32Array<ArrayBuffer>;
+          id: string;
+        }>();
         return createKernelError([]);
       },
     });
   });
 
   it('should infer Options from optionsSchema', () => {
-    const schema = z.object({ baseUrl: z.string(), debug: z.boolean().default(false) });
+    const schema = z.object({
+      baseUrl: z.string(),
+      debug: z.boolean().default(false),
+    });
 
     defineKernel({
       name: 'Test',
       version: '1.0.0',
       optionsSchema: schema,
       async initialize(options) {
-        expectTypeOf(options).toEqualTypeOf<{ baseUrl: string; debug: boolean }>();
+        expectTypeOf(options).toEqualTypeOf<{
+          baseUrl: string;
+          debug: boolean;
+        }>();
         return {};
       },
       async getDependencies() {
@@ -226,26 +253,44 @@ describe('defineBundler type inference', () => {
         return { bundlerInstance: 'esbuild' as string, projectPath: '/test' };
       },
       async detectImports(_input, context) {
-        expectTypeOf(context).toEqualTypeOf<{ bundlerInstance: string; projectPath: string }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          bundlerInstance: string;
+          projectPath: string;
+        }>();
         return { detectedModules: [], dependencies: [] };
       },
       async bundle(_input, context) {
-        expectTypeOf(context).toEqualTypeOf<{ bundlerInstance: string; projectPath: string }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          bundlerInstance: string;
+          projectPath: string;
+        }>();
         return { code: '', issues: [], success: true, dependencies: [] };
       },
       async execute(_code, context) {
-        expectTypeOf(context).toEqualTypeOf<{ bundlerInstance: string; projectPath: string }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          bundlerInstance: string;
+          projectPath: string;
+        }>();
         return { success: true as const, value: undefined };
       },
       registerModule(_name, _module, context) {
-        expectTypeOf(context).toEqualTypeOf<{ bundlerInstance: string; projectPath: string }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          bundlerInstance: string;
+          projectPath: string;
+        }>();
       },
       async resolveDependencies(_input, context) {
-        expectTypeOf(context).toEqualTypeOf<{ bundlerInstance: string; projectPath: string }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          bundlerInstance: string;
+          projectPath: string;
+        }>();
         return [];
       },
       async cleanup(context) {
-        expectTypeOf(context).toEqualTypeOf<{ bundlerInstance: string; projectPath: string }>();
+        expectTypeOf(context).toEqualTypeOf<{
+          bundlerInstance: string;
+          projectPath: string;
+        }>();
       },
     });
   });
@@ -308,13 +353,19 @@ describe('defineBundler type inference', () => {
 
 describe('defineMiddleware type inference', () => {
   it('should infer State from stateSchema in wrap hooks', () => {
-    const stateSchema = z.object({ cacheKey: z.string(), cacheHit: z.boolean() });
+    const stateSchema = z.object({
+      cacheKey: z.string(),
+      cacheHit: z.boolean(),
+    });
 
     const middleware = defineMiddleware({
       name: 'TestMiddleware',
       stateSchema,
       async wrapCreateGeometry(input, handler, { state }) {
-        expectTypeOf(state.value).toExtend<{ cacheKey?: string; cacheHit?: boolean }>();
+        expectTypeOf(state.value).toExtend<{
+          cacheKey?: string;
+          cacheHit?: boolean;
+        }>();
         state.update({ cacheKey: 'key', cacheHit: true });
         return handler(input);
       },
@@ -372,7 +423,7 @@ describe('createKernelPlugin type inference', () => {
     it('should return a zero-arg factory', () => {
       const factory = createKernelPlugin(staticConfig);
       expectTypeOf(factory).toBeFunction();
-      // eslint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
+      // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
       expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
       expectTypeOf(factory).returns.toEqualTypeOf<KernelPlugin>();
     });
@@ -493,16 +544,16 @@ describe('createMiddlewarePlugin type inference', () => {
 
   it('should return a zero-arg factory for static config', () => {
     const factory = createMiddlewarePlugin(staticConfig);
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
     expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
     expectTypeOf(factory).returns.toEqualTypeOf<MiddlewarePlugin>();
   });
 
   it('should return an optional-arg factory for all-optional options', () => {
     const factory = createMiddlewarePlugin<{ ttl?: number }>(staticConfig);
-    const noArgs = factory();
+    const noArguments = factory();
     const withArgs = factory({ ttl: 60 });
-    expectTypeOf(noArgs).toEqualTypeOf<MiddlewarePlugin>();
+    expectTypeOf(noArguments).toEqualTypeOf<MiddlewarePlugin>();
     expectTypeOf(withArgs).toEqualTypeOf<MiddlewarePlugin>();
   });
 
@@ -530,16 +581,16 @@ describe('createBundlerPlugin type inference', () => {
 
   it('should return a zero-arg factory for static config', () => {
     const factory = createBundlerPlugin(staticConfig);
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- valid type test
     expectTypeOf(factory).parameters.toEqualTypeOf<[]>();
     expectTypeOf(factory).returns.toEqualTypeOf<BundlerPlugin>();
   });
 
   it('should return an optional-arg factory for all-optional options', () => {
     const factory = createBundlerPlugin<{ minify?: boolean }>(staticConfig);
-    const noArgs = factory();
+    const noArguments = factory();
     const withArgs = factory({ minify: true });
-    expectTypeOf(noArgs).toEqualTypeOf<BundlerPlugin>();
+    expectTypeOf(noArguments).toEqualTypeOf<BundlerPlugin>();
     expectTypeOf(withArgs).toEqualTypeOf<BundlerPlugin>();
   });
 
@@ -557,9 +608,9 @@ describe('createBundlerPlugin type inference', () => {
       moduleUrl: 'test.js',
       extensions: options?.extensions ?? ['ts', 'js'],
     }));
-    const noArgs = factory();
+    const noArguments = factory();
     const withArgs = factory({ extensions: ['tsx'] });
-    expectTypeOf(noArgs).toEqualTypeOf<BundlerPlugin>();
+    expectTypeOf(noArguments).toEqualTypeOf<BundlerPlugin>();
     expectTypeOf(withArgs).toEqualTypeOf<BundlerPlugin>();
   });
 
@@ -606,9 +657,19 @@ describe('createKernelSuccess type inference', () => {
   });
 
   it('should preserve array of objects', () => {
-    const result = createKernelSuccess([{ data: new Uint8Array(), name: 'model.stl', mimeType: 'model/stl' as const }]);
+    const result = createKernelSuccess([
+      {
+        data: new Uint8Array(),
+        name: 'model.stl',
+        mimeType: 'model/stl' as const,
+      },
+    ]);
     expectTypeOf(result.data).toEqualTypeOf<
-      Array<{ data: Uint8Array<ArrayBuffer>; name: string; mimeType: 'model/stl' }>
+      Array<{
+        data: Uint8Array<ArrayBuffer>;
+        name: string;
+        mimeType: 'model/stl';
+      }>
     >();
   });
 

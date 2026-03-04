@@ -47,7 +47,7 @@ export default defineBundler({
     return { bundler, builtinModules, filesystem, projectPath };
   },
 
-  async detectImports({ entryPath }, ctx) {
+  async detectImports({ entryPath }, context) {
     const buildOptions: BuildOptions = {
       entryPoints: [entryPath],
       bundle: true,
@@ -56,7 +56,12 @@ export default defineBundler({
       format: 'esm',
       target: 'es2022',
       platform: 'browser',
-      plugins: [createDetectionPlugin({ filesystem: ctx.filesystem, projectPath: ctx.projectPath })],
+      plugins: [
+        createDetectionPlugin({
+          filesystem: context.filesystem,
+          projectPath: context.projectPath,
+        }),
+      ],
       external: [],
       logLevel: 'silent',
     };
@@ -65,14 +70,18 @@ export default defineBundler({
       const result = await esbuild.build(buildOptions);
       return {
         detectedModules: extractExternalImports(result.metafile),
-        dependencies: extractProjectDependencies(result.metafile, ctx.projectPath),
+        dependencies: extractProjectDependencies(result.metafile, context.projectPath),
       };
     } catch (error) {
       const issues: KernelIssue[] = [];
       if (error && typeof error === 'object' && 'errors' in error) {
         const buildErrors = error as { errors: Array<{ text: string }> };
         for (const errorMessage of buildErrors.errors) {
-          issues.push({ message: errorMessage.text, type: 'compilation', severity: 'error' });
+          issues.push({
+            message: errorMessage.text,
+            type: 'compilation',
+            severity: 'error',
+          });
         }
       }
 
@@ -80,30 +89,30 @@ export default defineBundler({
     }
   },
 
-  async bundle({ entryPath }, ctx) {
-    return ctx.bundler.bundle(entryPath);
+  async bundle({ entryPath }, context) {
+    return context.bundler.bundle(entryPath);
   },
 
-  async execute(code, _ctx) {
+  async execute(code, _context) {
     return executeCode(code);
   },
 
-  registerModule(name, builtinModule, ctx) {
+  registerModule(name, builtinModule, context) {
     const entry: BuiltinModule = {
       code: builtinModule.code,
       version: builtinModule.version,
       globalName: builtinModule.globalName,
     };
-    ctx.builtinModules.set(name, entry);
-    ctx.bundler.registerModule(name, entry);
+    context.builtinModules.set(name, entry);
+    context.bundler.registerModule(name, entry);
   },
 
-  async resolveDependencies({ entryPath }, ctx) {
-    const result = await ctx.bundler.bundle(entryPath);
+  async resolveDependencies({ entryPath }, context) {
+    const result = await context.bundler.bundle(entryPath);
     return result.dependencies;
   },
 
-  async cleanup(ctx) {
-    ctx.bundler.dispose();
+  async cleanup(context) {
+    context.bundler.dispose();
   },
 });

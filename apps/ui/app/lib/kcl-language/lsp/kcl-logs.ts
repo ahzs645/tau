@@ -32,7 +32,7 @@ export function createKclLogger(component: string): {
 
   return {
     info(...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset}`, ...arguments_);
       }
@@ -46,7 +46,7 @@ export function createKclLogger(component: string): {
       console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset}`, ...arguments_);
     },
     debug(...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset}`, ...arguments_);
       }

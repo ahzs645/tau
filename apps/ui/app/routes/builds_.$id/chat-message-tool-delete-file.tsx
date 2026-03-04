@@ -28,17 +28,17 @@ export function ChatMessageToolDeleteFile({
       const hasPath = targetFile !== filename;
 
       return (
-        <div className="@container/code overflow-hidden rounded-md border bg-neutral/10">
-          <div className="flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-muted-foreground">
-            <LoaderCircle className="size-3 animate-spin" />
+        <div className='@container/code overflow-hidden rounded-md border bg-neutral/10'>
+          <div className='flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-muted-foreground'>
+            <LoaderCircle className='size-3 animate-spin' />
             {hasPath ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="min-w-0 truncate">
+                  <span className='min-w-0 truncate'>
                     <AnimatedShinyText>{filename}</AnimatedShinyText>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="top" align="start">
+                <TooltipContent side='top' align='start'>
                   {targetFile}
                 </TooltipContent>
               </Tooltip>
@@ -57,29 +57,29 @@ export function ChatMessageToolDeleteFile({
       const hasPath = targetFile !== filename;
 
       return (
-        <div className="@container/code overflow-hidden rounded-md border bg-neutral/10">
-          <div className="flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-muted-foreground">
-            <FileExtensionIcon filename={filename} className="size-3" />
+        <div className='@container/code overflow-hidden rounded-md border bg-neutral/10'>
+          <div className='flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-muted-foreground'>
+            <FileExtensionIcon filename={filename} className='size-3' />
             {hasPath ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="min-w-0 truncate">{filename}</span>
+                  <span className='min-w-0 truncate'>{filename}</span>
                 </TooltipTrigger>
-                <TooltipContent side="top" align="start">
+                <TooltipContent side='top' align='start'>
                   {targetFile}
                 </TooltipContent>
               </Tooltip>
             ) : (
-              <span className="min-w-0 truncate">{filename}</span>
+              <span className='min-w-0 truncate'>{filename}</span>
             )}
-            <span className="text-destructive/80">Deleted</span>
+            <span className='text-destructive/80'>Deleted</span>
           </div>
         </div>
       );
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={X} fallbackTitle="Failed to delete file" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={X} fallbackTitle='Failed to delete file' />;
     }
 
     case 'approval-requested':

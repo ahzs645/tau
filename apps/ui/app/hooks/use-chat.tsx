@@ -24,6 +24,7 @@ import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
 import { parseErrorForPersistence } from '#utils/error.utils.js';
 import { finalizeInterruptedToolParts } from '#utils/chat.utils.js';
+import type { ChatMode } from '#routes/builds_.$id/chat-mode-selector.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
 
@@ -86,7 +87,7 @@ export function ChatProvider({
           const loadedChat = await getChat(input.chatId);
           if (loadedChat?.messageEdits?.[input.messageId]) {
             const updatedEdits = { ...loadedChat.messageEdits };
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
+            // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
             delete updatedEdits[input.messageId];
             await updateChat(input.chatId, { messageEdits: updatedEdits }, { ignoreKeys: ['messageEdits'] });
           }
@@ -179,7 +180,10 @@ export function ChatProvider({
           const newMessages = [...sanitizedMessages, pendingMessage as MyUIMessage];
 
           setMessagesRef.current?.(newMessages);
-          persistenceActorRef.send({ type: 'queuePersist', messages: newMessages });
+          persistenceActorRef.send({
+            type: 'queuePersist',
+            messages: newMessages,
+          });
 
           // Defer to next microtask so the old makeRequest's finally block
           // (which nulls activeResponse) completes before we start a new one.
@@ -203,7 +207,10 @@ export function ChatProvider({
           }
 
           setMessagesRef.current?.(sanitizedMessages);
-          persistenceActorRef.send({ type: 'queuePersist', messages: sanitizedMessages });
+          persistenceActorRef.send({
+            type: 'queuePersist',
+            messages: sanitizedMessages,
+          });
         }
 
         return;
@@ -214,7 +221,10 @@ export function ChatProvider({
         // so partial AI output survives reload and is available on retry.
         const sanitizedMessages = finalizeInterruptedToolParts(messages);
         setMessagesRef.current?.(sanitizedMessages);
-        persistenceActorRef.send({ type: 'queuePersist', messages: sanitizedMessages });
+        persistenceActorRef.send({
+          type: 'queuePersist',
+          messages: sanitizedMessages,
+        });
         // Error itself is already persisted via the onError callback
         return;
       }
@@ -229,7 +239,10 @@ export function ChatProvider({
       persistenceActorRef.send({ type: 'handleError', error });
       // Parse and persist the error for display after page reload
       const normalizedError = parseErrorForPersistence(error);
-      persistenceActorRef.send({ type: 'setPersistedError', error: normalizedError });
+      persistenceActorRef.send({
+        type: 'setPersistedError',
+        error: normalizedError,
+      });
     },
   });
 
@@ -314,7 +327,7 @@ type CombinedChatState = {
   draftText: string;
   draftImages: string[];
   draftToolChoice: string | string[];
-  draftMode: string;
+  draftMode: ChatMode;
   messageEdits: Record<string, MyUIMessage>;
   activeEditMessageId: string | undefined;
   editDraftText: string;
@@ -366,7 +379,7 @@ export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T
       draftText: draftContext.draftText,
       draftImages: draftContext.draftImages,
       draftToolChoice: draftContext.draftToolChoice,
-      draftMode: draftContext.draftMode,
+      draftMode: draftContext.draftMode as ChatMode,
       messageEdits: draftContext.messageEdits,
       activeEditMessageId: draftContext.activeEditMessageId,
       editDraftText: draftContext.editDraftText,
@@ -396,7 +409,7 @@ export function useChatActions(): {
   addEditDraftImage: (image: string) => void;
   removeEditDraftImage: (index: number) => void;
   clearMessageEdit: (messageId: string) => void;
-  // eslint-disable-next-line max-params -- callback signature shared across chat components; refactoring would require updating many call sites
+  // oxlint-disable-next-line max-params -- callback signature shared across chat components; refactoring would require updating many call sites
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
 } {
@@ -451,7 +464,10 @@ export function useChatActions(): {
         draftActorRef.send({ type: 'setDraftToolChoice', toolChoice });
       },
       setDraftMode(mode: string) {
-        draftActorRef.send({ type: 'setDraftMode', mode: mode as 'agent' | 'plan' });
+        draftActorRef.send({
+          type: 'setDraftMode',
+          mode: mode as 'agent' | 'plan',
+        });
       },
       clearDraft() {
         draftActorRef.send({ type: 'clearDraft' });
@@ -460,7 +476,11 @@ export function useChatActions(): {
       // Edit actions (via XState)
       startEditingMessage(messageId: string) {
         const originalMessage = chat.messages.find((m) => m.id === messageId);
-        draftActorRef.send({ type: 'startEditingMessage', messageId, originalMessage });
+        draftActorRef.send({
+          type: 'startEditingMessage',
+          messageId,
+          originalMessage,
+        });
       },
       exitEditMode() {
         draftActorRef.send({ type: 'exitEditMode' });
@@ -479,7 +499,7 @@ export function useChatActions(): {
       },
 
       // Edit and retry - uses both useChat and draft machine
-      // eslint-disable-next-line max-params -- matches the callback signature used across chat components
+      // oxlint-disable-next-line max-params -- matches the callback signature used across chat components
       editMessage(messageId: string, content: string, model: string, _metadata?: unknown, imageUrls?: string[]) {
         // Clear the edit from draft machine
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
@@ -496,7 +516,11 @@ export function useChatActions(): {
           role: 'user',
           parts: [
             { type: 'text', text: content },
-            ...(imageUrls?.map((url) => ({ type: 'file' as const, url, mediaType: 'image/png' as const })) ?? []),
+            ...(imageUrls?.map((url) => ({
+              type: 'file' as const,
+              url,
+              mediaType: 'image/png' as const,
+            })) ?? []),
           ],
           metadata: {
             createdAt: Date.now(),
@@ -524,7 +548,10 @@ export function useChatActions(): {
           // Update the previous message with the new model
           const updatedMessages = [
             ...chat.messages.slice(0, sliceIndex),
-            { ...previousMessage, metadata: { ...previousMessage.metadata, model: modelId } },
+            {
+              ...previousMessage,
+              metadata: { ...previousMessage.metadata, model: modelId },
+            },
           ];
           chat.setMessages(updatedMessages);
         } else {

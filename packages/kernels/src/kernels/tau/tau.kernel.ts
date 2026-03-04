@@ -102,7 +102,11 @@ export default defineKernel({
   async getParameters() {
     return createKernelSuccess({
       defaultParameters: {},
-      jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+      jsonSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
     });
   },
 
@@ -135,7 +139,11 @@ export default defineKernel({
       throw new TauBuildError([
         {
           message: errorMessage,
-          location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+          location: {
+            fileName: relativeFilePath,
+            startLineNumber: 1,
+            startColumn: 1,
+          },
           type: 'runtime',
           severity: 'error',
         },
@@ -143,7 +151,7 @@ export default defineKernel({
     }
   },
 
-  async exportGeometry({ fileType, nativeHandle }, { logger }, _ctx) {
+  async exportGeometry({ fileType, nativeHandle }, { logger }, _context) {
     try {
       if (nativeHandle.length === 0) {
         return createKernelError([
@@ -179,7 +187,7 @@ export default defineKernel({
 class TauBuildError extends Error {
   public readonly issues: KernelIssue[];
   public constructor(issues: KernelIssue[]) {
-    super(issues.map((i) => i.message).join('; '));
+    super(issues.map((index) => index.message).join('; '));
     this.issues = issues;
   }
 }

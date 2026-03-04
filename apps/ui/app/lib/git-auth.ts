@@ -35,8 +35,7 @@ export async function requestGitHubRepoAccess(): Promise<void> {
   await authClient.linkSocial({
     provider: 'github',
     scopes: githubRepoScopes,
-    // eslint-disable-next-line @typescript-eslint/naming-convention -- Better Auth naming convention
-    callbackURL: globalThis.location.href, // Return to current page after OAuth
+    callbackURL: globalThis.location.href,
   });
 }
 
@@ -55,7 +54,7 @@ export async function getGitHubAccessToken(): Promise<string> {
       providerId: 'github',
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- tokenData can be null
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- tokenData can be null
     if (!tokenData) {
       throw new Error('No GitHub account linked. Please link your GitHub account in Settings first.');
     }

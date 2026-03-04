@@ -176,10 +176,10 @@ export function transformVerticesGltf(vertex: readonly [number, number, number])
 export function transformVertexArray(vertices: number[]): Float32Array<ArrayBuffer> {
   const transformedVertices = new Float32Array(vertices.length);
 
-  for (let i = 0; i < vertices.length; i += 3) {
-    const x = vertices[i];
-    const y = vertices[i + 1];
-    const z = vertices[i + 2];
+  for (let index = 0; index < vertices.length; index += 3) {
+    const x = vertices[index];
+    const y = vertices[index + 1];
+    const z = vertices[index + 2];
 
     if (x === undefined || y === undefined || z === undefined) {
       continue;
@@ -188,9 +188,9 @@ export function transformVertexArray(vertices: number[]): Float32Array<ArrayBuff
     const vertex: [number, number, number] = [x, y, z];
     const transformed = transformVerticesGltf(vertex);
 
-    transformedVertices[i] = transformed[0];
-    transformedVertices[i + 1] = transformed[1];
-    transformedVertices[i + 2] = transformed[2];
+    transformedVertices[index] = transformed[0];
+    transformedVertices[index + 1] = transformed[1];
+    transformedVertices[index + 2] = transformed[2];
   }
 
   return transformedVertices;
@@ -207,16 +207,16 @@ export function transformVertexArray(vertices: number[]): Float32Array<ArrayBuff
 export function transformNormalArray(normals: number[]): Float32Array<ArrayBuffer> {
   const transformedNormals = new Float32Array(normals.length);
 
-  for (let i = 0; i < normals.length; i += 3) {
-    const x = normals[i] ?? 0;
-    const y = normals[i + 1] ?? 0;
-    const z = normals[i + 2] ?? 0;
+  for (let index = 0; index < normals.length; index += 3) {
+    const x = normals[index] ?? 0;
+    const y = normals[index + 1] ?? 0;
+    const z = normals[index + 2] ?? 0;
 
     // Apply rotation only (no scaling for direction vectors)
     // Z-up to Y-up: x' = x, y' = z, z' = -y
-    transformedNormals[i] = x;
-    transformedNormals[i + 1] = z;
-    transformedNormals[i + 2] = -y;
+    transformedNormals[index] = x;
+    transformedNormals[index + 1] = z;
+    transformedNormals[index + 2] = -y;
   }
 
   return transformedNormals;

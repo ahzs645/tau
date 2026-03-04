@@ -24,8 +24,8 @@ import { useKernel } from '#hooks/use-kernel.js';
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/builds/new">New</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/builds/new'>New</Link>
       </Button>
     );
   },
@@ -36,31 +36,31 @@ export const handle: Handle = {
 function KernelDetailsContent({ kernelId }: { readonly kernelId: KernelProvider }): React.JSX.Element {
   const selectedOption = getKernelOption(kernelId);
   return (
-    <div className="space-y-4">
-      <p className="text-sm leading-relaxed text-muted-foreground">{selectedOption.longDescription}</p>
+    <div className='space-y-4'>
+      <p className='text-sm leading-relaxed text-muted-foreground'>{selectedOption.longDescription}</p>
 
-      <div className="space-y-3">
-        <Badge variant="default" className="text-xs font-medium">
+      <div className='space-y-3'>
+        <Badge variant='default' className='text-xs font-medium'>
           Best for: {selectedOption.recommended}
         </Badge>
 
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium">Tags:</h4>
-          <div className="flex flex-wrap gap-1">
+        <div className='space-y-2'>
+          <h4 className='text-sm font-medium'>Tags:</h4>
+          <div className='flex flex-wrap gap-1'>
             {selectedOption.tags.map((tag) => (
-              <Badge key={tag} variant="secondary" className="text-xs">
+              <Badge key={tag} variant='secondary' className='text-xs'>
                 {tag}
               </Badge>
             ))}
           </div>
         </div>
 
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium">Key Features:</h4>
-          <ul className="space-y-1 text-sm text-muted-foreground">
+        <div className='space-y-2'>
+          <h4 className='text-sm font-medium'>Key Features:</h4>
+          <ul className='space-y-1 text-sm text-muted-foreground'>
             {selectedOption.features.map((feature) => (
-              <li key={feature} className="flex items-center gap-2">
-                <div className="size-1.5 shrink-0 rounded-full bg-primary/60" />
+              <li key={feature} className='flex items-center gap-2'>
+                <div className='size-1.5 shrink-0 rounded-full bg-primary/60' />
                 <span>{feature}</span>
               </li>
             ))}
@@ -108,7 +108,9 @@ function useBuildCreation() {
           },
           chatName: 'Initial design',
           // Set initial panel state: editor open
-          editorState: { panelState: { openPanels: { editor: true, files: true } } },
+          editorState: {
+            panelState: { openPanels: { editor: true, files: true } },
+          },
         });
 
         void navigate(`/builds/${createdBuild.id}`);
@@ -164,24 +166,24 @@ export default function BuildsNew(): React.JSX.Element {
   );
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 pb-8">
-      <div className="mb-8 text-center">
-        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Create New Build</h1>
-        <p className="text-muted-foreground">Choose a CAD kernel and start building</p>
+    <div className='container mx-auto max-w-4xl px-4 pb-8'>
+      <div className='mb-8 text-center'>
+        <h1 className='mb-2 text-3xl font-semibold tracking-tight'>Create New Build</h1>
+        <p className='text-muted-foreground'>Choose a CAD kernel and start building</p>
       </div>
 
-      <div className="space-y-6">
+      <div className='space-y-6'>
         {/* Build Details */}
         <Card>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="build-name">Build Name *</Label>
+          <CardContent className='space-y-4'>
+            <div className='space-y-2'>
+              <Label htmlFor='build-name'>Build Name *</Label>
               <Input
                 autoFocus
-                autoComplete="off"
-                id="build-name"
+                autoComplete='off'
+                id='build-name'
                 value={buildName}
-                placeholder="Enter your build name..."
+                placeholder='Enter your build name...'
                 maxLength={100}
                 onChange={(event) => {
                   setBuildName(event.target.value);
@@ -189,10 +191,10 @@ export default function BuildsNew(): React.JSX.Element {
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="build-description">Description (optional)</Label>
+            <div className='space-y-2'>
+              <Label htmlFor='build-description'>Description (optional)</Label>
               <Textarea
-                id="build-description"
+                id='build-description'
                 value={buildDescription}
                 placeholder="Describe what you're building..."
                 maxLength={500}
@@ -213,7 +215,7 @@ export default function BuildsNew(): React.JSX.Element {
           </CardHeader>
           <CardContent>
             {/* Mobile Accordion Layout */}
-            <div className="block md:hidden">
+            <div className='block md:hidden'>
               <RadioGroup
                 value={kernel}
                 onValueChange={(value) => {
@@ -221,9 +223,9 @@ export default function BuildsNew(): React.JSX.Element {
                 }}
               >
                 <Accordion
-                  type="single"
+                  type='single'
                   value={kernel}
-                  className="space-y-2"
+                  className='space-y-2'
                   onValueChange={(value) => {
                     if (value) {
                       setSelectedKernel(value as KernelProvider);
@@ -239,25 +241,25 @@ export default function BuildsNew(): React.JSX.Element {
                         kernel === option.id && 'border-ring bg-primary/5 ring-3 ring-ring/50',
                       )}
                     >
-                      <div className="flex items-start gap-3 p-4">
-                        <RadioGroupItem value={option.id} id={`mobile-${option.id}`} className="mt-1" />
-                        <div className="min-w-0 flex-1">
+                      <div className='flex items-start gap-3 p-4'>
+                        <RadioGroupItem value={option.id} id={`mobile-${option.id}`} className='mt-1' />
+                        <div className='min-w-0 flex-1'>
                           <AccordionTrigger
                             className={cn(
                               'flex h-auto w-full cursor-pointer items-start justify-between gap-3 border-0 p-0 text-left transition-all hover:no-underline',
                               'bg-transparent hover:bg-transparent data-[state=open]:bg-transparent',
                             )}
                           >
-                            <div className="flex flex-1 items-start gap-3">
-                              <SvgIcon id={option.id} className="mt-0.5 size-6 shrink-0" />
-                              <div className="flex w-full min-w-0 flex-col gap-1">
-                                <div className="flex w-full items-start justify-between gap-2">
-                                  <span className="text-sm font-medium">{option.name}</span>
-                                  <span className="font-mono text-xs text-muted-foreground/70">
+                            <div className='flex flex-1 items-start gap-3'>
+                              <SvgIcon id={option.id} className='mt-0.5 size-6 shrink-0' />
+                              <div className='flex w-full min-w-0 flex-col gap-1'>
+                                <div className='flex w-full items-start justify-between gap-2'>
+                                  <span className='text-sm font-medium'>{option.name}</span>
+                                  <span className='font-mono text-xs text-muted-foreground/70'>
                                     {option.backendProvider}
                                   </span>
                                 </div>
-                                <span className="text-xs leading-relaxed text-muted-foreground">
+                                <span className='text-xs leading-relaxed text-muted-foreground'>
                                   {option.description}
                                 </span>
                               </div>
@@ -265,7 +267,7 @@ export default function BuildsNew(): React.JSX.Element {
                           </AccordionTrigger>
                         </div>
                       </div>
-                      <AccordionContent className="px-4 pb-4">
+                      <AccordionContent className='px-4 pb-4'>
                         <KernelDetailsContent kernelId={option.id} />
                       </AccordionContent>
                     </AccordionItem>
@@ -275,12 +277,12 @@ export default function BuildsNew(): React.JSX.Element {
             </div>
 
             {/* Desktop Side-by-Side Layout */}
-            <div className="hidden md:flex md:gap-6">
+            <div className='hidden md:flex md:gap-6'>
               {/* Left side - Radio Group */}
-              <div className="flex flex-col gap-2 md:min-w-80">
+              <div className='flex flex-col gap-2 md:min-w-80'>
                 <RadioGroup
                   value={kernel}
-                  className="space-y-2"
+                  className='space-y-2'
                   onValueChange={(value) => {
                     setSelectedKernel(value as KernelProvider);
                   }}
@@ -295,14 +297,14 @@ export default function BuildsNew(): React.JSX.Element {
                           'border-ring bg-primary/5 ring-3 ring-ring/50 hover:border-ring hover:bg-primary/10',
                       )}
                     >
-                      <RadioGroupItem value={option.id} id={option.id} className="mt-1" />
-                      <SvgIcon id={option.id} className="mt-0.5 size-6 shrink-0" />
-                      <div className="flex w-full min-w-0 flex-col gap-1">
-                        <div className="flex w-full items-start justify-between gap-2">
-                          <span className="text-sm font-medium">{option.name}</span>
-                          <span className="font-mono text-xs text-muted-foreground/70">{option.backendProvider}</span>
+                      <RadioGroupItem value={option.id} id={option.id} className='mt-1' />
+                      <SvgIcon id={option.id} className='mt-0.5 size-6 shrink-0' />
+                      <div className='flex w-full min-w-0 flex-col gap-1'>
+                        <div className='flex w-full items-start justify-between gap-2'>
+                          <span className='text-sm font-medium'>{option.name}</span>
+                          <span className='font-mono text-xs text-muted-foreground/70'>{option.backendProvider}</span>
                         </div>
-                        <span className="text-xs leading-relaxed text-muted-foreground">{option.description}</span>
+                        <span className='text-xs leading-relaxed text-muted-foreground'>{option.description}</span>
                       </div>
                     </Label>
                   ))}
@@ -310,7 +312,7 @@ export default function BuildsNew(): React.JSX.Element {
               </div>
 
               {/* Right side - Content panel */}
-              <div className="flex-1 rounded-lg border border-border bg-card p-6">
+              <div className='flex-1 rounded-lg border border-border bg-card p-6'>
                 <KernelDetailsContent kernelId={kernel} />
               </div>
             </div>
@@ -318,11 +320,11 @@ export default function BuildsNew(): React.JSX.Element {
         </Card>
 
         {/* Action Buttons */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:gap-4">
-          <Button variant="outline" disabled={isCreating} onClick={handleCancel}>
+        <div className='flex flex-col gap-3 sm:flex-row sm:justify-between sm:gap-4'>
+          <Button variant='outline' disabled={isCreating} onClick={handleCancel}>
             Cancel
           </Button>
-          <Button disabled={isCreateButtonDisabled} className="min-w-[120px]" onClick={handleCreateBuild}>
+          <Button disabled={isCreateButtonDisabled} className='min-w-[120px]' onClick={handleCreateBuild}>
             {isCreating ? 'Creating...' : `Create Build ${formattedKeyCombination}`}
           </Button>
         </div>

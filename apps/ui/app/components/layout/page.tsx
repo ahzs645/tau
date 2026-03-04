@@ -66,9 +66,9 @@ function SectionContent({
       <div
         className={cn('flex min-h-full flex-col overflow-clip', shouldApplyPositioning && sidebarPositioningClasses)}
       >
-        <div className="flex flex-1 flex-col">{content}</div>
+        <div className='flex flex-1 flex-col'>{content}</div>
         {enableFloatingSidebar ? (
-          <SidebarOffset asChild via="margin">
+          <SidebarOffset asChild via='margin'>
             <PageFooter />
           </SidebarOffset>
         ) : (
@@ -84,7 +84,7 @@ function SectionContent({
   }
 
   // Default: render content directly
-  // eslint-disable-next-line react/jsx-no-useless-fragment -- needed for consistent return type
+  // oxlint-disable-next-line react/jsx-no-useless-fragment -- needed for consistent return type
   return <>{content}</>;
 }
 
@@ -143,17 +143,17 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
       <SidebarProvider>
         <AppSidebar />
         <SidebarInset style={{ '--header-height': headerHeight }}>
-          <header className="pointer-events-none absolute top-0 z-20 flex h-(--header-height) w-full shrink-0 items-center justify-between gap-2">
-            <div className="pointer-events-auto ml-2 flex h-8 items-center gap-0.25 rounded-md border bg-sidebar p-0.25 pl-2.75 transition-[margin] duration-200 ease-linear md:ml-(--sidebar-width-current) md:gap-1">
-              <SidebarTrigger className="group/sidebar-trigger -ml-2.5 rounded-sm">
-                <PanelLeftIcon className="size-4 group-data-[open=true]/sidebar-trigger:block" />
+          <header className='pointer-events-none absolute top-0 z-20 flex h-(--header-height) w-full shrink-0 items-center justify-between gap-2'>
+            <div className='pointer-events-auto ml-2 flex h-8 items-center gap-0.25 rounded-md border bg-sidebar p-0.25 pl-2.75 transition-[margin] duration-200 ease-linear md:ml-(--sidebar-width-current) md:gap-1'>
+              <SidebarTrigger className='group/sidebar-trigger -ml-2.5 rounded-sm'>
+                <PanelLeftIcon className='size-4 group-data-[open=true]/sidebar-trigger:block' />
               </SidebarTrigger>
               {hasBreadcrumbItems ? (
-                <span className="h-4">
-                  <Separator orientation="vertical" />
+                <span className='h-4'>
+                  <Separator orientation='vertical' />
                 </span>
               ) : null}
-              <Breadcrumb className="hidden [&:has(>:not(:empty))]:block">
+              <Breadcrumb className='hidden [&:has(>:not(:empty))]:block'>
                 <BreadcrumbList
                   className={cn(
                     'sm:gap-0',
@@ -171,10 +171,10 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
                     return (
                       <Fragment key={match.id}>
                         {breadcrumbArray.map((item, index) => (
-                          // eslint-disable-next-line react/no-array-index-key -- these are stable.
+                          // oxlint-disable-next-line react/no-array-index-key -- these are stable.
                           <Fragment key={`${match.id}-${index}`}>
-                            <BreadcrumbSeparator className="hidden first:hidden lg:block" />
-                            <BreadcrumbItem className="hidden last:block hover:text-foreground lg:block">
+                            <BreadcrumbSeparator className='hidden first:hidden lg:block' />
+                            <BreadcrumbItem className='hidden last:block hover:text-foreground lg:block'>
                               <BreadcrumbLink asChild>{item}</BreadcrumbLink>
                             </BreadcrumbItem>
                           </Fragment>
@@ -186,11 +186,11 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
               </Breadcrumb>
             </div>
 
-            <div className="pointer-events-auto flex items-center gap-2 px-2">
+            <div className='pointer-events-auto flex items-center gap-2 px-2'>
               {isOnline ? null : (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Badge className="h-8 font-mono font-normal" variant="outline">
+                    <Badge className='h-8 font-mono font-normal' variant='outline'>
                       OFFLINE
                     </Badge>
                   </TooltipTrigger>

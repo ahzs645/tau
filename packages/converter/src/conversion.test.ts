@@ -75,6 +75,7 @@ const testFixtures: Record<SupportedImportFormat, string> = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- valid file extension
   'mesh.xml': 'cube.mesh.xml',
   nff: 'cube.nff',
+  // eslint-disable-next-line id-denylist -- valid file extension
   obj: 'cube.obj',
   off: 'cube.off',
   ogex: 'cube.ogex',

@@ -94,30 +94,30 @@ export function BackendSelector({
       defaultValue={currentOption}
       getValue={(item) => item.value}
       renderLabel={(item, selectedItem) => (
-        <span className="flex w-full items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <item.icon className="size-4" />
-            <div className="flex flex-col items-start gap-0.5">
-              <span className="font-medium">{item.label}</span>
-              <span className="text-xs text-muted-foreground">{item.description}</span>
+        <span className='flex w-full items-center justify-between gap-4'>
+          <div className='flex items-center gap-2'>
+            <item.icon className='size-4' />
+            <div className='flex flex-col items-start gap-0.5'>
+              <span className='font-medium'>{item.label}</span>
+              <span className='text-xs text-muted-foreground'>{item.description}</span>
             </div>
           </div>
-          {selectedItem?.value === item.value ? <Check className="size-4 shrink-0" /> : undefined}
+          {selectedItem?.value === item.value ? <Check className='size-4 shrink-0' /> : undefined}
         </span>
       )}
       popoverProperties={{ className: 'w-[340px]' }}
       isDisabled={(item) => item.value === 'webaccess' && !isFileSystemAccessSupported}
-      title="Select Storage Backend"
-      description="Choose where to store files"
+      title='Select Storage Backend'
+      description='Choose where to store files'
       isSearchEnabled={false}
       onSelect={onSelect}
     >
-      <Button variant="outline" className="w-[160px] justify-between" disabled={isLoading}>
-        <span className="flex items-center gap-2">
-          {isLoading ? <Loader className="size-4" /> : <currentOption.icon className="size-4" />}
-          <span className="truncate">{currentOption.label}</span>
+      <Button variant='outline' className='w-[160px] justify-between' disabled={isLoading}>
+        <span className='flex items-center gap-2'>
+          {isLoading ? <Loader className='size-4' /> : <currentOption.icon className='size-4' />}
+          <span className='truncate'>{currentOption.label}</span>
         </span>
-        <ChevronDown className="size-4 shrink-0 opacity-50" />
+        <ChevronDown className='size-4 shrink-0 opacity-50' />
       </Button>
     </ComboBoxResponsive>
   );

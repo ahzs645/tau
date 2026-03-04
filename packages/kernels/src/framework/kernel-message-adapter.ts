@@ -18,10 +18,10 @@ export type KernelMessagePort = {
   close(): void;
 };
 
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
+// oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
 function getNodeParentPort(): import('node:worker_threads').MessagePort | undefined {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
+    // oxlint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
     const workerThreads = require('node:worker_threads') as typeof import('node:worker_threads');
     return workerThreads.parentPort ?? undefined;
   } catch {
@@ -65,7 +65,7 @@ export function getWorkerMessagePort(): KernelMessagePort {
   if (parentPort) {
     return {
       postMessage(message, transferables) {
-        // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
+        // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
         parentPort.postMessage(message, transferables as Array<import('node:worker_threads').Transferable> | undefined);
       },
       onMessage(handler) {

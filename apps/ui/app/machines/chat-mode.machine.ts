@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/naming-convention -- XState uses UPPER_CASE event types */
 import { setup, assign } from 'xstate';
 import type { ChatMode } from '@taucad/chat/constants';
 import { chatMode } from '@taucad/chat/constants';
@@ -15,7 +16,9 @@ type ChatModeEvent =
 
 export const chatModeMachine = setup({
   types: {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     context: {} as ChatModeContext,
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     events: {} as ChatModeEvent,
   },
 }).createMachine({

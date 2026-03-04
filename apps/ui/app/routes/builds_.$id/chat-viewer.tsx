@@ -70,9 +70,9 @@ export const ChatViewer = memo(function ({
       return entry.type === 'dir';
     }
 
-    const dirPrefix = `${entryFile}/`;
+    const directoryPrefix = `${entryFile}/`;
     for (const key of fileTree.keys()) {
-      if (key.startsWith(dirPrefix)) {
+      if (key.startsWith(directoryPrefix)) {
         return true;
       }
     }
@@ -94,9 +94,9 @@ export const ChatViewer = memo(function ({
     }
 
     // If it's a directory prefix, it's not missing (handled by isDirectory)
-    const dirPrefix = `${entryFile}/`;
+    const directoryPrefix = `${entryFile}/`;
     for (const key of fileTree.keys()) {
-      if (key.startsWith(dirPrefix)) {
+      if (key.startsWith(directoryPrefix)) {
         return false;
       }
     }
@@ -145,8 +145,8 @@ export const ChatViewer = memo(function ({
   // If no graphics actor yet, render a placeholder
   if (!graphicsActor) {
     return (
-      <div className="flex h-full items-center justify-center text-muted-foreground">
-        <span className="text-sm">Initializing viewer...</span>
+      <div className='flex h-full items-center justify-center text-muted-foreground'>
+        <span className='text-sm'>Initializing viewer...</span>
       </div>
     );
   }
@@ -155,17 +155,17 @@ export const ChatViewer = memo(function ({
   if (!entryFile) {
     return (
       <GraphicsProvider graphicsRef={graphicsActor}>
-        <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
-          <span className="text-sm">No file selected</span>
+        <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
+          <span className='text-sm'>No file selected</span>
           <FileSelector
             files={files}
             selectedFile={undefined}
-            placeholder="Select file to render..."
-            className="h-8 w-[200px]"
-            title="Viewport File"
-            description="Choose which file to render in the viewport"
-            searchPlaceholder="Search files..."
-            emptyMessage="No files found."
+            placeholder='Select file to render...'
+            className='h-8 w-[200px]'
+            title='Viewport File'
+            description='Choose which file to render in the viewport'
+            searchPlaceholder='Search files...'
+            emptyMessage='No files found.'
             onSelect={handleFileSelect}
           />
         </div>
@@ -177,19 +177,19 @@ export const ChatViewer = memo(function ({
   if (isDirectory) {
     return (
       <GraphicsProvider graphicsRef={graphicsActor}>
-        <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
-          <FolderOpen className="size-12 stroke-1" />
-          <p className="text-sm">The viewer cannot display a directory.</p>
+        <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
+          <FolderOpen className='size-12 stroke-1' />
+          <p className='text-sm'>The viewer cannot display a directory.</p>
           <FileSelector
             files={files}
             selectedFile={undefined}
             initialPath={entryFile}
-            placeholder="Select a file to render..."
-            className="h-8 w-[200px]"
-            title="Viewport File"
-            description="Choose a file to render in the viewport"
-            searchPlaceholder="Search files..."
-            emptyMessage="No files found."
+            placeholder='Select a file to render...'
+            className='h-8 w-[200px]'
+            title='Viewport File'
+            description='Choose a file to render in the viewport'
+            searchPlaceholder='Search files...'
+            emptyMessage='No files found.'
             onSelect={handleFileSelect}
           />
         </div>
@@ -201,21 +201,21 @@ export const ChatViewer = memo(function ({
   if (isMissing) {
     return (
       <GraphicsProvider graphicsRef={graphicsActor}>
-        <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
-          <FileX className="size-12 stroke-1" />
-          <div className="flex flex-col items-center gap-1">
-            <p className="text-sm font-medium">File not found</p>
-            <p className="max-w-60 truncate text-xs">{entryFile}</p>
+        <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
+          <FileX className='size-12 stroke-1' />
+          <div className='flex flex-col items-center gap-1'>
+            <p className='text-sm font-medium'>File not found</p>
+            <p className='max-w-60 truncate text-xs'>{entryFile}</p>
           </div>
           <FileSelector
             files={files}
             selectedFile={undefined}
-            placeholder="Select a file to render..."
-            className="h-8 w-[200px]"
-            title="Viewport File"
-            description="Choose a file to render in the viewport"
-            searchPlaceholder="Search files..."
-            emptyMessage="No files found."
+            placeholder='Select a file to render...'
+            className='h-8 w-[200px]'
+            title='Viewport File'
+            description='Choose a file to render in the viewport'
+            searchPlaceholder='Search files...'
+            emptyMessage='No files found.'
             onSelect={handleFileSelect}
           />
         </div>
@@ -267,7 +267,12 @@ const ViewerContent = memo(function ({
   }, [graphicsActor, geometries, units]);
 
   // Sync graphics settings back to editor state for persistence
-  useViewSettingsSync({ viewId, graphicsRef: graphicsActor, editorRef, cadRef: cadActorRef });
+  useViewSettingsSync({
+    viewId,
+    graphicsRef: graphicsActor,
+    editorRef,
+    cadRef: cadActorRef,
+  });
 
   // Restore persisted render timeout to the shared CadMachine on mount
   const persistedViewSettings = useSelector(editorRef, (state) => state.context.viewSettings[viewId]);
@@ -280,7 +285,10 @@ const ViewerContent = memo(function ({
     const savedTimeout = persistedViewSettings?.graphicsSettings.renderTimeout;
     if (savedTimeout !== undefined && cadActorRef) {
       // RenderTimeout in GraphicsViewSettings is in seconds, CadMachine expects milliseconds
-      cadActorRef.send({ type: 'setRenderTimeout', timeout: savedTimeout * 1000 });
+      cadActorRef.send({
+        type: 'setRenderTimeout',
+        timeout: savedTimeout * 1000,
+      });
       hasRestoredTimeoutRef.current = true;
     }
   }, [cadActorRef, persistedViewSettings]);
@@ -305,9 +313,9 @@ const ViewerContent = memo(function ({
   const shiftGizmo = isTopRight && !isMobile;
 
   return (
-    <div className="group/viewer relative flex h-full flex-col">
+    <div className='group/viewer relative flex h-full flex-col'>
       {/* Status overlays */}
-      <div className="absolute top-[10%] right-2 left-2 z-10 mx-auto flex w-fit max-w-full flex-col gap-2">
+      <div className='absolute top-[10%] right-2 left-2 z-10 mx-auto flex w-fit max-w-full flex-col gap-2'>
         <ChatInterfaceStatus />
         <ChatViewerStatus />
       </div>
@@ -322,7 +330,7 @@ const ViewerContent = memo(function ({
       />
 
       {/* Geometry canvas */}
-      <div className="min-h-0 flex-1">
+      <div className='min-h-0 flex-1'>
         <CadViewer
           enableZoom
           enablePan
@@ -339,12 +347,12 @@ const ViewerContent = memo(function ({
       </div>
 
       {/* AR button — mobile iOS only, positioned bottom-right above controls */}
-      <ChatArButton geometries={geometries} className="absolute right-3 bottom-14 z-10" />
+      <ChatArButton geometries={geometries} className='absolute right-3 bottom-14 z-10' />
 
       {/* Bottom controls */}
-      <div className="absolute right-2 bottom-2 left-2 z-10 flex shrink-0 flex-col gap-2">
+      <div className='absolute right-2 bottom-2 left-2 z-10 flex shrink-0 flex-col gap-2'>
         <ChatInterfaceGraphics />
-        <ChatStackTrace entryFile={entryFile} side="bottom" />
+        <ChatStackTrace entryFile={entryFile} side='bottom' />
         <ChatViewerControls />
       </div>
     </div>

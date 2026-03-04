@@ -12,11 +12,11 @@ type PreviewDetailsProps = {
 
 export function PreviewDetails({ build, geometriesCount, onExport }: PreviewDetailsProps): React.JSX.Element {
   return (
-    <div className="space-y-6 p-6">
+    <div className='space-y-6 p-6'>
       {/* About */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold">About</h3>
-        <p className="text-sm text-muted-foreground">{build.description || 'No description provided'}</p>
+        <h3 className='mb-3 text-sm font-semibold'>About</h3>
+        <p className='text-sm text-muted-foreground'>{build.description || 'No description provided'}</p>
       </div>
 
       <Separator />
@@ -25,10 +25,10 @@ export function PreviewDetails({ build, geometriesCount, onExport }: PreviewDeta
       {build.tags.length > 0 ? (
         <>
           <div>
-            <h3 className="mb-3 text-sm font-semibold">Tags</h3>
-            <div className="flex flex-wrap gap-2">
+            <h3 className='mb-3 text-sm font-semibold'>Tags</h3>
+            <div className='flex flex-wrap gap-2'>
               {build.tags.map((tag) => (
-                <Badge key={tag} variant="secondary">
+                <Badge key={tag} variant='secondary'>
                   {tag}
                 </Badge>
               ))}
@@ -40,50 +40,50 @@ export function PreviewDetails({ build, geometriesCount, onExport }: PreviewDeta
 
       {/* License */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold">License</h3>
-        <p className="text-sm text-muted-foreground">MIT</p>
+        <h3 className='mb-3 text-sm font-semibold'>License</h3>
+        <p className='text-sm text-muted-foreground'>MIT</p>
       </div>
 
       <Separator />
 
       {/* Downloads */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold">Downloads</h3>
-        <div className="space-y-2">
+        <h3 className='mb-3 text-sm font-semibold'>Downloads</h3>
+        <div className='space-y-2'>
           <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
+            variant='outline'
+            size='sm'
+            className='w-full justify-start'
             disabled={geometriesCount === 0}
             onClick={() => {
               onExport('stl');
             }}
           >
-            <Download className="mr-2 size-4" />
+            <Download className='mr-2 size-4' />
             Download STL
           </Button>
           <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
+            variant='outline'
+            size='sm'
+            className='w-full justify-start'
             disabled={geometriesCount === 0}
             onClick={() => {
               onExport('step');
             }}
           >
-            <Download className="mr-2 size-4" />
+            <Download className='mr-2 size-4' />
             Download STEP
           </Button>
           <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
+            variant='outline'
+            size='sm'
+            className='w-full justify-start'
             disabled={geometriesCount === 0}
             onClick={() => {
               onExport('gltf');
             }}
           >
-            <Download className="mr-2 size-4" />
+            <Download className='mr-2 size-4' />
             Download GLTF
           </Button>
         </div>

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- required for the precompiled grammar */
-/* eslint-disable no-useless-escape -- required for the precompiled grammar */
+/* oxlint-disable no-useless-escape -- required for the precompiled grammar */
 /**
  * Precompiled STEP file language for Shiki.
  *

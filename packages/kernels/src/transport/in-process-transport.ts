@@ -51,7 +51,7 @@ export function createInProcessTransport(): KernelTransport {
       }
     },
     onMessage(handler: (data: KernelCommand | KernelResponse) => void): void {
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage assignment to implicitly call start()
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage assignment to implicitly call start()
       channel.port1.onmessage = (event: MessageEvent<KernelCommand | KernelResponse>): void => {
         handler(event.data);
       };
@@ -73,7 +73,7 @@ export function createInProcessTransport(): KernelTransport {
       }
     },
     onMessage(handler: (message: KernelResponse) => void): void {
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage assignment to implicitly call start()
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage assignment to implicitly call start()
       channel.port2.onmessage = (event: MessageEvent<KernelResponse>): void => {
         handler(event.data);
       };

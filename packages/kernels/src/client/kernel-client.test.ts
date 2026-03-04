@@ -43,7 +43,7 @@ const mainWithImport = `
   }
 `;
 
-const libCode = `
+const libraryCode = `
   import { makeBaseBox } from 'replicad';
   export function createBox() {
     return makeBaseBox(5, 10, 15);
@@ -88,7 +88,10 @@ describe('inline render (single-file)', () => {
       transport: createInProcessTransport(),
     });
 
-    const result = await client.render({ code: { 'box.ts': boxCode }, file: 'box.ts' });
+    const result = await client.render({
+      code: { 'box.ts': boxCode },
+      file: 'box.ts',
+    });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -134,7 +137,7 @@ describe('inline render (multi-file)', () => {
     const result = await client.render({
       code: {
         'main.ts': mainWithImport,
-        'lib.ts': libCode,
+        'lib.ts': libraryCode,
       },
       file: 'main.ts',
     });
@@ -166,7 +169,7 @@ describe('inline render (multi-file)', () => {
     const result = await client.render({
       code: {
         'main.ts': parametricMain,
-        'lib.ts': libCode,
+        'lib.ts': libraryCode,
       },
       file: 'main.ts',
       parameters: { scale: 3 },
@@ -295,7 +298,9 @@ describe('geometry event', () => {
       eventResult = result;
     });
 
-    const promiseResult = await client.render({ code: { 'box.ts': invalidCode } });
+    const promiseResult = await client.render({
+      code: { 'box.ts': invalidCode },
+    });
 
     expect(promiseResult.success).toBe(false);
     expect(eventResult).toBeDefined();
@@ -391,7 +396,7 @@ describe('self-rendering export', () => {
     const result = await client.export('step', {
       code: {
         'main.ts': mainWithImport,
-        'lib.ts': libCode,
+        'lib.ts': libraryCode,
       },
       file: 'main.ts',
     });

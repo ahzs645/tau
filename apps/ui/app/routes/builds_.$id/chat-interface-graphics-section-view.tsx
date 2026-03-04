@@ -127,6 +127,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
     return { x: false, y: false, z: false } as const;
   }, [selectedSectionViewId]);
 
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- dir refers to direction vector, not directory
   function getUiLabelFor(base: 'xy' | 'xz' | 'yz', dir: 1 | -1): string {
     type PlaneLabels = Record<'xy' | 'xz' | 'yz', [string, string]>;
 
@@ -161,18 +162,18 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className='flex h-full flex-col gap-3'>
       {selectedSectionViewId ? (
-        <div className="grid gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-1 px-1 text-xs text-muted-foreground">
+        <div className='grid gap-3'>
+          <div className='flex flex-wrap items-center justify-between gap-1 px-1 text-xs text-muted-foreground'>
             <div>
-              Plane: <span className="font-medium text-foreground">{getSelectedHeader()}</span>
+              Plane: <span className='font-medium text-foreground'>{getSelectedHeader()}</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className='flex items-center gap-2'>
               <Button
-                variant="ghost"
-                size="xs"
-                title="Change plane"
+                variant='ghost'
+                size='xs'
+                title='Change plane'
                 onClick={() => {
                   graphicsActor.send({ type: 'selectSectionView', payload: undefined });
                 }}
@@ -180,9 +181,9 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                 Change
               </Button>
               <Button
-                variant="outline"
-                size="xs"
-                title="Flip direction"
+                variant='outline'
+                size='xs'
+                title='Flip direction'
                 onClick={() => {
                   graphicsActor.send({ type: 'toggleSectionViewDirection' });
                 }}
@@ -191,23 +192,23 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
               </Button>
             </div>
           </div>
-          <div className="grid gap-2">
-            <div className="flex items-center gap-1 px-1 text-xs text-muted-foreground">
+          <div className='grid gap-2'>
+            <div className='flex items-center gap-1 px-1 text-xs text-muted-foreground'>
               <span>Translation</span>
-              <InfoTooltip className="size-3">
+              <InfoTooltip className='size-3'>
                 Offset along the base plane axis. Stays constant while rotating.
               </InfoTooltip>
             </div>
-            <div className="grid grid-cols-[20px_1fr] items-center gap-2">
-              <div className="px-1 text-xs text-muted-foreground">
-                <Ruler className="size-4 -rotate-45" />
+            <div className='grid grid-cols-[20px_1fr] items-center gap-2'>
+              <div className='px-1 text-xs text-muted-foreground'>
+                <Ruler className='size-4 -rotate-45' />
               </div>
               <ParametersNumber
                 enableContinualOnChange
                 units={units}
                 value={sectionViewTranslation}
                 defaultValue={0}
-                descriptor="length"
+                descriptor='length'
                 step={1}
                 min={-maxDistance}
                 max={maxDistance}
@@ -217,11 +218,11 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
               />
             </div>
           </div>
-          <div className="grid gap-2">
-            <div className="px-1 text-xs text-muted-foreground">Rotation (degrees)</div>
-            <div className="grid gap-2">
-              <div className="grid grid-cols-[20px_1fr] items-center gap-2">
-                <div className="flex h-5 w-5 flex-col items-center justify-center text-sm font-medium text-muted-foreground">
+          <div className='grid gap-2'>
+            <div className='px-1 text-xs text-muted-foreground'>Rotation (degrees)</div>
+            <div className='grid gap-2'>
+              <div className='grid grid-cols-[20px_1fr] items-center gap-2'>
+                <div className='flex h-5 w-5 flex-col items-center justify-center text-sm font-medium text-muted-foreground'>
                   X
                 </div>
                 <ParametersNumber
@@ -229,7 +230,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                   units={units}
                   value={rotationDegrees.x}
                   defaultValue={0}
-                  descriptor="angle"
+                  descriptor='angle'
                   min={-180}
                   max={180}
                   step={1}
@@ -240,8 +241,8 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                   }}
                 />
               </div>
-              <div className="grid grid-cols-[20px_1fr] items-center gap-2">
-                <div className="flex h-5 w-5 items-center justify-center text-sm font-medium text-muted-foreground">
+              <div className='grid grid-cols-[20px_1fr] items-center gap-2'>
+                <div className='flex h-5 w-5 items-center justify-center text-sm font-medium text-muted-foreground'>
                   Y
                 </div>
                 <ParametersNumber
@@ -249,7 +250,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                   units={units}
                   value={rotationDegrees.y}
                   defaultValue={0}
-                  descriptor="angle"
+                  descriptor='angle'
                   min={-180}
                   max={180}
                   step={1}
@@ -260,8 +261,8 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                   }}
                 />
               </div>
-              <div className="grid grid-cols-[20px_1fr] items-center gap-2">
-                <div className="flex h-5 w-5 items-center justify-center text-sm font-medium text-muted-foreground">
+              <div className='grid grid-cols-[20px_1fr] items-center gap-2'>
+                <div className='flex h-5 w-5 items-center justify-center text-sm font-medium text-muted-foreground'>
                   Z
                 </div>
                 <ParametersNumber
@@ -269,7 +270,7 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                   units={units}
                   value={rotationDegrees.z}
                   defaultValue={0}
-                  descriptor="angle"
+                  descriptor='angle'
                   min={-180}
                   max={180}
                   step={1}
@@ -282,14 +283,14 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
               </div>
             </div>
           </div>
-          <div className="grid gap-2">
-            <div className="flex items-center gap-1 px-1 text-xs text-muted-foreground">
+          <div className='grid gap-2'>
+            <div className='flex items-center gap-1 px-1 text-xs text-muted-foreground'>
               <span>Apply to</span>
             </div>
-            <div className="grid gap-2">
-              <label className="flex cursor-pointer items-center justify-between rounded-md border bg-card px-2 py-1.5 text-sm select-none">
-                <span className="flex items-center gap-2">
-                  <Box className="size-4 text-muted-foreground" /> Surfaces
+            <div className='grid gap-2'>
+              <label className='flex cursor-pointer items-center justify-between rounded-md border bg-card px-2 py-1.5 text-sm select-none'>
+                <span className='flex items-center gap-2'>
+                  <Box className='size-4 text-muted-foreground' /> Surfaces
                 </span>
                 <Switch
                   checked={enableClippingMesh}
@@ -298,9 +299,9 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
                   }}
                 />
               </label>
-              <label className="flex cursor-pointer items-center justify-between rounded-md border bg-card px-2 py-1.5 text-sm select-none">
-                <span className="flex items-center gap-2">
-                  <PenLine className="size-4 text-muted-foreground" /> Lines
+              <label className='flex cursor-pointer items-center justify-between rounded-md border bg-card px-2 py-1.5 text-sm select-none'>
+                <span className='flex items-center gap-2'>
+                  <PenLine className='size-4 text-muted-foreground' /> Lines
                 </span>
                 <Switch
                   checked={enableClippingLines}
@@ -313,14 +314,14 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <div className="grid gap-2">
-          <div className="px-1 text-xs text-muted-foreground">Select a plane</div>
-          <div className="grid grid-cols-2 gap-2">
+        <div className='grid gap-2'>
+          <div className='px-1 text-xs text-muted-foreground'>Select a plane</div>
+          <div className='grid grid-cols-2 gap-2'>
             {getPlaneButtonsForUpDirection(upDirection).map((item) => (
               <Button
                 key={`${item.id}`}
-                variant="outline"
-                size="xs"
+                variant='outline'
+                size='xs'
                 onMouseEnter={() => {
                   graphicsActor.send({ type: 'setHoveredSectionView', payload: item.id });
                 }}
@@ -341,17 +342,17 @@ export function ChatInterfaceGraphicsSectionView(): React.JSX.Element {
               </Button>
             ))}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-1 px-1">
-            <span className="text-xs text-muted-foreground">Plane naming</span>
+          <div className='flex flex-wrap items-center justify-between gap-1 px-1'>
+            <span className='text-xs text-muted-foreground'>Plane naming</span>
             <Tabs
               value={planeName}
               onValueChange={(v) => {
                 graphicsActor.send({ type: 'setPlaneName', payload: v as 'face' | 'cartesian' });
               }}
             >
-              <TabsList className="h-7 [&_[data-slot=tabs-trigger]]:text-xs">
-                <TabsTrigger value="face">Face</TabsTrigger>
-                <TabsTrigger value="cartesian">Cartesian</TabsTrigger>
+              <TabsList className='h-7 [&_[data-slot=tabs-trigger]]:text-xs'>
+                <TabsTrigger value='face'>Face</TabsTrigger>
+                <TabsTrigger value='cartesian'>Cartesian</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>

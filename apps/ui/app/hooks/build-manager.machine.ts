@@ -2,6 +2,8 @@ import { assign, assertEvent, setup, fromPromise } from 'xstate';
 import type { OutputFrom, DoneActorEvent } from 'xstate';
 import { wrap } from 'comlink';
 import type { Remote } from 'comlink';
+import { safeDispose } from '@taucad/utils/dispose';
+// oxlint-disable-next-line eslint-plugin-import/no-named-as-default -- web worker default import
 import ObjectStoreWorker from '#hooks/object-store.worker.js?worker';
 import type { ObjectStoreWorker as ObjectStoreWorkerType } from '#hooks/object-store.worker.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
@@ -13,26 +15,35 @@ type BuildManagerContext = {
 };
 
 const initializeWorkerActor = fromPromise<
-  { type: 'workerInitialized' } | { type: 'workerInitializationFailed'; error: Error },
+  | {
+      type: 'workerInitialized';
+      worker: Worker;
+      wrappedWorker: Remote<ObjectStoreWorkerType>;
+    }
+  | { type: 'workerInitializationFailed'; error: Error },
   { context: BuildManagerContext }
->(async ({ input }) => {
+>(async ({ input, signal }) => {
   const { context } = input;
+  console.debug('[BuildManager] initializeWorkerActor: start');
 
-  // Clean up any existing worker
+  // Clean up any existing worker (error-isolated so failures don't prevent new worker creation)
   if (context.worker) {
-    context.worker.terminate();
+    safeDispose(() => context.worker?.terminate());
+  }
+
+  if (signal.aborted) {
+    console.debug('[BuildManager] initializeWorkerActor: aborted');
+    return { type: 'workerInitializationFailed', error: new Error('Aborted') };
   }
 
   try {
     const worker = new ObjectStoreWorker();
     const wrappedWorker = wrap<ObjectStoreWorkerType>(worker);
 
-    // Store references
-    context.worker = worker;
-    context.wrappedWorker = wrappedWorker;
-
-    return { type: 'workerInitialized' };
+    console.debug('[BuildManager] initializeWorkerActor: success');
+    return { type: 'workerInitialized', worker, wrappedWorker };
   } catch (error) {
+    console.error('[BuildManager] initializeWorkerActor: FAILED', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to initialize worker';
     return {
       type: 'workerInitializationFailed',
@@ -62,9 +73,9 @@ type BuildManagerEvent = BuildManagerEventExternalDone | BuildManagerEventIntern
  */
 export const buildManagerMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as BuildManagerContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as BuildManagerEvent,
   },
   actors: buildManagerActors,
@@ -81,13 +92,26 @@ export const buildManagerMachine = setup({
       error: undefined,
     }),
 
-    destroyWorker({ context }) {
-      if (context.worker) {
-        context.worker.terminate();
-        context.worker = undefined;
-        context.wrappedWorker = undefined;
-      }
-    },
+    destroyWorker: assign(({ context }) => {
+      safeDispose(() => context.worker?.terminate());
+      return {
+        worker: undefined,
+        wrappedWorker: undefined,
+      };
+    }),
+
+    assignWorkerResources: assign({
+      worker({ event }) {
+        assertActorDoneEvent(event);
+        assertEvent(event.output, 'workerInitialized');
+        return event.output.worker;
+      },
+      wrappedWorker({ event }) {
+        assertActorDoneEvent(event);
+        assertEvent(event.output, 'workerInitialized');
+        return event.output.wrappedWorker;
+      },
+    }),
   },
   guards: {
     isWorkerInitializationFailed({ event }) {
@@ -106,6 +130,9 @@ export const buildManagerMachine = setup({
   exit: ['destroyWorker'],
   states: {
     initializing: {
+      entry() {
+        console.debug('[BuildManager] state → initializing');
+      },
       on: {
         initialize: {
           target: 'creatingWorker',
@@ -114,7 +141,12 @@ export const buildManagerMachine = setup({
     },
 
     creatingWorker: {
-      entry: ['clearError'],
+      entry: [
+        'clearError',
+        () => {
+          console.debug('[BuildManager] state → creatingWorker');
+        },
+      ],
       invoke: {
         id: 'initializeWorkerActor',
         src: 'initializeWorkerActor',
@@ -129,16 +161,22 @@ export const buildManagerMachine = setup({
           },
           {
             target: 'ready',
+            actions: ['assignWorkerResources'],
           },
         ],
       },
     },
 
     ready: {
-      // Worker is ready for use
+      entry() {
+        console.debug('[BuildManager] state → ready');
+      },
     },
 
     error: {
+      entry({ context }) {
+        console.error('[BuildManager] state → error', context.error);
+      },
       on: {
         initialize: {
           target: 'creatingWorker',

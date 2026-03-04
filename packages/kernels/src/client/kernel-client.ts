@@ -45,10 +45,16 @@ export type CodeInput<T extends Record<string, string>> = {
   /** @internal Not applicable in inline mode (client auto-manages). */
   changedPaths?: never;
 } & (string extends keyof T
-  ? { /** Entry point filename. Required when key count is unknown at compile time. */ file: string }
+  ? {
+      /** Entry point filename. Required when key count is unknown at compile time. */ file: string;
+    }
   : true extends IsUnion<keyof T>
-    ? { /** Entry point filename. Required for multi-file code. */ file: string }
-    : { /** Entry point filename. Optional for single-file code (inferred from the only key). */ file?: string });
+    ? {
+        /** Entry point filename. Required for multi-file code. */ file: string;
+      }
+    : {
+        /** Entry point filename. Optional for single-file code (inferred from the only key). */ file?: string;
+      });
 
 /**
  * Filesystem-based input for `render()`.
@@ -138,7 +144,12 @@ export type ConnectOptions =
   //
   { fileSystem: KernelFileSystemBase } | { port: MessagePort };
 
-type LogEntry = { level: string; message: string; origin?: LogOrigin; data?: unknown };
+type LogEntry = {
+  level: string;
+  message: string;
+  origin?: LogOrigin;
+  data?: unknown;
+};
 
 type EventHandlers = {
   log: Set<(entry: LogEntry) => void>;
@@ -433,7 +444,12 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
 
         const resolvedFile = resolveFileString(entryFile.startsWith('/') ? entryFile : `/${entryFile}`);
 
-        return executeRender({ file: resolvedFile, parameters, tessellation, client });
+        return executeRender({
+          file: resolvedFile,
+          parameters,
+          tessellation,
+          client,
+        });
       }
 
       // --- Filesystem mode ---
@@ -446,7 +462,12 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
 
       const resolvedFile = typeof fileInput.file === 'string' ? resolveFileString(fileInput.file) : fileInput.file;
 
-      return executeRender({ file: resolvedFile, parameters, tessellation, client });
+      return executeRender({
+        file: resolvedFile,
+        parameters,
+        tessellation,
+        client,
+      });
     },
 
     async export(
@@ -470,7 +491,11 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
       const client = await ensureConnected();
       const internalResult = await client.exportGeometry(format, tessellation);
       if (internalResult.success) {
-        return { success: true, data: internalResult.data[0]!, issues: internalResult.issues };
+        return {
+          success: true,
+          data: internalResult.data[0]!,
+          issues: internalResult.issues,
+        };
       }
 
       return internalResult;
@@ -480,8 +505,8 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
       workerClient?.notifyFileChanged(paths);
     },
 
-    on(event: string, handler: (...args: never[]) => void): () => void {
-      const set = handlers[event as keyof EventHandlers] as Set<(...args: never[]) => void> | undefined;
+    on(event: string, handler: (...arguments_: never[]) => void): () => void {
+      const set = handlers[event as keyof EventHandlers] as Set<(...arguments_: never[]) => void> | undefined;
       if (!set) {
         throw new Error(`Unknown event: ${event}`);
       }

@@ -7,33 +7,33 @@ import { describe, it, expect } from 'vitest';
 
 describe('ESM import smoke tests', () => {
   it('should resolve the main entry point', async () => {
-    const mod = await import('#index.js');
-    expect(mod).toBeDefined();
-    expect(mod.presets).toBeDefined();
-    expect(mod.KernelWorkerClient).toBeTypeOf('function');
-    expect(mod.createBridgePort).toBeTypeOf('function');
-    expect(mod.fromFsLike).toBeTypeOf('function');
-    expect(mod.createKernelSuccess).toBeTypeOf('function');
-    expect(mod.createKernelError).toBeTypeOf('function');
-    expect(mod.defineKernel).toBeTypeOf('function');
-    expect(mod.defineBundler).toBeTypeOf('function');
+    const module_ = await import('#index.js');
+    expect(module_).toBeDefined();
+    expect(module_.presets).toBeDefined();
+    expect(module_.KernelWorkerClient).toBeTypeOf('function');
+    expect(module_.createBridgePort).toBeTypeOf('function');
+    expect(module_.fromFsLike).toBeTypeOf('function');
+    expect(module_.createKernelSuccess).toBeTypeOf('function');
+    expect(module_.createKernelError).toBeTypeOf('function');
+    expect(module_.defineKernel).toBeTypeOf('function');
+    expect(module_.defineBundler).toBeTypeOf('function');
   });
 
   it('should resolve the filesystem subpath', async () => {
-    const mod = await import('#filesystem/index.js');
-    expect(mod).toBeDefined();
-    expect(mod.exposeFileSystem).toBeTypeOf('function');
-    expect(mod.createFileSystemBridge).toBeTypeOf('function');
-    expect(mod.createBridgeServer).toBeTypeOf('function');
-    expect(mod.createBridgeProxy).toBeTypeOf('function');
-    expect(mod.createBridgePort).toBeTypeOf('function');
+    const module_ = await import('#filesystem/index.js');
+    expect(module_).toBeDefined();
+    expect(module_.exposeFileSystem).toBeTypeOf('function');
+    expect(module_.createFileSystemBridge).toBeTypeOf('function');
+    expect(module_.createBridgeServer).toBeTypeOf('function');
+    expect(module_.createBridgeProxy).toBeTypeOf('function');
+    expect(module_.createBridgePort).toBeTypeOf('function');
   });
 
   it('should resolve the middleware entry point', async () => {
-    const mod = await import('#middleware/kernel-middleware.js');
-    expect(mod).toBeDefined();
-    expect(mod.defineMiddleware).toBeTypeOf('function');
-    expect(mod.createMiddlewareRuntime).toBeTypeOf('function');
+    const module_ = await import('#middleware/kernel-middleware.js');
+    expect(module_).toBeDefined();
+    expect(module_.defineMiddleware).toBeTypeOf('function');
+    expect(module_.createMiddlewareRuntime).toBeTypeOf('function');
   });
 
   it('should resolve individual kernel modules', async () => {
@@ -54,8 +54,8 @@ describe('ESM import smoke tests', () => {
   });
 
   it('should resolve the bundler module', async () => {
-    const mod = await import('#bundler/esbuild.bundler.js');
-    expect(mod.default).toBeDefined();
+    const module_ = await import('#bundler/esbuild.bundler.js');
+    expect(module_.default).toBeDefined();
   });
 
   it('should resolve middleware modules', async () => {
@@ -73,11 +73,11 @@ describe('ESM import smoke tests', () => {
   });
 
   it('should resolve the testing entry point', async () => {
-    const mod = await import('#testing/index.js');
-    expect(mod).toBeDefined();
-    expect(mod.createMockLogger).toBeTypeOf('function');
-    expect(mod.createMockFileSystem).toBeTypeOf('function');
-    expect(mod.createSuccessResult).toBeTypeOf('function');
-    expect(mod.createErrorResult).toBeTypeOf('function');
+    const module_ = await import('#testing/index.js');
+    expect(module_).toBeDefined();
+    expect(module_.createMockLogger).toBeTypeOf('function');
+    expect(module_.createMockFileSystem).toBeTypeOf('function');
+    expect(module_.createSuccessResult).toBeTypeOf('function');
+    expect(module_.createErrorResult).toBeTypeOf('function');
   });
 });

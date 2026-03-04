@@ -77,11 +77,11 @@ export const orthographicViews = [
  */
 export const screenshotRequestMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     context: {} as ScreenshotRequestContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     events: {} as ScreenshotRequestEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     input: {} as ScreenshotRequestInput,
   },
   actors: {

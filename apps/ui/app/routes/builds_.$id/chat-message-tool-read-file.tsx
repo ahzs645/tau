@@ -39,7 +39,7 @@ export function ChatMessageToolReadFile({
     case 'input-streaming':
     case 'input-available': {
       return (
-        <ChatToolCard variant="minimal" status="loading" isCollapsible={false}>
+        <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
@@ -61,12 +61,12 @@ export function ChatMessageToolReadFile({
       const startLine = input.offset ?? 1;
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
+        <ChatToolCard variant='minimal' status='ready' isCollapsible={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
               <ChatToolAction>Read</ChatToolAction>{' '}
-              <FileLink path={targetFile} lineNumber={startLine} className="text-foreground/50">
+              <FileLink path={targetFile} lineNumber={startLine} className='text-foreground/50'>
                 {targetFile}
                 {lineRange}
               </FileLink>
@@ -77,7 +77,7 @@ export function ChatMessageToolReadFile({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={FileText} fallbackTitle="Failed to read file" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FileText} fallbackTitle='Failed to read file' />;
     }
 
     case 'approval-requested':

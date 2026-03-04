@@ -46,7 +46,7 @@ export function useCommandPaletteItems(
     throw new Error('useCommandPaletteItems must be used within CommandPaletteProvider');
   }
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies are provided by caller
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies are provided by caller
   const items = useMemo(factory, dependencies);
 
   useEffect(() => {
@@ -101,8 +101,8 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
 
   return (
     <CommandDialog open={isOpen} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Search for actions..." />
-      <CommandList className="py-0">
+      <CommandInput placeholder='Search for actions...' />
+      <CommandList className='py-0'>
         <CommandEmpty>No results found.</CommandEmpty>
         {Object.entries(groupedItems).map(([groupName, groupItems]) => (
           <CommandGroup key={groupName} heading={groupName}>
@@ -121,10 +121,10 @@ function CommandPalette({ isOpen, onOpenChange, items }: CommandPalettePropertie
                 }}
               >
                 <div className={menuItemLayoutClass}>
-                  <span className="shrink-0">{item.icon}</span>
+                  <span className='shrink-0'>{item.icon}</span>
                   <span>{item.label}</span>
                 </div>
-                {item.shortcut ? <KeyShortcut className="ml-auto">{item.shortcut}</KeyShortcut> : null}
+                {item.shortcut ? <KeyShortcut className='ml-auto'>{item.shortcut}</KeyShortcut> : null}
               </CommandItem>
             ))}
           </CommandGroup>
@@ -153,14 +153,14 @@ function CommandPaletteTrigger({ items }: CommandPaletteTriggerProperties): Reac
   return (
     <>
       <Button
-        variant="outline"
-        className="relative h-8 w-full max-w-sm justify-start rounded-md bg-sidebar pl-3 text-sm font-normal text-muted-foreground shadow-none max-md:hidden sm:pr-12 md:w-32 dark:bg-sidebar"
+        variant='outline'
+        className='relative h-8 w-full max-w-sm justify-start rounded-md bg-sidebar pl-3 text-sm font-normal text-muted-foreground shadow-none max-md:hidden sm:pr-12 md:w-32 dark:bg-sidebar'
         onClick={() => {
           setOpen(true);
         }}
       >
-        <span className="inline-flex">Search...</span>
-        <KeyShortcut className="absolute top-1/2 right-2 -translate-y-1/2">{formattedKeyCombination}</KeyShortcut>
+        <span className='inline-flex'>Search...</span>
+        <KeyShortcut className='absolute top-1/2 right-2 -translate-y-1/2'>{formattedKeyCombination}</KeyShortcut>
       </Button>
       <CommandPalette isOpen={open} items={items} onOpenChange={setOpen} />
     </>
@@ -215,10 +215,10 @@ function CommandPaletteMobile({ items }: CommandPaletteMobileProperties): React.
         getValue={getItemValue}
         defaultValue={undefined}
         isDisabled={isItemDisabled}
-        searchPlaceHolder="Search commands..."
-        placeholder="Actions"
-        title="Search commands..."
-        description="Search for actions on the current page or across the entire platform."
+        searchPlaceHolder='Search commands...'
+        placeholder='Actions'
+        title='Search commands...'
+        description='Search for actions on the current page or across the entire platform.'
         onSelect={(itemId) => {
           const selectedItem = items.find((item) => item.id === itemId);
           if (selectedItem) {
@@ -231,8 +231,8 @@ function CommandPaletteMobile({ items }: CommandPaletteMobileProperties): React.
         }}
       >
         <TooltipTrigger asChild>
-          <Button variant="overlay" size="icon" className="text-muted-foreground md:hidden">
-            <Menu className="size-4" />
+          <Button variant='overlay' size='icon' className='text-muted-foreground md:hidden'>
+            <Menu className='size-4' />
           </Button>
         </TooltipTrigger>
       </ComboBoxResponsive>
@@ -281,7 +281,7 @@ function CommandPaletteProvider({ children }: { readonly children: React.ReactNo
       {children}
       {/* Render UI with aggregated items */}
       {allItems.length > 0 ? (
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           <CommandPaletteTrigger items={allItems} />
           <CommandPaletteMobile items={allItems} />
         </div>

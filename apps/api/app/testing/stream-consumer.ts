@@ -21,7 +21,7 @@ export async function collectStreamChunks(response: Response): Promise<UIMessage
 
   const chunkStream = parseJsonEventStream({
     stream: body,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- AI SDK schema type mismatch between LazySchema versions
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- AI SDK schema type mismatch between LazySchema versions
     schema: uiMessageChunkSchema as any,
   }).pipeThrough(
     new TransformStream({
@@ -38,9 +38,9 @@ export async function collectStreamChunks(response: Response): Promise<UIMessage
   const chunks: UIMessageChunk[] = [];
   const reader = chunkStream.getReader();
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- read loop
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- read loop
   while (true) {
-    // eslint-disable-next-line no-await-in-loop -- sequential stream read
+    // oxlint-disable-next-line no-await-in-loop -- sequential stream read
     const result = await reader.read();
     if (result.done) {
       break;

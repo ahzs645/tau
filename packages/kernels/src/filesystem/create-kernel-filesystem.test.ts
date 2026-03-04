@@ -122,7 +122,10 @@ describe('createKernelFileSystem', () => {
     it('should use supplied readFiles override instead of default', async () => {
       const customReadFiles = vi.fn().mockResolvedValue({ '/x': new Uint8Array([99]) });
       const base = fromMemoryFS({ '/x': 'original' });
-      const fs = createKernelFileSystem({ ...base, readFiles: customReadFiles });
+      const fs = createKernelFileSystem({
+        ...base,
+        readFiles: customReadFiles,
+      });
 
       const result = await fs.readFiles(['/x']);
       expect(customReadFiles).toHaveBeenCalledWith(['/x']);
@@ -130,18 +133,24 @@ describe('createKernelFileSystem', () => {
     });
 
     it('should use supplied ensureDir override instead of default', async () => {
-      const customEnsureDir = vi.fn().mockResolvedValue(undefined);
+      const customEnsureDirectory = vi.fn().mockResolvedValue(undefined);
       const base = fromMemoryFS();
-      const fs = createKernelFileSystem({ ...base, ensureDir: customEnsureDir });
+      const fs = createKernelFileSystem({
+        ...base,
+        ensureDir: customEnsureDirectory,
+      });
 
       await fs.ensureDir('/custom/path');
-      expect(customEnsureDir).toHaveBeenCalledWith('/custom/path');
+      expect(customEnsureDirectory).toHaveBeenCalledWith('/custom/path');
     });
 
     it('should use supplied readdirContents override instead of default', async () => {
       const customReaddirContents = vi.fn().mockResolvedValue({ 'file.txt': new Uint8Array([1]) });
       const base = fromMemoryFS();
-      const fs = createKernelFileSystem({ ...base, readdirContents: customReaddirContents });
+      const fs = createKernelFileSystem({
+        ...base,
+        readdirContents: customReaddirContents,
+      });
 
       const result = await fs.readdirContents('/dir');
       expect(customReaddirContents).toHaveBeenCalledWith('/dir');
@@ -149,10 +158,21 @@ describe('createKernelFileSystem', () => {
     });
 
     it('should use supplied readdirStat override instead of default', async () => {
-      const mockEntries = [{ path: '/d/f', name: 'f', type: 'file' as const, size: 5, mtimeMs: 123 }];
+      const mockEntries = [
+        {
+          path: '/d/f',
+          name: 'f',
+          type: 'file' as const,
+          size: 5,
+          mtimeMs: 123,
+        },
+      ];
       const customReaddirStat = vi.fn().mockResolvedValue(mockEntries);
       const base = fromMemoryFS();
-      const fs = createKernelFileSystem({ ...base, readdirStat: customReaddirStat });
+      const fs = createKernelFileSystem({
+        ...base,
+        readdirStat: customReaddirStat,
+      });
 
       const result = await fs.readdirStat('/d');
       expect(customReaddirStat).toHaveBeenCalledWith('/d');

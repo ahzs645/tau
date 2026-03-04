@@ -101,7 +101,7 @@ const extractZipActor = fromPromise<
 
   // Process each file sequentially for progress tracking
   for (const [path, file] of fileEntries) {
-    // eslint-disable-next-line no-await-in-loop -- processing files sequentially for progress tracking
+    // oxlint-disable-next-line no-await-in-loop -- processing files sequentially for progress tracking
     const content = (await file.async('uint8array')) as Uint8Array<ArrayBuffer>;
     files.set(path, {
       filename: path,
@@ -172,13 +172,13 @@ type ImportDiskEvent = ImportDiskEventExternalDone | ImportDiskEventInternal;
  */
 export const importDiskMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as ImportDiskContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as ImportDiskEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as ImportDiskInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as ImportDiskEmitted,
   },
   actors: importDiskActors,

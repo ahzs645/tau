@@ -91,8 +91,8 @@ function createLinePrimitiveFromReplicadEdges(
 
   // Create line indices - each pair of positions forms a line
   const lineIndices = new Uint32Array(linePositions.length / 3);
-  for (let i = 0; i < lineIndices.length; i++) {
-    lineIndices[i] = i;
+  for (let index = 0; index < lineIndices.length; index++) {
+    lineIndices[index] = index;
   }
 
   const lineMaterial = document
@@ -201,8 +201,9 @@ async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Pro
       for (const byte of uint8Array) {
         binaryString += String.fromCodePoint(byte);
       }
+      // oxlint-disable-next-line no-restricted-globals -- btoa is available in browsers
 
-      // eslint-disable-next-line no-restricted-globals -- btoa is available in browsers
+      // oxlint-disable-next-line no-restricted-globals -- btoa is available in browsers
       const base64Data = btoa(binaryString);
 
       buffer.uri = `data:application/octet-stream;base64,${base64Data}`;

@@ -36,18 +36,18 @@ export const ChatExamples = memo(function () {
 
   return (
     <EmptyItems>
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-medium">Get started with 3D model examples</h3>
-        <Button variant="ghost" size="icon" className="size-7" onClick={handleRefreshExamples}>
-          <RefreshCw className="size-4" />
+      <div className='mb-2 flex items-center justify-between'>
+        <h3 className='text-sm font-medium'>Get started with 3D model examples</h3>
+        <Button variant='ghost' size='icon' className='size-7' onClick={handleRefreshExamples}>
+          <RefreshCw className='size-4' />
         </Button>
       </div>
-      <div className="flex w-full flex-wrap justify-between gap-2">
+      <div className='flex w-full flex-wrap justify-between gap-2'>
         {examples.map((example) => (
           <Button
             key={example.title}
-            variant="outline"
-            className="flex-1"
+            variant='outline'
+            className='flex-1'
             onClick={() => {
               handleExampleClick(example);
             }}

@@ -144,7 +144,7 @@ export const createInspectSignature = (
  * Check if a mesh has a specific attribute type
  */
 export const hasAttribute = (mesh: InspectReport['meshes']['properties'][0], attributeType: string): boolean => {
-  return mesh.attributes.some((attr) => attr.toLowerCase().includes(attributeType.toLowerCase()));
+  return mesh.attributes.some((attribute) => attribute.toLowerCase().includes(attributeType.toLowerCase()));
 };
 
 /**
@@ -267,7 +267,9 @@ function convertSimpleToGltf(simple: SimpleHierarchy): GltfNodeInfo {
   return {
     type: simple.type as GltfNodeInfo['type'],
     ...(simple.name && { name: simple.name }),
-    ...(simple.children.length > 0 && { children: simple.children.map((child) => convertSimpleToGltf(child)) }),
+    ...(simple.children.length > 0 && {
+      children: simple.children.map((child) => convertSimpleToGltf(child)),
+    }),
   };
 }
 

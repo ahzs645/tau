@@ -11,7 +11,7 @@
 export function hashBytes(data: Uint8Array<ArrayBuffer>): string {
   let hash = 5381;
   for (const byte of data) {
-    // eslint-disable-next-line no-bitwise -- unsigned 32-bit wraparound is intentional
+    // oxlint-disable-next-line unicorn/prefer-math-trunc, no-bitwise -- unsigned 32-bit wraparound is intentional
     hash = (hash * 33 + byte) >>> 0;
   }
 
@@ -24,9 +24,9 @@ export function hashBytes(data: Uint8Array<ArrayBuffer>): string {
  */
 export function hashString(input: string): string {
   let hash = 5381;
-  for (let i = 0; i < input.length; i++) {
-    // eslint-disable-next-line no-bitwise -- unsigned 32-bit wraparound is intentional
-    hash = (hash * 33 + input.codePointAt(i)!) >>> 0;
+  for (let index = 0; index < input.length; index++) {
+    // oxlint-disable-next-line unicorn/prefer-math-trunc, no-bitwise -- unsigned 32-bit wraparound is intentional
+    hash = (hash * 33 + input.codePointAt(index)!) >>> 0;
   }
 
   return hash.toString(16).padStart(8, '0');

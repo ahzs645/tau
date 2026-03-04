@@ -27,9 +27,9 @@ export const ChatErrorTool = memo(function ({
         className,
       )}
     >
-      <div className="flex items-center gap-2">
-        <AlertTriangle className="size-4 shrink-0 text-destructive" />
-        <p className="font-medium text-foreground">Processing Error</p>
+      <div className='flex items-center gap-2'>
+        <AlertTriangle className='size-4 shrink-0 text-destructive' />
+        <p className='font-medium text-foreground'>Processing Error</p>
       </div>
       <MarkdownViewer
         className={cn(
@@ -42,12 +42,12 @@ export const ChatErrorTool = memo(function ({
       >
         {description ?? 'There was an error processing your message. Please try again.'}
       </MarkdownViewer>
-      <div className="flex items-center justify-between gap-2">
+      <div className='flex items-center justify-between gap-2'>
         {helpUrl ? (
           <ExternalLink
             href={helpUrl}
-            className="text-xs text-muted-foreground decoration-muted-foreground hover:text-foreground"
-            arrowSize="xs"
+            className='text-xs text-muted-foreground decoration-muted-foreground hover:text-foreground'
+            arrowSize='xs'
           >
             Learn more
           </ExternalLink>
@@ -55,14 +55,14 @@ export const ChatErrorTool = memo(function ({
           <div />
         )}
         <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0"
+          variant='outline'
+          size='sm'
+          className='shrink-0'
           onClick={() => {
             regenerate();
           }}
         >
-          <RefreshCcw className="size-3.5" />
+          <RefreshCcw className='size-3.5' />
           Retry
         </Button>
       </div>

@@ -8,19 +8,24 @@ const fsp = zenfs.promises;
  * Duplicated here to test the pattern in isolation without importing
  * the full file-manager module (which has side effects and worker deps).
  */
+// oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
 let writeQueue: Promise<void> = Promise.resolve();
 
 async function serialized<T>(operation: () => Promise<T>): Promise<T> {
   const result = writeQueue
+    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
     .catch(() => {
       // Swallow previous error so the queue continues
     })
+    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
     .then(async () => operation());
 
   writeQueue = result
+    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
     .catch(() => {
       // No-op
     })
+    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
     .then(() => {
       // No-op
     });
@@ -28,6 +33,7 @@ async function serialized<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 function resetQueue(): void {
+  // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
   writeQueue = Promise.resolve();
 }
 
@@ -38,12 +44,13 @@ function resetQueue(): void {
 async function writeFileRaw(path: string, content: string): Promise<void> {
   const lastSlash = path.lastIndexOf('/');
   if (lastSlash > 0) {
-    const dir = path.slice(0, lastSlash);
-    const segments = dir.split('/').filter(Boolean);
+    const directory = path.slice(0, lastSlash);
+    const segments = directory.split('/').filter(Boolean);
     let current = '';
     for (const segment of segments) {
       current += `/${segment}`;
       try {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- sequential processing required
         await fsp.mkdir(current);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -58,17 +65,18 @@ async function writeFileRaw(path: string, content: string): Promise<void> {
 
 describe('ZenFS directory listing race condition (zen-fs/core#256)', () => {
   beforeEach(async () => {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem mount path
     await configure({ mounts: { '/': InMemory } });
     resetQueue();
   });
 
   it('should lose directory entries when writing concurrently WITHOUT serialization', async () => {
-    const dir = '/race-test';
-    await fsp.mkdir(dir);
+    const directory = '/race-test';
+    await fsp.mkdir(directory);
 
     const fileCount = 10;
-    const writes = Array.from({ length: fileCount }, (_, i) =>
-      writeFileRaw(`${dir}/file-${i}.txt`, `content-${i}`),
+    const writes = Array.from({ length: fileCount }, async (_, i) =>
+      writeFileRaw(`${directory}/file-${i}.txt`, `content-${i}`),
     );
 
     // Fire all writes concurrently -- no serialization.
@@ -77,45 +85,40 @@ describe('ZenFS directory listing race condition (zen-fs/core#256)', () => {
     // all other entries are lost.
     await Promise.all(writes);
 
-    const entries = await fsp.readdir(dir);
+    const entries = await fsp.readdir(directory);
 
     // With the race condition, we expect FEWER than fileCount entries.
     // The exact count varies per run, but it should almost never be the full set.
     // We assert that at least one entry was lost to prove the race exists.
-    console.log(
-      `[race-test] Without serialization: ${entries.length}/${fileCount} files survived`,
-      entries,
-    );
+    console.log(`[race-test] Without serialization: ${entries.length}/${fileCount} files survived`, entries);
 
     expect(entries.length).toBeLessThan(fileCount);
   });
 
   it('should preserve ALL directory entries when writing with serialization', async () => {
-    const dir = '/serial-test';
-    await fsp.mkdir(dir);
+    const directory = '/serial-test';
+    await fsp.mkdir(directory);
 
     const fileCount = 10;
 
     // Write all files through the serialization queue -- each operation
     // waits for the previous one to complete before running.
-    const writes = Array.from({ length: fileCount }, (_, i) =>
-      serialized(async () => writeFileRaw(`${dir}/file-${i}.txt`, `content-${i}`)),
+    const writes = Array.from({ length: fileCount }, async (_, i) =>
+      serialized(async () => writeFileRaw(`${directory}/file-${i}.txt`, `content-${i}`)),
     );
 
     await Promise.all(writes);
 
-    const entries = await fsp.readdir(dir);
+    const entries = await fsp.readdir(directory);
 
-    console.log(
-      `[serial-test] With serialization: ${entries.length}/${fileCount} files survived`,
-      entries,
-    );
+    console.log(`[serial-test] With serialization: ${entries.length}/${fileCount} files survived`, entries);
 
     expect(entries.length).toBe(fileCount);
 
     // Verify every file is present and readable
     for (let i = 0; i < fileCount; i++) {
-      const content = await fsp.readFile(`${dir}/file-${i}.txt`, 'utf8');
+      // oxlint-disable-next-line eslint/no-await-in-loop -- sequential processing required
+      const content = await fsp.readFile(`${directory}/file-${i}.txt`, 'utf8');
       expect(content).toBe(`content-${i}`);
     }
   });
@@ -123,24 +126,22 @@ describe('ZenFS directory listing race condition (zen-fs/core#256)', () => {
   it('should lose entries in nested directory writes without serialization', async () => {
     // This simulates the real-world scenario: creating a build with multiple
     // files in /builds/<id>/ -- all written concurrently.
-    const buildDir = '/builds/test-build-id';
+    const buildDirectory = '/builds/test-build-id';
 
     const files: Record<string, string> = {
-      [`${buildDir}/main.ts`]: 'export default {};',
-      [`${buildDir}/utils.ts`]: 'export function helper() {}',
-      [`${buildDir}/types.ts`]: 'export type Foo = {};',
-      [`${buildDir}/config.json`]: '{"key": "value"}',
-      [`${buildDir}/README.md`]: '# Test',
+      [`${buildDirectory}/main.ts`]: 'export default {};',
+      [`${buildDirectory}/utils.ts`]: 'export function helper() {}',
+      [`${buildDirectory}/types.ts`]: 'export type Foo = {};',
+      [`${buildDirectory}/config.json`]: '{"key": "value"}',
+      [`${buildDirectory}/README.md`]: '# Test',
     };
 
     // Write all files concurrently without serialization
-    const writes = Object.entries(files).map(([path, content]) =>
-      writeFileRaw(path, content),
-    );
+    const writes = Object.entries(files).map(async ([path, content]) => writeFileRaw(path, content));
 
     await Promise.all(writes);
 
-    const entries = await fsp.readdir(buildDir);
+    const entries = await fsp.readdir(buildDirectory);
 
     console.log(
       `[nested-race-test] Without serialization: ${entries.length}/${Object.keys(files).length} files survived`,
@@ -152,24 +153,24 @@ describe('ZenFS directory listing race condition (zen-fs/core#256)', () => {
   });
 
   it('should preserve all entries in nested directory writes WITH serialization', async () => {
-    const buildDir = '/builds/test-build-id';
+    const buildDirectory = '/builds/test-build-id';
 
     const files: Record<string, string> = {
-      [`${buildDir}/main.ts`]: 'export default {};',
-      [`${buildDir}/utils.ts`]: 'export function helper() {}',
-      [`${buildDir}/types.ts`]: 'export type Foo = {};',
-      [`${buildDir}/config.json`]: '{"key": "value"}',
-      [`${buildDir}/README.md`]: '# Test',
+      [`${buildDirectory}/main.ts`]: 'export default {};',
+      [`${buildDirectory}/utils.ts`]: 'export function helper() {}',
+      [`${buildDirectory}/types.ts`]: 'export type Foo = {};',
+      [`${buildDirectory}/config.json`]: '{"key": "value"}',
+      [`${buildDirectory}/README.md`]: '# Test',
     };
 
     // Write all files through the serialization queue
-    const writes = Object.entries(files).map(([path, content]) =>
+    const writes = Object.entries(files).map(async ([path, content]) =>
       serialized(async () => writeFileRaw(path, content)),
     );
 
     await Promise.all(writes);
 
-    const entries = await fsp.readdir(buildDir);
+    const entries = await fsp.readdir(buildDirectory);
 
     console.log(
       `[nested-serial-test] With serialization: ${entries.length}/${Object.keys(files).length} files survived`,
@@ -180,6 +181,7 @@ describe('ZenFS directory listing race condition (zen-fs/core#256)', () => {
 
     // Verify file contents are intact
     for (const [path, expectedContent] of Object.entries(files)) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- sequential processing required
       const content = await fsp.readFile(path, 'utf8');
       expect(content).toBe(expectedContent);
     }

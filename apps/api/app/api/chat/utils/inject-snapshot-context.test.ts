@@ -196,10 +196,13 @@ describe('injectSnapshotContext', () => {
       expect(result).toHaveLength(3);
       // First message should be unchanged
       expect(result[0]?.parts).toHaveLength(1);
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toBe('First question');
       // Last user message should have context prepended as first part
       expect(result[2]?.parts).toHaveLength(2);
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[2]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[2]?.parts[1] as { type: 'text'; text: string }).text).toBe('Second question');
     });
 
@@ -231,8 +234,10 @@ describe('injectSnapshotContext', () => {
       // Context prepended as first part, then original parts follow
       expect(result[0]?.parts).toHaveLength(3);
       expect(result[0]?.parts[0]).toHaveProperty('type', 'text');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
       expect(result[0]?.parts[1]).toHaveProperty('type', 'text');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toBe('Check this image');
       expect(result[0]?.parts[2]).toHaveProperty('type', 'file');
     });
@@ -252,8 +257,11 @@ describe('injectSnapshotContext', () => {
 
       // Context is only in the first part, original parts are unchanged
       expect(result[0]?.parts).toHaveLength(3);
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toBe('Part one');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[2] as { type: 'text'; text: string }).text).toBe('Part two');
     });
 
@@ -287,8 +295,11 @@ describe('injectSnapshotContext', () => {
       // Context prepended as first part, then original file part
       expect(result[0]?.parts).toHaveLength(2);
       expect(result[0]?.parts[0]).toHaveProperty('type', 'text');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<active_file>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<project_layout>');
       expect(result[0]?.parts[1]).toHaveProperty('type', 'file');
     });
@@ -381,11 +392,11 @@ describe('injectSnapshotContext', () => {
       const result = injectSnapshotContext(messages, snapshot);
       const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      const libIndex = contextPart.text.indexOf('lib/');
-      const mainIndex = contextPart.text.indexOf('main.scad');
+      const libraryIndex = contextPart.text.indexOf('lib/');
+      const mainFileIndex = contextPart.text.indexOf('main.scad');
 
       // Directory should come before file
-      expect(libIndex).toBeLessThan(mainIndex);
+      expect(libraryIndex).toBeLessThan(mainFileIndex);
     });
 
     it('should show empty message for empty fileTree', () => {

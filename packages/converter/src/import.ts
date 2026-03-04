@@ -39,6 +39,7 @@ const loaderFromInputFormat = {
   md5mesh: new AssimpLoader(),
   'mesh.xml': new AssimpLoader(),
   nff: new AssimpLoader(),
+  // eslint-disable-next-line id-denylist -- OBJ file format identifier
   obj: new AssimpLoader(),
   off: new AssimpLoader(),
   ogex: new AssimpLoader(),

@@ -47,13 +47,13 @@ export function ChatInterfaceGraphicsMeasure(): React.JSX.Element {
   }, [measurements]);
 
   return (
-    <div className="flex h-full flex-col gap-2">
-      <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+    <div className='flex h-full flex-col gap-2'>
+      <div className='flex items-center justify-between px-1 text-xs text-muted-foreground'>
         <div>Measurements</div>
-        <div className="text-[11px]">Hover to preview, pin to persist</div>
+        <div className='text-[11px]'>Hover to preview, pin to persist</div>
       </div>
-      <div className="mt-1 grid gap-1">
-        {sorted.length === 0 ? <EmptyItems className="mx-1 -mt-1">No measurements</EmptyItems> : null}
+      <div className='mt-1 grid gap-1'>
+        {sorted.length === 0 ? <EmptyItems className='mx-1 -mt-1'>No measurements</EmptyItems> : null}
 
         {sorted.map((m) => {
           const value = (m.distance / lengthFactor).toFixed(1);
@@ -73,49 +73,49 @@ export function ChatInterfaceGraphicsMeasure(): React.JSX.Element {
                 graphicsActor.send({ type: 'setHoveredMeasurement', payload: undefined });
               }}
             >
-              <div className="flex items-center gap-2">
+              <div className='flex items-center gap-2'>
                 <Button
-                  variant="ghost"
-                  size="icon"
+                  variant='ghost'
+                  size='icon'
                   className={cn('size-7', m.isPinned ? 'text-primary' : 'text-muted-foreground')}
                   title={m.isPinned ? 'Unpin' : 'Pin'}
                   onClick={() => {
                     graphicsActor.send({ type: 'toggleMeasurementPinned', id: m.id });
                   }}
                 >
-                  {m.isPinned ? <Pin className="size-3.5" /> : <PinOff className="size-3.5" />}
+                  {m.isPinned ? <Pin className='size-3.5' /> : <PinOff className='size-3.5' />}
                 </Button>
 
-                <div className="min-w-0 flex-1 truncate text-sm">{label}</div>
+                <div className='min-w-0 flex-1 truncate text-sm'>{label}</div>
 
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Delete"
-                  className="size-7 text-muted-foreground hover:text-destructive"
+                  variant='ghost'
+                  size='icon'
+                  title='Delete'
+                  className='size-7 text-muted-foreground hover:text-destructive'
                   onClick={() => {
                     graphicsActor.send({ type: 'clearMeasurement', payload: m.id });
                   }}
                 >
-                  <Trash className="size-4" />
+                  <Trash className='size-4' />
                 </Button>
               </div>
 
-              <div className="flex items-center gap-2 pl-9 text-xs text-neutral">
-                <span className="flex items-center gap-1">
-                  <span className="font-medium" style={{ color: axesColors.x }}>
+              <div className='flex items-center gap-2 pl-9 text-xs text-neutral'>
+                <span className='flex items-center gap-1'>
+                  <span className='font-medium' style={{ color: axesColors.x }}>
                     X:
                   </span>
                   {m.deltaX}
                 </span>
-                <span className="flex items-center gap-1">
-                  <span className="font-medium" style={{ color: axesColors.y }}>
+                <span className='flex items-center gap-1'>
+                  <span className='font-medium' style={{ color: axesColors.y }}>
                     Y:
                   </span>
                   {m.deltaY}
                 </span>
-                <span className="flex items-center gap-1">
-                  <span className="font-medium" style={{ color: axesColors.z }}>
+                <span className='flex items-center gap-1'>
+                  <span className='font-medium' style={{ color: axesColors.z }}>
                     Z:
                   </span>
                   {m.deltaZ}

@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- test file */
+/* oxlint-disable max-lines -- test file */
 import type { Mock } from 'vitest';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -1172,7 +1172,7 @@ describe('Parameters - Search Highlighting', () => {
 
     // Should find description text - use function matcher since text is broken up by highlight marks
     const description = screen.getByText((_content, element) => {
-      return element !== null && element.textContent === 'The hostname or IP address of the server';
+      return element?.textContent === 'The hostname or IP address of the server';
     });
     expect(description).toBeTruthy();
 
@@ -2429,7 +2429,7 @@ describe('Parameters - Empty State', () => {
           units={defaultUnits}
           defaultParameters={{}}
           jsonSchema={undefined}
-          emptyMessage="Custom empty message"
+          emptyMessage='Custom empty message'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2447,7 +2447,7 @@ describe('Parameters - Empty State', () => {
           parameters={{}}
           defaultParameters={{}}
           jsonSchema={undefined}
-          emptyDescription="Custom description text"
+          emptyDescription='Custom description text'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2465,8 +2465,8 @@ describe('Parameters - Empty State', () => {
           parameters={{}}
           defaultParameters={{}}
           jsonSchema={undefined}
-          emptyMessage="Custom title"
-          emptyDescription="Custom description"
+          emptyMessage='Custom title'
+          emptyDescription='Custom description'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2560,7 +2560,7 @@ describe('Parameters - Feature Flags', () => {
           parameters={{}}
           defaultParameters={defaultParameters}
           jsonSchema={schema}
-          searchPlaceholder="Custom placeholder"
+          searchPlaceholder='Custom placeholder'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2979,7 +2979,7 @@ describe('Parameters - Edge Cases', () => {
           parameters={{}}
           defaultParameters={defaultParameters}
           jsonSchema={schema}
-          className="custom-class"
+          className='custom-class'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,

@@ -1,3 +1,4 @@
+// oxlint-disable complexity -- error mapping logic with deeply nested WASM error handling
 import type {
   ErrorLocation,
   KernelIssue,
@@ -62,8 +63,8 @@ export function convertKclErrorToKernelIssue(kclError: KclError, code?: string, 
           const location = frame.fileName
             ? `${frame.fileName}:${frame.lineNumber}:${frame.columnNumber}`
             : `<unknown>:${frame.lineNumber}:${frame.columnNumber}`;
-          const funcName = frame.functionName ?? '<anonymous>';
-          return `    at ${funcName} (${location})`;
+          const functionName = frame.functionName ?? '<anonymous>';
+          return `    at ${functionName} (${location})`;
         })
         .join('\n');
     }

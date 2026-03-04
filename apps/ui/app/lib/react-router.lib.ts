@@ -19,7 +19,7 @@ export function throwRedirectIfSubdomain(request: Request, subdomain: string, st
 
   if (hostnameParts[0] === subdomain) {
     url.hostname = hostnameParts.slice(1).join('.');
-    // eslint-disable-next-line @typescript-eslint/only-throw-error -- React Router pattern: throwing Response is valid
+    // oxlint-disable-next-line @typescript-eslint/only-throw-error -- React Router pattern: throwing Response is valid
     throw redirect(url.toString(), statusCode);
   }
 }

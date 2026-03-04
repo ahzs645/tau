@@ -24,7 +24,7 @@ export function AuthConfigProvider({ children }: { readonly children: React.Reac
       changeEmail={false}
       // Navigate={navigate}
       // replace={replace}
-      redirectTo="/"
+      redirectTo='/'
       baseURL={ENV.TAU_FRONTEND_URL}
       social={{
         providers: ['github', 'google'],
@@ -40,7 +40,7 @@ export function AuthConfigProvider({ children }: { readonly children: React.Reac
           API_KEYS: 'api-keys',
         },
       }}
-      // eslint-disable-next-line react/prop-types -- 3rd-party library
+      // oxlint-disable-next-line react/prop-types -- 3rd-party library
       Link={(props) => <Link {...props} to={props.href} />}
     >
       {children}

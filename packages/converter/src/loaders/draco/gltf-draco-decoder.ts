@@ -1,4 +1,4 @@
-/* eslint-disable complexity -- draco3d uses c++ style */
+/* oxlint-disable complexity -- draco3d uses c++ style */
 // Copyright 2016 The Draco Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,8 +16,8 @@
 // Pure gltf-transform implementation for Draco decoding
 
 /* eslint-disable @typescript-eslint/naming-convention -- draco3d uses c++ style */
-/* eslint-disable max-params -- draco3d uses c++ style */
-/* eslint-disable new-cap -- draco3d uses c++ style */
+/* oxlint-disable max-params -- draco3d uses c++ style */
+/* oxlint-disable new-cap -- draco3d uses c++ style */
 
 import type { Attribute, Decoder, DecoderBuffer, DecoderModule, DracoArray, Mesh, PointCloud } from 'draco3dgltf';
 import draco3d from 'draco3dgltf';

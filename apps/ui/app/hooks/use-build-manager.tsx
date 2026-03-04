@@ -86,7 +86,9 @@ type BuildManagerContextType = {
   // Chat methods
   createChat: (
     resourceId: string,
-    chat: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'> & { id?: string },
+    chat: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'> & {
+      id?: string;
+    },
   ) => Promise<Chat>;
   updateChat: (
     chatId: string,
@@ -285,7 +287,9 @@ export function BuildManagerProvider({ children }: { readonly children: ReactNod
   const createChat = useCallback(
     async (
       resourceId: string,
-      chatData: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'> & { id?: string },
+      chatData: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'> & {
+        id?: string;
+      },
     ): Promise<Chat> => {
       const worker = await getReadiedWorker();
       return worker.createChat(resourceId, chatData);

@@ -54,7 +54,7 @@ export function rjsfIdToJsonPath(rjsfId: string): string[] {
  * @param propertyName - The name of the property to check
  * @returns true if the schema or its nested properties match the search term
  */
-// eslint-disable-next-line complexity -- consider refactoring.
+// oxlint-disable-next-line complexity -- consider refactoring.
 export function isSchemaMatchingSearch(schema: RJSFSchema, searchTerm: string, propertyName?: string): boolean {
   if (!searchTerm) {
     return true;
@@ -113,10 +113,11 @@ export function isSchemaMatchingSearch(schema: RJSFSchema, searchTerm: string, p
  * Gets the appropriate default value for a field, handling array items specially.
  * For array items, extracts the default value from the parent array at the item's index.
  *
- * @param fieldPath - The JSON path to the field (e.g., ['strings', '0'] for first array item)
- * @param formData - The current form data value for this field
- * @param schemaDefault - The default value from the schema
- * @param defaultParameters - The default parameters object containing all default values
+ * @param root0 - The field default value parameters
+ * @param root0.fieldPath - The JSON path to the field (e.g., ['strings', '0'] for first array item)
+ * @param root0.formData - The current form data value for this field
+ * @param root0.schemaDefault - The default value from the schema
+ * @param root0.defaultParameters - The default parameters object containing all default values
  * @returns The default value to use for comparison (schema default or array item default)
  */
 export function getFieldDefaultValue({
@@ -142,7 +143,7 @@ export function getFieldDefaultValue({
         // Navigate to the parent array in defaultParameters
         let parentArray: unknown = defaultParameters;
         for (const segment of parentPath) {
-          // eslint-disable-next-line max-depth -- this is easier to read.
+          // oxlint-disable-next-line max-depth -- this is easier to read.
           if (typeof parentArray === 'object' && parentArray !== null && segment in parentArray) {
             parentArray = (parentArray as Record<string, unknown>)[segment];
           } else {

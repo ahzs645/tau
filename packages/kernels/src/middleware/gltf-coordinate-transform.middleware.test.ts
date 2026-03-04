@@ -40,8 +40,8 @@ async function createTestGltf(positions: number[]): Promise<Uint8Array<ArrayBuff
   // Create indices for a triangle (or multiple triangles)
   const numberVertices = positions.length / 3;
   const indices: number[] = [];
-  for (let i = 0; i < numberVertices; i++) {
-    indices.push(i);
+  for (let index = 0; index < numberVertices; index++) {
+    indices.push(index);
   }
 
   const indexAccessor = document
@@ -52,10 +52,10 @@ async function createTestGltf(positions: number[]): Promise<Uint8Array<ArrayBuff
 
   // Create normal accessor (dummy normals)
   const normals = new Float32Array(numberVertices * 3);
-  for (let i = 0; i < numberVertices; i++) {
-    normals[i * 3] = 0;
-    normals[i * 3 + 1] = 1;
-    normals[i * 3 + 2] = 0;
+  for (let index = 0; index < numberVertices; index++) {
+    normals[index * 3] = 0;
+    normals[index * 3 + 1] = 1;
+    normals[index * 3 + 2] = 0;
   }
 
   const normalAccessor = document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(normals);

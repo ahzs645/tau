@@ -57,7 +57,10 @@ function getSeverityIconClass(severity: IssueSeverity): string {
 /**
  * Counts issues by severity and returns formatted summary.
  */
-function getIssueSummary(issues: KernelIssue[]): { summary: string; hasErrors: boolean } {
+function getIssueSummary(issues: KernelIssue[]): {
+  summary: string;
+  hasErrors: boolean;
+} {
   const counts = {
     error: 0,
     warning: 0,
@@ -97,7 +100,7 @@ export function ChatMessageToolGetKernelResult({
     case 'input-streaming':
     case 'input-available': {
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={CheckCircle} />
             <ChatToolCardTitle>
@@ -117,8 +120,8 @@ export function ChatMessageToolGetKernelResult({
       // Success state with no issues - use minimal card with success icon
       if (status === 'ready' && !hasIssues) {
         return (
-          <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
-            <ChatToolCardHeader className="text-success">
+          <ChatToolCard variant='minimal' status='ready' isCollapsible={false}>
+            <ChatToolCardHeader className='text-success'>
               <ChatToolCardIcon icon={CheckCircle} />
               <ChatToolCardTitle>Kernel compilation successful</ChatToolCardTitle>
             </ChatToolCardHeader>
@@ -136,14 +139,14 @@ export function ChatMessageToolGetKernelResult({
       const cardStatus = hasErrors ? 'error' : 'warning';
 
       return (
-        <ChatToolCard isCookieDefaultOpen variant="minimal" status={cardStatus} isDefaultOpen={false}>
+        <ChatToolCard isCookieDefaultOpen variant='minimal' status={cardStatus} isDefaultOpen={false}>
           <ChatToolCardHeader className={headerColorClass}>
             <ChatToolCardIcon isError={hasErrors} icon={headerIcon} />
             <ChatToolCardTitle>{summary}</ChatToolCardTitle>
           </ChatToolCardHeader>
           {hasIssues ? (
             <ChatToolCardContent>
-              <ChatToolCardList maxHeight="max-h-48" className={borderClass}>
+              <ChatToolCardList maxHeight='max-h-48' className={borderClass}>
                 {kernelIssues.map((issue, index) => {
                   const { location, severity } = issue;
                   const key = `${location?.startLineNumber ?? index}-${issue.message}`;
@@ -152,18 +155,18 @@ export function ChatMessageToolGetKernelResult({
 
                   return (
                     <ChatToolCardListItem key={key} icon={issueIcon} iconClassName={issueIconClass}>
-                      <span className="flex flex-1 flex-col items-start gap-0.5 @xs:flex-row @xs:gap-1">
+                      <span className='flex flex-1 flex-col items-start gap-0.5 @xs:flex-row @xs:gap-1'>
                         {location ? (
                           <FileLink
                             path={location.fileName}
                             lineNumber={location.startLineNumber}
                             column={location.startColumn}
-                            className="shrink-0 font-mono text-xs text-muted-foreground/70 hover:text-foreground"
+                            className='shrink-0 font-mono text-xs text-muted-foreground/70 hover:text-foreground'
                           >
                             {location.fileName}:{location.startLineNumber}:{location.startColumn}
                           </FileLink>
                         ) : undefined}
-                        <MarkdownViewer className="inline w-auto font-mono text-xs text-inherit">
+                        <MarkdownViewer className='inline w-auto font-mono text-xs text-inherit'>
                           {issue.message}
                         </MarkdownViewer>
                       </span>
@@ -182,7 +185,7 @@ export function ChatMessageToolGetKernelResult({
         <ChatToolError
           errorText={part.errorText}
           fallbackIcon={XCircle}
-          fallbackTitle="Failed to check kernel status"
+          fallbackTitle='Failed to check kernel status'
         />
       );
     }

@@ -4,17 +4,17 @@ import { cn } from '#utils/ui.utils.js';
 import { buttonVariants } from '#components/ui/button.js';
 
 function AlertDialog({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Root>): React.JSX.Element {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
+  return <AlertDialogPrimitive.Root data-slot='alert-dialog' {...props} />;
 }
 
 function AlertDialogTrigger({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Trigger>): React.JSX.Element {
-  return <AlertDialogPrimitive.Trigger data-slot="alert-dialog-trigger" {...props} />;
+  return <AlertDialogPrimitive.Trigger data-slot='alert-dialog-trigger' {...props} />;
 }
 
 function AlertDialogPortal({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Portal>): React.JSX.Element {
-  return <AlertDialogPrimitive.Portal data-slot="alert-dialog-portal" {...props} />;
+  return <AlertDialogPrimitive.Portal data-slot='alert-dialog-portal' {...props} />;
 }
 
 function AlertDialogOverlay({
@@ -23,7 +23,7 @@ function AlertDialogOverlay({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Overlay>): React.JSX.Element {
   return (
     <AlertDialogPrimitive.Overlay
-      data-slot="alert-dialog-overlay"
+      data-slot='alert-dialog-overlay'
       className={cn(
         'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
         className,
@@ -41,7 +41,7 @@ function AlertDialogContent({
     <AlertDialogPortal>
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Content
-        data-slot="alert-dialog-content"
+        data-slot='alert-dialog-content'
         className={cn(
           'shadow-lg fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg',
           className,
@@ -55,7 +55,7 @@ function AlertDialogContent({
 function AlertDialogHeader({ className, ...props }: React.ComponentProps<'div'>): React.JSX.Element {
   return (
     <div
-      data-slot="alert-dialog-header"
+      data-slot='alert-dialog-header'
       className={cn('flex flex-col gap-2 text-center sm:text-left', className)}
       {...props}
     />
@@ -65,7 +65,7 @@ function AlertDialogHeader({ className, ...props }: React.ComponentProps<'div'>)
 function AlertDialogFooter({ className, ...props }: React.ComponentProps<'div'>): React.JSX.Element {
   return (
     <div
-      data-slot="alert-dialog-footer"
+      data-slot='alert-dialog-footer'
       className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
       {...props}
     />
@@ -78,7 +78,7 @@ function AlertDialogTitle({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Title>): React.JSX.Element {
   return (
     <AlertDialogPrimitive.Title
-      data-slot="alert-dialog-title"
+      data-slot='alert-dialog-title'
       className={cn('text-lg font-semibold', className)}
       {...props}
     />
@@ -91,7 +91,7 @@ function AlertDialogDescription({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Description>): React.JSX.Element {
   return (
     <AlertDialogPrimitive.Description
-      data-slot="alert-dialog-description"
+      data-slot='alert-dialog-description'
       className={cn('text-sm text-muted-foreground', className)}
       {...props}
     />

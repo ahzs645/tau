@@ -16,9 +16,9 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  * ```
  */
 export function fromNodeFS(basePath: string): KernelFileSystemBase {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- dynamic require avoids bundling Node.js builtins in browser builds
+  // oxlint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- dynamic require avoids bundling Node.js builtins in browser builds
   const fs = require('node:fs/promises') as typeof import('node:fs/promises');
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- dynamic require avoids bundling Node.js builtins in browser builds
+  // oxlint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- dynamic require avoids bundling Node.js builtins in browser builds
   const path = require('node:path') as typeof import('node:path');
 
   const resolve = (p: string): string => path.resolve(basePath, p);
@@ -39,11 +39,11 @@ export function fromNodeFS(basePath: string): KernelFileSystemBase {
     async writeFile(filePath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
       await fs.writeFile(resolve(filePath), data);
     },
-    async mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<void> {
-      await fs.mkdir(resolve(dirPath), options);
+    async mkdir(directoryPath: string, options?: { recursive?: boolean }): Promise<void> {
+      await fs.mkdir(resolve(directoryPath), options);
     },
-    async readdir(dirPath: string): Promise<string[]> {
-      return fs.readdir(resolve(dirPath));
+    async readdir(directoryPath: string): Promise<string[]> {
+      return fs.readdir(resolve(directoryPath));
     },
     async unlink(filePath: string): Promise<void> {
       await fs.unlink(resolve(filePath));
@@ -52,8 +52,8 @@ export function fromNodeFS(basePath: string): KernelFileSystemBase {
       const stats = await fs.stat(resolve(filePath));
       return toFileStat(stats);
     },
-    async rmdir(dirPath: string): Promise<void> {
-      await fs.rmdir(resolve(dirPath));
+    async rmdir(directoryPath: string): Promise<void> {
+      await fs.rmdir(resolve(directoryPath));
     },
     async rename(oldPath: string, newPath: string): Promise<void> {
       await fs.rename(resolve(oldPath), resolve(newPath));

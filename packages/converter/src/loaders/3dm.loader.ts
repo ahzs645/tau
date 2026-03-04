@@ -347,7 +347,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     // Try to convert each face to mesh
     for (let faceIndex = 0; faceIndex < faces.count; faceIndex++) {
       const face = faces.get(faceIndex);
-      // eslint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
+      // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
       const faceMesh = face.getMesh(this.rhino.MeshType.Any) as RhinoMesh | null;
 
       if (faceMesh) {
@@ -372,7 +372,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     attributes: ObjectAttributes,
     context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
     const mesh = geometry.getMesh(this.rhino.MeshType.Any) as RhinoMesh | null;
 
     if (!mesh) {
@@ -393,7 +393,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
   ): { mesh: Mesh; node: Node } {
     geometry.subdivide();
     // @ts-expect-error -- createFromSubDControlNet has incorrect type.
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
     const mesh = this.rhino.Mesh.createFromSubDControlNet(geometry) as RhinoMesh | null;
 
     if (!mesh) {
@@ -416,7 +416,13 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     const point = geometry.location;
     const positions = new Float32Array([point[0]!, point[1]!, point[2]!]);
 
-    const drawColor = (attributes.drawColor as (doc: File3dm) => { r: number; g: number; b: number })(doc);
+    const drawColor = (
+      attributes.drawColor as (doc: File3dm) => {
+        r: number;
+        g: number;
+        b: number;
+      }
+    )(doc);
     const colors = new Float32Array([drawColor.r / 255, drawColor.g / 255, drawColor.b / 255]);
 
     // Create accessors
@@ -787,8 +793,16 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     }
 
     // Create standard material from basic Rhino material
-    const diffuseColor = rhinoMaterial.diffuseColor as unknown as { r: number; g: number; b: number };
-    const specularColor = rhinoMaterial.specularColor as unknown as { r: number; g: number; b: number };
+    const diffuseColor = rhinoMaterial.diffuseColor as unknown as {
+      r: number;
+      g: number;
+      b: number;
+    };
+    const specularColor = rhinoMaterial.specularColor as unknown as {
+      r: number;
+      g: number;
+      b: number;
+    };
 
     const material = document
       .createMaterial()
@@ -814,7 +828,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
    * Create gltf-transform PBR material from Rhino PBR material
    */
   private createPbrMaterial(pbrMaterial: PhysicallyBasedMaterial, document: Document): Material {
-    const baseColor = pbrMaterial.baseColor as unknown as { r: number; g: number; b: number };
+    const baseColor = pbrMaterial.baseColor as unknown as {
+      r: number;
+      g: number;
+      b: number;
+    };
 
     const material = document
       .createMaterial()
@@ -830,7 +848,9 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     // Set emission (if available in the PBR material)
     const { emission } = pbrMaterial as unknown as { emission?: number };
     if (emission && emission > 0) {
-      const { emissionColor } = pbrMaterial as unknown as { emissionColor?: { r: number; g: number; b: number } };
+      const { emissionColor } = pbrMaterial as unknown as {
+        emissionColor?: { r: number; g: number; b: number };
+      };
       if (emissionColor) {
         material.setEmissiveFactor([emissionColor.r / 255, emissionColor.g / 255, emissionColor.b / 255]);
       }
@@ -844,7 +864,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
    */
   private extractColor(attributes: ObjectAttributes, doc: File3dm): { r: number; g: number; b: number } {
     // @ts-expect-error -- rhino3dm types are not correct.
-    const drawColor = attributes.drawColor(doc) as { r: number; g: number; b: number };
+    const drawColor = attributes.drawColor(doc) as {
+      r: number;
+      g: number;
+      b: number;
+    };
     return {
       r: drawColor.r / 255,
       g: drawColor.g / 255,

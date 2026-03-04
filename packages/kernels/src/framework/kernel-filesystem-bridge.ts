@@ -31,8 +31,8 @@ export function extractTransferables(value: unknown): Transferable[] {
         walk(item);
       }
     } else if (v !== null && typeof v === 'object') {
-      for (const prop of Object.values(v)) {
-        walk(prop);
+      for (const property of Object.values(v)) {
+        walk(property);
       }
     }
   }
@@ -86,12 +86,12 @@ const messagePortCallTimeoutMs = 30_000;
  * @param port - MessagePort to listen on
  */
 export function createBridgeServer<T extends Record<string, unknown>>(handlers: T, port: MessagePort): void {
-  // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
   port.onmessage = async (event: MessageEvent<BridgeRequest>): Promise<void> => {
     const { id, method, args } = event.data;
 
-    const fn = handlers[method] as ((...fnArgs: unknown[]) => Promise<unknown>) | undefined;
-    if (!fn) {
+    const function_ = handlers[method] as ((...fnArgs: unknown[]) => Promise<unknown>) | undefined;
+    if (!function_) {
       port.postMessage({
         id,
         error: { message: `Unknown method: ${method}`, name: 'Error' },
@@ -100,7 +100,7 @@ export function createBridgeServer<T extends Record<string, unknown>>(handlers: 
     }
 
     try {
-      const result: unknown = await fn.call(handlers, ...args);
+      const result: unknown = await function_.call(handlers, ...args);
       const response = { id, result } satisfies BridgeResponse;
       const transferables = extractTransferables(result);
       try {
@@ -227,7 +227,7 @@ function reconstructError(bridgeError: BridgeError): Error & {
  * ```
  */
 export function createBridgeCall(port: MessagePort): {
-  call: (method: string, args: unknown[]) => Promise<unknown>;
+  call: (method: string, arguments_: unknown[]) => Promise<unknown>;
   dispose: () => void;
 } {
   type PendingEntry = {
@@ -239,7 +239,7 @@ export function createBridgeCall(port: MessagePort): {
   let nextId = 0;
   const pending = new Map<number, PendingEntry>();
 
-  // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
   port.onmessage = (event: MessageEvent<BridgeResponse>): void => {
     const { id, result, error } = event.data;
     const entry = pending.get(id);
@@ -261,7 +261,7 @@ export function createBridgeCall(port: MessagePort): {
   }
 
   return {
-    async call(method: string, args: unknown[]): Promise<unknown> {
+    async call(method: string, arguments_: unknown[]): Promise<unknown> {
       return new Promise((resolve, reject) => {
         const id = nextId++;
         const timer = setTimeout(() => {
@@ -270,13 +270,17 @@ export function createBridgeCall(port: MessagePort): {
           }
         }, messagePortCallTimeoutMs);
         pending.set(id, { resolve, reject, timer });
-        const request = { id, method, args } satisfies BridgeRequest;
-        const transferables = extractTransferables(args);
+        const request = {
+          id,
+          method,
+          args: arguments_,
+        } satisfies BridgeRequest;
+        const transferables = extractTransferables(arguments_);
         port.postMessage(request, transferables);
       });
     },
     dispose() {
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- we set onmessage during setup, so we need to remove it here.
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- we set onmessage during setup, so we need to remove it here.
       port.onmessage = null;
       for (const [, entry] of pending) {
         clearTimeout(entry.timer);
@@ -312,8 +316,8 @@ export function createBridgeCall(port: MessagePort): {
  * proxy.dispose();
  * ```
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
-export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
+export function createBridgeProxy<T extends Record<string, (...arguments_: any[]) => any>>(
   port: MessagePort,
 ): T & { dispose(): void } {
   const { call, dispose: rawDispose } = createBridgeCall(port);
@@ -343,7 +347,7 @@ export function createBridgeProxy<T extends Record<string, (...args: any[]) => a
         throw new Error(`Bridge proxy has been disposed — cannot call '${method}'`);
       }
 
-      return async (...args: unknown[]) => call(method, args);
+      return async (...arguments_: unknown[]) => call(method, arguments_);
     },
   });
 }

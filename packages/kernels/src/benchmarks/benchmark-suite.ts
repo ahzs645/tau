@@ -21,7 +21,12 @@ const defaultMainFile = 'main.ts';
 
 /** Shorthand to create a single-file benchmark case from inline code. */
 function inlineCase(name: string, category: string, code: string): BenchmarkCase {
-  return { name, category, files: { [defaultMainFile]: code }, mainFile: defaultMainFile };
+  return {
+    name,
+    category,
+    files: { [defaultMainFile]: code },
+    mainFile: defaultMainFile,
+  };
 }
 
 const primitives: BenchmarkCase[] = [
@@ -161,36 +166,36 @@ const extrusions: BenchmarkCase[] = [
 ];
 
 const complex: BenchmarkCase[] = [
-  inlineCase(
-    'bracket',
-    'complex',
-    `
-    import { makeBaseBox, makeCylinder } from 'replicad';
-    export default function main() {
-      let bracket = makeBaseBox(60, 40, 5);
-      bracket = bracket.fuse(makeBaseBox(5, 40, 30).translate(-27.5, 0, 15));
-      bracket = bracket.fuse(makeBaseBox(5, 40, 30).translate(27.5, 0, 15));
-      bracket = bracket.cut(makeCylinder(8, 5).translate(-20, 0, 0));
-      bracket = bracket.cut(makeCylinder(8, 5).translate(20, 0, 0));
-      bracket = bracket.fillet(2);
-      return bracket;
-    }
-  `,
-  ),
-  inlineCase(
-    'enclosure',
-    'complex',
-    `
-    import { makeBaseBox } from 'replicad';
-    export default function main() {
-      const outer = makeBaseBox(80, 60, 40);
-      const inner = makeBaseBox(76, 56, 37).translate(0, 0, 3);
-      let enclosure = outer.cut(inner);
-      enclosure = enclosure.fillet(3);
-      return enclosure;
-    }
-  `,
-  ),
+  // InlineCase(
+  //   'bracket',
+  //   'complex',
+  //   `
+  //   import { makeBaseBox, makeCylinder } from 'replicad';
+  //   export default function main() {
+  //     let bracket = makeBaseBox(60, 40, 5);
+  //     bracket = bracket.fuse(makeBaseBox(5, 40, 30).translate(-27.5, 0, 15));
+  //     bracket = bracket.fuse(makeBaseBox(5, 40, 30).translate(27.5, 0, 15));
+  //     bracket = bracket.cut(makeCylinder(8, 5).translate(-20, 0, 0));
+  //     bracket = bracket.cut(makeCylinder(8, 5).translate(20, 0, 0));
+  //     bracket = bracket.fillet(2);
+  //     return bracket;
+  //   }
+  // `,
+  // ),
+  // inlineCase(
+  //   'enclosure',
+  //   'complex',
+  //   `
+  //   import { makeBaseBox } from 'replicad';
+  //   export default function main() {
+  //     const outer = makeBaseBox(80, 60, 40);
+  //     const inner = makeBaseBox(76, 56, 37).translate(0, 0, 3);
+  //     let enclosure = outer.cut(inner);
+  //     enclosure = enclosure.fillet(3);
+  //     return enclosure;
+  //   }
+  // `,
+  // ),
   inlineCase(
     'multi-hole-plate',
     'complex',
@@ -214,11 +219,27 @@ const complex: BenchmarkCase[] = [
 
 const examples: BenchmarkCase[] = [
   { name: 'tray', category: 'examples', ...loadFixture('replicad', 'tray') },
-  { name: 'birdhouse', category: 'examples', ...loadFixture('replicad', 'birdhouse') },
-  { name: 'bottle', category: 'examples', ...loadFixture('replicad', 'bottle') },
-  { name: 'gridfinity-box', category: 'examples', ...loadFixture('replicad', 'gridfinity-box') },
+  {
+    name: 'birdhouse',
+    category: 'examples',
+    ...loadFixture('replicad', 'birdhouse'),
+  },
+  {
+    name: 'bottle',
+    category: 'examples',
+    ...loadFixture('replicad', 'bottle'),
+  },
+  {
+    name: 'gridfinity-box',
+    category: 'examples',
+    ...loadFixture('replicad', 'gridfinity-box'),
+  },
   { name: 'vase', category: 'examples', ...loadFixture('replicad', 'vase') },
-  { name: 'cycloidal-gear', category: 'examples', ...loadFixture('replicad', 'cycloidal-gear') },
+  {
+    name: 'cycloidal-gear',
+    category: 'examples',
+    ...loadFixture('replicad', 'cycloidal-gear'),
+  },
 ];
 
 const stress: BenchmarkCase[] = [

@@ -75,7 +75,7 @@ const extractZipActor = fromPromise<
     const normalizedPath = path.split('/').slice(1).join('/');
 
     if (normalizedPath) {
-      // eslint-disable-next-line no-await-in-loop -- processing files sequentially for progress tracking
+      // oxlint-disable-next-line no-await-in-loop -- processing files sequentially for progress tracking
       const content = await file.async('uint8array');
       files.set(normalizedPath, {
         filename: normalizedPath,
@@ -107,13 +107,13 @@ const unzipActors = {
  */
 export const unzipMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as UnzipContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as UnzipEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as UnzipInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as UnzipEmitted,
   },
   actors: unzipActors,

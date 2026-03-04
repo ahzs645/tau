@@ -1,4 +1,4 @@
-/* eslint-disable no-await-in-loop -- sequential benchmark iterations are intentional */
+/* oxlint-disable no-await-in-loop -- sequential benchmark iterations are intentional */
 /**
  * Benchmark Runner
  *
@@ -91,14 +91,20 @@ function computePercentile(sorted: number[], percentile: number): number {
   return sorted[lower]! + (sorted[upper]! - sorted[lower]!) * (index - lower);
 }
 
-function computeStats(timings: number[]): { mean: number; median: number; p95: number; p99: number; stddev: number } {
+function computeStats(timings: number[]): {
+  mean: number;
+  median: number;
+  p95: number;
+  p99: number;
+  stddev: number;
+} {
   const sorted = [...timings].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
   const mean = sum / sorted.length;
   const median = computePercentile(sorted, 50);
   const p95 = computePercentile(sorted, 95);
   const p99 = computePercentile(sorted, 99);
-  const variance = sorted.reduce((acc, value) => acc + (value - mean) ** 2, 0) / sorted.length;
+  const variance = sorted.reduce((accumulator, value) => accumulator + (value - mean) ** 2, 0) / sorted.length;
   const stddev = Math.sqrt(variance);
 
   return { mean, median, p95, p99, stddev };
@@ -204,7 +210,7 @@ export async function runBenchmarks(
       const elapsed = performance.now() - start;
 
       if (!renderResult.success) {
-        const messages = renderResult.issues.map((i) => i.message).join('; ');
+        const messages = renderResult.issues.map((index) => index.message).join('; ');
         throw new Error(`Benchmark "${benchCase.name}" render failed (iteration ${iter}): ${messages}`);
       }
 
@@ -250,10 +256,10 @@ async function collectWasmSizes(): Promise<WasmSizeInfo | undefined> {
     const { resolve, dirname } = await import('node:path');
     const { fileURLToPath: toFilePath } = await import('node:url');
 
-    const wasmDir = resolve(dirname(toFilePath(import.meta.url)), 'kernels', 'replicad', 'wasm');
+    const wasmDirectory = resolve(dirname(toFilePath(import.meta.url)), 'kernels', 'replicad', 'wasm');
     const stat = (name: string): number | undefined => {
       try {
-        return statSync(resolve(wasmDir, name)).size;
+        return statSync(resolve(wasmDirectory, name)).size;
       } catch {
         return undefined;
       }
@@ -264,10 +270,11 @@ async function collectWasmSizes(): Promise<WasmSizeInfo | undefined> {
       return undefined;
     }
 
-    const jsDir = resolve(dirname(toFilePath(import.meta.url)), 'kernels', 'replicad');
+    const jsDirectory = resolve(dirname(toFilePath(import.meta.url)), 'kernels', 'replicad');
     const jsSize = (name: string): number => {
       try {
-        return statSync(resolve(jsDir, '..', '..', '..', 'node_modules', 'replicad-opencascadejs', 'src', name)).size;
+        return statSync(resolve(jsDirectory, '..', '..', '..', 'node_modules', 'replicad-opencascadejs', 'src', name))
+          .size;
       } catch {
         return 0;
       }

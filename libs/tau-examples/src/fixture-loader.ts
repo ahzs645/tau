@@ -64,7 +64,9 @@ export function loadAllFixtures(): Record<string, Record<string, Fixture>> {
     const kernelUrl = new URL(`${kernelEntry.name}/`, baseUrl);
     const examples: Record<string, Fixture> = {};
 
-    for (const exampleEntry of readdirSync(kernelUrl, { withFileTypes: true })) {
+    for (const exampleEntry of readdirSync(kernelUrl, {
+      withFileTypes: true,
+    })) {
       if (!exampleEntry.isDirectory()) {
         continue;
       }

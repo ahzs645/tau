@@ -1,5 +1,5 @@
-/* eslint-disable n/prefer-global/process -- CLI script requires direct process access */
-/* eslint-disable unicorn/no-process-exit -- CLI script uses process.exit for error codes */
+/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
+/* oxlint-disable unicorn/no-process-exit -- CLI script uses process.exit for error codes */
 /**
  * Build Matrix Report Generator
  *
@@ -24,7 +24,11 @@ const { values } = parseArgs({
     experiments: { type: 'string', short: 'e' },
     compare: { type: 'string', short: 'c', multiple: true },
     baseline: { type: 'string', short: 'b' },
-    output: { type: 'string', short: 'o', default: '../../tarballs/comparisons' },
+    output: {
+      type: 'string',
+      short: 'o',
+      default: '../../tarballs/comparisons',
+    },
     help: { type: 'boolean', short: 'h', default: false },
   },
   strict: true,
@@ -50,53 +54,55 @@ Options:
 
 type ExperimentData = {
   name: string;
-  dir: string;
+  directory: string;
   provenance?: BuildProvenance;
   benchmark?: BenchmarkRunResult;
   wasmSizeBytes: number;
 };
 
-function loadExperiment(dir: string): ExperimentData | undefined {
-  if (!existsSync(dir)) {
+function loadExperiment(directory: string): ExperimentData | undefined {
+  if (!existsSync(directory)) {
     return undefined;
   }
 
-  const name = basename(dir);
-  const data: ExperimentData = { name, dir, wasmSizeBytes: 0 };
+  const name = basename(directory);
+  const data: ExperimentData = { name, directory, wasmSizeBytes: 0 };
 
-  const provPath = join(dir, 'provenance.json');
+  const provPath = join(directory, 'provenance.json');
   if (existsSync(provPath)) {
     data.provenance = JSON.parse(readFileSync(provPath, 'utf8')) as BuildProvenance;
   }
 
-  const benchDir = join(dir, 'benchmarks');
-  if (!existsSync(benchDir)) {
+  const benchDirectory = join(directory, 'benchmarks');
+  if (!existsSync(benchDirectory)) {
     return data;
   }
 
-  const benchFiles = readdirSync(benchDir).filter(
+  const benchFiles = readdirSync(benchDirectory).filter(
     (f) => f.startsWith('benchmark-') && f.endsWith('.json') && !f.includes('comparison'),
   );
 
   if (benchFiles.length > 0) {
     const latestBench = benchFiles.sort().at(-1)!;
-    data.benchmark = JSON.parse(readFileSync(join(benchDir, latestBench), 'utf8')) as BenchmarkRunResult;
+    data.benchmark = JSON.parse(readFileSync(join(benchDirectory, latestBench), 'utf8')) as BenchmarkRunResult;
   }
 
-  const unpackedDir = join(dir, 'unpacked');
-  if (existsSync(unpackedDir)) {
+  const unpackedDirectory = join(directory, 'unpacked');
+  if (existsSync(unpackedDirectory)) {
     const { exceptions } = data.provenance?.compilation ?? {};
     const variantPrefix = exceptions === 'wasm-native' ? 'replicad_with_exceptions' : 'replicad_single';
 
-    for (const f of readdirSync(unpackedDir)) {
+    for (const f of readdirSync(unpackedDirectory)) {
       if (f.endsWith('.wasm') && f.startsWith(variantPrefix)) {
-        data.wasmSizeBytes += statSync(join(unpackedDir, f)).size;
+        data.wasmSizeBytes += statSync(join(unpackedDirectory, f)).size;
       }
     }
   }
 
   if (data.wasmSizeBytes === 0 && data.provenance) {
-    const { postOptSize } = data.provenance.postProcessing as { postOptSize?: number };
+    const { postOptSize } = data.provenance.postProcessing as {
+      postOptSize?: number;
+    };
     if (typeof postOptSize === 'number' && postOptSize > 0) {
       data.wasmSizeBytes = postOptSize;
     }
@@ -105,14 +111,14 @@ function loadExperiment(dir: string): ExperimentData | undefined {
   return data;
 }
 
-function discoverExperiments(dir: string): ExperimentData[] {
+function discoverExperiments(directory: string): ExperimentData[] {
   const experiments: ExperimentData[] = [];
-  if (!existsSync(dir)) {
+  if (!existsSync(directory)) {
     return experiments;
   }
 
-  for (const entry of readdirSync(dir)) {
-    const fullPath = join(dir, entry);
+  for (const entry of readdirSync(directory)) {
+    const fullPath = join(directory, entry);
     const stat = statSync(fullPath);
     if (stat.isDirectory()) {
       const experiment = loadExperiment(fullPath);
@@ -134,7 +140,7 @@ function formatMb(bytes: number): string {
 }
 
 function totalTime(input: number[]): number {
-  return input.reduce((acc, v) => acc + v, 0);
+  return input.reduce((accumulator, v) => accumulator + v, 0);
 }
 
 function stripTimestampPrefix(name: string): string {
@@ -206,14 +212,14 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
   let frontierLine = '';
   if (paretoPoints.length > 1) {
     const segments: string[] = [];
-    for (let i = 0; i < paretoPoints.length; i++) {
-      const current = paretoPoints[i]!;
+    for (let index = 0; index < paretoPoints.length; index++) {
+      const current = paretoPoints[index]!;
       const cx = scaleX(current.sizeMb);
       const cy = scaleY(current.medianMs);
-      if (i === 0) {
+      if (index === 0) {
         segments.push(`M ${cx} ${cy}`);
       } else {
-        const previousY = scaleY(paretoPoints[i - 1]!.medianMs);
+        const previousY = scaleY(paretoPoints[index - 1]!.medianMs);
         segments.push(`L ${cx} ${previousY}`, `L ${cx} ${cy}`);
       }
     }
@@ -222,11 +228,11 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
   }
 
   let dots = '';
-  let idx = 0;
+  let index = 0;
   for (const dp of dataPoints) {
     const x = scaleX(dp.sizeMb);
     const y = scaleY(dp.medianMs);
-    const color = colors[idx % colors.length]!;
+    const color = colors[index % colors.length]!;
     const isPareto = paretoSet.has(dp.name);
     dots += `<circle cx="${x}" cy="${y}" r="6" fill="${color}" stroke="white" stroke-width="2"/>`;
     if (isPareto) {
@@ -234,7 +240,7 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
     }
 
     dots += `<text x="${x + 10}" y="${y + 4}" font-size="10" fill="#374151">${escapeHtml(stripTimestampPrefix(dp.name))}${isPareto ? ' ★' : ''}</text>`;
-    idx++;
+    index++;
   }
 
   const axes = `
@@ -247,8 +253,8 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
   const gridLines: string[] = [];
   const xSteps = 5;
   const ySteps = 5;
-  for (let i = 0; i <= xSteps; i++) {
-    const xValue = minSize + ((maxSize - minSize) * i) / xSteps;
+  for (let index = 0; index <= xSteps; index++) {
+    const xValue = minSize + ((maxSize - minSize) * index) / xSteps;
     const x = scaleX(xValue);
     gridLines.push(
       `<line x1="${x}" y1="${padT}" x2="${x}" y2="${padT + plotH}" stroke="#F3F4F6" stroke-width="1"/>`,
@@ -256,8 +262,8 @@ function generateSizeSpeedChart(experiments: ExperimentData[]): string {
     );
   }
 
-  for (let i = 0; i <= ySteps; i++) {
-    const yValue = minTime + ((maxTime - minTime) * i) / ySteps;
+  for (let index = 0; index <= ySteps; index++) {
+    const yValue = minTime + ((maxTime - minTime) * index) / ySteps;
     const y = scaleY(yValue);
     gridLines.push(
       `<line x1="${padL}" y1="${y}" x2="${padL + plotW}" y2="${y}" stroke="#F3F4F6" stroke-width="1"/>`,
@@ -380,9 +386,9 @@ function generateSizeBreakdown(experiments: ExperimentData[]): string {
   const maxSize = Math.max(...experiments.map((experiment) => experiment.wasmSizeBytes), 1);
 
   let bars = '';
-  let idx = 0;
+  let index = 0;
   for (const experiment of experiments) {
-    const x = padL + idx * (barWidth + barGap);
+    const x = padL + index * (barWidth + barGap);
     const sizePx = (experiment.wasmSizeBytes / maxSize) * maxHeight;
     const y = padT + maxHeight - sizePx;
 
@@ -417,26 +423,26 @@ function generateSizeBreakdown(experiments: ExperimentData[]): string {
     const lto = compilation['lto'] ? 'LTO' : 'noLTO';
     const exc = asString(compilation['exceptions'], 'none');
     const wasmOpt = asString(compilation['wasmOptLevel'], '?');
-    const emVer = asString(toolchain['emscripten'], '?');
+    const emscriptenVersion = asString(toolchain['emscripten'], '?');
     const symbols =
       typeof experiment.provenance?.linking['boundSymbols'] === 'number'
         ? `${experiment.provenance.linking['boundSymbols']} symbols`
         : '';
 
     bars += `<text x="${labelX}" y="${labelY + lineHeight}" text-anchor="middle" font-size="11" fill="#6B7280">compile: ${opt} | ${lto} | exc: ${exc}</text>`;
-    bars += `<text x="${labelX}" y="${labelY + lineHeight * 2}" text-anchor="middle" font-size="11" fill="#6B7280">wasm-opt: ${wasmOpt} | em: ${emVer}</text>`;
+    bars += `<text x="${labelX}" y="${labelY + lineHeight * 2}" text-anchor="middle" font-size="11" fill="#6B7280">wasm-opt: ${wasmOpt} | em: ${emscriptenVersion}</text>`;
     if (symbols) {
       bars += `<text x="${labelX}" y="${labelY + lineHeight * 3}" text-anchor="middle" font-size="11" fill="#9CA3AF">${symbols}</text>`;
     }
 
-    idx++;
+    index++;
   }
 
   const yAxis = `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + maxHeight}" stroke="#D1D5DB"/>`;
   const gridSteps = 5;
   let gridLines = '';
-  for (let i = 0; i <= gridSteps; i++) {
-    const gridValue = (maxSize * i) / gridSteps;
+  for (let index = 0; index <= gridSteps; index++) {
+    const gridValue = (maxSize * index) / gridSteps;
     const gridY = padT + maxHeight - (gridValue / maxSize) * maxHeight;
     gridLines += `<line x1="${padL}" y1="${gridY}" x2="${chartW - padR}" y2="${gridY}" stroke="#F3F4F6"/>`;
     gridLines += `<text x="${padL - 8}" y="${gridY + 4}" text-anchor="end" font-size="10" fill="#9CA3AF">${formatMb(gridValue)}</text>`;
@@ -576,8 +582,8 @@ document.addEventListener('alpine:init', function() {
       refIndex: -1,
       display: 'both',
 
-      setRef: function(idx) {
-        this.refIndex = (this.refIndex === idx) ? -1 : idx;
+      setRef: function(index) {
+        this.refIndex = (this.refIndex === index) ? -1 : index;
       },
 
       ref: function() {
@@ -590,8 +596,8 @@ document.addEventListener('alpine:init', function() {
         return r ? r.shortName : '';
       },
 
-      isRef: function(idx) {
-        if (this.refIndex >= 0) return idx === this.refIndex;
+      isRef: function(index) {
+        if (this.refIndex >= 0) return index === this.refIndex;
         return false;
       },
 
@@ -781,8 +787,8 @@ ${generateAlpineScript()}
             <tr>
               <th>Benchmark</th>
               <th class="ref-th" style="text-align:center" x-text="refLabel() + ' (ref)'"></th>
-              <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name">
-                <th class="heatmap-th" :class="{ 'ref-th': isRef(idx) }" @click="setRef(idx)" x-text="exp.shortName"></th>
+              <template x-for="(exp, index) in $store.data.experiments" :key="exp.name">
+                <th class="heatmap-th" :class="{ 'ref-th': isRef(index) }" @click="setRef(index)" x-text="exp.shortName"></th>
               </template>
             </tr>
           </thead>
@@ -791,7 +797,7 @@ ${generateAlpineScript()}
               <tr>
                 <td><strong x-text="bench"></strong></td>
                 <td style="text-align:center;font-size:0.8rem;background:#F3F4F6;font-weight:500" x-text="refTime(bench) !== null ? _fmt.ms(refTime(bench)) : '—'"></td>
-                <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name + '-' + bench">
+                <template x-for="(exp, index) in $store.data.experiments" :key="exp.name + '-' + bench">
                   <td style="text-align:center;font-size:0.8rem"
                       :style="'background:' + _fmt.deltaColor(delta(exp, bench))"
                       x-text="cellText(exp, bench)"></td>
@@ -827,18 +833,18 @@ function main(): void {
   let baseline: ExperimentData | undefined;
 
   if (values.experiments) {
-    const expDir = resolve(values.experiments);
-    experiments = discoverExperiments(expDir);
-    console.log(`Discovered ${experiments.length} experiments in ${expDir}`);
+    const experimentDirectory = resolve(values.experiments);
+    experiments = discoverExperiments(experimentDirectory);
+    console.log(`Discovered ${experiments.length} experiments in ${experimentDirectory}`);
   }
 
   if (values.compare && values.compare.length > 0) {
-    for (const dir of values.compare) {
-      const experiment = loadExperiment(resolve(dir));
+    for (const directory of values.compare) {
+      const experiment = loadExperiment(resolve(directory));
       if (experiment) {
         experiments.push(experiment);
       } else {
-        console.warn(`Could not load experiment: ${dir}`);
+        console.warn(`Could not load experiment: ${directory}`);
       }
     }
   }
@@ -853,9 +859,9 @@ function main(): void {
   }
 
   if (!baseline) {
-    const baselineIdx = experiments.findIndex((experiment) => experiment.name.includes('baseline'));
-    if (baselineIdx !== -1) {
-      baseline = experiments.splice(baselineIdx, 1)[0];
+    const baselineIndex = experiments.findIndex((experiment) => experiment.name.includes('baseline'));
+    if (baselineIndex !== -1) {
+      baseline = experiments.splice(baselineIndex, 1)[0];
       console.log(`Auto-detected baseline: ${baseline!.name}`);
     }
   }
@@ -865,13 +871,13 @@ function main(): void {
     process.exit(1);
   }
 
-  const outputDir = resolve(values.output);
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true });
+  const outputDirectory = resolve(values.output);
+  if (!existsSync(outputDirectory)) {
+    mkdirSync(outputDirectory, { recursive: true });
   }
 
-  const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
-  const htmlPath = join(outputDir, `build-matrix-${timestamp}.html`);
+  const timestamp = new Date().toISOString().replaceAll(/[.:]/g, '-');
+  const htmlPath = join(outputDirectory, `build-matrix-${timestamp}.html`);
   writeFileSync(htmlPath, generateMatrixReport(experiments, baseline));
 
   console.log(`\nBuild matrix report written to: ${htmlPath}`);

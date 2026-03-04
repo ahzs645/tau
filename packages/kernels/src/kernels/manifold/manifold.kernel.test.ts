@@ -17,15 +17,22 @@ const createWorker = async (files: Record<string, string>): ReturnType<typeof cr
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
-): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(manifoldKernel, files, mainFile);
+): Promise<{
+  jsonSchema: unknown;
+  defaultParameters: Record<string, unknown>;
+}> => getTestParameters(manifoldKernel, files, mainFile);
 
 const createGeometry = async (
   files: Record<string, string>,
   mainFile: string,
   parameters: Record<string, unknown> = {},
 ): ReturnType<typeof createTestGeometry> =>
-  createTestGeometry({ definition: manifoldKernel, files, mainFile, parameters });
+  createTestGeometry({
+    definition: manifoldKernel,
+    files,
+    mainFile,
+    parameters,
+  });
 
 const geometryHelpers = createGeometryTestHelpers();
 
@@ -345,7 +352,10 @@ describe('ManifoldWorker', () => {
         `,
       });
 
-      const createResult = await worker.createGeometry({ file: createGeometryFile('cube.ts'), parameters: {} });
+      const createResult = await worker.createGeometry({
+        file: createGeometryFile('cube.ts'),
+        parameters: {},
+      });
       expect(createResult.success).toBe(true);
 
       const exportResult = await worker.exportGeometry('glb');
@@ -366,7 +376,10 @@ describe('ManifoldWorker', () => {
         `,
       });
 
-      const createResult = await worker.createGeometry({ file: createGeometryFile('cube.ts'), parameters: {} });
+      const createResult = await worker.createGeometry({
+        file: createGeometryFile('cube.ts'),
+        parameters: {},
+      });
       expect(createResult.success).toBe(true);
 
       const exportResult = await worker.exportGeometry('gltf');
@@ -402,7 +415,10 @@ describe('ManifoldWorker', () => {
         `,
       });
 
-      await worker.createGeometry({ file: createGeometryFile('cube.ts'), parameters: {} });
+      await worker.createGeometry({
+        file: createGeometryFile('cube.ts'),
+        parameters: {},
+      });
       const exportResult = await worker.exportGeometry('step');
       expect(exportResult.success).toBe(false);
     });

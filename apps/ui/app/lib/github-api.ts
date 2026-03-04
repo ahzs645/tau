@@ -278,7 +278,9 @@ class GitHubApiClient {
       // Type guard to check if a branch node has a valid committed date
       const hasCommittedDate = (
         node: BranchNode,
-      ): node is BranchNode & { target: { oid: string; committedDate: string } } => {
+      ): node is BranchNode & {
+        target: { oid: string; committedDate: string };
+      } => {
         return node.target.committedDate !== undefined;
       };
 
@@ -398,7 +400,10 @@ class GitHubApiClient {
     repo: string;
     ref: string;
     signal?: AbortSignal;
-  }): Promise<{ stream: ReadableStream<Uint8Array<ArrayBuffer>>; size: number | undefined }> {
+  }): Promise<{
+    stream: ReadableStream<Uint8Array<ArrayBuffer>>;
+    size: number | undefined;
+  }> {
     // Convert short ref to full ref for GitHub API (required for Content-Length header)
     // refs/heads/main, refs/tags/v1.0, etc work; short refs like "main" don't return Content-Length
     const fullRef = ref.startsWith('refs/') ? ref : `refs/heads/${ref}`;

@@ -21,8 +21,8 @@ export function NavChat(): React.JSX.Element {
   );
   return (
     // Elevate the sidebar group above the other items to ensure the new build button is always clickable
-    <SidebarGroup className="z-10">
-      <NavLink to="/">
+    <SidebarGroup className='z-10'>
+      <NavLink to='/'>
         {({ isActive, isPending }) => (
           <SidebarMenuButton
             asChild
@@ -31,18 +31,18 @@ export function NavChat(): React.JSX.Element {
               children: (
                 <>
                   New Build{` `}
-                  <KeyShortcut variant="tooltip" className="ml-1">
+                  <KeyShortcut variant='tooltip' className='ml-1'>
                     {formattedKeyCombination}
                   </KeyShortcut>
                 </>
               ),
             }}
-            variant="outline"
+            variant='outline'
           >
             <span>
-              {isPending ? <Loader /> : <PackagePlus className="size-4 shrink-0" />}
-              <span className="flex-1 whitespace-nowrap">New Build</span>
-              <KeyShortcut className="ml-2 shrink-0">{formattedKeyCombination}</KeyShortcut>
+              {isPending ? <Loader /> : <PackagePlus className='size-4 shrink-0' />}
+              <span className='flex-1 whitespace-nowrap'>New Build</span>
+              <KeyShortcut className='ml-2 shrink-0'>{formattedKeyCombination}</KeyShortcut>
             </span>
           </SidebarMenuButton>
         )}

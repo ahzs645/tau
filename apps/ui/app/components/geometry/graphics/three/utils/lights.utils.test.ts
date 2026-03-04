@@ -579,7 +579,13 @@ describe('applyLightingForCamera', () => {
       const camera = createTestCamera();
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       // EnvironmentRotation should have been set (not identity if camera is looking at origin from +Z)
       const euler = scene.environmentRotation;
@@ -595,7 +601,13 @@ describe('applyLightingForCamera', () => {
       const camera = createTestCamera(54); // Reference FOV
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       // At reference FOV (54), envFactor ≈ 1.0, so intensity ≈ base
       expect(scene.environmentIntensity).toBeCloseTo(environmentBaseIntensity, 2);
@@ -606,7 +618,13 @@ describe('applyLightingForCamera', () => {
       const camera = createTestCamera(10); // Low FOV
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       expect(scene.environmentIntensity).toBeLessThan(environmentBaseIntensity);
     });
@@ -623,7 +641,13 @@ describe('applyLightingForCamera', () => {
 
       const originalPosition = headlamp.position.clone();
 
-      applyLightingForCamera({ scene, camera, headlamp, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp,
+        ambient: undefined,
+        config,
+      });
 
       // Position should have changed
       expect(headlamp.position.equals(originalPosition)).toBe(false);
@@ -637,7 +661,13 @@ describe('applyLightingForCamera', () => {
       const config = createDefaultLightingConfig();
 
       expect(() => {
-        applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+        applyLightingForCamera({
+          scene,
+          camera,
+          headlamp: undefined,
+          ambient: undefined,
+          config,
+        });
       }).not.toThrow();
     });
   });
@@ -650,7 +680,13 @@ describe('applyLightingForCamera', () => {
       scene.add(ambient);
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient,
+        config,
+      });
 
       // At reference FOV, ambientFactor ≈ 1.0
       expect(ambient.intensity).toBeCloseTo(ambientBaseIntensity, 2);
@@ -663,7 +699,13 @@ describe('applyLightingForCamera', () => {
       scene.add(ambient);
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient,
+        config,
+      });
 
       // At low FOV, ambientFactor > 1.0
       expect(ambient.intensity).toBeGreaterThan(ambientBaseIntensity);
@@ -675,7 +717,13 @@ describe('applyLightingForCamera', () => {
       const config = createDefaultLightingConfig();
 
       expect(() => {
-        applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+        applyLightingForCamera({
+          scene,
+          camera,
+          headlamp: undefined,
+          ambient: undefined,
+          config,
+        });
       }).not.toThrow();
     });
   });
@@ -696,8 +744,20 @@ describe('applyLightingForCamera', () => {
       camera2.quaternion.copy(orbitQuaternion(Math.PI / 2, Math.PI / 4, 'z'));
       camera2.updateMatrixWorld(true);
 
-      applyLightingForCamera({ scene: scene1, camera: camera1, headlamp: undefined, ambient: undefined, config });
-      applyLightingForCamera({ scene: scene2, camera: camera2, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene: scene1,
+        camera: camera1,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
+      applyLightingForCamera({
+        scene: scene2,
+        camera: camera2,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       // Different azimuths should produce different environment rotations
       const rot1 = scene1.environmentRotation;

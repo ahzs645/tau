@@ -152,7 +152,7 @@ export type ParameterContext = {
   /** Last emitted value (to prevent duplicate emissions) */
   lastEmittedValue: number | undefined;
   /** Ref to the input element for focus/arrow key listeners */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
   inputRef: React.RefObject<HTMLInputElement | null>;
 };
 
@@ -173,7 +173,7 @@ export type ParameterInput = {
   /** Initial unit symbol */
   initialUnitSymbol: LengthSymbol;
   /** Ref to the input element for focus/arrow key listeners */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
   inputRef: React.RefObject<HTMLInputElement | null>;
   /** Optional minimum value in baseline units */
   min?: number;
@@ -300,13 +300,13 @@ export type ParameterEmitted = {
  */
 export const parameterMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as ParameterContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as ParameterInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as ParameterEventInternal,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as ParameterEmitted,
   },
   actors: {
@@ -638,7 +638,7 @@ export const parameterMachine = setup({
         const parsed = parseLengthInput(text);
         if (parsed) {
           // If a unit was specified and differs from current unit, convert
-          // eslint-disable-next-line unicorn/prefer-ternary -- ternary is not as readable as if/else
+          // oxlint-disable-next-line unicorn/prefer-ternary -- ternary is not as readable as if/else
           if (parsed.symbol && parsed.symbol !== context.currentUnitSymbol) {
             // Convert from parsed unit to current display unit
             valueInDisplayUnit = convertLength(parsed.value, parsed.symbol, context.currentUnitSymbol);

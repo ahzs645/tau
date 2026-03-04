@@ -161,43 +161,43 @@ export function StringColorPicker({ value, onChange, className }: StringColorPic
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
-            variant="outline"
-            className="h-7 w-7 p-0"
+            variant='outline'
+            className='h-7 w-7 p-0'
             style={{ backgroundColor: isValid ? value : 'transparent' }}
-            aria-label="Open color picker"
+            aria-label='Open color picker'
           >
-            {!isValid && <span className="text-xs text-muted-foreground">?</span>}
+            {!isValid && <span className='text-xs text-muted-foreground'>?</span>}
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-70 p-3" side="right" align="end">
-          <div className="space-y-3">
-            <RgbColorPicker color={rgbValue} className="!h-48 !w-full" onChange={handleColorChange} />
-            <div className="relative">
+        <PopoverContent className='w-70 p-3' side='right' align='end'>
+          <div className='space-y-3'>
+            <RgbColorPicker color={rgbValue} className='!h-48 !w-full' onChange={handleColorChange} />
+            <div className='relative'>
               <div
-                className="absolute top-px bottom-px left-px w-8 overflow-clip rounded-l-sm border-r border-border bg-clip-padding"
+                className='absolute top-px bottom-px left-px w-8 overflow-clip rounded-l-sm border-r border-border bg-clip-padding'
                 style={{ backgroundColor: isValidColor(temporaryColor) ? temporaryColor : 'transparent' }}
               >
                 {!isValidColor(temporaryColor) && (
-                  <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                  <span className='absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-xs text-muted-foreground'>
                     ?
                   </span>
                 )}
               </div>
               <Input
-                type="text"
+                type='text'
                 value={temporaryColor}
-                placeholder="Pick a color"
-                className="h-7 pr-8 pl-10 font-mono"
+                placeholder='Pick a color'
+                className='h-7 pr-8 pl-10 font-mono'
                 onChange={handlePopoverInputChange}
               />
-              <div className="pointer-events-none absolute top-0 right-2 bottom-0 rounded-r">
+              <div className='pointer-events-none absolute top-0 right-2 bottom-0 rounded-r'>
                 {isValidColor(temporaryColor) ? (
-                  <div className="flex h-full w-full items-center justify-center rounded-r text-success">
-                    <Check className="size-4" />
+                  <div className='flex h-full w-full items-center justify-center rounded-r text-success'>
+                    <Check className='size-4' />
                   </div>
                 ) : (
-                  <div className="flex h-full w-full items-center justify-center rounded-r text-destructive">
-                    <X className="size-4" />
+                  <div className='flex h-full w-full items-center justify-center rounded-r text-destructive'>
+                    <X className='size-4' />
                   </div>
                 )}
               </div>
@@ -213,11 +213,11 @@ export function StringColorPicker({ value, onChange, className }: StringColorPic
         )}
       >
         <Input
-          autoComplete="off"
-          type="text"
+          autoComplete='off'
+          type='text'
           value={value}
-          className="h-7 flex-1 bg-background px-3 font-mono text-sm focus-visible:ring-0"
-          placeholder="Color value"
+          className='h-7 flex-1 bg-background px-3 font-mono text-sm focus-visible:ring-0'
+          placeholder='Color value'
           onChange={handleMainInputChange}
         />
         {colorFormat ? (
@@ -230,7 +230,7 @@ export function StringColorPicker({ value, onChange, className }: StringColorPic
               'pointer-events-none cursor-text',
             )}
           >
-            <span className="font-mono text-[0.5rem] leading-none uppercase">{colorFormat}</span>
+            <span className='font-mono text-[0.5rem] leading-none uppercase'>{colorFormat}</span>
           </span>
         ) : null}
       </div>

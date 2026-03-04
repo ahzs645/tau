@@ -74,7 +74,9 @@ function renderTree(node: TreeNode, indent = ''): string {
 
   // Sort children: directories first, then files, alphabetically within each group
   const sortedChildren = [...node.children.entries()].sort((a, b) => {
+    // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- short name used in sort comparator
     const aIsDir = a[1].type === 'dir';
+    // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- short name used in sort comparator
     const bIsDir = b[1].type === 'dir';
     if (aIsDir !== bIsDir) {
       return aIsDir ? -1 : 1;

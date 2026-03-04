@@ -26,8 +26,8 @@ export function ChatViewerStatus({ className, ...props }: React.HTMLAttributes<H
         className,
       )}
     >
-      <Loader className="size-4 text-primary md:size-6" />
-      <span className="font-mono text-sm text-muted-foreground capitalize">{loadingState}...</span>
+      <Loader className='size-4 text-primary md:size-6' />
+      <span className='font-mono text-sm text-muted-foreground capitalize'>{loadingState}...</span>
     </div>
   ) : null;
 }

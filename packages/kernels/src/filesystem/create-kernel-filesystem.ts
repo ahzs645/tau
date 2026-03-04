@@ -40,11 +40,11 @@ export function createKernelFileSystem(base: KernelFileSystemBase & Partial<Enha
 
     readdirContents:
       base.readdirContents ??
-      (async (dirPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> => {
-        const names = await base.readdir(dirPath);
+      (async (directoryPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> => {
+        const names = await base.readdir(directoryPath);
         const entries = await Promise.all(
           names.map(async (name) => {
-            const fullPath = `${dirPath}/${name}`;
+            const fullPath = `${directoryPath}/${name}`;
             const s = await base.stat(fullPath);
             if (s.type === 'dir') {
               return undefined;
@@ -61,11 +61,11 @@ export function createKernelFileSystem(base: KernelFileSystemBase & Partial<Enha
 
     readdirStat:
       base.readdirStat ??
-      (async (dirPath: string): Promise<FileStatEntry[]> => {
-        const names = await base.readdir(dirPath);
+      (async (directoryPath: string): Promise<FileStatEntry[]> => {
+        const names = await base.readdir(directoryPath);
         return Promise.all(
           names.map(async (name) => {
-            const fullPath = `${dirPath}/${name}`;
+            const fullPath = `${directoryPath}/${name}`;
             const s = await base.stat(fullPath);
             return { path: fullPath, name, ...s };
           }),

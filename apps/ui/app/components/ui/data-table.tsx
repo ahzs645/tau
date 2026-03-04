@@ -82,7 +82,7 @@ export function DataTable<Data>({
           ))
         ) : (
           <TableRow>
-            <TableCell colSpan={columns.length} className="h-24 text-center">
+            <TableCell colSpan={columns.length} className='h-24 text-center'>
               {emptyMessage}
             </TableCell>
           </TableRow>
@@ -139,9 +139,9 @@ export function DataTableVirtualized<Data>({
   const paddingBottom = lastVirtualRow ? totalSize - lastVirtualRow.end : 0;
 
   return (
-    <div ref={tableContainerRef} className="overflow-auto" style={{ height }}>
+    <div ref={tableContainerRef} className='overflow-auto' style={{ height }}>
       <Table>
-        <TableHeader className="sticky top-0 z-10 bg-background">
+        <TableHeader className='sticky top-0 z-10 bg-background'>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
               {headerGroup.headers.map((header) => (
@@ -193,7 +193,7 @@ export function DataTableVirtualized<Data>({
             </>
           ) : (
             <TableRow>
-              <TableCell colSpan={columns.length} className="h-24 text-center">
+              <TableCell colSpan={columns.length} className='h-24 text-center'>
                 {emptyMessage}
               </TableCell>
             </TableRow>
@@ -225,7 +225,7 @@ export function DataTableSearch<Data>({
 
   return (
     <SearchInput
-      autoComplete="off"
+      autoComplete='off'
       className={cn('h-8', className)}
       placeholder={placeholder}
       value={globalFilter}
@@ -263,27 +263,27 @@ export function DataTablePagination<Data>({
   const totalCount = table.getFilteredRowModel().rows.length;
 
   return (
-    <div className="flex items-center justify-between">
+    <div className='flex items-center justify-between'>
       {withSelectedCount ? (
-        <div className="flex-1 text-sm text-muted-foreground">
+        <div className='flex-1 text-sm text-muted-foreground'>
           {selectedCount} of {totalCount} {itemName}(s) selected.
         </div>
       ) : (
-        <div className="flex-1" />
+        <div className='flex-1' />
       )}
-      <div className="flex items-center space-x-6 lg:space-x-8">
-        <div className="flex items-center space-x-2">
-          <p className="text-sm font-medium whitespace-nowrap">Items per page</p>
+      <div className='flex items-center space-x-6 lg:space-x-8'>
+        <div className='flex items-center space-x-2'>
+          <p className='text-sm font-medium whitespace-nowrap'>Items per page</p>
           <Select
             value={`${table.getState().pagination.pageSize}`}
             onValueChange={(value) => {
               table.setPageSize(Number(value));
             }}
           >
-            <SelectTrigger size="sm" className="w-[70px] pr-2">
+            <SelectTrigger size='sm' className='w-[70px] pr-2'>
               <SelectValue placeholder={table.getState().pagination.pageSize} />
             </SelectTrigger>
-            <SelectContent side="top">
+            <SelectContent side='top'>
               {pageSizeOptions.map((pageSize) => (
                 <SelectItem key={pageSize} value={`${pageSize}`}>
                   {pageSize}
@@ -292,53 +292,53 @@ export function DataTablePagination<Data>({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex w-[100px] items-center justify-center text-sm font-medium">
+        <div className='flex w-[100px] items-center justify-center text-sm font-medium'>
           Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
         </div>
-        <div className="flex items-center space-x-2">
+        <div className='flex items-center space-x-2'>
           <Button
-            variant="outline"
-            className="hidden h-7 w-8 p-0 lg:flex"
+            variant='outline'
+            className='hidden h-7 w-8 p-0 lg:flex'
             disabled={!table.getCanPreviousPage()}
             onClick={() => {
               table.setPageIndex(0);
             }}
           >
-            <span className="sr-only">Go to first page</span>
-            <ChevronsLeft className="h-4 w-4" />
+            <span className='sr-only'>Go to first page</span>
+            <ChevronsLeft className='h-4 w-4' />
           </Button>
           <Button
-            variant="outline"
-            className="h-7 w-8 p-0"
+            variant='outline'
+            className='h-7 w-8 p-0'
             disabled={!table.getCanPreviousPage()}
             onClick={() => {
               table.previousPage();
             }}
           >
-            <span className="sr-only">Go to previous page</span>
-            <ChevronLeft className="h-4 w-4" />
+            <span className='sr-only'>Go to previous page</span>
+            <ChevronLeft className='h-4 w-4' />
           </Button>
           <Button
-            variant="outline"
-            className="h-7 w-8 p-0"
+            variant='outline'
+            className='h-7 w-8 p-0'
             disabled={!table.getCanNextPage()}
             onClick={() => {
               table.nextPage();
             }}
           >
-            <span className="sr-only">Go to next page</span>
-            <ChevronRight className="h-4 w-4" />
+            <span className='sr-only'>Go to next page</span>
+            <ChevronRight className='h-4 w-4' />
           </Button>
           <Button
-            variant="outline"
-            className="hidden h-7 w-8 p-0 lg:flex"
+            variant='outline'
+            className='hidden h-7 w-8 p-0 lg:flex'
             disabled={!table.getCanNextPage()}
             onClick={() => {
               table.setPageIndex(table.getPageCount() - 1);
             }}
           >
-            <span className="sr-only">Go to last page</span>
-            <ChevronsRight className="h-4 w-4" />
+            <span className='sr-only'>Go to last page</span>
+            <ChevronsRight className='h-4 w-4' />
           </Button>
         </div>
       </div>
@@ -369,24 +369,24 @@ export function DataTableColumnHeader<Data, Value>({
     <div className={cn('flex items-center space-x-2', className)}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="-ml-3 h-7 text-sm font-medium data-[state=open]:bg-accent">
+          <Button variant='ghost' size='sm' className='-ml-3 h-7 text-sm font-medium data-[state=open]:bg-accent'>
             <span>{title}</span>
             {column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="ml-2 h-4 w-4" />
+              <ArrowDown className='ml-2 h-4 w-4' />
             ) : column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="ml-2 h-4 w-4" />
+              <ArrowUp className='ml-2 h-4 w-4' />
             ) : (
-              <ChevronsUpDown className="ml-2 h-4 w-4" />
+              <ChevronsUpDown className='ml-2 h-4 w-4' />
             )}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
+        <DropdownMenuContent align='start'>
           <DropdownMenuItem
             onClick={() => {
               column.toggleSorting(false);
             }}
           >
-            <ArrowUp className="text-muted-foreground/70" />
+            <ArrowUp className='text-muted-foreground/70' />
             Asc
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -394,7 +394,7 @@ export function DataTableColumnHeader<Data, Value>({
               column.toggleSorting(true);
             }}
           >
-            <ArrowDown className="text-muted-foreground/70" />
+            <ArrowDown className='text-muted-foreground/70' />
             Desc
           </DropdownMenuItem>
           {column.getCanHide() && (
@@ -405,7 +405,7 @@ export function DataTableColumnHeader<Data, Value>({
                   column.toggleVisibility(false);
                 }}
               >
-                <EyeOff className="text-muted-foreground/70" />
+                <EyeOff className='text-muted-foreground/70' />
                 Hide
               </DropdownMenuItem>
             </>
@@ -451,23 +451,23 @@ export function DataTableSortingDropdown<Data>({ table }: DataTableSortingDropdo
       return undefined;
     }
 
-    return sortingState.desc ? <ArrowDown className="ml-auto" /> : <ArrowUp className="ml-auto" />;
+    return sortingState.desc ? <ArrowDown className='ml-auto' /> : <ArrowUp className='ml-auto' />;
   };
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
-          <ArrowUpDown className="size-4" />
+        <Button variant='outline' size='icon'>
+          <ArrowUpDown className='size-4' />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align='end'>
         <DropdownMenuLabel>Sort by</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {sortFields.map((field) => (
           <DropdownMenuItem
             key={field.id}
-            className="flex w-full items-center"
+            className='flex w-full items-center'
             onClick={() => {
               toggleSorting(field.id);
             }}
@@ -498,11 +498,11 @@ export function DataTableColumnVisibilityDropdown<Data>({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
-          <List className="size-4" />
+        <Button variant='outline' size='icon'>
+          <List className='size-4' />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align='end'>
         <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {table

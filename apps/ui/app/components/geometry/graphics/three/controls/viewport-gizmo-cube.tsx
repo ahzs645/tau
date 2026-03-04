@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
+/* oxlint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
 import { useThree, useFrame } from '@react-three/fiber';
 import type { GizmoAxisOptions, GizmoOptions } from 'three-viewport-gizmo';
 import { ViewportGizmo } from 'three-viewport-gizmo';
@@ -65,9 +65,9 @@ export function ViewportGizmoCube({
   cameraFovAngleRef.current = cameraFovAngle;
 
   // Ref to the live gizmo instance for the FOV sync effect
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
   const gizmoRef = useRef<ViewportGizmo | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
 
   const handleChange = useCallback((): void => {
@@ -178,7 +178,7 @@ export function ViewportGizmoCube({
 
       disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
 
   // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation)

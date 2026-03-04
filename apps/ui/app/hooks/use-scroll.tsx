@@ -3,14 +3,15 @@ import { useEffect, useState, useCallback } from 'react';
 
 export type ScrollToProperties = {
   behavior?: ScrollBehavior;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- required by React
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- required by React
   reference: RefObject<HTMLDivElement | null>;
 };
 
 /**
  * Scroll to a reference element.
- * @param behavior - The behavior of the scroll.
- * @param reference - The reference element to scroll to.
+ * @param root0 - The scroll properties.
+ * @param root0.behavior - The behavior of the scroll.
+ * @param root0.reference - The reference element to scroll to.
  * @param dependencies - The dependencies of the scroll. Useful when elements are rendered asynchronously to ensure the `isScrolledTo` state is updated when the element is in view.
  *
  * @example
@@ -35,7 +36,7 @@ export type ScrollToProperties = {
  *
  * @returns The scroll to properties, `{ isScrolledTo: boolean, scrollTo: () => void }`.
  */
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- infer type for hooks
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- infer type for hooks
 export function useScroll({ behavior, reference }: ScrollToProperties, dependencies: readonly unknown[] = []) {
   const [isScrolledTo, setIsScrolledTo] = useState(false);
 
@@ -43,7 +44,7 @@ export function useScroll({ behavior, reference }: ScrollToProperties, dependenc
     if (reference.current) {
       // Find the scrollable parent container by traversing up and checking the
       // computed styles for overflow
-      // eslint-disable-next-line @typescript-eslint/no-restricted-types -- the parent element can be null
+      // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- the parent element can be null
       let element: HTMLElement | null = reference.current;
       let scrollContainer: HTMLElement | undefined;
 
@@ -83,7 +84,7 @@ export function useScroll({ behavior, reference }: ScrollToProperties, dependenc
         observer.unobserve(currentReference);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- we are accepting that dependencies are not fully known.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- we are accepting that dependencies are not fully known.
   }, [reference, ...dependencies]);
 
   return {

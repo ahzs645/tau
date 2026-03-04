@@ -202,7 +202,10 @@ describe('KCL LSP Integration (Real WASM)', () => {
 
     type HoverResult = {
       contents: string | { kind: string; value: string } | Array<string | { kind: string; value: string }>;
-      range?: { start: { line: number; character: number }; end: { line: number; character: number } };
+      range?: {
+        start: { line: number; character: number };
+        end: { line: number; character: number };
+      };
     };
 
     const result = await lspRequest<HoverResult | undefined>('textDocument/hover', {
@@ -243,7 +246,10 @@ describe('KCL LSP Integration (Real WASM)', () => {
 
   it('should return formatting edits', async () => {
     type TextEdit = {
-      range: { start: { line: number; character: number }; end: { line: number; character: number } };
+      range: {
+        start: { line: number; character: number };
+        end: { line: number; character: number };
+      };
       newText: string;
     };
 

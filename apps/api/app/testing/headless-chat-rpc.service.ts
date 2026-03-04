@@ -40,7 +40,7 @@ export class HeadlessChatRpcService extends ChatRpcService {
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Generic T narrowed at runtime
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Generic T narrowed at runtime
       const rpcCall = { rpcName: request.rpcName, args: request.args } as RpcCall;
       const result = await this.dispatcher.dispatch(rpcCall);
       return result as RpcResult<T>;

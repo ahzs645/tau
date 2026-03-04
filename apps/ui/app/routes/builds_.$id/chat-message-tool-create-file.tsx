@@ -21,7 +21,7 @@ export function ChatMessageToolCreateFile({
       const content = input?.content ?? '';
 
       if (planModeEnabled && targetFile.endsWith('.plan.md')) {
-        return <ChatMessagePlanCard targetFile={targetFile} content={content} status="loading" />;
+        return <ChatMessagePlanCard targetFile={targetFile} content={content} status='loading' />;
       }
 
       return <CollapsibleFileOperation targetFile={targetFile} toolStatus={part.state} content={content} />;
@@ -33,7 +33,7 @@ export function ChatMessageToolCreateFile({
       const { diffStats } = output;
 
       if (planModeEnabled && targetFile.endsWith('.plan.md')) {
-        return <ChatMessagePlanCard targetFile={targetFile} content={content} status="ready" />;
+        return <ChatMessagePlanCard targetFile={targetFile} content={content} status='ready' />;
       }
 
       return (
@@ -48,7 +48,7 @@ export function ChatMessageToolCreateFile({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={FilePlus} fallbackTitle="Failed to create file" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={FilePlus} fallbackTitle='Failed to create file' />;
     }
 
     case 'approval-requested':

@@ -38,9 +38,9 @@ type GeometryBoundsResult = {
  * bounding box center sits at the world origin.
  */
 export function useGeometryBounds(
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React refs use null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React refs use null
   innerRef: RefObject<THREE.Group | null>,
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React refs use null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React refs use null
   outerRef: RefObject<THREE.Group | null>,
   options: GeometryBoundsOptions = {},
 ): GeometryBoundsResult {

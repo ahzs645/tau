@@ -1,4 +1,4 @@
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- emscripten types are not available as a module
+// oxlint-disable-next-line @typescript-eslint/triple-slash-reference -- emscripten types are not available as a module
 /// <reference types="emscripten" />
 
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
@@ -23,7 +23,7 @@ type InitOpenCascadeOptions = {
   tracer?: KernelSpanTracer;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op to silence logs
+// oxlint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op to silence logs
 const noop = (): void => {};
 
 /**

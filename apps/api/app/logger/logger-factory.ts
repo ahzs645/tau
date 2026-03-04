@@ -93,9 +93,9 @@ const formatRequestId = (requestId: string) => {
   return `${colors.cyan}${requestId}${colors.reset}`;
 };
 
-const formatUrl = (url: string, isDevMode = true) => {
+const formatUrl = (url: string, isDevelopmentMode = true) => {
   if (!url) {
-    return isDevMode ? `${colors.white}/${colors.reset}` : '/';
+    return isDevelopmentMode ? `${colors.white}/${colors.reset}` : '/';
   }
 
   // Parse URL to separate pathname and query parameters
@@ -106,24 +106,24 @@ const formatUrl = (url: string, isDevMode = true) => {
 
     if (searchParams.toString()) {
       const queryString = searchParams.toString();
-      if (isDevMode) {
+      if (isDevelopmentMode) {
         return `${colors.white}${pathname}${colors.reset}${colors.dim}?${queryString}${colors.reset}`;
       }
 
       return `${pathname}?${queryString}`;
     }
 
-    return isDevMode ? `${colors.white}${pathname}${colors.reset}` : pathname;
+    return isDevelopmentMode ? `${colors.white}${pathname}${colors.reset}` : pathname;
   } catch {
     // Fallback for malformed URLs
-    return isDevMode ? `${colors.white}${url}${colors.reset}` : url;
+    return isDevelopmentMode ? `${colors.white}${url}${colors.reset}` : url;
   }
 };
 
 const customSuccessMessage = (request: IncomingMessage, response: ServerResponse, responseTime: number) => {
-  const isDevMode = import.meta.env.DEV;
+  const isDevelopmentMode = import.meta.env.DEV;
 
-  if (!isDevMode) {
+  if (!isDevelopmentMode) {
     const url = formatUrl(request.url ?? '', false);
     return `[RES]:${request.id as string} ${request.method} ${url} ${response.statusCode} ${responseTime}ms`;
   }
@@ -142,16 +142,16 @@ const customSuccessMessage = (request: IncomingMessage, response: ServerResponse
 };
 
 const customReceivedMessage = (request: IncomingMessage) => {
-  const isDevMode = import.meta.env.DEV;
+  const isDevelopmentMode = import.meta.env.DEV;
 
-  if (!isDevMode) {
+  if (!isDevelopmentMode) {
     const url = formatUrl(request.url ?? '', false);
     return `[REQ]:${request.id as string} ${request.method} ${url}`;
   }
 
   const methodColor = getMethodColor(request.method ?? '');
   // @ts-expect-error -- TODO: add typings
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- TODO: add typings
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- TODO: add typings
   const url = formatUrl(request.originalUrl ?? '', true);
 
   return [
@@ -169,9 +169,9 @@ const customErrorMessage = (...args: Parameters<NonNullable<Options['customError
     // @ts-expect-error -- Pino is missing the responseTime type
     responseTime,
   ] = args;
-  const isDevMode = import.meta.env.DEV;
+  const isDevelopmentMode = import.meta.env.DEV;
 
-  if (!isDevMode) {
+  if (!isDevelopmentMode) {
     const url = formatUrl(request.url ?? '', false);
     return [
       `[ERR]:${request.id as string}`,
@@ -202,7 +202,7 @@ const customErrorObject = (
   _response: ServerResponse,
   _error: Error,
   _responseTime: number,
-  // eslint-disable-next-line max-params -- pino-http callback signature
+  // oxlint-disable-next-line max-params -- pino-http callback signature
 ) => {
   // We don't want to log the error object as it's handled in the `HttpExceptionFilter` logging.
   // Returning `undefined` will cause the error object to not be logged.
@@ -296,12 +296,12 @@ export function logServiceConfig(logService: LogServiceProvider): Options {
 }
 
 export async function useLoggerFactory(configService: ConfigService<Environment, true>): Promise<Params> {
-  const nodeEnv = configService.get('NODE_ENV', { infer: true });
+  const nodeEnvironment = configService.get('NODE_ENV', { infer: true });
   const logLevel = configService.get('LOG_LEVEL', { infer: true });
   const logService = configService.get('LOG_SERVICE', { infer: true });
 
   // Disable logging in test environment
-  const effectiveLogLevel = nodeEnv === 'test' ? 'silent' : logLevel;
+  const effectiveLogLevel = nodeEnvironment === 'test' ? 'silent' : logLevel;
 
   const serviceOptions = logServiceConfig(logService);
 

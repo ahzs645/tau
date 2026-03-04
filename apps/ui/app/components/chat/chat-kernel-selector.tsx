@@ -42,10 +42,10 @@ export const ChatKernelSelector = memo(function ({
     <ComboBoxResponsive
       {...properties}
       popoverProperties={properties.popoverProperties}
-      emptyListMessage="No kernels found."
-      searchPlaceHolder="Search kernels..."
-      title="Select a kernel"
-      description="Select the kernel to use for the chat. This will be used to generate a response."
+      emptyListMessage='No kernels found.'
+      searchPlaceHolder='Search kernels...'
+      title='Select a kernel'
+      description='Select the kernel to use for the chat. This will be used to generate a response.'
       groupedItems={[
         {
           name: 'CAD Kernels',
@@ -53,19 +53,19 @@ export const ChatKernelSelector = memo(function ({
         },
       ]}
       renderLabel={(item, selectedItem) => (
-        <span className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-2">
+        <span className='flex w-full items-center justify-between'>
+          <div className='flex items-center gap-2'>
             <SvgIcon id={item.id} />
-            <div className="flex flex-col">
+            <div className='flex flex-col'>
               <span>{item.name}</span>
-              <span className="text-xs text-muted-foreground">{item.description}</span>
+              <span className='text-xs text-muted-foreground'>{item.description}</span>
             </div>
           </div>
           {selectedItem?.id === item.id ? <Check /> : null}
         </span>
       )}
       getValue={(item) => item.id}
-      placeholder="Select a kernel"
+      placeholder='Select a kernel'
       defaultValue={selectedKernel}
       isNested={isNested}
       onSelect={handleSelectKernel}

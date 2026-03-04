@@ -21,7 +21,7 @@ export function createSignatureHelpProvider(
     signatureHelpTriggerCharacters: ['(', ','],
     signatureHelpRetriggerCharacters: [','],
 
-    // eslint-disable-next-line max-params -- Monaco editor API contract
+    // oxlint-disable-next-line max-params -- Monaco editor API contract
     async provideSignatureHelp(
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,

@@ -15,7 +15,7 @@ type ParametersNumberProps = {
   readonly min?: number;
   readonly max?: number;
   readonly step?: number;
-  // eslint-disable-next-line react/boolean-prop-naming -- disabled is standard HTML/React prop
+  // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
   readonly disabled?: boolean;
   /**
    * Whether to commit value changes continually on every slider movement.
@@ -108,15 +108,15 @@ export function ParametersNumber({
   const displayUnit = useSelector(parameterRef, (state) => state.context.displayUnit);
 
   return (
-    <div className="flex w-full flex-row items-center gap-2">
+    <div className='flex w-full flex-row items-center gap-2'>
       <Slider
-        variant="inset"
+        variant='inset'
         value={[localValue]}
         min={rangeMin}
         max={rangeMax}
         step={currentStep}
         disabled={disabled}
-        className="[&_[data-slot=slider-track]]:h-7 md:[&_[data-slot=slider-track]]:h-4.5"
+        className='[&_[data-slot=slider-track]]:h-7 md:[&_[data-slot=slider-track]]:h-4.5'
         onValueChange={([newValue]) => {
           // Send slider change event to machine (in display units)
           parameterRef.send({ type: 'sliderChanged', value: Number(newValue) });

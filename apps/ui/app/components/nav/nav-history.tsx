@@ -147,12 +147,12 @@ export function NavHistory(): ReactNode {
   return (
     <>
       {/* Search input */}
-      <SidebarGroup className="-mb-2 group-data-[collapsible=icon]:hidden">
+      <SidebarGroup className='-mb-2 group-data-[collapsible=icon]:hidden'>
         <SidebarGroupLabel>Recent Builds</SidebarGroupLabel>
         <SearchInput
-          placeholder="Search builds..."
+          placeholder='Search builds...'
           value={searchQuery}
-          className="h-7 bg-background dark:bg-background"
+          className='h-7 bg-background dark:bg-background'
           onChange={handleSearchChange}
           onKeyDown={handleSearchKeyDown}
           onClear={handleSearchClear}
@@ -161,7 +161,7 @@ export function NavHistory(): ReactNode {
 
       {/* Temporal groups */}
       {visibleBuilds.map((group) => (
-        <SidebarGroup key={group.name} className="group-data-[collapsible=icon]:hidden">
+        <SidebarGroup key={group.name} className='group-data-[collapsible=icon]:hidden'>
           <SidebarGroupLabel>{group.name}</SidebarGroupLabel>
           <SidebarMenu>
             {group.items.map((build) => (
@@ -182,10 +182,10 @@ export function NavHistory(): ReactNode {
 
       {/* Show "No results" message when searching with no results */}
       {searchQuery.trim() && filteredBuilds.length === 0 && (
-        <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+        <SidebarGroup className='group-data-[collapsible=icon]:hidden'>
           <SidebarMenu>
             <SidebarMenuItem>
-              <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+              <div className='px-2 py-4 text-center text-sm text-muted-foreground'>
                 No builds found for &ldquo;{searchQuery}&rdquo;
               </div>
             </SidebarMenuItem>
@@ -195,11 +195,11 @@ export function NavHistory(): ReactNode {
 
       {/* Load More button */}
       {builds.length > totalVisibleBuildCount && !searchQuery.trim() && (
-        <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+        <SidebarGroup className='group-data-[collapsible=icon]:hidden'>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton className="-mt-3.5 text-sidebar-foreground/70" onClick={handleLoadMore}>
-                <MoreHorizontal className="size-4" />
+              <SidebarMenuButton className='-mt-3.5 text-sidebar-foreground/70' onClick={handleLoadMore}>
+                <MoreHorizontal className='size-4' />
                 <span>Load More</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -278,14 +278,14 @@ function NavHistoryItem({
     <SidebarMenuItem key={build.id}>
       {isEditing ? (
         // Show editing state without NavLink to prevent drag issues
-        <SidebarMenuButton asChild className="bg-sidebar-accent">
+        <SidebarMenuButton asChild className='bg-sidebar-accent'>
           <span>
-            <History className="size-4 shrink-0" />
+            <History className='size-4 shrink-0' />
             <input
               autoFocus
-              type="text"
+              type='text'
               value={editValue}
-              className="flex-1 border-none bg-transparent text-sidebar-foreground outline-none"
+              className='flex-1 border-none bg-transparent text-sidebar-foreground outline-none'
               onChange={(event) => {
                 setEditValue(event.target.value);
               }}
@@ -301,8 +301,8 @@ function NavHistoryItem({
           {({ isActive, isPending }) => (
             <SidebarMenuButton asChild isActive={isActive}>
               <span>
-                {isPending ? <Loader /> : <History className="size-4 shrink-0" />}
-                <span className="flex-1 truncate">{build.name}</span>
+                {isPending ? <Loader /> : <History className='size-4 shrink-0' />}
+                <span className='flex-1 truncate'>{build.name}</span>
               </span>
             </SidebarMenuButton>
           )}
@@ -313,11 +313,11 @@ function NavHistoryItem({
           <DropdownMenuTrigger asChild>
             <SidebarMenuAction shouldShowOnHover>
               <MoreHorizontal />
-              <span className="sr-only">More</span>
+              <span className='sr-only'>More</span>
             </SidebarMenuAction>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-48 rounded-lg"
+            className='w-48 rounded-lg'
             side={isMobile ? 'bottom' : 'right'}
             align={isMobile ? 'end' : 'start'}
           >
@@ -330,7 +330,7 @@ function NavHistoryItem({
               <span>Duplicate</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={handleDeleteClick}>
+            <DropdownMenuItem variant='destructive' onClick={handleDeleteClick}>
               <Trash2 />
               <span>Delete</span>
             </DropdownMenuItem>

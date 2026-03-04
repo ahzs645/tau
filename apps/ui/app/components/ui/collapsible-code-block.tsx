@@ -59,10 +59,10 @@ export function CollapsibleContainer({
       {/* Toggle button - always in normal flow so it has its own space */}
       {shouldShowToggle ? (
         <Button
-          size="xs"
+          size='xs'
           aria-label={isExpanded ? 'Collapse code block' : 'Expand code block'}
           aria-expanded={isExpanded}
-          className="h-4 w-full shrink-0 rounded-none bg-transparent text-center text-foreground/50 hover:bg-neutral/10"
+          className='h-4 w-full shrink-0 rounded-none bg-transparent text-center text-foreground/50 hover:bg-neutral/10'
           onClick={() => {
             setIsExpanded((previous) => !previous);
           }}
@@ -101,19 +101,19 @@ export const CollapsibleCodeBlock = memo(function ({
   const lineCount = useMemo(() => text.split('\n').length, [text]);
 
   return (
-    <CodeBlock className={containerClassName} variant="standard">
-      <CodeBlockHeader variant="standard">
-        <CodeBlockTitle variant="standard">{title}</CodeBlockTitle>
-        <CodeBlockAction variant="standard">
+    <CodeBlock className={containerClassName} variant='standard'>
+      <CodeBlockHeader variant='standard'>
+        <CodeBlockTitle variant='standard'>{title}</CodeBlockTitle>
+        <CodeBlockAction variant='standard'>
           <CopyButton
-            size="xs"
-            className="h-6 **:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex"
+            size='xs'
+            className='h-6 **:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex'
             getText={() => text}
           />
         </CodeBlockAction>
       </CodeBlockHeader>
       <CollapsibleContainer lineCount={lineCount} collapsedLineCount={collapsedLineCount}>
-        <CodeBlockContent className="px-3">
+        <CodeBlockContent className='px-3'>
           <Pre language={language} className={cn('text-xs', className)}>
             {text}
           </Pre>

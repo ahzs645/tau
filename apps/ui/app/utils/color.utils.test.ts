@@ -95,7 +95,7 @@ describe('stringToColor', () => {
     const formatColors = {
       stl: stringToColor('stl'),
       gltf: stringToColor('gltf'),
-      obj: stringToColor('obj'),
+      obj: stringToColor('obj'), // eslint-disable-line id-denylist -- OBJ file format identifier
       threeMf: stringToColor('3mf'),
     };
 

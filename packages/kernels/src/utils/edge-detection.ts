@@ -163,8 +163,8 @@ export function detectEdges(
 
   // Helper to get vertex position by index
   const getVertex = (index: number): Vertex3 => {
-    const i = index * 3;
-    return [positions[i] ?? 0, positions[i + 1] ?? 0, positions[i + 2] ?? 0];
+    const index_ = index * 3;
+    return [positions[index_] ?? 0, positions[index_ + 1] ?? 0, positions[index_ + 2] ?? 0];
   };
 
   // Determine number of triangles
@@ -174,12 +174,12 @@ export function detectEdges(
   // Process each triangle
   for (let t = 0; t < triangleCount; t++) {
     // Get vertex indices for this triangle
-    const i0 = indices ? (indices[t * 3] ?? 0) : t * 3;
+    const index0 = indices ? (indices[t * 3] ?? 0) : t * 3;
     const i1 = indices ? (indices[t * 3 + 1] ?? 0) : t * 3 + 1;
     const i2 = indices ? (indices[t * 3 + 2] ?? 0) : t * 3 + 2;
 
     // Get vertex positions
-    const a = getVertex(i0);
+    const a = getVertex(index0);
     const b = getVertex(i1);
     const c = getVertex(i2);
 
@@ -199,10 +199,30 @@ export function detectEdges(
     }
 
     // Process three edges of the triangle
-    const edges: Array<{ hash: string; reverseHash: string; idx0: number; idx1: number }> = [
-      { hash: `${hashA}_${hashB}`, reverseHash: `${hashB}_${hashA}`, idx0: i0, idx1: i1 },
-      { hash: `${hashB}_${hashC}`, reverseHash: `${hashC}_${hashB}`, idx0: i1, idx1: i2 },
-      { hash: `${hashC}_${hashA}`, reverseHash: `${hashA}_${hashC}`, idx0: i2, idx1: i0 },
+    const edges: Array<{
+      hash: string;
+      reverseHash: string;
+      index0: number;
+      index1: number;
+    }> = [
+      {
+        hash: `${hashA}_${hashB}`,
+        reverseHash: `${hashB}_${hashA}`,
+        index0: index0,
+        index1: i1,
+      },
+      {
+        hash: `${hashB}_${hashC}`,
+        reverseHash: `${hashC}_${hashB}`,
+        index0: i1,
+        index1: i2,
+      },
+      {
+        hash: `${hashC}_${hashA}`,
+        reverseHash: `${hashA}_${hashC}`,
+        index0: i2,
+        index1: index0,
+      },
     ];
 
     for (const edge of edges) {
@@ -230,8 +250,8 @@ export function detectEdges(
         // Only store if we haven't already seen this edge (including processed ones)
         // This prevents overwriting when the same edge appears twice
         edgeData.set(edge.hash, {
-          index0: edge.idx0,
-          index1: edge.idx1,
+          index0: edge.index0,
+          index1: edge.index1,
           normal,
         });
       }
@@ -254,8 +274,8 @@ export function detectEdges(
   const outputIndices = new Uint32Array(edgeCount * 2);
 
   // Generate sequential indices for LINES mode
-  for (let i = 0; i < edgeCount * 2; i++) {
-    outputIndices[i] = i;
+  for (let index = 0; index < edgeCount * 2; index++) {
+    outputIndices[index] = index;
   }
 
   return {

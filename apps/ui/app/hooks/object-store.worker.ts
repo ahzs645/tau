@@ -31,9 +31,12 @@ const objectStoreWorker = {
    * This reduces roundtrips between main thread and worker.
    * Implements rollback on partial failure to maintain atomicity.
    *
+   * @param options - Options for build creation
+   * @param options.build - The build data to create
+   * @param options.chat - The chat data to create
    * @param options.editorState - Optional initial editor state overrides (e.g., panelState for initial panel layout)
    */
-  // eslint-disable-next-line complexity -- TODO: Refactor this function to make it more readable.
+  // oxlint-disable-next-line complexity -- TODO: Refactor this function to make it more readable.
   async createBuildWithResources(options: {
     build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>;
     chat: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'>;

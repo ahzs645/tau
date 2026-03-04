@@ -34,29 +34,29 @@ export function FormatsList({
 
   return (
     <div className={className}>
-      <div className="flex flex-col overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div className='flex flex-col overflow-hidden rounded-lg border bg-card shadow-sm'>
         {/* Header */}
-        <div className="border-b bg-muted/50 px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10">
-              <Icon className="size-5 text-primary" />
+        <div className='border-b bg-muted/50 px-6 py-4'>
+          <div className='flex items-center gap-3'>
+            <div className='flex size-10 items-center justify-center rounded-lg bg-primary/10'>
+              <Icon className='size-5 text-primary' />
             </div>
             <div>
-              <h2 className="text-xl font-semibold">{title}</h2>
-              <p className="text-sm text-muted-foreground">{description}</p>
+              <h2 className='text-xl font-semibold'>{title}</h2>
+              <p className='text-sm text-muted-foreground'>{description}</p>
             </div>
           </div>
         </div>
 
         {/* Content */}
-        <div className="overflow-auto p-6">
-          <div className="space-y-4">
+        <div className='overflow-auto p-6'>
+          <div className='space-y-4'>
             {/* Count */}
-            <p className="text-sm text-muted-foreground">{formats.length} formats supported</p>
+            <p className='text-sm text-muted-foreground'>{formats.length} formats supported</p>
 
             {/* Search */}
             <SearchInput
-              placeholder="Search formats..."
+              placeholder='Search formats...'
               value={searchQuery}
               onClear={() => {
                 setSearchQuery('');
@@ -68,27 +68,27 @@ export function FormatsList({
 
             {/* Formats Grid */}
             {filteredFormats.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
+              <div className='flex flex-wrap gap-2'>
                 {filteredFormats.map((format) => (
                   <HoverCard key={format}>
                     <HoverCardTrigger asChild>
-                      <Badge variant="outline" className="cursor-pointer font-mono text-xs">
+                      <Badge variant='outline' className='cursor-pointer font-mono text-xs'>
                         {format.toUpperCase()}
                       </Badge>
                     </HoverCardTrigger>
-                    <HoverCardContent className="w-80">
-                      <div className="space-y-3">
-                        <h4 className="font-semibold">{formatDisplayName(format)}</h4>
-                        <div className="text-sm text-muted-foreground">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">Extension:</span>
-                            <Badge variant="secondary" className="font-mono text-xs">
+                    <HoverCardContent className='w-80'>
+                      <div className='space-y-3'>
+                        <h4 className='font-semibold'>{formatDisplayName(format)}</h4>
+                        <div className='text-sm text-muted-foreground'>
+                          <div className='flex items-center gap-2'>
+                            <span className='font-medium'>Extension:</span>
+                            <Badge variant='secondary' className='font-mono text-xs'>
                               .{format.toLowerCase()}
                             </Badge>
                           </div>
                         </div>
                         {Boolean(formatConfigurations[format].description) && (
-                          <p className="text-sm leading-relaxed text-muted-foreground">
+                          <p className='text-sm leading-relaxed text-muted-foreground'>
                             {formatConfigurations[format].description}
                           </p>
                         )}
@@ -98,8 +98,8 @@ export function FormatsList({
                 ))}
               </div>
             ) : (
-              <div className="flex h-32 items-center justify-center rounded-md border border-dashed">
-                <p className="text-sm text-muted-foreground">No formats found</p>
+              <div className='flex h-32 items-center justify-center rounded-md border border-dashed'>
+                <p className='text-sm text-muted-foreground'>No formats found</p>
               </div>
             )}
           </div>

@@ -104,8 +104,8 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
 
   if (!build) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <Loader className="size-16 text-primary" />
+      <div className='flex h-full items-center justify-center'>
+        <Loader className='size-16 text-primary' />
       </div>
     );
   }
@@ -114,18 +114,18 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
     <div className={cn('absolute inset-0 size-full', '[--nav-height:calc(var(--spacing)*10)]', 'md:hidden')}>
       {/* Main viewer - always visible */}
       <div
-        className="relative h-full transition-all duration-200 ease-linear"
+        className='relative h-full transition-all duration-200 ease-linear'
         style={{
           paddingBottom: isModelTab ? '0' : `calc(${Number(activeSnapPoint) - 0.07} * 100dvh)`,
         }}
       >
         {/* 3D Viewer */}
-        <div className="relative h-full">
-          <CadPreviewViewer enableZoom enablePan className="h-full" />
+        <div className='relative h-full'>
+          <CadPreviewViewer enableZoom enablePan className='h-full' />
         </div>
 
         {/* Status Overlay */}
-        <CadPreviewStatus className="top-[calc(var(--header-height)+var(--spacing)*4)] right-auto left-1/2 -translate-x-1/2" />
+        <CadPreviewStatus className='top-[calc(var(--header-height)+var(--spacing)*4)] right-auto left-1/2 -translate-x-1/2' />
 
         {/* Floating Action Button */}
         <div
@@ -136,13 +136,13 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="default" size="lg" className="shadow-lg rounded-full">
-                <Code className="mr-2 size-4" />
+              <Button variant='default' size='lg' className='shadow-lg rounded-full'>
+                <Code className='mr-2 size-4' />
                 Code
-                <ChevronDown className="ml-2 size-4" />
+                <ChevronDown className='ml-2 size-4' />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align='end'>
               <DropdownMenuItem disabled={isCloning} onClick={handleRemix}>
                 {isCloning ? <Loader /> : <FileCode />}
                 {isCloning ? 'Remixing...' : 'Remix'}
@@ -165,16 +165,16 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
         modal={false}
         onOpenChange={handleDrawerChange}
       >
-        <DrawerTitle className="sr-only" id="drawer-title">
+        <DrawerTitle className='sr-only' id='drawer-title'>
           Preview Content
         </DrawerTitle>
-        <DrawerDescription className="sr-only" id="drawer-description">
+        <DrawerDescription className='sr-only' id='drawer-description'>
           Preview content - use navigation tabs to switch between panels
         </DrawerDescription>
 
         <DrawerContent
-          aria-labelledby="drawer-title"
-          aria-describedby="drawer-description"
+          aria-labelledby='drawer-title'
+          aria-describedby='drawer-description'
           className={cn(
             'flex-1 rounded-t-lg border-t bg-sidebar',
             'z-40',
@@ -188,20 +188,20 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
         >
           <Tabs
             value={activeTab}
-            className="flex h-full flex-col p-0"
+            className='flex h-full flex-col p-0'
             style={{
               height: isModelTab ? '100dvh' : `calc(${Number(activeSnapPoint)} * 100dvh - var(--spacing)*12)`,
             }}
             onValueChange={handleTabChange}
           >
-            <TabsContent enableAnimation={false} value="files" className="flex h-full flex-col overflow-hidden p-4">
+            <TabsContent enableAnimation={false} value='files' className='flex h-full flex-col overflow-hidden p-4'>
               <PreviewFiles files={files} />
             </TabsContent>
-            <TabsContent enableAnimation={false} value="parameters" className="flex h-full flex-col overflow-hidden">
+            <TabsContent enableAnimation={false} value='parameters' className='flex h-full flex-col overflow-hidden'>
               <PreviewParameters />
             </TabsContent>
-            <TabsContent enableAnimation={false} value="model" className="flex h-full flex-col" />
-            <TabsContent enableAnimation={false} value="details" className="flex h-full flex-col overflow-y-auto">
+            <TabsContent enableAnimation={false} value='model' className='flex h-full flex-col' />
+            <TabsContent enableAnimation={false} value='details' className='flex h-full flex-col overflow-y-auto'>
               <PreviewDetails build={build} geometriesCount={geometries.length} onExport={exportGeometry} />
             </TabsContent>
           </Tabs>
@@ -211,7 +211,7 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
       {/* Navigation tabs */}
       <div className={cn('pointer-events-auto fixed right-0 bottom-0 left-0 z-50')}>
         <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <PreviewNav className="h-(--nav-height)" />
+          <PreviewNav className='h-(--nav-height)' />
         </Tabs>
       </div>
     </div>

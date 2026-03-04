@@ -31,13 +31,13 @@ function SourceItem({ source }: { readonly source: WebSource }): React.JSX.Eleme
   return (
     <ExternalLink
       href={source.url}
-      arrowSize="xs"
-      className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline"
+      arrowSize='xs'
+      className='flex items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline'
     >
-      <img src={faviconUrl} alt={domain} className="size-3.5 shrink-0 rounded-sm" />
-      <span className="shrink-0 font-medium">{domain}</span>
-      <span className="text-muted-foreground/50">-</span>
-      <span className="min-w-0 truncate">{source.title}</span>
+      <img src={faviconUrl} alt={domain} className='size-3.5 shrink-0 rounded-sm' />
+      <span className='shrink-0 font-medium'>{domain}</span>
+      <span className='text-muted-foreground/50'>-</span>
+      <span className='min-w-0 truncate'>{source.title}</span>
     </ExternalLink>
   );
 }
@@ -50,7 +50,7 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
   const hasMoreSources = hiddenSources.length > 0;
 
   return (
-    <div className="flex flex-col">
+    <div className='flex flex-col'>
       {/* Always visible sources */}
       {visibleSources.map((source) => (
         <SourceItem key={source.url} source={source} />
@@ -59,27 +59,27 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
       {/* Expandable section for additional sources */}
       {hasMoreSources ? (
         <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-          <CollapsibleTrigger className="group flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground">
+          <CollapsibleTrigger className='group flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground'>
             <ChevronRight
               className={cn('size-3 shrink-0 transition-transform duration-200', isExpanded && 'rotate-90')}
             />
             <span>...and {hiddenSources.length} more</span>
-            <div className="flex items-center gap-0.5">
+            <div className='flex items-center gap-0.5'>
               {hiddenSources.slice(0, 6).map((source) => {
                 const domain = extractDomainFromUrl(source.url);
                 const faviconUrl = createFaviconUrl(source.url);
 
                 return (
-                  <img key={source.url} src={faviconUrl} alt={domain} className="size-3.5 rounded-sm opacity-60" />
+                  <img key={source.url} src={faviconUrl} alt={domain} className='size-3.5 rounded-sm opacity-60' />
                 );
               })}
               {hiddenSources.length > 6 ? (
-                <span className="ml-0.5 text-[10px] text-muted-foreground/50">+{hiddenSources.length - 6}</span>
+                <span className='ml-0.5 text-[10px] text-muted-foreground/50'>+{hiddenSources.length - 6}</span>
               ) : undefined}
             </div>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="flex flex-col pl-4">
+            <div className='flex flex-col pl-4'>
               {hiddenSources.map((source) => (
                 <SourceItem key={source.url} source={source} />
               ))}
@@ -110,7 +110,7 @@ export function ChatMessageToolWebSearch({
       const query = part.input?.query ?? '';
 
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
@@ -118,7 +118,7 @@ export function ChatMessageToolWebSearch({
                 <>
                   <ChatToolAction>Searching web</ChatToolAction>{' '}
                   <ChatToolDescription>
-                    <span className="italic">{query}</span>
+                    <span className='italic'>{query}</span>
                   </ChatToolDescription>
                 </>
               ) : (
@@ -131,7 +131,7 @@ export function ChatMessageToolWebSearch({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle="Web search failed" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle='Web search failed' />;
     }
 
     case 'output-available': {
@@ -140,7 +140,7 @@ export function ChatMessageToolWebSearch({
 
       if (sources.length === 0) {
         return (
-          <ChatToolCard variant="minimal" status="ready" isCollapsible={false}>
+          <ChatToolCard variant='minimal' status='ready' isCollapsible={false}>
             <ChatToolCardHeader>
               <ChatToolCardIcon icon={Globe} />
               <ChatToolCardTitle>No sources found</ChatToolCardTitle>
@@ -153,18 +153,18 @@ export function ChatMessageToolWebSearch({
       const shouldBeOpen = !hasContent || isOpen;
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
+        <ChatToolCard variant='minimal' status='ready' isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
               <ChatToolAction>Searched web</ChatToolAction>{' '}
               <ChatToolDescription>
-                <span className="italic">{query}</span>
+                <span className='italic'>{query}</span>
               </ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
-          <ChatToolCardContent className="border-l-0">
-            <div className="border-l border-foreground/20 pl-4">
+          <ChatToolCardContent className='border-l-0'>
+            <div className='border-l border-foreground/20 pl-4'>
               <SourcesList sources={sources} />
             </div>
           </ChatToolCardContent>

@@ -62,7 +62,7 @@ const jsTsLanguages = new Set(['typescript', 'javascript', 'typescriptreact', 'j
 // eslint-disable-next-line @typescript-eslint/naming-convention -- toggle to enable debug logging
 const ATA_DEBUG = false;
 function ataLog(...arguments_: unknown[]): void {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag toggled manually
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag toggled manually
   if (ATA_DEBUG) {
     console.log('[ATA]', ...arguments_);
   }

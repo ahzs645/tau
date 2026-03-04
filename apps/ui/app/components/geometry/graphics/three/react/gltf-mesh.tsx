@@ -185,10 +185,11 @@ function updateVisibility(scene: Group, enableSurfaces: boolean, enableLines: bo
  *   - When vertex colors (COLOR_0 attribute) are present: uses vertex colors exclusively
  *   - When no vertex colors are present: falls back to material colors and opacity
  *
- * @param gltfFile - The GLTF file to load
- * @param enableMatcap - Whether to enable matcap material
- * @param enableSurfaces - Whether to enable surfaces
- * @param enableLines - Whether to enable lines
+ * @param props - The GLTF mesh display properties
+ * @param props.gltfFile - The GLTF file to load
+ * @param props.enableMatcap - Whether to enable matcap material
+ * @param props.enableSurfaces - Whether to enable surfaces
+ * @param props.enableLines - Whether to enable lines
  * @returns A React component with Three.js primitives that renders the GLTF mesh
  */
 export function GltfMesh({

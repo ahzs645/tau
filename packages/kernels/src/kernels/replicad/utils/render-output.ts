@@ -49,7 +49,7 @@ const isMeshable = (shape: unknown): shape is Meshable => {
   return (
     typeof shape === 'object' &&
     shape !== null &&
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime defensive guard against nullish values
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime defensive guard against nullish values
     Boolean((shape as Meshable).mesh && (shape as Meshable).meshEdges)
   );
 };
@@ -66,7 +66,7 @@ function createBasicShapeConfig(
   const raw: Array<AnyShape | InputShape | undefined> = Array.isArray(inputShapes) ? inputShapes : [inputShapes];
 
   // Filter out nullish entries (e.g., from main() returning undefined)
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime values can be nullish despite types
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime values can be nullish despite types
   const shapes = raw.filter((shape): shape is AnyShape | InputShape => shape !== null && shape !== undefined);
 
   return shapes
@@ -120,7 +120,10 @@ function renderSvg(shapeConfig: SvgShapeConfiguration): GeometrySvg {
   };
 }
 
-const defaultPreviewTessellation: Tessellation = { linearTolerance: 0.1, angularTolerance: 30 };
+const defaultPreviewTessellation: Tessellation = {
+  linearTolerance: 0.1,
+  angularTolerance: 30,
+};
 
 function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellation, withBrepEdges: boolean) {
   const { name, shape, color, opacity } = shapeConfig;

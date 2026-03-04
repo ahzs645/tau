@@ -135,11 +135,11 @@ export const kernelProviders = kernelConfigurations.map((option) => option.id) a
 
 export const backendProviders = kernelConfigurations.map((option) => option.backendProvider) as [KernelBackendProvider];
 
-// eslint-disable-next-line unicorn/no-array-reduce -- we know the keys are unique
+// oxlint-disable-next-line unicorn/no-array-reduce -- we know the keys are unique
 export const languageFromKernel = kernelConfigurations.reduce(
-  (acc, option: KernelConfiguration) => {
-    acc[option.id as KernelId] = option.language;
-    return acc;
+  (accumulator, option: KernelConfiguration) => {
+    accumulator[option.id as KernelId] = option.language;
+    return accumulator;
   },
   {} as Record<KernelId, CodeLanguage>,
 );

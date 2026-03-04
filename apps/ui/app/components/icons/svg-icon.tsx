@@ -14,11 +14,11 @@ export function SvgIcon({
   className,
   ...properties
 }: React.SVGProps<SVGSVGElement> & { readonly id: string }): React.JSX.Element {
-  const pngSrc = pngIcons[id];
-  if (pngSrc) {
+  const pngSource = pngIcons[id];
+  if (pngSource) {
     return (
-      <svg {...properties} className={className} viewBox="0 0 56 56" role="img" aria-label={id}>
-        <image href={pngSrc} width="56" height="56" />
+      <svg {...properties} className={className} viewBox='0 0 56 56' role='img' aria-label={id}>
+        <image href={pngSource} width='56' height='56' />
       </svg>
     );
   }
@@ -26,7 +26,7 @@ export function SvgIcon({
   const resolvedIconId = iconAliases[id] ?? (id as SvgIcons);
 
   return (
-    <svg {...properties} className={className} viewBox="0 0 56 56">
+    <svg {...properties} className={className} viewBox='0 0 56 56'>
       <use href={`${spriteSvg}#${resolvedIconId}`} />
     </svg>
   );

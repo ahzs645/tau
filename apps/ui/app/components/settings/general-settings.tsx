@@ -32,15 +32,15 @@ const privacyModes: PrivacyMode[] = [
 function getThemeIcon(themeId: ThemeWithSystem): React.JSX.Element {
   switch (themeId) {
     case Theme.LIGHT: {
-      return <Sun className="size-4" />;
+      return <Sun className='size-4' />;
     }
 
     case Theme.DARK: {
-      return <Moon className="size-4" />;
+      return <Moon className='size-4' />;
     }
 
     default: {
-      return <Laptop className="size-4" />;
+      return <Laptop className='size-4' />;
     }
   }
 }
@@ -66,55 +66,55 @@ export function GeneralSettings(): React.JSX.Element {
   };
 
   return (
-    <div className="flex flex-col gap-6 pb-6">
+    <div className='flex flex-col gap-6 pb-6'>
       {/* Appearance Section */}
       <Card>
         <CardHeader>
           <CardTitle>Appearance</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent className='flex flex-col gap-4'>
           {/* Theme Selector */}
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <span className="font-medium">Theme</span>
-              <span className="text-sm text-muted-foreground">Select your preferred color scheme</span>
+          <div className='flex items-center justify-between gap-4'>
+            <div className='flex flex-col gap-1'>
+              <span className='font-medium'>Theme</span>
+              <span className='text-sm text-muted-foreground'>Select your preferred color scheme</span>
             </div>
             <ComboBoxResponsive
-              title="Theme"
-              description="Select your preferred color scheme"
+              title='Theme'
+              description='Select your preferred color scheme'
               groupedItems={[{ name: 'Theme', items: themeOptions }]}
               getValue={(item) => String(item.id)}
               defaultValue={currentOption}
               isSearchEnabled={false}
               renderLabel={(item, selectedItem) => (
-                <span className="flex w-full items-center justify-between gap-4">
-                  <div className="flex items-center gap-2">
+                <span className='flex w-full items-center justify-between gap-4'>
+                  <div className='flex items-center gap-2'>
                     {getThemeIcon(item.id)}
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">{item.name}</span>
-                      <span className="text-xs text-muted-foreground">{item.description}</span>
+                    <div className='flex flex-col gap-0.5'>
+                      <span className='font-medium'>{item.name}</span>
+                      <span className='text-xs text-muted-foreground'>{item.description}</span>
                     </div>
                   </div>
-                  {selectedItem?.id === item.id ? <Check className="size-4 shrink-0" /> : null}
+                  {selectedItem?.id === item.id ? <Check className='size-4 shrink-0' /> : null}
                 </span>
               )}
               onSelect={handleThemeChange}
             >
-              <Button variant="outline" className="w-[160px] justify-between">
-                <span className="flex items-center gap-2">
+              <Button variant='outline' className='w-[160px] justify-between'>
+                <span className='flex items-center gap-2'>
                   {getThemeIcon(themeWithSystem)}
-                  <span className="truncate">{currentOption.name}</span>
+                  <span className='truncate'>{currentOption.name}</span>
                 </span>
-                <ChevronDown className="size-4 shrink-0 opacity-50" />
+                <ChevronDown className='size-4 shrink-0 opacity-50' />
               </Button>
             </ComboBoxResponsive>
           </div>
 
           {/* Color Picker */}
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <span className="font-medium">Accent Color</span>
-              <span className="text-sm text-muted-foreground">Customize the primary accent color</span>
+          <div className='flex items-center justify-between gap-4'>
+            <div className='flex flex-col gap-1'>
+              <span className='font-medium'>Accent Color</span>
+              <span className='text-sm text-muted-foreground'>Customize the primary accent color</span>
             </div>
             <ColorPicker
               hasTooltip={false}
@@ -124,12 +124,12 @@ export function GeneralSettings(): React.JSX.Element {
                 setHue(value.h);
               }}
             >
-              <Button variant="outline" className="w-[160px] justify-between">
-                <span className="flex items-center gap-2">
-                  <span className="size-4 shrink-0 rounded-full bg-primary" />
-                  <span className="truncate">Hue: {hue}°</span>
+              <Button variant='outline' className='w-[160px] justify-between'>
+                <span className='flex items-center gap-2'>
+                  <span className='size-4 shrink-0 rounded-full bg-primary' />
+                  <span className='truncate'>Hue: {hue}°</span>
                 </span>
-                <ChevronDown className="size-4 shrink-0 opacity-50" />
+                <ChevronDown className='size-4 shrink-0 opacity-50' />
               </Button>
             </ColorPicker>
           </div>
@@ -141,44 +141,44 @@ export function GeneralSettings(): React.JSX.Element {
         <CardHeader>
           <CardTitle>Privacy</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent className='flex flex-col gap-4'>
           {isLoading ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader className="size-5 text-muted-foreground" />
+            <div className='flex items-center justify-center py-4'>
+              <Loader className='size-5 text-muted-foreground' />
             </div>
           ) : error ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <AlertCircle className="size-4 shrink-0" />
+            <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+              <AlertCircle className='size-4 shrink-0' />
               <span>Unable to load privacy preferences. Check your connection and refresh.</span>
             </div>
           ) : (
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2 font-medium">
+            <div className='flex items-center justify-between gap-4'>
+              <div className='flex flex-col gap-1'>
+                <div className='flex items-center gap-2 font-medium'>
                   {currentModeId === 'share' ? (
                     <>
-                      <Check className="size-4 text-primary" />
+                      <Check className='size-4 text-primary' />
                       Data Sharing Enabled
                     </>
                   ) : (
                     <>
-                      <ShieldCheck className="size-4 text-primary" />
+                      <ShieldCheck className='size-4 text-primary' />
                       Privacy Mode Enabled
                     </>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className='text-sm text-muted-foreground'>
                   {currentModeId === 'share' ? (
                     <>
                       Your prompts and generated designs will be stored and used to improve our AI features.{' '}
-                      <Link to="/legal/privacy#9.2.1" className="underline hover:text-foreground">
+                      <Link to='/legal/privacy#9.2.1' className='underline hover:text-foreground'>
                         Learn more
                       </Link>
                     </>
                   ) : (
                     <>
                       No training. Your data is not used to improve AI features.{' '}
-                      <Link to="/legal/privacy#9.2.1" className="underline hover:text-foreground">
+                      <Link to='/legal/privacy#9.2.1' className='underline hover:text-foreground'>
                         Learn more
                       </Link>
                     </>
@@ -186,26 +186,26 @@ export function GeneralSettings(): React.JSX.Element {
                 </p>
               </div>
               <ComboBoxResponsive
-                title="Privacy Mode"
-                description="Select how your data is used"
+                title='Privacy Mode'
+                description='Select how your data is used'
                 groupedItems={[{ name: 'Privacy Settings', items: privacyModes }]}
                 getValue={(item) => item.id}
                 defaultValue={currentMode}
                 isSearchEnabled={false}
                 renderLabel={(item, selectedItem) => (
-                  <span className="flex w-full items-center justify-between gap-4">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">{item.name}</span>
-                      <span className="text-xs text-muted-foreground">{item.description}</span>
+                  <span className='flex w-full items-center justify-between gap-4'>
+                    <div className='flex flex-col gap-0.5'>
+                      <span className='font-medium'>{item.name}</span>
+                      <span className='text-xs text-muted-foreground'>{item.description}</span>
                     </div>
-                    {selectedItem?.id === item.id ? <Check className="size-4 shrink-0" /> : null}
+                    {selectedItem?.id === item.id ? <Check className='size-4 shrink-0' /> : null}
                   </span>
                 )}
                 onSelect={handlePrivacyModeChange}
               >
-                <Button variant="outline" disabled={isUpdating} className="w-[160px] justify-between">
-                  <span className="truncate">{currentMode.name}</span>
-                  <ChevronDown className="size-4 shrink-0 opacity-50" />
+                <Button variant='outline' disabled={isUpdating} className='w-[160px] justify-between'>
+                  <span className='truncate'>{currentMode.name}</span>
+                  <ChevronDown className='size-4 shrink-0 opacity-50' />
                 </Button>
               </ComboBoxResponsive>
             </div>

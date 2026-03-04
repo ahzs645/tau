@@ -44,8 +44,8 @@ export function ExternalLink({
   return (
     <a
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
+      target='_blank'
+      rel='noopener noreferrer'
       className={cn(
         'group/external-link underline decoration-muted-foreground/50 underline-offset-2 transition-colors hover:decoration-foreground',
         className,

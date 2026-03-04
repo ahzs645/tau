@@ -75,11 +75,38 @@ export type RenderPhase = string;
  */
 export type KernelResponse =
   | { type: 'initialized'; requestId: string }
-  | { type: 'parametersResolved'; requestId: string; result: GetParametersResult }
-  | { type: 'geometryComputed'; requestId: string; result: HashedGeometryResult }
+  | {
+      type: 'parametersResolved';
+      requestId: string;
+      result: GetParametersResult;
+    }
+  | {
+      type: 'geometryComputed';
+      requestId: string;
+      result: HashedGeometryResult;
+    }
   | { type: 'exported'; requestId: string; result: ExportGeometryResult }
   | { type: 'error'; requestId: string; issues: KernelIssue[] }
-  | { type: 'progress'; requestId: string; phase: RenderPhase; detail?: Record<string, unknown> }
-  | { type: 'log'; level: LogLevel; message: string; origin?: LogOrigin; data?: unknown }
-  | { type: 'logBatch'; entries: Array<{ level: LogLevel; message: string; origin?: LogOrigin; data?: unknown }> }
+  | {
+      type: 'progress';
+      requestId: string;
+      phase: RenderPhase;
+      detail?: Record<string, unknown>;
+    }
+  | {
+      type: 'log';
+      level: LogLevel;
+      message: string;
+      origin?: LogOrigin;
+      data?: unknown;
+    }
+  | {
+      type: 'logBatch';
+      entries: Array<{
+        level: LogLevel;
+        message: string;
+        origin?: LogOrigin;
+        data?: unknown;
+      }>;
+    }
   | { type: 'telemetry'; entries: PerformanceEntryData[] };

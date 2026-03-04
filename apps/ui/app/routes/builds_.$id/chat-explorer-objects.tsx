@@ -134,7 +134,7 @@ export function ChatEditorExplorerObjects({
   }
 
   return (
-    <Tree elements={treeElements} initialExpandedItems={treeElements.map((element) => element.id)} className="px-1">
+    <Tree elements={treeElements} initialExpandedItems={treeElements.map((element) => element.id)} className='px-1'>
       {treeElements.map((element) => (
         <CadTreeItem
           key={element.id}
@@ -156,7 +156,7 @@ type CadTreeItemProps = {
 function CadTreeItem({ element, onSelect, activeComponentId }: CadTreeItemProps): React.JSX.Element {
   if (element.children && element.children.length > 0) {
     return (
-      <Folder value={element.id} element={element.name} className="px-2 py-1 text-sm text-sidebar-foreground">
+      <Folder value={element.id} element={element.name} className='px-2 py-1 text-sm text-sidebar-foreground'>
         {element.children.map((child) => (
           <CadTreeItem key={child.id} element={child} activeComponentId={activeComponentId} onSelect={onSelect} />
         ))}
@@ -170,7 +170,7 @@ function CadTreeItem({ element, onSelect, activeComponentId }: CadTreeItemProps)
     <ExplorerFile
       id={element.id}
       name={element.name}
-      icon={<Box className="size-4" />}
+      icon={<Box className='size-4' />}
       isSelected={isActive}
       onClick={() => {
         onSelect(element.id);

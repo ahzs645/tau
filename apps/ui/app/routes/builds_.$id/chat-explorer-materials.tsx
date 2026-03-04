@@ -44,7 +44,7 @@ export function ChatEditorExplorerMaterials({
   }));
 
   return (
-    <Tree elements={treeElements} className="px-1">
+    <Tree elements={treeElements} className='px-1'>
       {materials.map((material) => {
         const isSelected = selectedMaterialId === material.id;
 
@@ -53,7 +53,7 @@ export function ChatEditorExplorerMaterials({
             key={material.id}
             id={material.id}
             name={material.name}
-            icon={<Palette className="size-4" style={{ color: material.color ?? '#888' }} />}
+            icon={<Palette className='size-4' style={{ color: material.color ?? '#888' }} />}
             isSelected={isSelected}
             onClick={() => {
               handleMaterialClick(material.id);

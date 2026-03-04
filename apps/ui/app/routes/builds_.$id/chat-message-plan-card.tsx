@@ -41,7 +41,7 @@ function extractPlanOverview(content: string): string | undefined {
 
 function extractTodos(content: string): Array<{ text: string; checked: boolean }> {
   const todos: Array<{ text: string; checked: boolean }> = [];
-  const regex = /^[\s]*-\s+\[([ xX])\]\s+(.+)$/gm;
+  const regex = /^\s*-\s+\[([ Xx])]\s+(.+)$/gm;
   let match;
 
   while ((match = regex.exec(content)) !== null) {
@@ -54,18 +54,14 @@ function extractTodos(content: string): Array<{ text: string; checked: boolean }
   return todos;
 }
 
-export function ChatMessagePlanCard({
-  targetFile,
-  content,
-  status,
-}: ChatMessagePlanCardProperties): React.JSX.Element {
+export function ChatMessagePlanCard({ targetFile, content, status }: ChatMessagePlanCardProperties): React.JSX.Element {
   const title = extractPlanTitle(content);
   const overview = extractPlanOverview(content);
   const todos = extractTodos(content);
 
   if (status === 'loading') {
     return (
-      <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+      <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
         <ChatToolCardHeader>
           <ChatToolCardIcon icon={FileText} />
           <ChatToolCardTitle>
@@ -77,36 +73,29 @@ export function ChatMessagePlanCard({
   }
 
   return (
-    <ChatToolCard variant="minimal" status="ready" isDefaultOpen isCookieDefaultOpen>
-      <ChatToolCardHeader className="text-foreground">
+    <ChatToolCard variant='minimal' status='ready' isDefaultOpen isCookieDefaultOpen>
+      <ChatToolCardHeader className='text-foreground'>
         <ChatToolCardIcon icon={FileText} />
         <ChatToolCardTitle>{title ?? 'Plan'}</ChatToolCardTitle>
       </ChatToolCardHeader>
       <ChatToolCardContent>
-        <div className="flex flex-col gap-2 text-sm">
-          {overview ? (
-            <MarkdownViewer className="text-muted-foreground">{overview}</MarkdownViewer>
-          ) : undefined}
+        <div className='flex flex-col gap-2 text-sm'>
+          {overview ? <MarkdownViewer className='text-muted-foreground'>{overview}</MarkdownViewer> : undefined}
 
           {todos.length > 0 ? (
-            <ul className="flex flex-col gap-1">
+            <ul className='flex flex-col gap-1'>
               {todos.map((todo, index) => (
-                // eslint-disable-next-line react/no-array-index-key -- Stable content
-                <li key={index} className="flex items-start gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={todo.checked}
-                    readOnly
-                    className="mt-0.5 size-3.5 rounded-sm"
-                  />
+                // oxlint-disable-next-line react/no-array-index-key -- Stable content
+                <li key={index} className='flex items-start gap-2 text-xs text-muted-foreground'>
+                  <input type='checkbox' checked={todo.checked} readOnly className='mt-0.5 size-3.5 rounded-sm' />
                   <span>{todo.text}</span>
                 </li>
               ))}
             </ul>
           ) : undefined}
 
-          <FileLink path={targetFile} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-            <ExternalLink className="size-3" />
+          <FileLink path={targetFile} className='inline-flex items-center gap-1 text-xs text-primary hover:underline'>
+            <ExternalLink className='size-3' />
             View Plan
           </FileLink>
         </div>

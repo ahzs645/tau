@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/member-ordering -- NestJS gateway has specific method ordering requirements */
-/* eslint-disable new-cap -- NestJS decorators use PascalCase */
+/* oxlint-disable new-cap -- NestJS decorators use PascalCase */
 import { Inject, Logger } from '@nestjs/common';
 import type { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import type { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit } from '@nestjs/websockets';
@@ -10,6 +10,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import type { RpcResponse } from '@taucad/chat';
 import { authInstanceKey } from '#constants/auth.constant.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
+// oxlint-disable-next-line eslint-plugin-import/no-cycle -- gateway and dev-websocket are tightly coupled
 import { DevWebSocketService } from '#api/websocket/dev-websocket.service.js';
 
 export const chatRpcPath = '/v1/chat/rpc';

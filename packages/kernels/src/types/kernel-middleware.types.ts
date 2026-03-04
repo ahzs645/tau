@@ -54,9 +54,9 @@ export type MiddlewareState<T extends Record<string, unknown>> = {
  * @template Options - The options type inferred from the middleware's optionsSchema. Must be an object type.
  */
 export type KernelMiddlewareRuntime<
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   Options extends Record<string, unknown> = {},
 > = {
   /** Logger with middleware name pre-configured as the component */
@@ -140,9 +140,9 @@ export type GetParametersHandler = (input: GetParametersInput) => Promise<GetPar
  * ```
  */
 export type WrapCreateGeometryHook<
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   Options extends Record<string, unknown> = {},
 > = (
   input: CreateGeometryInput,
@@ -157,9 +157,9 @@ export type WrapCreateGeometryHook<
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
 export type WrapExportGeometryHook<
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   Options extends Record<string, unknown> = {},
 > = (
   input: ExportGeometryInput,
@@ -174,9 +174,9 @@ export type WrapExportGeometryHook<
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  */
 export type WrapGetParametersHook<
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   Options extends Record<string, unknown> = {},
 > = (
   input: GetParametersInput,

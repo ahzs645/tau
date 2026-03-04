@@ -87,7 +87,11 @@ type DraftMachineEvents =
   | { type: 'addEditDraftImage'; image: string }
   | { type: 'removeEditDraftImage'; index: number }
   | { type: 'loadAllMessageEdits'; edits: Record<string, MyUIMessage> }
-  | { type: 'startEditingMessage'; messageId: string; originalMessage?: MyUIMessage }
+  | {
+      type: 'startEditingMessage';
+      messageId: string;
+      originalMessage?: MyUIMessage;
+    }
   | { type: 'exitEditMode' }
   | { type: 'clearEditDraft' }
   | { type: 'clearMessageEdit'; messageId: string }
@@ -109,11 +113,11 @@ const clearMessageEditActor = fromPromise<void, { chatId: string; messageId: str
 
 export const draftMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     context: {} as DraftMachineContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     events: {} as DraftMachineEvents,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     input: {} as DraftMachineInput,
   },
   actors: {
@@ -310,7 +314,7 @@ export const draftMachine = setup({
         clearMessageEdit: {
           actions: assign(({ context, event }) => {
             const newEdits = { ...context.messageEdits };
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
+            // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
             delete newEdits[event.messageId];
 
             return { messageEdits: newEdits };
@@ -464,7 +468,10 @@ export const draftMachine = setup({
           invoke: {
             src: 'clearMessageEditActor',
             input({ context, event }) {
-              const { messageId } = event as { type: 'clearMessageEdit'; messageId: string };
+              const { messageId } = event as {
+                type: 'clearMessageEdit';
+                messageId: string;
+              };
 
               return {
                 chatId: context.chatId!,

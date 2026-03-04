@@ -1,3 +1,4 @@
+import process from 'node:process';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { raceWithErrorTrap, createErrorTrap } from '#framework/worker-error-trap.js';
 
@@ -18,6 +19,7 @@ describe('raceWithErrorTrap', () => {
   it('catches an unhandled rejection that fires during the operation', async () => {
     const hangingPromise = new Promise<string>(() => {
       // Simulate a fire-and-forget rejection (e.g. Emscripten pthread postMessage)
+      // oxlint-disable-next-line promise/prefer-await-to-then -- oxlint false positive: flags Promise.reject() static call, not .then() chain
       void Promise.reject(new Error('SharedArrayBuffer transfer requires crossOriginIsolated'));
     });
 
@@ -28,10 +30,13 @@ describe('raceWithErrorTrap', () => {
 
   it('catches non-Error rejection reasons', async () => {
     const hangingPromise = new Promise<string>(() => {
+      // oxlint-disable-next-line prefer-promise-reject-errors, promise/prefer-await-to-then -- testing non-Error rejection; oxlint false positive on Promise.reject()
       void Promise.reject('string rejection reason');
     });
 
-    await expect(raceWithErrorTrap(hangingPromise)).rejects.toThrow('Unhandled rejection in worker: string rejection reason');
+    await expect(raceWithErrorTrap(hangingPromise)).rejects.toThrow(
+      'Unhandled rejection in worker: string rejection reason',
+    );
   });
 
   it('removes the listener after the operation resolves', async () => {
@@ -45,7 +50,7 @@ describe('raceWithErrorTrap', () => {
     try {
       await raceWithErrorTrap(Promise.reject(new Error('fail')));
     } catch {
-      // expected
+      // Expected
     }
 
     expect(removeSpy).toHaveBeenCalledWith('unhandledRejection', expect.any(Function));
@@ -82,6 +87,7 @@ describe('createErrorTrap', () => {
     const trap = createErrorTrap();
 
     try {
+      // oxlint-disable-next-line promise/prefer-await-to-then -- oxlint false positive: flags Promise.reject() static call, not .then() chain
       void Promise.reject(new Error('boom'));
       await Promise.race([
         trap.promise,

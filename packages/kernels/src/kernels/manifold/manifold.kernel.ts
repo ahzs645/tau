@@ -24,8 +24,8 @@ import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#f
 // =============================================================================
 
 type RuntimeModuleExports = {
-  default?: (...args: unknown[]) => unknown;
-  main?: (...args: unknown[]) => unknown;
+  default?: (...arguments_: unknown[]) => unknown;
+  main?: (...arguments_: unknown[]) => unknown;
   defaultParams?: Record<string, unknown>;
   defaultParameters?: Record<string, unknown>;
 };
@@ -70,7 +70,7 @@ function generateModuleShim(name: string, exports: Record<string, unknown>): str
   const registry = getModuleRegistry();
   registry.set(name, exports);
 
-  const exportNames = Object.keys(exports).filter((key) => /^[a-z_$][\w$]*$/i.test(key) && key !== 'default');
+  const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key) && key !== 'default');
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
   return `const __mod = globalThis.${kernelModulesKey}.get('${name}');\n${namedExports}\nexport default __mod;\n`;
 }
@@ -122,9 +122,9 @@ function isRecordObject(value: unknown): value is Record<string, unknown> {
 }
 
 function resolveModule(module: unknown): RuntimeModuleExports {
-  const mod = module as RuntimeModuleExports;
-  if (mod.default && typeof mod.default !== 'function' && isRecordObject(mod.default)) {
-    const inner = mod.default as RuntimeModuleExports;
+  const module_ = module as RuntimeModuleExports;
+  if (module_.default && typeof module_.default !== 'function' && isRecordObject(module_.default)) {
+    const inner = module_.default as RuntimeModuleExports;
     // Only unwrap CJS-style wrappers where default.default or default.main is a function.
     // Don't unwrap geometry objects (Manifold, GLTFNode arrays, etc.) that happen to be records.
     if (typeof inner.default === 'function' || typeof inner.main === 'function') {
@@ -132,7 +132,7 @@ function resolveModule(module: unknown): RuntimeModuleExports {
     }
   }
 
-  return mod;
+  return module_;
 }
 
 function extractDefaultParameters(module: unknown): Record<string, unknown> {
@@ -140,13 +140,13 @@ function extractDefaultParameters(module: unknown): Record<string, unknown> {
     return {};
   }
 
-  /* eslint-disable @typescript-eslint/no-unnecessary-condition -- runtime guard for untyped module */
+  /* oxlint-disable @typescript-eslint/no-unnecessary-condition -- runtime guard for untyped module */
   return (
     (module['defaultParams'] as Record<string, unknown>) ??
     (module['defaultParameters'] as Record<string, unknown>) ??
     {}
   );
-  /* eslint-enable @typescript-eslint/no-unnecessary-condition -- end of runtime guard */
+  /* oxlint-enable @typescript-eslint/no-unnecessary-condition -- end of runtime guard */
 }
 
 async function runMain(
@@ -233,7 +233,11 @@ async function createGlbFromManifoldOutput(output: unknown): Promise<Uint8Array<
 function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): KernelIssue[] {
   return issues.map((issue) => ({
     ...issue,
-    location: issue.location ?? { fileName: fallbackFileName, startLineNumber: 1, startColumn: 1 },
+    location: issue.location ?? {
+      fileName: fallbackFileName,
+      startLineNumber: 1,
+      startColumn: 1,
+    },
   }));
 }
 
@@ -275,9 +279,9 @@ export default defineKernel({
     }
 
     const code = await filesystem.readFile(filePath, 'utf8');
-    const hasEsmImport = /import\s+.*from\s+['"]manifold-3d(?:\/[^'"]*)?['"]/.test(code);
-    const hasRequire = /require\s*\(\s*['"]manifold-3d(?:\/[^'"]*)?['"]\s*\)/.test(code);
-    const hasDynamicImport = /import\s*\(\s*['"]manifold-3d(?:\/[^'"]*)?['"]\s*\)/.test(code);
+    const hasEsmImport = /import\s+.*from\s+["']manifold-3d(?:\/[^"']*)?["']/.test(code);
+    const hasRequire = /require\s*\(\s*["']manifold-3d(?:\/[^"']*)?["']\s*\)/.test(code);
+    const hasDynamicImport = /import\s*\(\s*["']manifold-3d(?:\/[^"']*)?["']\s*\)/.test(code);
     return hasEsmImport || hasRequire || hasDynamicImport;
   },
 
@@ -309,7 +313,11 @@ export default defineKernel({
       return createKernelError([
         {
           message: error instanceof Error ? error.message : 'Failed to extract parameters',
-          location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+          location: {
+            fileName: relativeFilePath,
+            startLineNumber: 1,
+            startColumn: 1,
+          },
           type: 'runtime',
           severity: 'error',
         },
@@ -366,7 +374,11 @@ export default defineKernel({
           {
             message:
               'main() did not return any model. Export a Manifold object (or an array of Manifold/GLTFNode objects).',
-            location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+            location: {
+              fileName: relativeFilePath,
+              startLineNumber: 1,
+              startColumn: 1,
+            },
             type: 'runtime',
             severity: 'warning',
           },
@@ -404,7 +416,13 @@ export default defineKernel({
 
   async exportGeometry({ fileType, nativeHandle }) {
     if (!nativeHandle) {
-      return createKernelError([{ message: 'No geometry available for export.', type: 'runtime', severity: 'error' }]);
+      return createKernelError([
+        {
+          message: 'No geometry available for export.',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
     }
 
     if (fileType === 'glb' || fileType === 'gltf') {

@@ -37,9 +37,10 @@ type StripedMaterialProperties = {
  * This material uses stencil operations for cross-section capping, ensuring it only
  * renders at mesh/plane intersections when used with the Cutter component.
  *
- * @param stripeFrequency - Distance between stripes in plane units (same units as geometry)
- * @param baseColor - Base color of the material
- * @param stripeColor - Color of the stripes
+ * @param properties - Configuration options for the striped material
+ * @param properties.stripeFrequency - Distance between stripes in plane units (same units as geometry)
+ * @param properties.baseColor - Base color of the material
+ * @param properties.stripeColor - Color of the stripes
  * @returns A THREE.ShaderMaterial with striped pattern
  */
 export function createStripedMaterial(properties?: StripedMaterialProperties): THREE.ShaderMaterial {

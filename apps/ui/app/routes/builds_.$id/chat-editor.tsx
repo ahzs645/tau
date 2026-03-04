@@ -95,7 +95,9 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
 
       const encoded = encodeTextFile(value ?? '');
       // Encode string -> Uint8Array and write directly to fileManager
-      void fileManager.writeFile(activeFile.path, encoded, { source: 'editor' });
+      void fileManager.writeFile(activeFile.path, encoded, {
+        source: 'editor',
+      });
     },
     [activeFile, fileManager],
   );
@@ -149,6 +151,7 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
 
           if (model) {
             const editors = monaco.editor.getEditors();
+            // oxlint-disable-next-line max-nested-callbacks -- monaco editor subscription nesting
             const targetEditor = editors.find((editorInstance) => editorInstance.getModel() === model);
 
             if (targetEditor) {
@@ -178,8 +181,8 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
           <ChatEditorBinaryWarning onForceOpen={handleForceOpenBinary} />
         ) : (
           <CodeEditor
-            loading={<Loader className="size-20 stroke-1 text-primary" />}
-            className="h-full bg-background"
+            loading={<Loader className='size-20 stroke-1 text-primary' />}
+            className='h-full bg-background'
             defaultLanguage={activeFile.language}
             defaultValue={editorContent}
             path={createMonacoPath(activeFile.path)}
@@ -189,9 +192,9 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
         )
       ) : (
         <EmptyItems>
-          <FileCode className="mb-4 size-12 stroke-1 text-muted-foreground" />
-          <p className="text-base font-medium">No file selected</p>
-          <p className="mt-1 text-xs text-muted-foreground/70">Select a file to start editing</p>
+          <FileCode className='mb-4 size-12 stroke-1 text-muted-foreground' />
+          <p className='text-base font-medium'>No file selected</p>
+          <p className='mt-1 text-xs text-muted-foreground/70'>Select a file to start editing</p>
         </EmptyItems>
       )}
     </div>

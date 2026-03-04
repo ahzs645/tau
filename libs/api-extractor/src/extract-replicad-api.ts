@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* eslint-disable no-bitwise -- Utility script using TS Compiler API with bitwise flag checks */
+/* oxlint-disable no-bitwise -- Utility script using TS Compiler API with bitwise flag checks */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -188,6 +188,7 @@ export function extractApi(): ApiEntry[] {
     else if (
       ts.isVariableStatement(node) &&
       node.modifiers?.some(
+        // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- mod is the standard name for ES module objects
         (mod) => mod.kind === ts.SyntaxKind.ExportKeyword || mod.kind === ts.SyntaxKind.DeclareKeyword,
       )
     ) {
@@ -270,13 +271,13 @@ function main(): void {
   try {
     console.log('Extracting replicad type declarations...\n');
 
-    const outputDir = join(import.meta.dirname, 'generated/replicad');
-    mkdirSync(outputDir, { recursive: true });
-    console.log(`Output directory: ${outputDir}`);
+    const outputDirectory = join(import.meta.dirname, 'generated/replicad');
+    mkdirSync(outputDirectory, { recursive: true });
+    console.log(`Output directory: ${outputDirectory}`);
 
     // Generate bundled .d.ts
     const bundledTypes = buildBundledTypes();
-    const bundledPath = join(outputDir, 'replicad-modeling.bundled.d.ts');
+    const bundledPath = join(outputDirectory, 'replicad-modeling.bundled.d.ts');
     writeFileSync(bundledPath, bundledTypes);
     console.log(`\nBundled type declarations written to ${bundledPath}`);
     console.log(`Output size: ${(bundledTypes.length / 1024).toFixed(1)} KB`);
@@ -284,7 +285,7 @@ function main(): void {
     // Generate structured JSON
     console.log('\n📝 Generating structured API data JSON...');
     const apiData = buildApiData();
-    const jsonPath = join(outputDir, 'replicad-api-data.json');
+    const jsonPath = join(outputDirectory, 'replicad-api-data.json');
     writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
     console.log(`✅ API data JSON saved to ${jsonPath}`);
     console.log(

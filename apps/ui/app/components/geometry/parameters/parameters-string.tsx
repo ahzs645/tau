@@ -33,8 +33,8 @@ export function ParametersString({
   // Otherwise, render a regular text input
   return (
     <Input
-      autoComplete="off"
-      type="text"
+      autoComplete='off'
+      type='text'
       value={value}
       className={cn('h-7 flex-1 bg-background px-3', className)}
       onChange={(event) => {

@@ -74,7 +74,7 @@ export type KclExportResult = {
   error?: string;
 };
 
-type KclUtilsOptions = {
+type KclUtilitiesOptions = {
   /** API key for modeling API authentication */
   apiKey: string;
   /** Base URL for the modeling API */
@@ -114,14 +114,17 @@ async function loadWasmModule(tracer?: KernelSpanTracer): Promise<WasmModule> {
 
     return wasmModule;
   } catch (error) {
-    throw KclError.simple({ kind: 'engine', message: `Failed to load WASM module: ${String(error)}` });
+    throw KclError.simple({
+      kind: 'engine',
+      message: `Failed to load WASM module: ${String(error)}`,
+    });
   }
 }
 
 /**
  *
  */
-export class KclUtils {
+export class KclUtilities {
   /**
    * Inject parameters into KCL program JSON by modifying variable declarations.
    * This is a pure transformation that doesn't modify the original program.
@@ -245,7 +248,7 @@ export class KclUtils {
   // Add execution state tracking
   private hasExecutedProgram = false;
 
-  public constructor(options: KclUtilsOptions) {
+  public constructor(options: KclUtilitiesOptions) {
     this.apiKey = options.apiKey;
     this.baseUrl = options.baseUrl ?? 'wss://api.zoo.dev';
     this.fileSystemManager = options.fileSystemManager;
@@ -279,7 +282,7 @@ export class KclUtils {
 
     // Create mock context for local operations
     const mockEngine = new MockEngineConnection();
-    // eslint-disable-next-line @typescript-eslint/await-thenable -- WASM Context constructor may return thenable
+    // oxlint-disable-next-line @typescript-eslint/await-thenable -- WASM Context constructor may return thenable
     this.mockContext = await new this.wasmModule.Context(mockEngine, this.fileSystemManager);
 
     this.isWasmInitialized = true;
@@ -314,7 +317,10 @@ export class KclUtils {
     }
 
     if (!this.wasmModule) {
-      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'WASM module not loaded',
+      });
     }
 
     try {
@@ -327,7 +333,10 @@ export class KclUtils {
         warnings: errors.warnings,
       };
     } catch (error) {
-      throw KclError.simple({ kind: 'syntax', message: `Failed to parse KCL code: ${String(error)}` });
+      throw KclError.simple({
+        kind: 'syntax',
+        message: `Failed to parse KCL code: ${String(error)}`,
+      });
     }
   }
 
@@ -345,11 +354,17 @@ export class KclUtils {
     }
 
     if (!this.wasmModule) {
-      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'WASM module not loaded',
+      });
     }
 
     if (!this.mockContext) {
-      throw KclError.simple({ kind: 'engine', message: 'Mock context not initialized' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'Mock context not initialized',
+      });
     }
 
     try {
@@ -392,11 +407,17 @@ export class KclUtils {
     }
 
     if (!this.wasmModule) {
-      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'WASM module not loaded',
+      });
     }
 
     if (!this.engineManager) {
-      throw KclError.simple({ kind: 'engine', message: 'Engine manager not initialized' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'Engine manager not initialized',
+      });
     }
 
     try {
@@ -438,13 +459,19 @@ export class KclUtils {
     }
 
     if (!this.isEngineInitialized) {
-      throw KclError.simple({ kind: 'engine', message: 'Engine not initialized' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'Engine not initialized',
+      });
     }
 
     // Get the context used for execution
     const context = this.engineManager?.context;
     if (!context) {
-      throw KclError.simple({ kind: 'engine', message: 'No context available for export' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'No context available for export',
+      });
     }
 
     // Create export format configuration
@@ -525,7 +552,10 @@ export class KclUtils {
    */
   private async createEngineManager(): Promise<EngineConnection> {
     if (!this.wasmModule) {
-      throw KclError.simple({ kind: 'engine', message: 'WASM module not loaded' });
+      throw KclError.simple({
+        kind: 'engine',
+        message: 'WASM module not loaded',
+      });
     }
 
     const engineManager = new EngineConnection({
@@ -540,7 +570,7 @@ export class KclUtils {
   /**
    * Create export format configuration based on options
    */
-  // eslint-disable-next-line complexity -- supporting many defaults for exports in readable way
+  // oxlint-disable-next-line complexity -- supporting many defaults for exports in readable way
   private createExportFormat(options: ExportOptions): OutputFormat3d {
     const defaultCoords: System = {
       forward: { axis: 'y', direction: 'negative' },

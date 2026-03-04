@@ -4,7 +4,7 @@ import { minimatch } from 'minimatch';
  * Type for CORS origin callback function
  * Note: Uses null instead of undefined to match Node.js callback conventions
  */
-// eslint-disable-next-line @typescript-eslint/no-restricted-types -- Node.js callback pattern requires null for no error
+// oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Node.js callback pattern requires null for no error
 type OriginCallback = (error: Error | null, allow: boolean) => void;
 
 /**

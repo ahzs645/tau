@@ -110,7 +110,7 @@ describe('createHeaderAnchor', () => {
 
   it('applies additional className from props', () => {
     const H1 = createHeaderAnchor('h1', 'text-3xl');
-    render(<H1 className="custom-class">Test Heading</H1>);
+    render(<H1 className='custom-class'>Test Heading</H1>);
 
     const heading = screen.getByRole('heading', { level: 1 });
     expect(heading).toHaveClass('custom-class');

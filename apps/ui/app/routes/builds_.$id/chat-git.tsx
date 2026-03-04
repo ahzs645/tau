@@ -34,9 +34,9 @@ export const ChatGitTrigger = memo(function ({
     <FloatingPanelTrigger
       icon={GitBranch}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Git
-          <KeyShortcut variant="tooltip">{formatKeyCombination(toggleGitKeyCombination)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(toggleGitKeyCombination)}</KeyShortcut>
         </div>
       }
       className={isOpen ? 'text-primary' : undefined}
@@ -60,7 +60,7 @@ export const ChatGit = memo(function (props: {
   const { formattedKeyCombination: formattedGitKeyCombination } = useKeybinding(toggleGitKeyCombination, toggleGitOpen);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Git</FloatingPanelContentTitle>
@@ -68,16 +68,16 @@ export const ChatGit = memo(function (props: {
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Git
-                  <KeyShortcut variant="tooltip">{formattedGitKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedGitKeyCombination}</KeyShortcut>
                 </div>
               )}
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
-        <FloatingPanelContentBody className="px-3 py-2">
+        <FloatingPanelContentBody className='px-3 py-2'>
           <GitConnectorContent gitRef={gitRef} />
         </FloatingPanelContentBody>
       </FloatingPanelContent>

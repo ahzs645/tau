@@ -4,7 +4,7 @@ import type { Vertex, Face, Color, IndexedPolyhedron } from '#framework/common.j
  * Parse OFF (Object File Format) data from string
  * OFF format supports vertices, faces, and colors
  */
-// eslint-disable-next-line complexity -- TODO: refactor this
+// oxlint-disable-next-line complexity -- TODO: refactor this
 export function parseOff(offContent: string): IndexedPolyhedron {
   const lines = offContent
     .split('\n')
@@ -44,16 +44,16 @@ export function parseOff(offContent: string): IndexedPolyhedron {
   }
 
   const vertices: Vertex[] = [];
-  for (let i = 0; i < numberVertices; i++) {
-    const vertexLine = lines[currentLine + i];
+  for (let index = 0; index < numberVertices; index++) {
+    const vertexLine = lines[currentLine + index];
     if (!vertexLine) {
-      throw new Error(`Invalid OFF file: missing vertex ${i}`);
+      throw new Error(`Invalid OFF file: missing vertex ${index}`);
     }
 
     const parts = vertexLine.split(/\s+/).map(Number);
 
     if (parts.length < 3 || parts.some((part) => Number.isNaN(part))) {
-      throw new Error(`Invalid OFF file: invalid vertex at line ${currentLine + i + 1}`);
+      throw new Error(`Invalid OFF file: invalid vertex at line ${currentLine + index + 1}`);
     }
 
     const x = parts[0];
@@ -61,7 +61,7 @@ export function parseOff(offContent: string): IndexedPolyhedron {
     const z = parts[2];
 
     if (x === undefined || y === undefined || z === undefined) {
-      throw new Error(`Invalid OFF file: missing coordinates at line ${currentLine + i + 1}`);
+      throw new Error(`Invalid OFF file: missing coordinates at line ${currentLine + index + 1}`);
     }
 
     vertices.push([x, y, z]);
@@ -72,10 +72,10 @@ export function parseOff(offContent: string): IndexedPolyhedron {
   const faces: Face[] = [];
   const colors: Color[] = [];
 
-  for (let i = 0; i < numberFaces; i++) {
-    const faceLine = lines[currentLine + i];
+  for (let index = 0; index < numberFaces; index++) {
+    const faceLine = lines[currentLine + index];
     if (!faceLine) {
-      throw new Error(`Invalid OFF file: missing face ${i}`);
+      throw new Error(`Invalid OFF file: missing face ${index}`);
     }
 
     const parts = faceLine.split(/\s+/).map(Number);
@@ -103,7 +103,7 @@ export function parseOff(offContent: string): IndexedPolyhedron {
     }
 
     if (faceVertices.length < 3) {
-      throw new Error(`Invalid OFF file: face at line ${currentLine + i + 1} must have at least 3 vertices`);
+      throw new Error(`Invalid OFF file: face at line ${currentLine + index + 1} must have at least 3 vertices`);
     }
 
     if (faceVertices.length === 3) {
@@ -112,8 +112,8 @@ export function parseOff(offContent: string): IndexedPolyhedron {
       colors.push(color);
     } else {
       // Triangulate polygon faces using fan triangulation
-      for (let j = 1; j < faceVertices.length - 1; j++) {
-        faces.push([faceVertices[0]!, faceVertices[j]!, faceVertices[j + 1]!]);
+      for (let index = 1; index < faceVertices.length - 1; index++) {
+        faces.push([faceVertices[0]!, faceVertices[index]!, faceVertices[index + 1]!]);
         colors.push(color);
       }
     }

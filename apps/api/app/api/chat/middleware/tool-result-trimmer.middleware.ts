@@ -430,7 +430,11 @@ function trimToolMessage(message: ToolMessage): BaseMessage {
  */
 function injectScreenshotImages(message: ToolMessage): ToolMessage {
   const messageRecord = message as unknown as Record<string, unknown>;
-  const { content, name, tool_call_id: toolCallId } = messageRecord as {
+  const {
+    content,
+    name,
+    tool_call_id: toolCallId,
+  } = messageRecord as {
     content: unknown;
     name: string | undefined;
     tool_call_id: string;
@@ -484,7 +488,7 @@ function findLastScreenshotIndex(messages: BaseMessage[]): number {
     }
 
     if (typeof record['content'] === 'string') {
-      const parsed = parseToolContent(record['content'] as string);
+      const parsed = parseToolContent(record['content']);
       if (isObject(parsed) && Array.isArray(parsed['images'])) {
         return index;
       }

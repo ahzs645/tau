@@ -9,7 +9,7 @@ import type { RJSFContext } from '#components/geometry/parameters/rjsf-context.j
 export function ParametersWidget(
   props: WidgetProps<Record<string, unknown>, RJSFSchema, RJSFContext>,
 ): React.JSX.Element {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- RJSF is untyped
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- RJSF is untyped
   const { value, onChange, name, schema, registry } = props;
 
   const { formContext } = registry;
@@ -36,7 +36,7 @@ export function ParametersWidget(
 
       return (
         <ParametersNumber
-          className="w-26"
+          className='w-26'
           value={numericValue}
           defaultValue={defaultNumericValue}
           descriptor={descriptor}

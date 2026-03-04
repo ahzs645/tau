@@ -16,7 +16,13 @@ import { createMockRuntime, createMockInput } from '#testing/kernel-testing.util
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, options: {} },
+    {
+      type: 'middleware',
+      name: 'TestMiddleware',
+      version: '1',
+      index: 0,
+      options: {},
+    },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -110,7 +116,9 @@ describe('parameterCacheMiddleware', () => {
   describe('wrapGetParameters', () => {
     describe('cache hit', () => {
       it('should return cached result and not call handler', async () => {
-        const cachedResult = createSuccessResult({ defaultParameters: { cached: true } });
+        const cachedResult = createSuccessResult({
+          defaultParameters: { cached: true },
+        });
 
         const { input, runtime } = createCacheContext({
           cacheExists: true,
@@ -168,7 +176,9 @@ describe('parameterCacheMiddleware', () => {
 
         expect(result.success).toBe(true);
         if (result.success) {
-          const schema = result.data.jsonSchema as { properties?: Record<string, unknown> };
+          const schema = result.data.jsonSchema as {
+            properties?: Record<string, unknown>;
+          };
           expect(schema.properties).toHaveProperty('customProp');
         }
       });
@@ -176,7 +186,9 @@ describe('parameterCacheMiddleware', () => {
 
     describe('cache miss', () => {
       it('should call handler and return its result', async () => {
-        const handlerResult = createSuccessResult({ defaultParameters: { fresh: true } });
+        const handlerResult = createSuccessResult({
+          defaultParameters: { fresh: true },
+        });
         const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
@@ -206,21 +218,23 @@ describe('parameterCacheMiddleware', () => {
         await wrapGetParameters!(input, handler, runtime);
 
         expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalled();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
         const writePath = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[0];
         expect(writePath).toContain('.tau/cache/parameters');
         expect(writePath).toContain('.json');
       });
 
       it('should write valid JSON to cache', async () => {
-        const handlerResult = createSuccessResult({ defaultParameters: { a: 1, b: 2 } });
+        const handlerResult = createSuccessResult({
+          defaultParameters: { a: 1, b: 2 },
+        });
         const { input, runtime } = createCacheContext({ cacheExists: false });
         const handler = createMockHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
         const writeContent = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[1];
         expect(writeContent).toBeDefined();
         expect(typeof writeContent).toBe('string');
@@ -242,9 +256,9 @@ describe('parameterCacheMiddleware', () => {
         await wrapGetParameters!(input, handler, runtime);
 
         expect(runtime.filesystem.mocks.ensureDir).toHaveBeenCalled();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = runtime.filesystem.mocks.ensureDir.mock.calls[0]?.[0];
-        expect(dirPath).toContain('.tau/cache/parameters');
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
+        const directoryPath = runtime.filesystem.mocks.ensureDir.mock.calls[0]?.[0];
+        expect(directoryPath).toContain('.tau/cache/parameters');
       });
 
       it('should log cache write message', async () => {

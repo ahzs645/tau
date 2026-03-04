@@ -20,23 +20,23 @@ function buildConversionMaps() {
     offset: number;
   };
 
-  // eslint-disable-next-line @typescript-eslint/consistent-indexed-object-style -- Dynamic map from constants
+  // oxlint-disable-next-line @typescript-eslint/consistent-indexed-object-style -- Dynamic map from constants
   type ConversionMaps = {
     [K in UnitQuantity]: Record<string, ConversionInfo>;
   };
 
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Dynamically built from constants
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Dynamically built from constants
   const maps = {} as ConversionMaps;
 
-  for (const [quantityKey, quantityDef] of Object.entries(standardInternationalBaseUnits)) {
+  for (const [quantityKey, quantityDefinition] of Object.entries(standardInternationalBaseUnits)) {
     const quantity = quantityKey as UnitQuantity;
     const conversionMap: Record<string, ConversionInfo> = {};
 
     // Add base unit (factor = 1, no offset)
-    conversionMap[quantityDef.symbol] = { factor: 1, offset: 0 };
+    conversionMap[quantityDefinition.symbol] = { factor: 1, offset: 0 };
 
     // Add all variants
-    for (const variant of quantityDef.variants) {
+    for (const variant of quantityDefinition.variants) {
       const offset = 'offset' in variant ? (variant.offset as number | undefined) : undefined;
 
       conversionMap[variant.symbol] = {
@@ -69,6 +69,7 @@ function getConversionInfo(quantity: UnitQuantity, unitSymbol: string): { factor
  *
  * Formula: (value * fromFactor + fromOffset - toOffset) / toFactor
  *
+ * @param input - The input object
  * @param input.value - The numeric value to convert
  * @param input.fromSymbol - The source unit symbol
  * @param input.toSymbol - The target unit symbol
@@ -150,7 +151,12 @@ export function convertElectricCurrent(
   fromSymbol: ElectricCurrentSymbol,
   toSymbol: ElectricCurrentSymbol,
 ): number {
-  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'electricCurrent' });
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'electricCurrent',
+  });
 }
 
 /**
@@ -167,7 +173,12 @@ export function convertTemperature(
   fromSymbol: ThermodynamicTemperatureSymbol,
   toSymbol: ThermodynamicTemperatureSymbol,
 ): number {
-  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'thermodynamicTemperature' });
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'thermodynamicTemperature',
+  });
 }
 
 /**
@@ -183,7 +194,12 @@ export function convertAmountOfSubstance(
   fromSymbol: AmountOfSubstanceSymbol,
   toSymbol: AmountOfSubstanceSymbol,
 ): number {
-  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'amountOfSubstance' });
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'amountOfSubstance',
+  });
 }
 
 /**
@@ -199,5 +215,10 @@ export function convertLuminousIntensity(
   fromSymbol: LuminousIntensitySymbol,
   toSymbol: LuminousIntensitySymbol,
 ): number {
-  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'luminousIntensity' });
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'luminousIntensity',
+  });
 }

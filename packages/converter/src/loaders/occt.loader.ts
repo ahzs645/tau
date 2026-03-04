@@ -1,4 +1,4 @@
-/* eslint-disable new-cap -- External library uses PascalCase method names */
+/* oxlint-disable new-cap -- External library uses PascalCase method names */
 import { Document, NodeIO } from '@gltf-transform/core';
 import occtimportjs from 'occt-import-js';
 import type { ImportResult as OcctImportResult } from 'occt-import-js';
@@ -14,6 +14,7 @@ type OcctOptions = {
 /**
  *
  */
+// oxlint-disable-next-line typescript/no-unnecessary-type-arguments -- ensuring future API changes are picked up automatically
 export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
   private readonly io = new NodeIO();
 

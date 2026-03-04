@@ -121,24 +121,24 @@ function UsageStackedChartComponent({
           <CardTitle>{title}</CardTitle>
           {description ? <CardDescription>{description}</CardDescription> : undefined}
         </CardHeader>
-        <CardContent className="flex h-[300px] items-center justify-center">
-          <p className="text-sm text-muted-foreground">No data available</p>
+        <CardContent className='flex h-[300px] items-center justify-center'>
+          <p className='text-sm text-muted-foreground'>No data available</p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card className="min-w-0 overflow-hidden">
+    <Card className='min-w-0 overflow-hidden'>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : undefined}
       </CardHeader>
-      <CardContent className="min-w-0">
-        <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-0">
+      <CardContent className='min-w-0'>
+        <ChartContainer config={chartConfig} className='h-[300px] w-full min-w-0'>
           <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="dateLabel" tickLine={false} axisLine={false} tickMargin={8} />
+            <CartesianGrid strokeDasharray='3 3' vertical={false} />
+            <XAxis dataKey='dateLabel' tickLine={false} axisLine={false} tickMargin={8} />
             <YAxis
               tickFormatter={(value: number) => formatNumberAbbreviation(value)}
               tickLine={false}
@@ -149,9 +149,9 @@ function UsageStackedChartComponent({
             {/* @ts-expect-error - ChartTooltipContent types don't match Recharts exactly */}
             <ChartTooltip cursor={false} content={ChartTooltipContent} />
             <ChartLegend content={<ChartLegendContent />} />
-            <Bar dataKey="cache" stackId="1" fill="var(--color-cache)" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="input" stackId="1" fill="var(--color-input)" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="output" stackId="1" fill="var(--color-output)" radius={[4, 4, 0, 0]} />
+            <Bar dataKey='cache' stackId='1' fill='var(--color-cache)' radius={[0, 0, 0, 0]} />
+            <Bar dataKey='input' stackId='1' fill='var(--color-input)' radius={[0, 0, 0, 0]} />
+            <Bar dataKey='output' stackId='1' fill='var(--color-output)' radius={[4, 4, 0, 0]} />
           </BarChart>
         </ChartContainer>
       </CardContent>

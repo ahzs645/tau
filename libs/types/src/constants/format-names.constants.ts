@@ -121,6 +121,7 @@ export const formatConfigurations = {
     description:
       'Developed for use in ray tracing and rendering applications, representing simple geometric primitives for academic and research purposes.',
   },
+  // eslint-disable-next-line id-denylist -- OBJ file format identifier
   obj: {
     name: 'Wavefront Object (OBJ)',
     description:

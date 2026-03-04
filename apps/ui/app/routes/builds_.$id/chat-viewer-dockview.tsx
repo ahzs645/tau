@@ -104,25 +104,25 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
   return (
     <DockviewWatermark
       icon={Box}
-      title="No geometry selected"
-      description="Drag a file from the file tree, or select one below"
+      title='No geometry selected'
+      description='Drag a file from the file tree, or select one below'
       onClose={handleClose}
     >
       <FileSelector
         files={files}
         selectedFile={undefined}
-        title="Viewport File"
-        description="Choose which file to render in the viewport"
-        searchPlaceholder="Search files..."
-        emptyMessage="No files found."
+        title='Viewport File'
+        description='Choose which file to render in the viewport'
+        searchPlaceholder='Search files...'
+        emptyMessage='No files found.'
         onSelect={handleSelect}
       >
-        <Button size="sm" variant="outline" className="justify-between">
-          <span className="truncate text-muted-foreground">
-            <span className="@xs/watermark:hidden">Select file...</span>
-            <span className="hidden @xs/watermark:inline">Select file to render...</span>
+        <Button size='sm' variant='outline' className='justify-between'>
+          <span className='truncate text-muted-foreground'>
+            <span className='@xs/watermark:hidden'>Select file...</span>
+            <span className='hidden @xs/watermark:inline'>Select file to render...</span>
           </span>
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+          <ChevronDown className='size-4 shrink-0 text-muted-foreground' />
         </Button>
       </FileSelector>
     </DockviewWatermark>
@@ -336,7 +336,10 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
       }
 
       if (panelEntryFile) {
-        buildRef.send({ type: 'createCompilationUnit', entryFile: panelEntryFile });
+        buildRef.send({
+          type: 'createCompilationUnit',
+          entryFile: panelEntryFile,
+        });
       }
     }
   }, [api, buildIsReady, buildRef, editorRef, mainEntryFile, viewSettings]);
@@ -451,7 +454,9 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
       const editorData = event.nativeEvent.dataTransfer?.getData(tauEditorPanelDragMime);
       if (editorData) {
         try {
-          const { filePath: droppedFile } = JSON.parse(editorData) as { filePath?: string };
+          const { filePath: droppedFile } = JSON.parse(editorData) as {
+            filePath?: string;
+          };
           if (droppedFile) {
             const viewId = generatePrefixedId('view');
             const fileName = droppedFile.split('/').pop() ?? droppedFile;
@@ -476,7 +481,10 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
               },
             });
 
-            buildRef.send({ type: 'createCompilationUnit', entryFile: droppedFile });
+            buildRef.send({
+              type: 'createCompilationUnit',
+              entryFile: droppedFile,
+            });
           }
         } catch {
           // Ignore corrupt data
@@ -578,10 +586,10 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
   return (
     <WebglContextTrackerProvider>
       <DockviewFileActionProvider value={handleOpenFile}>
-        <div className="relative size-full">
+        <div className='relative size-full'>
           <Dockview
             components={components}
-            noPanelsOverlay="emptyGroup"
+            noPanelsOverlay='emptyGroup'
             defaultTabComponent={ViewerDockviewTab}
             watermarkComponent={ViewerWatermark}
             leftHeaderActionsComponent={DockviewOpenFileAction}

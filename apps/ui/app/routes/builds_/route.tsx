@@ -12,13 +12,13 @@ export const handle: Handle = {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button asChild variant="ghost">
-            <Link to="/builds/library">Builds</Link>
+          <Button asChild variant='ghost'>
+            <Link to='/builds/library'>Builds</Link>
           </Button>
         </TooltipTrigger>
-        <TooltipContent className="flex items-center gap-2 align-baseline">
+        <TooltipContent className='flex items-center gap-2 align-baseline'>
           View all builds{` `}
-          <KeyShortcut variant="tooltip">{formatKeyCombination({ key: 'b', ctrlKey: true })}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination({ key: 'b', ctrlKey: true })}</KeyShortcut>
         </TooltipContent>
       </Tooltip>
     );

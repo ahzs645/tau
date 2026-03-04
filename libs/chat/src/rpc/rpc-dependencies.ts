@@ -22,7 +22,7 @@ import type {
 export type RpcFileSystem = {
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
-  writeBinaryFile(path: string, data: Uint8Array): Promise<void>;
+  writeBinaryFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void>;
   deleteFile(path: string): Promise<void>;
   readdir(path: string): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number }>>;
   exists(path: string): Promise<boolean>;

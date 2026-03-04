@@ -62,9 +62,9 @@ export const CadPreviewViewer = memo(function ({
   if (status === 'error') {
     return (
       <div className={cn('flex size-full items-center justify-center', className)}>
-        <div className="flex flex-col items-center gap-3 text-destructive">
-          <AlertTriangle className="size-10 opacity-60" strokeWidth={1.5} />
-          <span className="max-w-sm text-center text-sm">{error?.message ?? 'Failed to render preview'}</span>
+        <div className='flex flex-col items-center gap-3 text-destructive'>
+          <AlertTriangle className='size-10 opacity-60' strokeWidth={1.5} />
+          <span className='max-w-sm text-center text-sm'>{error?.message ?? 'Failed to render preview'}</span>
         </div>
       </div>
     );
@@ -73,7 +73,7 @@ export const CadPreviewViewer = memo(function ({
   if (geometries.length === 0) {
     return (
       <div className={cn('flex size-full items-center justify-center', className)}>
-        <Loader className="size-12" />
+        <Loader className='size-12' />
       </div>
     );
   }
@@ -123,8 +123,8 @@ export function CadPreviewStatus({ className }: CadPreviewStatusProps): React.Re
         className,
       )}
     >
-      <span className="font-mono text-sm text-muted-foreground capitalize">{status}...</span>
-      <Loader className="size-4" />
+      <span className='font-mono text-sm text-muted-foreground capitalize'>{status}...</span>
+      <Loader className='size-4' />
     </div>
   );
 }

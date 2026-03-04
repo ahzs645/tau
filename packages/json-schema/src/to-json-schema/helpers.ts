@@ -63,7 +63,7 @@ export function getCommonArrayItemsType(array: unknown[]): string | undefined {
  * @param schema2 - JSON schema
  * @returns JSON schema or null
  */
-// eslint-disable-next-line complexity -- taken from source code.
+// oxlint-disable-next-line complexity -- taken from source code.
 export function mergeSchemaObjs(schema1: JSONSchema7, schema2: JSONSchema7): JSONSchema7 | undefined {
   const schema1Keys = keys(schema1 as Record<string, unknown>);
   const schema2Keys = keys(schema2 as Record<string, unknown>);

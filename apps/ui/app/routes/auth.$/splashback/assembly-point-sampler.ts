@@ -85,10 +85,11 @@ async function sampleFromGeometry(geometry: Geometry, pointCount: number): Promi
  * - Points 0 to (splitRatio * sourcePointCount - 1) use gear12 positions (target A)
  * - Points (splitRatio * sourcePointCount) to end use gear8 positions (target B)
  *
- * @param gear12Geometry - The gear12 GLTF geometry
- * @param gear8Geometry - The gear8 GLTF geometry
- * @param sourcePointCount - Number of source points (must match gear8Points.length from morph source)
- * @param splitRatio - Ratio of points going to gear12 (default: 0.6 based on surface area ratio)
+ * @param root0 - The assembly point sampling parameters
+ * @param root0.gear12Geometry - The gear12 GLTF geometry
+ * @param root0.gear8Geometry - The gear8 GLTF geometry
+ * @param root0.sourcePointCount - Number of source points (must match gear8Points.length from morph source)
+ * @param root0.splitRatio - Ratio of points going to gear12 (default: 0.6 based on surface area ratio)
  * @returns Promise resolving to AssemblySampledPoints or undefined if sampling failed
  *
  * @example
@@ -139,21 +140,21 @@ export async function sampleAssemblyPoints({
     // For gear12 target array:
     // - First gear12TargetCount points use actual gear12 sampled positions
     // - Remaining points wrap around (these won't be used due to targetSelector)
-    const g12Idx = i < gear12TargetCount ? i : i % gear12TargetCount;
+    const g12Index = i < gear12TargetCount ? i : i % gear12TargetCount;
     const g12Pos = gear12RawPoints.positions;
-    gear12Positions[i * 3] = (g12Pos[g12Idx * 3] ?? 0) + gear12AssemblyOffset.x;
-    gear12Positions[i * 3 + 1] = (g12Pos[g12Idx * 3 + 1] ?? 0) + gear12AssemblyOffset.y;
-    gear12Positions[i * 3 + 2] = (g12Pos[g12Idx * 3 + 2] ?? 0) + gear12AssemblyOffset.z;
+    gear12Positions[i * 3] = (g12Pos[g12Index * 3] ?? 0) + gear12AssemblyOffset.x;
+    gear12Positions[i * 3 + 1] = (g12Pos[g12Index * 3 + 1] ?? 0) + gear12AssemblyOffset.y;
+    gear12Positions[i * 3 + 2] = (g12Pos[g12Index * 3 + 2] ?? 0) + gear12AssemblyOffset.z;
 
     // For gear8 target array:
     // - Points from gear12TargetCount onwards use actual gear8 sampled positions
     // - Earlier points wrap around (these won't be used due to targetSelector)
     const isGear8Region = i >= gear12TargetCount;
-    const g8Idx = isGear8Region ? i - gear12TargetCount : i % gear8TargetCount;
+    const g8Index = isGear8Region ? i - gear12TargetCount : i % gear8TargetCount;
     const g8Pos = gear8RawPoints.positions;
-    gear8Positions[i * 3] = (g8Pos[g8Idx * 3] ?? 0) + gear8AssemblyOffset.x;
-    gear8Positions[i * 3 + 1] = (g8Pos[g8Idx * 3 + 1] ?? 0) + gear8AssemblyOffset.y;
-    gear8Positions[i * 3 + 2] = (g8Pos[g8Idx * 3 + 2] ?? 0) + gear8AssemblyOffset.z;
+    gear8Positions[i * 3] = (g8Pos[g8Index * 3] ?? 0) + gear8AssemblyOffset.x;
+    gear8Positions[i * 3 + 1] = (g8Pos[g8Index * 3 + 1] ?? 0) + gear8AssemblyOffset.y;
+    gear8Positions[i * 3 + 2] = (g8Pos[g8Index * 3 + 2] ?? 0) + gear8AssemblyOffset.z;
   }
 
   return {

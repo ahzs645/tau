@@ -1,3 +1,4 @@
+// oxlint-disable-next-line eslint-plugin-import/no-named-as-default -- standard zod default import
 import z from 'zod';
 import { kernelProviders, manufacturingMethods, engineeringDisciplines } from '@taucad/types/constants';
 import { toolNames, toolModes } from '#constants/tool.constants.js';

@@ -21,9 +21,9 @@ export class ChatExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(ChatExceptionFilter.name);
 
   public catch(exception: unknown, host: ArgumentsHost): void {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<FastifyReply>();
-    const request = ctx.getRequest<FastifyRequest>();
+    const context = host.switchToHttp();
+    const response = context.getResponse<FastifyReply>();
+    const request = context.getRequest<FastifyRequest>();
 
     // Extract request ID: prefer header if present, otherwise use Fastify's generated ID
     const headerRequestId = request.headers[httpHeader.requestId] as string | undefined;

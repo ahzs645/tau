@@ -30,12 +30,22 @@ type SettingsSectionDefinition = {
 
 const sections: readonly SettingsSectionDefinition[] = [
   { id: 'general', label: 'General', icon: Settings2, requiresAuth: false },
-  { id: 'filesystem', label: 'Filesystem', icon: HardDrive, requiresAuth: false },
+  {
+    id: 'filesystem',
+    label: 'Filesystem',
+    icon: HardDrive,
+    requiresAuth: false,
+  },
   { id: 'account', label: 'Account', icon: User, requiresAuth: true },
   { id: 'security', label: 'Security', icon: Lock, requiresAuth: true },
   { id: 'api-keys', label: 'API Keys', icon: Key, requiresAuth: true },
   { id: 'billing', label: 'Billing', icon: CreditCard, requiresAuth: true },
-  { id: 'experimental', label: 'Experimental', icon: FlaskConical, requiresAuth: false },
+  {
+    id: 'experimental',
+    label: 'Experimental',
+    icon: FlaskConical,
+    requiresAuth: false,
+  },
 ] as const;
 
 const sectionPathMap: Record<SettingsSection, string> = {
@@ -116,39 +126,43 @@ export function SettingsDialog(): React.JSX.Element {
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className={cn('gap-0 overflow-hidden', 'h-[min(90vh,640px)]', 'sm:max-w-4xl')}>
-        <DialogTitle className="sr-only">Settings</DialogTitle>
-        <DialogDescription className="sr-only">Application settings and preferences</DialogDescription>
+        <DialogTitle className='sr-only'>Settings</DialogTitle>
+        <DialogDescription className='sr-only'>Application settings and preferences</DialogDescription>
 
-        <div className="size-full overflow-y-auto" onClickCapture={handleClickCapture}>
+        <div className='size-full overflow-y-auto' onClickCapture={handleClickCapture}>
           <ResponsiveTabs tabs={settingsTabs} activeTab={activeTab} enableContentAnimation={false}>
             {authSections.map((sectionId) => (
               <TabsContent
                 key={sectionId}
                 enableAnimation={false}
                 value={sectionToLabel[sectionId]}
-                className="*:md:gap-0"
+                className='*:md:gap-0'
               >
                 <SettingsAuthGate>
                   <AccountView
                     hideNav
                     pathname={sectionPathMap[sectionId]}
-                    classNames={{ cards: 'h-full', sidebar: { base: 'hidden' }, base: 'h-full pb-6' }}
+                    classNames={{
+                      cards: 'h-full',
+                      sidebar: { base: 'hidden' },
+                      base: 'h-full pb-6',
+                    }}
                   />
                 </SettingsAuthGate>
               </TabsContent>
             ))}
-            <TabsContent enableAnimation={false} value="General">
+            <TabsContent enableAnimation={false} value='General'>
               <GeneralSettings />
             </TabsContent>
-            <TabsContent enableAnimation={false} value="Filesystem">
+            <TabsContent enableAnimation={false} value='Filesystem'>
               <FileSystemSettings />
             </TabsContent>
-            <TabsContent enableAnimation={false} value="Billing">
+            <TabsContent enableAnimation={false} value='Billing'>
               <SettingsAuthGate>
-                <div className="py-4 text-sm text-muted-foreground">Billing - coming soon.</div>
+                <div className='py-4 text-sm text-muted-foreground'>Billing - coming soon.</div>
               </SettingsAuthGate>
             </TabsContent>
-            <TabsContent enableAnimation={false} value="Experimental">
+            <TabsContent enableAnimation={false} value='Experimental'>
               <ExperimentalSettings />
             </TabsContent>
           </ResponsiveTabs>

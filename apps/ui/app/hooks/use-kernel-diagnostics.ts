@@ -209,7 +209,7 @@ export function useKernelDiagnostics(options: UseKernelDiagnosticsOptions): UseK
     }
 
     const errors = monaco.editor.getModelMarkers({});
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- monaco has import issues. This is safe.
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- monaco has import issues. This is safe.
     const filteredErrors = errors.filter((error) => error.severity === 8);
 
     if (filteredErrors.length > 0) {

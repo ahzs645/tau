@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- comprehensive kernel test suite */
+/* oxlint-disable max-lines -- comprehensive kernel test suite */
 import { describe, it, expect } from 'vitest';
 import openscadKernel from '#kernels/openscad/openscad.kernel.js';
 import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
@@ -23,8 +23,10 @@ const createWorker = async (files: Record<string, string>): ReturnType<typeof cr
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
-): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(openscadKernel, files, mainFile);
+): Promise<{
+  jsonSchema: unknown;
+  defaultParameters: Record<string, unknown>;
+}> => getTestParameters(openscadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
 const createGeometry = async (
@@ -32,7 +34,12 @@ const createGeometry = async (
   mainFile: string,
   parameters: Record<string, unknown> = {},
 ): ReturnType<typeof createTestGeometry> =>
-  createTestGeometry({ definition: openscadKernel, files, mainFile, parameters });
+  createTestGeometry({
+    definition: openscadKernel,
+    files,
+    mainFile,
+    parameters,
+  });
 
 /**
  * Helper to compute geometry and get OFF data for analysis.
@@ -44,7 +51,10 @@ async function createGeometryAndGetOffData(
 ): Promise<{ offData: string | undefined; success: boolean }> {
   const worker = await createWorker(files);
   const geometryFile = createGeometryFile(mainFile);
-  const result = await worker.createGeometry({ file: geometryFile, parameters: {} });
+  const result = await worker.createGeometry({
+    file: geometryFile,
+    parameters: {},
+  });
 
   // NativeHandle is protected on KernelWorker; for OpenSCAD it holds the raw OFF string
   const offData = (worker as unknown as { nativeHandle: string | undefined }).nativeHandle;
@@ -61,7 +71,10 @@ const geometryHelpers = createGeometryTestHelpers();
 /**
  * Parse OFF face lines and count color components.
  */
-function analyzeOffColorComponents(offData: string): { rgbFaceCount: number; rgbaFaceCount: number } {
+function analyzeOffColorComponents(offData: string): {
+  rgbFaceCount: number;
+  rgbaFaceCount: number;
+} {
   const lines = offData.split('\n');
   let rgbFaceCount = 0;
   let rgbaFaceCount = 0;
@@ -110,8 +123,22 @@ describe('OpenSCAD Kernel', () => {
         expect(jsonSchema).toEqual({
           type: 'object',
           properties: {
-            width: { type: 'number', title: 'width', default: 10, minimum: 1, maximum: 100, multipleOf: 1 },
-            height: { type: 'number', title: 'height', default: 20, minimum: 1, maximum: 100, multipleOf: 1 },
+            width: {
+              type: 'number',
+              title: 'width',
+              default: 10,
+              minimum: 1,
+              maximum: 100,
+              multipleOf: 1,
+            },
+            height: {
+              type: 'number',
+              title: 'height',
+              default: 20,
+              minimum: 1,
+              maximum: 100,
+              multipleOf: 1,
+            },
             depth: { type: 'number', title: 'depth', default: 5 },
           },
           additionalProperties: false,
@@ -152,8 +179,16 @@ describe('OpenSCAD Kernel', () => {
               type: 'object',
               title: 'Roof Parameters',
               properties: {
-                roof_height: { type: 'number', title: 'roof_height', default: 35 },
-                roof_overhang: { type: 'number', title: 'roof_overhang', default: 8 },
+                roof_height: {
+                  type: 'number',
+                  title: 'roof_height',
+                  default: 35,
+                },
+                roof_overhang: {
+                  type: 'number',
+                  title: 'roof_overhang',
+                  default: 8,
+                },
               },
               additionalProperties: false,
             },
@@ -193,9 +228,21 @@ describe('OpenSCAD Kernel', () => {
               type: 'object',
               title: 'House Dimensions',
               properties: {
-                house_width: { type: 'number', title: 'house_width', default: 100 },
-                house_depth: { type: 'number', title: 'house_depth', default: 80 },
-                house_height: { type: 'number', title: 'house_height', default: 60 },
+                house_width: {
+                  type: 'number',
+                  title: 'house_width',
+                  default: 100,
+                },
+                house_depth: {
+                  type: 'number',
+                  title: 'house_depth',
+                  default: 80,
+                },
+                house_height: {
+                  type: 'number',
+                  title: 'house_height',
+                  default: 60,
+                },
               },
               additionalProperties: false,
             },
@@ -492,9 +539,9 @@ describe('OpenSCAD Kernel', () => {
         const files: Record<string, string> = {};
 
         // Create 60 levels of nesting
-        for (let i = 0; i < 60; i++) {
-          const nextFile = i < 59 ? `include <level${i + 1}.scad>\n` : '';
-          files[`level${i}.scad`] = `${nextFile}param${i} = ${i};`;
+        for (let index = 0; index < 60; index++) {
+          const nextFile = index < 59 ? `include <level${index + 1}.scad>\n` : '';
+          files[`level${index}.scad`] = `${nextFile}param${index} = ${index};`;
         }
 
         const { defaultParameters } = await getParameters(files, 'level0.scad');
@@ -516,7 +563,11 @@ describe('OpenSCAD Kernel', () => {
       it('should handle empty files', async () => {
         const { jsonSchema, defaultParameters } = await getParameters({ 'empty.scad': '' }, 'empty.scad');
 
-        expect(jsonSchema).toEqual({ type: 'object', properties: {}, additionalProperties: false });
+        expect(jsonSchema).toEqual({
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        });
         expect(defaultParameters).toEqual({});
       });
 
@@ -592,7 +643,11 @@ describe('OpenSCAD Kernel', () => {
           additionalProperties: false,
         });
 
-        expect(defaultParameters).toEqual({ radius: 2.5, height: 10.75, tolerance: 0.001 });
+        expect(defaultParameters).toEqual({
+          radius: 2.5,
+          height: 10.75,
+          tolerance: 0.001,
+        });
       });
 
       it('should extract number parameters with range annotations', async () => {
@@ -609,8 +664,22 @@ describe('OpenSCAD Kernel', () => {
         expect(jsonSchema).toEqual({
           type: 'object',
           properties: {
-            width: { type: 'number', title: 'width', default: 50, minimum: 10, maximum: 100, multipleOf: 1 },
-            height: { type: 'number', title: 'height', default: 25, minimum: 5, maximum: 50, multipleOf: 5 },
+            width: {
+              type: 'number',
+              title: 'width',
+              default: 50,
+              minimum: 10,
+              maximum: 100,
+              multipleOf: 1,
+            },
+            height: {
+              type: 'number',
+              title: 'height',
+              default: 25,
+              minimum: 5,
+              maximum: 50,
+              multipleOf: 5,
+            },
           },
           additionalProperties: false,
         });
@@ -634,13 +703,21 @@ describe('OpenSCAD Kernel', () => {
           type: 'object',
           properties: {
             show_base: { type: 'boolean', title: 'show_base', default: true },
-            center_object: { type: 'boolean', title: 'center_object', default: false },
+            center_object: {
+              type: 'boolean',
+              title: 'center_object',
+              default: false,
+            },
             add_holes: { type: 'boolean', title: 'add_holes', default: true },
           },
           additionalProperties: false,
         });
 
-        expect(defaultParameters).toEqual({ show_base: true, center_object: false, add_holes: true });
+        expect(defaultParameters).toEqual({
+          show_base: true,
+          center_object: false,
+          add_holes: true,
+        });
       });
 
       it('should extract string parameters', async () => {
@@ -658,12 +735,19 @@ describe('OpenSCAD Kernel', () => {
           type: 'object',
           properties: {
             label: { type: 'string', title: 'label', default: 'Hello World' },
-            author: { type: 'string', title: 'author', default: 'OpenSCAD User' },
+            author: {
+              type: 'string',
+              title: 'author',
+              default: 'OpenSCAD User',
+            },
           },
           additionalProperties: false,
         });
 
-        expect(defaultParameters).toEqual({ label: 'Hello World', author: 'OpenSCAD User' });
+        expect(defaultParameters).toEqual({
+          label: 'Hello World',
+          author: 'OpenSCAD User',
+        });
       });
 
       it('should extract vector parameters (arrays)', async () => {
@@ -700,7 +784,10 @@ describe('OpenSCAD Kernel', () => {
           additionalProperties: false,
         });
 
-        expect(defaultParameters).toEqual({ position: [10, 20, 30], origin: [0, 0, 0] });
+        expect(defaultParameters).toEqual({
+          position: [10, 20, 30],
+          origin: [0, 0, 0],
+        });
       });
 
       it('should extract 2D vector parameters', async () => {
@@ -737,7 +824,10 @@ describe('OpenSCAD Kernel', () => {
           additionalProperties: false,
         });
 
-        expect(defaultParameters).toEqual({ point: [50, 75], size_2d: [100, 200] });
+        expect(defaultParameters).toEqual({
+          point: [50, 75],
+          size_2d: [100, 200],
+        });
       });
 
       it('should extract negative number parameters', async () => {
@@ -1106,7 +1196,10 @@ describe('OpenSCAD Kernel', () => {
           'main.scad': 'include <lib.scad>\ncube([10, 10, 10]);',
           'lib.scad': 'x += 5;',
         });
-        const result = await worker.createGeometry({ file: createGeometryFile('main.scad'), parameters: {} });
+        const result = await worker.createGeometry({
+          file: createGeometryFile('main.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -1146,9 +1239,9 @@ module my_cube(size = 10) {
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-          expect(result.issues.some((i) => i.message.includes('No geometry to render'))).toBe(true);
-          expect(result.issues.some((i) => i.message.includes('Call a module'))).toBe(true);
+          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('No geometry to render'))).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('Call a module'))).toBe(true);
         }
       });
 
@@ -1234,8 +1327,21 @@ cube([size, size, size]);`,
             message: 'syntax error',
             type: 'compilation',
             severity: 'error',
-            location: { fileName: 'main.scad', startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 8 },
-            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' }],
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 3,
+              startColumn: 1,
+              endLineNumber: 3,
+              endColumn: 8,
+            },
+            stackFrames: [
+              {
+                functionName: 'include',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+            ],
           },
         ]);
       });
@@ -1261,8 +1367,21 @@ badModule();`,
             message: 'syntax error',
             type: 'compilation',
             severity: 'error',
-            location: { fileName: 'main.scad', startLineNumber: 3, startColumn: 3, endLineNumber: 3, endColumn: 10 },
-            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' }],
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 3,
+              startColumn: 3,
+              endLineNumber: 3,
+              endColumn: 10,
+            },
+            stackFrames: [
+              {
+                functionName: 'include',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+            ],
           },
         ]);
       });
@@ -1285,8 +1404,21 @@ x += 5;`,
             message: 'syntax error',
             type: 'compilation',
             severity: 'error',
-            location: { fileName: 'lib.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
-            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' }],
+            location: {
+              fileName: 'lib.scad',
+              startLineNumber: 2,
+              startColumn: 1,
+              endLineNumber: 2,
+              endColumn: 8,
+            },
+            stackFrames: [
+              {
+                functionName: 'include',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+            ],
           },
         ]);
       });
@@ -1312,11 +1444,27 @@ z += 5;`,
             message: 'syntax error',
             type: 'compilation',
             severity: 'error',
-            location: { fileName: 'bad.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
+            location: {
+              fileName: 'bad.scad',
+              startLineNumber: 2,
+              startColumn: 1,
+              endLineNumber: 2,
+              endColumn: 8,
+            },
             // Stack frames reconstruct the full include chain (deepest first)
             stackFrames: [
-              { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, context: 'user' },
-              { functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' },
+              {
+                functionName: 'include',
+                fileName: 'middle.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+              {
+                functionName: 'include',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
             ],
           },
         ]);
@@ -1344,8 +1492,21 @@ x += 5;`,
             message: 'syntax error',
             type: 'compilation',
             severity: 'error',
-            location: { fileName: 'lib.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
-            stackFrames: [{ functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' }],
+            location: {
+              fileName: 'lib.scad',
+              startLineNumber: 2,
+              startColumn: 1,
+              endLineNumber: 2,
+              endColumn: 8,
+            },
+            stackFrames: [
+              {
+                functionName: 'include',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+            ],
           },
         ]);
       });
@@ -1373,10 +1534,26 @@ z += 5;`,
             message: 'syntax error',
             type: 'compilation',
             severity: 'error',
-            location: { fileName: 'bad.scad', startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 8 },
+            location: {
+              fileName: 'bad.scad',
+              startLineNumber: 2,
+              startColumn: 1,
+              endLineNumber: 2,
+              endColumn: 8,
+            },
             stackFrames: [
-              { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, context: 'user' },
-              { functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' },
+              {
+                functionName: 'include',
+                fileName: 'middle.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+              {
+                functionName: 'include',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
             ],
           },
         ]);
@@ -1408,13 +1585,44 @@ outer();`,
             message: 'Assertion \'false\' failed: "deliberate failure"',
             type: 'runtime',
             severity: 'error',
-            location: { fileName: 'main.scad', startLineNumber: 6, startColumn: 3, endLineNumber: 6, endColumn: 39 },
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 6,
+              startColumn: 3,
+              endLineNumber: 6,
+              endColumn: 39,
+            },
             stackFrames: [
-              { functionName: 'assert', fileName: 'main.scad', lineNumber: 6, context: 'framework' },
-              { functionName: 'inner()', fileName: 'main.scad', lineNumber: 5, context: 'user' },
-              { functionName: 'inner', fileName: 'main.scad', lineNumber: 2, context: 'user' },
-              { functionName: 'outer()', fileName: 'main.scad', lineNumber: 1, context: 'user' },
-              { functionName: 'outer', fileName: 'main.scad', lineNumber: 9, context: 'user' },
+              {
+                functionName: 'assert',
+                fileName: 'main.scad',
+                lineNumber: 6,
+                context: 'framework',
+              },
+              {
+                functionName: 'inner()',
+                fileName: 'main.scad',
+                lineNumber: 5,
+                context: 'user',
+              },
+              {
+                functionName: 'inner',
+                fileName: 'main.scad',
+                lineNumber: 2,
+                context: 'user',
+              },
+              {
+                functionName: 'outer()',
+                fileName: 'main.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+              {
+                functionName: 'outer',
+                fileName: 'main.scad',
+                lineNumber: 9,
+                context: 'user',
+              },
             ],
           },
           {
@@ -1422,7 +1630,11 @@ outer();`,
               'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
             type: 'runtime',
             severity: 'warning',
-            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1 },
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 1,
+              startColumn: 1,
+            },
           },
         ]);
       });
@@ -1446,11 +1658,32 @@ broken_module();`,
             message: 'Assertion \'false\' failed: "fail in lib"',
             type: 'runtime',
             severity: 'error',
-            location: { fileName: 'lib.scad', startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 32 },
+            location: {
+              fileName: 'lib.scad',
+              startLineNumber: 2,
+              startColumn: 3,
+              endLineNumber: 2,
+              endColumn: 32,
+            },
             stackFrames: [
-              { functionName: 'assert', fileName: 'lib.scad', lineNumber: 2, context: 'framework' },
-              { functionName: 'broken_module()', fileName: 'lib.scad', lineNumber: 1, context: 'user' },
-              { functionName: 'broken_module', fileName: 'main.scad', lineNumber: 3, context: 'user' },
+              {
+                functionName: 'assert',
+                fileName: 'lib.scad',
+                lineNumber: 2,
+                context: 'framework',
+              },
+              {
+                functionName: 'broken_module()',
+                fileName: 'lib.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+              {
+                functionName: 'broken_module',
+                fileName: 'main.scad',
+                lineNumber: 3,
+                context: 'user',
+              },
             ],
           },
           {
@@ -1458,7 +1691,11 @@ broken_module();`,
               'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
             type: 'runtime',
             severity: 'warning',
-            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1 },
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 1,
+              startColumn: 1,
+            },
           },
         ]);
       });
@@ -1488,13 +1725,44 @@ module call_middle() {
             message: 'Assertion \'false\' failed: "deepest failure"',
             type: 'runtime',
             severity: 'error',
-            location: { fileName: 'bad.scad', startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 36 },
+            location: {
+              fileName: 'bad.scad',
+              startLineNumber: 2,
+              startColumn: 3,
+              endLineNumber: 2,
+              endColumn: 36,
+            },
             stackFrames: [
-              { functionName: 'assert', fileName: 'bad.scad', lineNumber: 2, context: 'framework' },
-              { functionName: 'call_bad()', fileName: 'bad.scad', lineNumber: 1, context: 'user' },
-              { functionName: 'call_bad', fileName: 'middle.scad', lineNumber: 4, context: 'user' },
-              { functionName: 'call_middle()', fileName: 'middle.scad', lineNumber: 3, context: 'user' },
-              { functionName: 'call_middle', fileName: 'main.scad', lineNumber: 3, context: 'user' },
+              {
+                functionName: 'assert',
+                fileName: 'bad.scad',
+                lineNumber: 2,
+                context: 'framework',
+              },
+              {
+                functionName: 'call_bad()',
+                fileName: 'bad.scad',
+                lineNumber: 1,
+                context: 'user',
+              },
+              {
+                functionName: 'call_bad',
+                fileName: 'middle.scad',
+                lineNumber: 4,
+                context: 'user',
+              },
+              {
+                functionName: 'call_middle()',
+                fileName: 'middle.scad',
+                lineNumber: 3,
+                context: 'user',
+              },
+              {
+                functionName: 'call_middle',
+                fileName: 'main.scad',
+                lineNumber: 3,
+                context: 'user',
+              },
             ],
           },
           {
@@ -1502,7 +1770,11 @@ module call_middle() {
               'No geometry to render. Call a module or add a primitive (e.g., cube(), sphere()) to create visible output.',
             type: 'runtime',
             severity: 'warning',
-            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1 },
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 1,
+              startColumn: 1,
+            },
           },
         ]);
       });
@@ -1524,13 +1796,25 @@ cube([get_size(), 10, 10]);`,
             message: 'Ignoring unknown variable "garbage"',
             type: 'compilation',
             severity: 'warning',
-            location: { fileName: 'main.scad', startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 31 },
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: 1,
+              endColumn: 31,
+            },
           },
           {
             message: 'Unable to convert cube(size=[undef, 10, 10], ...) parameter to a number or a vec3 of numbers',
             type: 'compilation',
             severity: 'warning',
-            location: { fileName: 'main.scad', startLineNumber: 3, startColumn: 1, endLineNumber: 3, endColumn: 28 },
+            location: {
+              fileName: 'main.scad',
+              startLineNumber: 3,
+              startColumn: 1,
+              endLineNumber: 3,
+              endColumn: 28,
+            },
           },
         ]);
       });
@@ -1550,8 +1834,8 @@ cube([get_size(), 10, 10]);`,
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-          expect(result.issues.some((i) => i.message.includes('undefined_var'))).toBe(true);
+          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('undefined_var'))).toBe(true);
         }
       });
 
@@ -1569,8 +1853,8 @@ cube([10, 10, 10]);`,
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-          expect(result.issues.some((i) => i.message.includes('my_undefined_module'))).toBe(true);
+          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('my_undefined_module'))).toBe(true);
         }
       });
 
@@ -1592,13 +1876,13 @@ cube([undefined_var, 10, 10]);`,
           expect(result.issues.length).toBeGreaterThanOrEqual(2);
 
           // All should be warnings
-          expect(result.issues.every((i) => i.severity === 'warning')).toBe(true);
+          expect(result.issues.every((index) => index.severity === 'warning')).toBe(true);
 
           // Should have warning about undefined module
-          expect(result.issues.some((i) => i.message.includes('my_undefined_module'))).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('my_undefined_module'))).toBe(true);
 
           // Should have warning about undefined variable
-          expect(result.issues.some((i) => i.message.includes('undefined_var'))).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('undefined_var'))).toBe(true);
         }
       });
 
@@ -1617,8 +1901,8 @@ cube([10, 10, 10]);`,
         if (result.success) {
           expect(result.issues.length).toBeGreaterThanOrEqual(2);
 
-          const firstModuleIssue = result.issues.find((i) => i.message.includes('first_undefined_module'));
-          const secondModuleIssue = result.issues.find((i) => i.message.includes('second_undefined_module'));
+          const firstModuleIssue = result.issues.find((index) => index.message.includes('first_undefined_module'));
+          const secondModuleIssue = result.issues.find((index) => index.message.includes('second_undefined_module'));
 
           expect(firstModuleIssue?.location?.startLineNumber).toBe(1);
           expect(secondModuleIssue?.location?.startLineNumber).toBe(2);
@@ -1653,7 +1937,10 @@ cube([10, 10, 10]);`,
           'site/main.scad': `undefined_module();
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometry({ file: createGeometryFile('site/main.scad'), parameters: {} });
+        const result = await worker.createGeometry({
+          file: createGeometryFile('site/main.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(true);
         if (result.success) {
@@ -1670,13 +1957,16 @@ cube([10, 10, 10]);`,
 cube([10, 10, 10]);`,
           'lib/broken.scad': `x += 5;`, // Syntax error in included file
         });
-        const result = await worker.createGeometry({ file: createGeometryFile('site/main.scad'), parameters: {} });
+        const result = await worker.createGeometry({
+          file: createGeometryFile('site/main.scad'),
+          parameters: {},
+        });
 
         expect(result.success).toBe(false);
         if (!result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
           // Error in included file should show its path (lib/broken.scad)
-          const brokenFileError = result.issues.find((i) => i.location?.fileName.includes('broken.scad'));
+          const brokenFileError = result.issues.find((index) => index.location?.fileName.includes('broken.scad'));
           expect(brokenFileError).toBeDefined();
           // Should preserve the relative path from the project root
           expect(brokenFileError?.location?.fileName).toMatch(/lib\/broken\.scad$/);
@@ -1688,13 +1978,16 @@ cube([10, 10, 10]);`,
           'site/main.scad': `include <../furniture/missing.scad>
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometry({ file: createGeometryFile('site/main.scad'), parameters: {} });
+        const result = await worker.createGeometry({
+          file: createGeometryFile('site/main.scad'),
+          parameters: {},
+        });
 
         // Should still produce geometry (the cube)
         expect(result.success).toBe(true);
         if (result.success) {
           // Should have a warning about the missing include
-          expect(result.issues.some((i) => i.message.includes('missing.scad'))).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('missing.scad'))).toBe(true);
         }
       });
     });
@@ -1712,7 +2005,7 @@ cube([x, 10, 10]);`,
 
         // Undefined function results in undef, geometry may still be produced
         expect(result.issues.length).toBeGreaterThan(0);
-        expect(result.issues.some((i) => i.message.includes('my_undefined_function'))).toBe(true);
+        expect(result.issues.some((index) => index.message.includes('my_undefined_function'))).toBe(true);
       });
 
       it('should parse too many parameters warning', async () => {
@@ -1734,7 +2027,10 @@ mymod(10, 20, 30);`, // Too many parameters
           'recursion.scad': `module infinite() { infinite(); }
 infinite();`,
         });
-        const result = await worker.createGeometry({ file: createGeometryFile('recursion.scad'), parameters: {} });
+        const result = await worker.createGeometry({
+          file: createGeometryFile('recursion.scad'),
+          parameters: {},
+        });
 
         // Recursion detection - OpenSCAD WASM may handle this differently
         // Just verify we get a result without crashing
@@ -1757,8 +2053,8 @@ cube([10, 10, 10]);`,
         // Should still produce geometry (the cube)
         expect(result.success).toBe(true);
         if (result.success) {
-          expect(result.issues.some((i) => i.message.includes('nonexistent_file.scad'))).toBe(true);
-          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('nonexistent_file.scad'))).toBe(true);
+          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
         }
       });
 
@@ -1767,7 +2063,10 @@ cube([10, 10, 10]);`,
           'assertion.scad': `assert(false, "Custom assertion message");
 cube([10, 10, 10]);`,
         });
-        const result = await worker.createGeometry({ file: createGeometryFile('assertion.scad'), parameters: {} });
+        const result = await worker.createGeometry({
+          file: createGeometryFile('assertion.scad'),
+          parameters: {},
+        });
 
         // Assertion failure should fail
         expect(result.success).toBe(false);

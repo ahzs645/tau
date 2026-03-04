@@ -40,11 +40,11 @@ type ChatTextareaDesktopProperties = {
   readonly formattedCancelKeyCombination: string;
 
   // Refs
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly textareaReference: React.RefObject<HTMLTextAreaElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly fileInputReference: React.RefObject<HTMLInputElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly containerReference: React.RefObject<HTMLDivElement | null>;
 
   // Handlers
@@ -163,7 +163,7 @@ export const ChatTextareaDesktop = memo(function ({
           rows={3}
           autoFocus={enableAutoFocus}
           value={inputText}
-          placeholder="Ask Tau to build anything..."
+          placeholder='Ask Tau to build anything...'
           onChange={handleTextChange}
           onKeyDown={handleTextareaKeyDown}
         />
@@ -191,13 +191,13 @@ export const ChatTextareaDesktop = memo(function ({
 
       {/* Drag and drop feedback */}
       {isDragging ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/10 backdrop-blur-xs">
-          <p className="rounded-md bg-background/50 px-2 font-medium text-primary">Add image(s)</p>
+        <div className='pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/10 backdrop-blur-xs'>
+          <p className='rounded-md bg-background/50 px-2 font-medium text-primary'>Add image(s)</p>
         </div>
       ) : null}
 
       {/* Main input controls */}
-      <div className="absolute bottom-2 left-2 flex flex-row items-center gap-1 text-muted-foreground">
+      <div className='absolute bottom-2 left-2 flex flex-row items-center gap-1 text-muted-foreground'>
         {/* Mode selector (behind feature flag) */}
         <ChatTextareaModeControl />
         {/* Model selector */}
@@ -213,14 +213,14 @@ export const ChatTextareaDesktop = memo(function ({
             {(_properties) => (
               <TooltipTrigger asChild>
                 <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2"
+                  variant='outline'
+                  size='sm'
+                  className='h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2'
                 >
-                  <span className="hidden truncate text-xs @[22rem]:block">{selectedModel?.name ?? 'Offline'}</span>
-                  <span className="relative flex size-4 items-center justify-center">
-                    <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
-                    <CircuitBoard className="absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0" />
+                  <span className='hidden truncate text-xs @[22rem]:block'>{selectedModel?.name ?? 'Offline'}</span>
+                  <span className='relative flex size-4 items-center justify-center'>
+                    <ChevronDown className='absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100' />
+                    <CircuitBoard className='absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0' />
                   </span>
                 </Button>
               </TooltipTrigger>
@@ -245,16 +245,16 @@ export const ChatTextareaDesktop = memo(function ({
               {({ selectedKernel }) => (
                 <TooltipTrigger asChild>
                   <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2"
+                    variant='outline'
+                    size='sm'
+                    className='h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2'
                   >
-                    <span className="hidden truncate text-xs @[22rem]:block">{selectedKernel?.name ?? 'OpenSCAD'}</span>
-                    <span className="relative flex size-4 items-center justify-center">
-                      <ChevronDown className="absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100" />
+                    <span className='hidden truncate text-xs @[22rem]:block'>{selectedKernel?.name ?? 'OpenSCAD'}</span>
+                    <span className='relative flex size-4 items-center justify-center'>
+                      <ChevronDown className='absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100' />
                       <SvgIcon
                         id={selectedKernel?.id ?? 'openscad'}
-                        className="absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0"
+                        className='absolute scale-100 transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0'
                       />
                     </span>
                   </Button>
@@ -273,34 +273,34 @@ export const ChatTextareaDesktop = memo(function ({
               <TooltipTrigger asChild>
                 <Button
                   data-chat-textarea-focustrap={focusTrapAttribute}
-                  variant="outline"
-                  size="sm"
+                  variant='outline'
+                  size='sm'
                   className={cn(
                     'h-7 rounded-full pr-2 text-muted-foreground hover:text-foreground @max-[22rem]:w-7',
                     selectedTools.length > 0 && 'px-2 @max-[22rem]:w-auto',
-                    // eslint-disable-next-line no-warning-comments -- keeping this file clean.
+                    // oxlint-disable-next-line no-warning-comments -- keeping this file clean.
                     'hidden', // TODO: add back when MCP is added.
                   )}
                 >
-                  <span className="hidden text-xs @[22rem]:block">
+                  <span className='hidden text-xs @[22rem]:block'>
                     {selectedMode === 'auto' && 'Auto'}
                     {selectedMode === 'none' && 'No tools'}
                     {selectedMode === 'any' && 'Any tool'}
                     {selectedMode === 'custom' && 'Custom'}
                   </span>
                   {selectedMode === 'custom' && selectedTools.length > 0 ? (
-                    <span className="flex items-center gap-1">
+                    <span className='flex items-center gap-1'>
                       {selectedTools.map((tool) => {
                         const Icon = toolMetadata[tool]?.icon;
                         if (!Icon) {
                           return null;
                         }
 
-                        return <Icon key={tool} className="size-4" />;
+                        return <Icon key={tool} className='size-4' />;
                       })}
                     </span>
                   ) : (
-                    <Wrench className="size-4" />
+                    <Wrench className='size-4' />
                   )}
                 </Button>
               </TooltipTrigger>
@@ -314,14 +314,14 @@ export const ChatTextareaDesktop = memo(function ({
         <input
           ref={fileInputReference}
           multiple
-          type="file"
-          accept="image/*"
-          className="hidden"
+          type='file'
+          accept='image/*'
+          className='hidden'
           onChange={handleFileChange}
         />
       </div>
 
-      <div className="absolute right-2 bottom-2 flex flex-row items-center gap-1">
+      <div className='absolute right-2 bottom-2 flex flex-row items-center gap-1'>
         {/* Context actions */}
         {enableContextActions ? (
           <ChatContextActions data-chat-textarea-focustrap addImage={handleAddImage} addText={handleAddText} />
@@ -331,10 +331,10 @@ export const ChatTextareaDesktop = memo(function ({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              variant="outline"
-              size="icon"
-              className="size-7 rounded-full text-muted-foreground hover:text-foreground"
-              title="Add image"
+              variant='outline'
+              size='icon'
+              className='size-7 rounded-full text-muted-foreground hover:text-foreground'
+              title='Add image'
               onClick={handleFileSelect}
             >
               <Paperclip />
@@ -363,7 +363,7 @@ ChatTextareaDesktop.displayName = 'ChatTextareaDesktop';
 
 function ChatTextareaModeControl(): React.JSX.Element | undefined {
   const planModeEnabled = useFeature('planMode');
-  const mode = useChatSelector((state) => (state.draftMode as ChatMode) ?? 'agent');
+  const mode = useChatSelector((state) => state.draftMode as ChatMode);
   const { setDraftMode } = useChatActions();
 
   if (!planModeEnabled) {

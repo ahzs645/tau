@@ -108,7 +108,7 @@ export function createFrameClassifier(libraryPatterns: LibraryPattern[]): (fileN
       return 'user';
     }
 
-    if (libraryPatterns.some((lib) => fileName.includes(lib.pattern))) {
+    if (libraryPatterns.some((library) => fileName.includes(library.pattern))) {
       return 'library';
     }
 
@@ -172,7 +172,7 @@ function applySourceMapToFrames(options: {
 
   try {
     const rawMap: unknown = JSON.parse(sourceMapJson);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
     const consumer = new SourceMapConsumer(rawMap as any);
     const resolver = resolveSourcePathFn ?? ((s: string) => resolveSourcePath(s));
 
@@ -198,9 +198,9 @@ function applySourceMapToFrames(options: {
       return {
         ...frame,
         fileName,
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
+        // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
         lineNumber: original.line ?? frame.lineNumber,
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
+        // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
         columnNumber: (original.column ?? 0) + 1,
         functionName: original.name ?? frame.functionName,
         context: 'user',
@@ -262,12 +262,12 @@ export function applyLibrarySourceMaps(
       return frame;
     }
 
-    const lib = libraryPatterns.find((l) => frame.fileName!.includes(l.pattern));
-    if (!lib) {
+    const library = libraryPatterns.find((l) => frame.fileName!.includes(l.pattern));
+    if (!library) {
       return frame;
     }
 
-    const consumer = getSourceMapConsumer(lib.moduleName);
+    const consumer = getSourceMapConsumer(library.moduleName);
     if (consumer) {
       try {
         const original = consumer.originalPositionFor({
@@ -278,10 +278,10 @@ export function applyLibrarySourceMaps(
         if (original.source) {
           return {
             ...frame,
-            fileName: resolveLibrarySourcePath(lib.moduleName, original.source),
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
+            fileName: resolveLibrarySourcePath(library.moduleName, original.source),
+            // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
             lineNumber: original.line ?? frame.lineNumber,
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
+            // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- source-map-js returns null at runtime despite types saying number
             columnNumber: (original.column ?? 0) + 1,
             functionName: original.name ?? frame.functionName,
           };
@@ -293,7 +293,7 @@ export function applyLibrarySourceMaps(
 
     return {
       ...frame,
-      fileName: resolveLibrarySourcePath(lib.moduleName, frame.fileName),
+      fileName: resolveLibrarySourcePath(library.moduleName, frame.fileName),
     };
   });
 }
@@ -309,7 +309,7 @@ export function applyLibrarySourceMaps(
 export function deriveLocationFromFrames(
   frames: KernelStackFrame[],
   sourceMapJson?: string,
-  resolveSourcePathFn?: (sourcePath: string) => string,
+  resolveSourcePathFunction?: (sourcePath: string) => string,
 ): ErrorLocation | undefined {
   const userFrame = frames.find((frame) => frame.context === 'user');
   if (!userFrame?.fileName || !userFrame.lineNumber) {
@@ -327,7 +327,7 @@ export function deriveLocationFromFrames(
         fileName: userFrame.fileName,
         lineNumber: startLineNumber,
         startColumn,
-        resolveSourcePathFn,
+        resolveSourcePathFn: resolveSourcePathFunction,
       });
       if (extent) {
         startColumn = extent.startColumn;
@@ -359,7 +359,7 @@ function computeExpressionExtentFromSourceMap(options: {
 }): { startColumn: number; endColumn: number } | undefined {
   const { sourceMapJson, fileName, lineNumber, startColumn, resolveSourcePathFn } = options;
   const rawMap: unknown = JSON.parse(sourceMapJson);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- source-map-js accepts parsed JSON
   const consumer = new SourceMapConsumer(rawMap as any);
   const resolver = resolveSourcePathFn ?? ((s: string) => resolveSourcePath(s));
 

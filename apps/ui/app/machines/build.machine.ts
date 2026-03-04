@@ -90,7 +90,11 @@ type BuildEventInternal =
   | { type: 'createCompilationUnit'; entryFile: string }
   | { type: 'openInViewer'; entryFile: string }
   | { type: 'destroyCompilationUnit'; entryFile: string }
-  | { type: 'createViewGraphics'; viewId: string; settings?: GraphicsViewSettings }
+  | {
+      type: 'createViewGraphics';
+      viewId: string;
+      settings?: GraphicsViewSettings;
+    }
   | { type: 'destroyViewGraphics'; viewId: string }
   // Flush pending state immediately (bypasses debounce, used on tab close)
   | { type: 'flushNow' };
@@ -125,13 +129,13 @@ type BuildEmitted =
  */
 export const buildMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as BuildContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as BuildEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as BuildEmitted,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as BuildInput,
   },
   actors: buildActors,
@@ -228,8 +232,8 @@ export const buildMachine = setup({
       }
 
       // Update build in context using Immer
-      enqueue.assign(({ context: ctx }) =>
-        produce(ctx, (draft) => {
+      enqueue.assign(({ context }) =>
+        produce(context, (draft) => {
           if (draft.build?.assets.mechanical) {
             draft.build.assets.mechanical.parameters = event.parameters;
             draft.build.updatedAt = Date.now();
@@ -245,8 +249,8 @@ export const buildMachine = setup({
       }
 
       // Update build in context using Immer
-      enqueue.assign(({ context: ctx }) =>
-        produce(ctx, (draft) => {
+      enqueue.assign(({ context }) =>
+        produce(context, (draft) => {
           if (draft.build?.assets.mechanical) {
             draft.build.assets.mechanical.parameters = event.parameters;
             draft.build.updatedAt = Date.now();
@@ -294,7 +298,11 @@ export const buildMachine = setup({
       gitRef({ context, spawn, self }) {
         return spawn('git', {
           id: `git-${context.buildId}`,
-          input: { buildId: context.buildId, parentRef: self, fileManagerRef: context.fileManagerRef },
+          input: {
+            buildId: context.buildId,
+            parentRef: self,
+            fileManagerRef: context.fileManagerRef,
+          },
         });
       },
       // Reset compilation units - the primary one will be created during initializeKernelIfNeeded after build load
@@ -333,14 +341,14 @@ export const buildMachine = setup({
       } else {
         // Spawn is only available inside assign callbacks in XState v5.
         // We spawn and immediately send events to the new actor within the assign.
-        enqueue.assign(({ spawn, context: ctx }) => {
+        enqueue.assign(({ spawn, context }) => {
           const cadUnit = spawn('cad', {
-            id: `cad-${ctx.buildId}-${mainFile.replaceAll('/', '-')}`,
+            id: `cad-${context.buildId}-${mainFile.replaceAll('/', '-')}`,
             input: {
               shouldInitializeKernelOnStart: false,
-              logRef: ctx.logRef,
-              fileManagerRef: ctx.fileManagerRef,
-              kernelOptions: ctx.kernelOptions,
+              logRef: context.logRef,
+              fileManagerRef: context.fileManagerRef,
+              kernelOptions: context.kernelOptions,
             },
           });
 
@@ -349,13 +357,13 @@ export const buildMachine = setup({
           cadUnit.send({
             type: 'initializeModel',
             file: {
-              path: `/builds/${ctx.buildId}`,
+              path: `/builds/${context.buildId}`,
               filename: mainFile,
             },
             parameters: mechanicalAsset.parameters,
           });
 
-          const newUnits = new Map(ctx.compilationUnits);
+          const newUnits = new Map(context.compilationUnits);
           newUnits.set(mainFile, cadUnit as ActorRefFrom<typeof cadMachine>);
           return { compilationUnits: newUnits, mainEntryFile: mainFile };
         });
@@ -384,14 +392,14 @@ export const buildMachine = setup({
         });
       } else {
         // Spawn is only available inside assign callbacks in XState v5.
-        enqueue.assign(({ spawn, context: ctx }) => {
+        enqueue.assign(({ spawn, context }) => {
           const cadUnit = spawn('cad', {
-            id: `cad-${ctx.buildId}-${mainFile.replaceAll('/', '-')}`,
+            id: `cad-${context.buildId}-${mainFile.replaceAll('/', '-')}`,
             input: {
               shouldInitializeKernelOnStart: false,
-              logRef: ctx.logRef,
-              fileManagerRef: ctx.fileManagerRef,
-              kernelOptions: ctx.kernelOptions,
+              logRef: context.logRef,
+              fileManagerRef: context.fileManagerRef,
+              kernelOptions: context.kernelOptions,
             },
           });
 
@@ -400,13 +408,13 @@ export const buildMachine = setup({
           cadUnit.send({
             type: 'initializeModel',
             file: {
-              path: `/builds/${ctx.buildId}`,
+              path: `/builds/${context.buildId}`,
               filename: mainFile,
             },
             parameters: mechanicalAsset.parameters,
           });
 
-          const newUnits = new Map(ctx.compilationUnits);
+          const newUnits = new Map(context.compilationUnits);
           newUnits.set(mainFile, cadUnit as ActorRefFrom<typeof cadMachine>);
           return { compilationUnits: newUnits, mainEntryFile: mainFile };
         });
@@ -421,14 +429,14 @@ export const buildMachine = setup({
       }
 
       // Spawn is only available inside assign callbacks in XState v5.
-      enqueue.assign(({ spawn, context: ctx }) => {
+      enqueue.assign(({ spawn, context }) => {
         const cadUnit = spawn('cad', {
-          id: `cad-${ctx.buildId}-${event.entryFile.replaceAll('/', '-')}`,
+          id: `cad-${context.buildId}-${event.entryFile.replaceAll('/', '-')}`,
           input: {
             shouldInitializeKernelOnStart: true,
-            logRef: ctx.logRef,
-            fileManagerRef: ctx.fileManagerRef,
-            kernelOptions: ctx.kernelOptions,
+            logRef: context.logRef,
+            fileManagerRef: context.fileManagerRef,
+            kernelOptions: context.kernelOptions,
           },
         });
 
@@ -436,20 +444,23 @@ export const buildMachine = setup({
         cadUnit.send({
           type: 'initializeModel',
           file: {
-            path: `/builds/${ctx.buildId}`,
+            path: `/builds/${context.buildId}`,
             filename: event.entryFile,
           },
-          parameters: ctx.build?.assets.mechanical?.parameters ?? {},
+          parameters: context.build?.assets.mechanical?.parameters ?? {},
         });
 
-        const newUnits = new Map(ctx.compilationUnits);
+        const newUnits = new Map(context.compilationUnits);
         newUnits.set(event.entryFile, cadUnit as ActorRefFrom<typeof cadMachine>);
         return { compilationUnits: newUnits };
       });
     }),
     openInViewer: enqueueActions(({ enqueue, event }) => {
       assertEvent(event, 'openInViewer');
-      enqueue.raise({ type: 'createCompilationUnit', entryFile: event.entryFile });
+      enqueue.raise({
+        type: 'createCompilationUnit',
+        entryFile: event.entryFile,
+      });
       enqueue.emit({ type: 'viewerFileRequested', entryFile: event.entryFile });
     }),
     destroyCompilationUnit: enqueueActions(({ enqueue, context, event }) => {
@@ -461,8 +472,8 @@ export const buildMachine = setup({
       }
 
       enqueue.stopChild(unit);
-      enqueue.assign(({ context: ctx }) => {
-        const newUnits = new Map(ctx.compilationUnits);
+      enqueue.assign(({ context }) => {
+        const newUnits = new Map(context.compilationUnits);
         newUnits.delete(event.entryFile);
         return { compilationUnits: newUnits };
       });
@@ -477,9 +488,9 @@ export const buildMachine = setup({
 
       const settings = event.settings ?? defaultGraphicsSettings;
 
-      enqueue.assign(({ spawn, context: ctx }) => {
+      enqueue.assign(({ spawn, context }) => {
         const gfx = spawn('graphics', {
-          id: `graphics-view-${ctx.buildId}-${event.viewId}`,
+          id: `graphics-view-${context.buildId}-${event.viewId}`,
           input: {
             defaultCameraFovAngle: settings.cameraFovAngle,
             measureSnapDistance: 40,
@@ -496,7 +507,7 @@ export const buildMachine = setup({
           },
         });
 
-        const newMap = new Map(ctx.viewGraphics);
+        const newMap = new Map(context.viewGraphics);
         newMap.set(event.viewId, gfx);
         return { viewGraphics: newMap };
       });
@@ -510,8 +521,8 @@ export const buildMachine = setup({
       }
 
       enqueue.stopChild(gfx);
-      enqueue.assign(({ context: ctx }) => {
-        const newMap = new Map(ctx.viewGraphics);
+      enqueue.assign(({ context }) => {
+        const newMap = new Map(context.viewGraphics);
         newMap.delete(event.viewId);
         return { viewGraphics: newMap };
       });

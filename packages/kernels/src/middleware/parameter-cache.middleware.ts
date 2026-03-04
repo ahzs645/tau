@@ -31,7 +31,7 @@ function getCachePath(basePath: string, cacheKey: string): string {
  * @param basePath - The base path for the build
  * @returns The full path to the cache directory
  */
-function getCacheDir(basePath: string): string {
+function getCacheDirectory(basePath: string): string {
   return joinPath(basePath, '.tau/cache/parameters');
 }
 
@@ -74,8 +74,8 @@ export const parameterCacheMiddleware = defineMiddleware({
     if (result.success) {
       try {
         // Ensure cache directory exists
-        const cacheDir = getCacheDir(basePath);
-        await filesystem.ensureDir(cacheDir);
+        const cacheDirectory = getCacheDirectory(basePath);
+        await filesystem.ensureDir(cacheDirectory);
 
         await filesystem.writeFile(cachePath, JSON.stringify(result));
         logger.debug(`Cached parameters at ${cacheKey}`);

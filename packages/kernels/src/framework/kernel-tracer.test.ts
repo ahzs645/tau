@@ -41,15 +41,18 @@ describe('KernelTracer', () => {
       expect(measureSpy).toHaveBeenCalledWith(
         'inner',
         expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
           detail: expect.objectContaining({ spanId: '1', parentSpanId: '0' }),
         }),
       );
       expect(measureSpy).toHaveBeenCalledWith(
         'outer',
         expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-          detail: expect.objectContaining({ spanId: '0', parentSpanId: undefined }),
+          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+          detail: expect.objectContaining({
+            spanId: '0',
+            parentSpanId: undefined,
+          }),
         }),
       );
     });
@@ -62,7 +65,7 @@ describe('KernelTracer', () => {
       expect(measureSpy).toHaveBeenCalledWith(
         'op',
         expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
           detail: expect.objectContaining({
             file: 'main.ts',
             count: 42,
@@ -134,7 +137,7 @@ describe('KernelTracer', () => {
       expect(measureSpy).toHaveBeenCalledWith(
         'fresh.inner',
         expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
           detail: expect.objectContaining({ parentSpanId: expect.any(String) }),
         }),
       );
@@ -153,13 +156,17 @@ describe('KernelTracer', () => {
 
       expect(measureSpy).toHaveBeenCalledWith(
         'epoch-0-span',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.stringMatching returns any
-        expect.objectContaining({ start: expect.stringMatching(/^tau:span:0:/) }),
+        expect.objectContaining({
+          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.stringMatching returns any
+          start: expect.stringMatching(/^tau:span:0:/),
+        }),
       );
       expect(measureSpy).toHaveBeenCalledWith(
         'epoch-1-span',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.stringMatching returns any
-        expect.objectContaining({ start: expect.stringMatching(/^tau:span:1:/) }),
+        expect.objectContaining({
+          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.stringMatching returns any
+          start: expect.stringMatching(/^tau:span:1:/),
+        }),
       );
     });
 

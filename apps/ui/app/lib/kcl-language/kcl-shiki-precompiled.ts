@@ -1,4 +1,4 @@
-/* eslint-disable no-useless-escape -- required for the precompiled grammar */
+/* oxlint-disable no-useless-escape -- required for the precompiled grammar */
 /* eslint-disable @typescript-eslint/naming-convention -- required for the precompiled grammar */
 /**
  * Precompiled KCL language for Shiki.
@@ -35,7 +35,9 @@ const lang = Object.freeze({
       name: 'comment.block.kcl',
       begin: /\/\*/dgv,
       end: /\*\//dgv,
-      beginCaptures: { '0': { name: 'punctuation.definition.comment.begin.kcl' } },
+      beginCaptures: {
+        '0': { name: 'punctuation.definition.comment.begin.kcl' },
+      },
       endCaptures: { '0': { name: 'punctuation.definition.comment.end.kcl' } },
     },
     { name: 'keyword.control.conditional.kcl', match: /\b(if|else)\b/dgv },
@@ -45,9 +47,13 @@ const lang = Object.freeze({
     {
       name: 'meta.annotation.kcl',
       begin: /@\(/dgv,
-      beginCaptures: { '0': { name: 'punctuation.definition.annotation.begin.kcl' } },
+      beginCaptures: {
+        '0': { name: 'punctuation.definition.annotation.begin.kcl' },
+      },
       end: /\)/dgv,
-      endCaptures: { '0': { name: 'punctuation.definition.annotation.end.kcl' } },
+      endCaptures: {
+        '0': { name: 'punctuation.definition.annotation.end.kcl' },
+      },
       patterns: [{ include: '#annotation-kv' }, { name: 'punctuation.separator.comma.kcl', match: /,/dgv }],
     },
     {
@@ -60,12 +66,19 @@ const lang = Object.freeze({
           name: 'string.quoted.double.kcl',
           begin: /"/dgv,
           end: /"/dgv,
-          beginCaptures: { '0': { name: 'punctuation.definition.string.begin.kcl' } },
-          endCaptures: { '0': { name: 'punctuation.definition.string.end.kcl' } },
+          beginCaptures: {
+            '0': { name: 'punctuation.definition.string.begin.kcl' },
+          },
+          endCaptures: {
+            '0': { name: 'punctuation.definition.string.end.kcl' },
+          },
           patterns: [{ include: '#escape-sequence' }],
         },
         { name: 'keyword.control.import.as.kcl', match: /\bas\b/dgv },
-        { name: 'entity.name.import.alias.kcl', match: /(?<=as\p{space})[\p{L}\p{M}\p{N}\p{Pc}]+/dgv },
+        {
+          name: 'entity.name.import.alias.kcl',
+          match: /(?<=as\p{space})[\p{L}\p{M}\p{N}\p{Pc}]+/dgv,
+        },
       ],
     },
     { name: 'entity.name.tag.kcl', match: /\$[\p{L}\p{M}\p{N}\p{Pc}]+\b/dgv },
@@ -105,7 +118,9 @@ const lang = Object.freeze({
       name: 'string.quoted.double.kcl',
       begin: /"/dgv,
       end: /"/dgv,
-      beginCaptures: { '0': { name: 'punctuation.definition.string.begin.kcl' } },
+      beginCaptures: {
+        '0': { name: 'punctuation.definition.string.begin.kcl' },
+      },
       endCaptures: { '0': { name: 'punctuation.definition.string.end.kcl' } },
       patterns: [{ include: '#escape-sequence' }],
     },
@@ -120,7 +135,10 @@ const lang = Object.freeze({
     { name: 'keyword.operator.logical.kcl', match: /(&|\|)(?!>)/dgv },
     { name: 'keyword.operator.arithmetic.kcl', match: /[\+\-\*\/\^]/dgv },
     { name: 'keyword.operator.assignment.kcl', match: /=/dgv },
-    { name: 'support.constant.prelude.kcl', match: /\b(ZERO|QUARTER_TURN|HALF_TURN|THREE_QUARTER_TURN)\b/dgv },
+    {
+      name: 'support.constant.prelude.kcl',
+      match: /\b(ZERO|QUARTER_TURN|HALF_TURN|THREE_QUARTER_TURN)\b/dgv,
+    },
     {
       name: 'support.function.stdlib.kcl',
       match:
@@ -142,19 +160,29 @@ const lang = Object.freeze({
   repository: {
     comment: {
       patterns: [
-        { name: 'comment.line.documentation.module.kcl', match: /\/\/![^\n]*/dgv },
+        {
+          name: 'comment.line.documentation.module.kcl',
+          match: /\/\/![^\n]*/dgv,
+        },
         { name: 'comment.line.documentation.kcl', match: /\/\/\/[^\n]*/dgv },
         { name: 'comment.line.double-slash.kcl', match: /\/\/[^\n]*/dgv },
         {
           name: 'comment.block.kcl',
           begin: /\/\*/dgv,
           end: /\*\//dgv,
-          beginCaptures: { '0': { name: 'punctuation.definition.comment.begin.kcl' } },
-          endCaptures: { '0': { name: 'punctuation.definition.comment.end.kcl' } },
+          beginCaptures: {
+            '0': { name: 'punctuation.definition.comment.begin.kcl' },
+          },
+          endCaptures: {
+            '0': { name: 'punctuation.definition.comment.end.kcl' },
+          },
         },
       ],
     },
-    'escape-sequence': { name: 'constant.character.escape.kcl', match: /\\("|\\|\/|b|f|n|r|t|u[0-9a-fA-F]{4})/dgv },
+    'escape-sequence': {
+      name: 'constant.character.escape.kcl',
+      match: /\\("|\\|\/|b|f|n|r|t|u[0-9a-fA-F]{4})/dgv,
+    },
     parameter: {
       patterns: [
         {
@@ -198,14 +226,19 @@ const lang = Object.freeze({
       name: 'meta.function.anonymous.kcl',
       begin:
         /(\()(?=\p{space}*[\p{L}\p{M}\p{N}\p{Pc}]+(?:\p{space}*,\p{space}*[\p{L}\p{M}\p{N}\p{Pc}]+)*\)\p{space}*=>)/dgv,
-      beginCaptures: { '1': { name: 'punctuation.section.parameters.begin.kcl' } },
+      beginCaptures: {
+        '1': { name: 'punctuation.section.parameters.begin.kcl' },
+      },
       end: /(=>)\p{space}*(\{)/dgv,
       endCaptures: {
         '1': { name: 'keyword.operator.fat-arrow.kcl' },
         '2': { name: 'punctuation.section.block.begin.kcl' },
       },
       patterns: [
-        { name: 'variable.parameter.kcl', match: /\b[\p{L}\p{M}\p{N}\p{Pc}]+\b/dgv },
+        {
+          name: 'variable.parameter.kcl',
+          match: /\b[\p{L}\p{M}\p{N}\p{Pc}]+\b/dgv,
+        },
         { name: 'punctuation.separator.parameter.function.kcl', match: /,/dgv },
         { name: 'punctuation.section.parameters.end.kcl', match: /\)/dgv },
       ],

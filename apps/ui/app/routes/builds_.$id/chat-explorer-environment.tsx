@@ -58,7 +58,7 @@ export function ChatEditorExplorerEnvironment(): React.JSX.Element {
   );
 
   return (
-    <div className="flex flex-col gap-0.5 px-2 py-1">
+    <div className='flex flex-col gap-0.5 px-2 py-1'>
       {presets.map((preset) => {
         const isActive = currentPreset === preset.id;
         const Icon = preset.icon;
@@ -66,7 +66,7 @@ export function ChatEditorExplorerEnvironment(): React.JSX.Element {
         return (
           <button
             key={preset.id}
-            type="button"
+            type='button'
             className={cn(
               'flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
               isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted/50',
@@ -75,10 +75,10 @@ export function ChatEditorExplorerEnvironment(): React.JSX.Element {
               handlePresetChange(preset.id);
             }}
           >
-            <Icon className="size-3.5 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="font-medium">{preset.label}</div>
-              <div className="truncate text-[10px] opacity-60">{preset.description}</div>
+            <Icon className='size-3.5 shrink-0' />
+            <div className='min-w-0 flex-1'>
+              <div className='font-medium'>{preset.label}</div>
+              <div className='truncate text-[10px] opacity-60'>{preset.description}</div>
             </div>
           </button>
         );

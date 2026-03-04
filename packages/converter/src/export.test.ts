@@ -190,7 +190,7 @@ const assertPositionAttribute = (comparison: InspectComparison, shouldHave: bool
   expect(roundTrip.meshes.properties.length).toBeGreaterThan(0);
 
   const mesh = roundTrip.meshes.properties[0]!;
-  const hasPosition = mesh.attributes.some((attr) => attr.toLowerCase().includes('position'));
+  const hasPosition = mesh.attributes.some((attribute) => attribute.toLowerCase().includes('position'));
 
   if (shouldHave) {
     expect(hasPosition).toBe(true);
@@ -209,7 +209,7 @@ const assertNormalAttribute = (comparison: InspectComparison, shouldHave: boolea
   expect(roundTrip.meshes.properties.length).toBeGreaterThan(0);
 
   const mesh = roundTrip.meshes.properties[0]!;
-  const hasNormal = mesh.attributes.some((attr) => attr.toLowerCase().includes('normal'));
+  const hasNormal = mesh.attributes.some((attribute) => attribute.toLowerCase().includes('normal'));
 
   if (shouldHave) {
     expect(hasNormal).toBe(true);
@@ -229,7 +229,7 @@ const assertUvAttribute = (comparison: InspectComparison, shouldHave: boolean): 
 
   const mesh = roundTrip.meshes.properties[0]!;
   const hasUv = mesh.attributes.some(
-    (attr) => attr.toLowerCase().includes('texcoord') || attr.toLowerCase().includes('uv'),
+    (attribute) => attribute.toLowerCase().includes('texcoord') || attribute.toLowerCase().includes('uv'),
   );
 
   if (shouldHave) {
@@ -249,13 +249,13 @@ const assertAdditionalAttributeCount = (comparison: InspectComparison, expectedC
   expect(roundTrip.meshes.properties.length).toBeGreaterThan(0);
 
   const mesh = roundTrip.meshes.properties[0]!;
-  const standardAttributes = mesh.attributes.filter((attr) => {
-    const attrLower = attr.toLowerCase();
+  const standardAttributes = mesh.attributes.filter((attribute) => {
+    const attributeLower = attribute.toLowerCase();
     return (
-      attrLower.includes('position') ||
-      attrLower.includes('normal') ||
-      attrLower.includes('texcoord') ||
-      attrLower.includes('uv')
+      attributeLower.includes('position') ||
+      attributeLower.includes('normal') ||
+      attributeLower.includes('texcoord') ||
+      attributeLower.includes('uv')
     );
   });
 
@@ -372,7 +372,10 @@ const exportTestCases: ExportTestCase[] = [
       expectedNames: ['model.gltf', 'buffer.bin'],
     },
     expectations: {
-      geometry: { ...standardGeometryExpectations, boundingBoxTolerance: 0.005 as number },
+      geometry: {
+        ...standardGeometryExpectations,
+        boundingBoxTolerance: 0.005 as number,
+      },
     },
   }),
   createExportTestCase('glb', {
@@ -380,7 +383,10 @@ const exportTestCases: ExportTestCase[] = [
       expectedNames: ['model.glb'],
     },
     expectations: {
-      geometry: { ...standardGeometryExpectations, boundingBoxTolerance: 0.005 as number },
+      geometry: {
+        ...standardGeometryExpectations,
+        boundingBoxTolerance: 0.005 as number,
+      },
     },
   }),
 

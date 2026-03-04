@@ -61,9 +61,9 @@ export function ChatToolError({
     const FallbackIcon = fallbackIcon;
     return (
       <div className={cn('overflow-hidden rounded-md border bg-neutral/10', className)}>
-        <div className="flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs">
-          <FallbackIcon className="size-3 shrink-0 text-destructive" />
-          <span className="font-medium text-destructive">{fallbackTitle}</span>
+        <div className='flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs'>
+          <FallbackIcon className='size-3 shrink-0 text-destructive' />
+          <span className='font-medium text-destructive'>{fallbackTitle}</span>
         </div>
       </div>
     );
@@ -103,13 +103,13 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
     // Simple non-expandable error display - single line layout
     return (
       <div className={cn('@container/error overflow-hidden rounded-md border bg-neutral/10', className)}>
-        <div className="flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs">
+        <div className='flex h-7 w-full flex-row items-center gap-1.5 px-2 text-xs'>
           <Icon className={cn('size-3 shrink-0', accentColor)} />
           <span className={cn('shrink-0 font-medium whitespace-nowrap', accentColor)}>{title}</span>
-          <span className="text-muted-foreground/50">·</span>
-          <code className="text-muted-foreground">{toolName}</code>
-          <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>
-          <span className="hidden min-w-0 truncate text-muted-foreground @xs/error:inline">{description}</span>
+          <span className='text-muted-foreground/50'>·</span>
+          <code className='text-muted-foreground'>{toolName}</code>
+          <span className='hidden text-muted-foreground/50 @xs/error:inline'>·</span>
+          <span className='hidden min-w-0 truncate text-muted-foreground @xs/error:inline'>{description}</span>
         </div>
       </div>
     );
@@ -124,38 +124,38 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
       className={cn('group/collapsible @container/error overflow-hidden rounded-md border bg-neutral/10', className)}
       onOpenChange={setIsOpen}
     >
-      <CollapsibleTrigger className="flex h-7 w-full items-center gap-1.5 px-2 text-left text-xs hover:bg-accent/50">
-        <Icon className="size-3 shrink-0 text-destructive" />
-        <span className="shrink-0 font-medium whitespace-nowrap text-destructive">{title}</span>
-        <span className="text-muted-foreground/50">·</span>
-        <code className="text-muted-foreground">{toolName}</code>
-        <span className="hidden text-muted-foreground/50 @xs/error:inline">·</span>
-        <span className="hidden min-w-0 truncate text-muted-foreground @xs/error:inline">{description}</span>
-        <div className="flex-1" />
+      <CollapsibleTrigger className='flex h-7 w-full items-center gap-1.5 px-2 text-left text-xs hover:bg-accent/50'>
+        <Icon className='size-3 shrink-0 text-destructive' />
+        <span className='shrink-0 font-medium whitespace-nowrap text-destructive'>{title}</span>
+        <span className='text-muted-foreground/50'>·</span>
+        <code className='text-muted-foreground'>{toolName}</code>
+        <span className='hidden text-muted-foreground/50 @xs/error:inline'>·</span>
+        <span className='hidden min-w-0 truncate text-muted-foreground @xs/error:inline'>{description}</span>
+        <div className='flex-1' />
         <ChevronRight
           className={cn('size-3 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}
         />
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t">
-        <div className="space-y-2 p-2">
+      <CollapsibleContent className='border-t'>
+        <div className='space-y-2 p-2'>
           {validationError.validationErrors.length > 0 && (
-            <div className="space-y-1">
-              <div className="text-xs font-medium text-destructive">Validation Errors:</div>
-              <ul className="space-y-0.5 text-xs text-muted-foreground">
+            <div className='space-y-1'>
+              <div className='text-xs font-medium text-destructive'>Validation Errors:</div>
+              <ul className='space-y-0.5 text-xs text-muted-foreground'>
                 {validationError.validationErrors.map((error_, index) => (
-                  // eslint-disable-next-line react/no-array-index-key -- ensure uniqueness for same path errors.
+                  // oxlint-disable-next-line react/no-array-index-key -- ensure uniqueness for same path errors.
                   <li key={`${error_.path}-${index}`}>
-                    <code className="text-destructive">{error_.path || 'root'}</code>: {error_.message}
+                    <code className='text-destructive'>{error_.path || 'root'}</code>: {error_.message}
                   </li>
                 ))}
               </ul>
             </div>
           )}
           {validationError.rawOutput !== undefined && (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Raw Output</summary>
-              <CodeBlockContent className="mt-2">
-                <Pre language="json" className="max-h-40 overflow-auto text-xs">
+            <details className='text-xs'>
+              <summary className='cursor-pointer text-muted-foreground hover:text-foreground'>Raw Output</summary>
+              <CodeBlockContent className='mt-2'>
+                <Pre language='json' className='max-h-40 overflow-auto text-xs'>
                   {JSON.stringify(validationError.rawOutput, null, 2)}
                 </Pre>
               </CodeBlockContent>

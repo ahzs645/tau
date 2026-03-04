@@ -3,21 +3,21 @@ import { resolveCjsDefault } from '#kernels/replicad/utils/resolve-cjs-default.j
 
 describe('resolveCjsDefault', () => {
   it('returns a function as-is (static import path)', () => {
-    const fn = (): string => 'hello';
-    expect(resolveCjsDefault(fn)).toBe(fn);
+    const function_ = (): string => 'hello';
+    expect(resolveCjsDefault(function_)).toBe(function_);
   });
 
   it('unwraps a double-wrapped CJS default (dynamic import path)', () => {
-    const fn = (): string => 'hello';
+    const function_ = (): string => 'hello';
 
-    const wrapped = { __esModule: true, default: fn };
-    expect(resolveCjsDefault(wrapped)).toBe(fn);
+    const wrapped = { __esModule: true, default: function_ };
+    expect(resolveCjsDefault(wrapped)).toBe(function_);
   });
 
   it('unwraps when only default is present (no __esModule)', () => {
-    const fn = (): string => 'hello';
-    const wrapped = { default: fn };
-    expect(resolveCjsDefault(wrapped)).toBe(fn);
+    const function_ = (): string => 'hello';
+    const wrapped = { default: function_ };
+    expect(resolveCjsDefault(wrapped)).toBe(function_);
   });
 
   it('returns non-function values without a default property as-is', () => {

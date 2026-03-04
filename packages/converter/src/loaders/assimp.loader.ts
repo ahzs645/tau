@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- some formats are named like this */
-/* eslint-disable new-cap -- External library uses PascalCase method names */
+/* oxlint-disable new-cap -- External library uses PascalCase method names */
 import assimpjs from 'assimpjs/all';
 import type { AssimpResult } from 'assimpjs/all';
 import type { FileExtension, FileInput } from '@taucad/types';

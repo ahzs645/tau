@@ -28,8 +28,8 @@ import type { FileTreeNode } from '#machines/file-manager.js';
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/files">Files</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/files'>Files</Link>
       </Button>
     );
   },
@@ -87,7 +87,12 @@ const fileActions: ItemAction[] = [
  */
 const folderActions: ItemAction[] = [
   { value: 'download-zip', label: 'Download as ZIP', icon: FolderArchive },
-  { value: 'delete', label: 'Delete Directory', icon: Trash2, variant: 'destructive' },
+  {
+    value: 'delete',
+    label: 'Delete Directory',
+    icon: Trash2,
+    variant: 'destructive',
+  },
 ];
 
 /**
@@ -110,7 +115,7 @@ function BuildLink({
 }): React.JSX.Element {
   return (
     <span
-      role="presentation"
+      role='presentation'
       onClick={(event) => {
         event.stopPropagation();
       }}
@@ -119,8 +124,8 @@ function BuildLink({
         withArrow
         isArrowOnHoverOnly
         href={`/builds/${buildId}`}
-        className="text-xs text-muted-foreground max-md:hidden"
-        arrowSize="xs"
+        className='text-xs text-muted-foreground max-md:hidden'
+        arrowSize='xs'
       >
         {buildName}
       </ExternalLink>
@@ -177,24 +182,24 @@ function FileActions({
             item.variant === 'destructive' && 'text-destructive [&>svg]:text-destructive!',
           )}
         >
-          <item.icon className="size-4" />
+          <item.icon className='size-4' />
           <span>{item.label}</span>
         </div>
       )}
-      title="File Actions"
-      description="Choose an action for this file"
+      title='File Actions'
+      description='Choose an action for this file'
       isSearchEnabled={false}
       onSelect={handleAction}
     >
       <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 shrink-0"
+        variant='ghost'
+        size='icon'
+        className='size-6 shrink-0'
         onClick={(event) => {
           event.stopPropagation();
         }}
       >
-        <MoreHorizontal className="size-4" />
+        <MoreHorizontal className='size-4' />
       </Button>
     </ComboBoxResponsive>
   );
@@ -235,24 +240,24 @@ function FolderActions({
             item.variant === 'destructive' && 'text-destructive [&>svg]:text-destructive!',
           )}
         >
-          <item.icon className="size-4" />
+          <item.icon className='size-4' />
           <span>{item.label}</span>
         </div>
       )}
-      title="Folder Actions"
-      description="Choose an action for this folder"
+      title='Folder Actions'
+      description='Choose an action for this folder'
       isSearchEnabled={false}
       onSelect={handleAction}
     >
       <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 shrink-0"
+        variant='ghost'
+        size='icon'
+        className='size-6 shrink-0'
         onClick={(event) => {
           event.stopPropagation();
         }}
       >
-        <MoreHorizontal className="size-4" />
+        <MoreHorizontal className='size-4' />
       </Button>
     </ComboBoxResponsive>
   );
@@ -274,7 +279,7 @@ type TreeActionHandlers = {
  */
 function FolderLabel({ name, build }: { readonly name: string; readonly build?: Build }): React.JSX.Element {
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className='inline-flex items-center gap-2'>
       <span>{name}</span>
       {build ? <BuildLink buildId={build.id} buildName={build.name} /> : undefined}
     </span>
@@ -416,36 +421,36 @@ function BackendColumn({
   return (
     <div className={cn('flex min-h-0 flex-col gap-3 rounded-lg border bg-card p-4', isDisabled && 'opacity-50')}>
       {/* Column Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">{meta.label}</span>
+      <div className='flex items-start justify-between gap-2'>
+        <div className='flex items-center gap-2'>
+          <Icon className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex flex-col gap-0.5'>
+            <div className='flex items-center gap-2'>
+              <span className='text-sm font-medium'>{meta.label}</span>
               {countBuilds(fileTree) > 0 ? (
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                <span className='rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground'>
                   {countBuilds(fileTree)}
                 </span>
               ) : undefined}
             </div>
             {meta.key === 'webaccess' && webAccessState?.directoryName ? (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <span className='inline-flex items-center gap-1 text-xs text-muted-foreground'>
                 {webAccessState.directoryName} -{' '}
-                <Button variant="link" size="xs" className="h-auto p-0 text-xs" onClick={onChangeDirectory}>
+                <Button variant='link' size='xs' className='h-auto p-0 text-xs' onClick={onChangeDirectory}>
                   Change Directory
                 </Button>
               </span>
             ) : (
-              <span className="text-xs text-muted-foreground">{meta.description}</span>
+              <span className='text-xs text-muted-foreground'>{meta.description}</span>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className='flex items-center gap-1'>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
-                size="icon"
+                variant='ghost'
+                size='icon'
                 className={cn('size-7', isDefault && 'text-primary')}
                 disabled={isDisabled}
                 onClick={onSetDefault}
@@ -458,9 +463,9 @@ function BackendColumn({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
+                variant='ghost'
+                size='icon'
+                className='size-7'
                 disabled={isLoading || isDisabled}
                 onClick={onRefresh}
               >
@@ -483,17 +488,17 @@ function BackendColumn({
 
       {/* Unsupported banner */}
       {isDisabled ? (
-        <div className="flex flex-1 items-center justify-center rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+        <div className='flex flex-1 items-center justify-center rounded-md border border-dashed p-6 text-sm text-muted-foreground'>
           Not supported in this browser
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-auto rounded-md border">
+        <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
           {isLoading ? (
-            <div className="flex h-32 items-center justify-center">
-              <Loader className="size-6" />
+            <div className='flex h-32 items-center justify-center'>
+              <Loader className='size-6' />
             </div>
           ) : fileTree.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">No files found</div>
+            <div className='flex h-32 items-center justify-center text-sm text-muted-foreground'>No files found</div>
           ) : (
             <Tree elements={fileTree} initialExpandedItems={findBuildsFolderIds(fileTree)}>
               {renderTree(fileTree, treeActionHandlers)}
@@ -519,8 +524,8 @@ function WebAccessDirectoryPanel({
 }): React.JSX.Element | undefined {
   if (state.directoryName === undefined) {
     return (
-      <Button variant="outline" size="sm" className="gap-2" onClick={onConnect}>
-        <FolderOpen className="size-4" />
+      <Button variant='outline' size='sm' className='gap-2' onClick={onConnect}>
+        <FolderOpen className='size-4' />
         Connect Directory
       </Button>
     );
@@ -528,12 +533,12 @@ function WebAccessDirectoryPanel({
 
   if (state.needsPermission) {
     return (
-      <div className="border-amber-500/30 bg-amber-500/10 flex items-center justify-between gap-2 rounded-md border px-3 py-2">
-        <div className="flex items-center gap-2">
-          <FolderOpen className="text-amber-600 size-3.5 shrink-0" />
-          <span className="text-xs">{state.directoryName}</span>
+      <div className='border-amber-500/30 bg-amber-500/10 flex items-center justify-between gap-2 rounded-md border px-3 py-2'>
+        <div className='flex items-center gap-2'>
+          <FolderOpen className='text-amber-600 size-3.5 shrink-0' />
+          <span className='text-xs'>{state.directoryName}</span>
         </div>
-        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onGrantAccess}>
+        <Button size='sm' variant='outline' className='h-7 text-xs' onClick={onGrantAccess}>
           Grant Access
         </Button>
       </div>
@@ -682,17 +687,17 @@ export default function FilesRoute(): React.JSX.Element {
         throw new Error('Worker not ready');
       }
 
-      const deleteRecursive = async (dirPath: string): Promise<void> => {
-        const entries = await worker.readdir(dirPath);
+      const deleteRecursive = async (directoryPath: string): Promise<void> => {
+        const entries = await worker.readdir(directoryPath);
         for (const entry of entries) {
-          const fullPath = `${dirPath}/${entry}`.replace('//', '/');
-          // eslint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
+          const fullPath = `${directoryPath}/${entry}`.replace('//', '/');
+          // oxlint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
           const stats = await worker.stat(fullPath);
-          // eslint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
+          // oxlint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
           await (stats.type === 'dir' ? deleteRecursive(fullPath) : worker.unlink(fullPath));
         }
 
-        await worker.rmdir(dirPath);
+        await worker.rmdir(directoryPath);
       };
 
       await deleteRecursive(path);
@@ -758,14 +763,14 @@ export default function FilesRoute(): React.JSX.Element {
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 px-6 py-8">
+    <div className='flex h-full flex-col gap-4 px-6 py-8'>
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="shrink-0 text-3xl font-medium tracking-tight">Files</h1>
+      <div className='flex items-center justify-between gap-4'>
+        <h1 className='shrink-0 text-3xl font-medium tracking-tight'>Files</h1>
       </div>
 
       {/* 3-column grid */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-2">
+      <div className='grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-2'>
         {backendColumns.map((column) => (
           <BackendColumn
             key={column.key}

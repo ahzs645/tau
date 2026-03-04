@@ -3,13 +3,13 @@ import { HoverCard as HoverCardPrimitive } from 'radix-ui';
 import { cn } from '#utils/ui.utils.js';
 
 function HoverCard({ ...properties }: React.ComponentProps<typeof HoverCardPrimitive.Root>): React.JSX.Element {
-  return <HoverCardPrimitive.Root openDelay={0} closeDelay={0} data-slot="hover-card" {...properties} />;
+  return <HoverCardPrimitive.Root openDelay={0} closeDelay={0} data-slot='hover-card' {...properties} />;
 }
 
 function HoverCardTrigger({
   ...properties
 }: React.ComponentProps<typeof HoverCardPrimitive.Trigger>): React.JSX.Element {
-  return <HoverCardPrimitive.Trigger data-slot="hover-card-trigger" {...properties} />;
+  return <HoverCardPrimitive.Trigger data-slot='hover-card-trigger' {...properties} />;
 }
 
 function HoverCardContent({
@@ -19,9 +19,9 @@ function HoverCardContent({
   ...properties
 }: React.ComponentProps<typeof HoverCardPrimitive.Content>): React.JSX.Element {
   return (
-    <HoverCardPrimitive.Portal data-slot="hover-card-portal">
+    <HoverCardPrimitive.Portal data-slot='hover-card-portal'>
       <HoverCardPrimitive.Content
-        data-slot="hover-card-content"
+        data-slot='hover-card-content'
         align={align}
         sideOffset={sideOffset}
         className={cn(
@@ -35,7 +35,7 @@ function HoverCardContent({
 }
 
 function HoverCardPortal({ ...properties }: React.ComponentProps<typeof HoverCardPrimitive.Portal>): React.JSX.Element {
-  return <HoverCardPrimitive.Portal data-slot="hover-card-portal" {...properties} />;
+  return <HoverCardPrimitive.Portal data-slot='hover-card-portal' {...properties} />;
 }
 
 export { HoverCard, HoverCardTrigger, HoverCardContent, HoverCardPortal };

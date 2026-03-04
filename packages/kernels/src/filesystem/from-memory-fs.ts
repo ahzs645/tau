@@ -19,19 +19,19 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  */
 export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBase {
   const store = new Map<string, Uint8Array<ArrayBuffer> | string>();
-  const dirs = new Set<string>();
+  const directories = new Set<string>();
 
   if (files) {
     for (const [filePath, content] of Object.entries(files)) {
       store.set(filePath, content);
       const parts = filePath.split('/');
       for (let i = 1; i < parts.length; i++) {
-        dirs.add(parts.slice(0, i).join('/'));
+        directories.add(parts.slice(0, i).join('/'));
       }
     }
   }
 
-  dirs.add('/');
+  directories.add('/');
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -57,18 +57,18 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
       store.set(filePath, data);
       const parts = filePath.split('/');
       for (let i = 1; i < parts.length; i++) {
-        dirs.add(parts.slice(0, i).join('/'));
+        directories.add(parts.slice(0, i).join('/'));
       }
     },
-    async mkdir(dirPath) {
-      dirs.add(dirPath);
-      const parts = dirPath.split('/');
+    async mkdir(directoryPath) {
+      directories.add(directoryPath);
+      const parts = directoryPath.split('/');
       for (let i = 1; i < parts.length; i++) {
-        dirs.add(parts.slice(0, i).join('/'));
+        directories.add(parts.slice(0, i).join('/'));
       }
     },
-    async readdir(dirPath) {
-      const prefix = dirPath.endsWith('/') ? dirPath : `${dirPath}/`;
+    async readdir(directoryPath) {
+      const prefix = directoryPath.endsWith('/') ? directoryPath : `${directoryPath}/`;
       const entries = new Set<string>();
       for (const key of store.keys()) {
         if (key.startsWith(prefix)) {
@@ -78,9 +78,9 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
         }
       }
 
-      for (const dir of dirs) {
-        if (dir.startsWith(prefix)) {
-          const rest = dir.slice(prefix.length);
+      for (const directory of directories) {
+        if (directory.startsWith(prefix)) {
+          const rest = directory.slice(prefix.length);
           const slash = rest.indexOf('/');
           entries.add(slash === -1 ? rest : rest.slice(0, slash));
         }
@@ -98,23 +98,23 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
         return { type: 'file', size, mtimeMs: Date.now() };
       }
 
-      if (dirs.has(filePath)) {
+      if (directories.has(filePath)) {
         return { type: 'dir', size: 0, mtimeMs: Date.now() };
       }
 
       throw new Error(`ENOENT: no such file or directory: ${filePath}`);
     },
-    async rmdir(dirPath) {
-      dirs.delete(dirPath);
+    async rmdir(directoryPath) {
+      directories.delete(directoryPath);
     },
     async rename(oldPath, newPath) {
       const content = store.get(oldPath);
       if (content !== undefined) {
         store.set(newPath, content);
         store.delete(oldPath);
-      } else if (dirs.has(oldPath)) {
-        dirs.delete(oldPath);
-        dirs.add(newPath);
+      } else if (directories.has(oldPath)) {
+        directories.delete(oldPath);
+        directories.add(newPath);
       } else {
         throw new Error(`ENOENT: no such file or directory: ${oldPath}`);
       }
@@ -126,14 +126,14 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
         return { type: 'file', size, mtimeMs: Date.now() };
       }
 
-      if (dirs.has(filePath)) {
+      if (directories.has(filePath)) {
         return { type: 'dir', size: 0, mtimeMs: Date.now() };
       }
 
       throw new Error(`ENOENT: no such file or directory: ${filePath}`);
     },
     async exists(filePath) {
-      return store.has(filePath) || dirs.has(filePath);
+      return store.has(filePath) || directories.has(filePath);
     },
   };
 }

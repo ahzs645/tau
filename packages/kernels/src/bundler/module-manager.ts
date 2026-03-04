@@ -42,9 +42,7 @@ export type BuiltinModule = {
   globalName?: string;
 };
 
-/**
- *
- */
+/** A module resolved and fetched from a CDN or cache. */
 export type FetchedModule = {
   /** Module source code */
   code: string;
@@ -82,7 +80,7 @@ const retryDelayMs = 60_000;
  * Minimal CDN Cache Manager for kernel workers.
  */
 export class ModuleManager {
-  // eslint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
+  // oxlint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
   private readonly filesystem: KernelFileSystem;
 
   /** Dedup concurrent fetches for the same cache key */
@@ -247,7 +245,7 @@ export class ModuleManager {
    * e.g., esm.sh - lodash@4.17.21
    */
   private extractVersionFromCode(code: string): string | undefined {
-    const match = /@(\d+\.\d+\.\d+(?:-[\da-z.]+)?)/.exec(code);
+    const match = /@(\d+\.\d+\.\d+(?:-[\d.a-z]+)?)/.exec(code);
     return match?.[1];
   }
 
@@ -260,15 +258,15 @@ export class ModuleManager {
    * 3. Write `package.json` LAST (commit marker -- its presence = valid cache)
    */
   private async writeToCacheDir(name: string, subpath: string | undefined, module: FetchedModule): Promise<void> {
-    const packageDir = getNodeModulesPath(name);
+    const packageDirectory = getNodeModulesPath(name);
 
     // Ensure directory exists
-    await this.filesystem.ensureDir(packageDir);
+    await this.filesystem.ensureDir(packageDirectory);
 
     // If subpath has nested directories (e.g., 'utils/debounce'), ensure parent dirs
     if (subpath?.includes('/')) {
-      const subpathDir = `${packageDir}/${subpath.slice(0, subpath.lastIndexOf('/'))}`;
-      await this.filesystem.ensureDir(subpathDir);
+      const subpathDirectory = `${packageDirectory}/${subpath.slice(0, subpath.lastIndexOf('/'))}`;
+      await this.filesystem.ensureDir(subpathDirectory);
     }
 
     // Write code file FIRST
@@ -276,7 +274,7 @@ export class ModuleManager {
     await this.filesystem.writeFile(codePath, module.code);
 
     // Write package.json LAST (commit marker)
-    const packageJsonPath = `${packageDir}/package.json`;
+    const packageJsonPath = `${packageDirectory}/package.json`;
     const packageJson = {
       name,
       version: module.version,

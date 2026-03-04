@@ -351,9 +351,9 @@ async function forwardNotifications(): Promise<void> {
   }
 }
 
-// eslint-disable-next-line unicorn/prefer-top-level-await -- worker context
+// oxlint-disable-next-line unicorn/prefer-top-level-await -- worker context
 void forwardRequests();
-// eslint-disable-next-line unicorn/prefer-top-level-await -- worker context
+// oxlint-disable-next-line unicorn/prefer-top-level-await -- worker context
 void forwardNotifications();
 
 log.debug('Worker initialized, waiting for messages...');

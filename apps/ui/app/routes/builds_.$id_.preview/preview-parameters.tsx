@@ -38,47 +38,47 @@ export function PreviewParameters(): React.JSX.Element {
   const hasModifiedParameters = Object.keys(parameters).length > 0;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b p-2">
-        <h3 className="text-sm font-semibold">Parameters</h3>
-        <div className="flex items-center gap-1">
+    <div className='flex h-full flex-col'>
+      <div className='flex items-center justify-between border-b p-2'>
+        <h3 className='text-sm font-semibold'>Parameters</h3>
+        <div className='flex items-center gap-1'>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
-                size="icon"
+                variant='ghost'
+                size='icon'
                 className={cn('size-6 rounded-sm', isSearchVisible && 'text-primary')}
                 aria-label={isSearchVisible ? 'Hide search' : 'Show search'}
                 onClick={toggleSearch}
               >
-                <Search className="size-4" />
+                <Search className='size-4' />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">{isSearchVisible ? 'Hide search' : 'Search parameters'}</TooltipContent>
+            <TooltipContent side='top'>{isSearchVisible ? 'Hide search' : 'Search parameters'}</TooltipContent>
           </Tooltip>
           {hasModifiedParameters ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 rounded-sm"
-                  aria-label="Reset all parameters"
+                  variant='ghost'
+                  size='icon'
+                  className='size-6 rounded-sm'
+                  aria-label='Reset all parameters'
                   onClick={resetAllParameters}
                 >
-                  <RefreshCcw className="size-4" />
+                  <RefreshCcw className='size-4' />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Reset all parameters</TooltipContent>
+              <TooltipContent side='top'>Reset all parameters</TooltipContent>
             </Tooltip>
           ) : null}
           {jsonSchema && hasJsonSchemaObjectProperties(jsonSchema) ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 rounded-sm"
+                  variant='ghost'
+                  size='icon'
+                  className='size-6 rounded-sm'
                   aria-expanded={isAllExpanded}
                   aria-label={isAllExpanded ? 'Collapse all' : 'Expand all'}
                   onClick={toggleAllExpanded}
@@ -88,12 +88,12 @@ export function PreviewParameters(): React.JSX.Element {
                   />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">{isAllExpanded ? 'Collapse all' : 'Expand all'}</TooltipContent>
+              <TooltipContent side='top'>{isAllExpanded ? 'Collapse all' : 'Expand all'}</TooltipContent>
             </Tooltip>
           ) : null}
         </div>
       </div>
-      <div className="flex-1 overflow-hidden">
+      <div className='flex-1 overflow-hidden'>
         <Parameters
           parameters={parameters}
           defaultParameters={defaultParameters}
@@ -101,7 +101,7 @@ export function PreviewParameters(): React.JSX.Element {
           units={units}
           enableSearch={isSearchVisible}
           isAllExpanded={isAllExpanded}
-          emptyDescription="This model has no parameters"
+          emptyDescription='This model has no parameters'
           onParametersChange={handleParametersChange}
         />
       </div>

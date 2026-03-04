@@ -1,9 +1,24 @@
 import { useSearchParams } from 'react-router';
 import type { SetURLSearchParams } from 'react-router';
 
-export type SettingsSection = 'general' | 'filesystem' | 'account' | 'security' | 'api-keys' | 'billing' | 'experimental';
+export type SettingsSection =
+  | 'general'
+  | 'filesystem'
+  | 'account'
+  | 'security'
+  | 'api-keys'
+  | 'billing'
+  | 'experimental';
 
-const validSections = new Set<string>(['general', 'filesystem', 'account', 'security', 'api-keys', 'billing', 'experimental']);
+const validSections = new Set<string>([
+  'general',
+  'filesystem',
+  'account',
+  'security',
+  'api-keys',
+  'billing',
+  'experimental',
+]);
 
 type SettingsDialogState = {
   readonly isOpen: boolean;

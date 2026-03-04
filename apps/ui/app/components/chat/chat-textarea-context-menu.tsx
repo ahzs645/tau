@@ -23,7 +23,7 @@ export const ChatTextareaContextMenu = memo(function ({
   onClose,
 }: ChatTextareaContextMenuProperties): React.JSX.Element {
   return (
-    <div className="absolute bottom-full left-2 z-50 mb-2 w-60 rounded-md border bg-popover p-0 text-popover-foreground shadow-md">
+    <div className='absolute bottom-full left-2 z-50 mb-2 w-60 rounded-md border bg-popover p-0 text-popover-foreground shadow-md'>
       <ChatContextActions
         asPopoverMenu
         addImage={onAddImage}

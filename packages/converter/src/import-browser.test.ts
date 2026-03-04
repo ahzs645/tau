@@ -1,4 +1,4 @@
-/* eslint-disable new-cap -- External library uses PascalCase method names */
+/* oxlint-disable new-cap -- External library uses PascalCase method names */
 /* eslint-disable @typescript-eslint/naming-convention -- External library uses PascalCase method names */
 /**
  * Browser-simulation tests for USDZ import.
@@ -86,7 +86,7 @@ const convertUsdzToGlb = async (options?: { blockGrowth?: boolean }): Promise<Co
         }
       }
 
-      // eslint-disable-next-line promise/prefer-await-to-then -- Emscripten's instantiateWasm requires synchronous return + async callback
+      // oxlint-disable-next-line promise/prefer-await-to-then -- Emscripten's instantiateWasm requires synchronous return + async callback
       void WebAssembly.instantiate(wasmModule, imports).then((instance) => {
         wasmMemory = instance.exports['memory'] as WebAssembly.Memory | undefined;
         callback(instance);
@@ -140,7 +140,9 @@ describe('USDZ browser-safe import', () => {
     // When blockGrowth is true, any attempt to grow memory throws
     // RuntimeError (simulating the browser crash). If the conversion
     // succeeds, it proves no memory growth was needed.
-    const { glb, memoryAfterMegabytes } = await convertUsdzToGlb({ blockGrowth: true });
+    const { glb, memoryAfterMegabytes } = await convertUsdzToGlb({
+      blockGrowth: true,
+    });
 
     expect(glb.length).toBeGreaterThan(0);
     expect(memoryAfterMegabytes).toBeLessThan(128);

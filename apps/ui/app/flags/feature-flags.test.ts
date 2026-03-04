@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/naming-convention -- localStorage keys use 'tau:flags' format */
 import { describe, expect, it, beforeEach } from 'vitest';
 import { isFeatureEnabled, getAllFlags, resetFlagCache, setFlagOverrides } from '#flags/feature-flags.js';
 import { featureFlagDefaults } from '#flags/flag.constants.js';
@@ -195,7 +196,11 @@ describe('zod schema fallback', () => {
 
   it('should strip extra keys and keep only registered flags', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: true, extra: 'data', another: 42 }),
+      'tau:flags': JSON.stringify({
+        planMode: true,
+        extra: 'data',
+        another: 42,
+      }),
     });
     const flags = getAllFlags(storage);
     expect(Object.keys(flags)).toStrictEqual(Object.keys(featureFlagDefaults));

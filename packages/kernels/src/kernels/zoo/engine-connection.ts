@@ -9,7 +9,7 @@ import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 /**
  *
  */
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() required for module type
+// oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() required for module type
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
 
 /**
@@ -64,7 +64,10 @@ export class MockEngineConnection {
    *
    */
   public async sendModelingCommandFromWasm(): Promise<Uint8Array<ArrayBuffer>> {
-    throw KclError.simple({ kind: 'engine', message: 'Mock execution should not require websocket commands' });
+    throw KclError.simple({
+      kind: 'engine',
+      message: 'Mock execution should not require websocket commands',
+    });
   }
 
   /**
@@ -119,7 +122,7 @@ export class EngineConnection {
       let authTimeoutId: NodeJS.Timeout;
 
       const initializeAsync = async (): Promise<void> => {
-        // eslint-disable-next-line @typescript-eslint/await-thenable -- await is required here.
+        // oxlint-disable-next-line typescript/await-thenable -- WASM Context constructor is async at runtime
         this.context = await new this.wasmModule.Context(this, this.fileSystemManager);
 
         try {
@@ -171,7 +174,11 @@ export class EngineConnection {
   /**
    *
    */
-  // eslint-disable-next-line max-params -- Emscripten WASM API contract: signature matches C++ binding
+
+  /**
+   *
+   */
+  // oxlint-disable-next-line max-params -- Emscripten WASM API contract: signature matches C++ binding
   public async sendModelingCommandFromWasm(
     _commandString: string,
     _id: string,
@@ -264,7 +271,10 @@ export class EngineConnection {
   };
 
   private readonly onWebSocketClose = (event: CloseEvent): void => {
-    log.debug('WebSocket disconnected', { code: event.code, reason: event.reason });
+    log.debug('WebSocket disconnected', {
+      code: event.code,
+      reason: event.reason,
+    });
     this.isConnected = false;
 
     // Remove all event listeners
@@ -381,7 +391,10 @@ export class EngineConnection {
       timeout: setTimeout(() => {
         this.pendingCommands.delete(commandId);
         reject(
-          KclError.simple({ kind: 'engine', message: `Timed out waiting for response to commandId: ${commandId}` }),
+          KclError.simple({
+            kind: 'engine',
+            message: `Timed out waiting for response to commandId: ${commandId}`,
+          }),
         );
       }, commandTimeout),
     });
@@ -404,7 +417,7 @@ export class EngineConnection {
     return { promise, resolve: resolve!, reject: reject! };
   }
 
-  // eslint-disable-next-line complexity -- this is a complex function.
+  // oxlint-disable-next-line complexity -- this is a complex function.
   private handleMessage(event: MessageEvent): void {
     // Handle binary messages (msgpack-serialized responses)
     let message!: WebSocketResponse;

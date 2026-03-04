@@ -84,28 +84,28 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
       )}
     >
       {/* Left side: Last activity */}
-      <div className="flex items-center gap-3">
+      <div className='flex items-center gap-3'>
         {updatedAt ? (
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Clock className="size-3" />
-            <span className="@[20rem]:hidden">{formatRelativeTime(updatedAt, { short: true })}</span>
-            <span className="hidden @[20rem]:inline">{formatRelativeTime(updatedAt)}</span>
+          <div className='flex items-center gap-1 text-muted-foreground'>
+            <Clock className='size-3' />
+            <span className='@[20rem]:hidden'>{formatRelativeTime(updatedAt, { short: true })}</span>
+            <span className='hidden @[20rem]:inline'>{formatRelativeTime(updatedAt)}</span>
           </div>
         ) : undefined}
       </div>
 
       {/* Right side: Model and cost */}
-      <div className="flex items-center gap-3">
+      <div className='flex items-center gap-3'>
         {displayModel ? (
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Cpu className="size-3" />
-            <span className="max-w-24 truncate">{displayModel}</span>
+          <div className='flex items-center gap-1 text-muted-foreground'>
+            <Cpu className='size-3' />
+            <span className='max-w-24 truncate'>{displayModel}</span>
           </div>
         ) : undefined}
 
         {showModelCost && totalCost > 0 ? (
-          <div className="flex items-center gap-0.5 text-muted-foreground">
-            <DollarSign className="size-3" />
+          <div className='flex items-center gap-0.5 text-muted-foreground'>
+            <DollarSign className='size-3' />
             <span>{formatCurrency(totalCost, { significantFigures: 2 })}</span>
           </div>
         ) : undefined}

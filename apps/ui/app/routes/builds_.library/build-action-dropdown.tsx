@@ -53,14 +53,14 @@ export function BuildActionDropdown({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" onClick={handleClick}>
-            <Ellipsis className="size-4" />
+          <Button variant='ghost' size='icon' onClick={handleClick}>
+            <Ellipsis className='size-4' />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" onClick={handleClick}>
+        <DropdownMenuContent align='end' onClick={handleClick}>
           {isDeleted ? (
             <DropdownMenuItem
-              data-action="restore"
+              data-action='restore'
               data-id={build.id}
               data-name={build.name}
               onClick={() => {
@@ -73,7 +73,7 @@ export function BuildActionDropdown({
           ) : (
             <>
               <DropdownMenuItem
-                data-action="duplicate"
+                data-action='duplicate'
                 data-id={build.id}
                 data-name={build.name}
                 onClick={async () => actions.handleDuplicate(build)}
@@ -82,7 +82,7 @@ export function BuildActionDropdown({
                 <span>Duplicate</span>
               </DropdownMenuItem>
               <DropdownMenuItem
-                data-action="rename"
+                data-action='rename'
                 data-id={build.id}
                 data-name={build.name}
                 onClick={() => {
@@ -94,8 +94,8 @@ export function BuildActionDropdown({
                 <span>Rename</span>
               </DropdownMenuItem>
               <DropdownMenuItem
-                variant="destructive"
-                data-action="delete"
+                variant='destructive'
+                data-action='delete'
                 data-id={build.id}
                 data-name={build.name}
                 onClick={() => {
@@ -111,13 +111,13 @@ export function BuildActionDropdown({
       </DropdownMenu>
 
       <Popover open={isRenaming} onOpenChange={setIsRenaming}>
-        <PopoverContent align="end" className="w-64 p-1">
-          <form className="flex items-center gap-2 align-middle" onSubmit={handleRename}>
+        <PopoverContent align='end' className='w-64 p-1'>
+          <form className='flex items-center gap-2 align-middle' onSubmit={handleRename}>
             <Input
               autoFocus
-              autoComplete="off"
+              autoComplete='off'
               value={newName}
-              className="h-7"
+              className='h-7'
               onChange={(event) => {
                 setNewName(event.target.value);
               }}
@@ -125,7 +125,7 @@ export function BuildActionDropdown({
                 event.target.select();
               }}
             />
-            <Button type="submit" size="sm" disabled={!newName.trim() || newName === build.name}>
+            <Button type='submit' size='sm' disabled={!newName.trim() || newName === build.name}>
               Save
             </Button>
           </form>

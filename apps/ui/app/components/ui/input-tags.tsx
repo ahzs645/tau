@@ -120,10 +120,10 @@ export function TagsTrigger({ className, placeholder = 'Type to add tags...' }: 
         ))}
         <input
           ref={inputRef}
-          type="text"
+          type='text'
           value={value}
           placeholder={tags.length === 0 ? placeholder : ''}
-          className="w-0 flex-1 bg-transparent px-0.5 py-px text-base outline-none group-focus-within/tags-trigger:w-[120px] placeholder:text-muted-foreground md:text-sm"
+          className='w-0 flex-1 bg-transparent px-0.5 py-px text-base outline-none group-focus-within/tags-trigger:w-[120px] placeholder:text-muted-foreground md:text-sm'
           onChange={(event) => {
             setValue(event.target.value);
           }}
@@ -164,11 +164,11 @@ export function TagsValue({
       {onRemove ? (
         <div
           data-tag-remove
-          className="size-auto cursor-pointer rounded-full hover:bg-primary-foreground/30"
+          className='size-auto cursor-pointer rounded-full hover:bg-primary-foreground/30'
           onClick={handleRemove}
           onPointerDown={handlePointerDown}
         >
-          <XIcon className="size-4" />
+          <XIcon className='size-4' />
         </div>
       ) : null}
     </Badge>
@@ -179,7 +179,7 @@ export type TagsContentProps = ComponentProps<typeof PopoverContent>;
 export function TagsContent({ className, children, ...props }: TagsContentProps): React.JSX.Element {
   const { value, setValue } = useTagsContext();
   return (
-    <PopoverContent className={cn('w-[300px] p-0', className)} align="start" {...props}>
+    <PopoverContent className={cn('w-[300px] p-0', className)} align='start' {...props}>
       <Command value={value} onValueChange={setValue}>
         {children}
       </Command>
@@ -204,5 +204,5 @@ export function TagsItem({ className, ...props }: TagsItemProps): React.JSX.Elem
   return <CommandItem className={cn('items-center justify-between', className)} {...props} />;
 }
 
-// eslint-disable-next-line no-barrel-files/no-barrel-files -- allowed for component reuse.
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- allowed for component reuse.
 export { CommandGroup as TagsGroup } from '#components/ui/command.js';

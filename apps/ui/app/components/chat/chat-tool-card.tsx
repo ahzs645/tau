@@ -172,8 +172,8 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
     return (
       <CollapsibleTrigger asChild>
         <Button
-          variant="ghost"
-          size="xs"
+          variant='ghost'
+          size='xs'
           className={cn(
             '-ml-2 max-w-full min-w-0 gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
             className,
@@ -204,7 +204,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
       )}
     >
       {/* Chevron - visible on hover */}
-      <span className="relative flex size-3 items-center justify-center">
+      <span className='relative flex size-3 items-center justify-center'>
         <ChevronRight
           className={cn(
             'absolute size-3 shrink-0 opacity-0 transition-all duration-150 group-hover/trigger:opacity-100',
@@ -377,7 +377,7 @@ function ChatToolCardListItem({
   return (
     <div className={cn('flex items-start gap-2 py-0.5 text-xs text-muted-foreground', className)}>
       {Icon ? <Icon className={cn('mt-0.5 size-3 shrink-0', iconClassName)} /> : undefined}
-      <span className="min-w-0 wrap-break-word">{children}</span>
+      <span className='min-w-0 wrap-break-word'>{children}</span>
     </div>
   );
 }
@@ -424,17 +424,17 @@ function ChatToolCardSection({
     <Collapsible open={isOpen} className={cn('group/section', className)} onOpenChange={setIsOpen}>
       <CollapsibleTrigger asChild>
         <Button
-          variant="ghost"
-          size="sm"
-          className="flex h-auto w-full justify-start gap-1.5 rounded-none p-2 text-muted-foreground hover:bg-transparent"
+          variant='ghost'
+          size='sm'
+          className='flex h-auto w-full justify-start gap-1.5 rounded-none p-2 text-muted-foreground hover:bg-transparent'
         >
           <ChevronRight className={cn('size-3 shrink-0 transition-transform duration-200', isOpen && 'rotate-90')} />
-          {Icon ? <Icon className="size-3 shrink-0" /> : undefined}
-          <span className="text-left text-xs font-normal">{title}</span>
+          {Icon ? <Icon className='size-3 shrink-0' /> : undefined}
+          <span className='text-left text-xs font-normal'>{title}</span>
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t">
-        <div className="p-2 text-xs">{children}</div>
+      <CollapsibleContent className='border-t'>
+        <div className='p-2 text-xs'>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

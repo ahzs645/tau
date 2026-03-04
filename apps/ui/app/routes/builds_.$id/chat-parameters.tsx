@@ -39,12 +39,12 @@ export const ChatParametersTrigger = memo(function ({
     <FloatingPanelTrigger
       icon={SlidersHorizontal}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Parameters
-          <KeyShortcut variant="tooltip">{formatKeyCombination(toggleParametersKeyCombination)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(toggleParametersKeyCombination)}</KeyShortcut>
         </div>
       }
-      tooltipSide="left"
+      tooltipSide='left'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -99,7 +99,7 @@ export const ChatParameters = memo(function (props: {
   );
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Parameters</FloatingPanelContentTitle>
@@ -111,15 +111,15 @@ export const ChatParameters = memo(function (props: {
                 tooltip={isSearchVisible ? 'Hide search' : 'Search parameters'}
                 onClick={toggleSearch}
               >
-                <Search className="size-4" />
+                <Search className='size-4' />
               </FloatingPanelMenuButton>
               {hasModifiedParameters ? (
                 <FloatingPanelMenuButton
-                  aria-label="Reset all parameters"
-                  tooltip="Reset all parameters"
+                  aria-label='Reset all parameters'
+                  tooltip='Reset all parameters'
                   onClick={resetAllParameters}
                 >
-                  <RefreshCcw className="size-4" />
+                  <RefreshCcw className='size-4' />
                 </FloatingPanelMenuButton>
               ) : null}
               {jsonSchema && hasJsonSchemaObjectProperties(jsonSchema) ? (
@@ -138,16 +138,16 @@ export const ChatParameters = memo(function (props: {
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Parameters
-                  <KeyShortcut variant="tooltip">{formattedParametersKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedParametersKeyCombination}</KeyShortcut>
                 </div>
               )}
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
-        <FloatingPanelContentBody className="overflow-y-hidden">
+        <FloatingPanelContentBody className='overflow-y-hidden'>
           <Parameters
             parameters={parameters}
             defaultParameters={defaultParameters}

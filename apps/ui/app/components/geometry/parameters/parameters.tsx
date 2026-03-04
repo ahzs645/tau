@@ -92,7 +92,7 @@ export function Parameters({
 
       if (isArrayItem) {
         // For array items, restore the default value instead of deleting
-        // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- getValueAtPath returns value or undefined, not void
+        // oxlint-disable-next-line @typescript-eslint/no-confusing-void-expression -- getValueAtPath returns value or undefined, not void
         const defaultValue = getValueAtPath(defaultParameters, fieldPath as readonly string[]);
         const updatedParameters = setValueAtPath(currentFormData, fieldPath, defaultValue);
         setParameters(updatedParameters);
@@ -145,17 +145,17 @@ export function Parameters({
   };
 
   return (
-    <div data-slot="parameters" className={cn('group flex h-full w-full flex-col', className)}>
+    <div data-slot='parameters' className={cn('group flex h-full w-full flex-col', className)}>
       {hasParameters ? (
         <>
           {/* Search Bar */}
           {enableSearch ? (
-            <div className="flex w-full flex-row gap-2 border-b bg-sidebar p-2">
+            <div className='flex w-full flex-row gap-2 border-b bg-sidebar p-2'>
               <SearchInput
                 ref={searchInputReference}
                 placeholder={searchPlaceholder}
                 value={searchTerm}
-                className="h-7 w-full bg-background"
+                className='h-7 w-full bg-background'
                 onChange={handleSearchChange}
                 onClear={clearSearch}
               />
@@ -174,17 +174,17 @@ export function Parameters({
             widgets={widgets}
             formData={mergedData}
             formContext={formContext}
-            className="flex flex-1 flex-col overflow-y-auto px-0 py-0"
+            className='flex flex-1 flex-col overflow-y-auto px-0 py-0'
             onChange={handleChange}
           />
         </>
       ) : (
         <EmptyItems>
-          <div className="mb-3 rounded-full bg-muted/50 p-2">
-            <Info className="size-6 text-muted-foreground" strokeWidth={1.5} />
+          <div className='mb-3 rounded-full bg-muted/50 p-2'>
+            <Info className='size-6 text-muted-foreground' strokeWidth={1.5} />
           </div>
-          <h3 className="mb-1 text-base font-medium">{emptyMessage}</h3>
-          <p className="text-muted-foreground">{emptyDescription}</p>
+          <h3 className='mb-1 text-base font-medium'>{emptyMessage}</h3>
+          <p className='text-muted-foreground'>{emptyDescription}</p>
         </EmptyItems>
       )}
     </div>

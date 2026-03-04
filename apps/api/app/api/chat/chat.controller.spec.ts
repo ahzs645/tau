@@ -32,7 +32,7 @@ vi.mock('@ai-sdk/langchain', () => ({
 
 // Mock the ai module - use importOriginal to keep other exports
 vi.mock('ai', async (importOriginal) => {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Import original module
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Import original module
   const actual = await importOriginal<typeof import('ai')>();
   return {
     ...actual,

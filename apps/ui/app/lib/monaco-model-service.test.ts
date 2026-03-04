@@ -66,13 +66,21 @@ function createMockModel(uriPath: string, content = ''): MockModel {
     dispose: vi.fn(),
     getValue: () => content,
     setValue: vi.fn(),
-    getFullModelRange: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }),
+    getFullModelRange: () => ({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 1,
+      endColumn: 1,
+    }),
     pushStackElement: vi.fn(),
     pushEditOperations: vi.fn(),
   };
 }
 
-function createMockMonaco(): { monaco: typeof Monaco & MockMonaco; models: Map<string, MockModel> } {
+function createMockMonaco(): {
+  monaco: typeof Monaco & MockMonaco;
+  models: Map<string, MockModel>;
+} {
   const models = new Map<string, MockModel>();
 
   const monaco: MockMonaco = {

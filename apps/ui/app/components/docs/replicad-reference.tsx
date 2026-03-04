@@ -17,18 +17,18 @@ type ExampleCardProps = {
 
 function ExampleCard({ name, description, code }: ExampleCardProps): React.JSX.Element {
   return (
-    <div className="not-prose overflow-hidden rounded-lg border">
-      <div className="border-b px-4 py-3">
-        <h3 className="text-base font-semibold">{name}</h3>
-        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+    <div className='not-prose overflow-hidden rounded-lg border'>
+      <div className='border-b px-4 py-3'>
+        <h3 className='text-base font-semibold'>{name}</h3>
+        <p className='mt-1 text-sm text-muted-foreground'>{description}</p>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2">
-        <div className="max-h-[500px] overflow-auto border-r border-b-0 md:border-b-0">
-          <div className="p-3">
-            <CodeViewer text={code} language="typescript" />
+      <div className='grid grid-cols-1 md:grid-cols-2'>
+        <div className='max-h-[500px] overflow-auto border-r border-b-0 md:border-b-0'>
+          <div className='p-3'>
+            <CodeViewer text={code} language='typescript' />
           </div>
         </div>
-        <div className="h-[400px] md:h-auto md:min-h-[400px]">
+        <div className='h-[400px] md:h-auto md:min-h-[400px]'>
           <KernelModelView code={code} />
         </div>
       </div>
@@ -53,7 +53,7 @@ export function ReplicadReference(): React.JSX.Element {
   return (
     <ClientOnly>
       <SharedRendererProvider>
-        <div className="flex flex-col gap-6">
+        <div className='flex flex-col gap-6'>
           {examples.map((example) => (
             <ExampleCard key={example.id} name={example.name} description={example.description} code={example.code} />
           ))}

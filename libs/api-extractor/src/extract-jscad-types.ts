@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* eslint-disable no-bitwise, complexity -- Utility script using TS Compiler API with bitwise flag checks */
+/* oxlint-disable no-bitwise, complexity -- Utility script using TS Compiler API with bitwise flag checks */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,8 +28,8 @@ type TsExtractionContext = {
 // Configuration
 // =============================================================================
 
-const jscadSrcDir = join(import.meta.dirname, '../../../node_modules/@jscad/modeling/src');
-const entryFile = join(jscadSrcDir, 'index.d.ts');
+const jscadSourceDirectory = join(import.meta.dirname, '../../../node_modules/@jscad/modeling/src');
+const entryFile = join(jscadSourceDirectory, 'index.d.ts');
 
 /** Files containing cross-cutting foundation types referenced across namespaces. */
 const foundationTypeFiles = [
@@ -52,7 +52,7 @@ const foundationTypeFiles = [
   'measurements/types.d.ts',
   'utils/recursiveArray.d.ts',
   'utils/corners.d.ts',
-].map((p) => join(jscadSrcDir, p));
+].map((p) => join(jscadSourceDirectory, p));
 
 /** Built-in TypeScript types that never need resolution. */
 const builtinTypes = new Set([
@@ -108,7 +108,7 @@ type ExtractionResult = {
   declarations: string[];
   nestedNamespaces: Map<string, ExtractionResult>;
   /** All type names referenced in declarations */
-  typeRefs: Set<string>;
+  typeReferences: Set<string>;
   /** All names defined (exported) in this namespace */
   definedNames: Set<string>;
 };
@@ -240,12 +240,12 @@ function printDeclarationText(
  * Walk an AST node and collect all type reference identifier names.
  */
 function collectTypeReferences(node: ts.Node): Set<string> {
-  const refs = new Set<string>();
+  const references = new Set<string>();
 
   function walk(n: ts.Node): void {
     if (ts.isTypeReferenceNode(n)) {
       if (ts.isIdentifier(n.typeName)) {
-        refs.add(n.typeName.text);
+        references.add(n.typeName.text);
       } else if (ts.isQualifiedName(n.typeName)) {
         // For Namespace.Type, collect the root name
         let root: ts.EntityName = n.typeName;
@@ -254,7 +254,7 @@ function collectTypeReferences(node: ts.Node): Set<string> {
         }
 
         if (ts.isIdentifier(root)) {
-          refs.add(root.text);
+          references.add(root.text);
         }
       }
     }
@@ -263,7 +263,7 @@ function collectTypeReferences(node: ts.Node): Set<string> {
   }
 
   walk(node);
-  return refs;
+  return references;
 }
 
 // =============================================================================
@@ -279,7 +279,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
   const { checker, printer } = context;
   const declarations: string[] = [];
   const nestedNamespaces = new Map<string, ExtractionResult>();
-  const typeRefs = new Set<string>();
+  const typeReferences = new Set<string>();
   const definedNames = new Set<string>();
   const visitedSourceFiles = new Set<ts.SourceFile>();
   const printedStatements = new Set<ts.Node>();
@@ -288,7 +288,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
   try {
     moduleExports = checker.getExportsOfModule(moduleSymbol);
   } catch {
-    return { declarations, nestedNamespaces, typeRefs, definedNames };
+    return { declarations, nestedNamespaces, typeReferences, definedNames };
   }
 
   for (const exportSymbol of moduleExports) {
@@ -302,9 +302,9 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
         definedNames.add(exportSymbol.name);
 
         // Bubble up unresolved type refs from nested namespace
-        for (const ref of nested.typeRefs) {
+        for (const ref of nested.typeReferences) {
           if (!nested.definedNames.has(ref)) {
-            typeRefs.add(ref);
+            typeReferences.add(ref);
           }
         }
       }
@@ -330,11 +330,17 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
 
       // Collect type references from the declaration
       for (const ref of collectTypeReferences(decl)) {
-        typeRefs.add(ref);
+        typeReferences.add(ref);
       }
 
       const text = printDeclarationText(
-        { decl, resolved, exportName: exportSymbol.name, sourceFile, printedStatements },
+        {
+          decl,
+          resolved,
+          exportName: exportSymbol.name,
+          sourceFile,
+          printedStatements,
+        },
         context,
       );
 
@@ -349,7 +355,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
   // (e.g. `type Vec = Vec1 | Vec2 | Vec3` in translate.d.ts).
   // We scan visited source files for matching type declarations.
   const localTypeDecls: string[] = [];
-  for (const ref of typeRefs) {
+  for (const ref of typeReferences) {
     if (definedNames.has(ref) || builtinTypes.has(ref)) {
       continue;
     }
@@ -363,9 +369,9 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
           );
           definedNames.add(ref);
 
-          // eslint-disable-next-line max-depth -- for completeness
+          // oxlint-disable-next-line max-depth -- for completeness
           for (const innerRef of collectTypeReferences(statement)) {
-            typeRefs.add(innerRef);
+            typeReferences.add(innerRef);
           }
 
           found = true;
@@ -378,9 +384,9 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
           );
           definedNames.add(ref);
 
-          // eslint-disable-next-line max-depth -- for completeness
+          // oxlint-disable-next-line max-depth -- for completeness
           for (const innerRef of collectTypeReferences(statement)) {
-            typeRefs.add(innerRef);
+            typeReferences.add(innerRef);
           }
 
           found = true;
@@ -398,7 +404,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionCont
   return {
     declarations: [...localTypeDecls, ...declarations],
     nestedNamespaces,
-    typeRefs,
+    typeReferences,
     definedNames,
   };
 }
@@ -445,7 +451,10 @@ function buildFoundationTypeMap(
         // Also map by the resolved symbol's own name — needed for default exports
         // where the export name is 'default' but the symbol name is 'RecursiveArray'
         if (resolved.name !== exp.name && resolved.name !== 'default') {
-          map.set(resolved.name, { symbol: resolved, sourceFile: declSourceFile });
+          map.set(resolved.name, {
+            symbol: resolved,
+            sourceFile: declSourceFile,
+          });
         }
       }
     }
@@ -486,7 +495,7 @@ function resolveFoundationTypes(
 
   // Seed with unresolved type references from all namespaces
   function collectUnresolved(result: ExtractionResult): void {
-    for (const ref of result.typeRefs) {
+    for (const ref of result.typeReferences) {
       if (!result.definedNames.has(ref) && !builtinTypes.has(ref)) {
         pending.add(ref);
       }
@@ -582,7 +591,7 @@ function getNeededImports(content: ExtractionResult, foundationTypeNames: Set<st
   const needed = new Set<string>();
 
   function collect(result: ExtractionResult): void {
-    for (const ref of result.typeRefs) {
+    for (const ref of result.typeReferences) {
       if (!result.definedNames.has(ref) && foundationTypeNames.has(ref)) {
         needed.add(ref);
       }
@@ -920,13 +929,13 @@ function main(): void {
   try {
     console.log('Extracting @jscad/modeling type declarations...\n');
 
-    const outputDir = join(import.meta.dirname, 'generated/jscad');
-    mkdirSync(outputDir, { recursive: true });
-    console.log(`Output directory: ${outputDir}`);
+    const outputDirectory = join(import.meta.dirname, 'generated/jscad');
+    mkdirSync(outputDirectory, { recursive: true });
+    console.log(`Output directory: ${outputDirectory}`);
 
     // Generate bundled .d.ts
     const bundledTypes = buildNamespaceBundle();
-    const outputPath = join(outputDir, 'jscad-modeling.bundled.d.ts');
+    const outputPath = join(outputDirectory, 'jscad-modeling.bundled.d.ts');
     writeFileSync(outputPath, bundledTypes);
     console.log(`\nBundled type declarations written to ${outputPath}`);
     console.log(`Output size: ${(bundledTypes.length / 1024).toFixed(1)} KB`);
@@ -934,7 +943,7 @@ function main(): void {
     // Generate structured JSON
     console.log('\n📝 Generating structured API data JSON...');
     const apiData = buildApiData();
-    const jsonPath = join(outputDir, 'jscad-api-data.json');
+    const jsonPath = join(outputDirectory, 'jscad-api-data.json');
     writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
     console.log(`✅ API data JSON saved to ${jsonPath}`);
     console.log(

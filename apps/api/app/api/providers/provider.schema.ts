@@ -18,7 +18,6 @@ export const providerSchema = z.object({
   configuration: z
     .object({
       apiKey: z.string().describe('The API key of the provider').optional(),
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
       baseURL: z.string().describe('The base URL of the provider').optional(),
     })
     .describe('The configuration of the provider'),

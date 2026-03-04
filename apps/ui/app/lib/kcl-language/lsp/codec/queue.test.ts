@@ -73,7 +73,7 @@ describe('Queue', () => {
       const queue = new Queue<string>();
 
       const resultPromise = (async (): Promise<string> => {
-        // eslint-disable-next-line no-unreachable-loop -- intentional: return on first item to test async wait
+        // oxlint-disable-next-line no-unreachable-loop -- intentional: return on first item to test async wait
         for await (const item of queue) {
           return item;
         }

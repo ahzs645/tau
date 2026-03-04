@@ -22,14 +22,23 @@ type ScreenshotCapabilityContext = {
   camera?: THREE.Camera;
   svgElement?: SVGSVGElement;
   captureMode?: CaptureMode;
-  queuedCaptureRequests: Array<{ options?: ScreenshotOptions; requestId: string; isComposite?: boolean }>;
+  queuedCaptureRequests: Array<{
+    options?: ScreenshotOptions;
+    requestId: string;
+    isComposite?: boolean;
+  }>;
   isRegistered: boolean;
   registrationError?: string;
 };
 
 // Event types
 type ScreenshotCapabilityEvent =
-  | { type: 'registerCapture'; gl: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera }
+  | {
+      type: 'registerCapture';
+      gl: THREE.WebGLRenderer;
+      scene: THREE.Scene;
+      camera: THREE.Camera;
+    }
   | { type: 'registerSvgCapture'; svgElement: SVGSVGElement }
   | { type: 'unregisterCapture'; captureMode?: 'threejs' | 'svg' }
   | { type: 'capture'; options?: ScreenshotOptions; requestId: string }
@@ -64,11 +73,16 @@ const defaultCompositeOptions = {
  *
  * @param itemCount - Number of items to arrange in a grid.
  * @param preferredRatio - Target column-to-row ratio.
+ * @param preferredRatio.columns - Number of preferred columns.
+ * @param preferredRatio.rows - Number of preferred rows.
  * @returns The grid dimensions that best match the preferred ratio.
  */
 export function calculateOptimalGrid(
   itemCount: number,
-  preferredRatio: { columns: number; rows: number } = defaultCompositeOptions.preferredRatio,
+  preferredRatio: {
+    columns: number;
+    rows: number;
+  } = defaultCompositeOptions.preferredRatio,
 ): { columns: number; rows: number } {
   if (itemCount <= 0) {
     return { columns: 1, rows: 1 };
@@ -373,7 +387,9 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
   // Serialise and create a Blob URL
   const serializer = new XMLSerializer();
   const svgString = serializer.serializeToString(clone);
-  const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+  const svgBlob = new Blob([svgString], {
+    type: 'image/svg+xml;charset=utf-8',
+  });
   const url = URL.createObjectURL(svgBlob);
 
   try {
@@ -395,20 +411,20 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
     canvas.width = width * pixelRatio;
     canvas.height = height * pixelRatio;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
+    const context = canvas.getContext('2d');
+    if (!context) {
       throw new Error('Could not get 2D canvas context for SVG screenshot');
     }
 
-    ctx.scale(pixelRatio, pixelRatio);
+    context.scale(pixelRatio, pixelRatio);
 
     // Fill background colour
     if (bgColor && bgColor !== 'transparent' && bgColor !== 'rgba(0, 0, 0, 0)') {
-      ctx.fillStyle = bgColor;
-      ctx.fillRect(0, 0, width, height);
+      context.fillStyle = bgColor;
+      context.fillRect(0, 0, width, height);
     }
 
-    ctx.drawImage(img, 0, 0, width, height);
+    context.drawImage(img, 0, 0, width, height);
 
     // Export as data URL via Blob → FileReader (consistent with Three.js path)
     const mimeType = config.output.format;
@@ -664,7 +680,7 @@ async function captureScreenshots({
       screenshotRenderer.render(screenshotScene, screenshotCamera);
 
       // Use toBlob API on the canvas
-      // eslint-disable-next-line no-await-in-loop -- sequential processing required for shared canvas
+      // oxlint-disable-next-line no-await-in-loop -- sequential processing required for shared canvas
       const blob = await new Promise<Blob | undefined>((resolve) => {
         const mimeType = config.output.format;
         const quality = mimeType === 'image/jpeg' || mimeType === 'image/webp' ? config.output.quality : undefined;
@@ -683,7 +699,7 @@ async function captureScreenshots({
       }
 
       // Convert blob to data URL
-      // eslint-disable-next-line no-await-in-loop -- sequential processing required for shared canvas
+      // oxlint-disable-next-line no-await-in-loop -- sequential processing required for shared canvas
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.addEventListener('load', () => {
@@ -726,11 +742,11 @@ async function captureScreenshots({
  */
 export const screenshotCapabilityMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     context: {} as ScreenshotCapabilityContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     events: {} as ScreenshotCapabilityEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     input: {} as ScreenshotCapabilityInput,
   },
   actors: {
@@ -749,7 +765,12 @@ export const screenshotCapabilityMachine = setup({
 
       (async () => {
         try {
-          const dataUrls = await captureScreenshots({ gl, scene, camera, options });
+          const dataUrls = await captureScreenshots({
+            gl,
+            scene,
+            camera,
+            options,
+          });
           sendBack({ type: 'screenshotCompleted', dataUrls, requestId });
         } catch (error: unknown) {
           sendBack({
@@ -777,7 +798,12 @@ export const screenshotCapabilityMachine = setup({
       (async () => {
         try {
           // First, capture individual screenshots using the shared logic
-          const dataUrls = await captureScreenshots({ gl, scene, camera, options });
+          const dataUrls = await captureScreenshots({
+            gl,
+            scene,
+            camera,
+            options,
+          });
 
           // Create composite image from individual screenshots
           const compositeOptions = options?.composite ?? defaultCompositeOptions;
@@ -792,7 +818,11 @@ export const screenshotCapabilityMachine = setup({
 
           const compositeDataUrl = await createCompositeImage(screenshots, compositeOptions);
 
-          sendBack({ type: 'screenshotCompleted', dataUrls: [compositeDataUrl], requestId });
+          sendBack({
+            type: 'screenshotCompleted',
+            dataUrls: [compositeDataUrl],
+            requestId,
+          });
         } catch (error: unknown) {
           sendBack({
             type: 'screenshotFailed',
@@ -853,7 +883,11 @@ export const screenshotCapabilityMachine = setup({
           }));
 
           const compositeDataUrl = await createCompositeImage(screenshots, compositeOptions);
-          sendBack({ type: 'screenshotCompleted', dataUrls: [compositeDataUrl], requestId });
+          sendBack({
+            type: 'screenshotCompleted',
+            dataUrls: [compositeDataUrl],
+            requestId,
+          });
         } catch (error: unknown) {
           sendBack({
             type: 'screenshotFailed',
@@ -891,7 +925,9 @@ export const screenshotCapabilityMachine = setup({
         actorRef: self,
       });
     }),
-    unregisterFromGraphics: sendTo(({ context }) => context.graphicsRef, { type: 'unregisterScreenshotCapability' }),
+    unregisterFromGraphics: sendTo(({ context }) => context.graphicsRef, {
+      type: 'unregisterScreenshotCapability',
+    }),
     unregisterCapture: enqueueActions(({ enqueue, context }) => {
       enqueue.assign({
         gl: undefined,
@@ -901,7 +937,9 @@ export const screenshotCapabilityMachine = setup({
         captureMode: undefined,
         isRegistered: false,
       });
-      enqueue.sendTo(context.graphicsRef, { type: 'unregisterScreenshotCapability' });
+      enqueue.sendTo(context.graphicsRef, {
+        type: 'unregisterScreenshotCapability',
+      });
     }),
     forwardResult: sendTo(
       ({ context }) => context.graphicsRef,
@@ -1031,7 +1069,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'registerSvgWithGraphics',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1066,7 +1108,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1101,7 +1147,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1135,7 +1185,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1168,7 +1222,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },

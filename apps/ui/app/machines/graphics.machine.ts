@@ -155,7 +155,10 @@ export type GraphicsEvent =
   | { type: 'setSectionViewDirection'; payload: 1 | -1 }
   | { type: 'setSectionViewPivot'; payload: [number, number, number] }
   | { type: 'setPlaneName'; payload: 'cartesian' | 'face' }
-  | { type: 'setHoveredSectionView'; payload: 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy' | undefined }
+  | {
+      type: 'setHoveredSectionView';
+      payload: 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy' | undefined;
+    }
   | {
       type: 'setSectionViewVisualization';
       payload: Partial<GraphicsContext['sectionViewVisualization']>;
@@ -200,7 +203,11 @@ export type GraphicsEvent =
   | { type: 'unregisterScreenshotCapability' }
   | { type: 'unregisterCameraCapability' }
   // Geometry updates from CAD
-  | { type: 'updateGeometries'; geometries: Geometry[]; units: { length: LengthSymbol } }
+  | {
+      type: 'updateGeometries';
+      geometries: Geometry[];
+      units: { length: LengthSymbol };
+    }
   // Scene radius update from Three.js bounding sphere (sent by Stage)
   | { type: 'sceneRadiusUpdated'; radius: number };
 
@@ -238,7 +245,7 @@ type LengthUnitData = {
 };
 
 const lengthUnitCache = new Map<LengthSymbol, LengthUnitData>();
-const lengthDef = standardInternationalBaseUnits.length;
+const lengthDefinition = standardInternationalBaseUnits.length;
 
 function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
   const cached = lengthUnitCache.get(symbol);
@@ -247,10 +254,10 @@ function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
   }
 
   // Check base unit
-  if (symbol === lengthDef.symbol) {
+  if (symbol === lengthDefinition.symbol) {
     const data: LengthUnitData = {
-      unit: lengthDef.unit,
-      symbol: lengthDef.symbol as LengthSymbol,
+      unit: lengthDefinition.unit,
+      symbol: lengthDefinition.symbol as LengthSymbol,
       factor: 1,
       system: 'si',
     };
@@ -259,7 +266,7 @@ function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
   }
 
   // Search variants
-  const variant = lengthDef.variants.find((v) => v.symbol === symbol);
+  const variant = lengthDefinition.variants.find((v) => v.symbol === symbol);
   if (!variant) {
     throw new Error(`Unknown length symbol: ${symbol}`);
   }
@@ -447,13 +454,13 @@ function roundTranslationToUnitDecimals(valueInBase: number, unitFactor: number,
  */
 export const graphicsMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as GraphicsContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as GraphicsEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as GraphicsInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as GraphicsEmitted,
   },
   actions: {

@@ -31,12 +31,12 @@ type WebglContextMachineEvents = { type: 'acquire' } | { type: 'release' };
  * acquire/release events.
  */
 export const webglContextMachine = setup({
-  /* eslint-disable @typescript-eslint/consistent-type-assertions -- Required for XState's type inference */
+  /* oxlint-disable @typescript-eslint/consistent-type-assertions -- Required for XState's type inference */
   types: {
     context: {} as WebglContextMachineContext,
     events: {} as WebglContextMachineEvents,
   },
-  /* eslint-enable @typescript-eslint/consistent-type-assertions -- reenabling */
+  /* oxlint-enable @typescript-eslint/consistent-type-assertions -- reenabling */
   guards: {
     hasActiveContexts: ({ context }) => context.count > 0,
   },

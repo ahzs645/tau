@@ -60,11 +60,11 @@ const clearErrorActor = fromPromise<void, { chatId: string }>(async () => {
 
 export const chatPersistenceMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     context: {} as ChatPersistenceMachineContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     events: {} as ChatPersistenceMachineEvents,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     input: {} as ChatPersistenceMachineInput,
   },
   actors: {

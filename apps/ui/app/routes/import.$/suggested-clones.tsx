@@ -110,26 +110,26 @@ function RepositoryAvatar({ owner, repo }: RepositoryAvatarProperties): React.JS
   // Show GitHub icon fallback when error
   if (imageState === 'error') {
     return (
-      <div className="flex size-8 items-center justify-center rounded-full bg-muted">
-        <SvgIcon id="github" className="size-5 text-muted-foreground" />
+      <div className='flex size-8 items-center justify-center rounded-full bg-muted'>
+        <SvgIcon id='github' className='size-5 text-muted-foreground' />
       </div>
     );
   }
 
   // Show loaded image
   if (imageState === 'loaded') {
-    return <img src={avatarUrl} alt={`${owner} avatar`} className="size-8 rounded-full" />;
+    return <img src={avatarUrl} alt={`${owner} avatar`} className='size-8 rounded-full' />;
   }
 
   // Loading state: show placeholder and preload image in background
   return (
-    <div className="relative flex size-8 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+    <div className='relative flex size-8 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground'>
       {owner[0]}/{repo[0]}
       {/* Hidden image to trigger load/error events */}
       <img
         src={avatarUrl}
-        alt=""
-        className="absolute inset-0 size-0 opacity-0"
+        alt=''
+        className='absolute inset-0 size-0 opacity-0'
         onLoad={handleLoad}
         onError={handleError}
       />
@@ -142,17 +142,17 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
 
   return (
     <div className={cn('space-y-3', className)}>
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Sparkles className="size-4" />
-        <span className="font-medium">Suggested Repositories</span>
+      <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+        <Sparkles className='size-4' />
+        <span className='font-medium'>Suggested Repositories</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className='grid grid-cols-2 gap-3'>
         {suggestedRepositories.map((repo) => (
           <button
             key={`${repo.owner}/${repo.repo}`}
-            type="button"
-            className="group flex flex-col gap-2 rounded-lg border bg-sidebar p-3 text-left transition-colors hover:border-primary/50 hover:bg-sidebar/80 sm:gap-3 sm:p-4"
+            type='button'
+            className='group flex flex-col gap-2 rounded-lg border bg-sidebar p-3 text-left transition-colors hover:border-primary/50 hover:bg-sidebar/80 sm:gap-3 sm:p-4'
             onClick={() => {
               onSelect({
                 owner: repo.owner,
@@ -163,40 +163,40 @@ export function SuggestedClones(properties: SuggestedClonesProperties): React.JS
             }}
           >
             {/* Header with avatar and kernel badge */}
-            <div className="flex items-center justify-between gap-2">
+            <div className='flex items-center justify-between gap-2'>
               <RepositoryAvatar owner={repo.owner} repo={repo.repo} />
 
               {/* Kernel badge */}
-              <div className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-xs sm:px-2 sm:text-xs">
-                <SvgIcon id={repo.kernelIcon} className="size-3" />
-                <span className="hidden sm:inline">{getKernelName(repo.kernel)}</span>
+              <div className='flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-xs sm:px-2 sm:text-xs'>
+                <SvgIcon id={repo.kernelIcon} className='size-3' />
+                <span className='hidden sm:inline'>{getKernelName(repo.kernel)}</span>
               </div>
             </div>
 
             {/* Repository name */}
-            <div className="flex items-center gap-2">
-              <span className="truncate font-mono text-xs font-medium sm:text-sm">
+            <div className='flex items-center gap-2'>
+              <span className='truncate font-mono text-xs font-medium sm:text-sm'>
                 {repo.owner}/{repo.repo}
               </span>
-              <ExternalLink className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              <ExternalLink className='size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100' />
             </div>
 
             {/* Description */}
-            <p className="line-clamp-2 text-xs text-muted-foreground sm:text-xs">{repo.description}</p>
+            <p className='line-clamp-2 text-xs text-muted-foreground sm:text-xs'>{repo.description}</p>
 
             {/* Footer with stats and main file */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground sm:text-xs">
-              <div className="flex items-center gap-2 sm:gap-3">
-                <div className="flex items-center gap-1">
-                  <Star className="size-3" />
+            <div className='flex items-center justify-between text-xs text-muted-foreground sm:text-xs'>
+              <div className='flex items-center gap-2 sm:gap-3'>
+                <div className='flex items-center gap-1'>
+                  <Star className='size-3' />
                   <span>{formatCount(repo.stars)}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <GitFork className="size-3" />
+                <div className='flex items-center gap-1'>
+                  <GitFork className='size-3' />
                   <span>{formatCount(repo.forks)}</span>
                 </div>
               </div>
-              <div className="hidden truncate text-right font-mono text-xs sm:block">
+              <div className='hidden truncate text-right font-mono text-xs sm:block'>
                 {repo.mainFile.split('/').pop()}
               </div>
             </div>

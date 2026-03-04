@@ -24,16 +24,16 @@ export const ScrollDownButton = memo(function ({
 
   return (
     <Button
-      size="icon"
-      variant="overlay"
+      size='icon'
+      variant='overlay'
       className={cn(
         'absolute bottom-28 left-1/2 flex -translate-x-1/2 justify-center rounded-full',
         !isVisible && 'pointer-events-none opacity-0 select-none',
       )}
-      aria-label="Scroll to bottom"
+      aria-label='Scroll to bottom'
       onClick={handleScrollToBottom}
     >
-      <ArrowDown className="size-4" />
+      <ArrowDown className='size-4' />
     </Button>
   );
 });

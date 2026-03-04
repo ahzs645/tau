@@ -2,7 +2,10 @@
  * Parametric Bottle
  * A simple bottle with adjustable dimensions and rounded edges.
  */
-import type { Sketch } from 'replicad';
+import type {
+  Shape3D,
+  Sketch,
+} from 'replicad';
 import {
   draw,
   makeCylinder,
@@ -61,7 +64,8 @@ export default function main(
       p.height,
     ])
     .ofSurfaceType('CYLINDRE')
-    .find(shape.clone(), {
+    // oxlint-disable-next-line unicorn/no-array-method-this-argument -- FaceFinder.find(shape, options) is not Array#find
+    .find(shape.clone() as Shape3D, {
       unique: true,
     });
 

@@ -121,7 +121,7 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
             }
 
             // Three.js mesh types are complex and involve generics
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Mesh type generics are complex
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- Mesh type generics are complex
             meshChildren.push(child);
           }
         });
@@ -145,7 +145,7 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
         }
       }
       // Depend on primitive values instead of plane object to avoid infinite loop
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- plane.normal and plane.constant are extracted below
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- plane.normal and plane.constant are extracted below
     }, [
       plane.normal.x,
       plane.normal.y,

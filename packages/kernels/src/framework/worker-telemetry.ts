@@ -31,7 +31,7 @@ import type { PerformanceEntryData } from '#types/kernel-protocol.types.js';
  * No timers -- flush is called explicitly by the framework after each operation.
  */
 export class WorkerTelemetryCollector {
-  // eslint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
+  // oxlint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
   private readonly send: (entries: PerformanceEntryData[]) => void;
   private readonly pending: PerformanceEntryData[] = [];
   private readonly observer: PerformanceObserver;

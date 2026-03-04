@@ -19,7 +19,7 @@ export function EmptyItems({
   children,
 }: React.ComponentProps<'div'> & VariantProps<typeof emptyItemVariants>): React.JSX.Element {
   return (
-    <div data-slot="empty-items" className={cn(emptyItemVariants({ variant, className }))}>
+    <div data-slot='empty-items' className={cn(emptyItemVariants({ variant, className }))}>
       {children}
     </div>
   );

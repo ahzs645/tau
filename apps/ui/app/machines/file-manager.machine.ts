@@ -12,6 +12,7 @@ import {
 import type { OutputFrom, DoneActorEvent, AnyEventObject } from 'xstate';
 import type { FileEntry, FileSystemBackend } from '@taucad/types';
 import { createBridgeProxy, createFileSystemBridge } from '@taucad/kernels/filesystem';
+import { safeDispose } from '@taucad/utils/dispose';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import { getStoredDirectoryHandle, getBuildFileSystemConfig, checkHandlePermission } from '#filesystem/handle-store.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
@@ -62,24 +63,25 @@ type FileManagerContext = {
 const initializeWorkerActor = fromPromise<
   | {
       type: 'workerInitialized';
+      worker: Worker;
+      proxy: FileManagerProxy;
+      bridgeDispose: () => void;
       configuredBackend: FileSystemBackend;
       webAccessNeedsPermission: boolean;
     }
   | { type: 'workerInitializationFailed'; error: Error },
   { context: FileManagerContext }
->(async ({ input }) => {
+>(async ({ input, signal }) => {
   const { context } = input;
+  console.debug('[FileManager] initializeWorkerActor: start');
 
-  // Clean up any existing bridge and proxy
-  if (context.proxy) {
-    context.proxy.dispose();
-  }
-
-  context.bridgeDispose?.();
+  // Clean up any existing bridge and proxy (error-isolated so failures don't prevent new worker creation)
+  safeDispose(() => context.proxy?.dispose());
+  safeDispose(context.bridgeDispose);
 
   // Only terminate worker if we own it (not shared)
   if (context.worker && !context.sharedWorker) {
-    context.worker.terminate();
+    safeDispose(() => context.worker?.terminate());
   }
 
   try {
@@ -88,14 +90,16 @@ const initializeWorkerActor = fromPromise<
     const { port, dispose: bridgeDispose } = createFileSystemBridge(worker);
     const proxy = createBridgeProxy<FileManagerProtocol>(port);
 
-    // Store references
-    context.worker = worker;
-    context.proxy = proxy;
-    context.bridgeDispose = bridgeDispose;
-
     // Resolve the backend -- if buildId is provided, read per-build config
     let backend = context.backendType;
     if (context.buildId) {
+      if (signal.aborted) {
+        return {
+          type: 'workerInitializationFailed',
+          error: new Error('Aborted'),
+        };
+      }
+
       const buildBackend = await getBuildFileSystemConfig(context.buildId);
       // Legacy builds (created before per-build configs) have no entry;
       // they historically used indexeddb, so default to that rather than
@@ -119,12 +123,30 @@ const initializeWorkerActor = fromPromise<
           // consistent with how indexeddb and opfs backends work.
           proxy.setDirectoryHandle(workspaceHandle);
           await proxy.reconfigure('webaccess');
-          return { type: 'workerInitialized', configuredBackend: 'webaccess', webAccessNeedsPermission: false };
+          console.debug('[FileManager] initializeWorkerActor: success (webaccess)');
+          return {
+            type: 'workerInitialized',
+            worker,
+            proxy,
+            bridgeDispose,
+            configuredBackend: 'webaccess',
+            webAccessNeedsPermission: false,
+          };
         }
       }
 
       // Handle missing or needs permission -- fall back to indexeddb
-      return { type: 'workerInitialized', configuredBackend: 'indexeddb', webAccessNeedsPermission: true };
+      console.debug(
+        '[FileManager] initializeWorkerActor: success (webaccess needs permission, falling back to indexeddb)',
+      );
+      return {
+        type: 'workerInitialized',
+        worker,
+        proxy,
+        bridgeDispose,
+        configuredBackend: 'indexeddb',
+        webAccessNeedsPermission: true,
+      };
     }
 
     // For non-default backends (opfs, memory), reconfigure
@@ -132,9 +154,17 @@ const initializeWorkerActor = fromPromise<
       await proxy.reconfigure(backend);
     }
 
-    return { type: 'workerInitialized', configuredBackend: backend, webAccessNeedsPermission: false };
+    console.debug('[FileManager] initializeWorkerActor: success');
+    return {
+      type: 'workerInitialized',
+      worker,
+      proxy,
+      bridgeDispose,
+      configuredBackend: backend,
+      webAccessNeedsPermission: false,
+    };
   } catch (error) {
-    console.error('[ZenFS] Worker initialization failed', error);
+    console.error('[FileManager] initializeWorkerActor: FAILED', error);
     return {
       type: 'workerInitializationFailed',
       error: error instanceof Error ? error : new Error('Failed to initialize worker'),
@@ -145,10 +175,17 @@ const initializeWorkerActor = fromPromise<
 const readDirectoryActor = fromPromise<
   { type: 'directoryRead'; entries: FileEntry[] } | { type: 'directoryReadFailed'; error: Error },
   { context: FileManagerContext; path: string }
->(async ({ input }) => {
+>(async ({ input, signal }) => {
   const { context, path } = input;
+  console.debug('[FileManager] readDirectoryActor: start');
+
+  if (signal.aborted) {
+    console.debug('[FileManager] readDirectoryActor: aborted');
+    return { type: 'directoryReadFailed', error: new Error('Aborted') };
+  }
 
   if (!context.proxy) {
+    console.error('[FileManager] readDirectoryActor: NO PROXY - worker not initialized');
     return {
       type: 'directoryReadFailed',
       error: new Error('Worker not initialized'),
@@ -174,8 +211,10 @@ const readDirectoryActor = fromPromise<
       });
     }
 
+    console.debug('[FileManager] readDirectoryActor: success');
     return { type: 'directoryRead', entries };
   } catch (error) {
+    console.error('[FileManager] readDirectoryActor: FAILED', error);
     return {
       type: 'directoryReadFailed',
       error: error instanceof Error ? error : new Error('Failed to read directory'),
@@ -252,7 +291,12 @@ type FileManagerEventLifecycle =
 // Hook calls worker directly, then sends ONE event to machine
 // Machine updates context, emits UI event, spawns background refresh
 type FileManagerEventMutation =
-  | { type: 'fileWritten'; path: string; data: Uint8Array<ArrayBuffer>; source: FileWriteSource }
+  | {
+      type: 'fileWritten';
+      path: string;
+      data: Uint8Array<ArrayBuffer>;
+      source: FileWriteSource;
+    }
   | { type: 'fileRead'; path: string; data: Uint8Array<ArrayBuffer> }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
   | { type: 'fileDeleted'; path: string; source: FileWriteSource }
@@ -299,13 +343,16 @@ type FileManagerInput = {
  */
 export const fileManagerMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     context: {} as FileManagerContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     events: {} as FileManagerEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     input: {} as FileManagerInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     emitted: {} as FileManagerEmitted,
   },
   actors: fileManagerActors,
@@ -328,21 +375,21 @@ export const fileManagerMachine = setup({
       error: undefined,
     }),
 
-    destroyWorker({ context }) {
-      if (context.proxy) {
-        context.proxy.dispose();
-        context.proxy = undefined;
-      }
-
-      context.bridgeDispose?.();
-      context.bridgeDispose = undefined;
+    destroyWorker: assign(({ context }) => {
+      safeDispose(() => context.proxy?.dispose());
+      safeDispose(context.bridgeDispose);
 
       // Only terminate the worker if we own it (not shared from parent)
-      if (context.worker && !context.sharedWorker) {
-        context.worker.terminate();
-        context.worker = undefined;
+      if (!context.sharedWorker) {
+        safeDispose(() => context.worker?.terminate());
       }
-    },
+
+      return {
+        proxy: undefined,
+        bridgeDispose: undefined,
+        worker: context.sharedWorker ? context.worker : undefined,
+      };
+    }),
 
     updateRootAndReset: assign({
       rootDirectory({ event }) {
@@ -359,8 +406,23 @@ export const fileManagerMachine = setup({
       isWatching: false,
     }),
 
-    // Update backend type and permission status from init actor output
+    // Assign worker resources and backend config from init actor output
     updateBackendFromInit: assign({
+      worker({ event }) {
+        assertActorDoneEvent(event);
+        assertEvent(event.output, 'workerInitialized');
+        return event.output.worker;
+      },
+      proxy({ event }) {
+        assertActorDoneEvent(event);
+        assertEvent(event.output, 'workerInitialized');
+        return event.output.proxy;
+      },
+      bridgeDispose({ event }) {
+        assertActorDoneEvent(event);
+        assertEvent(event.output, 'workerInitialized');
+        return event.output.bridgeDispose;
+      },
       backendType({ event }) {
         assertActorDoneEvent(event);
         assertEvent(event.output, 'workerInitialized');
@@ -621,6 +683,9 @@ export const fileManagerMachine = setup({
   exit: ['stopFileWatcher', 'destroyWorker'],
   states: {
     initializing: {
+      entry() {
+        console.debug('[FileManager] state → initializing');
+      },
       on: {
         initialize: {
           target: 'creatingWorker',
@@ -629,7 +694,12 @@ export const fileManagerMachine = setup({
     },
 
     creatingWorker: {
-      entry: ['clearError'],
+      entry: [
+        'clearError',
+        () => {
+          console.debug('[FileManager] state → creatingWorker');
+        },
+      ],
       on: {
         // Handle rapid navigation: cancel in-progress init and restart with new context
         // Guard prevents destructive self-transition when rootDirectory/buildId are unchanged
@@ -660,6 +730,9 @@ export const fileManagerMachine = setup({
     },
 
     loadingRootDirectory: {
+      entry() {
+        console.debug('[FileManager] state → loadingRootDirectory');
+      },
       on: {
         // Handle rapid navigation: cancel in-progress directory read and restart
         // Guard prevents destructive self-transition when rootDirectory/buildId are unchanged
@@ -692,6 +765,7 @@ export const fileManagerMachine = setup({
     ready: {
       // Auto-start file watcher when entering ready with webaccess backend
       entry: enqueueActions(({ enqueue, context }) => {
+        console.debug('[FileManager] state → ready');
         if (context.backendType === 'webaccess' && !context.isWatching) {
           enqueue('startFileWatcher');
         }
@@ -757,6 +831,9 @@ export const fileManagerMachine = setup({
     },
 
     error: {
+      entry({ context }) {
+        console.error('[FileManager] state → error', context.error);
+      },
       on: {
         setRoot: {
           target: 'creatingWorker',

@@ -225,15 +225,15 @@ export const ChatToolSelector = memo(function ({
       const isSelected = isItemSelected(item);
 
       return (
-        <span className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Icon className="size-4" />
-            <div className="flex flex-col items-start">
+        <span className='flex w-full items-center justify-between'>
+          <div className='flex items-center gap-2'>
+            <Icon className='size-4' />
+            <div className='flex flex-col items-start'>
               <span>{item.label}</span>
-              <span className="text-xs text-muted-foreground">{item.description}</span>
+              <span className='text-xs text-muted-foreground'>{item.description}</span>
             </div>
           </div>
-          {isSelected ? <Check className="size-4" /> : null}
+          {isSelected ? <Check className='size-4' /> : null}
         </span>
       );
     },
@@ -256,14 +256,14 @@ export const ChatToolSelector = memo(function ({
       {...properties}
       className="data-[slot='popover-content']:w-[280px]"
       popoverProperties={popoverProperties}
-      emptyListMessage="No options found."
-      searchPlaceHolder="Search tools..."
-      title="Tool Selection"
-      description="Select the tool mode or individual tools to use."
+      emptyListMessage='No options found.'
+      searchPlaceHolder='Search tools...'
+      title='Tool Selection'
+      description='Select the tool mode or individual tools to use.'
       groupedItems={groupedItems}
       renderLabel={renderLabel}
       getValue={getValue}
-      placeholder="Select tools"
+      placeholder='Select tools'
       defaultValue={defaultValue}
       isNested={isNested}
       isSearchEnabled={false}

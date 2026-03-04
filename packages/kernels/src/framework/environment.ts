@@ -24,13 +24,13 @@ export type RuntimeEnvironment = 'node' | 'browser' | 'worker';
  */
 export function getEnvironment(): RuntimeEnvironment {
   // Node.js — check first because worker_threads also have `process`
-  // eslint-disable-next-line n/prefer-global/process, @typescript-eslint/no-unnecessary-condition -- process may be undefined in browser/worker
+  // oxlint-disable-next-line n/prefer-global/process, @typescript-eslint/no-unnecessary-condition -- process may be undefined in browser/worker
   if (typeof process !== 'undefined' && process.versions?.node) {
     return 'node';
   }
 
   // Browser Web Worker — `self` exists and is not `window`
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- self may not exist
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- self may not exist
   if (globalThis.self !== undefined && typeof self.postMessage === 'function' && globalThis.window === undefined) {
     return 'worker';
   }
@@ -97,7 +97,6 @@ export async function resolveFileUrl(url: string | URL): Promise<string> {
     return urlString;
   }
 
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- node API
   const { fileURLToPath } = await import('node:url');
   return fileURLToPath(urlString);
 }

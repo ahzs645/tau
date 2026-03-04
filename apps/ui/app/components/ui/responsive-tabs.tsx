@@ -84,8 +84,8 @@ export function ResponsiveTabs({
           ))}
         </TabsList>
 
-        <div className="flex flex-1 flex-col gap-6">
-          <h2 className="hidden text-2xl font-bold md:block">{activeTab}</h2>
+        <div className='flex flex-1 flex-col gap-6'>
+          <h2 className='hidden text-2xl font-bold md:block'>{activeTab}</h2>
           <TabsContents className={cn('h-full! w-full')} enableAnimation={enableContentAnimation}>
             {children}
           </TabsContents>
@@ -97,12 +97,12 @@ export function ResponsiveTabs({
   return (
     <>
       {/* Desktop */}
-      <Tabs orientation="vertical" value={activeTab} className={cn('hidden md:flex', 'flex-row gap-6', className)}>
+      <Tabs orientation='vertical' value={activeTab} className={cn('hidden md:flex', 'flex-row gap-6', className)}>
         {tabsList}
       </Tabs>
 
       {/* Mobile */}
-      <Tabs orientation="horizontal" value={activeTab} className={cn('w-full md:hidden', className)}>
+      <Tabs orientation='horizontal' value={activeTab} className={cn('w-full md:hidden', className)}>
         {tabsList}
       </Tabs>
     </>

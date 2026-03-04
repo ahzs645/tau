@@ -282,7 +282,7 @@ export default function main(
               .inPlane('XY', potTopZ)
               .when(({ element }) =>
                 isCloseToRadiusInXYPlane(
-                  element,
+                  element as Edge,
                   expectedR,
                   filletTolerance,
                 ),
@@ -305,7 +305,7 @@ export default function main(
               .inPlane('XY', potTopZ)
               .when(({ element }) =>
                 isCloseToRadiusInXYPlane(
-                  element,
+                  element as Edge,
                   expectedR,
                   filletTolerance,
                 ),
@@ -337,7 +337,7 @@ export default function main(
                   )
                   .when(({ element }) =>
                     isCloseToRadiusInXYPlane(
-                      element,
+                      element as Edge,
                       expectedOuterR,
                       filletTolerance,
                     ),
@@ -366,7 +366,7 @@ export default function main(
                   )
                   .when(({ element }) =>
                     isCloseToRadiusInXYPlane(
-                      element,
+                      element as Edge,
                       expectedInnerR,
                       filletTolerance,
                     ),
@@ -391,7 +391,7 @@ export default function main(
                   .inPlane('XY', 0)
                   .when(({ element }) =>
                     isCloseToRadiusInXYPlane(
-                      element,
+                      element as Edge,
                       expectedR,
                       filletTolerance,
                     ),
@@ -410,7 +410,7 @@ export default function main(
               .inPlane('XY', 0)
               .when(({ element }) =>
                 isCloseToRadiusInXYPlane(
-                  element,
+                  element as Edge,
                   expectedR,
                   filletTolerance,
                 ),

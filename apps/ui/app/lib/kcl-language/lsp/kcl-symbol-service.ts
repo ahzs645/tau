@@ -237,11 +237,19 @@ export class KclSymbolService {
     log.debug('Reparsing', uris.length, 'cached documents');
 
     // Collect documents that need reparsing
-    const documentsToReparse: Array<{ uri: string; content: string; version: number }> = [];
+    const documentsToReparse: Array<{
+      uri: string;
+      content: string;
+      version: number;
+    }> = [];
     for (const uri of uris) {
       const cached = this.cache.get(uri);
       if (cached?.symbols.length === 0) {
-        documentsToReparse.push({ uri, content: cached.content, version: cached.version });
+        documentsToReparse.push({
+          uri,
+          content: cached.content,
+          version: cached.version,
+        });
       }
     }
 
@@ -588,7 +596,12 @@ export class KclSymbolService {
 
       // Extract symbols even if there are parse errors (partial AST)
       // The WASM parser returns a partial program even when there are errors
-      symbols = extractSymbolsFromProgram({ program, uri, content, lineOffsets });
+      symbols = extractSymbolsFromProgram({
+        program,
+        uri,
+        content,
+        lineOffsets,
+      });
       succeeded = true;
       log.debug('Extracted', symbols.length, 'symbols from AST (errors:', parseResult.errors.length, ')');
 
@@ -639,10 +652,16 @@ export class KclSymbolService {
    */
   private extractVariablesFromError(error: unknown): Partial<Record<string, KclValue>> {
     if (error && typeof error === 'object' && 'variables' in error) {
-      const errorWithVars = error as { variables?: Partial<Record<string, KclValue>> };
-      if (errorWithVars.variables && typeof errorWithVars.variables === 'object') {
-        log.debug('Mock execution failed but extracted', Object.keys(errorWithVars.variables).length, 'partial vars');
-        return errorWithVars.variables;
+      const errorWithVariables = error as {
+        variables?: Partial<Record<string, KclValue>>;
+      };
+      if (errorWithVariables.variables && typeof errorWithVariables.variables === 'object') {
+        log.debug(
+          'Mock execution failed but extracted',
+          Object.keys(errorWithVariables.variables).length,
+          'partial vars',
+        );
+        return errorWithVariables.variables;
       }
     }
 
@@ -755,7 +774,7 @@ function resolveImportPath(currentFileUri: string, importPath: string): string {
  * Escape special regex characters
  */
 function escapeRegExp(string: string): string {
-  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  return string.replaceAll(/[$()*+.?[\\\]^{|}]/g, String.raw`\$&`);
 }
 
 /**
@@ -771,7 +790,12 @@ function extractSymbolsFromProgram(options: {
   const symbols: KclSymbol[] = [];
 
   for (const bodyItem of program.body) {
-    const extracted = extractSymbolFromBodyItem({ item: bodyItem, uri, content, lineOffsets });
+    const extracted = extractSymbolFromBodyItem({
+      item: bodyItem,
+      uri,
+      content,
+      lineOffsets,
+    });
     if (extracted) {
       symbols.push(...extracted);
     }
@@ -826,8 +850,8 @@ function extractVariableSymbol(options: {
 
   // Check if this is a function declaration
   if (declarator.init.type === 'FunctionExpression') {
-    const funcExpr = declarator.init as unknown as Node<FunctionExpression>;
-    const parameters = extractParameters(funcExpr.params, uri, lineOffsets);
+    const functionExpression = declarator.init as unknown as Node<FunctionExpression>;
+    const parameters = extractParameters(functionExpression.params, uri, lineOffsets);
 
     // Add function symbol
     symbols.push({
@@ -908,7 +932,10 @@ function extractParameters(parameters: Parameter[], _uri: string, _lineOffsets: 
       type: typeString,
       isLabeled: parameter.labeled !== false,
       hasDefault: parameter.default_value !== undefined && parameter.default_value !== null,
-      range: { start: parameter.identifier.start, end: parameter.identifier.end },
+      range: {
+        start: parameter.identifier.start,
+        end: parameter.identifier.end,
+      },
     };
   });
 }

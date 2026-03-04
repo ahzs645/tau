@@ -46,7 +46,7 @@ export function ChatEditorExplorerAnimations({
   }));
 
   return (
-    <Tree elements={treeElements} className="px-1">
+    <Tree elements={treeElements} className='px-1'>
       {animations.map((animation) => {
         const isSelected = selectedAnimationId === animation.id;
 
@@ -55,7 +55,7 @@ export function ChatEditorExplorerAnimations({
             key={animation.id}
             id={animation.id}
             name={animation.name}
-            icon={<Film className="size-4" />}
+            icon={<Film className='size-4' />}
             isSelected={isSelected}
             onClick={() => {
               handleAnimationClick(animation.id);

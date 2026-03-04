@@ -1,4 +1,4 @@
-/* eslint-disable no-await-in-loop -- sequential filesystem operations in test helpers are intentional */
+/* oxlint-disable no-await-in-loop -- sequential filesystem operations in test helpers are intentional */
 /**
  * Kernel Middleware Testing Utilities
  *
@@ -72,11 +72,11 @@ export async function seedTestFileSystem(files: Record<string, string | Uint8Arr
   // Write files to the filesystem
   for (const [path, content] of Object.entries(files)) {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    const parentDir = dirname(normalizedPath);
+    const parentDirectory = dirname(normalizedPath);
 
     // Create parent directories if needed
-    if (parentDir && parentDir !== '/') {
-      await fs.promises.mkdir(parentDir, { recursive: true });
+    if (parentDirectory && parentDirectory !== '/') {
+      await fs.promises.mkdir(parentDirectory, { recursive: true });
     }
 
     // Write file content
@@ -225,7 +225,7 @@ export type MockFileSystem = KernelFileSystem & {
  * ```
  */
 export function createMockFileSystem(options?: MockFileSystemOptions): MockFileSystem {
-  const existsFn = vi.fn().mockImplementation(async (path: string) => {
+  const existsFunction = vi.fn().mockImplementation(async (path: string) => {
     if (typeof options?.existsResult === 'function') {
       return options.existsResult(path);
     }
@@ -257,22 +257,22 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
     .fn<(paths: string[]) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
     .mockResolvedValue({});
   const readdirContentsFn = vi
-    .fn<(dirPath: string) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
+    .fn<(directoryPath: string) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
     .mockResolvedValue({});
-  const readdirStatFn = vi.fn<(dirPath: string) => Promise<FileStatEntry[]>>().mockResolvedValue([]);
+  const readdirStatFn = vi.fn<(directoryPath: string) => Promise<FileStatEntry[]>>().mockResolvedValue([]);
   const ensureDirFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
 
   function readFile(path: string, encoding: 'utf8'): Promise<string>;
   function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- mock delegate; readFileFn is untyped to support both string and Uint8Array overloads
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- mock delegate; readFileFn is untyped to support both string and Uint8Array overloads
     return readFileFn(path, encoding);
   }
 
   // Mocks object for test assertions
   const mocks: MockFileSystemMocks = {
     readFile: readFileFn,
-    exists: existsFn,
+    exists: existsFunction,
     readdir: readdirFn,
     writeFile: writeFileFn,
     mkdir: mkdirFn,
@@ -289,7 +289,7 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
 
   return {
     readFile,
-    exists: async (path: string): Promise<boolean> => existsFn(path) as boolean,
+    exists: async (path: string): Promise<boolean> => existsFunction(path) as boolean,
     readdir: async (path: string) => readdirFn(path),
     writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data),
     mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFn(path, options_),
@@ -299,8 +299,8 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
     stat: async (path: string) => statFn(path),
     lstat: async (path: string) => lstatFn(path),
     readFiles: async (paths: string[]) => readFilesFn(paths),
-    readdirContents: async (dirPath: string) => readdirContentsFn(dirPath),
-    readdirStat: async (dirPath: string) => readdirStatFn(dirPath),
+    readdirContents: async (directoryPath: string) => readdirContentsFn(directoryPath),
+    readdirStat: async (directoryPath: string) => readdirStatFn(directoryPath),
     ensureDir: async (path: string) => ensureDirFn(path),
     mocks,
   };
@@ -314,10 +314,12 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
 } {
   // Start with empty object - we use a wrapper object to allow reassignment
   // while still having the getter work correctly
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test utility requires flexible typing
-  const stateContainer: { value: PartialDeep<T> } = { value: {} as PartialDeep<T> };
+  const stateContainer: { value: PartialDeep<T> } = {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test utility requires flexible typing
+    value: {} as PartialDeep<T>,
+  };
 
-  const updateFn = vi.fn().mockImplementation((partial: Partial<T>) => {
+  const updateFunction = vi.fn().mockImplementation((partial: Partial<T>) => {
     // Use deepmerge to match production createMiddlewareState behavior
     // Use arrayMerge to replace arrays instead of concatenating (matches kernel-middleware.ts)
     stateContainer.value = deepmerge(stateContainer.value, partial, {
@@ -329,7 +331,7 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
     get value() {
       return stateContainer.value;
     },
-    update: updateFn,
+    update: updateFunction,
   };
 }
 
@@ -342,9 +344,9 @@ const defaultMockDependencyHash = 'a'.repeat(64);
 
 /** Create a mock KernelMiddlewareRuntime for unit testing middleware hooks. */
 export function createMockRuntime<
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   Options extends Record<string, unknown> = {},
 >(mockOptions?: {
   filesystemOverrides?: MockFileSystemOptions;
@@ -587,13 +589,21 @@ export async function createTestWorker(
   // Auto-load bundler for JS/TS kernels (needed for bundle/execute/resolveDependencies).
   // Lazy import avoids pulling esbuild-wasm at module load time, which crashes in
   // jsdom environments due to a TextEncoder Uint8Array realm mismatch.
-  const needsBundler = !options?.skipBundler && extensions.some((ext) => ['ts', 'js', 'tsx', 'jsx'].includes(ext));
+  const needsBundler =
+    !options?.skipBundler && extensions.some((extension) => ['ts', 'js', 'tsx', 'jsx'].includes(extension));
   if (needsBundler) {
-    const bundlerDef =
+    const bundlerDefinition =
       options?.bundlerDefinition ??
-      ((await import('#bundler/esbuild.bundler.js')) as { default: BundlerDefinition }).default;
-    const dummyConfig = { bundlerModuleUrl: 'test://esbuild', extensions: ['ts', 'js', 'tsx', 'jsx'] };
-    await worker.ensureLoadedBundler(dummyConfig, bundlerDef);
+      (
+        (await import('#bundler/esbuild.bundler.js')) as {
+          default: BundlerDefinition;
+        }
+      ).default;
+    const dummyConfig = {
+      bundlerModuleUrl: 'test://esbuild',
+      extensions: ['ts', 'js', 'tsx', 'jsx'],
+    };
+    await worker.ensureLoadedBundler(dummyConfig, bundlerDefinition);
   }
 
   if (options?.bundlerEntries) {
@@ -617,7 +627,10 @@ export async function getTestParameters(
   definition: KernelDefinition,
   files: Record<string, string>,
   mainFile: string,
-): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> {
+): Promise<{
+  jsonSchema: unknown;
+  defaultParameters: Record<string, unknown>;
+}> {
   const { expect } = await import('vitest');
 
   const worker = await createTestWorker(definition, files);
@@ -658,7 +671,9 @@ export async function createTestGeometry(input: {
   if (!input.parameters) {
     const parametersResult = await worker.getParameters(geometryFile);
     if (parametersResult.success) {
-      const extracted = parametersResult.data as { defaultParameters?: Record<string, unknown> };
+      const extracted = parametersResult.data as {
+        defaultParameters?: Record<string, unknown>;
+      };
       if (extracted.defaultParameters) {
         parameters = deepmerge(extracted.defaultParameters, parameters);
       }
@@ -677,7 +692,12 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
   filesystem: MockFileSystem;
 } {
   const noopBundler: KernelRuntime['bundler'] = {
-    async bundle(): Promise<{ code: string; issues: never[]; success: false; dependencies: never[] }> {
+    async bundle(): Promise<{
+      code: string;
+      issues: never[];
+      success: false;
+      dependencies: never[];
+    }> {
       return { code: '', issues: [], success: false, dependencies: [] };
     },
     async resolveDependencies(): Promise<string[]> {
@@ -697,8 +717,14 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
     filesystem: createMockFileSystem(options?.filesystemOverrides),
     fileContentCache: new Map(),
     bundler: noopBundler,
-    async execute(): Promise<{ success: false; issues: Array<{ message: string; severity: 'error' }> }> {
-      return { success: false, issues: [{ message: 'Mock executor', severity: 'error' as const }] };
+    async execute(): Promise<{
+      success: false;
+      issues: Array<{ message: string; severity: 'error' }>;
+    }> {
+      return {
+        success: false,
+        issues: [{ message: 'Mock executor', severity: 'error' as const }],
+      };
     },
     tracer: { startSpan: () => ({ end: noopSpanEnd }) },
   };
@@ -751,13 +777,19 @@ export class MockKernelWorker extends KernelWorker {
       options.computeResult ?? createSuccessResult([{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }]);
     this.mockExportResult = options.exportResult ?? {
       success: true,
-      data: [{ bytes: new Uint8Array(), name: 'export.gltf', mimeType: 'model/gltf+json' }],
+      data: [
+        {
+          bytes: new Uint8Array(),
+          name: 'export.gltf',
+          mimeType: 'model/gltf+json',
+        },
+      ],
       issues: [],
     };
 
     // Set up onLog - use provided or no-op (must be done before _logger)
     // @ts-expect-error - Test utility accessing internals
-    // eslint-disable-next-line @typescript-eslint/no-empty-function -- Mock implementation
+    // oxlint-disable-next-line @typescript-eslint/no-empty-function -- Mock implementation
     this.onLog = options.onLog ?? (() => {});
 
     // Set up the internal _filesystem property directly
@@ -805,7 +837,10 @@ export class MockKernelWorker extends KernelWorker {
   ): Promise<GetParametersResult> {
     return {
       success: true,
-      data: { defaultParameters: {}, jsonSchema: { type: 'object', properties: {} } },
+      data: {
+        defaultParameters: {},
+        jsonSchema: { type: 'object', properties: {} },
+      },
       issues: [],
     };
   }

@@ -52,7 +52,7 @@ const SOCKET_TAPER_WIDTH =
 
 /**
  * Creates a socket profile for the Gridfinity base
- * @param _ - Unused parameter
+ * @param _plane - Unused plane parameter
  * @param startPoint - Start position for the profile
  * @returns The socket profile sketch
  */
@@ -83,6 +83,11 @@ function socketProfile(
 /**
  * Creates a socket for the Gridfinity base
  * @param options - Socket construction options
+ * @param options.magnetRadius - Radius of magnet holes
+ * @param options.magnetHeight - Depth of magnet holes
+ * @param options.screwRadius - Radius of screw holes
+ * @param options.enableScrew - Include screw holes
+ * @param options.enableMagnet - Include magnet holes
  * @returns The socket solid
  */
 function buildSocket({
@@ -137,33 +142,35 @@ function buildSocket({
           .extrude(SOCKET_HEIGHT)
       : null;
 
-    const cutout =
+    const rawCutout: Shape3D | null =
       magnetCutout && screwCutout
-        ? magnetCutout.fuse(screwCutout)
+        ? (magnetCutout.fuse(
+            screwCutout,
+          ) as Shape3D)
         : (magnetCutout ?? screwCutout);
 
-    if (!cutout) {
+    if (!rawCutout) {
       return slot;
     }
 
     slot = slot
       .cut(
-        cutout
+        rawCutout
           .clone()
           .translate([-13, -13, -5]),
       )
       .cut(
-        cutout
+        rawCutout
           .clone()
           .translate([-13, 13, -5]),
       )
       .cut(
-        cutout
+        rawCutout
           .clone()
           .translate([13, 13, -5]),
       )
       .cut(
-        cutout
+        rawCutout
           .clone()
           .translate([13, -13, -5]),
       );
@@ -187,6 +194,11 @@ function range(i: number) {
  * Clones a shape in a grid pattern
  * @param shape - Shape to clone
  * @param options - Grid configuration options
+ * @param options.xSteps - Number of steps in X direction
+ * @param options.ySteps - Number of steps in Y direction
+ * @param options.span - Default spacing between clones
+ * @param options.xSpan - X spacing (overrides span when set)
+ * @param options.ySpan - Y spacing (overrides span/xSpan when set)
  * @returns Array of cloned shapes with translations
  */
 function cloneOnGrid(
@@ -240,6 +252,10 @@ function cloneOnGrid(
 /**
  * Creates the top shape for the Gridfinity box
  * @param options - Top shape configuration options
+ * @param options.xSize - Width in Gridfinity units
+ * @param options.ySize - Length in Gridfinity units
+ * @param options.includeLip - Whether to include lip
+ * @param options.wallThickness - Wall thickness
  * @returns The top shape solid
  */
 function buildTopShape({

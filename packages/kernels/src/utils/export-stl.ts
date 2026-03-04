@@ -44,18 +44,18 @@ export function createStlAscii(meshData: IndexedPolyhedron): Uint8Array<ArrayBuf
     }
 
     // Triangulate face using fan triangulation
-    for (let i = 1; i < face.length - 1; i++) {
-      const idx1 = face[0];
-      const idx2 = face[i];
-      const idx3 = face[i + 1];
+    for (let index = 1; index < face.length - 1; index++) {
+      const index1 = face[0];
+      const index2 = face[index];
+      const index3 = face[index + 1];
 
-      if (idx1 === undefined || idx2 === undefined || idx3 === undefined) {
+      if (index1 === undefined || index2 === undefined || index3 === undefined) {
         continue;
       }
 
-      const v1 = vertices[idx1];
-      const v2 = vertices[idx2];
-      const v3 = vertices[idx3];
+      const v1 = vertices[index1];
+      const v2 = vertices[index2];
+      const v3 = vertices[index3];
 
       if (!v1 || !v2 || !v3) {
         continue;
@@ -107,8 +107,8 @@ export function createStlBinary(meshData: IndexedPolyhedron): Uint8Array<ArrayBu
   // Write header (80 bytes, can be anything)
   const headerText = 'Binary STL exported from OpenSCAD';
   const headerBytes = new TextEncoder().encode(headerText);
-  for (let i = 0; i < Math.min(headerBytes.length, headerSize); i++) {
-    view.setUint8(i, headerBytes[i]!);
+  for (let index = 0; index < Math.min(headerBytes.length, headerSize); index++) {
+    view.setUint8(index, headerBytes[index]!);
   }
 
   // Write triangle count
@@ -123,18 +123,18 @@ export function createStlBinary(meshData: IndexedPolyhedron): Uint8Array<ArrayBu
     }
 
     // Triangulate face using fan triangulation
-    for (let i = 1; i < face.length - 1; i++) {
-      const idx1 = face[0];
-      const idx2 = face[i];
-      const idx3 = face[i + 1];
+    for (let index = 1; index < face.length - 1; index++) {
+      const index1 = face[0];
+      const index2 = face[index];
+      const index3 = face[index + 1];
 
-      if (idx1 === undefined || idx2 === undefined || idx3 === undefined) {
+      if (index1 === undefined || index2 === undefined || index3 === undefined) {
         continue;
       }
 
-      const v1 = vertices[idx1];
-      const v2 = vertices[idx2];
-      const v3 = vertices[idx3];
+      const v1 = vertices[index1];
+      const v2 = vertices[index2];
+      const v3 = vertices[index3];
 
       if (!v1 || !v2 || !v3) {
         continue;

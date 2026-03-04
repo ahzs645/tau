@@ -118,14 +118,14 @@ export const ParametersInputNumber = React.forwardRef<HTMLInputElement, Paramete
               'pointer-events-none cursor-text',
             )}
           >
-            <span className="font-mono text-sm">×</span>
+            <span className='font-mono text-sm'>×</span>
           </span>
         ) : null}
         <Input
           ref={ref}
-          autoComplete="off"
-          type="text"
-          inputMode="decimal"
+          autoComplete='off'
+          type='text'
+          inputMode='decimal'
           value={text}
           step={step}
           className={cn(isCount ? 'pl-8' : 'pr-7', 'focus-visible:ring-0', className)}
@@ -179,13 +179,13 @@ export const ParametersInputNumber = React.forwardRef<HTMLInputElement, Paramete
                 )}
               >
                 {isAngle ? (
-                  <Angle className="size-4 stroke-[1.5px]" />
+                  <Angle className='size-4 stroke-[1.5px]' />
                 ) : isUnitless ? (
-                  <Hash className="size-3" />
+                  <Hash className='size-3' />
                 ) : (
-                  <span className="inline-flex flex-col items-center justify-center font-mono text-xs tracking-wide">
+                  <span className='inline-flex flex-col items-center justify-center font-mono text-xs tracking-wide'>
                     {isApproximation ? (
-                      <span className="-mb-0.5 text-[0.7rem] leading-none text-muted-foreground/60">≈</span>
+                      <span className='-mb-0.5 text-[0.7rem] leading-none text-muted-foreground/60'>≈</span>
                     ) : null}
                     <span className={cn(isApproximation && 'leading-none')}>{unit}</span>
                   </span>

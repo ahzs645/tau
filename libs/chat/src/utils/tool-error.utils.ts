@@ -333,7 +333,11 @@ export type ClientErrorMessageResolver = string | ((error: RpcClientError) => st
  */
 export function assertRpcSuccess<T extends { success: boolean }>(
   result: T | RpcExecutionError | RpcValidationError,
-  options: { toolName: string; toolCallId: string; clientErrorMessage?: ClientErrorMessageResolver },
+  options: {
+    toolName: string;
+    toolCallId: string;
+    clientErrorMessage?: ClientErrorMessageResolver;
+  },
 ): asserts result is Exclude<T, RpcExecutionError | RpcValidationError | RpcClientError> {
   const { toolName, toolCallId, clientErrorMessage } = options;
   assertRpcExecution(result, toolName, toolCallId);

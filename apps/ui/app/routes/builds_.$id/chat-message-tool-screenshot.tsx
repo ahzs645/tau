@@ -21,7 +21,7 @@ export function ChatMessageToolScreenshot({
     case 'input-available': {
       const mode = part.input?.mode;
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Camera} />
             <ChatToolCardTitle>
@@ -37,11 +37,11 @@ export function ChatMessageToolScreenshot({
 
     case 'output-available': {
       const { output } = part;
-      const images = output.images ?? [];
+      const { images } = output;
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isDefaultOpen={false}>
-          <ChatToolCardHeader className="text-success">
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
+          <ChatToolCardHeader className='text-success'>
             <ChatToolCardIcon icon={Camera} />
             <ChatToolCardTitle>
               Captured {images.length} {images.length === 1 ? 'screenshot' : 'screenshots'}
@@ -49,17 +49,15 @@ export function ChatMessageToolScreenshot({
           </ChatToolCardHeader>
           {images.length > 0 ? (
             <ChatToolCardContent>
-              <div
-                className={`grid gap-2 ${images.length === 1 ? 'grid-cols-1' : 'grid-cols-2 @md:grid-cols-3'}`}
-              >
+              <div className={`grid gap-2 ${images.length === 1 ? 'grid-cols-1' : 'grid-cols-2 @md:grid-cols-3'}`}>
                 {images.map((image) => (
-                  <div key={image.view} className="flex flex-col items-center gap-1">
+                  <div key={image.view} className='flex flex-col items-center gap-1'>
                     <img
                       src={image.dataUrl}
                       alt={`${image.view} view`}
-                      className="rounded-sm border bg-background object-contain"
+                      className='rounded-sm border bg-background object-contain'
                     />
-                    <span className="text-xs text-muted-foreground">{image.view}</span>
+                    <span className='text-xs text-muted-foreground'>{image.view}</span>
                   </div>
                 ))}
               </div>
@@ -71,7 +69,7 @@ export function ChatMessageToolScreenshot({
 
     case 'output-error': {
       return (
-        <ChatToolError errorText={part.errorText} fallbackIcon={XCircle} fallbackTitle="Failed to capture screenshot" />
+        <ChatToolError errorText={part.errorText} fallbackIcon={XCircle} fallbackTitle='Failed to capture screenshot' />
       );
     }
 

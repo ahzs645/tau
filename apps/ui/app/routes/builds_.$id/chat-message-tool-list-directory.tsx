@@ -26,7 +26,7 @@ export function ChatMessageToolListDirectory({
       const path = input?.path ?? '/';
 
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
               <ChatToolAction>Listing</ChatToolAction> <ChatToolDescription>{path}...</ChatToolDescription>
@@ -50,7 +50,7 @@ export function ChatMessageToolListDirectory({
       });
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FolderOpen} />
             <ChatToolCardTitle>
@@ -61,9 +61,9 @@ export function ChatMessageToolListDirectory({
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
-            <ChatToolCardList maxHeight="max-h-40">
+            <ChatToolCardList maxHeight='max-h-40'>
               {sortedEntries.length === 0 ? (
-                <ChatToolCardListItem className="text-muted-foreground/70 italic">
+                <ChatToolCardListItem className='text-muted-foreground/70 italic'>
                   (empty directory)
                 </ChatToolCardListItem>
               ) : (
@@ -85,7 +85,7 @@ export function ChatMessageToolListDirectory({
 
     case 'output-error': {
       return (
-        <ChatToolError errorText={part.errorText} fallbackIcon={FolderOpen} fallbackTitle="Failed to list directory" />
+        <ChatToolError errorText={part.errorText} fallbackIcon={FolderOpen} fallbackTitle='Failed to list directory' />
       );
     }
 

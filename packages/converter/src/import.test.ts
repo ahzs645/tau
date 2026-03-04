@@ -178,10 +178,21 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   },
 
-  createCubeTestCase('stl', { variant: 'binary', geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
-  createCubeTestCase('stl', { variant: 'ascii', geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('stl', {
+    variant: 'binary',
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
+  createCubeTestCase('stl', {
+    variant: 'ascii',
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
-  createCubeTestCase('obj', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('obj', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
   {
     format: 'obj',
     files: ['cube-materials.obj', 'cube-materials.mtl'],
@@ -197,11 +208,22 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   },
 
-  createCubeTestCase('ply', { variant: 'binary', geometry: assimpCubeGeometry, structure: 'directMesh' }),
-  createCubeTestCase('ply', { variant: 'ascii', geometry: assimpCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('ply', {
+    variant: 'binary',
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
+  createCubeTestCase('ply', {
+    variant: 'ascii',
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
 
   // FBX binary/ascii create complex nested structures - skip structure validation
-  createCubeTestCase('fbx', { variant: 'binary', geometry: assimpCubeGeometry }),
+  createCubeTestCase('fbx', {
+    variant: 'binary',
+    geometry: assimpCubeGeometry,
+  }),
   createCubeTestCase('fbx', { variant: 'ascii', geometry: assimpCubeGeometry }),
   createCubeTestCase('fbx', {
     variant: 'animations',
@@ -216,8 +238,14 @@ const loaderTestCases: LoaderTestCase[] = [
     skipReason: 'GLTF texture loading does not work in Node.js yet.',
   }),
 
-  createCubeTestCase('wrl', { geometry: assimpCubeGeometry, structure: 'directMesh' }),
-  createCubeTestCase('x3dv', { geometry: assimpCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('wrl', {
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
+  createCubeTestCase('x3dv', {
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
 
   // DAE creates complex multi-mesh structures - skip structure validation
   createCubeTestCase('dae', { geometry: assimpCubeGeometry }),
@@ -256,8 +284,14 @@ const loaderTestCases: LoaderTestCase[] = [
   // 3DS creates complex multi-mesh structures - skip structure validation
   createCubeTestCase('3ds', { geometry: assimpCubeGeometry }),
 
-  createCubeTestCase('amf', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
-  createCubeTestCase('lwo', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('amf', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
+  createCubeTestCase('lwo', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
   createCubeTestCase('x3d', {
     geometry: createGeometryVariant(assimpCubeGeometry, {
@@ -279,7 +313,10 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
   createSkippedTestCase('x3db', 'X3DB (binary) loader is not implemented yet.'),
 
-  createCubeTestCase('xgl', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('xgl', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
   createCubeTestCase('ifc', {
     variant: 'freecad',
@@ -348,9 +385,15 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   }),
 
-  createCubeTestCase('off', { geometry: assimpCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('off', {
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
 
-  createCubeTestCase('x', { geometry: assimpCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('x', {
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
 
   createCubeTestCase('smd', {
     geometry: assimpCubeGeometry,
@@ -369,14 +412,29 @@ const loaderTestCases: LoaderTestCase[] = [
   // MD5MESH creates complex skeletal animation structures - skip structure validation
   createCubeTestCase('md5mesh', { geometry: assimpCubeGeometry }),
 
-  createCubeTestCase('ac', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('ac', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
-  createCubeTestCase('nff', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('nff', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
-  createCubeTestCase('ogex', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
-  createCubeTestCase('mesh.xml', { geometry: assimpCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('ogex', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
+  createCubeTestCase('mesh.xml', {
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
 
-  createCubeTestCase('cob', { geometry: assimpCubeGeometry, structure: 'containerWithMeshChild' }),
+  createCubeTestCase('cob', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
   createCubeTestCase('drc', {
     geometry: createGeometryVariant(optimizedCubeGeometry, {
@@ -539,7 +597,10 @@ const loaderTestCases: LoaderTestCase[] = [
     // Skip structure validation for complex BREP - has complex multi-mesh structure
     skip: false,
   }),
-  createCubeTestCase('brep', { geometry: optimizedCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('brep', {
+    geometry: optimizedCubeGeometry,
+    structure: 'directMesh',
+  }),
 
   // ========================================================================
   // UNSUPPORTED FORMATS

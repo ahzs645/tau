@@ -41,7 +41,7 @@ export function ChatEditorExplorerFiles({
   }));
 
   return (
-    <Tree elements={treeElements} className="px-1">
+    <Tree elements={treeElements} className='px-1'>
       {files.map((file) => {
         const isSelected = selectedFileId === file.id;
 
@@ -50,7 +50,7 @@ export function ChatEditorExplorerFiles({
             key={file.id}
             id={file.id}
             name={file.name}
-            icon={<FileIcon className="size-4" />}
+            icon={<FileIcon className='size-4' />}
             isSelected={isSelected}
             onClick={() => {
               handleFileClick(file.id);

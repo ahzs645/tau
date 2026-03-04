@@ -10,6 +10,7 @@ import { RoundedRectangleGeometry } from '#components/geometry/graphics/three/ge
 import { adjustHexColorBrightness } from '#utils/color.utils.js';
 
 // Module-scope scratch vectors for PlaneSelector useFrame (avoids per-frame allocations)
+// oxlint-disable-next-line unicorn-js/prevent-abbreviations -- dir refers to direction vector, not directory
 const _normalizedDir = new THREE.Vector3();
 const _baseOffset = new THREE.Vector3();
 const _depthOffset = new THREE.Vector3();
@@ -321,12 +322,12 @@ function PlaneSelector({
   const [forwardPlaneName] = getLabelsForUpDirection(planeId, naming, upDirection);
 
   const frontFontGeometry = useMemo(
-    // eslint-disable-next-line new-cap -- Three.js naming convention
+    // oxlint-disable-next-line new-cap -- Three.js naming convention
     () => FontGeometry({ text: forwardPlaneName, depth: textDepth, size: 0.2 }),
     [forwardPlaneName, textDepth],
   );
   const roundedRectangleGeometry = useMemo(
-    // eslint-disable-next-line new-cap -- Three.js naming convention
+    // oxlint-disable-next-line new-cap -- Three.js naming convention
     () => RoundedRectangleGeometry({ width: 1, height: 1, radius: 0.1, smoothness: 16, depth: labelDepth }),
     [labelDepth],
   );
@@ -391,7 +392,7 @@ function PlaneSelector({
         <meshMatcapMaterial
           transparent
           matcap={matcapTexture}
-          color="black"
+          color='black'
           opacity={1}
           side={THREE.FrontSide}
           depthTest={false}
@@ -574,8 +575,8 @@ export function SectionViewControls({
 
       <TransformControls
         object={transformControlsRef as React.RefObject<THREE.Object3D>}
-        mode="translate"
-        space="local"
+        mode='translate'
+        space='local'
         size={1}
         visible={false}
         showX={Math.abs(normal.x) > 0.5}
@@ -608,8 +609,8 @@ export function SectionViewControls({
       />
       <TransformControls
         object={transformControlsRef as React.RefObject<THREE.Object3D>}
-        mode="rotate"
-        space="local"
+        mode='rotate'
+        space='local'
         size={1}
         visible={false}
         showX={Math.abs(normal.y) > 0.5 || Math.abs(normal.z) > 0.5}

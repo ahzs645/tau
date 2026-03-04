@@ -92,116 +92,116 @@ export function NavBugReportDialog(): React.JSX.Element {
       <Tooltip>
         <TooltipTrigger asChild>
           <DialogTrigger asChild>
-            <SidebarMenuButton className="size-7">
-              <Bug className="size-4" />
-              <span className="sr-only">Report a bug</span>
+            <SidebarMenuButton className='size-7'>
+              <Bug className='size-4' />
+              <span className='sr-only'>Report a bug</span>
             </SidebarMenuButton>
           </DialogTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">Report a bug</TooltipContent>
+        <TooltipContent side='top'>Report a bug</TooltipContent>
       </Tooltip>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
+      <DialogContent className='max-h-[90vh] overflow-y-auto'>
         <DialogHeader>
           <DialogTitle>Report a Bug</DialogTitle>
           <DialogDescription>
             Help us improve by reporting issues. You&apos;ll be taken to GitHub to submit your report.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <label htmlFor="bug-title" className="text-sm font-medium">
+        <div className='flex flex-col gap-4'>
+          <div className='flex flex-col gap-2'>
+            <label htmlFor='bug-title' className='text-sm font-medium'>
               Title
             </label>
             <Input
-              id="bug-title"
-              placeholder="Brief summary of the bug"
+              id='bug-title'
+              placeholder='Brief summary of the bug'
               value={formData.title}
               onChange={(event) => {
                 setFormData({ ...formData, title: event.target.value });
               }}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="bug-description" className="text-sm font-medium">
+          <div className='flex flex-col gap-2'>
+            <label htmlFor='bug-description' className='text-sm font-medium'>
               Description
             </label>
             <Textarea
-              id="bug-description"
-              placeholder="Describe the bug you encountered"
+              id='bug-description'
+              placeholder='Describe the bug you encountered'
               value={formData.description}
               onChange={(event) => {
                 setFormData({ ...formData, description: event.target.value });
               }}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="bug-steps" className="text-sm font-medium">
+          <div className='flex flex-col gap-2'>
+            <label htmlFor='bug-steps' className='text-sm font-medium'>
               Steps to Reproduce
             </label>
             <Textarea
-              id="bug-steps"
-              placeholder="1. Go to...&#10;2. Click on...&#10;3. See error..."
+              id='bug-steps'
+              placeholder='1. Go to...&#10;2. Click on...&#10;3. See error...'
               value={formData.stepsToReproduce}
               onChange={(event) => {
                 setFormData({ ...formData, stepsToReproduce: event.target.value });
               }}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="bug-expected" className="text-sm font-medium">
+          <div className='flex flex-col gap-2'>
+            <label htmlFor='bug-expected' className='text-sm font-medium'>
               Expected Behavior
             </label>
             <Textarea
-              id="bug-expected"
-              placeholder="What should have happened?"
+              id='bug-expected'
+              placeholder='What should have happened?'
               value={formData.expectedBehavior}
               onChange={(event) => {
                 setFormData({ ...formData, expectedBehavior: event.target.value });
               }}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="bug-actual" className="text-sm font-medium">
+          <div className='flex flex-col gap-2'>
+            <label htmlFor='bug-actual' className='text-sm font-medium'>
               Actual Behavior
             </label>
             <Textarea
-              id="bug-actual"
-              placeholder="What actually happened?"
+              id='bug-actual'
+              placeholder='What actually happened?'
               value={formData.actualBehavior}
               onChange={(event) => {
                 setFormData({ ...formData, actualBehavior: event.target.value });
               }}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <label htmlFor="bug-context" className="text-sm font-medium">
+          <div className='flex flex-col gap-2'>
+            <label htmlFor='bug-context' className='text-sm font-medium'>
               Additional Context
             </label>
             <Textarea
-              id="bug-context"
-              placeholder="Any other context, screenshots, or information"
+              id='bug-context'
+              placeholder='Any other context, screenshots, or information'
               value={formData.additionalContext}
               onChange={(event) => {
                 setFormData({ ...formData, additionalContext: event.target.value });
               }}
             />
           </div>
-          <div className="flex items-center gap-2">
+          <div className='flex items-center gap-2'>
             <Checkbox
-              id="browser-info"
+              id='browser-info'
               checked={formData.includeBrowserInfo}
               onCheckedChange={(checked) => {
                 setFormData({ ...formData, includeBrowserInfo: Boolean(checked) });
               }}
             />
-            <label htmlFor="browser-info" className="text-sm">
+            <label htmlFor='browser-info' className='text-sm'>
               Include browser information (recommended)
             </label>
           </div>
         </div>
         <DialogFooter>
           <Button
-            variant="outline"
+            variant='outline'
             onClick={() => {
               setIsOpen(false);
             }}

@@ -52,13 +52,24 @@ describe('serializeMessage', () => {
   describe('file parts', () => {
     it('serializes file with filename', () => {
       const message = baseMessage([
-        { type: 'file', url: 'data:image/png;base64,abc', mediaType: 'image/png', filename: 'screenshot.png' },
+        {
+          type: 'file',
+          url: 'data:image/png;base64,abc',
+          mediaType: 'image/png',
+          filename: 'screenshot.png',
+        },
       ]);
       expect(serializeMessage(message)).toBe('[Attached file: screenshot.png (image/png)]');
     });
 
     it('serializes file without filename as image', () => {
-      const message = baseMessage([{ type: 'file', url: 'data:image/webp;base64,xyz', mediaType: 'image/webp' }]);
+      const message = baseMessage([
+        {
+          type: 'file',
+          url: 'data:image/webp;base64,xyz',
+          mediaType: 'image/webp',
+        },
+      ]);
       expect(serializeMessage(message)).toBe('[Attached image (image/webp)]');
     });
   });
@@ -66,7 +77,12 @@ describe('serializeMessage', () => {
   describe('source-url parts', () => {
     it('serializes as markdown link with title', () => {
       const message = baseMessage([
-        { type: 'source-url', sourceId: 's1', url: 'https://example.com', title: 'Example' },
+        {
+          type: 'source-url',
+          sourceId: 's1',
+          url: 'https://example.com',
+          title: 'Example',
+        },
       ]);
       expect(serializeMessage(message)).toBe('[Example](https://example.com)');
     });
@@ -80,7 +96,12 @@ describe('serializeMessage', () => {
   describe('source-document parts', () => {
     it('serializes document reference', () => {
       const message = baseMessage([
-        { type: 'source-document', sourceId: 's1', mediaType: 'application/pdf', title: 'Doc' },
+        {
+          type: 'source-document',
+          sourceId: 's1',
+          mediaType: 'application/pdf',
+          title: 'Doc',
+        },
       ]);
       expect(serializeMessage(message)).toBe('[Document: Doc]');
     });
@@ -345,7 +366,14 @@ describe('serializeMessage', () => {
             passed: 2,
             total: 3,
             passes: [{ id: 'p1', requirement: 'r1' }],
-            failures: [{ id: 'f1', requirement: 'req', reason: 'failed', suggestion: 'fix' }],
+            failures: [
+              {
+                id: 'f1',
+                requirement: 'req',
+                reason: 'failed',
+                suggestion: 'fix',
+              },
+            ],
           },
         },
       ]);

@@ -151,8 +151,10 @@ describe('parseStderrLine', () => {
   describe('Column positions from file contents (1-based)', () => {
     it('should use line content to set start and end columns', () => {
       const errorLine = 'x += 90 + 2*tray_clearance;';
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'main.scad': `line 1\n${errorLine}\nline 3`,
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -176,8 +178,10 @@ describe('parseStderrLine', () => {
     it('should find first non-whitespace character for start column with indented code', () => {
       // Simulate indented error line like "    x += 90 + tray_clearance;"
       const errorLine = '    x += 90 + tray_clearance;';
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'main.scad': `line 1\n${errorLine}\nline 3`,
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -200,8 +204,10 @@ describe('parseStderrLine', () => {
 
     it('should handle tabs as leading whitespace', () => {
       const errorLine = '\t\tx += 1;';
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'main.scad': `line 1\n${errorLine}\nline 3` });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'main.scad': `line 1\n${errorLine}\nline 3`,
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -217,8 +223,10 @@ describe('parseStderrLine', () => {
     });
 
     it('should fallback to 1000 when file is not in contents map', () => {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'other.scad': 'content' });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'other.scad': 'content',
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -235,8 +243,10 @@ describe('parseStderrLine', () => {
     });
 
     it('should fallback to 1000 when line number is out of range', () => {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'main.scad': 'line 1\nline 2' });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'main.scad': 'line 1\nline 2',
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -311,8 +321,10 @@ describe('parseStderrLine', () => {
 
     it('should use actual line content for warnings when file contents provided', () => {
       const errorLine = 'undefined_var = x;';
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'model.scad': `line 1\n${errorLine}\nline 3` });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'model.scad': `line 1\n${errorLine}\nline 3`,
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -330,8 +342,10 @@ describe('parseStderrLine', () => {
 
     it('should find start column for indented warning lines', () => {
       const errorLine = '  undefined_var = x;';
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
-      const getFileContents = createGetFileContents({ 'model.scad': `line 1\n${errorLine}\nline 3` });
+      const getFileContents = createGetFileContents({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Test file name
+        'model.scad': `line 1\n${errorLine}\nline 3`,
+      });
 
       const errors: KernelIssue[] = [];
       parseStderrLine({
@@ -429,9 +443,24 @@ describe('parseStderrLine', () => {
             endColumn: 1000,
           },
           stackFrames: [
-            { functionName: 'assert', fileName: 'main.scad', lineNumber: 6, context: 'framework' },
-            { functionName: 'inner()', fileName: 'main.scad', lineNumber: 5, context: 'user' },
-            { functionName: 'inner', fileName: 'main.scad', lineNumber: 2, context: 'user' },
+            {
+              functionName: 'assert',
+              fileName: 'main.scad',
+              lineNumber: 6,
+              context: 'framework',
+            },
+            {
+              functionName: 'inner()',
+              fileName: 'main.scad',
+              lineNumber: 5,
+              context: 'user',
+            },
+            {
+              functionName: 'inner',
+              fileName: 'main.scad',
+              lineNumber: 2,
+              context: 'user',
+            },
           ],
         },
       ]);
@@ -461,8 +490,18 @@ describe('parseStderrLine', () => {
           },
           // Leading slashes should be stripped from file names
           stackFrames: [
-            { functionName: 'assert', fileName: 'lib.scad', lineNumber: 2, context: 'framework' },
-            { functionName: 'broken_module', fileName: 'main.scad', lineNumber: 3, context: 'user' },
+            {
+              functionName: 'assert',
+              fileName: 'lib.scad',
+              lineNumber: 2,
+              context: 'framework',
+            },
+            {
+              functionName: 'broken_module',
+              fileName: 'main.scad',
+              lineNumber: 3,
+              context: 'user',
+            },
           ],
         },
       ]);
@@ -537,8 +576,18 @@ describe('parseStderrLine', () => {
             endColumn: 1000,
           },
           stackFrames: [
-            { functionName: 'assert', fileName: 'a.scad', lineNumber: 1, context: 'framework' },
-            { functionName: 'mod_a', fileName: 'main.scad', lineNumber: 5, context: 'user' },
+            {
+              functionName: 'assert',
+              fileName: 'a.scad',
+              lineNumber: 1,
+              context: 'framework',
+            },
+            {
+              functionName: 'mod_a',
+              fileName: 'main.scad',
+              lineNumber: 5,
+              context: 'user',
+            },
           ],
         },
         {
@@ -552,7 +601,14 @@ describe('parseStderrLine', () => {
             endLineNumber: 3,
             endColumn: 1000,
           },
-          stackFrames: [{ functionName: 'assert', fileName: 'b.scad', lineNumber: 3, context: 'framework' }],
+          stackFrames: [
+            {
+              functionName: 'assert',
+              fileName: 'b.scad',
+              lineNumber: 3,
+              context: 'framework',
+            },
+          ],
         },
       ]);
     });
@@ -699,9 +755,19 @@ describe('parseStderrLine', () => {
           },
           stackFrames: [
             // Deepest first: middle.scad includes bad.scad
-            { functionName: 'include', fileName: 'middle.scad', lineNumber: 1, context: 'user' },
+            {
+              functionName: 'include',
+              fileName: 'middle.scad',
+              lineNumber: 1,
+              context: 'user',
+            },
             // Shallowest: main.scad includes middle.scad
-            { functionName: 'include', fileName: 'main.scad', lineNumber: 1, context: 'user' },
+            {
+              functionName: 'include',
+              fileName: 'main.scad',
+              lineNumber: 1,
+              context: 'user',
+            },
           ],
         },
       ]);

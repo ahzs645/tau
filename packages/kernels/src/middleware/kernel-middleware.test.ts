@@ -17,7 +17,13 @@ import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
 // Mock dependencies for testing
 const mockDependencies: readonly Dependency[] = [
   { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-  { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, options: {} },
+  {
+    type: 'middleware',
+    name: 'TestMiddleware',
+    version: '1',
+    index: 0,
+    options: {},
+  },
   { type: 'framework', name: 'tau', version: '0.0.1' },
 ];
 
@@ -217,7 +223,7 @@ describe('createMiddlewareState', () => {
 
     // Invalid update should throw
     expect(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- Testing invalid input
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- Testing invalid input
       const invalidValue: number = 'not a number' as any;
       state.update({ count: invalidValue });
     }).toThrow();
@@ -337,8 +343,12 @@ describe('wrap hook behavior', () => {
     });
 
     const result = await middleware.wrapCreateGeometry!(
-      { filePath: '/builds/test/test.kcl', basePath: '/builds/test', parameters: {} },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
+      {
+        filePath: '/builds/test/test.kcl',
+        basePath: '/builds/test',
+        parameters: {},
+      },
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
       runtime,
     );
@@ -347,7 +357,7 @@ describe('wrap hook behavior', () => {
     expect(result.success).toBe(true);
 
     if (result.success) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Testing dynamic property
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Testing dynamic property
       expect((result.data[0] as any).transformed).toBe(true);
     }
   });
@@ -355,7 +365,13 @@ describe('wrap hook behavior', () => {
   it('should allow wrap hooks to short-circuit by not calling handler', async () => {
     const cachedResult = {
       success: true as const,
-      data: [{ format: 'gltf' as const, hash: 'a'.repeat(64), content: new Uint8Array([1, 2, 3]) }],
+      data: [
+        {
+          format: 'gltf' as const,
+          hash: 'a'.repeat(64),
+          content: new Uint8Array([1, 2, 3]),
+        },
+      ],
       issues: [],
     };
 
@@ -370,7 +386,11 @@ describe('wrap hook behavior', () => {
 
     const mockHandler = vi.fn();
 
-    const input = { filePath: '/builds/test/test.kcl', basePath: '/builds/test', parameters: {} };
+    const input = {
+      filePath: '/builds/test/test.kcl',
+      basePath: '/builds/test',
+      parameters: {},
+    };
     const runtime = createMiddlewareRuntime({
       onLog: vi.fn() as OnWorkerLog,
       middlewareName: 'Test',
@@ -381,7 +401,7 @@ describe('wrap hook behavior', () => {
 
     const result = await middleware.wrapCreateGeometry!(
       input,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
       runtime,
     );
@@ -431,8 +451,12 @@ describe('wrap hook behavior', () => {
     });
 
     await middleware.wrapCreateGeometry!(
-      { filePath: '/builds/test/test.kcl', basePath: '/builds/test', parameters: {} },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
+      {
+        filePath: '/builds/test/test.kcl',
+        basePath: '/builds/test',
+        parameters: {},
+      },
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
       runtime,
     );

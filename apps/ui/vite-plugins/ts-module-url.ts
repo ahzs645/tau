@@ -31,19 +31,24 @@ export function tsModuleUrlPlugin(): Plugin {
         return;
       }
 
-      const urlPattern = /new\s+URL\(\s*['"]([^'"]+\.js)['"]\s*,\s*import\.meta\.url\s*\)(\.href)?/g;
-      const dir = path.dirname(id);
+      const urlPattern = /new\s+URL\(\s*["']([^"']+\.js)["']\s*,\s*import\.meta\.url\s*\)(\.href)?/g;
+      const directory = path.dirname(id);
 
-      type UrlMatch = { full: string; relPath: string; hasHref: boolean; idx: number };
+      type UrlMatch = {
+        full: string;
+        relPath: string;
+        hasHref: boolean;
+        index: number;
+      };
 
       const matches: UrlMatch[] = [...code.matchAll(urlPattern)]
         .map((m) => ({
           full: m[0],
           relPath: m[1]!,
           hasHref: Boolean(m[2]),
-          idx: m.index,
+          index: m.index,
         }))
-        .filter(({ relPath }) => fs.existsSync(path.resolve(dir, relPath.replace(/\.js$/, '.ts'))));
+        .filter(({ relPath }) => fs.existsSync(path.resolve(directory, relPath.replace(/\.js$/, '.ts'))));
 
       if (matches.length === 0) {
         return;
@@ -52,14 +57,14 @@ export function tsModuleUrlPlugin(): Plugin {
       let result = code;
 
       for (const match of [...matches].reverse()) {
-        const tsPath = path.resolve(dir, match.relPath.replace(/\.js$/, '.ts'));
+        const tsPath = path.resolve(directory, match.relPath.replace(/\.js$/, '.ts'));
         const refId = this.emitFile({ type: 'chunk', id: tsPath });
 
         const replacement = match.hasHref
           ? `import.meta.ROLLUP_FILE_URL_${refId}`
           : `new URL(import.meta.ROLLUP_FILE_URL_${refId})`;
 
-        result = result.slice(0, match.idx) + replacement + result.slice(match.idx + match.full.length);
+        result = result.slice(0, match.index) + replacement + result.slice(match.index + match.full.length);
       }
 
       return { code: result, map: null };

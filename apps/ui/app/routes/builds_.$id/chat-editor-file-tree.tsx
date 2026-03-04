@@ -105,13 +105,13 @@ type PendingFile = {
 };
 
 // Helper to read all entries from a directory (may require multiple calls)
-async function readAllDirectoryEntries(dirReader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+async function readAllDirectoryEntries(directoryReader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
   const entries: FileSystemEntry[] = [];
   let batch: FileSystemEntry[];
   do {
-    // eslint-disable-next-line no-await-in-loop -- Must read batches sequentially
+    // oxlint-disable-next-line no-await-in-loop -- Must read batches sequentially
     batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
-      dirReader.readEntries(resolve, reject);
+      directoryReader.readEntries(resolve, reject);
     });
     entries.push(...batch);
   } while (batch.length > 0);
@@ -134,13 +134,13 @@ async function processFileSystemEntry(
   }
 
   if (entry.isDirectory) {
-    const dirEntry = entry as FileSystemDirectoryEntry;
-    const dirPath = basePath ? `${basePath}/${entry.name}` : entry.name;
-    const children = await readAllDirectoryEntries(dirEntry.createReader());
+    const directoryEntry = entry as FileSystemDirectoryEntry;
+    const directoryPath = basePath ? `${basePath}/${entry.name}` : entry.name;
+    const children = await readAllDirectoryEntries(directoryEntry.createReader());
     const results: Array<{ file: File; relativePath: string }> = [];
     for (const child of children) {
-      // eslint-disable-next-line no-await-in-loop -- Must process entries sequentially
-      const childResults = await processFileSystemEntry(child, dirPath);
+      // oxlint-disable-next-line no-await-in-loop -- Must process entries sequentially
+      const childResults = await processFileSystemEntry(child, directoryPath);
       results.push(...childResults);
     }
 
@@ -169,7 +169,7 @@ async function processDataTransferItems(
 
   // Process entries
   for (const entry of entries) {
-    // eslint-disable-next-line no-await-in-loop -- Must process entries sequentially
+    // oxlint-disable-next-line no-await-in-loop -- Must process entries sequentially
     const entryResults = await processFileSystemEntry(entry, '');
     results.push(...entryResults);
   }
@@ -527,7 +527,7 @@ export const ChatEditorFileTree = memo(function ({
         }
 
         // Move file/folder in fileManager - awaits worker call
-        // eslint-disable-next-line no-await-in-loop -- Sequential rename required for consistency
+        // oxlint-disable-next-line no-await-in-loop -- Sequential rename required for consistency
         await renameFile(oldPath, newPath);
 
         // Update file explorer paths atomically (no close/open to avoid fallback behavior)
@@ -700,7 +700,7 @@ export const ChatEditorFileTree = memo(function ({
   // Rebuild tree when file data changes
   useEffect(() => {
     tree.rebuildTree();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree changes
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree changes
   }, [fileTree]);
 
   // Sync tree search state with external enableSearch prop
@@ -710,7 +710,7 @@ export const ChatEditorFileTree = memo(function ({
     } else if (!enableSearch && tree.isSearchOpen()) {
       tree.closeSearch();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only sync when enableSearch changes
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only sync when enableSearch changes
   }, [enableSearch]);
 
   // Sync active file with tree focus
@@ -901,7 +901,11 @@ export const ChatEditorFileTree = memo(function ({
         toast.promise(
           async () => {
             await duplicateFile(originalPath, finalPath);
-            editorRef.send({ type: 'openFile', path: finalPath, source: 'user' });
+            editorRef.send({
+              type: 'openFile',
+              path: finalPath,
+              source: 'user',
+            });
           },
           {
             loading: `Duplicating ${fileName}...`,
@@ -949,7 +953,9 @@ export const ChatEditorFileTree = memo(function ({
         toast.promise(
           async () => {
             const content = await readFile(path);
-            const blob = new Blob([asBuffer(content.buffer)], { type: 'application/octet-stream' });
+            const blob = new Blob([asBuffer(content.buffer)], {
+              type: 'application/octet-stream',
+            });
             downloadBlob(blob, name);
           },
           {
@@ -978,13 +984,13 @@ export const ChatEditorFileTree = memo(function ({
     async (files: Array<{ file: File; relativePath: string }>, targetDirectory: string) => {
       for (const { file, relativePath } of files) {
         try {
-          // eslint-disable-next-line no-await-in-loop -- Files need to be read sequentially
+          // oxlint-disable-next-line no-await-in-loop -- Files need to be read sequentially
           const arrayBuffer = await file.arrayBuffer();
           const uint8Array = new Uint8Array(arrayBuffer);
           const filePath = targetDirectory ? `${targetDirectory}/${relativePath}` : relativePath;
 
           // Write file to fileManager - calls worker directly
-          // eslint-disable-next-line no-await-in-loop -- Files need to be written sequentially
+          // oxlint-disable-next-line no-await-in-loop -- Files need to be written sequentially
           await writeFile(filePath, uint8Array, { source: 'user' });
 
           // Open file in fileExplorer
@@ -1008,7 +1014,10 @@ export const ChatEditorFileTree = memo(function ({
       const directory = targetItem?.isFolder() ? uploadTargetPath : '';
 
       // Convert FileList to the new format (flat files have relativePath = filename)
-      const filesWithPaths = [...files].map((file) => ({ file, relativePath: file.name }));
+      const filesWithPaths = [...files].map((file) => ({
+        file,
+        relativePath: file.name,
+      }));
       await processDroppedFiles(filesWithPaths, directory ?? '');
 
       if (fileInputRef.current) {
@@ -1040,15 +1049,15 @@ export const ChatEditorFileTree = memo(function ({
       <input
         ref={fileInputRef}
         multiple
-        type="file"
-        className="hidden"
-        aria-label="Upload files"
+        type='file'
+        className='hidden'
+        aria-label='Upload files'
         onChange={handleFileUpload}
       />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent
-          className="sm:max-w-md"
+          className='sm:max-w-md'
           onCloseAutoFocus={(event) => {
             // Prevent default focus restoration (trigger element is gone)
             // and manually focus the tree container
@@ -1063,7 +1072,7 @@ export const ChatEditorFileTree = memo(function ({
             <AlertDialogTitle>Are you sure you want to delete &apos;{deleteItemName}&apos;?</AlertDialogTitle>
             <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="gap-2">
+          <AlertDialogFooter className='gap-2'>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction className={buttonVariants({ variant: 'destructive' })} onClick={confirmDelete}>
               Delete
@@ -1085,16 +1094,16 @@ export const ChatEditorFileTree = memo(function ({
                   onSearchChange?.(!enableSearch);
                 }}
               >
-                <Search className="size-4" />
+                <Search className='size-4' />
               </FloatingPanelMenuButton>
               <DropdownMenu>
-                <FloatingPanelMenuButton asChild tooltip="Create new file" aria-label="Create new file">
+                <FloatingPanelMenuButton asChild tooltip='Create new file' aria-label='Create new file'>
                   <DropdownMenuTrigger>
-                    <FilePlus className="size-4" />
+                    <FilePlus className='size-4' />
                   </DropdownMenuTrigger>
                 </FloatingPanelMenuButton>
                 <DropdownMenuContent
-                  align="end"
+                  align='end'
                   onCloseAutoFocus={(event) => {
                     // Prevent Radix from restoring focus to trigger
                     event.preventDefault();
@@ -1131,32 +1140,32 @@ export const ChatEditorFileTree = memo(function ({
                 </DropdownMenuContent>
               </DropdownMenu>
               <FloatingPanelMenuButton
-                aria-label="Create new folder"
-                tooltip="Create new folder"
+                aria-label='Create new folder'
+                tooltip='Create new folder'
                 onClick={handleCreateFolder}
               >
-                <FolderPlus className="mt-0.5 size-4" />
+                <FolderPlus className='mt-0.5 size-4' />
               </FloatingPanelMenuButton>
               <FloatingPanelMenuButton
-                aria-label="Collapse all folders"
-                tooltip="Collapse all folders"
+                aria-label='Collapse all folders'
+                tooltip='Collapse all folders'
                 onClick={() => {
                   tree.collapseAll();
                 }}
               >
-                <CopyMinus className="size-4" />
+                <CopyMinus className='size-4' />
               </FloatingPanelMenuButton>
             </FloatingPanelButtonGroup>
             {closeButton}
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <FloatingPanelContentBody className="group/filetree flex min-h-0 flex-col">
+        <FloatingPanelContentBody className='group/filetree flex min-h-0 flex-col'>
           {enableSearch ? (
-            <div className="flex w-full shrink-0 flex-row gap-2 border-b bg-sidebar p-2">
+            <div className='flex w-full shrink-0 flex-row gap-2 border-b bg-sidebar p-2'>
               <SearchInput
                 {...tree.getSearchInputElementProps()}
-                placeholder="Search files..."
-                className="h-7 w-full bg-background"
+                placeholder='Search files...'
+                className='h-7 w-full bg-background'
                 // Override onBlur to prevent clearing search when clicking on tree items
                 onBlur={undefined}
                 onClear={() => {
@@ -1172,19 +1181,21 @@ export const ChatEditorFileTree = memo(function ({
             <div
               data-tree-container
               {...tree.getContainerProps()}
-              className="flex min-h-full flex-1 flex-col gap-0 outline-none"
+              className='flex min-h-full flex-1 flex-col gap-0 outline-none'
             >
               <AssistiveTreeDescription tree={tree} />
               {/* Pending folder at root level */}
               {pendingFolder?.parentPath === '' ? (
                 <PendingFolderInput
-                  parentPath=""
+                  parentPath=''
                   error={pendingFolder.error}
                   allPaths={allPaths}
                   level={0}
                   onSubmit={(name) => {
                     const gitkeepPath = `${name}/.gitkeep`;
-                    void writeFile(gitkeepPath, encodeTextFile(''), { source: 'user' });
+                    void writeFile(gitkeepPath, encodeTextFile(''), {
+                      source: 'user',
+                    });
                     setPendingFolder(undefined);
                     setExpandedItems((previous) => [...previous, name]);
                   }}
@@ -1200,7 +1211,7 @@ export const ChatEditorFileTree = memo(function ({
               {pendingFile?.parentPath === '' ? (
                 <PendingFileInput
                   inputRef={pendingFileInputRef}
-                  parentPath=""
+                  parentPath=''
                   extension={pendingFile.extension}
                   defaultName={pendingFile.defaultName}
                   error={pendingFile.error}
@@ -1208,7 +1219,11 @@ export const ChatEditorFileTree = memo(function ({
                   level={0}
                   onSubmit={(filename) => {
                     void writeFile(filename, encodeTextFile(pendingFile.content), { source: 'user' });
-                    editorRef.send({ type: 'openFile', path: filename, source: 'user' });
+                    editorRef.send({
+                      type: 'openFile',
+                      path: filename,
+                      source: 'user',
+                    });
                     setPendingFile(undefined);
                   }}
                   onCancel={() => {
@@ -1316,7 +1331,11 @@ export const ChatEditorFileTree = memo(function ({
                                 onSubmit={(filename) => {
                                   const filePath = `${pendingFile.parentPath}/${filename}`;
                                   void writeFile(filePath, encodeTextFile(pendingFile.content), { source: 'user' });
-                                  editorRef.send({ type: 'openFile', path: filePath, source: 'user' });
+                                  editorRef.send({
+                                    type: 'openFile',
+                                    path: filePath,
+                                    source: 'user',
+                                  });
                                   setPendingFile(undefined);
                                 }}
                                 onCancel={() => {
@@ -1341,7 +1360,7 @@ export const ChatEditorFileTree = memo(function ({
               })()}
             </div>
           ) : (
-            <EmptyItems className="m-2">No files available</EmptyItems>
+            <EmptyItems className='m-2'>No files available</EmptyItems>
           )}
         </FloatingPanelContentBody>
       </FloatingPanelContent>
@@ -1365,7 +1384,7 @@ type TreeItemProps = {
   readonly onCopyPath: (path: string) => void;
 };
 
-// eslint-disable-next-line complexity -- UI rendering with many conditional states
+// oxlint-disable-next-line complexity -- UI rendering with many conditional states
 function TreeItem({
   item,
   isActive,
@@ -1394,7 +1413,7 @@ function TreeItem({
     const renameInputProps = item.getRenameInputProps() as React.InputHTMLAttributes<HTMLInputElement>;
     return (
       <div
-        className="relative flex h-7 items-center border border-primary py-1 pr-1 pl-2"
+        className='relative flex h-7 items-center border border-primary py-1 pr-1 pl-2'
         style={{ paddingLeft: `${paddingLeft}px` }}
       >
         {/* Indent guide lines (VS Code-style) */}
@@ -1413,19 +1432,19 @@ function TreeItem({
             />
           );
         })}
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className='flex min-w-0 flex-1 items-center gap-2'>
           {isFolder ? (
             item.isExpanded() ? (
-              <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+              <FolderOpen className='size-4 shrink-0 text-muted-foreground' />
             ) : (
-              <Folder className="size-4 shrink-0 text-muted-foreground" />
+              <Folder className='size-4 shrink-0 text-muted-foreground' />
             )
           ) : (
-            <FileExtensionIcon filename={item.getItemName()} className="size-3.5 shrink-0 text-muted-foreground" />
+            <FileExtensionIcon filename={item.getItemName()} className='size-3.5 shrink-0 text-muted-foreground' />
           )}
           <input
-            className="h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
-            autoCorrect="off"
+            className='h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0'
+            autoCorrect='off'
             {...renameInputProps}
             onFocus={(event) => {
               // Call the library's onFocus handler first if it exists
@@ -1478,7 +1497,9 @@ function TreeItem({
             }
 
             // Plain click: delegate to tree's onClick (handles selection, focus, primaryAction, expand/collapse)
-            const { onClick } = treeItemProps as { onClick?: (event: MouseEvent) => void };
+            const { onClick } = treeItemProps as {
+              onClick?: (event: MouseEvent) => void;
+            };
             onClick?.(event.nativeEvent);
           }}
         >
@@ -1500,15 +1521,15 @@ function TreeItem({
               />
             );
           })}
-          <div className="flex min-w-0 flex-1 grow items-center gap-2">
+          <div className='flex min-w-0 flex-1 grow items-center gap-2'>
             {isFolder ? (
               item.isExpanded() ? (
-                <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                <FolderOpen className='size-4 shrink-0 text-muted-foreground' />
               ) : (
-                <Folder className="size-4 shrink-0 text-muted-foreground" />
+                <Folder className='size-4 shrink-0 text-muted-foreground' />
               )
             ) : (
-              <FileExtensionIcon filename={item.getItemName()} className="size-3.5 shrink-0 text-muted-foreground" />
+              <FileExtensionIcon filename={item.getItemName()} className='size-3.5 shrink-0 text-muted-foreground' />
             )}
             <span className={cn('truncate', isOpen && 'font-medium', isActive && 'text-primary')}>
               <HighlightText text={item.getItemName()} searchTerm={searchQuery} />
@@ -1516,7 +1537,7 @@ function TreeItem({
             {hasGitChanges ? (
               <span
                 aria-label={`File has changes: ${data.gitStatus ?? ''}`}
-                className="size-2 shrink-0 rounded-full bg-yellow"
+                className='size-2 shrink-0 rounded-full bg-yellow'
                 title={`File status: ${data.gitStatus ?? ''}`}
               />
             ) : null}
@@ -1525,17 +1546,17 @@ function TreeItem({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100"
+                  variant='ghost'
+                  size='icon'
+                  className='absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100'
                   onClick={(event) => {
                     event.stopPropagation();
                   }}
                 >
-                  <MoreHorizontal className="size-3.5" />
+                  <MoreHorizontal className='size-3.5' />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="right">
+              <DropdownMenuContent align='start' side='right'>
                 <DropdownMenuItem
                   onClick={(event) => {
                     event.stopPropagation();
@@ -1602,7 +1623,7 @@ function TreeItem({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  variant="destructive"
+                  variant='destructive'
                   onClick={(event) => {
                     event.stopPropagation();
                     onDelete([item]);
@@ -1683,7 +1704,7 @@ function TreeItem({
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
-          variant="destructive"
+          variant='destructive'
           onClick={() => {
             onDelete([item]);
           }}
@@ -1759,18 +1780,18 @@ function PendingFolderInput({
   }, [onCancel]);
 
   return (
-    <div className="flex w-full flex-col gap-0.5">
+    <div className='flex w-full flex-col gap-0.5'>
       <div
-        className="flex h-7 w-full items-center border border-primary py-1 pr-1"
+        className='flex h-7 w-full items-center border border-primary py-1 pr-1'
         style={{ paddingLeft: `${paddingLeft}px` }}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Folder className="size-4 shrink-0 text-muted-foreground" />
+        <div className='flex min-w-0 flex-1 items-center gap-2'>
+          <Folder className='size-4 shrink-0 text-muted-foreground' />
           <input
             autoFocus
             value={value}
-            className="h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
-            placeholder="Folder name"
+            className='h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0'
+            placeholder='Folder name'
             onChange={(event) => {
               setValue(event.target.value);
               // Clear error when user types
@@ -1785,7 +1806,7 @@ function PendingFolderInput({
       </div>
       {error ? (
         <div
-          className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
+          className='rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive'
           style={{ marginLeft: `${paddingLeft}px` }}
         >
           {error}
@@ -1796,7 +1817,7 @@ function PendingFolderInput({
 }
 
 type PendingFileInputProps = {
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly inputRef: React.RefObject<HTMLInputElement | null>;
   readonly parentPath: string;
   readonly extension: string;
@@ -1877,22 +1898,22 @@ function PendingFileInput({
   const currentExtension = value.includes('.') ? (value.split('.').pop() ?? extension) : extension;
 
   return (
-    <div className="flex w-full flex-col gap-0.5">
+    <div className='flex w-full flex-col gap-0.5'>
       <div
-        className="flex h-7 w-full items-center border border-primary py-1 pr-1"
+        className='flex h-7 w-full items-center border border-primary py-1 pr-1'
         style={{ paddingLeft: `${paddingLeft}px` }}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className='flex min-w-0 flex-1 items-center gap-2'>
           <FileExtensionIcon
             filename={`file.${currentExtension}`}
-            className="size-3.5 shrink-0 text-muted-foreground"
+            className='size-3.5 shrink-0 text-muted-foreground'
           />
           <input
             ref={inputRef}
             autoFocus
             value={value}
-            className="h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0"
-            placeholder="New File"
+            className='h-full min-w-0 flex-1 border-none bg-transparent px-0 text-sm shadow-none outline-none focus:border-transparent focus:ring-0 focus:ring-offset-0'
+            placeholder='New File'
             onChange={(event) => {
               setValue(event.target.value);
               // Clear error when user types
@@ -1908,7 +1929,7 @@ function PendingFileInput({
       </div>
       {error ? (
         <div
-          className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
+          className='rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive'
           style={{ marginLeft: `${paddingLeft}px` }}
         >
           {error}

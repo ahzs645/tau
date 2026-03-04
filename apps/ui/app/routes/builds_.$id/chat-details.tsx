@@ -51,16 +51,16 @@ function FileSystemInfo({
   const Icon = backendIcons[backendType];
 
   return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium text-foreground">Storage:</label>
-      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
-        <Icon className="size-4 shrink-0 text-muted-foreground" />
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium">{meta.label}</span>
+    <div className='space-y-2'>
+      <label className='text-sm font-medium text-foreground'>Storage:</label>
+      <div className='flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2'>
+        <Icon className='size-4 shrink-0 text-muted-foreground' />
+        <div className='flex flex-col gap-0.5'>
+          <span className='text-sm font-medium'>{meta.label}</span>
           {backendType === 'webaccess' && connectedDirectoryName ? (
-            <span className="text-xs text-muted-foreground">{connectedDirectoryName}</span>
+            <span className='text-xs text-muted-foreground'>{connectedDirectoryName}</span>
           ) : (
-            <span className="text-xs text-muted-foreground">{meta.description}</span>
+            <span className='text-xs text-muted-foreground'>{meta.description}</span>
           )}
         </div>
       </div>
@@ -80,12 +80,12 @@ export function ChatDetailsTrigger({
     <FloatingPanelTrigger
       icon={Info}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Details
-          <KeyShortcut variant="tooltip">{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
         </div>
       }
-      tooltipSide="left"
+      tooltipSide='left'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -132,7 +132,7 @@ export function ChatDetails({
   const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleDetails);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Details</FloatingPanelContentTitle>
@@ -140,63 +140,63 @@ export function ChatDetails({
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Details
-                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedEditorKeyCombination}</KeyShortcut>
                 </div>
               )}
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
-        <FloatingPanelContentBody className="px-3 py-2">
-          <div className="space-y-4">
+        <FloatingPanelContentBody className='px-3 py-2'>
+          <div className='space-y-4'>
             {/* Project Information */}
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="project-name">
+            <div className='space-y-3'>
+              <div className='space-y-2'>
+                <label className='text-sm font-medium text-foreground' htmlFor='project-name'>
                   Name:
                 </label>
                 <Input
-                  id="project-name"
+                  id='project-name'
                   value={buildName}
-                  placeholder="Enter your build name..."
+                  placeholder='Enter your build name...'
                   onChange={(event) => {
                     updateName(event.target.value);
                   }}
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="project-description">
+              <div className='space-y-2'>
+                <label className='text-sm font-medium text-foreground' htmlFor='project-description'>
                   Description:
                 </label>
                 <Textarea
-                  id="project-description"
+                  id='project-description'
                   value={buildDescription}
                   placeholder="Describe what you're building..."
-                  className="min-h-20"
+                  className='min-h-20'
                   onChange={(event) => {
                     updateDescription(event.target.value);
                   }}
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Tags:</label>
+              <div className='space-y-2'>
+                <label className='text-sm font-medium text-foreground'>Tags:</label>
                 <Tags tags={buildTags} onTagsChange={handleTagsChange}>
-                  <TagsTrigger placeholder="Add tags..." />
+                  <TagsTrigger placeholder='Add tags...' />
                 </Tags>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Main File:</label>
+              <div className='space-y-2'>
+                <label className='text-sm font-medium text-foreground'>Main File:</label>
                 <FileSelector
                   files={availableFiles.map((path) => ({ path }))}
                   selectedFile={mainFile}
-                  placeholder="Select main file..."
-                  title="Select Main File"
-                  description="Choose the main file for your build"
-                  emptyMessage="No files available"
+                  placeholder='Select main file...'
+                  title='Select Main File'
+                  description='Choose the main file for your build'
+                  emptyMessage='No files available'
                   isDisabled={availableFiles.length === 0}
                   onSelect={handleMainFileChange}
                 />

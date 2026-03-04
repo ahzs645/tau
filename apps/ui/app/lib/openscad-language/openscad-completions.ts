@@ -1,4 +1,4 @@
-/* eslint-disable max-params -- TODO: refactor */
+/* oxlint-disable max-params -- TODO: refactor */
 import type * as Monaco from 'monaco-editor';
 import {
   documentationDescriptor,
@@ -115,19 +115,18 @@ function createInsertTextForSymbol(symbol: OpenscadModuleSymbol): string {
   return `${symbol.name}() {\n\t\${1}\n}`;
 }
 
-function createInsertTextForFunction(func: OpenscadFunctionSymbol): string {
-  if ('parameters' in func && func.parameters && func.parameters.length > 0) {
-    // Create snippet with parameter placeholders - functions with parameters get semicolon
-    const parameterSnippets = func.parameters
+function createInsertTextForFunction(functionSymbol: OpenscadFunctionSymbol): string {
+  if ('parameters' in functionSymbol && functionSymbol.parameters && functionSymbol.parameters.length > 0) {
+    const parameterSnippets = functionSymbol.parameters
       .map((parameter, index) => {
         const placeholder = index + 1;
         return `\${${placeholder}:${parameter.name}}`;
       })
       .join(', ');
-    return `${func.name}(${parameterSnippets});`;
+    return `${functionSymbol.name}(${parameterSnippets});`;
   }
 
-  return `${func.name}();`;
+  return `${functionSymbol.name}();`;
 }
 
 function createUserDefinedModuleCompletion(
@@ -136,7 +135,7 @@ function createUserDefinedModuleCompletion(
   parameters: string[],
   description: string | undefined,
   position: Monaco.Position,
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
   word: Monaco.editor.IWordAtPosition | null,
 ): Monaco.languages.CompletionItem {
   // Create snippet with parameter placeholders
@@ -183,7 +182,7 @@ function createUserDefinedFunctionCompletion(
   parameters: string[],
   description: string | undefined,
   position: Monaco.Position,
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
   word: Monaco.editor.IWordAtPosition | null,
 ): Monaco.languages.CompletionItem {
   // Create snippet with parameter placeholders
@@ -226,7 +225,7 @@ function createUserDefinedVariableCompletion(
   type: string | undefined,
   description: string | undefined,
   position: Monaco.Position,
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
   word: Monaco.editor.IWordAtPosition | null,
 ): Monaco.languages.CompletionItem {
   const documentationParts: string[] = [];
@@ -260,7 +259,7 @@ function createParameterCompletion(
   defaultValue: string | undefined,
   scopeType: 'module' | 'function',
   position: Monaco.Position,
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- this is the Monaco API type
   word: Monaco.editor.IWordAtPosition | null,
 ): Monaco.languages.CompletionItem {
   const inferredType = inferParameterType(defaultValue);
@@ -287,7 +286,7 @@ function createParameterCompletion(
 
 export function createCompletionItemProvider(monaco: typeof Monaco): Monaco.languages.CompletionItemProvider {
   return {
-    // eslint-disable-next-line complexity -- TODO: refactor
+    // oxlint-disable-next-line complexity -- TODO: refactor
     provideCompletionItems(model, position) {
       const completions: Monaco.languages.CompletionItem[] = [];
 
@@ -351,15 +350,15 @@ export function createCompletionItemProvider(monaco: typeof Monaco): Monaco.lang
       }
 
       // Add built-in functions
-      for (const func of openscadFunctions) {
+      for (const builtinFunction of openscadFunctions) {
         completions.push({
-          label: func.name,
+          label: builtinFunction.name,
           kind: monaco.languages.CompletionItemKind.Function,
           documentation: {
-            value: createDocumentationForSymbol(func),
+            value: createDocumentationForSymbol(builtinFunction),
           },
-          detail: `${signatureSymbolDescriptor.function} ${func.name}`,
-          insertText: createInsertTextForFunction(func),
+          detail: `${signatureSymbolDescriptor.function} ${builtinFunction.name}`,
+          insertText: createInsertTextForFunction(builtinFunction),
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
           range: {
             startLineNumber: position.lineNumber,
@@ -441,9 +440,16 @@ export function createCompletionItemProvider(monaco: typeof Monaco): Monaco.lang
       }
 
       // Add user-defined functions
-      for (const func of userDefined.functions) {
+      for (const userFunction of userDefined.functions) {
         completions.push(
-          createUserDefinedFunctionCompletion(monaco, func.name, func.parameters, func.description, position, word),
+          createUserDefinedFunctionCompletion(
+            monaco,
+            userFunction.name,
+            userFunction.parameters,
+            userFunction.description,
+            position,
+            word,
+          ),
         );
       }
 

@@ -51,7 +51,7 @@ function createSuccessResponse(body: string, headers?: Record<string, string>): 
 // Plugin Handler Capture Utility
 // =============================================================================
 
-type HandlerArgs = {
+type HandlerArguments = {
   path: string;
   namespace: string;
   suffix: string;
@@ -59,16 +59,16 @@ type HandlerArgs = {
   with: Record<string, string>;
 };
 
-type OnLoadArgs = HandlerArgs;
+type OnLoadArgs = HandlerArguments;
 
-type OnResolveArgs = HandlerArgs & {
+type OnResolveArgs = HandlerArguments & {
   importer: string;
   resolveDir: string;
   kind: string;
 };
 
-type CapturedHandler = (args: OnLoadArgs) => Promise<unknown>;
-type CapturedResolveHandler = (args: OnResolveArgs) => Promise<unknown>;
+type CapturedHandler = (arguments_: OnLoadArgs) => Promise<unknown>;
+type CapturedResolveHandler = (arguments_: OnResolveArgs) => Promise<unknown>;
 
 type CapturedHandlers = {
   httpUrlOnLoad: CapturedHandler;
@@ -192,7 +192,11 @@ describe('ESBuild Bundler – http-url onLoad handler', () => {
   describe('response size limit', () => {
     it('should reject responses when content-length exceeds the limit', async () => {
       const oversizedLength = String(httpFetchMaxSizeBytes + 1);
-      mockFetch.mockResolvedValue(createSuccessResponse('export default 42;', { 'Content-Length': oversizedLength }));
+      mockFetch.mockResolvedValue(
+        createSuccessResponse('export default 42;', {
+          'Content-Length': oversizedLength,
+        }),
+      );
 
       const result = (await handler({
         path: 'https://esm.sh/huge-package',

@@ -19,7 +19,7 @@ export const mimeTypes = {
 
   // Mesh
   stl: 'model/stl',
-  obj: 'model/obj',
+  obj: 'model/obj', // eslint-disable-line id-denylist -- OBJ file format identifier
   ply: 'application/x-ply',
   off: 'application/x-off',
   '3mf': 'model/3mf',

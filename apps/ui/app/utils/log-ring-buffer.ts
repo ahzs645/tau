@@ -8,7 +8,7 @@
  * detection in React selectors without comparing array contents.
  */
 export class LogRingBuffer<T> {
-  // eslint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
+  // oxlint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
   private readonly capacity: number;
   private readonly items: Array<T | undefined>;
   private head = 0;

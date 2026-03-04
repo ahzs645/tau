@@ -7,7 +7,7 @@ import type { NativeStats } from '@taucad/types';
 import { toFileStat } from '@taucad/types/constants';
 import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
 
-/* eslint-disable @protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer -- ZenFS/BrowserFS returns Buffer<ArrayBufferLike>, we must accept the wider type */
+/* oxlint-disable @protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer -- ZenFS/BrowserFS returns Buffer<ArrayBufferLike>, we must accept the wider type */
 /**
  * Minimal interface for any fs-compatible object with a `promises` namespace.
  * Matches the shape of `fs` from `@zenfs/core`, BrowserFS, memfs, and similar
@@ -29,7 +29,7 @@ export type FsLike = {
     lstat(path: string): Promise<NativeStats>;
   };
 };
-/* eslint-enable @protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer -- re-enable after FsLike type */
+/* oxlint-enable @protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer -- re-enable after FsLike type */
 
 /**
  * Create a KernelFileSystem from any fs-compatible object.
@@ -73,11 +73,11 @@ export function fromFsLike(fsLike: FsLike, rootPath = '/'): KernelFileSystemBase
     async writeFile(filePath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
       await fsLike.promises.writeFile(resolve(filePath), data);
     },
-    async mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<void> {
-      await fsLike.promises.mkdir(resolve(dirPath), options);
+    async mkdir(directoryPath: string, options?: { recursive?: boolean }): Promise<void> {
+      await fsLike.promises.mkdir(resolve(directoryPath), options);
     },
-    async readdir(dirPath: string): Promise<string[]> {
-      return fsLike.promises.readdir(resolve(dirPath));
+    async readdir(directoryPath: string): Promise<string[]> {
+      return fsLike.promises.readdir(resolve(directoryPath));
     },
     async unlink(filePath: string): Promise<void> {
       await fsLike.promises.unlink(resolve(filePath));
@@ -86,8 +86,8 @@ export function fromFsLike(fsLike: FsLike, rootPath = '/'): KernelFileSystemBase
       const stats = await fsLike.promises.stat(resolve(filePath));
       return toFileStat(stats);
     },
-    async rmdir(dirPath: string): Promise<void> {
-      await fsLike.promises.rmdir(resolve(dirPath));
+    async rmdir(directoryPath: string): Promise<void> {
+      await fsLike.promises.rmdir(resolve(directoryPath));
     },
     async rename(oldPath: string, newPath: string): Promise<void> {
       await fsLike.promises.rename(resolve(oldPath), resolve(newPath));

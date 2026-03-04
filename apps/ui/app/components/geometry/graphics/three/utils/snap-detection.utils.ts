@@ -62,8 +62,8 @@ function pointPlaneDistance(normal: THREE.Vector3, constant: number, p: THREE.Ve
   return normal.dot(p) - constant;
 }
 
-function edgeKey(i: number, j: number): string {
-  return i < j ? `${i}|${j}` : `${j}|${i}`;
+function edgeKey(i: number, index: number): string {
+  return i < index ? `${i}|${index}` : `${index}|${i}`;
 }
 
 type CoplanarFaceParameters = {
@@ -104,11 +104,11 @@ function collectCoplanarContiguousFace(parameters: CoplanarFaceParameters): numb
 
     const t = triangle;
     const ca = canonicalIndex[t.a]!;
-    const cb = canonicalIndex[t.b]!;
+    const callback = canonicalIndex[t.b]!;
     const cc = canonicalIndex[t.c]!;
     const edges: Array<[string, number, number]> = [
-      [edgeKey(ca, cb), ca, cb],
-      [edgeKey(cb, cc), cb, cc],
+      [edgeKey(ca, callback), ca, callback],
+      [edgeKey(callback, cc), callback, cc],
       [edgeKey(cc, ca), cc, ca],
     ];
     for (const [k] of edges) {
@@ -127,18 +127,18 @@ function collectCoplanarContiguousFace(parameters: CoplanarFaceParameters): numb
   }
 
   while (queue.length > 0) {
-    const idx = queue.shift()!;
-    const t = triangles[idx]!;
+    const index = queue.shift()!;
+    const t = triangles[index]!;
     const ca = canonicalIndex[t.a]!;
-    const cb = canonicalIndex[t.b]!;
+    const callback = canonicalIndex[t.b]!;
     const cc = canonicalIndex[t.c]!;
-    const keys = [edgeKey(ca, cb), edgeKey(cb, cc), edgeKey(cc, ca)];
+    const keys = [edgeKey(ca, callback), edgeKey(callback, cc), edgeKey(cc, ca)];
     for (const k of keys) {
       const neighbors = edgeToTriangles.get(k) ?? [];
-      for (const nIdx of neighbors) {
-        if (candidateFlags[nIdx] && !visited.has(nIdx)) {
-          visited.add(nIdx);
-          queue.push(nIdx);
+      for (const nIndex of neighbors) {
+        if (candidateFlags[nIndex] && !visited.has(nIndex)) {
+          visited.add(nIndex);
+          queue.push(nIndex);
         }
       }
     }
@@ -178,17 +178,19 @@ function getRaycastIntersection(
 function buildCanonicalVertexIndices(worldPositions: THREE.Vector3[]): number[] {
   const positionKey = (v: THREE.Vector3): string => `${v.x.toFixed(5)},${v.y.toFixed(5)},${v.z.toFixed(5)}`;
   const keyToCanonical = new Map<string, number>();
-  const canonicalIndex: number[] = Array.from({ length: worldPositions.length });
+  const canonicalIndex: number[] = Array.from({
+    length: worldPositions.length,
+  });
 
-  let idx = 0;
+  let index = 0;
   for (const wp of worldPositions) {
     const key = positionKey(wp);
     if (!keyToCanonical.has(key)) {
-      keyToCanonical.set(key, idx);
+      keyToCanonical.set(key, index);
     }
 
-    canonicalIndex[idx] = keyToCanonical.get(key)!;
-    idx++;
+    canonicalIndex[index] = keyToCanonical.get(key)!;
+    index++;
   }
 
   return canonicalIndex;
@@ -226,21 +228,21 @@ function gatherBoundaryEdges(
   const edgeCount = new Map<string, [number, number]>();
   const edgeCounter = new Map<string, number>();
 
-  for (const idx of faceTriangleIndices) {
-    const t = triangles[idx]!;
+  for (const index of faceTriangleIndices) {
+    const t = triangles[index]!;
     const ca = canonicalIndex[t.a]!;
-    const cb = canonicalIndex[t.b]!;
+    const callback = canonicalIndex[t.b]!;
     const cc = canonicalIndex[t.c]!;
     const edges: Array<[number, number]> = [
-      [ca, cb],
-      [cb, cc],
+      [ca, callback],
+      [callback, cc],
       [cc, ca],
     ];
 
-    for (const [i, j] of edges) {
-      const k = edgeKey(i, j);
+    for (const [i, index] of edges) {
+      const k = edgeKey(i, index);
       if (!edgeCount.has(k)) {
-        edgeCount.set(k, [i, j]);
+        edgeCount.set(k, [i, index]);
       }
 
       edgeCounter.set(k, (edgeCounter.get(k) ?? 0) + 1);
@@ -274,19 +276,22 @@ function tryDetectCircularFace({
   planePoint: THREE.Vector3;
 }): SnapPoint[] | undefined {
   const boundaryVertexIndices = new Set<number>();
-  for (const [i, j] of boundaryEdges) {
+  for (const [i, index] of boundaryEdges) {
     boundaryVertexIndices.add(i);
-    boundaryVertexIndices.add(j);
+    boundaryVertexIndices.add(index);
   }
 
-  const boundaryVerticesWorld: THREE.Vector3[] = [...boundaryVertexIndices].map((idx) => worldPositions[idx]!);
+  const boundaryVerticesWorld: THREE.Vector3[] = [...boundaryVertexIndices].map((index) => worldPositions[index]!);
   return detectCircleOnFace(boundaryVerticesWorld, faceNormal, planePoint);
 }
 
 function collectBoundarySnapPoints(
   boundaryEdges: Array<[number, number]>,
   worldPositions: THREE.Vector3[],
-): { snapPoints: SnapPoint[]; addPoint: (v: THREE.Vector3, type: SnapPoint['type']) => void } {
+): {
+  snapPoints: SnapPoint[];
+  addPoint: (v: THREE.Vector3, type: SnapPoint['type']) => void;
+} {
   const snapPoints: SnapPoint[] = [];
   const seen = new Set<string>();
 
@@ -298,9 +303,9 @@ function collectBoundarySnapPoints(
     }
   };
 
-  for (const [i, j] of boundaryEdges) {
+  for (const [i, index] of boundaryEdges) {
     const vi = worldPositions[i]!;
-    const vj = worldPositions[j]!;
+    const vj = worldPositions[index]!;
     addPoint(vi, 'vertex');
     addPoint(vj, 'vertex');
     addPoint(new THREE.Vector3().addVectors(vi, vj).multiplyScalar(0.5), 'edge-midpoint');
@@ -316,17 +321,17 @@ function orderBoundaryVertices(boundaryEdges: Array<[number, number]>): {
   const boundaryVertexIndexSet = new Set<number>();
   const boundaryAdj = new Map<number, number[]>();
 
-  for (const [i, j] of boundaryEdges) {
+  for (const [i, index] of boundaryEdges) {
     boundaryVertexIndexSet.add(i);
-    boundaryVertexIndexSet.add(j);
+    boundaryVertexIndexSet.add(index);
 
     const ai = boundaryAdj.get(i) ?? [];
-    ai.push(j);
+    ai.push(index);
     boundaryAdj.set(i, ai);
 
-    const aj = boundaryAdj.get(j) ?? [];
+    const aj = boundaryAdj.get(index) ?? [];
     aj.push(i);
-    boundaryAdj.set(j, aj);
+    boundaryAdj.set(index, aj);
   }
 
   const boundaryIndexList = [...boundaryVertexIndexSet];
@@ -335,21 +340,22 @@ function orderBoundaryVertices(boundaryEdges: Array<[number, number]>): {
   if (boundaryIndexList.length >= 3) {
     const start = boundaryIndexList[0]!;
     let previous = -1;
-    let curr = start;
+    let current = start;
     const maxSteps = boundaryIndexList.length + 5;
 
     for (let step = 0; step < maxSteps; step++) {
-      ordered.push(curr);
-      // eslint-disable-next-line @typescript-eslint/no-loop-func -- `previous` is always defined in the loop
-      const neighbors = (boundaryAdj.get(curr) ?? []).filter((n) => n !== previous);
+      ordered.push(current);
+
+      // oxlint-disable-next-line no-loop-func -- references loop variable intentionally
+      const neighbors = (boundaryAdj.get(current) ?? []).filter((n) => n !== previous);
       if (neighbors.length === 0) {
         break;
       }
 
       const next = neighbors[0]!;
-      previous = curr;
-      curr = next;
-      if (curr === start) {
+      previous = current;
+      current = next;
+      if (current === start) {
         break;
       }
     }
@@ -377,8 +383,8 @@ function computeFaceCenter(parameters: FaceCenterParameters): THREE.Vector3 {
     let cx = 0;
     let cy = 0;
 
-    const to2D = (idx: number): { x: number; y: number } => {
-      const p = worldPositions[idx]!;
+    const to2D = (index: number): { x: number; y: number } => {
+      const p = worldPositions[index]!;
       const rel = new THREE.Vector3().subVectors(p, refPoint);
       return { x: rel.dot(planeU), y: rel.dot(planeV) };
     };
@@ -406,8 +412,8 @@ function computeFaceCenter(parameters: FaceCenterParameters): THREE.Vector3 {
   if (!center) {
     // Fallback: average of boundary vertices
     center = new THREE.Vector3();
-    for (const idx of boundaryVertexIndexSet) {
-      center.add(worldPositions[idx]!);
+    for (const index of boundaryVertexIndexSet) {
+      center.add(worldPositions[index]!);
     }
 
     const boundaryIndexList = [...boundaryVertexIndexSet];
@@ -438,9 +444,9 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
 
   // 5. Compute reference plane from hit triangle
   const {
-    normal: refNormal,
-    constant: refConstant,
-    point: refPoint,
+    normal: referenceNormal,
+    constant: referenceConstant,
+    point: referencePoint,
   } = computeReferencePlane(triangles[triIndex]!, worldPositions);
 
   // 6. Collect contiguous coplanar face region
@@ -448,8 +454,8 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
     hitTriIndex: triIndex,
     triangles,
     worldPositions,
-    refNormal,
-    refConstant,
+    refNormal: referenceNormal,
+    refConstant: referenceConstant,
     canonicalIndex,
   });
 
@@ -460,8 +466,8 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
   const maybeCircle = tryDetectCircularFace({
     boundaryEdges,
     worldPositions,
-    faceNormal: refNormal,
-    planePoint: refPoint,
+    faceNormal: referenceNormal,
+    planePoint: referencePoint,
   });
   if (maybeCircle) {
     return maybeCircle;
@@ -476,8 +482,8 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
     ordered,
     boundaryVertexIndexSet,
     worldPositions,
-    refNormal,
-    refPoint,
+    refNormal: referenceNormal,
+    refPoint: referencePoint,
   });
   addPoint(center, 'vertex');
 
@@ -486,7 +492,10 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
 
 // ---------------------- Circle detection helpers ----------------------
 
-function constructPlaneAxes(normal: THREE.Vector3): { u: THREE.Vector3; v: THREE.Vector3 } {
+function constructPlaneAxes(normal: THREE.Vector3): {
+  u: THREE.Vector3;
+  v: THREE.Vector3;
+} {
   const tryAxis = (axis: THREE.Vector3): THREE.Vector3 => {
     const proj = axis.clone().addScaledVector(normal, -axis.dot(normal));
     if (proj.lengthSq() < 1e-10) {
@@ -643,21 +652,33 @@ function detectCircleOnFace(
   }
 
   const rms = Math.sqrt(r2sum / pts2D.length);
-  const relRms = rms / r;
+  const relativeRms = rms / r;
   const width = maxX - minX;
   const height = maxY - minY;
   const aspect = Math.max(width, height) / Math.max(1e-9, Math.min(width, height));
-  if (!(relRms <= 0.03 && aspect <= 1.05)) {
+  if (!(relativeRms <= 0.03 && aspect <= 1.05)) {
     return undefined;
   }
 
   const centerWorld = planePoint.clone().addScaledVector(u, cx).addScaledVector(v, cy);
 
   const result: SnapPoint[] = [
-    { position: centerWorld.clone().addScaledVector(u, r), type: 'edge-midpoint' },
-    { position: centerWorld.clone().addScaledVector(u, -r), type: 'edge-midpoint' },
-    { position: centerWorld.clone().addScaledVector(v, r), type: 'edge-midpoint' },
-    { position: centerWorld.clone().addScaledVector(v, -r), type: 'edge-midpoint' },
+    {
+      position: centerWorld.clone().addScaledVector(u, r),
+      type: 'edge-midpoint',
+    },
+    {
+      position: centerWorld.clone().addScaledVector(u, -r),
+      type: 'edge-midpoint',
+    },
+    {
+      position: centerWorld.clone().addScaledVector(v, r),
+      type: 'edge-midpoint',
+    },
+    {
+      position: centerWorld.clone().addScaledVector(v, -r),
+      type: 'edge-midpoint',
+    },
     { position: centerWorld, type: 'vertex' },
   ];
   return result;

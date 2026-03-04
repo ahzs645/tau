@@ -165,17 +165,17 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="overlay" size="icon" className={cn(className)}>
+            <Button variant='overlay' size='icon' className={cn(className)}>
               <Settings />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">Viewer settings</TooltipContent>
+        <TooltipContent side='top'>Viewer settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
-        align="end"
-        side="right"
-        className="w-72"
+        align='end'
+        side='right'
+        className='w-72'
         onCloseAutoFocus={(event) => {
           event.preventDefault();
         }}
@@ -191,35 +191,35 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
               <PenLine />
               Lines
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem className="h-10" isChecked={enableMatcap} onIsCheckedChange={handleMatcapToggle}>
+            <DropdownMenuSwitchItem className='h-10' isChecked={enableMatcap} onIsCheckedChange={handleMatcapToggle}>
               <Sparkles />
-              <div className="flex flex-col">
-                <span className="flex items-center gap-1">
+              <div className='flex flex-col'>
+                <span className='flex items-center gap-1'>
                   Matcap{' '}
                   <InfoTooltip>
                     A material that gives models a consistent appearance independent of scene lighting.
                     <br /> Rendering performance is improved with this enabled.
                   </InfoTooltip>
                 </span>
-                <span className="text-xs font-medium text-muted-foreground/80">
+                <span className='text-xs font-medium text-muted-foreground/80'>
                   Lighting effects are {enableMatcap ? 'inactive' : 'active'}
                 </span>
               </div>
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem
-              className="h-10"
+              className='h-10'
               isChecked={enablePostProcessing}
               onIsCheckedChange={handlePostProcessingToggle}
             >
               <Layers />
-              <div className="flex flex-col">
-                <span className="flex items-center gap-1">
+              <div className='flex flex-col'>
+                <span className='flex items-center gap-1'>
                   Post-processing{' '}
                   <InfoTooltip>
                     Enables screen-space ambient occlusion for more realistic depth and contact shadows.
                   </InfoTooltip>
                 </span>
-                <span className="text-xs font-medium text-muted-foreground/80">
+                <span className='text-xs font-medium text-muted-foreground/80'>
                   Ambient occlusion is {enablePostProcessing ? 'active' : 'inactive'}
                 </span>
               </div>

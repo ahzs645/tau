@@ -22,13 +22,13 @@ export function MeasureControl(): React.JSX.Element {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          variant="overlay"
-          size="icon"
+          variant='overlay'
+          size='icon'
           data-active={isMeasureActive ? 'true' : 'false'}
           className={cn('data-[active=true]:bg-accent data-[active=true]:text-primary', is2dGeometry && 'hidden')}
           onClick={handleClick}
         >
-          <Ruler className="size-4 -rotate-45" />
+          <Ruler className='size-4 -rotate-45' />
         </Button>
       </TooltipTrigger>
       <TooltipContent>{isMeasureActive ? 'Disable' : 'Enable'} measuring tool</TooltipContent>

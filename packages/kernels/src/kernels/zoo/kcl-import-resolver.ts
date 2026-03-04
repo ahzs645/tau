@@ -32,7 +32,7 @@ export type ReadFileFunction = (path: string) => Promise<string>;
  * @param program - The parsed KCL program AST
  * @returns Array of relative file paths that are imported
  */
-// eslint-disable-next-line @typescript-eslint/no-restricted-types -- KCL WASM API
+// oxlint-disable-next-line @typescript-eslint/no-restricted-types -- KCL WASM API
 export function extractLocalImportPaths(program: Node<Program> | null): string[] {
   const importPaths: string[] = [];
 
@@ -178,7 +178,7 @@ export async function discoverKclDependencies(
 
     for (const importPath of importPaths) {
       const resolvedPath = resolveRelativeImportPath(normalizedPath, importPath);
-      // eslint-disable-next-line no-await-in-loop -- Sequential processing required for proper depth tracking
+      // oxlint-disable-next-line no-await-in-loop -- Sequential processing required for proper depth tracking
       await resolveFile(resolvedPath, depth + 1);
     }
   };

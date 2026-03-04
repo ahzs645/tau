@@ -81,16 +81,16 @@ export function DockviewOpenFileAction({
       files={files}
       selectedFile={undefined}
       initialPath={initialPath}
-      placeholder="Open file..."
-      title="Open File"
-      description="Choose a file to open in this pane"
-      searchPlaceholder="Search files..."
-      emptyMessage="No files found."
+      placeholder='Open file...'
+      title='Open File'
+      description='Choose a file to open in this pane'
+      searchPlaceholder='Search files...'
+      emptyMessage='No files found.'
       popoverProperties={{ align: 'start' }}
       onSelect={handleSelect}
     >
-      <DockviewPaneAction aria-label="Open file">
-        <Plus className="size-3.5" />
+      <DockviewPaneAction aria-label='Open file'>
+        <Plus className='size-3.5' />
       </DockviewPaneAction>
     </FileSelector>
   );

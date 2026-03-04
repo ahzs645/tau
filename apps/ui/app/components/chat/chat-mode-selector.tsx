@@ -32,8 +32,8 @@ export function ChatModeSelector({ mode, onModeChange }: ChatModeSelectorPropert
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          variant="outline"
-          size="sm"
+          variant='outline'
+          size='sm'
           className={cn(
             'h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2',
             mode === chatMode.plan && 'border-primary/50 text-primary',
@@ -42,8 +42,8 @@ export function ChatModeSelector({ mode, onModeChange }: ChatModeSelectorPropert
             onModeChange(nextMode);
           }}
         >
-          <currentConfig.icon className="size-4" />
-          <span className="hidden text-xs @[22rem]:block">{currentConfig.shortLabel}</span>
+          <currentConfig.icon className='size-4' />
+          <span className='hidden text-xs @[22rem]:block'>{currentConfig.shortLabel}</span>
         </Button>
       </TooltipTrigger>
       <TooltipContent>

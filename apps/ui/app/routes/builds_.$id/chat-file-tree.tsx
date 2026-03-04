@@ -29,12 +29,12 @@ export const ChatFileTreeTrigger = memo(function ({
     <FloatingPanelTrigger
       icon={Files}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Files
-          <KeyShortcut variant="tooltip">{formatKeyCombination(toggleFileTreeKeyCombination)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(toggleFileTreeKeyCombination)}</KeyShortcut>
         </div>
       }
-      tooltipSide="right"
+      tooltipSide='right'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -58,7 +58,7 @@ export const ChatFileTree = memo(function (props: {
   const { formattedKeyCombination } = useKeybinding(toggleFileTreeKeyCombination, toggleFileTree);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
         <ChatEditorFileTree
           enableSearch={isSearchVisible}
@@ -66,9 +66,9 @@ export const ChatFileTree = memo(function (props: {
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Files
-                  <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedKeyCombination}</KeyShortcut>
                 </div>
               )}
             />

@@ -18,19 +18,19 @@ type AgentType = 'cad_expert' | 'research_expert' | 'supervisor' | 'unknown';
 function getAgentIcon(agent: AgentType): React.JSX.Element {
   switch (agent) {
     case 'cad_expert': {
-      return <Compass className="size-3.5" />;
+      return <Compass className='size-3.5' />;
     }
 
     case 'research_expert': {
-      return <BookOpen className="size-3.5" />;
+      return <BookOpen className='size-3.5' />;
     }
 
     case 'supervisor': {
-      return <Users className="size-3.5" />;
+      return <Users className='size-3.5' />;
     }
 
     default: {
-      return <Users className="size-3.5" />;
+      return <Users className='size-3.5' />;
     }
   }
 }
@@ -122,26 +122,26 @@ export function ChatMessageToolTransfer({ part }: { readonly part: ToolUIPart })
       {/* Direction indicator */}
       <div className={cn('flex items-center gap-1.5', isStreaming ? 'text-primary' : 'text-muted-foreground')}>
         {isStreaming ? (
-          <LoaderCircle className="size-3 animate-spin" />
+          <LoaderCircle className='size-3 animate-spin' />
         ) : isComplete ? (
-          <Check className="size-3 text-success" />
+          <Check className='size-3 text-success' />
         ) : isTransferBack ? (
-          <CornerDownLeft className="size-3" />
+          <CornerDownLeft className='size-3' />
         ) : (
-          <ArrowRight className="size-3" />
+          <ArrowRight className='size-3' />
         )}
       </div>
 
       {/* Action text */}
-      <span className="text-muted-foreground">{isTransferBack ? 'Returning to' : 'Consulting'}</span>
+      <span className='text-muted-foreground'>{isTransferBack ? 'Returning to' : 'Consulting'}</span>
 
       {/* Agent badge */}
       <div className={cn('flex items-center gap-1.5 rounded-sm px-1.5 py-0.5', 'bg-neutral/20', agentAccent)}>
         {getAgentIcon(agentType)}
         {isStreaming ? (
-          <AnimatedShinyText className="font-medium">{agentLabel}</AnimatedShinyText>
+          <AnimatedShinyText className='font-medium'>{agentLabel}</AnimatedShinyText>
         ) : (
-          <span className="font-medium">{agentLabel}</span>
+          <span className='font-medium'>{agentLabel}</span>
         )}
       </div>
     </div>

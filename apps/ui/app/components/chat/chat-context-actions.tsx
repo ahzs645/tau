@@ -515,7 +515,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
       <div className={cn('max-h-64 overflow-y-auto', className)}>
         {filteredGroupedItems.map((group) => (
           <div key={group.name}>
-            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">{group.name}</div>
+            <div className='px-2 py-1.5 text-xs font-medium text-muted-foreground'>{group.name}</div>
             {group.items.map((item) => {
               const isSelected = selectedIndex === currentFlatIndex && !item.disabled;
               const itemFlatIndex = currentFlatIndex;
@@ -526,7 +526,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
               return (
                 <button
                   key={item.id}
-                  type="button"
+                  type='button'
                   className={`hover:text-accent-foreground flex w-full items-center px-2 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 ${
                     isSelected ? 'text-accent-foreground bg-accent' : ''
                   }`}
@@ -547,7 +547,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
           </div>
         ))}
         {filteredGroupedItems.length === 0 && (
-          <div className="px-2 py-4 text-center text-sm text-muted-foreground">No results found</div>
+          <div className='px-2 py-4 text-center text-sm text-muted-foreground'>No results found</div>
         )}
       </div>
     );
@@ -566,10 +566,10 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
           side: 'top',
           className: 'w-60',
         }}
-        searchPlaceHolder="Search context..."
-        placeholder="Add context"
-        title="Add chat context"
-        description="Provide additional context for the chat. This will be used to generate a response."
+        searchPlaceHolder='Search context...'
+        placeholder='Add context'
+        title='Add chat context'
+        description='Provide additional context for the chat. This will be used to generate a response.'
         onSelect={(itemId) => {
           const selectedItem = contextItems.find((item) => item.id === itemId);
           selectedItem?.action();
@@ -578,11 +578,11 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
       >
         <TooltipTrigger asChild>
           <Button
-            variant="outline"
-            size="icon"
-            className="size-7 rounded-full text-muted-foreground hover:text-foreground"
+            variant='outline'
+            size='icon'
+            className='size-7 rounded-full text-muted-foreground hover:text-foreground'
           >
-            <AtSign className="size-3.5" />
+            <AtSign className='size-3.5' />
           </Button>
         </TooltipTrigger>
       </ComboBoxResponsive>

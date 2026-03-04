@@ -36,8 +36,8 @@ export function ChatMessageToolFileEdit({
           diffStats={diffStats}
           actions={
             <CopyButton
-              size="xs"
-              className="**:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex"
+              size='xs'
+              className='**:data-[slot=label]:hidden @xs/code:**:data-[slot=label]:flex'
               getText={() => displayContent}
             />
           }
@@ -46,7 +46,7 @@ export function ChatMessageToolFileEdit({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Pencil} fallbackTitle="File edit failed" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Pencil} fallbackTitle='File edit failed' />;
     }
 
     case 'approval-requested':

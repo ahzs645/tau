@@ -47,9 +47,9 @@ export type ChatInterfaceState = {
   drawerOpen: boolean;
   handleDrawerChange: (value: boolean) => void;
   snapPoints: Array<number | string>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   activeSnapPoint: number | string | null;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   handleSnapChange: (value: number | string | null) => void;
   // Actions
   handleTabChange: (value: string) => void;
@@ -107,7 +107,7 @@ export function useChatInterfaceState(): ChatInterfaceState {
   const [isFullHeightPanel, setIsFullHeightPanel] = useCookie(cookieName.chatInterfaceFullHeight, false);
 
   const [drawerOpen, setDrawerOpen] = useState<boolean>(activeTab !== 'viewer');
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   const [snapPoint, setSnapPoint] = useState<number | string | null>(mobileDrawerSnapPoints[0]!);
 
   const handleDrawerChange = useCallback(
@@ -136,7 +136,7 @@ export function useChatInterfaceState(): ChatInterfaceState {
     [drawerOpen, setActiveTab],
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   const handleSnapChange = useCallback((value: number | string | null): void => {
     setSnapPoint(value);
   }, []);
@@ -181,7 +181,7 @@ type UsePanePositionObserverOptions = {
  * Updates position attributes on visible panes for performant CSS selectors
  */
 export function usePanePositionObserver(
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- allowable for `ref`
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- allowable for `ref`
   allotmentRef: React.RefObject<HTMLDivElement | null>,
   options: UsePanePositionObserverOptions,
 ): void {

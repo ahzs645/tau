@@ -1,4 +1,4 @@
-/* eslint-disable complexity -- Label/line sizing and camera-facing math in a single component */
+/* oxlint-disable complexity -- Label/line sizing and camera-facing math in a single component */
 import { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
@@ -51,6 +51,7 @@ const _labelNormal = new THREE.Vector3();
 const _labelUp = new THREE.Vector3();
 const _cameraUp = new THREE.Vector3();
 const _cameraUpProjected = new THREE.Vector3();
+// oxlint-disable-next-line unicorn-js/prevent-abbreviations -- dir refers to direction vector, not directory
 const _lineDir = new THREE.Vector3();
 const _coneOffset = new THREE.Vector3();
 
@@ -290,7 +291,10 @@ export function MeasureTool(): React.JSX.Element {
           return;
         }
 
-        graphicsActor.send({ type: 'completeMeasurement', payload: pointArray });
+        graphicsActor.send({
+          type: 'completeMeasurement',
+          payload: pointArray,
+        });
       } else {
         graphicsActor.send({ type: 'startMeasurement', payload: pointArray });
       }
@@ -413,7 +417,7 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
         <cylinderGeometry args={[borderSize, borderSize, height, segments]} />
         <meshMatcapMaterial
           transparent
-          color="#000000"
+          color='#000000'
           opacity={1}
           depthTest={false}
           depthWrite={false}
@@ -598,14 +602,14 @@ function MeasurementLine({
 
   // Memoize geometries to avoid re-creating large buffers every render frame
   const textGeometry = useMemo(
-    // eslint-disable-next-line new-cap -- Three.js convention
+    // oxlint-disable-next-line new-cap -- Three.js convention
     () => LabelTextGeometry({ text: labelText, size: textSize, depth: textDepth }),
     [labelText, textSize, textDepth],
   );
 
   const backgroundGeometry = useMemo(
     () =>
-      // eslint-disable-next-line new-cap -- Three.js convention
+      // oxlint-disable-next-line new-cap -- Three.js convention
       LabelBackgroundGeometry({
         // Use placeholder string sized to reserve constant-width units area
         text: backgroundPlaceholderText,
@@ -620,7 +624,7 @@ function MeasurementLine({
 
   const backgroundOutlineGeometry = useMemo(
     () =>
-      // eslint-disable-next-line new-cap -- Three.js convention
+      // oxlint-disable-next-line new-cap -- Three.js convention
       LabelBackgroundGeometry({
         text: backgroundPlaceholderText,
         characterWidth: labelCharWidth,
@@ -714,7 +718,11 @@ function MeasurementLine({
     const startQ = new THREE.Quaternion().setFromUnitVectors(up, lineDirection.clone().negate());
     const endQ = new THREE.Quaternion().setFromUnitVectors(up, lineDirection);
     const cylinderQ = new THREE.Quaternion().setFromUnitVectors(up, lineDirection);
-    return { startQuaternion: startQ, endQuaternion: endQ, cylinderQuaternion: cylinderQ };
+    return {
+      startQuaternion: startQ,
+      endQuaternion: endQ,
+      cylinderQuaternion: cylinderQ,
+    };
   }, [lineDirection]);
 
   return (
@@ -730,7 +738,7 @@ function MeasurementLine({
         >
           {/* Unit geometry – scaled per-frame */}
           <cylinderGeometry args={[1, 1, 1, 16]} />
-          <primitive object={derivedMaterials.coneMaterial} attach="material" />
+          <primitive object={derivedMaterials.coneMaterial} attach='material' />
         </mesh>
 
         {/* Cone at start */}
@@ -743,7 +751,7 @@ function MeasurementLine({
           >
             {/* Unit geometry – scaled per-frame */}
             <coneGeometry args={[1, 1, 16]} />
-            <primitive object={derivedMaterials.coneMaterial} attach="material" />
+            <primitive object={derivedMaterials.coneMaterial} attach='material' />
           </mesh>
         )}
 
@@ -752,7 +760,7 @@ function MeasurementLine({
           <mesh ref={endConeMeshRef} position={end} quaternion={endQuaternion} userData={{ isMeasurementUi: true }}>
             {/* Unit geometry – scaled per-frame */}
             <coneGeometry args={[1, 1, 16]} />
-            <primitive object={derivedMaterials.coneMaterial} attach="material" />
+            <primitive object={derivedMaterials.coneMaterial} attach='material' />
           </mesh>
         )}
       </group>
@@ -768,13 +776,19 @@ function MeasurementLine({
               event.stopPropagation();
               setIsLabelHovered(true);
               if (id) {
-                graphicsActor.send({ type: 'setHoveredMeasurement', payload: id });
+                graphicsActor.send({
+                  type: 'setHoveredMeasurement',
+                  payload: id,
+                });
               }
             }}
             onPointerLeave={(event) => {
               event.stopPropagation();
               setIsLabelHovered(false);
-              graphicsActor.send({ type: 'setHoveredMeasurement', payload: undefined });
+              graphicsActor.send({
+                type: 'setHoveredMeasurement',
+                payload: undefined,
+              });
             }}
           >
             {(() => {
@@ -799,18 +813,18 @@ function MeasurementLine({
           </mesh>
           {/* Background */}
           <mesh position={[0, 0, 0]} userData={{ isMeasurementUi: true }}>
-            <primitive object={backgroundOutlineGeometry} attach="geometry" />
-            <primitive object={derivedMaterials.textMaterial} attach="material" />
+            <primitive object={backgroundOutlineGeometry} attach='geometry' />
+            <primitive object={derivedMaterials.textMaterial} attach='material' />
           </mesh>
           <mesh position={[0, 0, 0]} userData={{ isMeasurementUi: true }}>
-            <primitive object={backgroundGeometry} attach="geometry" />
-            <primitive object={derivedMaterials.backgroundMaterial} attach="material" />
+            <primitive object={backgroundGeometry} attach='geometry' />
+            <primitive object={derivedMaterials.backgroundMaterial} attach='material' />
           </mesh>
 
           {/* Text */}
           <mesh position={[0, 0, 0]} userData={{ isMeasurementUi: true }}>
-            <primitive object={textGeometry} attach="geometry" />
-            <primitive object={derivedMaterials.textMaterial} attach="material" />
+            <primitive object={textGeometry} attach='geometry' />
+            <primitive object={derivedMaterials.textMaterial} attach='material' />
           </mesh>
 
           {/* Pin button in top-right over label */}
@@ -836,7 +850,10 @@ function MeasurementLine({
                   // Keep hover state active when over pin button
                   setIsLabelHovered(true);
                   if (id) {
-                    graphicsActor.send({ type: 'setHoveredMeasurement', payload: id });
+                    graphicsActor.send({
+                      type: 'setHoveredMeasurement',
+                      payload: id,
+                    });
                   }
                 }}
                 onPointerOut={(event) => {
@@ -877,7 +894,7 @@ function MeasurementLine({
                 }}
               >
                 <cylinderGeometry args={[labelCharWidth * 0.12, labelCharWidth * 0.12, labelCharWidth * 0.4, 16]} />
-                <primitive object={derivedMaterials.textMaterial} attach="material" />
+                <primitive object={derivedMaterials.textMaterial} attach='material' />
               </mesh>
               <mesh
                 position={[0, -labelCharWidth * 0.2, 0]}
@@ -890,7 +907,7 @@ function MeasurementLine({
                 }}
               >
                 <coneGeometry args={[labelCharWidth * 0.15, labelCharWidth * 0.35, 16]} />
-                <primitive object={derivedMaterials.textMaterial} attach="material" />
+                <primitive object={derivedMaterials.textMaterial} attach='material' />
               </mesh>
             </group>
           ) : null}

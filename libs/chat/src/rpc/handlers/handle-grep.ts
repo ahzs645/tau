@@ -13,7 +13,7 @@ async function collectFilePaths(fileSystem: RpcFileSystem, basePath: string): Pr
     if (entry.type === 'file') {
       paths.push(fullPath);
     } else {
-      // eslint-disable-next-line no-await-in-loop -- recursive traversal
+      // oxlint-disable-next-line no-await-in-loop -- recursive traversal
       const subPaths = await collectFilePaths(fileSystem, fullPath);
       paths.push(...subPaths);
     }
@@ -41,7 +41,11 @@ export async function handleGrep(input: GrepRpcInput, fileSystem: RpcFileSystem)
       try {
         const text = await fileSystem.readFile(filePath);
         const lines = text.split('\n');
-        const fileMatches: Array<{ file: string; line: number; content: string }> = [];
+        const fileMatches: Array<{
+          file: string;
+          line: number;
+          content: string;
+        }> = [];
 
         for (const [lineIndex, line] of lines.entries()) {
           if (line && regex.test(line)) {

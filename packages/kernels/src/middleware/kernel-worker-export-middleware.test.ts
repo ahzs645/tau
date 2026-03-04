@@ -28,7 +28,13 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
 
   const defaultExportResult: ExportGeometryResult = {
     success: true,
-    data: [{ bytes: new TextEncoder().encode('test-content'), name: 'export.gltf', mimeType: 'model/gltf+json' }],
+    data: [
+      {
+        bytes: new TextEncoder().encode('test-content'),
+        name: 'export.gltf',
+        mimeType: 'model/gltf+json',
+      },
+    ],
     issues: [],
   };
 
@@ -98,7 +104,10 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
         if (result.success) {
           return {
             ...result,
-            data: result.data.map((entry) => ({ ...entry, bytes: modifiedData })),
+            data: result.data.map((entry) => ({
+              ...entry,
+              bytes: modifiedData,
+            })),
           };
         }
 
@@ -174,7 +183,13 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
   it('should allow middleware to short-circuit by not calling handler', async () => {
     const cachedResult: ExportGeometryResult = {
       success: true,
-      data: [{ bytes: new TextEncoder().encode('cached'), name: 'cached.stl', mimeType: 'model/stl' }],
+      data: [
+        {
+          bytes: new TextEncoder().encode('cached'),
+          name: 'cached.stl',
+          mimeType: 'model/stl',
+        },
+      ],
       issues: [],
     };
 

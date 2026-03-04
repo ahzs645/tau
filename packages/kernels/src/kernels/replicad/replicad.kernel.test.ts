@@ -1,5 +1,6 @@
 // @vitest-environment node
-/* eslint-disable max-lines -- comprehensive kernel test suite */
+/* oxlint-disable max-lines -- comprehensive kernel test suite */
+/* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
 import replicadKernel from '#kernels/replicad/replicad.kernel.js';
@@ -17,8 +18,6 @@ import {
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
 import type { PerformanceEntryData } from '#types/index.js';
 
-/* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
-
 // =============================================================================
 // Test Utilities
 // =============================================================================
@@ -31,8 +30,10 @@ const createWorker = async (files: Record<string, string>): ReturnType<typeof cr
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
-): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(replicadKernel, files, mainFile);
+): Promise<{
+  jsonSchema: unknown;
+  defaultParameters: Record<string, unknown>;
+}> => getTestParameters(replicadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
 const createGeometry = async ({
@@ -46,7 +47,13 @@ const createGeometry = async ({
   parameters?: Record<string, unknown>;
   options?: CreateTestWorkerOptions;
 }): ReturnType<typeof createTestGeometry> =>
-  createTestGeometry({ definition: replicadKernel, files, mainFile, parameters, options });
+  createTestGeometry({
+    definition: replicadKernel,
+    files,
+    mainFile,
+    parameters,
+    options,
+  });
 
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
@@ -222,7 +229,7 @@ describe('ReplicadWorker', () => {
     });
 
     describe('Should detect replicad via transitive imports (bundler-assisted detection)', () => {
-      const productionDetectImport = /import.*from\s+['"]replicad['"]/s.source;
+      const productionDetectImport = /import.*from\s+["']replicad["']/s.source;
 
       const createWorkerWithDetection = async (files: Record<string, string>): ReturnType<typeof createTestWorker> =>
         createTestWorker(replicadKernel, files, {
@@ -429,7 +436,11 @@ describe('ReplicadWorker', () => {
           'box.ts',
         );
 
-        expect(defaultParameters).toEqual({ width: 100, height: 50, depth: 30 });
+        expect(defaultParameters).toEqual({
+          width: 100,
+          height: 50,
+          depth: 30,
+        });
         expect(jsonSchema).toMatchObject({
           type: 'object',
           properties: {
@@ -987,7 +998,7 @@ describe('ReplicadWorker', () => {
 
     describe('Multi-file imports', () => {
       it('should handle transitive imports without direct replicad import in entry file', async () => {
-        const productionDetectImport = /import.*from\s+['"]replicad['"]/s.source;
+        const productionDetectImport = /import.*from\s+["']replicad["']/s.source;
         const result = await createGeometry({
           files: {
             'main.ts': `
@@ -1408,7 +1419,12 @@ export default function main() {
         expect(issue.message).toBe(
           'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
         );
-        expect(issue.location).toEqual(expect.objectContaining({ fileName: 'extrude_stack.ts', startLineNumber: 10 }));
+        expect(issue.location).toEqual(
+          expect.objectContaining({
+            fileName: 'extrude_stack.ts',
+            startLineNumber: 10,
+          }),
+        );
         expect(issue.stackFrames).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -1462,7 +1478,12 @@ export default function main() {
         expect(issue.type).toBe('kernel');
         expect(issue.severity).toBe('error');
         expect(issue.message).toMatch(/BRepSweep_Translation/);
-        expect(issue.location).toEqual(expect.objectContaining({ fileName: 'nested_helpers.ts', startLineNumber: 14 }));
+        expect(issue.location).toEqual(
+          expect.objectContaining({
+            fileName: 'nested_helpers.ts',
+            startLineNumber: 14,
+          }),
+        );
         expect(issue.stackFrames).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -1512,11 +1533,24 @@ export function buildGeometry() {
         expect(issue.type).toBe('kernel');
         expect(issue.severity).toBe('error');
         expect(issue.message).toMatch(/BRepSweep_Translation/);
-        expect(issue.location).toEqual(expect.objectContaining({ fileName: 'helpers.ts', startLineNumber: 10 }));
+        expect(issue.location).toEqual(
+          expect.objectContaining({
+            fileName: 'helpers.ts',
+            startLineNumber: 10,
+          }),
+        );
         expect(issue.stackFrames).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ functionName: 'buildGeometry', fileName: 'helpers.ts', context: 'user' }),
-            expect.objectContaining({ functionName: 'main', fileName: 'main.ts', context: 'user' }),
+            expect.objectContaining({
+              functionName: 'buildGeometry',
+              fileName: 'helpers.ts',
+              context: 'user',
+            }),
+            expect.objectContaining({
+              functionName: 'main',
+              fileName: 'main.ts',
+              context: 'user',
+            }),
             expect.objectContaining({ context: 'library' }),
           ]),
         );
@@ -1552,7 +1586,12 @@ export default function main() {
         expect(issue.type).toBe('kernel');
         expect(issue.severity).toBe('error');
         expect(issue.message).toMatch(/StdFail_NotDone/);
-        expect(issue.location).toEqual(expect.objectContaining({ fileName: 'fillet_fail.ts', startLineNumber: 7 }));
+        expect(issue.location).toEqual(
+          expect.objectContaining({
+            fileName: 'fillet_fail.ts',
+            startLineNumber: 7,
+          }),
+        );
         expect(issue.stackFrames).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -1599,7 +1638,9 @@ export default function main() {
           files: { 'fillet_no_trace.ts': code },
           mainFile: 'fillet_no_trace.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' } },
+          options: {
+            workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
+          },
         });
 
         assertFailure(result);
@@ -1607,7 +1648,12 @@ export default function main() {
         expect(issue.type).toBe('kernel');
         expect(issue.severity).toBe('error');
         expect(issue.message).toMatch(/StdFail_NotDone/);
-        expect(issue.location).toEqual(expect.objectContaining({ fileName: 'fillet_no_trace.ts', startLineNumber: 7 }));
+        expect(issue.location).toEqual(
+          expect.objectContaining({
+            fileName: 'fillet_no_trace.ts',
+            startLineNumber: 7,
+          }),
+        );
         expect(issue.stackFrames).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -1653,7 +1699,9 @@ export default function main() {
           files: { 'extrude_no_trace.ts': code },
           mainFile: 'extrude_no_trace.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' } },
+          options: {
+            workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
+          },
         });
 
         assertFailure(result);
@@ -1663,8 +1711,16 @@ export default function main() {
         expect(issue.message).toMatch(/BRepSweep_Translation/);
         expect(issue.stackFrames).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ functionName: 'buildShape', fileName: 'extrude_no_trace.ts', context: 'user' }),
-            expect.objectContaining({ functionName: 'main', fileName: 'extrude_no_trace.ts', context: 'user' }),
+            expect.objectContaining({
+              functionName: 'buildShape',
+              fileName: 'extrude_no_trace.ts',
+              context: 'user',
+            }),
+            expect.objectContaining({
+              functionName: 'main',
+              fileName: 'extrude_no_trace.ts',
+              context: 'user',
+            }),
           ]),
         );
       });
@@ -1690,7 +1746,12 @@ export default function main() {
           files: { 'fluent.ts': code },
           mainFile: 'fluent.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions', withSourceMapping: true } },
+          options: {
+            workerOptions: {
+              wasm: 'single-exceptions',
+              withSourceMapping: true,
+            },
+          },
         });
 
         assertFailure(result);
@@ -1714,7 +1775,13 @@ export default function main() {
         // columnNumber 6 = 'e' of extrude (location.startColumn 5 includes the '.')
         const userFrames = issue.stackFrames?.filter((frame) => frame.context === 'user');
         expect(userFrames).toEqual([
-          { functionName: 'main', fileName: 'fluent.ts', lineNumber: 10, columnNumber: 6, context: 'user' },
+          {
+            functionName: 'main',
+            fileName: 'fluent.ts',
+            lineNumber: 10,
+            columnNumber: 6,
+            context: 'user',
+          },
         ]);
 
         // Library frames: replicad internals with source-mapped positions
@@ -1791,10 +1858,14 @@ export default function main() {
 
         assertSuccess(result);
         expect(result.issues.length).toBeGreaterThan(0);
-        expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-        expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+        expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+        expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
         // Warning should point to line 1 of the file for navigation
-        expect(result.issues[0]?.location).toEqual({ fileName: 'no_return.ts', startLineNumber: 1, startColumn: 1 });
+        expect(result.issues[0]?.location).toEqual({
+          fileName: 'no_return.ts',
+          startLineNumber: 1,
+          startColumn: 1,
+        });
       });
 
       it('should return warning when main explicitly returns undefined', async () => {
@@ -1813,8 +1884,8 @@ export default function main() {
 
         assertSuccess(result);
         expect(result.issues.length).toBeGreaterThan(0);
-        expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-        expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+        expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+        expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
         // Warning should point to line 1 of the file for navigation
         expect(result.issues[0]?.location).toEqual({
           fileName: 'explicit_undefined.ts',
@@ -1835,7 +1906,10 @@ export default function main() {
 }
 `;
 
-        const result = await createGeometry({ files: { 'main.ts': code }, mainFile: 'main.ts' });
+        const result = await createGeometry({
+          files: { 'main.ts': code },
+          mainFile: 'main.ts',
+        });
         assertFailure(result);
 
         // Framework/runtime frames have machine-specific paths; filter to user frames only
@@ -1849,10 +1923,19 @@ export default function main() {
             // Source map should resolve to original file name (not blob UUID)
             // and original line 6 (not post-banner offset line 9)
             stackFrames: [
-              { functionName: 'main', fileName: 'main.ts', lineNumber: 6, columnNumber: 3, context: 'user' },
+              {
+                functionName: 'main',
+                fileName: 'main.ts',
+                lineNumber: 6,
+                columnNumber: 3,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'main.ts', startLineNumber: 6 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'main.ts',
+              startLineNumber: 6,
+            }),
           }),
         );
       });
@@ -1879,11 +1962,26 @@ export default function main() { return broken(); }
             type: 'runtime',
             severity: 'error',
             stackFrames: [
-              { functionName: 'broken', fileName: 'lib/helper.ts', lineNumber: 1, columnNumber: 28, context: 'user' },
-              { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, context: 'user' },
+              {
+                functionName: 'broken',
+                fileName: 'lib/helper.ts',
+                lineNumber: 1,
+                columnNumber: 28,
+                context: 'user',
+              },
+              {
+                functionName: 'main',
+                fileName: 'main.ts',
+                lineNumber: 3,
+                columnNumber: 41,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'lib/helper.ts', startLineNumber: 1 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'lib/helper.ts',
+              startLineNumber: 1,
+            }),
           }),
         );
       });
@@ -1902,7 +2000,10 @@ export default function main() {
 }
 `;
 
-        const result = await createGeometry({ files: { 'main.ts': code }, mainFile: 'main.ts' });
+        const result = await createGeometry({
+          files: { 'main.ts': code },
+          mainFile: 'main.ts',
+        });
         assertFailure(result);
 
         const issue = result.issues[0]!;
@@ -1913,11 +2014,26 @@ export default function main() {
             type: 'runtime',
             severity: 'error',
             stackFrames: [
-              { functionName: 'makeBadShape', fileName: 'main.ts', lineNumber: 4, columnNumber: 3, context: 'user' },
-              { functionName: 'main', fileName: 'main.ts', lineNumber: 8, columnNumber: 10, context: 'user' },
+              {
+                functionName: 'makeBadShape',
+                fileName: 'main.ts',
+                lineNumber: 4,
+                columnNumber: 3,
+                context: 'user',
+              },
+              {
+                functionName: 'main',
+                fileName: 'main.ts',
+                lineNumber: 8,
+                columnNumber: 10,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'main.ts', startLineNumber: 4 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'main.ts',
+              startLineNumber: 4,
+            }),
           }),
         );
       });
@@ -1949,12 +2065,33 @@ export function getShape() { return broken(); }
             type: 'runtime',
             severity: 'error',
             stackFrames: [
-              { functionName: 'broken', fileName: 'lib/bad.ts', lineNumber: 1, columnNumber: 28, context: 'user' },
-              { functionName: 'getShape', fileName: 'lib/middle.ts', lineNumber: 2, columnNumber: 37, context: 'user' },
-              { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, context: 'user' },
+              {
+                functionName: 'broken',
+                fileName: 'lib/bad.ts',
+                lineNumber: 1,
+                columnNumber: 28,
+                context: 'user',
+              },
+              {
+                functionName: 'getShape',
+                fileName: 'lib/middle.ts',
+                lineNumber: 2,
+                columnNumber: 37,
+                context: 'user',
+              },
+              {
+                functionName: 'main',
+                fileName: 'main.ts',
+                lineNumber: 3,
+                columnNumber: 41,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'lib/bad.ts', startLineNumber: 1 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'lib/bad.ts',
+              startLineNumber: 1,
+            }),
           }),
         );
       });
@@ -2013,7 +2150,12 @@ export default function main() {
           files: { 'box.ts': extrudeZeroCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions', withSourceMapping: true } },
+          options: {
+            workerOptions: {
+              wasm: 'single-exceptions',
+              withSourceMapping: true,
+            },
+          },
         });
 
         assertFailure(result);
@@ -2123,10 +2265,19 @@ export default function main() {
             severity: 'error',
             // Source map should resolve to full relative path including subdirectory
             stackFrames: [
-              { functionName: 'main', fileName: 'project/main.ts', lineNumber: 5, columnNumber: 15, context: 'user' },
+              {
+                functionName: 'main',
+                fileName: 'project/main.ts',
+                lineNumber: 5,
+                columnNumber: 15,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'project/main.ts', startLineNumber: 5 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'project/main.ts',
+              startLineNumber: 5,
+            }),
           }),
         );
       });
@@ -2151,7 +2302,10 @@ export default function main() {
 
       // First create geometry
       const geometryFile = createGeometryFile('box.ts');
-      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const createResult = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       assertSuccess(createResult);
 
       // Then export
@@ -2969,7 +3123,10 @@ export default function main() {
       const geometryFile = createGeometryFile('main.ts');
 
       // Override only base.width -- base.depth and base.cornerRadius should be preserved
-      const result = await worker.render({ file: geometryFile, parameters: { base: { width: 50 } } });
+      const result = await worker.render({
+        file: geometryFile,
+        parameters: { base: { width: 50 } },
+      });
 
       assertSuccess(result);
       // If shallow merge: base = { width: 50 } (missing depth, cornerRadius → runtime error)
@@ -2990,7 +3147,10 @@ export default function main() {
       const geometryFile = createGeometryFile('main.ts');
 
       // First render: 10x10x10 box
-      const result1 = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       assertSuccess(result1);
       await geometryHelpers.expectValidGltf(result1);
 
@@ -3008,7 +3168,10 @@ export default function main() {
       await worker.notifyFileChanged(['/builds/test/main.ts']);
 
       // Second render should use updated code
-      const result2 = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       assertSuccess(result2);
       await geometryHelpers.expectValidGltf(result2);
 
@@ -3030,7 +3193,10 @@ export default function main() {
       const geometryFile = createGeometryFile('main.ts');
 
       // First render
-      const result1 = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       assertSuccess(result1);
 
       // Modify file content
@@ -3047,7 +3213,10 @@ export default function main() {
       await worker.notifyFileChanged(['/builds/test/main.ts']);
 
       // Second render should use updated code
-      const result2 = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       assertSuccess(result2);
 
       // Bounding boxes must differ (10mm vs 30mm)
@@ -3056,7 +3225,7 @@ export default function main() {
     });
 
     it('should re-render with different parameters when replicad is imported transitively (production flow)', async () => {
-      const productionDetectImport = /import.*from\s+['"]replicad['"]/s.source;
+      const productionDetectImport = /import.*from\s+["']replicad["']/s.source;
 
       const worker = await createTestWorker(
         replicadKernel,
@@ -3090,7 +3259,10 @@ export default function main() {
       const canHandle1 = await worker.canHandle(geometryFile);
       expect(canHandle1).toBe(true);
 
-      const result1 = await worker.render({ file: geometryFile, parameters: { size: 30 } });
+      const result1 = await worker.render({
+        file: geometryFile,
+        parameters: { size: 30 },
+      });
       assertSuccess(result1);
       await geometryHelpers.expectValidGltf(result1);
 
@@ -3101,7 +3273,10 @@ export default function main() {
       const canHandle2 = await worker.canHandle(geometryFile);
       expect(canHandle2).toBe(true);
 
-      const result2 = await worker.render({ file: geometryFile, parameters: { size: 60 } });
+      const result2 = await worker.render({
+        file: geometryFile,
+        parameters: { size: 60 },
+      });
       assertSuccess(result2);
       await geometryHelpers.expectValidGltf(result2);
     });
@@ -3325,11 +3500,11 @@ describe('withBrepEdges option', () => {
     const glbWithout = extractGltfFromResult(withoutEdges)!;
     const glbWith = extractGltfFromResult(withEdges)!;
 
-    const docWithout = await new NodeIO().readBinary(glbWithout);
-    const docWith = await new NodeIO().readBinary(glbWith);
+    const documentWithout = await new NodeIO().readBinary(glbWithout);
+    const documentWith = await new NodeIO().readBinary(glbWith);
 
     let triangleVerticesWithout = 0;
-    for (const mesh of docWithout.getRoot().listMeshes()) {
+    for (const mesh of documentWithout.getRoot().listMeshes()) {
       for (const primitive of mesh.listPrimitives()) {
         if (primitive.getMode() === 4) {
           triangleVerticesWithout += primitive.getAttribute('POSITION')!.getCount();
@@ -3338,7 +3513,7 @@ describe('withBrepEdges option', () => {
     }
 
     let triangleVerticesWith = 0;
-    for (const mesh of docWith.getRoot().listMeshes()) {
+    for (const mesh of documentWith.getRoot().listMeshes()) {
       for (const primitive of mesh.listPrimitives()) {
         if (primitive.getMode() === 4) {
           triangleVerticesWith += primitive.getAttribute('POSITION')!.getCount();

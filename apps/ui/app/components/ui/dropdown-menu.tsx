@@ -21,19 +21,19 @@ import {
 } from '#components/ui/menu.variants.js';
 
 function DropdownMenu({ ...properties }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>): React.JSX.Element {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...properties} />;
+  return <DropdownMenuPrimitive.Root data-slot='dropdown-menu' {...properties} />;
 }
 
 function DropdownMenuPortal({
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>): React.JSX.Element {
-  return <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...properties} />;
+  return <DropdownMenuPrimitive.Portal data-slot='dropdown-menu-portal' {...properties} />;
 }
 
 function DropdownMenuTrigger({
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>): React.JSX.Element {
-  return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...properties} />;
+  return <DropdownMenuPrimitive.Trigger data-slot='dropdown-menu-trigger' {...properties} />;
 }
 
 function DropdownMenuContent({
@@ -48,7 +48,7 @@ function DropdownMenuContent({
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
-        data-slot="dropdown-menu-content"
+        data-slot='dropdown-menu-content'
         sideOffset={sideOffset}
         side={side}
         alignOffset={resolvedAlignOffset}
@@ -66,7 +66,7 @@ function DropdownMenuContent({
 function DropdownMenuGroup({
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Group>): React.JSX.Element {
-  return <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...properties} />;
+  return <DropdownMenuPrimitive.Group data-slot='dropdown-menu-group' {...properties} />;
 }
 
 function DropdownMenuItem({
@@ -80,7 +80,7 @@ function DropdownMenuItem({
 }): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.Item
-      data-slot="dropdown-menu-item"
+      data-slot='dropdown-menu-item'
       data-inset={isInset}
       data-variant={variant}
       className={cn(menuItemVariants({ variant, inset: isInset }), className)}
@@ -97,14 +97,14 @@ function DropdownMenuCheckboxItem({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.CheckboxItem
-      data-slot="dropdown-menu-checkbox-item"
+      data-slot='dropdown-menu-checkbox-item'
       className={cn(menuItemVariants({ inset: true }), 'pr-2', className)}
       checked={checked}
       {...properties}
     >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+      <span className='pointer-events-none absolute left-2 flex size-3.5 items-center justify-center'>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon className="size-4" />
+          <CheckIcon className='size-4' />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
@@ -115,7 +115,7 @@ function DropdownMenuCheckboxItem({
 function DropdownMenuRadioGroup({
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>): React.JSX.Element {
-  return <DropdownMenuPrimitive.RadioGroup data-slot="dropdown-menu-radio-group" {...properties} />;
+  return <DropdownMenuPrimitive.RadioGroup data-slot='dropdown-menu-radio-group' {...properties} />;
 }
 
 function DropdownMenuRadioItem({
@@ -125,16 +125,16 @@ function DropdownMenuRadioItem({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem>): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.RadioItem
-      data-slot="dropdown-menu-radio-item"
+      data-slot='dropdown-menu-radio-item'
       className={cn(menuItemVariants({ inset: true }), 'pr-2', className)}
       {...properties}
     >
       <span
-        data-slot="dropdown-menu-radio-item-indicator"
-        className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center"
+        data-slot='dropdown-menu-radio-item-indicator'
+        className='pointer-events-none absolute left-2 flex size-3.5 items-center justify-center'
       >
         <DropdownMenuPrimitive.ItemIndicator>
-          <CircleIcon className="size-2 fill-current" />
+          <CircleIcon className='size-2 fill-current' />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
       {children}
@@ -154,7 +154,7 @@ function DropdownMenuSwitchItem({
 }): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.Item
-      data-slot="dropdown-menu-switch-item"
+      data-slot='dropdown-menu-switch-item'
       className={cn(menuItemVariants(), 'justify-between', className)}
       onSelect={(event) => {
         event.preventDefault();
@@ -164,7 +164,7 @@ function DropdownMenuSwitchItem({
     >
       <span className={menuItemLayoutClass}>{children}</span>
       <Switch
-        className="data-[state=unchecked]:bg-muted-foreground!"
+        className='data-[state=unchecked]:bg-muted-foreground!'
         checked={isChecked}
         onCheckedChange={onIsCheckedChange}
       />
@@ -209,21 +209,21 @@ function DropdownMenuSliderItem({
 
   return (
     <div
-      data-slot="dropdown-menu-slider-item"
+      data-slot='dropdown-menu-slider-item'
       className={cn('px-3 py-2', className)}
       // Prevent dropdown from closing when interacting with slider
       onPointerDown={(event) => {
         event.stopPropagation();
       }}
     >
-      <div className="mb-2 flex items-center justify-between">
+      <div className='mb-2 flex items-center justify-between'>
         <span className={cn(menuItemLayoutClass, menuItemIconClass, 'text-sm')}>
           {children}
           {infoTooltip}
         </span>
-        <span className="text-xs text-muted-foreground">{displayValue}</span>
+        <span className='text-xs text-muted-foreground'>{displayValue}</span>
       </div>
-      <Slider value={[value]} min={min} max={max} step={step} className="w-full" onValueChange={handleValueChange} />
+      <Slider value={[value]} min={min} max={max} step={step} className='w-full' onValueChange={handleValueChange} />
     </div>
   );
 }
@@ -262,7 +262,7 @@ function DropdownMenuToggleGroupItem<T extends string>({
 
   return (
     <div
-      data-slot="dropdown-menu-toggle-group-item"
+      data-slot='dropdown-menu-toggle-group-item'
       className={cn('flex items-center justify-between px-3 py-1.5', className)}
       // Prevent dropdown from closing when interacting with toggle group
       onPointerDown={(event) => {
@@ -274,10 +274,10 @@ function DropdownMenuToggleGroupItem<T extends string>({
         {infoTooltip}
       </span>
       <ToggleGroup
-        type="single"
-        variant="outline"
+        type='single'
+        variant='outline'
         value={value}
-        className="font-semibold"
+        className='font-semibold'
         onValueChange={handleValueChange}
       >
         {options.map((option) => (
@@ -285,7 +285,7 @@ function DropdownMenuToggleGroupItem<T extends string>({
             key={option.value}
             value={option.value}
             aria-label={option.ariaLabel ?? option.value}
-            className="h-7 flex-1"
+            className='h-7 flex-1'
           >
             {option.label}
           </ToggleGroupItem>
@@ -304,7 +304,7 @@ function DropdownMenuLabel({
 }): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.Label
-      data-slot="dropdown-menu-label"
+      data-slot='dropdown-menu-label'
       data-inset={isInset}
       className={cn(menuLabelVariants({ inset: isInset }), className)}
       {...properties}
@@ -318,7 +318,7 @@ function DropdownMenuSeparator({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Separator>): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.Separator
-      data-slot="dropdown-menu-separator"
+      data-slot='dropdown-menu-separator'
       className={cn(menuSeparatorVariants(), className)}
       {...properties}
     />
@@ -326,11 +326,11 @@ function DropdownMenuSeparator({
 }
 
 function DropdownMenuShortcut({ className, ...properties }: React.ComponentProps<'span'>): React.JSX.Element {
-  return <span data-slot="dropdown-menu-shortcut" className={cn(menuShortcutClass, className)} {...properties} />;
+  return <span data-slot='dropdown-menu-shortcut' className={cn(menuShortcutClass, className)} {...properties} />;
 }
 
 function DropdownMenuSub({ ...properties }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>): React.JSX.Element {
-  return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...properties} />;
+  return <DropdownMenuPrimitive.Sub data-slot='dropdown-menu-sub' {...properties} />;
 }
 
 function DropdownMenuSubTrigger({
@@ -343,13 +343,13 @@ function DropdownMenuSubTrigger({
 }): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.SubTrigger
-      data-slot="dropdown-menu-sub-trigger"
+      data-slot='dropdown-menu-sub-trigger'
       data-inset={isInset}
       className={cn(menuItemVariants({ inset: isInset }), menuSubTriggerOpenClass, className)}
       {...properties}
     >
       {children}
-      <ChevronRightIcon className="ml-auto size-3.5" />
+      <ChevronRightIcon className='ml-auto size-3.5' />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }
@@ -361,7 +361,7 @@ function DropdownMenuSubContent({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>): React.JSX.Element {
   return (
     <DropdownMenuPrimitive.SubContent
-      data-slot="dropdown-menu-sub-content"
+      data-slot='dropdown-menu-sub-content'
       alignOffset={alignOffset}
       className={cn(
         menuContentVariants(),
@@ -412,9 +412,9 @@ function DropdownMenuSelectItem<T>({
     (item: T, selectedItem: T | undefined) => {
       const isSelected = selectedItem && getOptionValue(item) === getOptionValue(selectedItem);
       return (
-        <span className="flex w-full items-center justify-between">
+        <span className='flex w-full items-center justify-between'>
           <span>{getOptionLabel(item)}</span>
-          {isSelected ? <CheckIcon className="size-4" /> : null}
+          {isSelected ? <CheckIcon className='size-4' /> : null}
         </span>
       );
     },
@@ -423,7 +423,7 @@ function DropdownMenuSelectItem<T>({
 
   return (
     <div
-      data-slot="dropdown-menu-select-item"
+      data-slot='dropdown-menu-select-item'
       className={cn('flex items-center justify-between px-3 py-1.5', className)}
       // Prevent parent dropdown from closing when interacting with select
       onPointerDown={(event) => {
@@ -450,9 +450,9 @@ function DropdownMenuSelectItem<T>({
         }}
         onSelect={onValueChange}
       >
-        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" role="combobox">
+        <Button variant='outline' size='sm' className='h-7 gap-1 px-2 text-xs' role='combobox'>
           {getOptionLabel(value)}
-          <ChevronDownIcon className="size-3 opacity-50" />
+          <ChevronDownIcon className='size-3 opacity-50' />
         </Button>
       </ComboBoxResponsive>
     </div>

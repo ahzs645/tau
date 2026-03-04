@@ -141,7 +141,7 @@ export function registerMonacoNavigation(options: {
       }, 5000);
 
       // Ensure the target model exists (async, fire-and-forget)
-      // eslint-disable-next-line promise/prefer-await-to-then, promise/prefer-catch -- cannot be async here
+      // oxlint-disable-next-line promise/prefer-await-to-then, promise/prefer-catch -- cannot be async here
       void modelService.getOrEnsureModel(relativePath).then(
         () => {
           // Model loaded (or already existed), now open the file

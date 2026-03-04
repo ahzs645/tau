@@ -31,12 +31,12 @@ export const ChatTextareaSubmitButton = memo(function ({
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button size="icon" className="size-7 rounded-full" onClick={onCancel}>
-            <Square className="size-4 fill-primary-foreground" />
+          <Button size='icon' className='size-7 rounded-full' onClick={onCancel}>
+            <Square className='size-4 fill-primary-foreground' />
           </Button>
         </TooltipTrigger>
-        <TooltipContent className="flex items-center gap-2 align-baseline">
-          Stop <KeyShortcut variant="tooltip">{formattedCancelKeyCombination}</KeyShortcut>
+        <TooltipContent className='flex items-center gap-2 align-baseline'>
+          Stop <KeyShortcut variant='tooltip'>{formattedCancelKeyCombination}</KeyShortcut>
         </TooltipContent>
       </Tooltip>
     );
@@ -45,12 +45,12 @@ export const ChatTextareaSubmitButton = memo(function ({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button size="icon" className="size-7 rounded-full" disabled={isDisabled || isSubmitting} onClick={onSubmit}>
-          {isSubmitting ? <Loader className="size-4" /> : <ArrowUp className="size-5" />}
+        <Button size='icon' className='size-7 rounded-full' disabled={isDisabled || isSubmitting} onClick={onSubmit}>
+          {isSubmitting ? <Loader className='size-4' /> : <ArrowUp className='size-5' />}
         </Button>
       </TooltipTrigger>
-      <TooltipContent className="flex items-center gap-2 align-baseline">
-        Send <KeyShortcut variant="tooltip">{formatKeyCombination({ key: 'Enter' })}</KeyShortcut>
+      <TooltipContent className='flex items-center gap-2 align-baseline'>
+        Send <KeyShortcut variant='tooltip'>{formatKeyCombination({ key: 'Enter' })}</KeyShortcut>
       </TooltipContent>
     </Tooltip>
   );

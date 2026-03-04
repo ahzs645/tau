@@ -1,4 +1,4 @@
-/* eslint-disable new-cap -- External library uses PascalCase method names */
+/* oxlint-disable new-cap -- External library uses PascalCase method names */
 import assimpjsExporter from 'assimpjs/exporter';
 import { lookupMimeType } from '@taucad/types/constants';
 import type { ExportFile } from '@taucad/types';

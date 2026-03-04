@@ -32,8 +32,10 @@ function createMockPort(): KernelMessagePort & {
 function createMockWorker(overrides?: Partial<KernelWorker>): KernelWorker {
   return {
     initialize: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-    render: vi.fn<() => Promise<{ success: true; data: [] }>>().mockResolvedValue({ success: true, data: [] }),
-    exportGeometry: vi.fn<() => Promise<{ success: true; data: [] }>>().mockResolvedValue({ success: true, data: [] }),
+    render: vi.fn<() => Promise<{ success: true; data: unknown[] }>>().mockResolvedValue({ success: true, data: [] }),
+    exportGeometry: vi
+      .fn<() => Promise<{ success: true; data: unknown[] }>>()
+      .mockResolvedValue({ success: true, data: [] }),
     cleanup: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     notifyFileChanged: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     configureMiddleware: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -130,6 +132,7 @@ describe('createWorkerDispatcher', () => {
           async () =>
             new Promise<void>(() => {
               // Simulates Emscripten's pthread init: throws in a fire-and-forget promise
+              // oxlint-disable-next-line promise/prefer-await-to-then -- oxlint false positive: flags Promise.reject() static call, not .then() chain
               void Promise.reject(new Error('SharedArrayBuffer transfer requires self.crossOriginIsolated'));
             }),
         ),
@@ -157,6 +160,7 @@ describe('createWorkerDispatcher', () => {
         render: vi.fn().mockImplementation(
           async () =>
             new Promise(() => {
+              // oxlint-disable-next-line promise/prefer-await-to-then -- oxlint false positive: flags Promise.reject() static call, not .then() chain
               void Promise.reject(new Error('WASM worker crash'));
             }),
         ),
@@ -184,6 +188,7 @@ describe('createWorkerDispatcher', () => {
         exportGeometry: vi.fn().mockImplementation(
           async () =>
             new Promise(() => {
+              // oxlint-disable-next-line promise/prefer-await-to-then -- oxlint false positive: flags Promise.reject() static call, not .then() chain
               void Promise.reject(new Error('export worker failure'));
             }),
         ),
@@ -248,6 +253,7 @@ describe('createWorkerDispatcher', () => {
         initialize: vi.fn().mockImplementation(
           async () =>
             new Promise<void>(() => {
+              // oxlint-disable-next-line prefer-promise-reject-errors, promise/prefer-await-to-then -- testing non-Error rejection; oxlint false positive on Promise.reject()
               void Promise.reject('plain string rejection');
             }),
         ),

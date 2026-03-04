@@ -42,9 +42,9 @@ type OpenScadContext = {
 };
 
 const maxIncludeDepth = 50;
-const useIncludeRegex = /^\s*(?:use|include)\s*[<"]([^>"]+)[>"]/gm;
+const useIncludeRegex = /^\s*(?:use|include)\s*["<]([^">]+)[">]/gm;
 
-const fontsConf = `<?xml version="1.0" encoding="UTF-8"?>
+const fontsConfig = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
 </fontconfig>
@@ -83,7 +83,7 @@ function getBasename(filename: string): string {
 
 function parseUseIncludeStatements(code: string): string[] {
   const paths: string[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- RegExp match returns null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- RegExp match returns null
   let match: RegExpExecArray | null;
   useIncludeRegex.lastIndex = 0;
   while ((match = useIncludeRegex.exec(code)) !== null) {
@@ -97,8 +97,8 @@ function parseUseIncludeStatements(code: string): string[] {
 
 function resolveIncludePath(baseFilePath: string, relativePath: string): string {
   const lastSlash = baseFilePath.lastIndexOf('/');
-  const baseDir = lastSlash === -1 ? '' : baseFilePath.slice(0, lastSlash);
-  const combinedPath = baseDir ? joinPath(baseDir, relativePath) : relativePath;
+  const baseDirectory = lastSlash === -1 ? '' : baseFilePath.slice(0, lastSlash);
+  const combinedPath = baseDirectory ? joinPath(baseDirectory, relativePath) : relativePath;
   const segments = combinedPath.split('/');
   const resolved: string[] = [];
   for (const segment of segments) {
@@ -148,7 +148,7 @@ async function getReferencedScadFiles(options: {
     const dependencies = parseUseIncludeStatements(code);
     for (const depPath of dependencies) {
       const resolvedPath = resolveIncludePath(normalizedPath, depPath);
-      // eslint-disable-next-line no-await-in-loop -- sequential for depth tracking
+      // oxlint-disable-next-line no-await-in-loop -- sequential for depth tracking
       await resolveFile(resolvedPath, depth + 1);
     }
   };
@@ -185,10 +185,14 @@ async function createInstance(options: {
   const instance = await createOpenSCAD({
     noInitialRun: true,
     print(message: string) {
-      logger.custom(parseLogLevel(message), message, { data: { operation: 'internal' } });
+      logger.custom(parseLogLevel(message), message, {
+        data: { operation: 'internal' },
+      });
     },
     printErr(message: string) {
-      logger.custom(parseLogLevel(message), message, { data: { operation: 'internal' } });
+      logger.custom(parseLogLevel(message), message, {
+        data: { operation: 'internal' },
+      });
       stderrParser?.parseLine(message);
     },
   });
@@ -206,10 +210,10 @@ function ensureDirectoryForFile(instance: OpenSCAD, filePath: string): void {
     return;
   }
 
-  const dirPath = filePath.slice(0, lastSlashIndex);
-  const dirSegments = dirPath.split('/');
+  const directoryPath = filePath.slice(0, lastSlashIndex);
+  const directorySegments = directoryPath.split('/');
   let currentPath = '';
-  for (const segment of dirSegments) {
+  for (const segment of directorySegments) {
     currentPath = currentPath ? joinPath(currentPath, segment) : segment;
     try {
       instance.FS.mkdir(currentPath);
@@ -235,7 +239,12 @@ async function mountFileSystem(
   (instance.FS as unknown as { chdir(path: string): void }).chdir('/');
   instance.FS.mkdir('/locale');
 
-  const referencedFiles = await getReferencedScadFiles({ mainFile, basePath, filesystem, logger });
+  const referencedFiles = await getReferencedScadFiles({
+    mainFile,
+    basePath,
+    filesystem,
+    logger,
+  });
   logger.debug(`Mounting ${referencedFiles.length} referenced files`);
 
   const uncachedAbsolutePaths = referencedFiles
@@ -251,7 +260,7 @@ async function mountFileSystem(
     const absolutePath = resolveFromRoot(relativePath, basePath);
     const content =
       fileContentCache.get(absolutePath) ??
-      // eslint-disable-next-line no-await-in-loop -- sequential fallback for cache misses
+      // oxlint-disable-next-line no-await-in-loop -- sequential fallback for cache misses
       (await filesystem.readFile(absolutePath));
 
     ensureDirectoryForFile(instance, relativePath);
@@ -294,10 +303,12 @@ async function mountFonts(instance: OpenSCAD, context: OpenScadContext, logger: 
       instance.FS.writeFile(`/fonts/${filename}`, data);
     }
 
-    instance.FS.writeFile('/fonts/fonts.conf', fontsConf);
+    instance.FS.writeFile('/fonts/fonts.conf', fontsConfig);
   } catch (error) {
     context.fontCache.clear();
-    logger.warn('Failed to mount fonts - text() may not render correctly', { data: error });
+    logger.warn('Failed to mount fonts - text() may not render correctly', {
+      data: error,
+    });
   }
 }
 
@@ -320,7 +331,13 @@ async function getParametersFromFile(
 
   try {
     const instance = await createInstance({ logger });
-    await mountFileSystem(instance, { mainFile: filePath, basePath, filesystem, logger, fileContentCache });
+    await mountFileSystem(instance, {
+      mainFile: filePath,
+      basePath,
+      filesystem,
+      logger,
+      fileContentCache,
+    });
     await mountFonts(instance, { fontCache }, logger);
 
     const result = instance.callMain([filePath, '-o', parameterFile, '--export-format=param']);
@@ -329,20 +346,24 @@ async function getParametersFromFile(
       return undefined;
     }
 
-    const parameterData = instance.FS.readFile(parameterFile, { encoding: 'utf8' });
+    const parameterData = instance.FS.readFile(parameterFile, {
+      encoding: 'utf8',
+    });
     const parsed = JSON.parse(parameterData) as OpenScadParameterExport;
     logger.debug(`Extracted ${parsed.parameters.length} parameters from ${filePath}`);
     return parsed;
   } catch (error) {
-    logger.debug(`Failed to extract parameters from ${filePath}`, { data: error });
+    logger.debug(`Failed to extract parameters from ${filePath}`, {
+      data: error,
+    });
     return undefined;
   }
 }
 
 function getGroupNameFromPath(filePath: string): string {
   const fileName = getBasename(filePath);
-  const nameWithoutExt = fileName.replace(/\.scad$/, '');
-  return nameWithoutExt.charAt(0).toUpperCase() + nameWithoutExt.slice(1);
+  const nameWithoutExtension = fileName.replace(/\.scad$/, '');
+  return nameWithoutExtension.charAt(0).toUpperCase() + nameWithoutExtension.slice(1);
 }
 
 function formatValue(value: unknown): string {
@@ -397,7 +418,7 @@ export default defineKernel({
       const allParameters: OpenScadParameterExport['parameters'] = [];
 
       for (const scadFile of referencedFiles) {
-        // eslint-disable-next-line no-await-in-loop -- sequential: each file needs its own WASM instance
+        // oxlint-disable-next-line no-await-in-loop -- sequential: each file needs its own WASM instance
         const extractedParameters = await getParametersFromFile(scadFile, {
           basePath,
           filesystem,
@@ -421,7 +442,10 @@ export default defineKernel({
             !isMainFile && (!parameter.group || parameter.group === 'Global' || parameter.group === 'Parameters');
 
           if (needsFileGroup) {
-            allParameters.push({ ...parameter, group: getGroupNameFromPath(scadFile) });
+            allParameters.push({
+              ...parameter,
+              group: getGroupNameFromPath(scadFile),
+            });
           } else {
             allParameters.push(parameter);
           }
@@ -432,11 +456,18 @@ export default defineKernel({
       let defaultParameters: Record<string, unknown> = {};
 
       if (allParameters.length > 0) {
-        const mergedExport: OpenScadParameterExport = { parameters: allParameters, title: mainFilePath };
+        const mergedExport: OpenScadParameterExport = {
+          parameters: allParameters,
+          title: mainFilePath,
+        };
         jsonSchema = processOpenScadParameters(mergedExport);
         defaultParameters = jsonDefault(jsonSchema) as Record<string, unknown>;
       } else {
-        jsonSchema = { type: 'object', properties: {}, additionalProperties: false };
+        jsonSchema = {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        };
       }
 
       return createKernelSuccess({ defaultParameters, jsonSchema });
@@ -446,7 +477,11 @@ export default defineKernel({
       return createKernelError([
         {
           message: error instanceof Error ? error.message : 'Unknown error',
-          location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+          location: {
+            fileName: relativeFilePath,
+            startLineNumber: 1,
+            startColumn: 1,
+          },
           severity: 'error',
         },
       ]);
@@ -474,7 +509,12 @@ export default defineKernel({
       }
 
       const wasmSpan = tracer.startSpan('openscad.wasm-init');
-      const instance = await createInstance({ logger, addError, getFileContents, mainFilePath: relativeFilePath });
+      const instance = await createInstance({
+        logger,
+        addError,
+        getFileContents,
+        mainFilePath: relativeFilePath,
+      });
       wasmSpan.end();
 
       await mountFileSystem(instance, {
@@ -492,19 +532,21 @@ export default defineKernel({
 
       instance.FS.writeFile(relativeFilePath, code);
 
-      const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
+      const arguments_ = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
 
       if (tessellation) {
-        args.push(`-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
+        arguments_.push(`-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
       }
 
       const flattenedParameters = flattenParametersForInjection(parameters);
       for (const [key, value] of Object.entries(flattenedParameters)) {
-        args.push(`-D${key}=${formatValue(value)}`);
+        arguments_.push(`-D${key}=${formatValue(value)}`);
       }
 
-      const callMainSpan = tracer.startSpan('openscad.call-main', { phase: 'computingGeometry' });
-      const result = instance.callMain(args);
+      const callMainSpan = tracer.startSpan('openscad.call-main', {
+        phase: 'computingGeometry',
+      });
+      const result = instance.callMain(arguments_);
       callMainSpan.end();
 
       if (result !== 0) {
@@ -520,14 +562,22 @@ export default defineKernel({
         throw new Error('OpenSCAD build failed');
       }
 
-      const offData = instance.FS.readFile(`${relativeFilePath}.off`, { encoding: 'utf8' });
+      const offData = instance.FS.readFile(`${relativeFilePath}.off`, {
+        encoding: 'utf8',
+      });
 
-      const convertSpan = tracer.startSpan('openscad.convert-geometry', { phase: 'computingGeometry' });
+      const convertSpan = tracer.startSpan('openscad.convert-geometry', {
+        phase: 'computingGeometry',
+      });
       const gltfBlob = await convertOffToGltf(offData, 'glb');
       convertSpan.end();
 
       const geometry: GeometryGltf = { format: 'gltf', content: gltfBlob };
-      return { geometry: [geometry], nativeHandle: offData, issues: collectedIssues };
+      return {
+        geometry: [geometry],
+        nativeHandle: offData,
+        issues: collectedIssues,
+      };
     } catch (error) {
       if (error instanceof OpenScadBuildError) {
         throw error;
@@ -550,7 +600,10 @@ export default defineKernel({
 
     if (!nativeHandle) {
       return createKernelError([
-        { message: 'No geometry available for export. Please build geometries before exporting.', severity: 'error' },
+        {
+          message: 'No geometry available for export. Please build geometries before exporting.',
+          severity: 'error',
+        },
       ]);
     }
 
@@ -581,7 +634,12 @@ export default defineKernel({
       }
 
       default: {
-        return createKernelError([{ message: `Unsupported export format: ${fileType}`, severity: 'error' }]);
+        return createKernelError([
+          {
+            message: `Unsupported export format: ${fileType}`,
+            severity: 'error',
+          },
+        ]);
       }
     }
   },
@@ -590,7 +648,7 @@ export default defineKernel({
 class OpenScadBuildError extends Error {
   public readonly issues: KernelIssue[];
   public constructor(issues: KernelIssue[]) {
-    super(issues.map((i) => i.message).join('; '));
+    super(issues.map((index) => index.message).join('; '));
     this.issues = issues;
   }
 }

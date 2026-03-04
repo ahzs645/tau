@@ -80,7 +80,7 @@ function ChatWithProvider(): React.JSX.Element {
     <ViewContextProvider>
       <ChatProvider chatId={activeChatId} resourceId={buildId}>
         {name ? <title>{name}</title> : null}
-        {description ? <meta name="description" content={description} /> : null}
+        {description ? <meta name='description' content={description} /> : null}
         <FlushOnCloseGuard />
         <Chat />
       </ChatProvider>
@@ -109,7 +109,7 @@ function FlushOnCloseGuard(): React.JSX.Element {
     draftActorRef.send({ type: 'flushNow' });
   });
 
-  // eslint-disable-next-line react/jsx-no-useless-fragment -- Headless component
+  // oxlint-disable-next-line react/jsx-no-useless-fragment -- Headless component
   return <></>;
 }
 

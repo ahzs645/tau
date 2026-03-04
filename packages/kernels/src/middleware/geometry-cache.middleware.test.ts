@@ -23,7 +23,13 @@ import {
 function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    { type: 'middleware', name: 'TestMiddleware', version: '1', index: 0, options: {} },
+    {
+      type: 'middleware',
+      name: 'TestMiddleware',
+      version: '1',
+      index: 0,
+      options: {},
+    },
     { type: 'framework', name: 'tau', version: '0.0.1' },
   ];
 
@@ -83,7 +89,10 @@ function createCacheTestContext(options?: {
     },
     dependencies: options?.dependencies ?? createMockDependencies(),
     dependencyHash: options?.dependencyHash ?? 'a'.repeat(64),
-    options: options?.cacheOptions ?? { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+    options: options?.cacheOptions ?? {
+      maxEntries: 100,
+      maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+    },
   });
 
   return {
@@ -153,13 +162,24 @@ describe('geometryCacheMiddleware', () => {
       it('should preserve issues on cache hit', async () => {
         const gltfContent = new Uint8Array([1, 2, 3]);
         const cachedIssues: KernelIssue[] = [
-          { message: 'ignoring unknown variable "size"', severity: 'warning', type: 'compilation' },
-          { message: 'undefined operation', severity: 'warning', type: 'compilation' },
+          {
+            message: 'ignoring unknown variable "size"',
+            severity: 'warning',
+            type: 'compilation',
+          },
+          {
+            message: 'undefined operation',
+            severity: 'warning',
+            type: 'compilation',
+          },
         ];
 
         const serializedContent = createSerializedCacheContent(gltfContent, cachedIssues);
         const runtime = createMockRuntime<Record<string, never>, GeometryCacheOptions>({
-          filesystemOverrides: { existsResult: true, readFileResult: serializedContent },
+          filesystemOverrides: {
+            existsResult: true,
+            readFileResult: serializedContent,
+          },
           dependencies: createMockDependencies(),
           dependencyHash: 'a'.repeat(64),
           options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
@@ -184,7 +204,9 @@ describe('geometryCacheMiddleware', () => {
     describe('cache miss', () => {
       it('should call handler and return its result', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([5, 6, 7]));
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
@@ -195,7 +217,9 @@ describe('geometryCacheMiddleware', () => {
       });
 
       it('should log cache miss message', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
@@ -206,14 +230,16 @@ describe('geometryCacheMiddleware', () => {
 
       it('should write result to cache after handler returns', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
         expect(runtime.filesystem.mocks.writeFile).toHaveBeenCalled();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
         const writePath = runtime.filesystem.mocks.writeFile.mock.calls[0]?.[0];
         expect(writePath).toContain('.tau/cache/geometry');
         expect(writePath).toContain('.bin');
@@ -221,21 +247,25 @@ describe('geometryCacheMiddleware', () => {
 
       it('should ensure cache directory exists before writing', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
 
         expect(runtime.filesystem.mocks.ensureDir).toHaveBeenCalled();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
-        const dirPath = runtime.filesystem.mocks.ensureDir.mock.calls[0]?.[0];
-        expect(dirPath).toContain('.tau/cache/geometry');
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest mock call args
+        const directoryPath = runtime.filesystem.mocks.ensureDir.mock.calls[0]?.[0];
+        expect(directoryPath).toContain('.tau/cache/geometry');
       });
 
       it('should log cache write message', async () => {
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
@@ -246,14 +276,20 @@ describe('geometryCacheMiddleware', () => {
 
       it('should persist issues when writing to cache', async () => {
         const issues: KernelIssue[] = [
-          { message: 'ignoring unknown variable "size"', severity: 'warning', type: 'compilation' },
+          {
+            message: 'ignoring unknown variable "size"',
+            severity: 'warning',
+            type: 'compilation',
+          },
         ];
         const handlerResult: CreateGeometryResult = {
           success: true,
           data: [{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }],
           issues,
         };
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
@@ -269,7 +305,9 @@ describe('geometryCacheMiddleware', () => {
 
       it('should not cache failed results', async () => {
         const errorResult = createErrorResult();
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handler = createMockHandler(errorResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
@@ -321,7 +359,9 @@ describe('geometryCacheMiddleware', () => {
 
     describe('error handling', () => {
       it('should handle file read errors gracefully', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: true });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: true,
+        });
         // Make readFile throw an error
         runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
@@ -337,7 +377,9 @@ describe('geometryCacheMiddleware', () => {
       });
 
       it('should handle file write errors gracefully', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         // Make writeFile throw an error
         runtime.filesystem.mocks.writeFile.mockRejectedValue(new Error('Write error'));
 
@@ -355,7 +397,9 @@ describe('geometryCacheMiddleware', () => {
 
     describe('webrtc handling', () => {
       it('should skip caching when result contains webrtc geometry', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         // Create a handler that returns webrtc geometry
         const mockStream = new ReadableStream();
         const videoStreamResult = {
@@ -380,7 +424,9 @@ describe('geometryCacheMiddleware', () => {
       });
 
       it('should cache when result contains only GLTF geometry', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
@@ -392,7 +438,9 @@ describe('geometryCacheMiddleware', () => {
       });
 
       it('should skip caching when result contains mixed geometries including webrtc', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         // Mixed result with both GLTF and webrtc
         const mockStream = new ReadableStream();
         const mixedResult = {
@@ -415,7 +463,9 @@ describe('geometryCacheMiddleware', () => {
 
     describe('cache cleanup', () => {
       it('should call cleanup after successful cache write', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
         const handler = createMockHandler(handlerResult);
 
@@ -429,7 +479,9 @@ describe('geometryCacheMiddleware', () => {
       it('should delete old cache entries', async () => {
         const now = Date.now();
         const oldMtimeMs = now - 8 * 24 * 60 * 60 * 1000; // 8 days ago (older than 7 day max age)
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
 
         runtime.filesystem.mocks.readdirStat.mockResolvedValue([
           {
@@ -453,12 +505,14 @@ describe('geometryCacheMiddleware', () => {
 
       it('should delete excess cache entries when over max count', async () => {
         const now = Date.now();
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
 
         // Create 102 files (2 over the 100 max), stagger mtimeMs oldest first
-        const cacheDir = '/builds/test-build/.tau/cache/geometry';
+        const cacheDirectory = '/builds/test-build/.tau/cache/geometry';
         const entries = Array.from({ length: 102 }, (_, index) => ({
-          path: `${cacheDir}/cache-${index}.bin`,
+          path: `${cacheDirectory}/cache-${index}.bin`,
           name: `cache-${index}.bin`,
           type: 'file' as const,
           size: 100,
@@ -477,7 +531,9 @@ describe('geometryCacheMiddleware', () => {
       });
 
       it('should handle cleanup errors gracefully', async () => {
-        const { input, runtime } = createCacheTestContext({ cacheExists: false });
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+        });
 
         runtime.filesystem.mocks.readdirStat.mockRejectedValue(new Error('Readdir error'));
 

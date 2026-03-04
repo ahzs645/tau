@@ -53,7 +53,7 @@ export function ChatEditorExplorerMeshes({
   }));
 
   return (
-    <Tree elements={treeElements} className="px-1">
+    <Tree elements={treeElements} className='px-1'>
       {meshes.map((mesh) => {
         const isSelected = selectedMeshId === mesh.id;
         const meshColor = stringToColor(mesh.name);
@@ -63,7 +63,7 @@ export function ChatEditorExplorerMeshes({
             key={mesh.id}
             id={mesh.id}
             name={mesh.name}
-            icon={<Box className="size-4" style={{ color: meshColor }} />}
+            icon={<Box className='size-4' style={{ color: meshColor }} />}
             isSelected={isSelected}
             onClick={() => {
               handleMeshClick(mesh.id);

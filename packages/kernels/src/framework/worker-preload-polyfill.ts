@@ -19,7 +19,7 @@
  */
 
 if (typeof document === 'undefined') {
-  // eslint-disable-next-line @typescript-eslint/no-empty-function -- intentional no-op for DOM stub
+  // oxlint-disable-next-line @typescript-eslint/no-empty-function -- intentional no-op for DOM stub
   const noop = (): void => {};
   const noopElement = {
     rel: '',

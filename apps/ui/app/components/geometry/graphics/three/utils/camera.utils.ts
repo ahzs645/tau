@@ -55,7 +55,7 @@ function calculatePositionFromSphericalCoordinates({
  *
  * Uses **perspective-correct** angular extents: each bounding-box corner is
  * projected from the camera position, and the tangent of the angle from the
- * optical axis is computed per-corner (rightDist / forwardDist). Corners that
+ * optical axis is computed per-corner (rightDist / forwardDistance). Corners that
  * are closer to the camera subtend a larger angle and therefore limit the zoom
  * more than corners further away. This prevents clipping that the simpler
  * orthographic approximation (constant `distance` divisor) would miss.
@@ -131,26 +131,26 @@ export function computeViewFittingZoom({
 
   for (let i = 0; i < 8; i++) {
     const corner = new THREE.Vector3(
-      // eslint-disable-next-line no-bitwise -- bit mask selects min/max per axis
+      // oxlint-disable-next-line no-bitwise -- bit mask selects min/max per axis
       i & 1 ? max.x : min.x,
-      // eslint-disable-next-line no-bitwise -- bit mask selects min/max per axis
+      // oxlint-disable-next-line no-bitwise -- bit mask selects min/max per axis
       i & 2 ? max.y : min.y,
-      // eslint-disable-next-line no-bitwise -- bit mask selects min/max per axis
+      // oxlint-disable-next-line no-bitwise -- bit mask selects min/max per axis
       i & 4 ? max.z : min.z,
     );
 
     // Vector from camera to this corner
     const toCorner = corner.sub(cameraPosition);
-    const forwardDist = toCorner.dot(forward);
+    const forwardDistance = toCorner.dot(forward);
 
     // Skip corners behind or at the camera plane
-    if (forwardDist <= tanEpsilon) {
+    if (forwardDistance <= tanEpsilon) {
       continue;
     }
 
     // Tangent of horizontal and vertical angles from the optical axis
-    maxRightTan = Math.max(maxRightTan, Math.abs(toCorner.dot(right) / forwardDist));
-    maxUpTan = Math.max(maxUpTan, Math.abs(toCorner.dot(up) / forwardDist));
+    maxRightTan = Math.max(maxRightTan, Math.abs(toCorner.dot(right) / forwardDistance));
+    maxUpTan = Math.max(maxUpTan, Math.abs(toCorner.dot(up) / forwardDistance));
     validCorners++;
   }
 

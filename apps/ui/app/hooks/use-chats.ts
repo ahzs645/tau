@@ -4,7 +4,7 @@ import type { PartialDeep } from 'type-fest';
 import type { Chat } from '@taucad/chat';
 import { useBuildManager } from '#hooks/use-build-manager.js';
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- let types be inferred
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- let types be inferred
 export function useChats(resourceId: string, options?: { includeDeleted?: boolean }) {
   const queryClient = useQueryClient();
   const includeDeleted = options?.includeDeleted ?? false;

@@ -65,9 +65,9 @@ export const ChatError = memo(function ({
           onOpenChange={onOpenChange}
         >
           <CollapsibleTrigger asChild>
-            <div className="flex w-full cursor-pointer items-center justify-between gap-2 px-2 py-1.5">
-              <ChevronRight className="size-4 transition-transform duration-300 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
-              <div className="flex w-full items-center justify-between gap-2">
+            <div className='flex w-full cursor-pointer items-center justify-between gap-2 px-2 py-1.5'>
+              <ChevronRight className='size-4 transition-transform duration-300 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
+              <div className='flex w-full items-center justify-between gap-2'>
                 <MarkdownViewer
                   className={cn(
                     'inline w-auto! text-sm text-foreground',
@@ -81,21 +81,21 @@ export const ChatError = memo(function ({
                   {parsedError.message || parsedError.title || 'Unable to send the message.'}
                 </MarkdownViewer>
                 <Button
-                  variant="outline"
-                  className="h-7 shrink-0 hover:border-neutral/50"
-                  size="sm"
+                  variant='outline'
+                  className='h-7 shrink-0 hover:border-neutral/50'
+                  size='sm'
                   onClick={() => {
                     regenerate();
                   }}
                 >
-                  <RefreshCcw className="size-3.5" />
+                  <RefreshCcw className='size-3.5' />
                   Retry
                 </Button>
               </div>
             </div>
           </CollapsibleTrigger>
-          <CollapsibleContent className="overflow-x-scroll px-2 pb-2">
-            <CodeViewer text={formattedError} language="json" className="text-xs whitespace-pre-wrap" />
+          <CollapsibleContent className='overflow-x-scroll px-2 pb-2'>
+            <CodeViewer text={formattedError} language='json' className='text-xs whitespace-pre-wrap' />
           </CollapsibleContent>
         </Collapsible>
       </div>

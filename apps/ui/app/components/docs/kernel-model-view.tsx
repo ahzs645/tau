@@ -186,7 +186,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     return () => {
       observer.disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- code is stable for the lifecycle of this component
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- code is stable for the lifecycle of this component
   }, []);
 
   useEffect(
@@ -217,20 +217,20 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
 
   return (
     <div ref={containerRef} className={cn('relative size-full', className)}>
-      <canvas ref={canvasRef} className="size-full" style={{ display: 'block' }} />
+      <canvas ref={canvasRef} className='size-full' style={{ display: 'block' }} />
       {viewState === 'loading' && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
-          <Loader className="size-8" />
+        <div className='absolute inset-0 flex items-center justify-center bg-background/50'>
+          <Loader className='size-8' />
         </div>
       )}
       {viewState === 'error' && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
-          <span className="max-w-48 text-center text-xs text-destructive">{errorMessage}</span>
+        <div className='absolute inset-0 flex items-center justify-center bg-background/50'>
+          <span className='max-w-48 text-center text-xs text-destructive'>{errorMessage}</span>
         </div>
       )}
       {viewState === 'idle' && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
-          <span className="text-xs text-muted-foreground">Scroll to load</span>
+        <div className='absolute inset-0 flex items-center justify-center bg-background/50'>
+          <span className='text-xs text-muted-foreground'>Scroll to load</span>
         </div>
       )}
     </div>

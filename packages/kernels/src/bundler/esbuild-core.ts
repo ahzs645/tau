@@ -151,7 +151,7 @@ async function resolveFileExtension(filesystem: KernelFileSystem, path: string):
 
   for (const extension of extensions) {
     const fullPath = path + extension;
-    // eslint-disable-next-line no-await-in-loop -- Intentional: short-circuits on first match
+    // oxlint-disable-next-line no-await-in-loop -- Intentional: short-circuits on first match
     if (await filesystem.exists(fullPath)) {
       return fullPath;
     }
@@ -340,11 +340,11 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // -----------------------------------------------------------------
       // onResolve: all imports
       // -----------------------------------------------------------------
-      // eslint-disable-next-line complexity -- TOOD: refactor
-      build.onResolve({ filter: /.*/ }, async (args) => {
+      // oxlint-disable-next-line complexity -- TOOD: refactor
+      build.onResolve({ filter: /.*/ }, async (arguments_) => {
         // Entry point: convert to project-relative path in zenfs namespace
-        if (args.kind === 'entry-point') {
-          return { path: toRelative(args.path), namespace: 'zenfs' };
+        if (arguments_.kind === 'entry-point') {
+          return { path: toRelative(arguments_.path), namespace: 'zenfs' };
         }
 
         // Imports originating from the http-url namespace (sub-imports within
@@ -352,9 +352,9 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
         // registered below. Only full URLs are handled here; relative, absolute, and
         // bare paths are passed through by returning undefined so esbuild falls
         // through to the http-url onResolve handlers.
-        if (args.namespace === 'http-url') {
-          if (args.path.startsWith('http://') || args.path.startsWith('https://')) {
-            return { path: args.path, namespace: 'http-url' };
+        if (arguments_.namespace === 'http-url') {
+          if (arguments_.path.startsWith('http://') || arguments_.path.startsWith('https://')) {
+            return { path: arguments_.path, namespace: 'http-url' };
           }
 
           // Let the http-url-specific onResolve handlers below handle this import
@@ -362,41 +362,41 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
         }
 
         // Handle data: URLs (esbuild internal)
-        if (args.path.startsWith('data:')) {
+        if (arguments_.path.startsWith('data:')) {
           return { external: true };
         }
 
         // Handle http/https URLs - fetch and bundle them
-        if (args.path.startsWith('http://') || args.path.startsWith('https://')) {
-          return { path: args.path, namespace: 'http-url' };
+        if (arguments_.path.startsWith('http://') || arguments_.path.startsWith('https://')) {
+          return { path: arguments_.path, namespace: 'http-url' };
         }
 
         // --- Bare specifiers ---
-        if (isBareSpecifier(args.path)) {
-          const pkgInfo = parsePackageSpecifier(args.path);
+        if (isBareSpecifier(arguments_.path)) {
+          const packageInfo = parsePackageSpecifier(arguments_.path);
 
           // Builtins: check full specifier first (e.g., '@jscad/modeling/primitives'),
           // then fall back to root package name (e.g., '@jscad/modeling')
-          const fullSpecifier = pkgInfo.path ? `${pkgInfo.name}/${pkgInfo.path}` : pkgInfo.name;
+          const fullSpecifier = packageInfo.path ? `${packageInfo.name}/${packageInfo.path}` : packageInfo.name;
           if (builtinModules.has(fullSpecifier)) {
             return { path: fullSpecifier, namespace: 'builtin' };
           }
 
-          if (builtinModules.has(pkgInfo.name)) {
-            return { path: pkgInfo.name, namespace: 'builtin' };
+          if (builtinModules.has(packageInfo.name)) {
+            return { path: packageInfo.name, namespace: 'builtin' };
           }
 
           // CDN modules: ensure cached at root /node_modules/, return zenfs path
           // These keep absolute paths since they're outside the project directory
           try {
-            const cachePath = getCdnCachePath(pkgInfo.name, pkgInfo.path || undefined);
-            await moduleManager.ensureCdnModule(pkgInfo.name, pkgInfo.path || undefined);
+            const cachePath = getCdnCachePath(packageInfo.name, packageInfo.path || undefined);
+            await moduleManager.ensureCdnModule(packageInfo.name, packageInfo.path || undefined);
             return { path: cachePath, namespace: 'zenfs' };
           } catch (error) {
             return {
               errors: [
                 {
-                  text: `Failed to resolve '${args.path}': ${error instanceof Error ? error.message : String(error)}`,
+                  text: `Failed to resolve '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}`,
                 },
               ],
             };
@@ -406,17 +406,20 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
         // --- Relative / absolute imports ---
         // Reconstruct the importer's absolute path for resolution, since
         // project files use relative paths in esbuild
-        const importerAbsolute = toAbsolute(args.importer || relativeEntryPath);
+        const importerAbsolute = toAbsolute(arguments_.importer || relativeEntryPath);
 
         // CDN-relative paths: when a cached CDN module (under /node_modules/)
         // imports an absolute path like /@thi.ng/vectors@^8.6.20/..., resolve
         // it against the esm.sh CDN origin rather than the local filesystem.
-        if (args.path.startsWith('/') && importerAbsolute.startsWith('/node_modules/')) {
-          return { path: `https://esm.sh${args.path}`, namespace: 'http-url' };
+        if (arguments_.path.startsWith('/') && importerAbsolute.startsWith('/node_modules/')) {
+          return {
+            path: `https://esm.sh${arguments_.path}`,
+            namespace: 'http-url',
+          };
         }
 
         try {
-          const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
+          const resolvedPath = resolveRelativePath(arguments_.path, importerAbsolute);
           const withExtension = await resolveFileExtension(filesystem, resolvedPath);
           // Return project-relative path for project files
           return { path: toRelative(withExtension), namespace: 'zenfs' };
@@ -424,7 +427,7 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
           return {
             errors: [
               {
-                text: `Failed to resolve '${args.path}': ${error instanceof Error ? error.message : String(error)}`,
+                text: `Failed to resolve '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
           };
@@ -434,10 +437,12 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // -----------------------------------------------------------------
       // onLoad: builtin namespace (serve from memory)
       // -----------------------------------------------------------------
-      build.onLoad({ filter: /.*/, namespace: 'builtin' }, (args) => {
-        const builtin = builtinModules.get(args.path);
+      build.onLoad({ filter: /.*/, namespace: 'builtin' }, (arguments_) => {
+        const builtin = builtinModules.get(arguments_.path);
         if (!builtin) {
-          return { errors: [{ text: `Built-in module '${args.path}' not found` }] };
+          return {
+            errors: [{ text: `Built-in module '${arguments_.path}' not found` }],
+          };
         }
 
         return { contents: builtin.code, loader: 'js' };
@@ -446,14 +451,18 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // -----------------------------------------------------------------
       // onLoad: HTTP/HTTPS URLs
       // -----------------------------------------------------------------
-      build.onLoad({ filter: /.*/, namespace: 'http-url' }, async (args) => {
+      build.onLoad({ filter: /.*/, namespace: 'http-url' }, async (arguments_) => {
         try {
-          const response = await fetch(args.path, {
+          const response = await fetch(arguments_.path, {
             signal: AbortSignal.timeout(httpFetchTimeoutMs),
           });
           if (!response.ok) {
             return {
-              errors: [{ text: `Failed to fetch '${args.path}': ${response.status} ${response.statusText}` }],
+              errors: [
+                {
+                  text: `Failed to fetch '${arguments_.path}': ${response.status} ${response.statusText}`,
+                },
+              ],
             };
           }
 
@@ -463,7 +472,7 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
             return {
               errors: [
                 {
-                  text: `Remote module '${args.path}' exceeds maximum size of ${httpFetchMaxSizeBytes} bytes (${contentLength} bytes)`,
+                  text: `Remote module '${arguments_.path}' exceeds maximum size of ${httpFetchMaxSizeBytes} bytes (${contentLength} bytes)`,
                 },
               ],
             };
@@ -476,19 +485,21 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
             return {
               errors: [
                 {
-                  text: `Remote module '${args.path}' exceeds maximum size of ${httpFetchMaxSizeBytes} bytes`,
+                  text: `Remote module '${arguments_.path}' exceeds maximum size of ${httpFetchMaxSizeBytes} bytes`,
                 },
               ],
             };
           }
 
-          const loader = getLoader(new URL(args.path).pathname);
+          const loader = getLoader(new URL(arguments_.path).pathname);
 
           return { contents, loader };
         } catch (error) {
           return {
             errors: [
-              { text: `Failed to fetch '${args.path}': ${error instanceof Error ? error.message : String(error)}` },
+              {
+                text: `Failed to fetch '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}`,
+              },
             ],
           };
         }
@@ -497,19 +508,19 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // -----------------------------------------------------------------
       // onResolve: relative imports within HTTP modules (e.g. ./lib/foo.js)
       // -----------------------------------------------------------------
-      build.onResolve({ filter: /^\./, namespace: 'http-url' }, (args) => {
+      build.onResolve({ filter: /^\./, namespace: 'http-url' }, (arguments_) => {
         // Resolve relative to the importer URL (resolveDir is unreliable for URLs)
-        const resolvedUrl = new URL(args.path, args.importer).href;
+        const resolvedUrl = new URL(arguments_.path, arguments_.importer).href;
         return { path: resolvedUrl, namespace: 'http-url' };
       });
 
       // -----------------------------------------------------------------
       // onResolve: absolute-path imports within HTTP modules (e.g. /lodash@4.17.21/es2022/lodash.mjs)
       // -----------------------------------------------------------------
-      build.onResolve({ filter: /^\//, namespace: 'http-url' }, (args) => {
+      build.onResolve({ filter: /^\//, namespace: 'http-url' }, (arguments_) => {
         // Resolve absolute paths against the importer's origin
-        const importerUrl = new URL(args.importer);
-        const resolvedUrl = new URL(args.path, importerUrl.origin).href;
+        const importerUrl = new URL(arguments_.importer);
+        const resolvedUrl = new URL(arguments_.path, importerUrl.origin).href;
         return { path: resolvedUrl, namespace: 'http-url' };
       });
 
@@ -519,25 +530,25 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
       // CDNs use different URL schemes (e.g. JSPM uses npm: prefixes, Skypack uses
       // hashed pins). Instead, resolve through esm.sh which handles bare specifiers.
       // -----------------------------------------------------------------
-      build.onResolve({ filter: /^[^./]/, namespace: 'http-url' }, (args) => {
-        const resolvedUrl = `https://esm.sh/${args.path}`;
+      build.onResolve({ filter: /^[^./]/, namespace: 'http-url' }, (arguments_) => {
+        const resolvedUrl = `https://esm.sh/${arguments_.path}`;
         return { path: resolvedUrl, namespace: 'http-url' };
       });
 
       // -----------------------------------------------------------------
       // onLoad: zenfs namespace (project files + CDN cache)
       // -----------------------------------------------------------------
-      build.onLoad({ filter: /.*/, namespace: 'zenfs' }, async (args) => {
+      build.onLoad({ filter: /.*/, namespace: 'zenfs' }, async (arguments_) => {
         try {
           // Reconstruct absolute ZenFS path for filesystem I/O
-          const absolutePath = toAbsolute(args.path);
+          const absolutePath = toAbsolute(arguments_.path);
 
           let content = await filesystem.readFile(absolutePath, 'utf8');
-          const loader = getLoader(args.path);
+          const loader = getLoader(arguments_.path);
 
           // For the entry file (not node_modules), add CommonJS exports if needed
           // This prevents esbuild from tree-shaking away unexported main/defaultParams
-          const isEntryFile = args.path === relativeEntryPath;
+          const isEntryFile = arguments_.path === relativeEntryPath;
           const isNodeModules = absolutePath.includes('/node_modules/');
 
           if (isEntryFile && !isNodeModules && (loader === 'js' || loader === 'ts')) {
@@ -553,7 +564,7 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
           return {
             errors: [
               {
-                text: `Failed to load '${args.path}': ${error instanceof Error ? error.message : String(error)}`,
+                text: `Failed to load '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
           };
@@ -632,8 +643,11 @@ export class EsbuildBundler {
       // Only root modules with a globalName are included (not submodules)
       // Also define module/exports objects to prevent runtime errors in CommonJS-style code
       const moduleGlobals = [...this.builtinModules.entries()]
-        .filter(([, mod]) => mod.globalName)
-        .map(([name, mod]) => `const ${mod.globalName} = globalThis.__KERNEL_MODULES__?.get(${JSON.stringify(name)});`)
+        .filter(([, module_]) => module_.globalName)
+        .map(
+          ([name, module_]) =>
+            `const ${module_.globalName} = globalThis.__KERNEL_MODULES__?.get(${JSON.stringify(name)});`,
+        )
         .join('\n');
       const commonjsBanner = `${moduleGlobals}
 const exports = {};
@@ -841,28 +855,28 @@ export function createDetectionPlugin({ filesystem, projectPath }: DetectionPlug
     setup(build) {
       let relativeEntryPath = '';
 
-      build.onResolve({ filter: /.*/ }, async (args) => {
-        if (args.kind === 'entry-point') {
-          relativeEntryPath = toRelative(args.path);
+      build.onResolve({ filter: /.*/ }, async (arguments_) => {
+        if (arguments_.kind === 'entry-point') {
+          relativeEntryPath = toRelative(arguments_.path);
           return { path: relativeEntryPath, namespace: 'zenfs' };
         }
 
-        if (args.namespace === 'http-url' || args.path.startsWith('data:')) {
+        if (arguments_.namespace === 'http-url' || arguments_.path.startsWith('data:')) {
           return { external: true };
         }
 
-        if (args.path.startsWith('http://') || args.path.startsWith('https://')) {
+        if (arguments_.path.startsWith('http://') || arguments_.path.startsWith('https://')) {
           return { external: true };
         }
 
-        if (isBareSpecifier(args.path)) {
-          return { path: args.path, external: true };
+        if (isBareSpecifier(arguments_.path)) {
+          return { path: arguments_.path, external: true };
         }
 
-        const importerAbsolute = toAbsolute(args.importer || relativeEntryPath);
+        const importerAbsolute = toAbsolute(arguments_.importer || relativeEntryPath);
 
         try {
-          const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
+          const resolvedPath = resolveRelativePath(arguments_.path, importerAbsolute);
           const withExtension = await resolveFileExtension(filesystem, resolvedPath);
           return { path: toRelative(withExtension), namespace: 'zenfs' };
         } catch {
@@ -870,11 +884,11 @@ export function createDetectionPlugin({ filesystem, projectPath }: DetectionPlug
         }
       });
 
-      build.onLoad({ filter: /.*/, namespace: 'zenfs' }, async (args) => {
+      build.onLoad({ filter: /.*/, namespace: 'zenfs' }, async (arguments_) => {
         try {
-          const absolutePath = toAbsolute(args.path);
+          const absolutePath = toAbsolute(arguments_.path);
           const content = await filesystem.readFile(absolutePath, 'utf8');
-          const loader = getLoader(args.path);
+          const loader = getLoader(arguments_.path);
           return {
             contents: content,
             loader,
@@ -884,7 +898,7 @@ export function createDetectionPlugin({ filesystem, projectPath }: DetectionPlug
           return {
             errors: [
               {
-                text: `Failed to load '${args.path}': ${error instanceof Error ? error.message : String(error)}`,
+                text: `Failed to load '${arguments_.path}': ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
           };

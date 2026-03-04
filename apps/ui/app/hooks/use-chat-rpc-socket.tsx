@@ -180,7 +180,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
 
     // After validation, we can safely construct the typed RPC call.
     // The server has validated the args against the schema before sending.
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Boundary assertion after runtime validation
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Boundary assertion after runtime validation
     const rpcCall = {
       toolCallId,
       rpcName: currentRpcName,

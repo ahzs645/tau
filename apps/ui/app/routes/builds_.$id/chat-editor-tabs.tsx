@@ -66,24 +66,24 @@ export function ChatEditorTabs(): React.JSX.Element {
   }, [editorRef, scrollToTab]);
 
   return (
-    <FloatingPanelContentHeader className="pl-0">
+    <FloatingPanelContentHeader className='pl-0'>
       <div
         ref={scrollContainerRef}
-        className="z-40 -mb-px h-7.75 overflow-x-auto overflow-y-hidden overscroll-x-none [scrollbar-width:none]"
+        className='z-40 -mb-px h-7.75 overflow-x-auto overflow-y-hidden overscroll-x-none [scrollbar-width:none]'
       >
-        <div className="flex h-full w-max">
+        <div className='flex h-full w-max'>
           {openFiles.map((file) => {
             const gitStatus = gitStatuses.get(file.path)?.status;
             const isActive = activeFilePath === file.path;
 
             return (
-              <div key={file.path} data-path={file.path} className="flex h-full">
+              <div key={file.path} data-path={file.path} className='flex h-full'>
                 <div
                   className={cn(
                     'group/editor-tab flex h-full min-w-0 cursor-pointer items-center gap-0 border-y border-y-transparent pr-1 pl-3 text-sm transition-colors',
                     isActive ? 'bg-background text-foreground' : 'text-muted-foreground',
                   )}
-                  role="tab"
+                  role='tab'
                   tabIndex={0}
                   aria-selected={isActive}
                   onClick={() => {
@@ -97,13 +97,13 @@ export function ChatEditorTabs(): React.JSX.Element {
                 >
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="flex max-w-32 items-center gap-1.5 truncate">
-                        <FileExtensionIcon filename={file.name} className="size-3 shrink-0" />
-                        <span className="truncate">{file.name}</span>
+                      <span className='flex max-w-32 items-center gap-1.5 truncate'>
+                        <FileExtensionIcon filename={file.name} className='size-3 shrink-0' />
+                        <span className='truncate'>{file.name}</span>
                         {gitStatus && gitStatus !== 'clean' ? (
                           <span
                             aria-label={`File has git changes: ${gitStatus}`}
-                            className="size-1.5 shrink-0 rounded-full bg-yellow"
+                            className='size-1.5 shrink-0 rounded-full bg-yellow'
                             title={`Git status: ${gitStatus}`}
                           />
                         ) : null}
@@ -114,8 +114,8 @@ export function ChatEditorTabs(): React.JSX.Element {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
-                        size="icon"
-                        variant="ghost"
+                        size='icon'
+                        variant='ghost'
                         className={cn(
                           'ml-1 size-6 rounded-sm p-0 transition-opacity hover:bg-primary/20',
                           isActive ? 'opacity-100' : 'opacity-0 group-hover/editor-tab:opacity-100',
@@ -125,13 +125,13 @@ export function ChatEditorTabs(): React.JSX.Element {
                           handleTabClose(event, file.path);
                         }}
                       >
-                        <X className="size-3" />
+                        <X className='size-3' />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>Close</TooltipContent>
                   </Tooltip>
                 </div>
-                <div className="h-full w-px bg-border" />
+                <div className='h-full w-px bg-border' />
               </div>
             );
           })}

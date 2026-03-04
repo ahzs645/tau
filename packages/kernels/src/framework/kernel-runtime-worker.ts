@@ -14,7 +14,7 @@
  * file caching, middleware chain, telemetry, and the MessagePort dispatcher.
  */
 
-// eslint-disable-next-line import-x/no-unassigned-import -- side-effect: stubs `document` before any bundler modulepreload code runs
+// oxlint-disable-next-line import-x/no-unassigned-import -- side-effect: stubs `document` before any bundler modulepreload code runs
 import '#framework/worker-preload-polyfill.js';
 import type {
   CreateGeometryResult,
@@ -138,7 +138,11 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   ): Promise<GetParametersResult> {
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
     if (!kernel) {
-      return { success: true, data: { defaultParameters: {}, jsonSchema: {} }, issues: [] };
+      return {
+        success: true,
+        data: { defaultParameters: {}, jsonSchema: {} },
+        issues: [],
+      };
     }
 
     return kernel.definition.getParameters(input, runtime, kernel.ctx);
@@ -170,7 +174,11 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       return {
         success: false,
         issues: [
-          { message: error instanceof Error ? error.message : String(error), type: 'kernel', severity: 'error' },
+          {
+            message: error instanceof Error ? error.message : String(error),
+            type: 'kernel',
+            severity: 'error',
+          },
         ],
       };
     }
@@ -183,7 +191,13 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     if (!this.activeKernelId) {
       return {
         success: false,
-        issues: [{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }],
+        issues: [
+          {
+            message: 'No geometry available for export',
+            type: 'runtime',
+            severity: 'error',
+          },
+        ],
       };
     }
 
@@ -232,14 +246,18 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     if (config.definition) {
       definition = config.definition;
     } else {
-      const importSpan = tracer.startSpan('kernel.load-module', { id: config.id });
+      const importSpan = tracer.startSpan('kernel.load-module', {
+        id: config.id,
+      });
       this.logger.debug(`Loading kernel module: ${config.id} from ${config.moduleUrl}`);
-      const module = (await import(/* @vite-ignore */ config.moduleUrl)) as { default: KernelDefinition };
+      const module = (await import(/* @vite-ignore */ config.moduleUrl)) as {
+        default: KernelDefinition;
+      };
       definition = module.default;
       importSpan.end();
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Runtime guard for dynamic import
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Runtime guard for dynamic import
     if (!definition || typeof definition.getDependencies !== 'function') {
       throw new Error(`Kernel module ${config.id} does not export a valid KernelDefinition`);
     }
@@ -298,7 +316,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     let catchAllEntry: KernelModuleEntry | undefined;
     const hasBundlerKernels = this.kernelModules.some((c) => c.builtinModuleNames && c.builtinModuleNames.length > 0);
 
-    /* eslint-disable no-await-in-loop -- Sequential kernel selection: try each config in priority order */
+    /* oxlint-disable no-await-in-loop -- Sequential kernel selection: try each config in priority order */
 
     // Pass 1: Extension + regex fast path
     for (const config of this.kernelModules) {
@@ -320,12 +338,17 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       if (!config.detectImport) {
         const kernel = await this.loadKernelModule(config, runtime.tracer);
         await this.ensureKernelInitialized(kernel, runtime);
-        this.selectionCache.set(filePath, { id: config.id, method: 'extension' });
+        this.selectionCache.set(filePath, {
+          id: config.id,
+          method: 'extension',
+        });
         return { kernel, method: 'extension' };
       }
 
       try {
-        const detectSpan = runtime.tracer.startSpan('kernel.detect-import', { kernel: config.id });
+        const detectSpan = runtime.tracer.startSpan('kernel.detect-import', {
+          kernel: config.id,
+        });
         const code = await runtime.filesystem.readFile(filePath, 'utf8');
         detectSpan.end();
         const importRegex = new RegExp(config.detectImport, 's');
@@ -341,15 +364,17 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     // Pass 2: Bundler-assisted detection via detectImports
-    const fileExt = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase() : '';
-    if (this.hasBundlerForExtension(fileExt)) {
+    const fileExtension = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase() : '';
+    if (this.hasBundlerForExtension(fileExtension)) {
       const configsWithBuiltins = this.kernelModules.filter(
         (c) => c.builtinModuleNames && c.builtinModuleNames.length > 0,
       );
 
       if (configsWithBuiltins.length > 0) {
-        const bundler = await this.ensureBundlerForExtension(fileExt);
-        const detectSpan = runtime.tracer.startSpan('kernel.detect-bundle', { file: filePath });
+        const bundler = await this.ensureBundlerForExtension(fileExtension);
+        const detectSpan = runtime.tracer.startSpan('kernel.detect-bundle', {
+          file: filePath,
+        });
         const { detectedModules, dependencies } = await bundler.definition.detectImports(
           { entryPath: filePath },
           bundler.ctx,
@@ -374,17 +399,24 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
             await this.ensureKernelInitialized(kernel, runtime);
           }
 
-          this.selectionCache.set(filePath, { id: primaryConfig.id, method: 'bundler' });
+          this.selectionCache.set(filePath, {
+            id: primaryConfig.id,
+            method: 'bundler',
+          });
           return { kernel: primaryKernel, method: 'bundler' };
         }
       }
     }
 
-    /* eslint-enable no-await-in-loop -- End sequential kernel selection */
+    /* oxlint-enable no-await-in-loop -- End sequential kernel selection */
 
     // Pass 3: Catch-all fallback — guarded by canHandle when defined
     if (catchAllEntry) {
-      return this.tryCatchAllKernel(catchAllEntry, { filePath, extension, runtime });
+      return this.tryCatchAllKernel(catchAllEntry, {
+        filePath,
+        extension,
+        runtime,
+      });
     }
 
     return undefined;

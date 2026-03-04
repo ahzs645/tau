@@ -4,7 +4,12 @@ import { encodeMessage, decodeMessage } from '#lib/kcl-language/lsp/codec/utils.
 describe('codec utils', () => {
   describe('encodeMessage', () => {
     it('should encode a JSON-RPC request to bytes with LSP headers', () => {
-      const request = { jsonrpc: '2.0' as const, id: 1, method: 'initialize', params: {} };
+      const request = {
+        jsonrpc: '2.0' as const,
+        id: 1,
+        method: 'initialize',
+        params: {},
+      };
       const result = encodeMessage(request);
       const decoded = new TextDecoder().decode(result);
       expect(decoded).toContain('Content-Length:');
@@ -12,7 +17,11 @@ describe('codec utils', () => {
     });
 
     it('should encode a JSON-RPC response', () => {
-      const response = { jsonrpc: '2.0' as const, id: 1, result: { capabilities: {} } };
+      const response = {
+        jsonrpc: '2.0' as const,
+        id: 1,
+        result: { capabilities: {} },
+      };
       const result = encodeMessage(response);
       const decoded = new TextDecoder().decode(result);
       expect(decoded).toContain('"result"');
@@ -51,9 +60,18 @@ describe('codec utils', () => {
   describe('encode/decode roundtrip', () => {
     it('should preserve message identity through encode then decode', () => {
       const messages = [
-        { jsonrpc: '2.0' as const, id: 1, method: 'initialize', params: { capabilities: {} } },
+        {
+          jsonrpc: '2.0' as const,
+          id: 1,
+          method: 'initialize',
+          params: { capabilities: {} },
+        },
         { jsonrpc: '2.0' as const, id: 2, result: { contents: 'hover text' } },
-        { jsonrpc: '2.0' as const, id: 3, error: { code: -32_600, message: 'Invalid Request' } },
+        {
+          jsonrpc: '2.0' as const,
+          id: 3,
+          error: { code: -32_600, message: 'Invalid Request' },
+        },
       ];
 
       for (const message of messages) {

@@ -82,7 +82,7 @@ function useStatusInfo(mode: DetailedMode): StatusInfo {
       return {
         label: 'Measure',
         description: (
-          <div className="flex flex-col gap-2">
+          <div className='flex flex-col gap-2'>
             {hasMeasurements ? <p>Click more points or clear to restart</p> : <p>Click points to measure distances</p>}
           </div>
         ),
@@ -135,39 +135,39 @@ export function ChatInterfaceStatus({ className, ...props }: ChatInterfaceStatus
       onOpenChange={setIsViewerStatusOpen}
     >
       <CollapsibleTrigger asChild>
-        <div className="flex flex-col items-center p-2 select-none md:px-3">
-          <div className="flex w-full items-center justify-between gap-1">
+        <div className='flex flex-col items-center p-2 select-none md:px-3'>
+          <div className='flex w-full items-center justify-between gap-1'>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="ghost"
-                  className="-m-1.5 mr-0 size-6 text-muted-foreground hover:text-foreground"
-                  size="icon"
+                  variant='ghost'
+                  className='-m-1.5 mr-0 size-6 text-muted-foreground hover:text-foreground'
+                  size='icon'
                   onClick={(event) => {
                     event.stopPropagation();
                     handleClose();
                   }}
                 >
-                  <X className="size-3" />
+                  <X className='size-3' />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent className="flex items-center gap-2 align-baseline">
-                {tooltipLabel} <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
+              <TooltipContent className='flex items-center gap-2 align-baseline'>
+                {tooltipLabel} <KeyShortcut variant='tooltip'>{formattedKeyCombination}</KeyShortcut>
               </TooltipContent>
             </Tooltip>
-            <span className="text-sm font-medium">{label}</span>
-            <ChevronDown className="size-4 text-muted-foreground group-data-[state=open]/viewer-status:rotate-180" />
+            <span className='text-sm font-medium'>{label}</span>
+            <ChevronDown className='size-4 text-muted-foreground group-data-[state=open]/viewer-status:rotate-180' />
           </div>
         </div>
       </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col gap-2 overflow-hidden p-3 pt-0 text-center text-balance">
-        <div className="text-sm text-muted-foreground">{description}</div>
+      <CollapsibleContent className='flex flex-col gap-2 overflow-hidden p-3 pt-0 text-center text-balance'>
+        <div className='text-sm text-muted-foreground'>{description}</div>
         {tips !== undefined && tips.length > 0 ? (
           <div>
             {tips.map((tip) => (
-              <div key={tip as string} className="flex items-center gap-1 text-muted-foreground">
-                <Info className="size-3" />
-                <p className="text-xs text-muted-foreground">{tip}</p>
+              <div key={tip as string} className='flex items-center gap-1 text-muted-foreground'>
+                <Info className='size-3' />
+                <p className='text-xs text-muted-foreground'>{tip}</p>
               </div>
             ))}
           </div>

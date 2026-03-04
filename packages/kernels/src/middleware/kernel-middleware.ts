@@ -17,7 +17,7 @@ import type { Dependency } from '#types/kernel-dependency.types.js';
  * Used as the default when no state schema is provided.
  * z.infer of this type yields `{}`.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Represents z.object({}) schema type
+// oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Represents z.object({}) schema type
 type EmptyZodObject = z.ZodObject<{}>;
 
 /**
@@ -25,7 +25,7 @@ type EmptyZodObject = z.ZodObject<{}>;
  * Used as the default inferred state type when no state schema is provided.
  * Equivalent to z.infer<EmptyZodObject>.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Represents an empty state object
+// oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Represents an empty state object
 type EmptyState = {};
 
 /**
@@ -210,7 +210,7 @@ export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: strin
 export function createMiddlewareState<State extends Record<string, unknown> = EmptyState>(
   schema?: z.ZodObject<z.ZodRawShape>,
 ): MiddlewareState<State> {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- initial value is empty object
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- initial value is empty object
   let stateValue: PartialDeep<State> = {} as PartialDeep<State>;
 
   return {

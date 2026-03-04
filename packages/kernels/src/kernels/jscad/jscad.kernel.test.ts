@@ -1,5 +1,6 @@
 // @vitest-environment node
-/* eslint-disable max-lines -- comprehensive kernel test suite */
+/* oxlint-disable max-lines -- comprehensive kernel test suite */
+/* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 import { describe, it, expect } from 'vitest';
 import jscadKernel from '#kernels/jscad/jscad.kernel.js';
 import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
@@ -9,8 +10,6 @@ import {
   createTestGeometry,
   getTestParameters,
 } from '#testing/kernel-testing.utils.js';
-
-/* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 
 // =============================================================================
 // Test Utilities
@@ -24,8 +23,10 @@ const createWorker = async (files: Record<string, string>): ReturnType<typeof cr
 const getParameters = async (
   files: Record<string, string>,
   mainFile: string,
-): Promise<{ jsonSchema: unknown; defaultParameters: Record<string, unknown> }> =>
-  getTestParameters(jscadKernel, files, mainFile);
+): Promise<{
+  jsonSchema: unknown;
+  defaultParameters: Record<string, unknown>;
+}> => getTestParameters(jscadKernel, files, mainFile);
 
 /** Helper to create geometry and return the result. */
 const createGeometry = async (
@@ -309,7 +310,11 @@ describe('JscadWorker', () => {
           'cylinder.ts',
         );
 
-        expect(defaultParameters).toEqual({ height: 20, radius: 8, segments: 48 });
+        expect(defaultParameters).toEqual({
+          height: 20,
+          radius: 8,
+          segments: 48,
+        });
         expect(jsonSchema).toMatchObject({
           type: 'object',
           properties: {
@@ -1035,10 +1040,19 @@ module.exports = { main, getParameterDefinitions }
             type: 'runtime',
             severity: 'error',
             stackFrames: [
-              { functionName: 'main', fileName: 'undefined_func.ts', lineNumber: 5, columnNumber: 35, context: 'user' },
+              {
+                functionName: 'main',
+                fileName: 'undefined_func.ts',
+                lineNumber: 5,
+                columnNumber: 35,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'undefined_func.ts', startLineNumber: 5 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'undefined_func.ts',
+              startLineNumber: 5,
+            }),
           }),
         );
       });
@@ -1066,10 +1080,19 @@ module.exports = { main, getParameterDefinitions }
             type: 'runtime',
             severity: 'error',
             stackFrames: [
-              { functionName: 'main', fileName: 'runtime_error.ts', lineNumber: 5, columnNumber: 23, context: 'user' },
+              {
+                functionName: 'main',
+                fileName: 'runtime_error.ts',
+                lineNumber: 5,
+                columnNumber: 23,
+                context: 'user',
+              },
             ],
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-            location: expect.objectContaining({ fileName: 'runtime_error.ts', startLineNumber: 5 }),
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
+            location: expect.objectContaining({
+              fileName: 'runtime_error.ts',
+              startLineNumber: 5,
+            }),
           }),
         );
       });
@@ -1092,10 +1115,14 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-          expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
           // Warning should point to line 1 of the file for navigation
-          expect(result.issues[0]?.location).toEqual({ fileName: 'no_return.ts', startLineNumber: 1, startColumn: 1 });
+          expect(result.issues[0]?.location).toEqual({
+            fileName: 'no_return.ts',
+            startLineNumber: 1,
+            startColumn: 1,
+          });
         }
       });
 
@@ -1116,8 +1143,8 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
-          expect(result.issues.some((i) => i.message.includes('did not return'))).toBe(true);
+          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
+          expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
           // Warning should point to line 1 of the file for navigation
           expect(result.issues[0]?.location).toEqual({
             fileName: 'explicit_undefined.ts',
@@ -1147,7 +1174,10 @@ module.exports = { main, getParameterDefinitions }
 
       // First create geometry
       const geometryFile = createGeometryFile('cube.ts');
-      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const createResult = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       expect(createResult.success).toBe(true);
 
       // Then export
@@ -1174,7 +1204,10 @@ module.exports = { main, getParameterDefinitions }
       });
 
       const geometryFile = createGeometryFile('glb_cube.ts');
-      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      const createResult = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
       expect(createResult.success).toBe(true);
 
       const exportResult = await worker.exportGeometry('glb');

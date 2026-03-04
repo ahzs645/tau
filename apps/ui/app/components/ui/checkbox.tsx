@@ -29,7 +29,7 @@ function Checkbox({ className, onCheckedChange, size = 'default', ...props }: Ch
   return (
     <CheckboxPrimitive.Root {...props} asChild onCheckedChange={handleCheckedChange}>
       <motion.button
-        data-slot="checkbox"
+        data-slot='checkbox'
         className={cn(
           'peer flex shrink-0 items-center justify-center bg-input transition-colors duration-500 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:aria-invalid:ring-destructive/40',
           size === 'default' ? 'size-4' : 'size-8',
@@ -42,20 +42,20 @@ function Checkbox({ className, onCheckedChange, size = 'default', ...props }: Ch
       >
         <CheckboxPrimitive.Indicator forceMount asChild>
           <motion.svg
-            data-slot="checkbox-indicator"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth="3.5"
-            stroke="currentColor"
+            data-slot='checkbox-indicator'
+            xmlns='http://www.w3.org/2000/svg'
+            fill='none'
+            viewBox='0 0 24 24'
+            strokeWidth='3.5'
+            stroke='currentColor'
             className={cn(size === 'default' ? 'size-3' : 'size-6')}
-            initial="unchecked"
+            initial='unchecked'
             animate={isChecked ? 'checked' : 'unchecked'}
           >
             <motion.path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M4.5 12.75l6 6 9-13.5"
+              strokeLinecap='round'
+              strokeLinejoin='round'
+              d='M4.5 12.75l6 6 9-13.5'
               variants={{
                 checked: {
                   pathLength: 1,

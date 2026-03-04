@@ -21,8 +21,8 @@ import { Loader } from '#components/ui/loader.js';
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/builds/community">Community</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/builds/community'>Community</Link>
       </Button>
     );
   },
@@ -83,37 +83,37 @@ export default function CadCommunity(): React.JSX.Element {
   };
 
   return (
-    <div className="container mx-auto space-y-8 px-4 py-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-2">
-          <h1 className="text-3xl font-bold">Community</h1>
-          <span className="text-muted-foreground">({sortedProjects.length})</span>
+    <div className='container mx-auto space-y-8 px-4 py-8'>
+      <div className='flex flex-col gap-4 md:flex-row md:items-center md:justify-between'>
+        <div className='flex items-center gap-2'>
+          <h1 className='text-3xl font-bold'>Community</h1>
+          <span className='text-muted-foreground'>({sortedProjects.length})</span>
         </div>
         <Button asChild>
-          <NavLink to="/">{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
+          <NavLink to='/'>{({ isPending }) => (isPending ? <Loader /> : 'New Build')}</NavLink>
         </Button>
       </div>
 
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center">
+      <div className='flex flex-col gap-4'>
+        <div className='flex flex-col gap-4 md:flex-row md:items-center'>
           <SearchInput
-            placeholder="Search projects..."
+            placeholder='Search projects...'
             value={searchTerm}
-            containerClassName="grow"
+            containerClassName='grow'
             onChange={(event) => {
               setSearchTerm(event.target.value);
             }}
             onClear={handleSearchClear}
           />
-          <div className="flex items-center gap-2">
+          <div className='flex items-center gap-2'>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-start">
-                  <Code2 className="mr-2 size-4" />
+                <Button variant='outline' className='w-[180px] justify-start'>
+                  <Code2 className='mr-2 size-4' />
                   {selectedKernel === 'all' ? 'All Kernels' : selectedKernel}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-[180px]">
+              <DropdownMenuContent align='end' className='w-[180px]'>
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     onClick={() => {
@@ -137,12 +137,12 @@ export default function CadCommunity(): React.JSX.Element {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-start">
-                  <SlidersHorizontal className="mr-2 size-4" />
+                <Button variant='outline' className='w-[180px] justify-start'>
+                  <SlidersHorizontal className='mr-2 size-4' />
                   Sort by: {sortOption}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-[180px]">
+              <DropdownMenuContent align='end' className='w-[180px]'>
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     onClick={() => {
@@ -168,7 +168,7 @@ export default function CadCommunity(): React.JSX.Element {
       <CommunityBuildGrid builds={sortedProjects} />
 
       {visibleProjects < sortedProjects.length && (
-        <div className="flex justify-center">
+        <div className='flex justify-center'>
           <Button onClick={handleLoadMore}>Load More Projects</Button>
         </div>
       )}

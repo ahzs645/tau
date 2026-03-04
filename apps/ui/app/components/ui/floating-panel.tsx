@@ -120,7 +120,7 @@ function FloatingPanel({
     <FloatingPanelContext.Provider value={contextValue}>
       <div
         className={cn('group/floating-panel relative size-full overflow-hidden bg-background', className)}
-        data-slot="floating-panel"
+        data-slot='floating-panel'
         data-state={isOpen ? 'open' : 'closed'}
       >
         {children}
@@ -167,10 +167,10 @@ function FloatingPanelTriggerButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          size="icon"
-          variant="overlay"
+          size='icon'
+          variant='overlay'
           className={cn('text-muted-foreground', className)}
-          data-slot="floating-panel-trigger"
+          data-slot='floating-panel-trigger'
           onClick={onClick}
         >
           <span className={cn('group-data-[state=open]/floating-panel:[&_svg]:text-primary')}>{renderIcon()}</span>
@@ -206,13 +206,13 @@ function FloatingPanelClose({ icon, className, children, tooltipContent }: Float
   const button = (
     <FloatingPanelMenuButton
       tooltip={tooltipContent(isOpen)}
-      tooltipSide="top"
+      tooltipSide='top'
       className={cn(
         'text-muted-foreground',
         'max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
         className,
       )}
-      aria-label="Close panel"
+      aria-label='Close panel'
       onClick={close}
     >
       {renderIcon()}
@@ -304,10 +304,16 @@ class FloatingPanelErrorBoundary extends React.Component<
     return { hasError: true, error };
   }
 
-  public override state: FloatingPanelErrorBoundaryState = { hasError: false, error: undefined };
+  public override state: FloatingPanelErrorBoundaryState = {
+    hasError: false,
+    error: undefined,
+  };
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    this.props.analytics.captureException(error, { errorInfo, context: { component: 'FloatingPanel' } });
+    this.props.analytics.captureException(error, {
+      errorInfo,
+      context: { component: 'FloatingPanel' },
+    });
     console.error('FloatingPanel content error:', error, errorInfo);
   }
 
@@ -336,7 +342,7 @@ function FloatingPanelContent({ children, className, errorFallback }: FloatingPa
   const fallback = errorFallback ?? ((props) => <FloatingPanelErrorContent {...props} />);
   const analytics = useAnalytics();
   return (
-    <div className={cn('flex size-full flex-col bg-sidebar/50', className)} data-slot="floating-panel-content">
+    <div className={cn('flex size-full flex-col bg-sidebar/50', className)} data-slot='floating-panel-content'>
       <FloatingPanelErrorBoundary fallback={fallback} analytics={analytics}>
         {children}
       </FloatingPanelErrorBoundary>
@@ -383,7 +389,7 @@ function FloatingPanelContentHeader({ children, className }: FloatingPanelConten
         useDrawerHandle && drawerHandleOverrides,
         className,
       )}
-      data-slot="floating-panel-content-header"
+      data-slot='floating-panel-content-header'
     >
       {children}
     </Comp>
@@ -407,7 +413,7 @@ function FloatingPanelContentHeaderActions({
         'group-hover/floating-panel:opacity-100',
         className,
       )}
-      data-slot="floating-panel-content-header-actions"
+      data-slot='floating-panel-content-header-actions'
     >
       {children}
     </div>
@@ -426,7 +432,7 @@ type FloatingPanelMenuButtonProps = React.ComponentProps<typeof PaneButton>;
 function FloatingPanelMenuButton({ className, ...properties }: FloatingPanelMenuButtonProps): React.JSX.Element {
   return (
     <PaneButton
-      data-slot="floating-panel-menu-button"
+      data-slot='floating-panel-menu-button'
       className={cn('max-md:size-8 max-md:rounded-md', className)}
       {...properties}
     />
@@ -446,8 +452,8 @@ type FloatingPanelButtonGroupProps = {
 function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGroupProps): React.JSX.Element {
   return (
     <div
-      role="group"
-      data-slot="floating-panel-button-group"
+      role='group'
+      data-slot='floating-panel-button-group'
       className={cn(
         'flex items-center',
         'max-md:overflow-hidden max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
@@ -461,7 +467,7 @@ function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGr
 
 function FloatingPanelContentTitle({ children, className }: FloatingPanelContentTitleProps): React.JSX.Element {
   return (
-    <h2 className={cn('text-sm font-medium text-nowrap', className)} data-slot="floating-panel-content-title">
+    <h2 className={cn('text-sm font-medium text-nowrap', className)} data-slot='floating-panel-content-title'>
       {children}
     </h2>
   );
@@ -469,7 +475,7 @@ function FloatingPanelContentTitle({ children, className }: FloatingPanelContent
 
 function FloatingPanelContentBody({ children, className }: FloatingPanelContentBodyProps): React.JSX.Element {
   return (
-    <div className={cn('flex-1 overflow-y-auto', className)} data-slot="floating-panel-content-body">
+    <div className={cn('flex-1 overflow-y-auto', className)} data-slot='floating-panel-content-body'>
       {children}
     </div>
   );
@@ -497,49 +503,49 @@ function FloatingPanelErrorContent({
 
   return (
     <div className={cn('flex h-full flex-col items-center justify-center gap-4 p-6', className)}>
-      <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
+      <div className='flex w-full max-w-sm flex-col items-center gap-3 text-center'>
         {/* Error Icon */}
-        <div className="flex size-12 items-center justify-center rounded-full bg-destructive/10">
-          <AlertCircle className="size-6 text-destructive" />
+        <div className='flex size-12 items-center justify-center rounded-full bg-destructive/10'>
+          <AlertCircle className='size-6 text-destructive' />
         </div>
 
         {/* Error Title */}
-        <h3 className="text-lg font-semibold text-foreground">{title}</h3>
+        <h3 className='text-lg font-semibold text-foreground'>{title}</h3>
 
         {/* Description */}
         {displayDescription ? (
-          <p className="max-w-xs text-sm text-muted-foreground">{displayDescription}</p>
+          <p className='max-w-xs text-sm text-muted-foreground'>{displayDescription}</p>
         ) : undefined}
 
-        <p className="max-w-3xs text-sm text-pretty text-muted-foreground">
+        <p className='max-w-3xs text-sm text-pretty text-muted-foreground'>
           Our team has been notified of the error and will investigate it shortly.
         </p>
 
         {/* Error Details with Stack Trace */}
         {errorStack ? (
           <CollapsibleCodeBlock
-            language="bash"
+            language='bash'
             title={errorMessage ?? 'Error'}
             text={errorStack}
             collapsedLineCount={3}
-            className="text-left text-destructive/80"
-            containerClassName="w-full"
+            className='text-left text-destructive/80'
+            containerClassName='w-full'
           />
         ) : errorMessage ? (
-          <div className="w-full rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left">
-            <p className="text-xs font-medium text-destructive/80">{errorMessage}</p>
+          <div className='w-full rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left'>
+            <p className='text-xs font-medium text-destructive/80'>{errorMessage}</p>
           </div>
         ) : undefined}
       </div>
 
       {/* Action Buttons */}
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button variant="default" size="sm" className="gap-2" onClick={onRetry}>
-          <RotateCcw className="size-4" />
+      <div className='flex flex-wrap items-center justify-center gap-2'>
+        <Button variant='default' size='sm' className='gap-2' onClick={onRetry}>
+          <RotateCcw className='size-4' />
           Try Again
         </Button>
-        <Button variant="outline" size="sm" className="gap-2" onClick={onReload}>
-          <RefreshCcw className="size-4" />
+        <Button variant='outline' size='sm' className='gap-2' onClick={onReload}>
+          <RefreshCcw className='size-4' />
           Reload Page
         </Button>
       </div>

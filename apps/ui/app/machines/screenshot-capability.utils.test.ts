@@ -149,7 +149,11 @@ function createColoredMesh(
   opacity = 1,
 ): THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> {
   const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshStandardMaterial({ color, opacity, transparent: opacity < 1 });
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    opacity,
+    transparent: opacity < 1,
+  });
   return new THREE.Mesh(geometry, material);
 }
 
@@ -641,8 +645,8 @@ describe('screenshot camera centering', () => {
       const cameraPosition = new THREE.Vector3(geometryCenter.x + ox, geometryCenter.y + oy, geometryCenter.z + oz);
 
       // Distance from origin is NOT the intended camera distance
-      const distFromOrigin = cameraPosition.length();
-      expect(distFromOrigin).not.toBeCloseTo(distance, 0);
+      const distanceFromOrigin = cameraPosition.length();
+      expect(distanceFromOrigin).not.toBeCloseTo(distance, 0);
 
       // But distance from geometry center IS correct
       expect(cameraPosition.distanceTo(geometryCenter)).toBeCloseTo(distance, 6);
@@ -699,7 +703,7 @@ describe('screenshot camera centering', () => {
 
 describe('computeViewFittingZoom', () => {
   // Helper: axis-aligned bounding box centred at `center` with given half-extents
-  // eslint-disable-next-line max-params -- test helper, simple positional args are clearer here
+  // oxlint-disable-next-line max-params -- test helper, simple positional args are clearer here
   function makeBox(center: THREE.Vector3, hx: number, hy: number, hz: number): THREE.Box3 {
     return new THREE.Box3(
       new THREE.Vector3(center.x - hx, center.y - hy, center.z - hz),
@@ -730,8 +734,8 @@ describe('computeViewFittingZoom', () => {
       // With perspective-correct projection, the closest bbox corners (at z = +halfExtent)
       // are at forward distance (d - halfExtent), which makes them subtend a larger angle.
       // zoom = (d - halfExtent) * tan(fov/2) / halfExtent
-      const closestForwardDist = distance - halfExtent;
-      const expectedZoom = (closestForwardDist * tanHalf) / halfExtent;
+      const closestForwardDistance = distance - halfExtent;
+      const expectedZoom = (closestForwardDistance * tanHalf) / halfExtent;
 
       const zoom = computeViewFittingZoom({
         cameraPosition: new THREE.Vector3(0, 0, distance),
@@ -791,8 +795,8 @@ describe('computeViewFittingZoom', () => {
       const tanHalf = Math.tan((fov / 2) * (Math.PI / 180));
       // Closest corners at z=+1 have forward distance 9.
       // Horizontal constrains: aspect * tanHalf / (4/9) = 9 * aspect * tanHalf / 4
-      const closestForwardDist = 9;
-      const zoomH = (squareAspect * closestForwardDist * tanHalf) / 4;
+      const closestForwardDistance = 9;
+      const zoomH = (squareAspect * closestForwardDistance * tanHalf) / 4;
       expect(zoom).toBeCloseTo(zoomH, 5);
     });
   });
@@ -886,8 +890,14 @@ describe('computeViewFittingZoom', () => {
         aspectRatio: squareAspect,
       };
 
-      const zoomFull = computeViewFittingZoom({ ...baseParameters, paddingFactor: 1 });
-      const zoomPadded = computeViewFittingZoom({ ...baseParameters, paddingFactor: 0.8 });
+      const zoomFull = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 1,
+      });
+      const zoomPadded = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 0.8,
+      });
 
       expect(zoomPadded / zoomFull).toBeCloseTo(0.8, 5);
     });
@@ -902,7 +912,10 @@ describe('computeViewFittingZoom', () => {
       };
 
       const zoomDefault = computeViewFittingZoom(baseParameters);
-      const zoomExplicit = computeViewFittingZoom({ ...baseParameters, paddingFactor: 0.9 });
+      const zoomExplicit = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 0.9,
+      });
 
       expect(zoomDefault).toBeCloseTo(zoomExplicit, 10);
     });
@@ -974,8 +987,8 @@ describe('computeViewFittingZoom', () => {
       // Perspective-correct: closest corners at z = -halfZ are at forward distance
       // (distance - halfZ) = 12 from camera. Their tangent = halfXY / 12, which is
       // larger than halfXY / 20, so the required zoom is lower (less zoomed in).
-      const perspectiveForwardDist = distance - halfZ;
-      const perspectiveZoom = (perspectiveForwardDist * tanHalf) / halfXy;
+      const perspectiveForwardDistance = distance - halfZ;
+      const perspectiveZoom = (perspectiveForwardDistance * tanHalf) / halfXy;
 
       expect(zoom).toBeCloseTo(perspectiveZoom, 5);
       expect(zoom).toBeLessThan(orthographicZoom);

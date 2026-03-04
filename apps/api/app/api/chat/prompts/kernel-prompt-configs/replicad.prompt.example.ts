@@ -6,43 +6,37 @@ import { makePlane, makeCylinder, draw, drawCircle } from 'replicad';
 
 export const defaultParams = {
   // Body dimensions
-  baseWidth: 20,        // Width at the base in mm
-  bodyHeight: 100,      // Height of the main body in mm
-  
+  baseWidth: 20, // Width at the base in mm
+  bodyHeight: 100, // Height of the main body in mm
+
   // Filler dimensions
-  topFillerRadius: 12,  // Radius of top filler opening in mm
-  fillerAngle: 20,      // Angle of filler from vertical in degrees
-  
+  topFillerRadius: 12, // Radius of top filler opening in mm
+  fillerAngle: 20, // Angle of filler from vertical in degrees
+
   // Spout dimensions
-  spoutRadius: 5,       // Radius of the spout in mm
-  spoutLength: 70,      // Length of the spout in mm
-  spoutAngle: 45,       // Angle of spout from vertical in degrees
+  spoutRadius: 5, // Radius of the spout in mm
+  spoutLength: 70, // Length of the spout in mm
+  spoutAngle: 45, // Angle of spout from vertical in degrees
   spoutOpeningFilletRadius: 0.4, // Fillet radius at spout opening in mm
-  
+
   // Construction
-  wallThickness: 1,     // Wall thickness for hollow body in mm
-  filletRadius: 30,     // Fillet radius for smooth transitions in mm
+  wallThickness: 1, // Wall thickness for hollow body in mm
+  filletRadius: 30, // Fillet radius for smooth transitions in mm
 };
 
 export default function main(p = defaultParams) {
   // Building the body
-  const profile = draw()
-    .hLine(p.baseWidth)
-    .line(10, 5)
-    .vLine(3)
-    .lineTo([8, p.bodyHeight])
-    .hLine(-8)
-    .close();
+  const profile = draw().hLine(p.baseWidth).line(10, 5).vLine(3).lineTo([8, p.bodyHeight]).hLine(-8).close();
 
-  const body = profile.sketchOnPlane("XZ").revolve([0, 0, 1]);
+  const body = profile.sketchOnPlane('XZ').revolve([0, 0, 1]);
 
   // Building the filler
-  const topPlane = makePlane().pivot(-p.fillerAngle, "Y").translate([-35, 0, 135]);
+  const topPlane = makePlane().pivot(-p.fillerAngle, 'Y').translate([-35, 0, 135]);
   const topCircle = drawCircle(p.topFillerRadius).sketchOnPlane(topPlane);
 
-  const middleCircle = drawCircle(8).sketchOnPlane("XY", p.bodyHeight);
+  const middleCircle = drawCircle(8).sketchOnPlane('XY', p.bodyHeight);
 
-  const bottomPlane = makePlane().pivot(p.fillerAngle, "Y").translateZ(80);
+  const bottomPlane = makePlane().pivot(p.fillerAngle, 'Y').translateZ(80);
   const bottomCircle = drawCircle(9).sketchOnPlane(bottomPlane);
 
   // @ts-expect-error - Replicad types are incorrect for loftWith.
@@ -57,7 +51,7 @@ export default function main(p = defaultParams) {
 
   let wateringCan = body
     .fuse(filler)
-    .fillet(p.filletRadius, (e) => e.inPlane("XY", p.bodyHeight))
+    .fillet(p.filletRadius, (e) => e.inPlane('XY', p.bodyHeight))
     .fuse(spout)
     .fillet(10, (e) => e.inBox([20, 20, p.bodyHeight], [-20, -20, 120]));
 
@@ -68,22 +62,18 @@ export default function main(p = defaultParams) {
   ] as [number, number, number];
 
   wateringCan = wateringCan.shell(-p.wallThickness, (face) =>
-    face.either([
-      (f) => f.containsPoint(spoutOpening),
-      (f) => f.inPlane(topPlane),
-    ])
+    face.either([(f) => f.containsPoint(spoutOpening), (f) => f.inPlane(topPlane)]),
   );
 
   // Add fillet to the spout opening
   wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (e) =>
-    e.withinDistance(p.spoutRadius + 1, spoutOpening).ofCurveType("CIRCLE")
+    e.withinDistance(p.spoutRadius + 1, spoutOpening).ofCurveType('CIRCLE'),
   );
 
-  // Add fillet to the filler opening  
+  // Add fillet to the filler opening
   const fillerOpeningCenter = [-35, 0, 135] as [number, number, number];
   wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (e) =>
-    e.withinDistance(p.topFillerRadius + p.wallThickness + 1, fillerOpeningCenter)
-      .not((f) => f.ofCurveType("LINE"))
+    e.withinDistance(p.topFillerRadius + p.wallThickness + 1, fillerOpeningCenter).not((f) => f.ofCurveType('LINE')),
   );
 
   return wateringCan;

@@ -173,8 +173,8 @@ export function ChatHistorySelector({
       const draftText = draftTextPart?.type === 'text' ? draftTextPart.text : undefined;
 
       return (
-        <div className="group flex w-full items-start justify-between">
-          <div className="flex min-w-0 flex-col">
+        <div className='group flex w-full items-start justify-between'>
+          <div className='flex min-w-0 flex-col'>
             <div
               className={cn(
                 'font-medium',
@@ -185,43 +185,43 @@ export function ChatHistorySelector({
               {chatName}
             </div>
             {draftText ? (
-              <div className="truncate text-xs text-muted-foreground italic">
-                <span className="font-medium">Draft</span>: {draftText}
+              <div className='truncate text-xs text-muted-foreground italic'>
+                <span className='font-medium'>Draft</span>: {draftText}
               </div>
             ) : null}
             {chat.error ? (
-              <div className="flex items-center gap-1 text-xs text-warning">
-                <AlertCircle className="size-3 shrink-0 text-warning" />
-                <span className="truncate">{chat.error.title}</span>
+              <div className='flex items-center gap-1 text-xs text-warning'>
+                <AlertCircle className='size-3 shrink-0 text-warning' />
+                <span className='truncate'>{chat.error.title}</span>
               </div>
             ) : null}
-            <div className="text-xs text-muted-foreground">
+            <div className='text-xs text-muted-foreground'>
               {chat.messages.length} {chat.messages.length === 1 ? 'message' : 'messages'} ·{' '}
               {formatRelativeTime(chat.updatedAt)}
             </div>
           </div>
-          <div className="flex gap-1 md:opacity-0 md:group-hover:opacity-100">
+          <div className='flex gap-1 md:opacity-0 md:group-hover:opacity-100'>
             <Button
-              variant="ghost"
-              size="icon"
-              className="hover:bg-neutral/20! max-md:bg-neutral/20! md:size-6"
+              variant='ghost'
+              size='icon'
+              className='hover:bg-neutral/20! max-md:bg-neutral/20! md:size-6'
               onClick={(event) => {
                 event.stopPropagation();
                 handleRenameChat(chat.id, chatName);
               }}
             >
-              <Pencil className="size-3" />
+              <Pencil className='size-3' />
             </Button>
             <Button
-              variant="ghost"
-              size="icon"
-              className="hover:bg-destructive/20! max-md:bg-destructive/20! md:size-6"
+              variant='ghost'
+              size='icon'
+              className='hover:bg-destructive/20! max-md:bg-destructive/20! md:size-6'
               onClick={(event) => {
                 event.stopPropagation();
                 void handleDeleteChat(chat.id);
               }}
             >
-              <Trash className="size-3" />
+              <Trash className='size-3' />
             </Button>
           </div>
         </div>
@@ -236,19 +236,19 @@ export function ChatHistorySelector({
   return (
     <>
       <div className={cn('ml-0.5 flex flex-1 items-center gap-2 truncate', isGeneratingName && 'animate-pulse')}>
-        <span className="truncate">{activeChat?.name}</span>
+        <span className='truncate'>{activeChat?.name}</span>
         {isDisconnected ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="relative flex size-2 shrink-0">
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-warning opacity-75" />
-                <span className="relative inline-flex size-2 rounded-full bg-warning" />
+              <span className='relative flex size-2 shrink-0'>
+                <span className='absolute inline-flex size-full animate-ping rounded-full bg-warning opacity-75' />
+                <span className='relative inline-flex size-2 rounded-full bg-warning' />
               </span>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
-              <div className="text-xs">
-                <div className="font-medium">Connection {connectionStatus}</div>
-                {connectionError ? <div className="text-muted-foreground">{connectionError}</div> : null}
+            <TooltipContent side='bottom'>
+              <div className='text-xs'>
+                <div className='font-medium'>Connection {connectionStatus}</div>
+                {connectionError ? <div className='text-muted-foreground'>{connectionError}</div> : null}
               </div>
             </TooltipContent>
           </Tooltip>
@@ -262,10 +262,10 @@ export function ChatHistorySelector({
               renderLabel={renderChatLabel}
               getValue={getChatValue}
               defaultValue={activeChat}
-              placeholder="Select a chat"
-              searchPlaceHolder="Search chats..."
-              title="Chats"
-              description="Select a chat to continue the conversation."
+              placeholder='Select a chat'
+              searchPlaceHolder='Search chats...'
+              title='Chats'
+              description='Select a chat to continue the conversation.'
               popoverProperties={{
                 align: 'end',
                 className: 'w-[300px]',
@@ -273,27 +273,27 @@ export function ChatHistorySelector({
               onSelect={handleSelectChat}
             >
               <TooltipTrigger asChild>
-                <FloatingPanelMenuButton aria-label="Search chats">
-                  <History className="size-4" />
+                <FloatingPanelMenuButton aria-label='Search chats'>
+                  <History className='size-4' />
                 </FloatingPanelMenuButton>
               </TooltipTrigger>
             </ComboBoxResponsive>
-            <TooltipContent side="top">Search chats</TooltipContent>
+            <TooltipContent side='top'>Search chats</TooltipContent>
           </Tooltip>
 
           <FloatingPanelMenuButton
-            aria-label="New chat"
+            aria-label='New chat'
             tooltip={
               <>
                 New chat{' '}
-                <KeyShortcut variant="tooltip" className="ml-1">
+                <KeyShortcut variant='tooltip' className='ml-1'>
                   {formattedKeyCombination}
                 </KeyShortcut>
               </>
             }
             onClick={handleAddChat}
           >
-            <Plus className="size-4" />
+            <Plus className='size-4' />
           </FloatingPanelMenuButton>
           <ChatHistorySettings />
         </FloatingPanelButtonGroup>
@@ -302,11 +302,11 @@ export function ChatHistorySelector({
 
       {/* Rename Dialog */}
       <Dialog open={isRenameDialogOpen} onOpenChange={setIsRenameDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className='sm:max-w-md'>
           <DialogHeader>
             <DialogTitle>Rename Chat</DialogTitle>
           </DialogHeader>
-          <div className="flex items-center space-y-2">
+          <div className='flex items-center space-y-2'>
             <Input
               ref={inputRef}
               value={newChatName}
@@ -322,7 +322,7 @@ export function ChatHistorySelector({
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="neutral">Cancel</Button>
+              <Button variant='neutral'>Cancel</Button>
             </DialogClose>
             <Button onClick={handleSaveRename}>Save</Button>
           </DialogFooter>

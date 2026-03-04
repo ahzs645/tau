@@ -22,13 +22,13 @@ export function SectionViewControl(): React.JSX.Element {
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          variant="overlay"
-          size="icon"
+          variant='overlay'
+          size='icon'
           data-active={isSectionViewActive ? 'true' : 'false'}
           className={cn('data-[active=true]:bg-accent data-[active=true]:text-primary', is2dGeometry && 'hidden')}
           onClick={handleClick}
         >
-          <FlipHorizontal className="size-4" />
+          <FlipHorizontal className='size-4' />
         </Button>
       </TooltipTrigger>
       <TooltipContent>{isSectionViewActive ? 'Disable' : 'Enable'} section view</TooltipContent>

@@ -93,14 +93,14 @@ export function DocsSidebarProvider({ children }: { readonly children: ReactNode
   return (
     <DocsSidebarProviderContext.Provider value={value}>
       <div
-        data-slot="docs-sidebar"
+        data-slot='docs-sidebar'
         style={{
           '--docs-sidebar-width': docsSidebarWidth,
           '--docs-sidebar-width-icon': docsSidebarWidthIcon,
           '--docs-sidebar-toggle-width-current': isDocsSidebarOpen ? '0px' : docsSidebarWidthIcon,
           '--docs-sidebar-width-current': isDocsSidebarOpen ? docsSidebarWidth : '0px',
         }}
-        className="size-full"
+        className='size-full'
       >
         {children}
       </div>
@@ -130,7 +130,7 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
   const { isDocsSidebarOpen, setIsDocsSidebarOpen } = useDocsSidebarProvider();
 
   return (
-    <FloatingPanel isOpen={isDocsSidebarOpen} side="right" className={className} onOpenChange={setIsDocsSidebarOpen}>
+    <FloatingPanel isOpen={isDocsSidebarOpen} side='right' className={className} onOpenChange={setIsDocsSidebarOpen}>
       <FloatingPanelContent className={cn('overflow-hidden rounded-md border', isDocsSidebarOpen && 'z-100')}>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>
@@ -141,13 +141,13 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => `${isOpen ? 'Close' : 'Open'} Documentation Sidebar`}
-              className="md:hidden"
+              className='md:hidden'
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
         <FloatingPanelContentBody>
-          <SidebarContent className="p-1">
+          <SidebarContent className='p-1'>
             <SidebarGroup>
               <SidebarMenu>
                 <DocsSidebarItems />
@@ -160,15 +160,15 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
   );
 }
 
-type DocSection = {
+type DocumentSection = {
   readonly id: string;
   readonly label: string;
   readonly icon: ReactNode;
   readonly url: string;
 };
 
-function getDocSections(root: PageTree.Root): DocSection[] {
-  const sections: DocSection[] = [];
+function getDocumentSections(root: PageTree.Root): DocumentSection[] {
+  const sections: DocumentSection[] = [];
 
   for (const child of root.children) {
     if (child.type === 'folder' && child.root) {
@@ -188,7 +188,7 @@ function getDocSections(root: PageTree.Root): DocSection[] {
   return sections;
 }
 
-function useCurrentSection(sections: DocSection[]): DocSection | undefined {
+function useCurrentSection(sections: DocumentSection[]): DocumentSection | undefined {
   const location = useLocation();
   return useMemo(
     () => sections.find((section) => location.pathname.startsWith(section.url)) ?? sections[0],
@@ -199,7 +199,7 @@ function useCurrentSection(sections: DocSection[]): DocSection | undefined {
 function DocsSidebarFrameworkSelector({ className }: { readonly className?: string }): React.JSX.Element {
   const { root } = useTreeContext();
   const navigate = useNavigate();
-  const sections = useMemo(() => getDocSections(root), [root]);
+  const sections = useMemo(() => getDocumentSections(root), [root]);
   const currentSection = useCurrentSection(sections);
 
   const groupedItems = [
@@ -210,22 +210,22 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
   ];
 
   return (
-    <ComboBoxResponsive<DocSection>
-      searchPlaceHolder="Search sections..."
+    <ComboBoxResponsive<DocumentSection>
+      searchPlaceHolder='Search sections...'
       isSearchEnabled={false}
       groupedItems={groupedItems}
       renderLabel={(section) => (
-        <div className="flex items-center gap-2">
-          {section.icon ? <span className="[&_svg]:size-4">{section.icon}</span> : undefined}
+        <div className='flex items-center gap-2'>
+          {section.icon ? <span className='[&_svg]:size-4'>{section.icon}</span> : undefined}
           <span>{section.label}</span>
         </div>
       )}
       popoverProperties={{ align: 'start' }}
       getValue={(section) => section.id}
       defaultValue={currentSection}
-      title="Select Section"
-      description="Choose which documentation section to view"
-      className="md:w-[180px]"
+      title='Select Section'
+      description='Choose which documentation section to view'
+      className='md:w-[180px]'
       onSelect={(value) => {
         const section = sections.find((s) => s.id === value);
         if (section) {
@@ -234,13 +234,13 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
       }}
     >
       <Button
-        variant="ghost"
+        variant='ghost'
         className={cn(
           'h-7 gap-2 rounded-sm border border-transparent pr-3 pl-2! hover:border-border hover:text-foreground max-md:border-border',
           className,
         )}
       >
-        {currentSection?.icon ? <span className="[&_svg]:size-4">{currentSection.icon}</span> : undefined}
+        {currentSection?.icon ? <span className='[&_svg]:size-4'>{currentSection.icon}</span> : undefined}
         {currentSection?.label ?? 'Docs'}
       </Button>
     </ComboBoxResponsive>
@@ -265,8 +265,8 @@ function DocsSidebarSearch(): React.JSX.Element | undefined {
 
   return (
     <Button
-      variant="outline"
-      className="mr-0.5 h-6 w-fit px-2 text-xs font-normal"
+      variant='outline'
+      className='mr-0.5 h-6 w-fit px-2 text-xs font-normal'
       onClick={() => {
         setOpenSearch(true);
       }}
@@ -292,7 +292,7 @@ function DocsSidebarItems(): React.JSX.Element {
     return renderItems(root.children);
   }, [root]);
 
-  // eslint-disable-next-line react/jsx-no-useless-fragment -- children IS an array of ReactNodes
+  // oxlint-disable-next-line react/jsx-no-useless-fragment -- children IS an array of ReactNodes
   return <>{children}</>;
 }
 
@@ -318,7 +318,7 @@ function DocsSidebarItem({
   if (item.type === 'page') {
     return (
       <SidebarMenuItem>
-        <NavLink end prefetch="viewport" preventScrollReset={false} to={item.url}>
+        <NavLink end prefetch='viewport' preventScrollReset={false} to={item.url}>
           {({ isActive, isPending }) => (
             <SidebarMenuButton asChild isActive={isActive} className={linkVariants({ active: isActive })}>
               <span>
@@ -333,7 +333,7 @@ function DocsSidebarItem({
   }
 
   if (item.type === 'separator') {
-    return <SidebarGroupLabel className="mt-4 px-1.5 first:mt-0">{item.name}</SidebarGroupLabel>;
+    return <SidebarGroupLabel className='mt-4 px-1.5 first:mt-0'>{item.name}</SidebarGroupLabel>;
   }
 
   // Folder type
@@ -342,7 +342,7 @@ function DocsSidebarItem({
     <div>
       {folderIndex ? (
         <SidebarMenuItem>
-          <NavLink end prefetch="viewport" preventScrollReset={false} to={folderIndex.url}>
+          <NavLink end prefetch='viewport' preventScrollReset={false} to={folderIndex.url}>
             {({ isActive, isPending }) => (
               <SidebarMenuButton asChild isActive={isActive} className={linkVariants({ active: isActive })}>
                 <span>
@@ -354,14 +354,14 @@ function DocsSidebarItem({
           </NavLink>
         </SidebarMenuItem>
       ) : (
-        <li className="px-2">
+        <li className='px-2'>
           <div className={cn(linkVariants(), 'justify-start text-start')}>
             {renderIcon(item.icon)}
             <span>{item.name}</span>
           </div>
         </li>
       )}
-      <div className="ml-2 flex flex-col space-y-1 border-l pl-4">
+      <div className='ml-2 flex flex-col space-y-1 border-l pl-4'>
         <SidebarMenu>{children}</SidebarMenu>
       </div>
     </div>
@@ -372,7 +372,7 @@ export function DocsSidebarWithTrigger(): React.JSX.Element {
   const { isDocsSidebarOpen, setIsDocsSidebarOpen } = useDocsSidebarProvider();
 
   return (
-    <SidebarOffset asChild via="left">
+    <SidebarOffset asChild via='left'>
       <div
         className={cn(
           // Left
@@ -385,7 +385,7 @@ export function DocsSidebarWithTrigger(): React.JSX.Element {
           'fixed',
         )}
       >
-        <SidebarOffset asChild via="left">
+        <SidebarOffset asChild via='left'>
           <DocsSidebar
             className={cn(
               // Left
@@ -410,7 +410,7 @@ export function DocsSidebarWithTrigger(): React.JSX.Element {
           />
         </SidebarOffset>
         <div
-          className="absolute top-0"
+          className='absolute top-0'
           style={{
             left: isDocsSidebarOpen ? 'calc(var(--docs-sidebar-width) + var(--spacing)*2)' : 0,
           }}

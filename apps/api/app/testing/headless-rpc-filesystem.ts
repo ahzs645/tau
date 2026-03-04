@@ -25,7 +25,7 @@ export function createHeadlessRpcFileSystem(fs: KernelFileSystem): RpcFileSystem
       for (const name of names) {
         const fullPath = path ? `${path}/${name}` : name;
         try {
-          // eslint-disable-next-line no-await-in-loop -- sequential stat calls
+          // oxlint-disable-next-line no-await-in-loop -- sequential stat calls
           const info = await fs.stat(fullPath);
           entries.push({
             name,

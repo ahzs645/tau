@@ -192,19 +192,19 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-12">
-        <Loader className="size-8 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Loading repositories...</p>
+      <div className='flex flex-col items-center justify-center gap-4 py-12'>
+        <Loader className='size-8 text-muted-foreground' />
+        <p className='text-sm text-muted-foreground'>Loading repositories...</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-1 flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold">Select Repository</h4>
+    <div className='flex h-full flex-1 flex-col gap-4'>
+      <div className='flex items-center justify-between'>
+        <h4 className='text-sm font-semibold'>Select Repository</h4>
         {onCancel ? (
-          <Button size="sm" variant="outline" onClick={onCancel}>
+          <Button size='sm' variant='outline' onClick={onCancel}>
             Cancel
           </Button>
         ) : null}
@@ -212,11 +212,11 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
 
       {/* Git Scope Selector */}
       {scopes.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted-foreground">Git Scope</label>
+        <div className='flex flex-col gap-2'>
+          <label className='text-xs font-medium text-muted-foreground'>Git Scope</label>
           <Select value={selectedScope} onValueChange={setSelectedScope}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select Git Scope" />
+            <SelectTrigger className='w-full'>
+              <SelectValue placeholder='Select Git Scope' />
             </SelectTrigger>
             <SelectContent>
               {scopes.map((scope) => (
@@ -232,15 +232,15 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
         </div>
       )}
 
-      <div ref={scrollContainerRef} className="flex flex-col gap-4 overflow-y-auto">
+      <div ref={scrollContainerRef} className='flex flex-col gap-4 overflow-y-auto'>
         {groupedRepositories.map((group) => (
-          <div key={group.name} className="flex flex-col gap-2">
-            <h5 className="px-3 text-xs font-medium text-muted-foreground">{group.name}</h5>
-            <div className="flex flex-col gap-2 px-3">
+          <div key={group.name} className='flex flex-col gap-2'>
+            <h5 className='px-3 text-xs font-medium text-muted-foreground'>{group.name}</h5>
+            <div className='flex flex-col gap-2 px-3'>
               {group.items.map((repo) => (
                 <button
                   key={`${repo.owner}/${repo.name}`}
-                  type="button"
+                  type='button'
                   className={cn(
                     'flex items-center justify-between rounded-md border p-3 text-left transition-colors hover:bg-muted',
                     selectedRepo?.name === repo.name && 'border-primary bg-muted',
@@ -249,15 +249,15 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
                     void handleSelectRepo(repo);
                   }}
                 >
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm font-medium">
+                  <div className='flex flex-col gap-1'>
+                    <span className='text-sm font-medium'>
                       {repo.owner}/{repo.name}
                     </span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className='text-xs text-muted-foreground'>
                       {repo.branch} • {repo.isPrivate ? 'Private' : 'Public'}
                     </span>
                   </div>
-                  <GitBranch className="size-4 text-muted-foreground" />
+                  <GitBranch className='size-4 text-muted-foreground' />
                 </button>
               ))}
             </div>
@@ -266,15 +266,15 @@ export function RepositorySelector({ gitRef, onSelected, onCancel }: RepositoryS
 
         {/* Load More / Loading indicator */}
         {hasMore ? (
-          <div className="flex justify-center py-2">
+          <div className='flex justify-center py-2'>
             {isLoadingMore ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader className="size-4" />
+              <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+                <Loader className='size-4' />
                 <span>Loading more...</span>
               </div>
             ) : (
-              <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={handleLoadMore}>
-                <MoreHorizontal className="size-4" />
+              <Button size='sm' variant='ghost' className='text-muted-foreground' onClick={handleLoadMore}>
+                <MoreHorizontal className='size-4' />
                 <span>Load More</span>
               </Button>
             )}

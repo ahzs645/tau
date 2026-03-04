@@ -30,8 +30,8 @@ import {
 type JscadModuleExports = {
   getParameterDefinitions?: () => JscadParameterDefinition[];
   defaultParams?: Record<string, unknown>;
-  default?: (...args: unknown[]) => unknown;
-  main?: (...args: unknown[]) => unknown;
+  default?: (...arguments_: unknown[]) => unknown;
+  main?: (...arguments_: unknown[]) => unknown;
 };
 
 const kernelModulesKey = '__KERNEL_MODULES__';
@@ -90,7 +90,7 @@ function generateModuleShim(name: string, exports: Record<string, unknown>): str
   const registry = getModuleRegistry();
   registry.set(name, exports);
 
-  const exportNames = Object.keys(exports).filter((key) => /^[a-z_$][\w$]*$/i.test(key) && key !== 'default');
+  const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key) && key !== 'default');
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
   return `const __mod = globalThis.${kernelModulesKey}.get('${name}');\n${namedExports}\nexport default __mod;\n`;
 }
@@ -113,10 +113,13 @@ function registerJscadModules(runtime: KernelRuntime): void {
     const submoduleExports = exports[subpath];
     if (submoduleExports && typeof submoduleExports === 'object') {
       const subRecord = submoduleExports as Record<string, unknown>;
-      const subExportNames = Object.keys(subRecord).filter((key) => /^[a-z_$][\w$]*$/i.test(key));
+      const subExportNames = Object.keys(subRecord).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
       const subNamed = subExportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
       const subCode = `const __mod = globalThis.${kernelModulesKey}.get('@jscad/modeling').${subpath};\n${subNamed}\nexport default __mod;\n`;
-      runtime.bundler.registerModule(submoduleName, { code: subCode, version: '2.12.6' });
+      runtime.bundler.registerModule(submoduleName, {
+        code: subCode,
+        version: '2.12.6',
+      });
     }
   }
 }
@@ -156,7 +159,11 @@ async function runMain(module: JscadModuleExports, parameters: Record<string, un
 function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): KernelIssue[] {
   return issues.map((issue) => ({
     ...issue,
-    location: issue.location ?? { fileName: fallbackFileName, startLineNumber: 1, startColumn: 1 },
+    location: issue.location ?? {
+      fileName: fallbackFileName,
+      startLineNumber: 1,
+      startColumn: 1,
+    },
   }));
 }
 
@@ -167,12 +174,12 @@ function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): K
  * directly accessible.
  */
 function resolveModule(module: unknown): JscadModuleExports {
-  const mod = module as JscadModuleExports;
-  if (mod.default && typeof mod.default !== 'function' && isRecordObject(mod.default)) {
-    return mod.default as JscadModuleExports;
+  const module_ = module as JscadModuleExports;
+  if (module_.default && typeof module_.default !== 'function' && isRecordObject(module_.default)) {
+    return module_.default as JscadModuleExports;
   }
 
-  return mod;
+  return module_;
 }
 
 // =============================================================================
@@ -195,8 +202,8 @@ export default defineKernel({
     }
 
     const code = await filesystem.readFile(filePath, 'utf8');
-    const hasEsmImport = /import\s+.*from\s+['"]@jscad\/modeling(\/[^'"]*)?['"]/.test(code);
-    const hasRequire = /require\s*\(\s*['"]@jscad\/modeling(\/[^'"]*)?['"]\s*\)/.test(code);
+    const hasEsmImport = /import\s+.*from\s+["']@jscad\/modeling(\/[^"']*)?["']/.test(code);
+    const hasRequire = /require\s*\(\s*["']@jscad\/modeling(\/[^"']*)?["']\s*\)/.test(code);
     return hasEsmImport || hasRequire;
   },
 
@@ -239,7 +246,11 @@ export default defineKernel({
       return createKernelError([
         {
           message: error instanceof Error ? error.message : 'Failed to extract parameters',
-          location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+          location: {
+            fileName: relativeFilePath,
+            startLineNumber: 1,
+            startColumn: 1,
+          },
           type: 'runtime',
           severity: 'error',
         },
@@ -293,7 +304,11 @@ export default defineKernel({
         issues: [
           {
             message: 'main() did not return any shapes. Did you forget to add a return statement?',
-            location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+            location: {
+              fileName: relativeFilePath,
+              startLineNumber: 1,
+              startColumn: 1,
+            },
             type: 'runtime',
             severity: 'warning',
           },
@@ -322,9 +337,15 @@ export default defineKernel({
     return { geometry: geometries, nativeHandle: filteredShapes };
   },
 
-  async exportGeometry({ fileType, nativeHandle }, _runtime, _ctx) {
+  async exportGeometry({ fileType, nativeHandle }, _runtime, _context) {
     if (nativeHandle.length === 0) {
-      return createKernelError([{ message: 'No geometry available for export.', type: 'runtime', severity: 'error' }]);
+      return createKernelError([
+        {
+          message: 'No geometry available for export.',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
     }
 
     if (fileType === 'glb' || fileType === 'gltf') {
@@ -332,7 +353,11 @@ export default defineKernel({
       const gltfData = gltfResults[0];
       if (!gltfData) {
         return createKernelError([
-          { message: 'Failed to generate GLTF from computed geometry', type: 'runtime', severity: 'error' },
+          {
+            message: 'Failed to generate GLTF from computed geometry',
+            type: 'runtime',
+            severity: 'error',
+          },
         ]);
       }
 
@@ -354,7 +379,7 @@ export default defineKernel({
 class JscadBuildError extends Error {
   public readonly issues: KernelIssue[];
   public constructor(issues: KernelIssue[]) {
-    super(issues.map((i) => i.message).join('; '));
+    super(issues.map((index) => index.message).join('; '));
     this.issues = issues;
   }
 }

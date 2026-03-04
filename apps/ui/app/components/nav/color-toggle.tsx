@@ -16,8 +16,8 @@ export function ColorToggle(): React.JSX.Element {
       }}
     >
       <Button
-        variant="ghost"
-        size="icon"
+        variant='ghost'
+        size='icon'
         className={cn(
           'size-7 overflow-hidden border-none bg-transparent shadow-none ring-sidebar-ring! dark:bg-transparent',
           // Active styles - show primary color when popover is open
@@ -26,7 +26,7 @@ export function ColorToggle(): React.JSX.Element {
           'data-[state=open]:text-primary-foreground hover:data-[state=open]:text-primary-foreground',
         )}
       >
-        <Pipette className="size-4" />
+        <Pipette className='size-4' />
       </Button>
     </ColorPicker>
   );

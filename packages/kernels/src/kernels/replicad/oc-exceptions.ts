@@ -140,9 +140,14 @@ function extractExceptionTypeName(
   errorData: ReturnType<OpenCascadeWithExceptions['OCJS']['getStandard_FailureData']>,
 ): string {
   try {
-    // eslint-disable-next-line new-cap, @typescript-eslint/naming-convention -- C++ method with PascalCase convention
-    const dynType = errorData.ExceptionType() as unknown as { Name(): string; delete(): void };
-    // eslint-disable-next-line new-cap -- C++ method Name() is PascalCase in OpenCASCADE
+    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
+    const dynType = errorData.ExceptionType() as unknown as {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- C++ method with PascalCase convention
+      Name(): string;
+      delete(): void;
+    };
+
+    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
     return withWasmObject(dynType, (dt) => dt.Name());
   } catch {
     return '';
@@ -159,9 +164,9 @@ function extractStandardFailureData(
 ): { message: string; typeName: string; cppStack: string } {
   const oc = ocInstance as OpenCascadeWithExceptions;
   return withWasmObject(oc.OCJS.getStandard_FailureData(errorPointer), (errorData) => {
-    // eslint-disable-next-line new-cap -- C++ method
+    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
     const errorMessage = errorData.GetMessageString();
-    // eslint-disable-next-line new-cap -- C++ method
+    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
     const cppStack = errorData.GetStackString();
     const typeName = extractExceptionTypeName(errorData);
     return { message: errorMessage, typeName, cppStack };
@@ -227,7 +232,13 @@ export function formatRuntimeErrorWithOc({
   if (error instanceof OcKernelError) {
     const stackFrames = applySourceMaps(parseStackTrace(error));
     const location = deriveLocation(stackFrames, sourceMap);
-    return { message: error.message, location, type: 'kernel', severity: 'error', stackFrames };
+    return {
+      message: error.message,
+      location,
+      type: 'kernel',
+      severity: 'error',
+      stackFrames,
+    };
   }
 
   if (isWebAssemblyException(error)) {
@@ -235,7 +246,13 @@ export function formatRuntimeErrorWithOc({
     if (decoded) {
       const stackFrames = applySourceMaps(parseStackTrace(new Error(decoded.message)));
       const location = deriveLocation(stackFrames, sourceMap);
-      return { message: decoded.message, location, type: 'kernel', severity: 'error', stackFrames };
+      return {
+        message: decoded.message,
+        location,
+        type: 'kernel',
+        severity: 'error',
+        stackFrames,
+      };
     }
   }
 
@@ -245,7 +262,14 @@ export function formatRuntimeErrorWithOc({
     const errorForStack = wasmException.sourceError ?? new Error(message);
     const stackFrames = applySourceMaps(parseStackTrace(errorForStack));
     const location = deriveLocation(stackFrames, sourceMap);
-    return { message, location, type: 'kernel', severity: 'error', stack: cppStack, stackFrames };
+    return {
+      message,
+      location,
+      type: 'kernel',
+      severity: 'error',
+      stack: cppStack,
+      stackFrames,
+    };
   }
 
   const stackFrames = applySourceMaps(parseStackTrace(error));

@@ -76,7 +76,9 @@ export const jsTsContribution: LanguageContribution = {
     monaco.typescript.javascriptDefaults.setEagerModelSync(true);
 
     // Create module resolver and definition provider
-    const resolver = new ModuleResolver({ exists: async (path: string) => context.fileManager.exists(path) });
+    const resolver = new ModuleResolver({
+      exists: async (path: string) => context.fileManager.exists(path),
+    });
     const provider = createJsDefinitionProvider(monaco, { resolver });
 
     // Register for all JS/TS languages
@@ -91,9 +93,21 @@ export const jsTsContribution: LanguageContribution = {
     ataInstance = new TypeAcquisitionService();
     ataInstance.initialize(monaco, {
       staticTypes: [
-        { packageName: 'replicad', content: replicadTypesOriginal, prewrapped: true },
-        { packageName: '@jscad/modeling', content: jscadModelingTypes, prewrapped: true },
-        { packageName: 'manifold-3d', content: manifoldTypes, prewrapped: true },
+        {
+          packageName: 'replicad',
+          content: replicadTypesOriginal,
+          prewrapped: true,
+        },
+        {
+          packageName: '@jscad/modeling',
+          content: jscadModelingTypes,
+          prewrapped: true,
+        },
+        {
+          packageName: 'manifold-3d',
+          content: manifoldTypes,
+          prewrapped: true,
+        },
       ],
     });
     ataInstance.startWatching();

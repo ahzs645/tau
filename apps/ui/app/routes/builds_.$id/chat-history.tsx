@@ -39,7 +39,7 @@ const toggleChatHistoryKeyCombination = {
 // Memoized individual message item component to prevent re-renders
 const MessageItem = memo(function ({ messageId }: { readonly messageId: string }) {
   return (
-    <div className="py-1">
+    <div className='py-1'>
       <ChatMessage messageId={messageId} />
     </div>
   );
@@ -57,12 +57,12 @@ export const ChatHistoryTrigger = memo(function ({
     <FloatingPanelTrigger
       icon={MessageCircle}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Chat
-          <KeyShortcut variant="tooltip">{formatKeyCombination(toggleChatHistoryKeyCombination)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(toggleChatHistoryKeyCombination)}</KeyShortcut>
         </div>
       }
-      tooltipSide="right"
+      tooltipSide='right'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -154,14 +154,14 @@ export const ChatHistory = memo(function (props: {
   }, []);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" className={className} onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' className={className} onOpenChange={setIsExpanded}>
       <FloatingPanelContent
         className={cn(!isExpanded && 'hidden')}
         errorFallback={(errorProps) => (
           <FloatingPanelErrorContent
             {...errorProps}
-            title="Chat Unavailable"
-            description="Something went wrong while loading the chat."
+            title='Chat Unavailable'
+            description='Something went wrong while loading the chat.'
           />
         )}
       >
@@ -172,9 +172,9 @@ export const ChatHistory = memo(function (props: {
               <FloatingPanelClose
                 icon={XIcon}
                 tooltipContent={(isOpen) => (
-                  <div className="flex items-center gap-2">
+                  <div className='flex items-center gap-2'>
                     {isOpen ? 'Close' : 'Open'} Chat
-                    <KeyShortcut variant="tooltip">{formattedKeyCombination}</KeyShortcut>
+                    <KeyShortcut variant='tooltip'>{formattedKeyCombination}</KeyShortcut>
                   </div>
                 )}
               />
@@ -191,19 +191,19 @@ export const ChatHistory = memo(function (props: {
           ref={virtuosoRef}
           totalCount={messageIds.length}
           itemContent={renderItem}
-          followOutput="smooth"
-          className="mt-1 h-full"
+          followOutput='smooth'
+          className='mt-1 h-full'
           atBottomStateChange={handleAtBottomStateChange}
           components={{
             Header: () => null,
             EmptyPlaceholder: () => (
-              <div className="-mb-12 h-full p-2 pt-1">
-                <ChatHistoryEmpty className="m-0 flex-1 justify-end" />
+              <div className='-mb-12 h-full p-2 pt-1'>
+                <ChatHistoryEmpty className='m-0 flex-1 justify-end' />
               </div>
             ),
             Footer: () => (
               <ChatError
-                className="px-4 pb-4"
+                className='px-4 pb-4'
                 isOpen={isErrorCollapsibleOpen}
                 onOpenChange={setIsErrorCollapsibleOpen}
               />
@@ -213,11 +213,11 @@ export const ChatHistory = memo(function (props: {
         <ScrollDownButton hasContent={messageIds.length > 0} isVisible={!atBottom} onScrollToBottom={scrollToBottom} />
 
         {/* Chat input area */}
-        <div className="relative mx-2 mb-2">
+        <div className='relative mx-2 mb-2'>
           <ChatTextarea
             ref={chatTextareaRef}
-            mode="main"
-            className="rounded-sm"
+            mode='main'
+            className='rounded-sm'
             enableAutoFocus={false}
             onSubmit={onSubmit}
           />

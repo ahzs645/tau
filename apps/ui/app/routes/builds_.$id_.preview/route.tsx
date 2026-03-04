@@ -125,8 +125,8 @@ function DynamicPreviewProvider({
           {children}
         </CadPreviewProvider>
       ) : (
-        <div className="flex h-full items-center justify-center">
-          <Loader className="size-16 text-primary" />
+        <div className='flex h-full items-center justify-center'>
+          <Loader className='size-16 text-primary' />
         </div>
       )}
     </PreviewBuildContext.Provider>
@@ -156,7 +156,7 @@ function BuildNameBreadcrumb(): React.JSX.Element {
   const name = build?.name ?? 'Build';
 
   return (
-    <Button asChild variant="ghost">
+    <Button asChild variant='ghost'>
       <Link to={`/builds/${id}/preview`}>{name}</Link>
     </Button>
   );
@@ -168,7 +168,7 @@ export const handle: Handle = {
 
     return [
       <BuildNameBreadcrumb key={`${id}-build-name`} />,
-      <span key={`${id}-preview`} className="flex h-8 items-center px-3 text-sm font-medium">
+      <span key={`${id}-preview`} className='flex h-8 items-center px-3 text-sm font-medium'>
         Preview
       </span>,
     ];

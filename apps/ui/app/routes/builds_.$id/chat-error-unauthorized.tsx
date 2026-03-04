@@ -12,33 +12,33 @@ export const ChatErrorUnauthorized = memo(function ({ className }: { readonly cl
 
   return (
     <div className={cn('flex flex-col gap-3 rounded-md border bg-muted p-3 text-sm', className)}>
-      <div className="flex flex-col gap-1">
-        <p className="font-medium text-foreground">Sign in to continue</p>
-        <p className="text-xs text-muted-foreground">Create an account or sign in to chat with Tau.</p>
+      <div className='flex flex-col gap-1'>
+        <p className='font-medium text-foreground'>Sign in to continue</p>
+        <p className='text-xs text-muted-foreground'>Create an account or sign in to chat with Tau.</p>
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Button asChild variant="default" className="flex-1">
+      <div className='flex flex-col gap-2 sm:flex-row'>
+        <Button asChild variant='default' className='flex-1'>
           <NavLink to={signIn} tabIndex={-1}>
             {({ isPending }) =>
               isPending ? (
                 <Loader />
               ) : (
                 <>
-                  <LogIn className="size-4" />
+                  <LogIn className='size-4' />
                   Sign In
                 </>
               )
             }
           </NavLink>
         </Button>
-        <Button asChild variant="outline" className="flex-1">
+        <Button asChild variant='outline' className='flex-1'>
           <NavLink to={signUp} tabIndex={-1}>
             {({ isPending }) =>
               isPending ? (
                 <Loader />
               ) : (
                 <>
-                  <UserPlus className="size-4" />
+                  <UserPlus className='size-4' />
                   Create Account
                 </>
               )

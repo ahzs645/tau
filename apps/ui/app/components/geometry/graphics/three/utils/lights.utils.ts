@@ -177,10 +177,11 @@ export function computeEnvironmentRotation(
  * highlight remains biased toward screen upper-right. The target is placed
  * forward of the camera with slight lower-left skew.
  *
- * @param cameraPosition - The camera's world position.
- * @param cameraMatrixWorld - The camera's world matrix (used for basis vectors).
- * @param sceneRadius - The bounding sphere radius of the scene.
- * @param config - Offset multipliers for headlamp placement.
+ * @param root0 - The headlamp transform parameters
+ * @param root0.cameraPosition - The camera's world position.
+ * @param root0.cameraMatrixWorld - The camera's world matrix (used for basis vectors).
+ * @param root0.sceneRadius - The bounding sphere radius of the scene.
+ * @param root0.config - Offset multipliers for headlamp placement.
  * @returns The world-space position and target position for the headlamp.
  */
 export function computeHeadlampTransform({

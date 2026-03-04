@@ -239,14 +239,14 @@ function BreadcrumbNav({
   useHorizontalScroll(scrollContainerRef);
 
   return (
-    <div className="flex items-center border-b text-sm">
+    <div className='flex items-center border-b text-sm'>
       <div
         ref={scrollContainerRef}
-        className="mx-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className='mx-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
       >
         {/* "Files" root button - inside scrollable area */}
         <button
-          type="button"
+          type='button'
           className={cn(
             'my-1.5 shrink-0 snap-start rounded-xs px-1 py-0.5 hover:bg-muted',
             currentPath === '' && 'font-medium text-foreground',
@@ -262,11 +262,11 @@ function BreadcrumbNav({
         {crumbs.map((crumb, index) => {
           const isLast = index === crumbs.length - 1;
           return (
-            <div key={crumb.path} className="my-1.5 flex shrink-0 snap-start items-center gap-0.5">
-              <ChevronRight className="size-3 text-muted-foreground" />
+            <div key={crumb.path} className='my-1.5 flex shrink-0 snap-start items-center gap-0.5'>
+              <ChevronRight className='size-3 text-muted-foreground' />
               <button
                 ref={isLast ? currentCrumbRef : undefined}
-                type="button"
+                type='button'
                 className={cn(
                   'max-w-32 shrink-0 truncate rounded-xs px-1 py-0.5 hover:bg-muted',
                   isLast && 'font-medium text-foreground',
@@ -307,16 +307,16 @@ function FileSelectorItem({
     return (
       <CommandItem
         value={item.path}
-        className="flex items-center justify-between gap-2"
+        className='flex items-center justify-between gap-2'
         onSelect={() => {
           onDrillDown(item.path);
         }}
       >
         <div className={cn(menuItemLayoutClass, 'min-w-0 flex-1')}>
-          <Folder className="shrink-0 text-muted-foreground" />
-          <span className="truncate">{item.name}</span>
+          <Folder className='shrink-0 text-muted-foreground' />
+          <span className='truncate'>{item.name}</span>
         </div>
-        <ChevronRight className="shrink-0 text-muted-foreground" />
+        <ChevronRight className='shrink-0 text-muted-foreground' />
       </CommandItem>
     );
   }
@@ -324,20 +324,20 @@ function FileSelectorItem({
   return (
     <CommandItem
       value={item.path}
-      className="flex items-center justify-between gap-2"
+      className='flex items-center justify-between gap-2'
       onSelect={() => {
         onSelect(item.path);
       }}
     >
       <div className={cn(menuItemLayoutClass, 'min-w-0 flex-1')}>
-        <FileExtensionIcon filename={item.name} className="shrink-0" />
+        <FileExtensionIcon filename={item.name} className='shrink-0' />
         <span className={cn(directoryHint ? 'shrink-0' : 'truncate', isSelected && 'font-medium')}>{item.name}</span>
         {directoryHint ? (
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{directoryHint}</span>
+          <span className='min-w-0 truncate text-xs text-muted-foreground'>{directoryHint}</span>
         ) : undefined}
       </div>
       {item.size === undefined ? undefined : (
-        <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(item.size)}</span>
+        <span className='shrink-0 text-xs text-muted-foreground'>{formatBytes(item.size)}</span>
       )}
     </CommandItem>
   );
@@ -403,7 +403,7 @@ function FileSelectorList({
 
   // Show empty message when no items match
   if (filteredItems.length === 0) {
-    return <div className="p-1 py-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>;
+    return <div className='p-1 py-6 text-center text-sm text-muted-foreground'>{emptyMessage}</div>;
   }
 
   if (filteredItems.length > virtualizationThreshold) {
@@ -416,16 +416,16 @@ function FileSelectorList({
         // absolute positioning used for virtualization. Use Header/Footer for vertical
         // spacing and px-1 on List for horizontal padding.
         components={{
-          List: (properties) => <div {...properties} className="px-1" />,
-          Header: () => <div className="h-1" />,
-          Footer: () => <div className="h-1" />,
+          List: (properties) => <div {...properties} className='px-1' />,
+          Header: () => <div className='h-1' />,
+          Footer: () => <div className='h-1' />,
         }}
       />
     );
   }
 
   return (
-    <div className="p-1">
+    <div className='p-1'>
       {filteredItems.map((item) => {
         const hint = isSearching ? getDirectoryHint(item.path, currentPath) : undefined;
         return (
@@ -520,26 +520,26 @@ export function FileSelector({
 
   // Default trigger button
   const triggerButton = children ?? (
-    <Button variant="outline" className={cn('w-full justify-between', className)} disabled={isDisabled || isLoading}>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    <Button variant='outline' className={cn('w-full justify-between', className)} disabled={isDisabled || isLoading}>
+      <div className='flex min-w-0 flex-1 items-center gap-2'>
         {isLoading ? (
-          <Loader className="size-4" />
+          <Loader className='size-4' />
         ) : selectedFile ? (
-          <FileExtensionIcon filename={selectedFile} className="size-4 shrink-0" />
+          <FileExtensionIcon filename={selectedFile} className='size-4 shrink-0' />
         ) : undefined}
         <span className={cn('truncate', !selectedFile && 'text-muted-foreground')}>
           {selectedFileName ?? placeholder}
         </span>
       </div>
-      <ChevronDown className="size-4 shrink-0" />
+      <ChevronDown className='size-4 shrink-0' />
     </Button>
   );
 
   const content = (
-    <Command shouldFilter={false} className="flex flex-col">
+    <Command shouldFilter={false} className='flex flex-col'>
       <BreadcrumbNav currentPath={currentPath} onNavigate={handleNavigate} />
       <CommandInput placeholder={searchPlaceholder} value={searchQuery} onValueChange={setSearchQuery} />
-      <CommandList className="max-h-[300px]">
+      <CommandList className='max-h-[300px]'>
         <FileSelectorList
           items={currentItems}
           rootNode={tree}
@@ -559,11 +559,11 @@ export function FileSelector({
     return (
       <Drawer open={open} onOpenChange={handleOpenChange}>
         <DrawerTrigger asChild>{triggerButton}</DrawerTrigger>
-        <DrawerContent aria-labelledby="drawer-title" aria-describedby="drawer-description">
-          <DrawerTitle className="sr-only" id="drawer-title">
+        <DrawerContent aria-labelledby='drawer-title' aria-describedby='drawer-description'>
+          <DrawerTitle className='sr-only' id='drawer-title'>
             {title}
           </DrawerTitle>
-          <DrawerDescription className="sr-only" id="drawer-description">
+          <DrawerDescription className='sr-only' id='drawer-description'>
             {description}
           </DrawerDescription>
           {content}

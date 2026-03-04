@@ -15,13 +15,13 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
   // Load an existing cube mesh from our fixtures
   const fixturePath = join(import.meta.dirname, '..', 'cube-mesh.3dm');
   const existingFileData = readFileSync(fixturePath);
-  const existingDoc = rhino.File3dm.fromByteArray(new Uint8Array(existingFileData));
+  const existingDocument = rhino.File3dm.fromByteArray(new Uint8Array(existingFileData));
 
   // Create a new document for our instance-based version
   const doc = new rhino.File3dm();
 
   // Get the first mesh from the existing document
-  const existingObjects = existingDoc.objects();
+  const existingObjects = existingDocument.objects();
   let cubeMesh = null;
 
   for (let i = 0; i < existingObjects.count; i++) {
@@ -45,7 +45,7 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
   doc.objects().add(cubeMesh, cubeAttributes);
 
   // Create an instance definition from this geometry
-  const instanceDefIndex = doc.instanceDefinitions().add(
+  const instanceDefinitionIndex = doc.instanceDefinitions().add(
     'CubeBlock',
     'A 2x2x2mm test cube',
     '',
@@ -55,12 +55,12 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
     [cubeAttributes],
   );
 
-  if (instanceDefIndex < 0) {
+  if (instanceDefinitionIndex < 0) {
     throw new Error('Failed to create instance definition');
   }
 
   // Get the instance definition we just created
-  const iDef = doc.instanceDefinitions().get(instanceDefIndex);
+  const instanceDefinition = doc.instanceDefinitions().get(instanceDefinitionIndex);
 
   // Create multiple instance references
   const instancePositions = [
@@ -76,7 +76,7 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
 
     // Create instance reference geometry
     // @ts-expect-error -- InstanceReference is not typed correctly.
-    const instanceRef = new rhino.InstanceReference(iDef.id, transform);
+    const instanceRef = new rhino.InstanceReference(instanceDefinition.id, transform);
 
     // Create attributes for the instance reference
     const refAttributes = new rhino.ObjectAttributes();

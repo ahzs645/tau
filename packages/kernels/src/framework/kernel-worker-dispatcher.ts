@@ -43,7 +43,12 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
     port.postMessage(response, transferables);
   };
 
-  const pendingLogs: Array<{ level: LogLevel; message: string; origin?: LogOrigin; data?: unknown }> = [];
+  const pendingLogs: Array<{
+    level: LogLevel;
+    message: string;
+    origin?: LogOrigin;
+    data?: unknown;
+  }> = [];
   let logFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
   const flushLogs = (): void => {
@@ -56,7 +61,12 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
   };
 
   const onLog: OnWorkerLog = (log) => {
-    pendingLogs.push({ level: log.level, message: log.message, origin: log.origin, data: log.data });
+    pendingLogs.push({
+      level: log.level,
+      message: log.message,
+      origin: log.origin,
+      data: log.data,
+    });
     logFlushTimer ??= setTimeout(flushLogs, 250);
   };
 
@@ -90,7 +100,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
 
           if (message.bundlerEntries) {
             for (const entry of message.bundlerEntries) {
-              // eslint-disable-next-line no-await-in-loop -- Sequential: bundlers must be loaded before use
+              // oxlint-disable-next-line no-await-in-loop -- bundler entries must load sequentially to avoid race conditions
               await Promise.race([worker.ensureLoadedBundler(entry), trapPromise]);
             }
           }
@@ -105,7 +115,11 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
               file: message.file,
               parameters: message.params,
               onParametersResolved(parametersResult) {
-                respond({ type: 'parametersResolved', requestId, result: parametersResult });
+                respond({
+                  type: 'parametersResolved',
+                  requestId,
+                  result: parametersResult,
+                });
               },
               onProgress(phase) {
                 respond({ type: 'progress', requestId, phase });

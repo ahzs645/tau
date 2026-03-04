@@ -43,7 +43,6 @@ import { useMonacoServices } from '#hooks/use-monaco-model-service.js';
 import { useKernelDiagnostics } from '#hooks/use-kernel-diagnostics.js';
 import { Button } from '#components/ui/button.js';
 
-
 /**
  * Create a root-level Monaco URI for a file path.
  */
@@ -173,7 +172,9 @@ const FileEditor = memo(function ({
       }
 
       const encoded = encodeTextFile(value ?? '');
-      void fileManager.writeFile(activeFile.path, encoded, { source: 'editor' });
+      void fileManager.writeFile(activeFile.path, encoded, {
+        source: 'editor',
+      });
     },
     [activeFile, fileManager],
   );
@@ -198,21 +199,21 @@ const FileEditor = memo(function ({
 
   if (isMissing) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
-        <FileX className="size-12 stroke-1" />
-        <div className="flex flex-col items-center gap-1">
-          <p className="text-sm font-medium">File not found</p>
-          <p className="max-w-60 truncate text-xs">{filePath}</p>
+      <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
+        <FileX className='size-12 stroke-1' />
+        <div className='flex flex-col items-center gap-1'>
+          <p className='text-sm font-medium'>File not found</p>
+          <p className='max-w-60 truncate text-xs'>{filePath}</p>
         </div>
         <FileSelector
           files={fileSelectorFiles}
           selectedFile={undefined}
-          placeholder="Select file to edit..."
-          className="h-8 w-[200px]"
-          title="Open File"
-          description="Choose a file to open in the editor"
-          searchPlaceholder="Search files..."
-          emptyMessage="No files found."
+          placeholder='Select file to edit...'
+          className='h-8 w-[200px]'
+          title='Open File'
+          description='Choose a file to open in the editor'
+          searchPlaceholder='Search files...'
+          emptyMessage='No files found.'
           onSelect={handleFileSelectorSelect}
         />
       </div>
@@ -221,8 +222,8 @@ const FileEditor = memo(function ({
 
   if (!activeFile) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <Loader className="size-8 stroke-1 text-muted-foreground" />
+      <div className='flex h-full items-center justify-center'>
+        <Loader className='size-8 stroke-1 text-muted-foreground' />
       </div>
     );
   }
@@ -232,11 +233,11 @@ const FileEditor = memo(function ({
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className='flex h-full flex-col bg-background'>
       <ChatEditorBreadcrumbs filePath={filePath} />
       <CodeEditor
-        loading={<Loader className="size-20 stroke-1 text-primary" />}
-        className="h-full bg-background"
+        loading={<Loader className='size-20 stroke-1 text-primary' />}
+        className='h-full bg-background'
         defaultLanguage={activeFile.language}
         defaultValue={editorContent}
         path={createMonacoPath(activeFile.path)}
@@ -279,25 +280,25 @@ function EditorWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
   return (
     <DockviewWatermark
       icon={FileCode}
-      title="No files open"
-      description="Pick a file from the file tree, or select one below"
+      title='No files open'
+      description='Pick a file from the file tree, or select one below'
       onClose={handleClose}
     >
       <FileSelector
         files={files}
         selectedFile={undefined}
-        title="Open File"
-        description="Choose a file to open in the editor"
-        searchPlaceholder="Search files..."
-        emptyMessage="No files found."
+        title='Open File'
+        description='Choose a file to open in the editor'
+        searchPlaceholder='Search files...'
+        emptyMessage='No files found.'
         onSelect={handleSelect}
       >
-        <Button size="sm" variant="outline" className="justify-between">
-          <span className="truncate text-muted-foreground">
-            <span className="@xs/watermark:hidden">Select file...</span>
-            <span className="hidden @xs/watermark:inline">Select file to edit...</span>
+        <Button size='sm' variant='outline' className='justify-between'>
+          <span className='truncate text-muted-foreground'>
+            <span className='@xs/watermark:hidden'>Select file...</span>
+            <span className='hidden @xs/watermark:inline'>Select file to edit...</span>
           </span>
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+          <ChevronDown className='size-4 shrink-0 text-muted-foreground' />
         </Button>
       </FileSelector>
     </DockviewWatermark>
@@ -323,16 +324,16 @@ function EditorRightHeaderActions(properties: IDockviewHeaderActionsProps): Reac
       <DockviewSplitAction {...properties} />
       {isTopRight ? (
         <DockviewPaneAction
-          aria-label="Close editor"
+          aria-label='Close editor'
           tooltip={
-            <div className="flex items-center gap-2">
+            <div className='flex items-center gap-2'>
               Close editor
-              <KeyShortcut variant="tooltip">{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
+              <KeyShortcut variant='tooltip'>{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
             </div>
           }
           onClick={close}
         >
-          <XIcon className="size-3.5" />
+          <XIcon className='size-3.5' />
         </DockviewPaneAction>
       ) : undefined}
     </>
@@ -419,6 +420,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
               const model = monaco.editor.getModel(uri);
               if (model) {
                 const editors = monaco.editor.getEditors();
+                // oxlint-disable-next-line max-nested-callbacks -- monaco editor lookup
                 const targetEditor = editors.find((ed) => ed.getModel() === model);
                 if (targetEditor) {
                   const position = new monaco.Position(event.lineNumber!, event.column ?? 1);
@@ -581,9 +583,15 @@ export const EditorDockview = memo(function (): React.JSX.Element {
       const viewerData = event.nativeEvent.dataTransfer?.getData(tauViewerPanelDragMime);
       if (viewerData) {
         try {
-          const { entryFile } = JSON.parse(viewerData) as { entryFile?: string };
+          const { entryFile } = JSON.parse(viewerData) as {
+            entryFile?: string;
+          };
           if (entryFile) {
-            editorRef.send({ type: 'openFile', path: entryFile, source: 'user' });
+            editorRef.send({
+              type: 'openFile',
+              path: entryFile,
+              source: 'user',
+            });
           }
         } catch {
           // Ignore corrupt data
@@ -624,7 +632,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
     <DockviewFileActionProvider value={handleOpenFile}>
       <Dockview
         components={components}
-        noPanelsOverlay="emptyGroup"
+        noPanelsOverlay='emptyGroup'
         defaultTabComponent={EditorDockviewTab}
         watermarkComponent={EditorWatermark}
         leftHeaderActionsComponent={DockviewOpenFileAction}

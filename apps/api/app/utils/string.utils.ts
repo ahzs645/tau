@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer';
 import { encodeBytes } from '#utils/base62.js';
 
 /**

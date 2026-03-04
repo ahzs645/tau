@@ -140,7 +140,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- panelVisibility is derived from visibility states
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- panelVisibility is derived from visibility states
   }, [
     isClient,
     isEditorReady,
@@ -173,7 +173,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   // Return placeholder during SSR or while editor state is loading from IndexedDB
   // This ensures preferredSize props receive the correct saved panel sizes on mount
   if (!isClient || !isEditorReady) {
-    return <div className="hidden size-full md:flex" />;
+    return <div className='hidden size-full md:flex' />;
   }
 
   // Use inline style for opacity to ensure it's applied immediately without CSS transition issues
@@ -184,10 +184,10 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   return (
     <div
       ref={allotmentRef}
-      className="size-full"
+      className='size-full'
       style={{ opacity: opacityValue, transition: isLayoutReady ? 'opacity 150ms' : 'none' }}
     >
-      <SidebarOffset asChild via="padding">
+      <SidebarOffset asChild via='padding'>
         <Allotment
           ref={allotmentInstanceRef}
           separator={false}
@@ -236,7 +236,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
         >
           {/* Left panels - Low priority so they keep their preferred size */}
           <Allotment.Pane
-            className="rs-left z-10"
+            className='rs-left z-10'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.chat}
             priority={LayoutPriority.Low}
@@ -246,7 +246,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           </Allotment.Pane>
 
           <Allotment.Pane
-            className="rs-left z-10"
+            className='rs-left z-10'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.files}
             priority={LayoutPriority.Low}
@@ -256,7 +256,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           </Allotment.Pane>
 
           <Allotment.Pane
-            className="rs-left z-10"
+            className='rs-left z-10'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.explorer}
             priority={LayoutPriority.Low}
@@ -266,7 +266,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           </Allotment.Pane>
 
           <Allotment.Pane
-            className="rs-left z-10"
+            className='rs-left z-10'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.kernel}
             priority={LayoutPriority.Low}
@@ -277,7 +277,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
 
           {/* Center viewer - High priority so it absorbs all extra space from collapsed panels */}
           <Allotment.Pane
-            className="rs-center"
+            className='rs-center'
             minSize={panelMinSizeViewer}
             preferredSize={panelSizes.viewer}
             priority={LayoutPriority.High}
@@ -360,7 +360,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
 
           {/* Right panels - Low priority so they keep their preferred size */}
           <Allotment.Pane
-            className="rs-right"
+            className='rs-right'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.parameters}
             priority={LayoutPriority.Low}
@@ -370,7 +370,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           </Allotment.Pane>
 
           <Allotment.Pane
-            className="rs-right"
+            className='rs-right'
             minSize={panelMinSizeEditor}
             preferredSize={panelSizes.editor}
             priority={LayoutPriority.Low}
@@ -380,7 +380,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           </Allotment.Pane>
 
           <Allotment.Pane
-            className="rs-right"
+            className='rs-right'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.converter}
             priority={LayoutPriority.Low}
@@ -390,7 +390,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           </Allotment.Pane>
 
           <Allotment.Pane
-            className="rs-right"
+            className='rs-right'
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.details}
             priority={LayoutPriority.Low}

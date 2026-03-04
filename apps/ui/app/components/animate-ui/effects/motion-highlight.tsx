@@ -31,7 +31,7 @@ type MotionHighlightContextType<T extends string> = {
 };
 
 const MotionHighlightContext = React.createContext<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any is used to allow for dynamic context values
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- any is used to allow for dynamic context values
   MotionHighlightContextType<any> | undefined
 >(undefined);
 
@@ -213,19 +213,19 @@ function MotionHighlight<T extends string>({ ref, ...props }: MotionHighlightPro
   }, [mode, activeValue, safeSetBounds]);
 
   const render = React.useCallback(
-    // eslint-disable-next-line @typescript-eslint/promise-function-async -- this is a callback function
+    // oxlint-disable-next-line @typescript-eslint/promise-function-async -- this is a callback function
     (children: React.ReactNode) => {
       if (mode === 'parent') {
         return (
           <div
             ref={localRef}
-            data-slot="motion-highlight-container"
+            data-slot='motion-highlight-container'
             className={cn('relative', (props as ParentModeMotionHighlightProps).containerClassName)}
           >
             <AnimatePresence initial={false}>
               {boundsState ? (
                 <motion.div
-                  data-slot="motion-highlight"
+                  data-slot='motion-highlight'
                   animate={{
                     top: boundsState.top,
                     left: boundsState.left,
@@ -319,13 +319,13 @@ function getNonOverridingDataAttributes(
   element: React.ReactElement,
   dataAttributes: Record<string, unknown>,
 ): Record<string, unknown> {
-  // eslint-disable-next-line unicorn/no-array-reduce -- copied from animate-ui
-  return Object.keys(dataAttributes).reduce<Record<string, unknown>>((acc, key) => {
+  // oxlint-disable-next-line unicorn/no-array-reduce -- copied from animate-ui
+  return Object.keys(dataAttributes).reduce<Record<string, unknown>>((accumulator, key) => {
     if ((element.props as Record<string, unknown>)[key] === undefined) {
-      acc[key] = dataAttributes[key];
+      accumulator[key] = dataAttributes[key];
     }
 
-    return acc;
+    return accumulator;
   }, {});
 }
 
@@ -352,7 +352,7 @@ type MotionHighlightItemProps = React.ComponentProps<'div'> & {
   readonly shouldForceUpdateBounds?: boolean;
 };
 
-// eslint-disable-next-line complexity -- copied from animate-ui
+// oxlint-disable-next-line complexity -- copied from animate-ui
 function MotionHighlightItem({
   ref,
   children,
@@ -502,7 +502,7 @@ function MotionHighlightItem({
             {isActive && !isDisabled ? (
               <motion.div
                 layoutId={`transition-background-${contextId}`}
-                data-slot="motion-highlight"
+                data-slot='motion-highlight'
                 className={cn('absolute inset-0 z-0 bg-muted', contextClassName, activeClassName)}
                 transition={itemTransition}
                 initial={{ opacity: 0 }}
@@ -519,7 +519,7 @@ function MotionHighlightItem({
             ) : null}
           </AnimatePresence>
 
-          <div data-slot="motion-highlight-item" className={cn('relative z-[1]', className)} {...dataAttributes}>
+          <div data-slot='motion-highlight-item' className={cn('relative z-[1]', className)} {...dataAttributes}>
             {children}
           </div>
         </>,
@@ -540,7 +540,7 @@ function MotionHighlightItem({
     <div
       key={childValue}
       ref={localRef}
-      data-slot="motion-highlight-item-container"
+      data-slot='motion-highlight-item-container'
       className={cn(mode === 'children' && 'relative', className)}
       {...dataAttributes}
       {...props}
@@ -551,7 +551,7 @@ function MotionHighlightItem({
           {isActive && !isDisabled ? (
             <motion.div
               layoutId={`transition-background-${contextId}`}
-              data-slot="motion-highlight"
+              data-slot='motion-highlight'
               className={cn('absolute inset-0 z-0 bg-muted', contextClassName, activeClassName)}
               transition={itemTransition}
               initial={{ opacity: 0 }}

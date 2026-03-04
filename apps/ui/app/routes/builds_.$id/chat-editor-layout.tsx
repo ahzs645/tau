@@ -32,12 +32,12 @@ export function ChatEditorLayoutTrigger({
     <FloatingPanelTrigger
       icon={Code2}
       tooltipContent={
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           {isOpen ? 'Close' : 'Open'} Editor
-          <KeyShortcut variant="tooltip">{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(keyCombinationEditor)}</KeyShortcut>
         </div>
       }
-      tooltipSide="left"
+      tooltipSide='left'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -60,17 +60,17 @@ export function ChatEditorLayout({
   const { formattedKeyCombination: formattedEditorKeyCombination } = useKeybinding(keyCombinationEditor, toggleEditor);
 
   return (
-    <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' onOpenChange={setIsExpanded}>
       <FloatingPanelContent>
-        <FloatingPanelContentHeader className="md:hidden">
+        <FloatingPanelContentHeader className='md:hidden'>
           <FloatingPanelContentTitle>Editor</FloatingPanelContentTitle>
           <FloatingPanelContentHeaderActions>
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">
+                <div className='flex items-center gap-2'>
                   {isOpen ? 'Close' : 'Open'} Editor
-                  <KeyShortcut variant="tooltip">{formattedEditorKeyCombination}</KeyShortcut>
+                  <KeyShortcut variant='tooltip'>{formattedEditorKeyCombination}</KeyShortcut>
                 </div>
               )}
             />

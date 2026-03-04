@@ -107,38 +107,38 @@ export const PreviewDesktop = memo(function (): React.JSX.Element {
 
   if (!build) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-muted-foreground">Loading build...</p>
+      <div className='flex h-full items-center justify-center'>
+        <p className='text-muted-foreground'>Loading build...</p>
       </div>
     );
   }
 
   return (
-    <div className="-ml-2 hidden h-full flex-col md:flex">
+    <div className='-ml-2 hidden h-full flex-col md:flex'>
       {/* Header */}
-      <div className="flex items-center justify-between border-b px-6 py-4">
-        <div className="flex items-center gap-4">
-          <Avatar className="size-10">
+      <div className='flex items-center justify-between border-b px-6 py-4'>
+        <div className='flex items-center gap-4'>
+          <Avatar className='size-10'>
             <AvatarImage src={build.author.avatar} alt={build.author.name} />
             <AvatarFallback>{build.author.name[0]?.toUpperCase()}</AvatarFallback>
           </Avatar>
           <div>
-            <h1 className="text-xl font-semibold">
+            <h1 className='text-xl font-semibold'>
               {build.author.name} / {build.name}
             </h1>
-            <p className="text-sm text-muted-foreground">{build.description}</p>
+            <p className='text-sm text-muted-foreground'>{build.description}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className='flex items-center gap-2'>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="default">
-                <Code className="mr-2 size-4" />
+              <Button variant='default'>
+                <Code className='mr-2 size-4' />
                 Code
-                <ChevronDown className="ml-2 size-4" />
+                <ChevronDown className='ml-2 size-4' />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align='end'>
               <DropdownMenuItem disabled={isCloning} onClick={handleEditOnline}>
                 {isCloning ? <Loader /> : <FileCode />}
                 {isCloning ? 'Remixing...' : 'Remix'}
@@ -154,56 +154,56 @@ export const PreviewDesktop = memo(function (): React.JSX.Element {
       </div>
 
       {/* Tabs */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Tabs value={activeTab} className="flex flex-1 flex-col gap-0 overflow-hidden" onValueChange={setActiveTab}>
-          <div className="flex items-center justify-between border-b px-6">
+      <div className='flex flex-1 flex-col overflow-hidden'>
+        <Tabs value={activeTab} className='flex flex-1 flex-col gap-0 overflow-hidden' onValueChange={setActiveTab}>
+          <div className='flex items-center justify-between border-b px-6'>
             <TabsList
               className="border-none bg-transparent p-0 [&_[data-slot='tabs-trigger']]:min-h-8"
-              activeClassName="shadow-none border-b-2 rounded-none border-b-primary"
+              activeClassName='shadow-none border-b-2 rounded-none border-b-primary'
             >
-              <TabsTrigger value="files">
-                <FileCode className="mr-2 size-4" />
+              <TabsTrigger value='files'>
+                <FileCode className='mr-2 size-4' />
                 Files
               </TabsTrigger>
-              <TabsTrigger value="3d">
-                <Eye className="mr-2 size-4" />
+              <TabsTrigger value='3d'>
+                <Eye className='mr-2 size-4' />
                 3D View
               </TabsTrigger>
             </TabsList>
             {activeTab === '3d' && hasParameters ? (
               <Button
-                variant="ghost"
-                size="sm"
+                variant='ghost'
+                size='sm'
                 className={cn('gap-2', showParameters && 'text-primary')}
                 onClick={toggleParameters}
               >
-                <SlidersHorizontal className="size-4" />
+                <SlidersHorizontal className='size-4' />
                 Parameters
               </Button>
             ) : null}
           </div>
 
-          <div className="flex flex-1 overflow-hidden">
+          <div className='flex flex-1 overflow-hidden'>
             {/* Main Content */}
-            <div className="flex-1 overflow-hidden">
+            <div className='flex-1 overflow-hidden'>
               <TabsContent
                 enableAnimation={false}
-                value="files"
-                className="h-full overflow-auto p-6 data-[state=inactive]:hidden"
+                value='files'
+                className='h-full overflow-auto p-6 data-[state=inactive]:hidden'
               >
                 <PreviewFiles files={files} />
               </TabsContent>
 
-              <TabsContent enableAnimation={false} value="3d" className="h-full data-[state=inactive]:hidden">
-                <div className="flex h-full">
+              <TabsContent enableAnimation={false} value='3d' className='h-full data-[state=inactive]:hidden'>
+                <div className='flex h-full'>
                   {/* 3D Viewer */}
-                  <div className="relative min-w-0 flex-1">
+                  <div className='relative min-w-0 flex-1'>
                     <CadPreviewStatus />
-                    <CadPreviewViewer enableZoom enablePan className="h-full" />
+                    <CadPreviewViewer enableZoom enablePan className='h-full' />
                   </div>
                   {/* Parameters Panel */}
                   {hasParameters && showParameters ? (
-                    <div className="h-full w-80 border-l bg-background">
+                    <div className='h-full w-80 border-l bg-background'>
                       <PreviewParameters />
                     </div>
                   ) : null}
@@ -212,11 +212,11 @@ export const PreviewDesktop = memo(function (): React.JSX.Element {
             </div>
 
             {/* Sidebar - About Section */}
-            <div className="w-80 border-l bg-sidebar">
+            <div className='w-80 border-l bg-sidebar'>
               <PreviewDetails build={build} geometriesCount={geometries.length} onExport={exportGeometry} />
               <Separator />
-              <div className="hidden p-6">
-                <h3 className="mb-3 text-sm font-semibold">Version Control</h3>
+              <div className='hidden p-6'>
+                <h3 className='mb-3 text-sm font-semibold'>Version Control</h3>
               </div>
             </div>
           </div>

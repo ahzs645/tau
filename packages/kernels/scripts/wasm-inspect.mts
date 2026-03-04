@@ -1,6 +1,5 @@
-/* eslint-disable complexity -- refactor if needed */
-/* eslint-disable n/prefer-global/process -- CLI script requires direct process access */
-/* eslint-disable unicorn/no-process-exit -- CLI script uses process.exit for error codes */
+// oxlint-disable complexity -- CLI inspection script with deeply nested WASM analysis logic
+
 /**
  * WASM Binary Inspection Tool
  *
@@ -21,6 +20,7 @@
  *     --json              Also output JSON report
  */
 
+import process from 'node:process';
 import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
@@ -36,15 +36,15 @@ const { values } = parseArgs({
   strict: true,
 });
 
-const wasmDir = resolve('src/kernels/replicad/wasm');
-const symbolsDir = resolve('../../repos/replicad/packages/replicad-opencascadejs');
+const wasmDirectory = resolve('src/kernels/replicad/wasm');
+const symbolsDirectory = resolve('../../repos/replicad/packages/replicad-opencascadejs');
 
 function findWasmFile(): string {
   if (values.wasm) {
     return resolve(values.wasm);
   }
 
-  const candidates = [join(wasmDir, 'replicad_single.wasm'), join(symbolsDir, 'replicad_single.wasm')];
+  const candidates = [join(wasmDirectory, 'replicad_single.wasm'), join(symbolsDirectory, 'replicad_single.wasm')];
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
@@ -63,7 +63,7 @@ function findSymbolsFile(wasmPath: string): string | undefined {
 
   const base = basename(wasmPath, '.wasm');
   const candidates = [
-    join(symbolsDir, `${base}.js.symbols`),
+    join(symbolsDirectory, `${base}.js.symbols`),
     wasmPath.replace('.wasm', '.js.symbols'),
     wasmPath.replace('.wasm', '.symbols'),
   ];
@@ -88,7 +88,10 @@ type CategoryBreakdown = {
 };
 
 function parseSections(wasmPath: string): SectionInfo[] {
-  const output = execSync(`wasm-objdump -h "${wasmPath}"`, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 });
+  const output = execSync(`wasm-objdump -h "${wasmPath}"`, {
+    encoding: 'utf8',
+    maxBuffer: 50 * 1024 * 1024,
+  });
   const sections: SectionInfo[] = [];
 
   for (const line of output.split('\n')) {
@@ -125,9 +128,9 @@ function parseFunctionOffsets(wasmPath: string): FunctionSize[] {
   }
 
   const sizes: FunctionSize[] = [];
-  for (let i = 0; i < entries.length - 1; i++) {
-    const entry = entries[i];
-    const nextEntry = entries[i + 1];
+  for (let index = 0; index < entries.length - 1; index++) {
+    const entry = entries[index];
+    const nextEntry = entries[index + 1];
     if (!entry || !nextEntry) {
       continue;
     }
@@ -145,9 +148,9 @@ function loadSymbolMap(symbolsPath: string): Map<number, string> {
   const map = new Map<number, string>();
   const content = readFileSync(symbolsPath, 'utf8');
   for (const line of content.split('\n')) {
-    const idx = line.indexOf(':');
-    if (idx > 0) {
-      map.set(Number.parseInt(line.slice(0, idx), 10), line.slice(idx + 1).trim());
+    const index = line.indexOf(':');
+    if (index > 0) {
+      map.set(Number.parseInt(line.slice(0, index), 10), line.slice(index + 1).trim());
     }
   }
 
@@ -312,12 +315,13 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function generateReport(
-  wasmPath: string,
-  sections: SectionInfo[],
-  funcSizes: FunctionSize[],
-  symbols: Map<number, string>,
-): Record<string, unknown> {
+function generateReport(options: {
+  wasmPath: string;
+  sections: SectionInfo[];
+  funcSizes: FunctionSize[];
+  symbols: Map<number, string>;
+}): Record<string, unknown> {
+  const { wasmPath, sections, funcSizes, symbols } = options;
   const fileSize = statSync(wasmPath).size;
   const totalCode = sections.find((s) => s.name === 'Code')?.size ?? 0;
   const totalData = sections.find((s) => s.name === 'Data')?.size ?? 0;
@@ -344,11 +348,11 @@ function generateReport(
   console.log('');
 
   const categories = new Map<string, { size: number; count: number }>();
-  for (const func of funcSizes) {
-    const name = symbols.get(func.index) ?? `unknown_${func.index}`;
+  for (const function_ of funcSizes) {
+    const name = symbols.get(function_.index) ?? `unknown_${function_.index}`;
     const cat = categorizeFunction(name);
     const existing = categories.get(cat) ?? { size: 0, count: 0 };
-    existing.size += func.size;
+    existing.size += function_.size;
     existing.count += 1;
     categories.set(cat, existing);
   }
@@ -396,10 +400,10 @@ function generateReport(
   console.log('  TOP 20 LARGEST FUNCTIONS');
   console.log('─'.repeat(80));
   const topFuncs = [...funcSizes].sort((a, b) => b.size - a.size).slice(0, 20);
-  for (const func of topFuncs) {
-    const name = symbols.get(func.index) ?? `func[${func.index}]`;
+  for (const function_ of topFuncs) {
+    const name = symbols.get(function_.index) ?? `func[${function_.index}]`;
     const truncated = name.length > 70 ? name.slice(0, 67) + '...' : name;
-    console.log(`  ${formatBytes(func.size).padStart(10)}  ${truncated}`);
+    console.log(`  ${formatBytes(function_.size).padStart(10)}  ${truncated}`);
   }
 
   console.log('');
@@ -432,9 +436,9 @@ function generateReport(
     `  DynamicType() functions: ${dynamicTypeFuncs.length}, Total: ${formatBytes(dynamicTypeTotal)} (${dynamicTypePct}%)`,
   );
   const topDynamic = dynamicTypeFuncs.sort((a, b) => b.size - a.size).slice(0, 5);
-  for (const func of topDynamic) {
-    const name = symbols.get(func.index) ?? 'unknown';
-    console.log(`    ${formatBytes(func.size).padStart(10)}  ${name.slice(0, 60)}`);
+  for (const function_ of topDynamic) {
+    const name = symbols.get(function_.index) ?? 'unknown';
+    console.log(`    ${formatBytes(function_.size).padStart(10)}  ${name.slice(0, 60)}`);
   }
 
   console.log('');
@@ -447,9 +451,9 @@ function generateReport(
 
   console.log(`  Destructors: ${destructors.length}, Total: ${formatBytes(destructorTotal)} (${destructorPct}%)`);
   const topDestructors = destructors.sort((a, b) => b.size - a.size).slice(0, 5);
-  for (const func of topDestructors) {
-    const name = symbols.get(func.index) ?? 'unknown';
-    console.log(`    ${formatBytes(func.size).padStart(10)}  ${name.slice(0, 60)}`);
+  for (const function_ of topDestructors) {
+    const name = symbols.get(function_.index) ?? 'unknown';
+    console.log(`    ${formatBytes(function_.size).padStart(10)}  ${name.slice(0, 60)}`);
   }
 
   console.log('');
@@ -496,7 +500,11 @@ function generateReport(
   return {
     file: basename(wasmPath),
     fileSize,
-    sections: sections.map((s) => ({ name: s.name, size: s.size, count: s.count })),
+    sections: sections.map((s) => ({
+      name: s.name,
+      size: s.size,
+      count: s.count,
+    })),
     codeSizeBytes: totalCode,
     dataSizeBytes: totalData,
     functionCount: totalFunctions,
@@ -506,7 +514,10 @@ function generateReport(
       size: f.size,
     })),
     pathological: {
-      dynamicType: { count: dynamicTypeFuncs.length, totalBytes: dynamicTypeTotal },
+      dynamicType: {
+        count: dynamicTypeFuncs.length,
+        totalBytes: dynamicTypeTotal,
+      },
       destructors: { count: destructors.length, totalBytes: destructorTotal },
     },
   };
@@ -531,18 +542,23 @@ async function main(): Promise<void> {
   const sections = parseSections(wasmPath);
 
   console.log('  Parsing function offsets...');
-  const funcSizes = parseFunctionOffsets(wasmPath);
+  const functionSizes = parseFunctionOffsets(wasmPath);
 
   const symbols = symbolsPath ? loadSymbolMap(symbolsPath) : new Map<number, string>();
   console.log(`  Loaded ${symbols.size} symbol names`);
 
-  const report = generateReport(wasmPath, sections, funcSizes, symbols);
+  const report = generateReport({
+    wasmPath,
+    sections,
+    funcSizes: functionSizes,
+    symbols,
+  });
 
-  const outputDir = resolve(values.output);
-  mkdirSync(outputDir, { recursive: true });
+  const outputDirectory = resolve(values.output);
+  mkdirSync(outputDirectory, { recursive: true });
 
   if (values.json) {
-    const jsonPath = join(outputDir, `wasm-inspect-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`);
+    const jsonPath = join(outputDirectory, `wasm-inspect-${new Date().toISOString().replaceAll(/[.:]/g, '-')}.json`);
     writeFileSync(jsonPath, JSON.stringify(report, undefined, 2));
     console.log(`\nJSON report: ${jsonPath}`);
   }

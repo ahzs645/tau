@@ -48,7 +48,7 @@ function Button({
   }): React.JSX.Element {
   const Comp = asChild ? SlotPrimitive.Slot : 'button';
 
-  return <Comp data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...properties} />;
+  return <Comp data-slot='button' className={cn(buttonVariants({ variant, size, className }))} {...properties} />;
 }
 
 export { Button, buttonVariants };

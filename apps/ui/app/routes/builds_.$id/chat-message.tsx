@@ -102,8 +102,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
       >
         <When shouldRender={isUser ? isEditing : false}>
           <ChatTextarea
-            mode="edit"
-            className="rounded-sm"
+            mode='edit'
+            className='rounded-sm'
             onSubmit={async (event) => {
               editMessage(messageId, event.content, event.model, event.metadata, event.imageUrls);
               exitEditMode();
@@ -130,19 +130,19 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             onClick={handleEditClick}
           >
             {fileParts.length > 0 ? (
-              <div className="flex flex-row gap-2">
+              <div className='flex flex-row gap-2'>
                 {fileParts.map((part) => (
                   <ChatMessageFile key={part.url} part={part} />
                 ))}
               </div>
             ) : null}
-            {/* eslint-disable-next-line complexity -- This is a complex switch statement, we want to keep it simple. */}
+            {/* oxlint-disable-next-line complexity -- This is a complex switch statement, we want to keep it simple. */}
             {displayMessage.parts.map((part, index) => {
               switch (part.type) {
                 case 'text': {
                   return (
                     <ChatMessageText
-                      // eslint-disable-next-line react/no-array-index-key -- Index is stable
+                      // oxlint-disable-next-line react/no-array-index-key -- Index is stable
                       key={`${displayMessage.id}-message-part-${index}`}
                       part={part}
                     />
@@ -153,7 +153,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   const hasPartsAfter = index < displayMessage.parts.length - 1;
                   return (
                     <ChatMessageReasoning
-                      // eslint-disable-next-line react/no-array-index-key -- Index is stable
+                      // oxlint-disable-next-line react/no-array-index-key -- Index is stable
                       key={`${displayMessage.id}-message-part-${index}`}
                       part={part}
                       hasContent={hasPartsAfter}
@@ -267,36 +267,36 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
         </When>
         <ChatMessagePlanning messageId={messageId} />
         <When shouldRender={!isUser}>
-          <div className="mt-1 flex flex-row items-start justify-start text-muted-foreground">
+          <div className='mt-1 flex flex-row items-start justify-start text-muted-foreground'>
             <CopyButton
               tooltipContentProperties={{ side: 'bottom' }}
-              size="icon"
+              size='icon'
               getText={() => serializeMessage(displayMessage)}
-              tooltip="Copy message"
-              className="size-7"
+              tooltip='Copy message'
+              className='size-7'
             />
             <Tooltip>
               <DropdownMenu>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
-                    <Button size="xs" variant="ghost" className="h-7 gap-1 has-[>svg]:px-1.5">
-                      <RefreshCw className="size-4" />
-                      <ChevronDown className="size-4" />
+                    <Button size='xs' variant='ghost' className='h-7 gap-1 has-[>svg]:px-1.5'>
+                      <RefreshCw className='size-4' />
+                      <ChevronDown className='size-4' />
                     </Button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
-                <DropdownMenuContent align="start" side="top" className="min-w-[200px]">
+                <DropdownMenuContent align='start' side='top' className='min-w-[200px]'>
                   <DropdownMenuLabel>Switch model</DropdownMenuLabel>
                   <ChatModelSelector
                     popoverProperties={{ side: 'right', align: 'start' }}
-                    className="h-fit w-full"
+                    className='h-fit w-full'
                     onSelect={(modelId) => {
                       retryMessage(messageId, modelId);
                     }}
                   >
                     {({ selectedModel }) => (
                       <button
-                        type="button"
+                        type='button'
                         className={cn(
                           menuItemVariants(),
                           menuSubTriggerOpenClass,
@@ -304,25 +304,25 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                         )}
                       >
                         <span>{selectedModel?.name ?? 'Offline'}</span>
-                        <ChevronRight className="ml-auto size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90" />
+                        <ChevronRight className='ml-auto size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90' />
                       </button>
                     )}
                   </ChatModelSelector>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    className="flex justify-between"
+                    className='flex justify-between'
                     onClick={() => {
                       retryMessage(messageId);
                     }}
                   >
                     <p>Try again</p>
-                    <RefreshCw className="text-muted-foreground" />
+                    <RefreshCw className='text-muted-foreground' />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <TooltipContent side="bottom">Switch model</TooltipContent>
+              <TooltipContent side='bottom'>Switch model</TooltipContent>
             </Tooltip>
-            <div className="flex flex-row items-center justify-end gap-1">
+            <div className='flex flex-row items-center justify-end gap-1'>
               {usageParts.length > 0 ? <ChatMessageDataUsage usageParts={usageParts} /> : null}
             </div>
           </div>

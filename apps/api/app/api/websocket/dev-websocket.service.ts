@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -8,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as SocketIoServer } from 'socket.io';
 import type { Environment } from '#config/environment.config.js';
+// oxlint-disable-next-line eslint-plugin-import/no-cycle -- gateway and dev-websocket are tightly coupled
 import { chatRpcPath } from '#api/chat/chat-rpc.gateway.js';
 
 export type WebSocketConnectionHandler = (socket: WebSocket, request: IncomingMessage) => void | Promise<void>;
@@ -136,7 +136,7 @@ export class DevWebSocketService implements OnModuleDestroy {
     });
 
     // Handle upgrade requests manually to route between Socket.IO and raw WebSocket
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Buffer required by ws library
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Buffer required by ws library
     this.httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       const { pathname } = new URL(request.url ?? '/', `http://localhost:${this.wsPort}`);
 

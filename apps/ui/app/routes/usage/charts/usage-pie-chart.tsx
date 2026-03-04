@@ -36,8 +36,8 @@ function renderCustomLabel(props: PieLabelRenderProps): React.ReactElement | und
       x={x}
       y={y}
       textAnchor={x > cxNumber ? 'start' : 'end'}
-      dominantBaseline="central"
-      className="fill-foreground text-xs font-medium"
+      dominantBaseline='central'
+      className='fill-foreground text-xs font-medium'
     >
       {name}
     </text>
@@ -103,49 +103,49 @@ function UsagePieChartComponent({
           <CardTitle>{title}</CardTitle>
           {description ? <CardDescription>{description}</CardDescription> : undefined}
         </CardHeader>
-        <CardContent className="flex h-[300px] items-center justify-center">
-          <p className="text-sm text-muted-foreground">No data available</p>
+        <CardContent className='flex h-[300px] items-center justify-center'>
+          <p className='text-sm text-muted-foreground'>No data available</p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card className="min-w-0 overflow-hidden">
+    <Card className='min-w-0 overflow-hidden'>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : undefined}
       </CardHeader>
-      <CardContent className="min-w-0">
-        <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-0">
+      <CardContent className='min-w-0'>
+        <ChartContainer config={chartConfig} className='h-[300px] w-full min-w-0'>
           <PieChart>
             {/* @ts-expect-error - ChartTooltipContent types don't match Recharts exactly */}
             <ChartTooltip cursor={false} content={ChartTooltipContent} />
             <Pie
               data={chartData}
-              dataKey="cost"
-              nameKey="provider"
-              cx="50%"
-              cy="50%"
-              innerRadius="35%"
-              outerRadius="55%"
+              dataKey='cost'
+              nameKey='provider'
+              cx='50%'
+              cy='50%'
+              innerRadius='35%'
+              outerRadius='55%'
               strokeWidth={2}
               label={renderCustomLabel}
               labelLine={{ stroke: 'var(--border)', strokeWidth: 1 }}
             >
               {chartData.map((entry) => (
-                // eslint-disable-next-line @typescript-eslint/no-deprecated -- todo: fix this
+                // oxlint-disable-next-line @typescript-eslint/no-deprecated -- todo: fix this
                 <Cell key={entry.provider} fill={entry.fill} />
               ))}
               <Label
                 content={({ viewBox }) => {
                   if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
                     return (
-                      <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
-                        <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-xl font-bold">
+                      <text x={viewBox.cx} y={viewBox.cy} textAnchor='middle' dominantBaseline='middle'>
+                        <tspan x={viewBox.cx} y={viewBox.cy} className='fill-foreground text-xl font-bold'>
                           {formatCurrency(totalCost, { significantFigures: 3, minDecimalPlaces: 3 })}
                         </tspan>
-                        <tspan x={viewBox.cx} y={viewBox.cy + 20} className="fill-muted-foreground text-xs">
+                        <tspan x={viewBox.cx} y={viewBox.cy + 20} className='fill-muted-foreground text-xs'>
                           Total
                         </tspan>
                       </text>

@@ -20,8 +20,8 @@ function charOffsetToLineColumn(sourceCode: string, charOffset: number): LineCol
   let line = 1;
   let column = 0;
 
-  for (let i = 0; i < charOffset && i < sourceCode.length; i++) {
-    if (sourceCode[i] === '\n') {
+  for (let index = 0; index < charOffset && index < sourceCode.length; index++) {
+    if (sourceCode[index] === '\n') {
       line++;
       column = 0;
     } else {

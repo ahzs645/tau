@@ -95,7 +95,13 @@ type ImportGitHubEventInternal =
   | { type: 'updateRepoUrl'; url: string }
   | { type: 'selectBranch'; branch: string }
   | { type: 'selectMainFile'; file: string }
-  | { type: 'syncLocation'; owner: string; repo: string; ref: string; mainFile: string }
+  | {
+      type: 'syncLocation';
+      owner: string;
+      repo: string;
+      ref: string;
+      mainFile: string;
+    }
   | { type: 'startImport' }
   | { type: 'cancelDownload' }
   | { type: 'loadMoreBranches' }
@@ -283,16 +289,16 @@ const downloadZipActor = fromPromise<
 
   try {
     // Read the stream in chunks
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- standard stream reading pattern
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- standard stream reading pattern
     while (true) {
       // Check if aborted before reading next chunk
       if (signal.aborted) {
-        // eslint-disable-next-line no-await-in-loop -- need to cancel stream before throwing
+        // oxlint-disable-next-line no-await-in-loop -- need to cancel stream before throwing
         await reader.cancel();
         throw new Error('Download canceled');
       }
 
-      // eslint-disable-next-line no-await-in-loop -- reading stream sequentially
+      // oxlint-disable-next-line no-await-in-loop -- reading stream sequentially
       const { done, value } = await reader.read();
 
       if (done) {
@@ -321,7 +327,10 @@ const downloadZipActor = fromPromise<
       position += chunk.length;
     }
 
-    return { type: 'downloaded', blob: new Blob([zipData], { type: 'application/zip' }) };
+    return {
+      type: 'downloaded',
+      blob: new Blob([zipData], { type: 'application/zip' }),
+    };
   } finally {
     // Always release the reader lock
     reader.releaseLock();
@@ -376,13 +385,13 @@ type ImportGitHubEventExternalDone = DoneActorEvent<ImportGitHubEventExternal, I
  */
 export const importGitHubMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as ImportGitHubContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as ImportGitHubEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as ImportGitHubInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as ImportGitHubEmitted,
   },
   actors: {
@@ -615,6 +624,7 @@ export const importGitHubMachine = setup({
 
         // Try to find a CAD file as suggestion
         const cadExtensions = ['.scad', '.jscad', '.ts', '.js'];
+        // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
         const foundFile = fileNames.find((filename) => cadExtensions.some((ext) => filename.endsWith(ext)));
 
         return foundFile;
@@ -629,7 +639,10 @@ export const importGitHubMachine = setup({
       assertActorDoneEvent(event);
       assertEvent(event.output, 'downloaded');
       if (context.unzipRef) {
-        enqueue.sendTo(context.unzipRef, { type: 'extract', zipBlob: event.output.blob });
+        enqueue.sendTo(context.unzipRef, {
+          type: 'extract',
+          zipBlob: event.output.blob,
+        });
       }
     }),
     setMetadataError: assign({
@@ -809,7 +822,7 @@ export const importGitHubMachine = setup({
     requestedMainFile: input.mainFile ?? '',
     // Initialize selectedMainFile from input if provided (for URL loading with ?main=)
     // Empty string means no file selected, so treat as undefined
-    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentionally treat '' as falsy
+    // oxlint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentionally treat '' as falsy
     selectedMainFile: input.mainFile || undefined,
     repoMetadata: undefined,
     branches: [],

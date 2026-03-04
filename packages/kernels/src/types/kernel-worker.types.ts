@@ -95,9 +95,9 @@ export type KernelFileSystem = KernelFileSystemBase & {
   /** Batch-read multiple files as binary. Default: `Promise.all(paths.map(readFile))`. */
   readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   /** Read all file contents in a directory (skips subdirectories). */
-  readdirContents(dirPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
+  readdirContents(directoryPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   /** Get stat information for all entries in a directory. */
-  readdirStat(dirPath: string): Promise<FileStatEntry[]>;
+  readdirStat(directoryPath: string): Promise<FileStatEntry[]>;
   /** Ensure a directory exists, creating parents as needed. Default: `mkdir(path, { recursive: true })`. */
   ensureDir(path: string): Promise<void>;
 };

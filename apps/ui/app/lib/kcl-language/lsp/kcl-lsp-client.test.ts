@@ -212,7 +212,12 @@ describe('KclLspClient', () => {
       ).length;
 
       client.textDocumentDidOpen({
-        textDocument: { uri: 'file:///test.kcl', languageId: 'kcl', version: 1, text: 'const x = 1' },
+        textDocument: {
+          uri: 'file:///test.kcl',
+          languageId: 'kcl',
+          version: 1,
+          text: 'const x = 1',
+        },
       });
 
       const callCountAfter = mockWorker.postMessageCalls.filter(

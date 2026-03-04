@@ -101,11 +101,11 @@ export function useChatTextareaLogic({
   formattedCancelKeyCombination: string;
 
   // Refs
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   textareaReference: React.RefObject<HTMLTextAreaElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   fileInputReference: React.RefObject<HTMLInputElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   containerReference: React.RefObject<HTMLDivElement | null>;
 
   // Handlers
@@ -287,7 +287,7 @@ export function useChatTextareaLogic({
         for (const file of event.dataTransfer.files) {
           if (file.type.startsWith('image/')) {
             try {
-              // eslint-disable-next-line no-await-in-loop -- reading files sequentially
+              // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
               const dataUrl = await readFileAsDataUrl(file);
               addImage(dataUrl);
             } catch {

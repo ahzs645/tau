@@ -11,7 +11,7 @@ async function collectFilePaths(fileSystem: RpcFileSystem, basePath: string): Pr
     if (entry.type === 'file') {
       paths.push(fullPath);
     } else {
-      // eslint-disable-next-line no-await-in-loop -- recursive traversal
+      // oxlint-disable-next-line no-await-in-loop -- recursive traversal
       const subPaths = await collectFilePaths(fileSystem, fullPath);
       paths.push(...subPaths);
     }

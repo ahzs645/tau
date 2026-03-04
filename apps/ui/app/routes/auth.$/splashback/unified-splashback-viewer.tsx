@@ -164,7 +164,7 @@ type SceneContentProperties = {
   readonly onPhaseTransitionComplete?: () => void;
 };
 
-// eslint-disable-next-line complexity -- complex logic
+// oxlint-disable-next-line complexity -- complex logic
 function SceneContent({
   phase,
   gear12Points,
@@ -190,13 +190,19 @@ function SceneContent({
   const crossfadeProgressRef = useRef(0);
   const crossfadeIsActiveRef = useRef(false);
   const crossfadeHasSentCompleteRef = useRef(false);
-  const [crossfadeOpacity, setCrossfadeOpacity] = useState({ pointCloud: 1, mesh: 0 });
+  const [crossfadeOpacity, setCrossfadeOpacity] = useState({
+    pointCloud: 1,
+    mesh: 0,
+  });
 
   // Split morph crossfade state refs (gear8 -> assembly)
   const splitCrossfadeProgressRef = useRef(0);
   const splitCrossfadeIsActiveRef = useRef(false);
   const splitCrossfadeHasSentCompleteRef = useRef(false);
-  const [splitCrossfadeOpacity, setSplitCrossfadeOpacity] = useState({ pointCloud: 1, mesh: 0 });
+  const [splitCrossfadeOpacity, setSplitCrossfadeOpacity] = useState({
+    pointCloud: 1,
+    mesh: 0,
+  });
 
   // Refs for counter-rotation of assembly meshes
   const assemblyGear12RotationRef = useRef<Group>(null);
@@ -309,7 +315,10 @@ function SceneContent({
     });
 
     if (gear8Opacity) {
-      setCrossfadeOpacity({ pointCloud: gear8Opacity.source, mesh: gear8Opacity.target });
+      setCrossfadeOpacity({
+        pointCloud: gear8Opacity.source,
+        mesh: gear8Opacity.target,
+      });
       if (gear8Mesh) {
         gear8Mesh.material.opacity = gear8Opacity.target;
       }
@@ -330,7 +339,10 @@ function SceneContent({
     });
 
     if (assemblyOpacity) {
-      setSplitCrossfadeOpacity({ pointCloud: assemblyOpacity.source, mesh: assemblyOpacity.target });
+      setSplitCrossfadeOpacity({
+        pointCloud: assemblyOpacity.source,
+        mesh: assemblyOpacity.target,
+      });
       if (assemblyGear12Mesh) {
         assemblyGear12Mesh.material.opacity = assemblyOpacity.target;
       }

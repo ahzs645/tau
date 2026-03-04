@@ -76,30 +76,30 @@ function SvgGrid({ viewbox, transform }: SvgGridProps): React.ReactElement {
           id={`${id}-small`}
           width={smallSize}
           height={smallSize}
-          patternUnits="userSpaceOnUse"
+          patternUnits='userSpaceOnUse'
           patternTransform={`translate(${offsetSmallX} ${offsetSmallY})`}
         >
           <path
             d={`M ${smallSize} 0 L 0 0 0 ${smallSize}`}
-            fill="none"
+            fill='none'
             stroke={gridColor}
-            strokeWidth="2"
-            vectorEffect="non-scaling-stroke"
+            strokeWidth='2'
+            vectorEffect='non-scaling-stroke'
           />
         </pattern>
         <pattern
           id={`${id}-large`}
           width={largeSize}
           height={largeSize}
-          patternUnits="userSpaceOnUse"
+          patternUnits='userSpaceOnUse'
           patternTransform={`translate(${offsetLargeX} ${offsetLargeY})`}
         >
           <path
             d={`M ${largeSize} 0 L 0 0 0 ${largeSize}`}
-            fill="none"
+            fill='none'
             stroke={gridColor}
-            strokeWidth="4"
-            vectorEffect="non-scaling-stroke"
+            strokeWidth='4'
+            vectorEffect='non-scaling-stroke'
           />
         </pattern>
       </defs>
@@ -148,9 +148,9 @@ function SvgAxes({
   const yEnd = -extension;
 
   return (
-    <g data-slot="axes" id="axes-2d" pointerEvents="none" strokeLinecap="round" className={className}>
+    <g data-slot='axes' id='axes-2d' pointerEvents='none' strokeLinecap='round' className={className}>
       <line
-        data-slot="axes-x"
+        data-slot='axes-x'
         x1={0}
         y1={0}
         x2={xEnd}
@@ -158,10 +158,10 @@ function SvgAxes({
         stroke={axesColors.x}
         opacity={opacity}
         strokeWidth={strokeWidth}
-        vectorEffect="non-scaling-stroke"
+        vectorEffect='non-scaling-stroke'
       />
       <line
-        data-slot="axes-y"
+        data-slot='axes-y'
         x1={0}
         y1={0}
         x2={0}
@@ -169,7 +169,7 @@ function SvgAxes({
         stroke={axesColors.y}
         opacity={opacity}
         strokeWidth={strokeWidth}
-        vectorEffect="non-scaling-stroke"
+        vectorEffect='non-scaling-stroke'
       />
     </g>
   );
@@ -245,7 +245,14 @@ const stringifyViewbox = ({ xMin, yMin, xMax, yMax }: Viewbox): string => {
 
   // Validate all values are finite before stringifying
   if (!Number.isFinite(xMin) || !Number.isFinite(yMin) || !Number.isFinite(width) || !Number.isFinite(height)) {
-    console.error('Invalid viewbox values:', { xMin, yMin, xMax, yMax, width, height });
+    console.error('Invalid viewbox values:', {
+      xMin,
+      yMin,
+      xMax,
+      yMax,
+      width,
+      height,
+    });
     return '-10 -10 20 20'; // Fallback to default viewbox
   }
 
@@ -279,11 +286,11 @@ type GeometryPathProps = {
 function GeometryPath({ geometry }: GeometryPathProps): React.ReactElement {
   return (
     <path
-      data-slot="geometry"
+      data-slot='geometry'
       data-geometry-name={geometry.name}
       d={geometry.paths.flat(Infinity).join(' ')}
       strokeDasharray={dashArray(geometry.strokeType)}
-      vectorEffect="non-scaling-stroke"
+      vectorEffect='non-scaling-stroke'
       style={{ stroke: geometry.color }}
     />
   );
@@ -307,7 +314,7 @@ type SvgWindowProps = {
   readonly enableAxes?: boolean;
   readonly defaultColor?: string;
   readonly children?: ReactNode;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
   readonly svgRef?: React.RefObject<SVGSVGElement | null>;
 };
 
@@ -324,7 +331,11 @@ function SvgWindow({
   const [adaptedViewbox, setAdaptedViewbox] = useState<Viewbox>(viewbox);
   const panzoomRef = useRef<PanzoomObject>(null);
   const graphicsActor = useGraphics();
-  const [transform, setTransform] = useState<{ scale: number; x: number; y: number }>({ scale: 1, x: 0, y: 0 });
+  const [transform, setTransform] = useState<{
+    scale: number;
+    x: number;
+    y: number;
+  }>({ scale: 1, x: 0, y: 0 });
 
   // Use ResizeObserver instead of window resize event
   useEffect(() => {
@@ -417,7 +428,7 @@ function SvgWindow({
 
   // Create onWheel handler as useCallback with explicit dependencies
   const onWheel = useCallback(
-    // eslint-disable-next-line max-params -- signature dictated by Panzoom onWheel callback API
+    // oxlint-disable-next-line max-params -- signature dictated by Panzoom onWheel callback API
     (event: WheelEvent, instance: PanzoomObject, container: HTMLDivElement, currentAdaptedViewbox: Viewbox): void => {
       // Keep zoom centered around the world origin [0,0]
       event.preventDefault();
@@ -474,7 +485,7 @@ function SvgWindow({
       return;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- Panzoom ES module
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-call -- Panzoom ES module
     const instance = panzoom(contentGroup, {
       maxScale: gridMaxScale,
       animate: true,
@@ -528,7 +539,7 @@ function SvgWindow({
   }, [adaptedViewbox, onChange, onWheel]);
 
   return (
-    <div ref={canvasRef} className="flex h-full w-full flex-1 touch-none overflow-hidden bg-background">
+    <div ref={canvasRef} className='flex h-full w-full flex-1 touch-none overflow-hidden bg-background'>
       <RawCanvas
         viewbox={adaptedViewbox}
         enableGrid={enableGrid}
@@ -550,7 +561,7 @@ type RawCanvasProps = {
   readonly defaultColor?: string;
   readonly children?: ReactNode;
   readonly transform?: { scale: number; x: number; y: number };
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
   readonly svgRef?: React.RefObject<SVGSVGElement | null>;
 };
 
@@ -569,21 +580,21 @@ function RawCanvas({
     <svg
       ref={svgRef}
       viewBox={stringifyViewbox(viewbox)}
-      width="100%"
-      height="100%"
-      xmlns="http://www.w3.org/2000/svg"
-      className="h-full w-full bg-background [&>line]:stroke-muted-foreground/20"
-      preserveAspectRatio="xMidYMid meet"
+      width='100%'
+      height='100%'
+      xmlns='http://www.w3.org/2000/svg'
+      className='h-full w-full bg-background [&>line]:stroke-muted-foreground/20'
+      preserveAspectRatio='xMidYMid meet'
     >
-      <g id="panzoom-root">
+      <g id='panzoom-root'>
         {enableGrid ? <SvgGrid viewbox={viewbox} transform={safeTransform} /> : null}
         {enableAxes ? <SvgAxes viewbox={viewbox} /> : null}
         <g
           stroke={defaultColor}
-          id="raw-canvas"
-          vectorEffect="non-scaling-stroke"
-          fill="none"
-          className="stroke-foreground"
+          id='raw-canvas'
+          vectorEffect='non-scaling-stroke'
+          fill='none'
+          className='stroke-foreground'
         >
           {children}
         </g>
@@ -639,7 +650,7 @@ export function SvgViewer({
   const viewbox = mergeViewboxes(geometries.map((s) => s.viewbox));
 
   return (
-    <div className="relative h-full w-full">
+    <div className='relative h-full w-full'>
       <Viewer2D
         viewbox={viewbox}
         enableGrid={enableGrid}

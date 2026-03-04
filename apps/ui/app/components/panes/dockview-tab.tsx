@@ -33,14 +33,14 @@ export function DockviewTab(properties: IDockviewPanelHeaderProps): React.JSX.El
   );
 
   return (
-    <div className="dv-default-tab group/default-tab">
-      <span className="dv-default-tab-content flex items-center gap-1.5">
-        <FileExtensionIcon filename={title} className="size-3 shrink-0" />
-        <span className="truncate">{title}</span>
+    <div className='dv-default-tab group/default-tab'>
+      <span className='dv-default-tab-content flex items-center gap-1.5'>
+        <FileExtensionIcon filename={title} className='size-3 shrink-0' />
+        <span className='truncate'>{title}</span>
       </span>
       <div
-        className="dv-default-tab-action size-5! rounded-xs! opacity-0 group-hover/default-tab:opacity-100"
-        role="button"
+        className='dv-default-tab-action size-5! rounded-xs! opacity-0 group-hover/default-tab:opacity-100'
+        role='button'
         tabIndex={0}
         onClick={handleClose}
         onKeyDown={(event) => {
@@ -50,7 +50,7 @@ export function DockviewTab(properties: IDockviewPanelHeaderProps): React.JSX.El
           }
         }}
       >
-        <X className="size-3.5" />
+        <X className='size-3.5' />
       </div>
     </div>
   );

@@ -186,12 +186,12 @@ type HiddenLinesSeparatorProps = {
 
 function HiddenLinesSeparator({ count }: HiddenLinesSeparatorProps): React.JSX.Element {
   return (
-    <div className="flex h-4 w-full items-center gap-1 bg-muted/10 px-1 text-[11px] text-muted-foreground">
-      <span className="w-4 border-t border-muted-foreground/20" />
-      <span className="shrink-0 whitespace-nowrap">
+    <div className='flex h-4 w-full items-center gap-1 bg-muted/10 px-1 text-[11px] text-muted-foreground'>
+      <span className='w-4 border-t border-muted-foreground/20' />
+      <span className='shrink-0 whitespace-nowrap'>
         {count} hidden line{count === 1 ? '' : 's'}
       </span>
-      <span className="flex-1 border-t border-muted-foreground/20" />
+      <span className='flex-1 border-t border-muted-foreground/20' />
     </div>
   );
 }
@@ -225,7 +225,7 @@ export function DiffViewer({
   const renderedSegments = useMemo(() => {
     return segments.map((segment, segmentIndex) => {
       if (segment.type === 'hidden') {
-        // eslint-disable-next-line react/no-array-index-key -- segments are stable during render
+        // oxlint-disable-next-line react/no-array-index-key -- segments are stable during render
         return <HiddenLinesSeparator key={`hidden-${segmentIndex}`} count={segment.count} />;
       }
 
@@ -238,9 +238,9 @@ export function DiffViewer({
 
       return (
         <div
-          // eslint-disable-next-line react/no-array-index-key -- segments are stable during render
+          // oxlint-disable-next-line react/no-array-index-key -- segments are stable during render
           key={`code-${segmentIndex}`}
-          // eslint-disable-next-line react/no-danger -- Shiki returns trusted HTML
+          // oxlint-disable-next-line react/no-danger -- Shiki returns trusted HTML
           dangerouslySetInnerHTML={{ __html: html }}
           className={cn(
             // Pre element styles

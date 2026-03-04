@@ -1,13 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { getEnvironment, isNode, isBrowser, isWebWorker, resolveFileUrl, assertCrossOriginIsolated } from '#framework/environment.js';
+import {
+  getEnvironment,
+  isNode,
+  isBrowser,
+  isWebWorker,
+  resolveFileUrl,
+  assertCrossOriginIsolated,
+} from '#framework/environment.js';
 import type { RuntimeEnvironment } from '#framework/environment.js';
 
 describe('environment detection', () => {
   describe('getEnvironment', () => {
     it('returns a valid RuntimeEnvironment', () => {
-      const env = getEnvironment();
+      const environment = getEnvironment();
       const validValues: RuntimeEnvironment[] = ['node', 'browser', 'worker'];
-      expect(validValues).toContain(env);
+      expect(validValues).toContain(environment);
     });
 
     it('detects Node.js in test runner', () => {

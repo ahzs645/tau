@@ -1,7 +1,7 @@
 import { Switch } from '#components/ui/switch.js';
 
 type ParametersBooleanProps = {
-  // eslint-disable-next-line react/boolean-prop-naming -- not relevant
+  // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
   readonly value: boolean;
   readonly onChange: (value: boolean) => void;
   readonly name?: string;
@@ -10,7 +10,7 @@ type ParametersBooleanProps = {
 export function ParametersBoolean({ value, onChange, ...properties }: ParametersBooleanProps): React.JSX.Element {
   return (
     <Switch
-      size="md"
+      size='md'
       checked={Boolean(value)}
       onCheckedChange={(checkedValue) => {
         onChange(checkedValue);

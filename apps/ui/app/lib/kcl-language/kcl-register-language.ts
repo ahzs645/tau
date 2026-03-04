@@ -404,7 +404,7 @@ export function registerKclLanguage(monaco: typeof Monaco): void {
     ],
     // Word pattern: matches identifiers and quoted strings (for import paths)
     // This enables Cmd+Click on both symbols and import path strings
-    wordPattern: /("[^"]*\.kcl"|'[^']*\.kcl'|[a-zA-Z_]\w*)/,
+    wordPattern: /("[^"]*\.kcl"|'[^']*\.kcl'|[A-Z_a-z]\w*)/,
   });
 
   // Initialize LSP client and register providers
@@ -545,9 +545,9 @@ async function initializeSymbolServiceWasm(): Promise<void> {
       getAllFiles: async (): Promise<string[]> => [],
     };
 
-    // eslint-disable-next-line @typescript-eslint/await-thenable -- WASM Context constructor may return thenable
+    // oxlint-disable-next-line @typescript-eslint/await-thenable -- WASM Context constructor may return thenable
     const mockContext = (await new wasmModule.Context(mockEngine, mockFileSystem)) as {
-      // eslint-disable-next-line max-params -- External WASM API contract
+      // oxlint-disable-next-line max-params -- External WASM API contract
       executeMock: (program: string, path: string, settings: string, capture: boolean) => Promise<unknown>;
     };
 
@@ -556,7 +556,10 @@ async function initializeSymbolServiceWasm(): Promise<void> {
       errors: unknown[];
       sourceFiles?: Record<
         string | number,
-        { path: { type: 'Main' } | { type: 'Local'; value: string } | { type: 'Std'; value: string }; source: string }
+        {
+          path: { type: 'Main' } | { type: 'Local'; value: string } | { type: 'Std'; value: string };
+          source: string;
+        }
       >;
     };
 
@@ -584,7 +587,11 @@ async function initializeSymbolServiceWasm(): Promise<void> {
           stdlibProcessed = true;
         }
 
-        return { variables: result.variables, errors: result.errors, sourceFiles: result.sourceFiles };
+        return {
+          variables: result.variables,
+          errors: result.errors,
+          sourceFiles: result.sourceFiles,
+        };
       } catch (error) {
         // Mock execution can throw but still contain partial results
         // The error object may contain sourceFiles which we need for stdlib
@@ -606,7 +613,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
             errors: errorObject.errors,
             sourceFiles: errorObject.sourceFiles,
           };
-          // eslint-disable-next-line @typescript-eslint/only-throw-error -- Intentionally throwing data object for symbol service
+          // oxlint-disable-next-line @typescript-eslint/only-throw-error -- Intentionally throwing data object for symbol service
           throw errorData;
         }
 

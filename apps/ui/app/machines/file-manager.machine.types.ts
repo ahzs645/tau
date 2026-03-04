@@ -26,7 +26,12 @@ export type FileWriteSource = 'editor' | 'user' | 'machine';
  * Emitted events for UI consumers (toasts, Monaco updates, etc.)
  */
 export type FileManagerEmitted =
-  | { type: 'fileWritten'; path: string; data: Uint8Array<ArrayBuffer>; source: FileWriteSource }
+  | {
+      type: 'fileWritten';
+      path: string;
+      data: Uint8Array<ArrayBuffer>;
+      source: FileWriteSource;
+    }
   | { type: 'fileRead'; path: string; data: Uint8Array<ArrayBuffer> }
   | { type: 'fileRenamed'; oldPath: string; newPath: string }
   | { type: 'fileDeleted'; path: string; source: FileWriteSource };

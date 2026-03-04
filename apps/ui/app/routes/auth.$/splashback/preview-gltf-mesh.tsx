@@ -38,11 +38,12 @@ type PreviewGltfMeshProperties = {
  * - Uses a metallic MeshStandardMaterial instead of matcap
  * - Is optimized for showcase/preview scenarios
  *
- * @param gltfFile - The GLTF file to load
- * @param color - Material color (default: primary teal)
- * @param metalness - Material metalness (default: 0.7)
- * @param roughness - Material roughness (default: 0.2)
- * @param envMapIntensity - Environment map intensity (default: 1)
+ * @param props - The preview GLTF mesh properties
+ * @param props.gltfFile - The GLTF file to load
+ * @param props.color - Material color (default: primary teal)
+ * @param props.metalness - Material metalness (default: 0.7)
+ * @param props.roughness - Material roughness (default: 0.2)
+ * @param props.envMapIntensity - Environment map intensity (default: 1)
  */
 export function PreviewGltfMesh({
   gltfFile,

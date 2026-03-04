@@ -26,7 +26,7 @@ export function ChatMessageToolGlobSearch({
       const pattern = input?.pattern ?? 'pattern';
 
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
               <ChatToolAction>Finding files matching</ChatToolAction>{' '}
@@ -43,12 +43,12 @@ export function ChatMessageToolGlobSearch({
       const { files, totalFiles } = output;
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Files} />
             <ChatToolCardTitle>
               <ChatToolAction>
-                <span className="font-mono">{pattern}</span>
+                <span className='font-mono'>{pattern}</span>
               </ChatToolAction>{' '}
               <ChatToolDescription>
                 ({totalFiles} file{totalFiles === 1 ? '' : 's'})
@@ -56,18 +56,18 @@ export function ChatMessageToolGlobSearch({
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
-            <ChatToolCardList maxHeight="max-h-32">
+            <ChatToolCardList maxHeight='max-h-32'>
               {files.length === 0 ? (
-                <ChatToolCardListItem className="text-muted-foreground/70 italic">No files found</ChatToolCardListItem>
+                <ChatToolCardListItem className='text-muted-foreground/70 italic'>No files found</ChatToolCardListItem>
               ) : (
                 <>
                   {files.slice(0, 10).map((file) => (
                     <ChatToolCardListItem key={file} icon={File}>
-                      <span className="font-mono">{file}</span>
+                      <span className='font-mono'>{file}</span>
                     </ChatToolCardListItem>
                   ))}
                   {files.length > 10 ? (
-                    <ChatToolCardListItem className="text-muted-foreground/70 italic">
+                    <ChatToolCardListItem className='text-muted-foreground/70 italic'>
                       ... {files.length - 10} more files
                     </ChatToolCardListItem>
                   ) : undefined}
@@ -80,7 +80,7 @@ export function ChatMessageToolGlobSearch({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Files} fallbackTitle="File search failed" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Files} fallbackTitle='File search failed' />;
     }
 
     case 'approval-requested':

@@ -41,6 +41,7 @@ export function BuildSettingsDialog(): React.JSX.Element {
     setIsDeleteDialogOpen(true);
   }, []);
 
+  // oxlint-disable-next-line max-nested-callbacks -- dialog form nesting
   const handleDeleteConfirm = useCallback(() => {
     // TODO: Implement delete build functionality
     setIsDeleteDialogOpen(false);
@@ -52,27 +53,27 @@ export function BuildSettingsDialog(): React.JSX.Element {
       <Tooltip>
         <DialogTrigger asChild>
           <TooltipTrigger asChild>
-            <Button variant="outline" size="icon">
+            <Button variant='outline' size='icon'>
               <Settings />
             </Button>
           </TooltipTrigger>
         </DialogTrigger>
         <TooltipContent>Build Settings</TooltipContent>
       </Tooltip>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className='max-w-2xl'>
         <DialogHeader>
           <DialogTitle>Build Settings</DialogTitle>
           <DialogDescription>Update your build&apos;s details and preferences</DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-6 py-4">
+        <div className='flex flex-col gap-6 py-4'>
           {/* Build Name */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="build-name">Build Name</Label>
+          <div className='flex flex-col gap-2'>
+            <Label htmlFor='build-name'>Build Name</Label>
             <Input
-              id="build-name"
+              id='build-name'
               value={localName}
-              placeholder="Enter build name"
+              placeholder='Enter build name'
               onChange={(event) => {
                 setLocalName(event.target.value);
               }}
@@ -80,12 +81,12 @@ export function BuildSettingsDialog(): React.JSX.Element {
           </div>
 
           {/* Description */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="build-description">Description</Label>
+          <div className='flex flex-col gap-2'>
+            <Label htmlFor='build-description'>Description</Label>
             <Textarea
-              id="build-description"
+              id='build-description'
               value={localDescription}
-              placeholder="Describe your build..."
+              placeholder='Describe your build...'
               rows={3}
               onChange={(event) => {
                 setLocalDescription(event.target.value);
@@ -96,13 +97,13 @@ export function BuildSettingsDialog(): React.JSX.Element {
           <Separator />
 
           {/* Danger Zone */}
-          <div className="flex flex-col gap-4 rounded-md border border-destructive/50 p-4">
+          <div className='flex flex-col gap-4 rounded-md border border-destructive/50 p-4'>
             <div>
-              <h4 className="text-sm font-semibold text-destructive">Danger Zone</h4>
-              <p className="text-xs text-muted-foreground">Once deleted, your build cannot be recovered.</p>
+              <h4 className='text-sm font-semibold text-destructive'>Danger Zone</h4>
+              <p className='text-xs text-muted-foreground'>Once deleted, your build cannot be recovered.</p>
             </div>
-            <Button variant="destructive" className="w-fit" onClick={handleDeleteClick}>
-              <Trash2 className="mr-2 size-4" />
+            <Button variant='destructive' className='w-fit' onClick={handleDeleteClick}>
+              <Trash2 className='mr-2 size-4' />
               Delete Build
             </Button>
           </div>
@@ -110,7 +111,7 @@ export function BuildSettingsDialog(): React.JSX.Element {
 
         <DialogFooter>
           <Button
-            variant="outline"
+            variant='outline'
             onClick={() => {
               setIsOpen(false);
             }}
@@ -132,14 +133,14 @@ export function BuildSettingsDialog(): React.JSX.Element {
           </DialogHeader>
           <DialogFooter>
             <Button
-              variant="outline"
+              variant='outline'
               onClick={() => {
                 setIsDeleteDialogOpen(false);
               }}
             >
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleDeleteConfirm}>
+            <Button variant='destructive' onClick={handleDeleteConfirm}>
               Delete
             </Button>
           </DialogFooter>

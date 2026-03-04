@@ -12,16 +12,16 @@ export function NavFooter(): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <Collapsible open={isOpen} className="flex w-full flex-col-reverse" onOpenChange={setIsOpen}>
-      <div className="flex w-full items-center justify-between">
-        <SidebarMenuButton asChild className="w-auto gap-1 overflow-hidden">
-          <a href={metaConfig.githubUrl} target="_blank" rel="noopener noreferrer">
-            <SvgIcon id="github" className="size-3!" />
-            <span className="text-xs">{metaConfig.githubRepo}</span>
-            <span className="sr-only">GitHub</span>
+    <Collapsible open={isOpen} className='flex w-full flex-col-reverse' onOpenChange={setIsOpen}>
+      <div className='flex w-full items-center justify-between'>
+        <SidebarMenuButton asChild className='w-auto gap-1 overflow-hidden'>
+          <a href={metaConfig.githubUrl} target='_blank' rel='noopener noreferrer'>
+            <SvgIcon id='github' className='size-3!' />
+            <span className='text-xs'>{metaConfig.githubRepo}</span>
+            <span className='sr-only'>GitHub</span>
           </a>
         </SidebarMenuButton>
-        <div className="flex flex-row items-center -space-x-1">
+        <div className='flex flex-row items-center -space-x-1'>
           <NavInfoTrigger isOpen={isOpen} />
           <NavBugReportDialog />
           <ColorToggle />

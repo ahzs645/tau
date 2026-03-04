@@ -12,14 +12,14 @@ type WebglContextLostFallbackProps = {
  */
 export function WebglContextLostFallback({ onRetry }: WebglContextLostFallbackProps): React.JSX.Element {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-muted-foreground">
-      <AlertTriangle className="size-12 stroke-1" />
-      <div className="flex max-w-xs flex-col items-center gap-1 text-center">
-        <p className="text-sm font-medium text-foreground">Graphics context lost</p>
-        <p className="text-xs">The WebGL rendering context was lost. This can happen when too many viewers are open.</p>
+    <div className='flex h-full flex-col items-center justify-center gap-4 p-6 text-muted-foreground'>
+      <AlertTriangle className='size-12 stroke-1' />
+      <div className='flex max-w-xs flex-col items-center gap-1 text-center'>
+        <p className='text-sm font-medium text-foreground'>Graphics context lost</p>
+        <p className='text-xs'>The WebGL rendering context was lost. This can happen when too many viewers are open.</p>
       </div>
-      <Button variant="default" size="sm" className="gap-2" onClick={onRetry}>
-        <RotateCcw className="size-4" />
+      <Button variant='default' size='sm' className='gap-2' onClick={onRetry}>
+        <RotateCcw className='size-4' />
         Retry
       </Button>
     </div>

@@ -8,7 +8,7 @@ const filteredFormats = stringFormats.filter((item) => !skipReverseFind.has(item
 
 type ArrayMode = 'all' | 'first' | 'uniform' | 'tuple';
 
-// eslint-disable-next-line max-params -- callback type definition: 4th param is the default-implementation function
+// oxlint-disable-next-line max-params -- callback type definition: 4th param is the default-implementation function
 type PostProcessFunction = (
   type: string,
   schema: JSONSchema7,

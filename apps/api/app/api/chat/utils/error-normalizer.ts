@@ -151,7 +151,7 @@ function extractNestedAnthropicMessage(error: unknown): string | undefined {
  */
 function extractHelpUrl(message: string): string | undefined {
   const match = /troubleshooting url:\s*(https?:\/\/\S+)/i.exec(message);
-  return match?.[1]?.replace(/[.,;:!?)\]}>]+$/, ''); // Strip trailing punctuation
+  return match?.[1]?.replace(/[!),.:;>?\]}]+$/, ''); // Strip trailing punctuation
 }
 
 /**
@@ -272,6 +272,7 @@ function detectPatternCategory(message: string): ErrorCategory | undefined {
  * 4. Pattern matching on message text
  * 5. Generic fallback
  */
+// oxlint-disable-next-line eslint/complexity -- multi-layer error normalization requires sequential checks
 export function normalizeError(error: unknown): string {
   const rawMessage = error instanceof Error ? error.message : String(error);
   let category: ErrorCategory = errorCategory.generic;
@@ -332,7 +333,7 @@ export function normalizeError(error: unknown): string {
     if (parsed['type'] === 'error' && typeof parsed['error'] === 'object' && parsed['error'] !== null) {
       const errorBody = parsed['error'] as Record<string, unknown>;
       if (!nestedMessage && typeof errorBody['message'] === 'string') {
-        message = errorBody['message'];
+        ({ message } = errorBody as { message: string });
       }
 
       if (typeof errorBody['type'] === 'string') {
@@ -340,6 +341,7 @@ export function normalizeError(error: unknown): string {
 
         // Map Anthropic error types to categories
         if (category === errorCategory.generic) {
+          // oxlint-disable-next-line eslint/max-depth -- nested within JSON parsing conditional
           switch (errorBody['type']) {
             case 'invalid_request_error': {
               category = errorCategory.toolError;

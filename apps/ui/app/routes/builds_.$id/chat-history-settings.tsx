@@ -115,7 +115,9 @@ export function ChatHistorySettings(): React.ReactNode {
 
   const handleExport = useCallback(() => {
     const transcript = serializeTranscript(messages, chatName);
-    const blob = new Blob([transcript], { type: 'text/markdown;charset=utf-8' });
+    const blob = new Blob([transcript], {
+      type: 'text/markdown;charset=utf-8',
+    });
     const timestamp = new Date().toISOString().slice(0, 16).replaceAll(':', '-');
     const snakeName = toSnakeCase(chatName) || 'chat_transcript';
     downloadBlob(blob, `${snakeName}_${timestamp}.md`);
@@ -123,22 +125,22 @@ export function ChatHistorySettings(): React.ReactNode {
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <FloatingPanelMenuButton asChild tooltip="Chat settings" aria-label="Chat settings">
+      <FloatingPanelMenuButton asChild tooltip='Chat settings' aria-label='Chat settings'>
         <DropdownMenuTrigger>
-          <Settings className="size-4" />
+          <Settings className='size-4' />
         </DropdownMenuTrigger>
       </FloatingPanelMenuButton>
       <DropdownMenuContent
-        align="end"
-        side="bottom"
-        className="w-56"
+        align='end'
+        side='bottom'
+        className='w-56'
         onCloseAutoFocus={(event) => {
           event.preventDefault();
         }}
       >
         <DropdownMenuLabel>Metadata Display</DropdownMenuLabel>
         <DropdownMenuSwitchItem isChecked={showModelCost} onIsCheckedChange={handleShowModelCostToggle}>
-          <DollarSign className="stroke-2" />
+          <DollarSign className='stroke-2' />
           Show Model Cost
         </DropdownMenuSwitchItem>
 
@@ -154,7 +156,7 @@ export function ChatHistorySettings(): React.ReactNode {
               Editor Context
             </span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52">
+          <DropdownMenuSubContent className='w-52'>
             <DropdownMenuSwitchItem isChecked={includeFileSystem} onIsCheckedChange={handleIncludeFileSystemToggle}>
               <FolderTree />
               Filesystem
@@ -182,7 +184,7 @@ export function ChatHistorySettings(): React.ReactNode {
               File Operations
             </span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52">
+          <DropdownMenuSubContent className='w-52'>
             <DropdownMenuSwitchItem isChecked={showCodePreview} onIsCheckedChange={handleShowCodePreviewToggle}>
               <Code />
               Preview
@@ -198,7 +200,7 @@ export function ChatHistorySettings(): React.ReactNode {
               Analysis
             </span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52">
+          <DropdownMenuSubContent className='w-52'>
             <DropdownMenuLabel>Image Analysis</DropdownMenuLabel>
             <DropdownMenuSwitchItem isChecked={showAnalysisImages} onIsCheckedChange={handleShowAnalysisImagesToggle}>
               <Image />
@@ -212,7 +214,7 @@ export function ChatHistorySettings(): React.ReactNode {
               formatValue={formatQualityValue}
               infoTooltip={
                 <InfoTooltip>
-                  <ul className="list-disc space-y-1 pl-4">
+                  <ul className='list-disc space-y-1 pl-4'>
                     <li>Lower quality: less precise, faster upload and lower LLM cost</li>
                     <li>Higher quality: more precise, slower upload and higher LLM cost</li>
                   </ul>

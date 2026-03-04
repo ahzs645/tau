@@ -82,7 +82,7 @@ describe('getValueAtPath', () => {
 
     it('should get undefined values', () => {
       const object = { value: undefined };
-      // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- undefined is allowed.
+      // oxlint-disable-next-line @typescript-eslint/no-confusing-void-expression -- undefined is allowed.
       expect(getValueAtPath(object, ['value'] as const)).toBeUndefined();
     });
 
@@ -161,13 +161,13 @@ describe('getValueAtPath', () => {
   describe('Edge cases', () => {
     it('should return undefined when traversing through null', () => {
       const object = { user: null };
-      // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- undefined is allowed.
+      // oxlint-disable-next-line @typescript-eslint/no-confusing-void-expression -- undefined is allowed.
       expect(getValueAtPath(object, ['user', 'name'] as const)).toBeUndefined();
     });
 
     it('should return undefined when traversing through undefined', () => {
       const object = { user: undefined };
-      // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- undefined is allowed.
+      // oxlint-disable-next-line @typescript-eslint/no-confusing-void-expression -- undefined is allowed.
       expect(getValueAtPath(object, ['user', 'name'] as const)).toBeUndefined();
     });
 
@@ -233,7 +233,7 @@ describe('getValueAtPath', () => {
         current = current[key] as Record<string, unknown>;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- needs a dynamic type.
+      // oxlint-disable-next-line @typescript-eslint/no-confusing-void-expression -- needs a dynamic type.
       const result = getValueAtPath(object, path);
 
       expect(result).toBe('deep value');

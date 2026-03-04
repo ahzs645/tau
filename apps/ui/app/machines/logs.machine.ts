@@ -13,16 +13,19 @@ type LogMachineContext = {
 
 type LogMachineEvents =
   | { type: 'addLog'; message: string; options?: LogOptions }
-  | { type: 'addLogs'; entries: Array<{ message: string; options?: LogOptions }> }
+  | {
+      type: 'addLogs';
+      entries: Array<{ message: string; options?: LogOptions }>;
+    }
   | { type: 'clearLogs' };
 
 export const logMachine = setup({
-  /* eslint-disable @typescript-eslint/consistent-type-assertions -- Required for XState's type inference */
+  /* oxlint-disable @typescript-eslint/consistent-type-assertions -- Required for XState's type inference */
   types: {
     context: {} as LogMachineContext,
     events: {} as LogMachineEvents,
   },
-  /* eslint-enable @typescript-eslint/consistent-type-assertions -- reenabling */
+  /* oxlint-enable @typescript-eslint/consistent-type-assertions -- reenabling */
 }).createMachine({
   id: 'logs',
   initial: 'ready',

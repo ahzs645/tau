@@ -3,7 +3,9 @@ import { KernelWorkerClient, RenderSupersededError, isRenderSupersededError } fr
 import type { KernelTransport } from '#transport/kernel-transport.js';
 import type { KernelCommand, KernelResponse } from '#types/kernel-protocol.types.js';
 
-function createMockTransport(): KernelTransport & { simulateResponse: (response: KernelResponse) => void } {
+function createMockTransport(): KernelTransport & {
+  simulateResponse: (response: KernelResponse) => void;
+} {
   let handler: ((message: KernelResponse) => void) | undefined;
 
   return {

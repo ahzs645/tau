@@ -127,7 +127,7 @@ export function Lights({
       <directionalLight
         ref={cameraLightReference}
         intensity={headlampBaseIntensity}
-        color="white"
+        color='white'
         userData={{ [lightingUserDataKeys.headlamp]: true }}
       />
 
@@ -140,7 +140,7 @@ export function Lights({
                   camera with moderate upward offset. Creates the NE-bright
                   gradient (NNE, ENE lit) while keeping NNW dark. */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioKeyIntensity}
                 position={[clampedSceneRadius * 4, clampedSceneRadius * 1.5, clampedSceneRadius]}
                 rotation={[Math.PI / 8, -Math.PI / 3, 0]}
@@ -151,7 +151,7 @@ export function Lights({
                   rightward key cannot reach. Env_x dominant negative with moderate
                   +env_y so WNW (env_y=0.38) gets more than WSW (env_y=-0.38). */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioLeftFillIntensity}
                 position={[-clampedSceneRadius * 3, clampedSceneRadius, clampedSceneRadius * 0.5]}
                 rotation={[Math.PI / 8, Math.PI / 3, 0]}
@@ -161,7 +161,7 @@ export function Lights({
               {/* Reduced overhead accent — kept low to avoid over-brightening
                   NNW (D section) which has high env_y normal component. */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioTopIntensity}
                 position={[0, clampedSceneRadius * 3, 0]}
                 rotation={[Math.PI / 2, 0, 0]}
@@ -172,7 +172,7 @@ export function Lights({
                   the bottom-face specular shifts toward the right (matching the
                   asymmetric rig's "brighter on right" pattern). */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioGroundIntensity}
                 position={[clampedSceneRadius * 2, -clampedSceneRadius * 3, 0]}
                 rotation={[-Math.PI / 2, 0, 0]}
@@ -187,7 +187,7 @@ export function Lights({
                   top-right corner. Negligible contribution to front/side face
                   speculars (~61° from front reflection direction). */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioBackFillIntensity}
                 position={[clampedSceneRadius * 2, -clampedSceneRadius * 3, clampedSceneRadius * 4]}
                 scale={[clampedSceneRadius * 2, clampedSceneRadius * 2, 1]}
@@ -197,14 +197,14 @@ export function Lights({
             <>
               {/* Neutral preset: reduced intensity, minimal reflections */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={neutralKeyIntensity}
                 position={[0, clampedSceneRadius * 3, 0]}
                 rotation={[Math.PI / 2, 0, 0]}
                 scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={neutralGroundIntensity}
                 position={[0, -clampedSceneRadius * 3, 0]}
                 rotation={[-Math.PI / 2, 0, 0]}
@@ -222,8 +222,8 @@ export function Lights({
       {!enableMatcap && environmentPreset === 'performance' ? (
         <>
           <hemisphereLight args={['#ffffff', '#444444', 1]} />
-          <directionalLight color="white" intensity={2} position={[-1, -3, 5]} />
-          <directionalLight color="white" intensity={2} position={[1, 3, 5]} />
+          <directionalLight color='white' intensity={2} position={[-1, -3, 5]} />
+          <directionalLight color='white' intensity={2} position={[1, 3, 5]} />
         </>
       ) : null}
     </>

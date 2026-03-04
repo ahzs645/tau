@@ -38,43 +38,43 @@ export function createZooLogger(component: string): {
 
   return {
     info(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset} ${message}`, ...arguments_);
       }
     },
     error(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset} ${message}`, ...arguments_);
       }
     },
     warn(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset} ${message}`, ...arguments_);
       }
     },
     debug(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset} ${message}`, ...arguments_);
       }
     },
     trace(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.trace}${prefix}[TRACE]${consoleColors.reset} ${message}`, ...arguments_);
       }
     },
     req(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.req}${prefix}[REQ]${consoleColors.reset} ${message}`, ...arguments_);
       }
     },
     res(message: string, ...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
         console.log(`${consoleColors.res}${prefix}[RES]${consoleColors.reset} ${message}`, ...arguments_);
       }

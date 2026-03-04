@@ -73,7 +73,7 @@ export function BuildNameEditor(): React.JSX.Element {
     } else {
       setDisplayName(buildName);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only run after loading completes
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- only run after loading completes
   }, [buildName, isLoading, activeChatFirstMessage]);
 
   // Render display content based on state
@@ -95,9 +95,9 @@ export function BuildNameEditor(): React.JSX.Element {
         <InlineTextEditor
           value={displayName}
           isDisabled={isBuildError}
-          className="h-7 [&_[data-slot=button]]:w-auto [&_[data-slot=button]]:max-w-48"
+          className='h-7 [&_[data-slot=button]]:w-auto [&_[data-slot=button]]:max-w-48'
           renderDisplay={(value) => (
-            <span data-animate={isNameAnimating} className="truncate data-[animate=true]:animate-typewriter-20">
+            <span data-animate={isNameAnimating} className='truncate data-[animate=true]:animate-typewriter-20'>
               {renderDisplayContent(value)}
             </span>
           )}

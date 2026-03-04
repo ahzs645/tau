@@ -46,11 +46,11 @@ export type OnProgressCallback = (phase: RenderPhase, detail?: Record<string, un
  * Wraps a KernelTransport with request/response correlation and Promise-based methods.
  */
 export class KernelWorkerClient {
-  /* eslint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
+  /* oxlint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
   private readonly transport: KernelTransport;
   private readonly onLog: OnLogCallback;
   private readonly onTelemetry?: OnTelemetryCallback;
-  /* eslint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
+  /* oxlint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
 
   private nextRequestId = 0;
   private lastRenderRequestId?: string;
@@ -141,7 +141,10 @@ export class KernelWorkerClient {
   /** Cancel any pending render operation. */
   public cancelPendingRender(): void {
     if (this.pendingRender && this.lastRenderRequestId) {
-      const command: KernelCommand = { type: 'cancel', requestId: this.lastRenderRequestId };
+      const command: KernelCommand = {
+        type: 'cancel',
+        requestId: this.lastRenderRequestId,
+      };
       this.transport.send(command);
       this.pendingRender.reject(new RenderSupersededError());
       this.pendingRender = undefined;
@@ -199,6 +202,7 @@ export class KernelWorkerClient {
     this.transport.close();
   }
 
+  // oxlint-disable-next-line complexity -- TODO: refactor if needed
   private handleMessage(response: KernelResponse): void {
     switch (response.type) {
       case 'initialized': {
@@ -253,7 +257,7 @@ export class KernelWorkerClient {
       }
 
       case 'error': {
-        const errorMessage = response.issues.map((i: KernelIssue) => i.message).join('; ');
+        const errorMessage = response.issues.map((index: KernelIssue) => index.message).join('; ');
         const error = new Error(errorMessage);
 
         if (this.pendingInit) {

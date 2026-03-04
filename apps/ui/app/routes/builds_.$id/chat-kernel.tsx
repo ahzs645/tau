@@ -477,15 +477,15 @@ function PipelineTimingBar({
   const widthPercent = maxDuration > 0 ? Math.max(2, (duration / maxDuration) * 100) : 0;
 
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-32 shrink-0 truncate text-muted-foreground">{phaseLabels[phase]}</span>
-      <div className="relative h-4 flex-1 overflow-hidden rounded-sm bg-muted">
+    <div className='flex items-center gap-2 text-xs'>
+      <span className='w-32 shrink-0 truncate text-muted-foreground'>{phaseLabels[phase]}</span>
+      <div className='relative h-4 flex-1 overflow-hidden rounded-sm bg-muted'>
         <div
-          className="h-full rounded-sm bg-primary/60 transition-all duration-300"
+          className='h-full rounded-sm bg-primary/60 transition-all duration-300'
           style={{ width: `${widthPercent}%` }}
         />
       </div>
-      <span className="w-14 shrink-0 text-right font-mono text-muted-foreground">{formatDuration(duration)}</span>
+      <span className='w-14 shrink-0 text-right font-mono text-muted-foreground'>{formatDuration(duration)}</span>
     </div>
   );
 }
@@ -505,8 +505,8 @@ function VirtualizedLogList({
       }
 
       return (
-        <div className="group flex items-start gap-1.5 py-[3px] pr-2 text-xs hover:bg-muted/30">
-          <span className="shrink-0 font-mono text-[10px] leading-4 text-muted-foreground/40">
+        <div className='group flex items-start gap-1.5 py-[3px] pr-2 text-xs hover:bg-muted/30'>
+          <span className='shrink-0 font-mono text-[10px] leading-4 text-muted-foreground/40'>
             {formatTimestamp(log.timestamp)}
           </span>
           <span className={cn('flex-1 leading-4 break-all', logLevelColors[log.level] ?? 'text-foreground')}>
@@ -536,7 +536,7 @@ function CompilationUnitLogs({ entryFile }: { readonly entryFile: string }): Rea
   const cuLogs = useMemo(() => {
     const all = logRef.getSnapshot().context.logBuffer.toArray();
     return all.filter((log: LogEntry) => log.origin?.file === entryFile);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- logVersion tracks buffer mutations
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- logVersion tracks buffer mutations
   }, [logRef, logVersion, entryFile]);
 
   const filteredLogs = useMemo(() => {
@@ -571,29 +571,29 @@ function CompilationUnitLogs({ entryFile }: { readonly entryFile: string }): Rea
   }, []);
 
   return (
-    <div className="flex flex-col gap-1 p-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <Terminal className="size-3 shrink-0 text-muted-foreground" />
-          <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Console</span>
+    <div className='flex flex-col gap-1 p-2'>
+      <div className='flex items-center justify-between'>
+        <div className='flex items-center gap-1.5'>
+          <Terminal className='size-3 shrink-0 text-muted-foreground' />
+          <span className='text-xs font-medium tracking-wider text-muted-foreground uppercase'>Console</span>
           {cuLogs.length > 0 ? (
-            <span className="ml-0.5 text-[10px] text-muted-foreground/50 tabular-nums">{cuLogs.length}</span>
+            <span className='ml-0.5 text-[10px] text-muted-foreground/50 tabular-nums'>{cuLogs.length}</span>
           ) : undefined}
         </div>
         <PaneButton
-          tooltip="Filter logs"
+          tooltip='Filter logs'
           className={cn('size-5', isFilterVisible && 'text-primary')}
           onClick={toggleFilter}
         >
-          <ListFilter className="size-3" />
+          <ListFilter className='size-3' />
         </PaneButton>
       </div>
 
       {isFilterVisible ? (
         <SearchInput
-          autoComplete="off"
-          className="h-6 w-full bg-background text-xs"
-          placeholder="Filter logs..."
+          autoComplete='off'
+          className='h-6 w-full bg-background text-xs'
+          placeholder='Filter logs...'
           value={filter}
           onChange={handleFilterChange}
           onClear={handleClearFilter}
@@ -603,7 +603,7 @@ function CompilationUnitLogs({ entryFile }: { readonly entryFile: string }): Rea
       {filteredLogs.length > 0 ? (
         <VirtualizedLogList filteredLogs={filteredLogs} filter={filter} />
       ) : (
-        <p className="py-2 text-center text-[11px] text-muted-foreground/60">
+        <p className='py-2 text-center text-[11px] text-muted-foreground/60'>
           {cuLogs.length > 0 ? 'No matching logs.' : 'No logs yet.'}
         </p>
       )}
@@ -628,9 +628,9 @@ function SpanAttributeBadges({ entry }: { readonly entry: PerformanceEntryData }
   }
 
   return (
-    <span className="inline-flex min-w-0 shrink gap-1 overflow-hidden">
+    <span className='inline-flex min-w-0 shrink gap-1 overflow-hidden'>
       {displayKeys.slice(0, 2).map((key) => (
-        <span key={key} className="shrink-0 rounded bg-muted/80 px-1 py-px text-[10px] text-muted-foreground">
+        <span key={key} className='shrink-0 rounded bg-muted/80 px-1 py-px text-[10px] text-muted-foreground'>
           {String(attributes[key]).length > 20 ? `${key}` : `${key}=${String(attributes[key])}`}
         </span>
       ))}
@@ -668,57 +668,61 @@ function StandardSpanRow({
         }
       >
         {Array.from({ length: node.depth }, (_, i) => (
-          <span key={String(i)} className="relative flex h-full w-5 shrink-0 items-center justify-center">
-            {ancestorIsLast[i] ? undefined : <span className="absolute inset-y-0 left-2.5 w-px bg-border" />}
+          <span key={String(i)} className='relative flex h-full w-5 shrink-0 items-center justify-center'>
+            {ancestorIsLast[i] ? undefined : <span className='absolute inset-y-0 left-2.5 w-px bg-border' />}
           </span>
         ))}
 
         {node.depth > 0 && (
-          <span className="absolute flex items-center" style={{ left: (node.depth - 1) * 20 + 10 }}>
+          <span className='absolute flex items-center' style={{ left: (node.depth - 1) * 20 + 10 }}>
             <span
               className={cn('inline-block w-px bg-border', isLast ? 'h-1/2 self-start' : 'h-full')}
-              style={{ position: 'absolute', top: 0, height: isLast ? '50%' : '100%' }}
+              style={{
+                position: 'absolute',
+                top: 0,
+                height: isLast ? '50%' : '100%',
+              }}
             />
             <span
-              className="inline-block h-px bg-border"
+              className='inline-block h-px bg-border'
               style={{ position: 'absolute', top: '50%', left: 0, width: 10 }}
             />
           </span>
         )}
 
-        <span className="inline-flex w-5 shrink-0 items-center justify-center">
+        <span className='inline-flex w-5 shrink-0 items-center justify-center'>
           {hasChildren ? (
             isCollapsed ? (
-              <ChevronRight className="size-3.5" style={{ color: categorySvgColors[category] }} />
+              <ChevronRight className='size-3.5' style={{ color: categorySvgColors[category] }} />
             ) : (
-              <ChevronDown className="size-3.5" style={{ color: categorySvgColors[category] }} />
+              <ChevronDown className='size-3.5' style={{ color: categorySvgColors[category] }} />
             )
           ) : (
             <span className={cn('inline-block size-1.5 rounded-full', categoryDotColors[category])} />
           )}
         </span>
 
-        <span className="min-w-0 flex-1 truncate font-medium text-foreground" title={node.entry.name}>
+        <span className='min-w-0 flex-1 truncate font-medium text-foreground' title={node.entry.name}>
           {node.entry.name}
         </span>
 
         {displaySettings.showLatency ? (
-          <span className="ml-2 shrink-0 font-mono text-muted-foreground">{formatDuration(node.entry.duration)}</span>
+          <span className='ml-2 shrink-0 font-mono text-muted-foreground'>{formatDuration(node.entry.duration)}</span>
         ) : undefined}
 
         {displaySettings.showSelfTime && hasChildren && node.selfTime < node.entry.duration * 0.95 ? (
-          <span className="ml-1 shrink-0 font-mono text-muted-foreground/50" title="Self time">
+          <span className='ml-1 shrink-0 font-mono text-muted-foreground/50' title='Self time'>
             ({formatDuration(node.selfTime)})
           </span>
         ) : undefined}
       </div>
 
       {displaySettings.showAttributes ? (
-        <div className="flex items-center pb-0.5 text-xs">
+        <div className='flex items-center pb-0.5 text-xs'>
           {Array.from({ length: node.depth }, (_, i) => (
-            <span key={String(i)} className="w-5 shrink-0" />
+            <span key={String(i)} className='w-5 shrink-0' />
           ))}
-          <span className="w-5 shrink-0" />
+          <span className='w-5 shrink-0' />
           <SpanAttributeBadges entry={node.entry} />
         </div>
       ) : undefined}
@@ -800,13 +804,13 @@ function WaterfallAxisBar({ renderDuration }: { readonly renderDuration: number 
   const ticks = useMemo(() => generateTicks(renderDuration, 400), [renderDuration]);
 
   return (
-    <div className="relative border-b border-border" style={{ height: waterfallRowHeight }}>
+    <div className='relative border-b border-border' style={{ height: waterfallRowHeight }}>
       {ticks.map((tick) => {
         const xPercent = renderDuration > 0 ? (tick / renderDuration) * 100 : 0;
         return (
           <span
             key={tick}
-            className="absolute -translate-x-1/2 text-[10px] text-muted-foreground"
+            className='absolute -translate-x-1/2 text-[10px] text-muted-foreground'
             style={{ left: `${String(xPercent)}%`, top: 4 }}
           >
             {formatDuration(tick)}
@@ -821,13 +825,13 @@ function WaterfallGridLines({ renderDuration }: { readonly renderDuration: numbe
   const ticks = useMemo(() => generateTicks(renderDuration, 400), [renderDuration]);
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-10">
+    <div className='pointer-events-none absolute inset-0 z-10'>
       {ticks.map((tick) => {
         const xPercent = renderDuration > 0 ? (tick / renderDuration) * 100 : 0;
         return (
           <div
             key={tick}
-            className="absolute top-0 bottom-0 border-l border-dashed border-border/30"
+            className='absolute top-0 bottom-0 border-l border-dashed border-border/30'
             style={{ left: `${String(xPercent)}%` }}
           />
         );
@@ -884,7 +888,7 @@ function WaterfallHtmlRow({
       }
     >
       <div
-        className="absolute rounded-sm"
+        className='absolute rounded-sm'
         style={{
           left: `${String(clampedLeft)}%`,
           width: `${String(clampedWidth)}%`,
@@ -895,7 +899,7 @@ function WaterfallHtmlRow({
         }}
       />
       <div
-        className="absolute rounded-sm"
+        className='absolute rounded-sm'
         style={{
           left: `${String(clampedLeft)}%`,
           width: `${String(clampedWidth)}%`,
@@ -906,14 +910,18 @@ function WaterfallHtmlRow({
         }}
       />
       <span
-        className="absolute truncate font-mono text-[11px] text-foreground"
-        style={{ left: depthPad, top: waterfallLabelOffset + barTop, maxWidth: `${String(clampedLeft - 1)}%` }}
+        className='absolute truncate font-mono text-[11px] text-foreground'
+        style={{
+          left: depthPad,
+          top: waterfallLabelOffset + barTop,
+          maxWidth: `${String(clampedLeft - 1)}%`,
+        }}
       >
         {label}
       </span>
       {hasChildren && spanId ? (
         <span
-          className="absolute right-2 text-[10px] text-muted-foreground"
+          className='absolute right-2 text-[10px] text-muted-foreground'
           style={{ top: waterfallRowHeight / 2 - 5 }}
         >
           {isCollapsed ? '▸' : '▾'}
@@ -965,15 +973,17 @@ function WaterfallView({
   );
 
   return (
-    <div className="flex flex-col">
+    <div className='flex flex-col'>
       <WaterfallAxisBar renderDuration={renderDuration} />
-      <div className="relative">
+      <div className='relative'>
         <WaterfallGridLines renderDuration={renderDuration} />
         <Virtuoso
           totalCount={flatNodes.length}
           itemContent={renderWaterfallItem}
           fixedItemHeight={waterfallRowHeight}
-          style={{ height: Math.min(384, flatNodes.length * waterfallRowHeight) }}
+          style={{
+            height: Math.min(384, flatNodes.length * waterfallRowHeight),
+          }}
         />
       </div>
     </div>
@@ -1006,28 +1016,28 @@ function TraceToolbar({
   const hasActiveFilters = filters.some((f) => f.value !== '');
 
   return (
-    <div className="flex items-center justify-between gap-1">
-      <div className="flex items-center gap-1">
+    <div className='flex items-center justify-between gap-1'>
+      <div className='flex items-center gap-1'>
         {/* Filter */}
         <Popover>
           <PopoverTrigger asChild>
-            <PaneButton tooltip="Filter spans" className="relative">
-              <ListFilter className="size-3.5" />
+            <PaneButton tooltip='Filter spans' className='relative'>
+              <ListFilter className='size-3.5' />
               {hasActiveFilters ? (
-                <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary" />
+                <span className='absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary' />
               ) : undefined}
             </PaneButton>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-auto min-w-80 p-3">
+          <PopoverContent align='start' className='w-auto min-w-80 p-3'>
             <TraceConditionPicker conditions={filters} onChange={onFiltersChange} />
           </PopoverContent>
         </Popover>
 
         {/* View toggle */}
         <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
+          type='single'
+          variant='outline'
+          size='sm'
           value={viewMode}
           onValueChange={(value) => {
             if (value) {
@@ -1035,31 +1045,34 @@ function TraceToolbar({
             }
           }}
         >
-          <ToggleGroupItem value="standard" className="h-6 px-2 text-[11px]">
+          <ToggleGroupItem value='standard' className='h-6 px-2 text-[11px]'>
             Standard
           </ToggleGroupItem>
-          <ToggleGroupItem value="waterfall" className="h-6 px-2 text-[11px]">
+          <ToggleGroupItem value='waterfall' className='h-6 px-2 text-[11px]'>
             Waterfall
           </ToggleGroupItem>
         </ToggleGroup>
       </div>
 
-      <div className="flex items-center gap-0.5">
+      <div className='flex items-center gap-0.5'>
         {/* Settings */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <PaneButton tooltip="Display settings">
-              <Settings2 className="size-3.5" />
+            <PaneButton tooltip='Display settings'>
+              <Settings2 className='size-3.5' />
             </PaneButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuContent align='end' className='min-w-44'>
             <DropdownMenuCheckboxItem
               checked={displaySettings.showLatency}
               onSelect={(event) => {
                 event.preventDefault();
               }}
               onCheckedChange={(checked) => {
-                onDisplaySettingsChange({ ...displaySettings, showLatency: Boolean(checked) });
+                onDisplaySettingsChange({
+                  ...displaySettings,
+                  showLatency: Boolean(checked),
+                });
               }}
             >
               Show Latency
@@ -1070,7 +1083,10 @@ function TraceToolbar({
                 event.preventDefault();
               }}
               onCheckedChange={(checked) => {
-                onDisplaySettingsChange({ ...displaySettings, showSelfTime: Boolean(checked) });
+                onDisplaySettingsChange({
+                  ...displaySettings,
+                  showSelfTime: Boolean(checked),
+                });
               }}
             >
               Show Self Time
@@ -1081,7 +1097,10 @@ function TraceToolbar({
                 event.preventDefault();
               }}
               onCheckedChange={(checked) => {
-                onDisplaySettingsChange({ ...displaySettings, showAttributes: Boolean(checked) });
+                onDisplaySettingsChange({
+                  ...displaySettings,
+                  showAttributes: Boolean(checked),
+                });
               }}
             >
               Show Attributes
@@ -1091,11 +1110,14 @@ function TraceToolbar({
             <DropdownMenuRadioGroup
               value={displaySettings.visibility}
               onValueChange={(value) => {
-                onDisplaySettingsChange({ ...displaySettings, visibility: value as 'all' | 'relevant' });
+                onDisplaySettingsChange({
+                  ...displaySettings,
+                  visibility: value as 'all' | 'relevant',
+                });
               }}
             >
               <DropdownMenuRadioItem
-                value="all"
+                value='all'
                 onSelect={(event) => {
                   event.preventDefault();
                 }}
@@ -1103,7 +1125,7 @@ function TraceToolbar({
                 All
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem
-                value="relevant"
+                value='relevant'
                 onSelect={(event) => {
                   event.preventDefault();
                 }}
@@ -1116,7 +1138,7 @@ function TraceToolbar({
 
         {/* Collapse/Expand All */}
         <PaneButton tooltip={isAllCollapsed ? 'Expand all' : 'Collapse all'} onClick={onToggleCollapseAll}>
-          {isAllCollapsed ? <ChevronsUpDown className="size-3.5" /> : <ChevronsDownUp className="size-3.5" />}
+          {isAllCollapsed ? <ChevronsUpDown className='size-3.5' /> : <ChevronsDownUp className='size-3.5' />}
         </PaneButton>
       </div>
     </div>
@@ -1234,20 +1256,20 @@ function CompilationUnitTiming({ cadRef }: { readonly cadRef: ActorRefFrom<typeo
   }, [isAllCollapsed, processedTree]);
 
   return (
-    <div className="flex flex-col gap-2 p-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Render Pipeline</span>
+    <div className='flex flex-col gap-2 p-2'>
+      <div className='flex items-center justify-between'>
+        <span className='text-xs font-medium tracking-wider text-muted-foreground uppercase'>Render Pipeline</span>
         {renderPhase ? (
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+          <span className='rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary'>
             {phaseLabels[renderPhase]}
           </span>
         ) : (
-          <span className="text-xs text-muted-foreground">Idle</span>
+          <span className='text-xs text-muted-foreground'>Idle</span>
         )}
       </div>
 
       {visiblePhases.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
+        <div className='flex flex-col gap-1.5'>
           {visiblePhases.map((phase) => (
             <PipelineTimingBar
               key={phase}
@@ -1256,30 +1278,30 @@ function CompilationUnitTiming({ cadRef }: { readonly cadRef: ActorRefFrom<typeo
               maxDuration={maxDuration}
             />
           ))}
-          <div className="mt-1 flex items-center justify-between border-t border-border pt-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Total</span>
-            <span className="font-mono text-xs font-medium text-foreground">{formatDuration(totalDuration)}</span>
+          <div className='mt-1 flex items-center justify-between border-t border-border pt-1.5'>
+            <span className='text-xs font-medium text-muted-foreground'>Total</span>
+            <span className='font-mono text-xs font-medium text-foreground'>{formatDuration(totalDuration)}</span>
           </div>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">No render data yet.</p>
+        <p className='text-xs text-muted-foreground'>No render data yet.</p>
       )}
 
       {spanTree.length > 0 && (
-        <div className="mt-1 flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Telemetry</span>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <span className="inline-block size-1.5 rounded-full bg-primary" />
+        <div className='mt-1 flex flex-col gap-1.5'>
+          <div className='flex items-center justify-between'>
+            <span className='text-xs font-medium tracking-wider text-muted-foreground uppercase'>Telemetry</span>
+            <div className='flex items-center gap-2 text-[10px] text-muted-foreground'>
+              <span className='flex items-center gap-1'>
+                <span className='inline-block size-1.5 rounded-full bg-primary' />
                 framework
               </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block size-1.5 rounded-full bg-success" />
+              <span className='flex items-center gap-1'>
+                <span className='inline-block size-1.5 rounded-full bg-success' />
                 kernel
               </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block size-1.5 rounded-full bg-warning" />
+              <span className='flex items-center gap-1'>
+                <span className='inline-block size-1.5 rounded-full bg-warning' />
                 middleware
               </span>
             </div>
@@ -1324,14 +1346,14 @@ function CompilationUnitSummary({ cadRef }: { readonly cadRef: ActorRefFrom<type
   const { totalDuration } = useSelector(cadRef, selectPipelineData);
 
   if (renderPhase) {
-    return <span className="shrink-0 text-xs text-primary">{phaseLabels[renderPhase]}...</span>;
+    return <span className='shrink-0 text-xs text-primary'>{phaseLabels[renderPhase]}...</span>;
   }
 
   if (totalDuration > 0) {
-    return <span className="shrink-0 font-mono text-xs text-muted-foreground">{formatDuration(totalDuration)}</span>;
+    return <span className='shrink-0 font-mono text-xs text-muted-foreground'>{formatDuration(totalDuration)}</span>;
   }
 
-  return <span className="shrink-0 text-xs text-muted-foreground">Idle</span>;
+  return <span className='shrink-0 text-xs text-muted-foreground'>Idle</span>;
 }
 
 function KernelCollapsibleSection({
@@ -1346,17 +1368,17 @@ function KernelCollapsibleSection({
   readonly onOpenChange: (isOpen: boolean) => void;
 }): React.JSX.Element {
   return (
-    <Collapsible open={isOpen} className="w-full border-b border-border/50 last:border-b-0" onOpenChange={onOpenChange}>
-      <CollapsibleTrigger className="group/collapsible flex h-8 w-full items-center justify-between px-2 py-1.5 transition-colors hover:bg-muted/50">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
-          <span className="truncate text-xs font-medium text-foreground">{entryFile}</span>
+    <Collapsible open={isOpen} className='w-full border-b border-border/50 last:border-b-0' onOpenChange={onOpenChange}>
+      <CollapsibleTrigger className='group/collapsible flex h-8 w-full items-center justify-between px-2 py-1.5 transition-colors hover:bg-muted/50'>
+        <div className='flex min-w-0 flex-1 items-center gap-1.5'>
+          <ChevronRight className='size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
+          <span className='truncate text-xs font-medium text-foreground'>{entryFile}</span>
         </div>
         <CompilationUnitSummary cadRef={cadRef} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-0 py-0">
+      <CollapsibleContent className='px-0 py-0'>
         <CompilationUnitTiming cadRef={cadRef} />
-        <div className="mx-2 border-t border-border/20" />
+        <div className='mx-2 border-t border-border/20' />
         <CompilationUnitLogs entryFile={entryFile} />
       </CollapsibleContent>
     </Collapsible>
@@ -1381,7 +1403,7 @@ function KernelCompilationUnits(): React.JSX.Element {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className='h-full overflow-y-auto'>
       {[...compilationUnits.entries()].map(([entryFile, cadRef]) => (
         <KernelCollapsibleSection
           key={entryFile}
@@ -1398,17 +1420,11 @@ function KernelCompilationUnits(): React.JSX.Element {
 }
 
 export const ChatKernelTrigger = memo(
-  ({
-    isOpen,
-    onToggle,
-  }: {
-    readonly isOpen: boolean;
-    readonly onToggle: () => void;
-  }): React.JSX.Element => (
+  ({ isOpen, onToggle }: { readonly isOpen: boolean; readonly onToggle: () => void }): React.JSX.Element => (
     <FloatingPanelTrigger
       icon={Activity}
-      tooltipContent={<div className="flex items-center gap-2">{isOpen ? 'Close' : 'Open'} Kernel</div>}
-      tooltipSide="right"
+      tooltipContent={<div className='flex items-center gap-2'>{isOpen ? 'Close' : 'Open'} Kernel</div>}
+      tooltipSide='right'
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
@@ -1425,7 +1441,7 @@ export const ChatKernel = memo(
     readonly setIsExpanded: (isExpanded: boolean | ((previous: boolean) => boolean)) => void;
     readonly className?: string;
   }): React.JSX.Element => (
-    <FloatingPanel isOpen={isExpanded} side="right" onOpenChange={setIsExpanded}>
+    <FloatingPanel isOpen={isExpanded} side='right' onOpenChange={setIsExpanded}>
       <FloatingPanelContent className={cn('flex h-full flex-col', className)}>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>Kernel</FloatingPanelContentTitle>
@@ -1433,13 +1449,13 @@ export const ChatKernel = memo(
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => (
-                <div className="flex items-center gap-2">{isOpen ? 'Close' : 'Open'} Kernel</div>
+                <div className='flex items-center gap-2'>{isOpen ? 'Close' : 'Open'} Kernel</div>
               )}
             />
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
-        <FloatingPanelContentBody className="flex-1 overflow-y-auto p-0">
+        <FloatingPanelContentBody className='flex-1 overflow-y-auto p-0'>
           <KernelCompilationUnits />
         </FloatingPanelContentBody>
       </FloatingPanelContent>

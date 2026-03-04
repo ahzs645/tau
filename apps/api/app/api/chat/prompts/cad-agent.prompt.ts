@@ -5,6 +5,7 @@ import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kerne
 import { getKernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.js';
 
 function getFileOrganizationStrategy(config: KernelConfig): string {
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
   const ext = config.fileExtension;
 
   if (config.fileLayoutMode === 'full-nesting') {

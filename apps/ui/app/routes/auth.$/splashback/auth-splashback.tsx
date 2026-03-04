@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useMachine, useSelector } from '@xstate/react';
+import { useActorRef, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
 import { jscad } from '@taucad/kernels/kernels';
 import { parameterCache, geometryCache, gltfCoordinateTransform } from '@taucad/kernels/middleware';
@@ -41,7 +41,7 @@ const timing = {
 function Cursor(): React.JSX.Element {
   return (
     <motion.span
-      className="ml-0.5 inline-block h-[1em] w-[2px] bg-primary pt-0.5"
+      className='ml-0.5 inline-block h-[1em] w-[2px] bg-primary pt-0.5'
       animate={{ opacity: [1, 1, 0, 0] }}
       transition={{
         duration: 1,
@@ -110,11 +110,11 @@ function PromptStatusIcon({
       }
       onAnimationComplete={shouldShowEnterKey ? onEnterComplete : undefined}
     >
-      <AnimatePresence mode="wait" initial={false}>
+      <AnimatePresence mode='wait' initial={false}>
         {iconType === 'enter' ? (
           <motion.span
-            key="enter"
-            className="flex size-4 items-center justify-center text-xs text-muted-foreground"
+            key='enter'
+            className='flex size-4 items-center justify-center text-xs text-muted-foreground'
             exit={{ opacity: 0, scale: 0.8 }}
             transition={{ duration: 0.08 }}
           >
@@ -122,25 +122,25 @@ function PromptStatusIcon({
           </motion.span>
         ) : iconType === 'spinner' ? (
           <motion.span
-            key="spinner"
+            key='spinner'
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.8 }}
             transition={{ duration: 0.08 }}
-            className="flex size-4 items-center justify-center text-muted-foreground"
+            className='flex size-4 items-center justify-center text-muted-foreground'
           >
-            <Loader className="size-4" variant="spinner" />
+            <Loader className='size-4' variant='spinner' />
           </motion.span>
         ) : (
           <motion.span
-            key="check"
+            key='check'
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.8 }}
             transition={{ duration: 0.12, ease: 'easeOut' }}
-            className="flex size-4 items-center justify-center"
+            className='flex size-4 items-center justify-center'
           >
-            <Check className="size-4 text-success" />
+            <Check className='size-4 text-success' />
           </motion.span>
         )}
       </AnimatePresence>
@@ -226,15 +226,15 @@ function TypewriterPrompt({
   const shouldShowCursor = isActive && !typingComplete;
 
   return (
-    <div className="flex h-14 items-center gap-3 rounded-full border border-primary/20 bg-background/80 px-5 py-3 backdrop-blur-sm">
-      <div className="flex size-2 items-center justify-center">
-        <span className="relative flex size-2">
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
-          <span className="relative inline-flex size-2 rounded-full bg-primary" />
+    <div className='flex h-14 items-center gap-3 rounded-full border border-primary/20 bg-background/80 px-5 py-3 backdrop-blur-sm'>
+      <div className='flex size-2 items-center justify-center'>
+        <span className='relative flex size-2'>
+          <span className='absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75' />
+          <span className='relative inline-flex size-2 rounded-full bg-primary' />
         </span>
       </div>
-      <p className="flex items-center font-mono text-sm text-foreground md:text-base">
-        <span>{displayedText || <span className="invisible">.</span>}</span>
+      <p className='flex items-center font-mono text-sm text-foreground md:text-base'>
+        <span>{displayedText || <span className='invisible'>.</span>}</span>
         {shouldShowCursor ? <Cursor /> : undefined}
         <PromptStatusIcon
           shouldShowEnterKey={shouldShowEnterKey}
@@ -249,26 +249,26 @@ function TypewriterPrompt({
 
 function GridPattern(): React.JSX.Element {
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      <div className="bg-gradient-radial absolute inset-0 from-transparent via-transparent to-muted/80" />
+    <div className='pointer-events-none absolute inset-0 overflow-hidden'>
+      <div className='bg-gradient-radial absolute inset-0 from-transparent via-transparent to-muted/80' />
 
-      <svg className="absolute inset-0 size-full opacity-[0.03]" aria-hidden="true">
+      <svg className='absolute inset-0 size-full opacity-[0.03]' aria-hidden='true'>
         <defs>
-          <pattern id="auth-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="currentColor" strokeWidth="1" />
+          <pattern id='auth-grid' width='40' height='40' patternUnits='userSpaceOnUse'>
+            <path d='M 40 0 L 0 0 0 40' fill='none' stroke='currentColor' strokeWidth='1' />
           </pattern>
         </defs>
-        <rect width="100%" height="100%" fill="url(#auth-grid)" />
+        <rect width='100%' height='100%' fill='url(#auth-grid)' />
       </svg>
 
-      <div className="absolute top-1/2 left-1/2 size-[500px] -translate-x-1/2 -translate-y-1/2">
-        <div className="absolute inset-0 animate-pulse-subtle rounded-full border border-primary/5" />
+      <div className='absolute top-1/2 left-1/2 size-[500px] -translate-x-1/2 -translate-y-1/2'>
+        <div className='absolute inset-0 animate-pulse-subtle rounded-full border border-primary/5' />
         <div
-          className="absolute inset-8 animate-pulse-subtle rounded-full border border-primary/5"
+          className='absolute inset-8 animate-pulse-subtle rounded-full border border-primary/5'
           style={{ animationDelay: '0.5s' }}
         />
         <div
-          className="absolute inset-16 animate-pulse-subtle rounded-full border border-primary/5"
+          className='absolute inset-16 animate-pulse-subtle rounded-full border border-primary/5'
           style={{ animationDelay: '1s' }}
         />
       </div>
@@ -501,7 +501,7 @@ function deriveCurrentPhase(flags: PhaseFlags): SplashbackPhase {
   return 'loading';
 }
 
-type AuthSplashbackSend = ReturnType<typeof useMachine<typeof authSplashbackMachine>>[1];
+type AuthSplashbackSend = ReturnType<typeof useActorRef<typeof authSplashbackMachine>>['send'];
 
 type AuthSplashbackContentProperties = {
   readonly state: ReturnType<typeof authSplashbackMachine.transition>;
@@ -613,20 +613,20 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
   }, [send, isAssemblyWaitingForMesh]);
 
   return (
-    <div className="relative flex size-full items-center justify-center overflow-hidden bg-muted" aria-hidden="true">
+    <div className='relative flex size-full items-center justify-center overflow-hidden bg-muted' aria-hidden='true'>
       <GridPattern />
 
       <motion.div
-        className="relative z-10 flex flex-col items-center gap-4 md:gap-5"
+        className='relative z-10 flex flex-col items-center gap-4 md:gap-5'
         animate={{ opacity: isFading ? 0 : 1 }}
         transition={{ duration: timing.fadeDuration / 1000 }}
       >
         {/* Prompt Bubbles */}
-        <div className="flex min-h-[52px] items-center justify-center px-6">
-          <AnimatePresence mode="wait">
+        <div className='flex min-h-[52px] items-center justify-center px-6'>
+          <AnimatePresence mode='wait'>
             {showPrompt1 ? (
               <motion.div
-                key="prompt1"
+                key='prompt1'
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 initial={{ opacity: 0, y: 10 }}
@@ -646,7 +646,7 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
             ) : undefined}
             {showPrompt2 ? (
               <motion.div
-                key="prompt2"
+                key='prompt2'
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 initial={{ opacity: 0, y: 10 }}
@@ -666,7 +666,7 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
             ) : undefined}
             {showPrompt3 ? (
               <motion.div
-                key="prompt3"
+                key='prompt3'
                 animate={{ opacity: isFading ? 0 : 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 initial={{ opacity: 0, y: 10 }}
@@ -695,18 +695,18 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
           animate={{ opacity: isFading ? 0 : showContainer ? 1 : 0 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
         >
-          <div className="relative size-72 md:size-80 lg:size-128">
+          <div className='relative size-72 md:size-80 lg:size-128'>
             <AnimatePresence>
               {showLoading || cadStatus === 'loading' ? (
                 <motion.div
-                  key="loading"
-                  className="absolute inset-0 z-10 flex items-center justify-center bg-background/50"
+                  key='loading'
+                  className='absolute inset-0 z-10 flex items-center justify-center bg-background/50'
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   initial={{ opacity: 0 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <Loader className="size-16" />
+                  <Loader className='size-16' />
                 </motion.div>
               ) : undefined}
             </AnimatePresence>
@@ -722,7 +722,7 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
                 assemblyGear8Points={assemblyGear8Points}
                 assemblySplitRatio={assemblySplitRatio}
                 crossfadeDuration={machineTiming.crossfadeDuration}
-                className="size-full"
+                className='size-full'
                 onInteraction={handleInteraction}
                 onMorphComplete={handleMorphComplete}
                 onCrossfadeComplete={handleCrossfadeComplete}
@@ -734,12 +734,12 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
         </motion.div>
 
         {/* Tagline */}
-        <div className="relative flex h-6 w-full items-center justify-center">
-          <AnimatePresence mode="wait">
+        <div className='relative flex h-6 w-full items-center justify-center'>
+          <AnimatePresence mode='wait'>
             {showContainer && !isFading ? (
               <motion.p
                 key={currentTagline}
-                className="text-md absolute text-center whitespace-nowrap text-muted-foreground"
+                className='text-md absolute text-center whitespace-nowrap text-muted-foreground'
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
@@ -756,7 +756,9 @@ function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackCont
 }
 
 export function AuthSplashback(): React.JSX.Element {
-  const [state, send, actorRef] = useMachine(authSplashbackMachine);
+  const actorRef = useActorRef(authSplashbackMachine);
+  const state = useSelector(actorRef, (snapshot) => snapshot);
+  const { send } = actorRef;
   const derivedState = useSelector(actorRef, deriveVisibilityState);
 
   const gearFiles = useMemo(() => {
@@ -766,8 +768,8 @@ export function AuthSplashback(): React.JSX.Element {
 
   return (
     <CadPreviewProvider
-      buildId="auth-gears"
-      mainFile="main.js"
+      buildId='auth-gears'
+      mainFile='main.js'
       files={gearFiles}
       isEnabled={derivedState.showContainer}
       kernelOptions={splashbackKernelOptions}

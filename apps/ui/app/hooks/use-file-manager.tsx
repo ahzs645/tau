@@ -164,7 +164,12 @@ export function FileManagerProvider({
 
       await worker.writeFile(absolutePath, data);
 
-      fileManagerRef.send({ type: 'fileWritten', path, data, source: options.source });
+      fileManagerRef.send({
+        type: 'fileWritten',
+        path,
+        data,
+        source: options.source,
+      });
     },
     [fileManagerRef, getReadiedWorker],
   );
@@ -257,7 +262,12 @@ export function FileManagerProvider({
       const data = await worker.readFile(absoluteDestinationPath);
 
       // Single consolidated event - machine handles context update, emit, and refresh
-      fileManagerRef.send({ type: 'fileWritten', path: destinationPath, data, source: 'user' });
+      fileManagerRef.send({
+        type: 'fileWritten',
+        path: destinationPath,
+        data,
+        source: 'user',
+      });
     },
     [fileManagerRef, getReadiedWorker],
   );
@@ -275,7 +285,11 @@ export function FileManagerProvider({
       await worker.unlink(absolutePath);
 
       // Single consolidated event - machine handles optimistic delete, emit, and refresh
-      fileManagerRef.send({ type: 'fileDeleted', path, source: options.source });
+      fileManagerRef.send({
+        type: 'fileDeleted',
+        path,
+        source: options.source,
+      });
     },
     [fileManagerRef, getReadiedWorker],
   );
@@ -403,7 +417,9 @@ export function FileManagerProvider({
    */
   const selectDirectory = useCallback(async (): Promise<void> => {
     // ShowDirectoryPicker must be called from a user gesture
-    const handle = await globalThis.window.showDirectoryPicker({ mode: 'readwrite' });
+    const handle = await globalThis.window.showDirectoryPicker({
+      mode: 'readwrite',
+    });
 
     // Persist the handle for future sessions
     await storeDirectoryHandle(handle);

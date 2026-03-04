@@ -80,6 +80,7 @@ export function getFileExtension(filename: string): string {
  */
 export function isBinaryFile(filename: string, data?: Uint8Array<ArrayBuffer>): boolean {
   // Fast path: check extension
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
   const ext = getFileExtension(filename).toLowerCase();
   if (binaryExtensions.has(ext)) {
     return true;
@@ -108,7 +109,7 @@ export function isBinaryFile(filename: string, data?: Uint8Array<ArrayBuffer>): 
  * decodeTextFile(new Uint8Array([72, 101, 108, 108, 111])) // 'Hello'
  */
 export function decodeTextFile(data: Uint8Array<ArrayBuffer>): string {
-  const decoder = new TextDecoder('utf8');
+  const decoder = new TextDecoder('utf-8');
   return decoder.decode(data);
 }
 

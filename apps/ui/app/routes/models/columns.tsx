@@ -45,17 +45,17 @@ export function createColumns({ selectedModelId }: ColumnsContext): Array<Column
   return [
     {
       id: 'select',
-      header: () => <div className="w-8" />,
+      header: () => <div className='w-8' />,
       cell({ row }): ReactNode {
         const isSelected = row.original.id === selectedModelId;
         return (
-          <div className="flex w-8 items-center justify-center">
+          <div className='flex w-8 items-center justify-center'>
             {isSelected ? (
-              <div className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                <Check className="size-3" />
+              <div className='flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground'>
+                <Check className='size-3' />
               </div>
             ) : (
-              <div className="size-5 rounded-full border-2 border-muted-foreground/30" />
+              <div className='size-5 rounded-full border-2 border-muted-foreground/30' />
             )}
           </div>
         );
@@ -65,14 +65,14 @@ export function createColumns({ selectedModelId }: ColumnsContext): Array<Column
     },
     {
       accessorKey: 'name',
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Model" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title='Model' />,
       cell({ row }): ReactNode {
         const model = row.original;
         return (
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{model.name}</span>
+          <div className='flex flex-col gap-0.5'>
+            <span className='font-medium'>{model.name}</span>
             {model.description ? (
-              <span className="max-w-md truncate text-xs text-muted-foreground">{model.description}</span>
+              <span className='max-w-md truncate text-xs text-muted-foreground'>{model.description}</span>
             ) : undefined}
           </div>
         );
@@ -82,7 +82,7 @@ export function createColumns({ selectedModelId }: ColumnsContext): Array<Column
     },
     {
       accessorKey: 'provider',
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Provider" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title='Provider' />,
       cell({ row }): ReactNode {
         const { provider } = row.original;
         return <Badge variant={getProviderVariant(provider.id)}>{provider.name}</Badge>;
@@ -94,14 +94,14 @@ export function createColumns({ selectedModelId }: ColumnsContext): Array<Column
     {
       id: 'inputCost',
       accessorFn: (row) => row.details.cost?.inputTokens,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Input $/M" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title='Input $/M' />,
       cell({ row }): ReactNode {
         const cost = row.original.details.cost?.inputTokens;
         if (cost === undefined) {
-          return <span className="text-sm text-muted-foreground/50">—</span>;
+          return <span className='text-sm text-muted-foreground/50'>—</span>;
         }
 
-        return <span className="font-mono text-sm text-muted-foreground">{formatTokenCost(cost)}</span>;
+        return <span className='font-mono text-sm text-muted-foreground'>{formatTokenCost(cost)}</span>;
       },
       enableSorting: true,
       enableHiding: true,
@@ -109,14 +109,14 @@ export function createColumns({ selectedModelId }: ColumnsContext): Array<Column
     {
       id: 'outputCost',
       accessorFn: (row) => row.details.cost?.outputTokens,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Output $/M" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title='Output $/M' />,
       cell({ row }): ReactNode {
         const cost = row.original.details.cost?.outputTokens;
         if (cost === undefined) {
-          return <span className="text-sm text-muted-foreground/50">—</span>;
+          return <span className='text-sm text-muted-foreground/50'>—</span>;
         }
 
-        return <span className="font-mono text-sm text-muted-foreground">{formatTokenCost(cost)}</span>;
+        return <span className='font-mono text-sm text-muted-foreground'>{formatTokenCost(cost)}</span>;
       },
       enableSorting: true,
       enableHiding: true,
@@ -124,12 +124,12 @@ export function createColumns({ selectedModelId }: ColumnsContext): Array<Column
     {
       id: 'family',
       accessorFn: (row) => row.details.family,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Family" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title='Family' />,
       cell({ row }): ReactNode {
         const { family } = row.original.details;
         return (
           <Badge
-            variant="outline"
+            variant='outline'
             className={cn(
               'capitalize',
               family === 'claude' && 'border-orange-500/50 text-orange-500',

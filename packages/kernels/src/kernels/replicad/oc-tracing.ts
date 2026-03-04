@@ -52,7 +52,7 @@ export type OcTracingResult = {
 // Shared type guards
 // =============================================================================
 
-type GenericFunction = (...args: unknown[]) => unknown;
+type GenericFunction = (...arguments_: unknown[]) => unknown;
 type ExceptionDecoder = (ex: WebAssembly.Exception) => [string, string];
 
 function isCallable(value: unknown): value is GenericFunction {
@@ -83,7 +83,7 @@ function getExceptionDecoder(oc: OpenCascadeInstance): ExceptionDecoder | undefi
  * Converts `WebAssembly.Exception` to `OcKernelError` at the call site so the
  * JS stack trace includes user code frames.
  */
-function createRethrowFn(decoder: ExceptionDecoder | undefined): (error: unknown) => never {
+function createRethrowFunction(decoder: ExceptionDecoder | undefined): (error: unknown) => never {
   return function rethrowIfWasmException(error: unknown): never {
     if (
       typeof decoder === 'function' &&
@@ -112,8 +112,7 @@ function createRethrowFn(decoder: ExceptionDecoder | undefined): (error: unknown
  * calls are intercepted for exception conversion.
  */
 function isEmscriptenRecord(value: unknown): value is Record<string, unknown> & { delete(): void } {
-  // eslint-disable-next-line @typescript-eslint/dot-notation -- 'delete' is a reserved keyword, dot notation fails
-  return typeof value === 'object' && value !== null && 'delete' in value && typeof value['delete'] === 'function';
+  return typeof value === 'object' && value !== null && 'delete' in value && typeof value.delete === 'function';
 }
 
 function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => never): (value: unknown) => unknown {
@@ -141,7 +140,9 @@ function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => nev
         };
 
         const className = (target as { constructor?: { name?: string } }).constructor?.name ?? 'OC';
-        Object.defineProperty(wrapper, 'name', { value: `${className}.${String(property)}` });
+        Object.defineProperty(wrapper, 'name', {
+          value: `${className}.${String(property)}`,
+        });
         return wrapper;
       },
     });
@@ -170,7 +171,7 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
     return oc;
   }
 
-  const rethrowIfWasmException = createRethrowFn(decoder);
+  const rethrowIfWasmException = createRethrowFunction(decoder);
   const wrapEmscriptenResult = createEmscriptenWrapper(rethrowIfWasmException);
 
   const cache = new Map<string, unknown>();
@@ -240,7 +241,7 @@ export function wrapOcWithTracing(
   const stats = new Map<string, ClassStats>();
 
   const decoder = getExceptionDecoder(oc);
-  const rethrowIfWasmException = createRethrowFn(decoder);
+  const rethrowIfWasmException = createRethrowFunction(decoder);
   const wrapEmscriptenResult = createEmscriptenWrapper(rethrowIfWasmException);
 
   function recordSummaryCall(className: string, durationMs: number): void {
@@ -253,12 +254,12 @@ export function wrapOcWithTracing(
     }
   }
 
-  function wrapFunctionForSummary(fn: GenericFunction, className: string): GenericFunction {
-    return new Proxy(fn, {
-      construct(target, args, newTarget) {
+  function wrapFunctionForSummary(function_: GenericFunction, className: string): GenericFunction {
+    return new Proxy(function_, {
+      construct(target, arguments_, newTarget) {
         const start = performance.now();
         try {
-          const result: unknown = Reflect.construct(target, args, newTarget);
+          const result: unknown = Reflect.construct(target, arguments_, newTarget);
           recordSummaryCall(className, performance.now() - start);
           return wrapEmscriptenResult(result) as Record<string, unknown>;
         } catch (error: unknown) {
@@ -266,10 +267,10 @@ export function wrapOcWithTracing(
           return rethrowIfWasmException(error);
         }
       },
-      apply(target, thisArg, args) {
+      apply(target, thisArgument, args) {
         const start = performance.now();
         try {
-          const result: unknown = Reflect.apply(target, thisArg, args);
+          const result: unknown = Reflect.apply(target, thisArgument, args);
           recordSummaryCall(className, performance.now() - start);
           return wrapEmscriptenResult(result);
         } catch (error: unknown) {
@@ -280,22 +281,24 @@ export function wrapOcWithTracing(
     });
   }
 
-  function wrapFunctionForPerCall(fn: GenericFunction, className: string): GenericFunction {
-    return new Proxy(fn, {
-      construct(target, args, newTarget) {
-        const span = tracer.startSpan(`oc.${className}`, { method: 'constructor' });
+  function wrapFunctionForPerCall(function_: GenericFunction, className: string): GenericFunction {
+    return new Proxy(function_, {
+      construct(target, arguments_, newTarget) {
+        const span = tracer.startSpan(`oc.${className}`, {
+          method: 'constructor',
+        });
         try {
-          return wrapEmscriptenResult(Reflect.construct(target, args, newTarget)) as Record<string, unknown>;
+          return wrapEmscriptenResult(Reflect.construct(target, arguments_, newTarget)) as Record<string, unknown>;
         } catch (error: unknown) {
           return rethrowIfWasmException(error);
         } finally {
           span.end();
         }
       },
-      apply(target, thisArg, args) {
+      apply(target, thisArgument, args) {
         const span = tracer.startSpan(`oc.${className}`, { method: 'apply' });
         try {
-          return wrapEmscriptenResult(Reflect.apply(target, thisArg, args));
+          return wrapEmscriptenResult(Reflect.apply(target, thisArgument, args));
         } catch (error: unknown) {
           return rethrowIfWasmException(error);
         } finally {

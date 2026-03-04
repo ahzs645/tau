@@ -16,23 +16,23 @@ import { InlineTextEditor } from '#components/inline-text-editor.js';
 // Rename component for table cells
 function BuildNameCell({ build, actions }: { readonly build: Build; readonly actions: BuildActions }) {
   return (
-    <div className="flex w-full items-center justify-between gap-3 pr-2">
-      <div className="flex items-center gap-3">
-        <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-full">
+    <div className='flex w-full items-center justify-between gap-3 pr-2'>
+      <div className='flex items-center gap-3'>
+        <div className='relative h-9 w-9 shrink-0 overflow-hidden rounded-full'>
           <img
             src={build.thumbnail || '/placeholder.svg'}
             alt={build.name}
-            className="absolute inset-0 h-full w-full object-cover"
+            className='absolute inset-0 h-full w-full object-cover'
           />
           {!build.thumbnail && !build.author.avatar && (
-            <div className="absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground">
+            <div className='absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground'>
               {build.name.charAt(0)}
             </div>
           )}
         </div>
         <InlineTextEditor
           value={build.name}
-          className="h-7 [&_[data-slot=button]]:font-medium"
+          className='h-7 [&_[data-slot=button]]:font-medium'
           onSave={async (value) => actions.handleRename(build.id, value)}
         />
       </div>
@@ -45,10 +45,10 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
   {
     id: 'select',
     header: ({ table }) => (
-      <div className="pl-2">
+      <div className='pl-2'>
         <Checkbox
           checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && 'indeterminate')}
-          aria-label="Select all"
+          aria-label='Select all'
           onCheckedChange={(value) => {
             table.toggleAllPageRowsSelected(Boolean(value));
           }}
@@ -56,10 +56,10 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
       </div>
     ),
     cell: ({ row }) => (
-      <div className="pl-2">
+      <div className='pl-2'>
         <Checkbox
           checked={row.getIsSelected()}
-          aria-label="Select row"
+          aria-label='Select row'
           onCheckedChange={(value) => {
             row.toggleSelected(Boolean(value));
           }}
@@ -70,7 +70,7 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
   },
   {
     accessorKey: 'name',
-    header: ({ column }) => <DataTableColumnHeader column={column} title="Name" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Name' />,
     cell({ row }): ReactNode {
       return <BuildNameCell build={row.original} actions={actions} />;
     },
@@ -79,19 +79,19 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
   },
   {
     accessorKey: 'description',
-    header: ({ column }) => <DataTableColumnHeader column={column} title="Description" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Description' />,
     cell({ row }): ReactNode {
-      return <div className="max-w-xs truncate">{row.original.description}</div>;
+      return <div className='max-w-xs truncate'>{row.original.description}</div>;
     },
     enableHiding: true,
   },
   {
     accessorKey: 'assets',
-    header: ({ column }) => <DataTableColumnHeader column={column} title="Assets" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Assets' />,
     cell({ row }): ReactNode {
       const build = row.original;
       return (
-        <div className="flex flex-wrap gap-2">
+        <div className='flex flex-wrap gap-2'>
           {(Object.keys(build.assets) as EngineeringDiscipline[]).map((cat) => (
             <CategoryBadge key={cat} category={cat} />
           ))}
@@ -103,7 +103,7 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
   },
   {
     accessorKey: 'updatedAt',
-    header: ({ column }) => <DataTableColumnHeader column={column} title="Last Updated" />,
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Last Updated' />,
     cell({ row }): ReactNode {
       return <div>{formatRelativeTime(row.original.updatedAt)}</div>;
     },
@@ -117,11 +117,11 @@ export const createColumns = (actions: BuildActions): Array<ColumnDef<Build>> =>
       const isDeleted = Boolean(build.deletedAt);
 
       return (
-        <div className="flex items-center justify-end gap-2">
+        <div className='flex items-center justify-end gap-2'>
           <BuildActionDropdown build={build} actions={actions} />
 
           {!isDeleted && (
-            <Button asChild variant="outline" size="sm" className="ml-auto flex items-center gap-1">
+            <Button asChild variant='outline' size='sm' className='ml-auto flex items-center gap-1'>
               <NavLink to={`/builds/${build.id}`}>
                 {({ isPending }) =>
                   isPending ? (

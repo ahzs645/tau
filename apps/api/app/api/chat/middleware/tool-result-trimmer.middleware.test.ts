@@ -31,6 +31,8 @@ function createTestModelOutput(failures: TestFailure[], passed: number): TestMod
  * @param failures - Array of test failures
  * @param passed - Number of passed tests
  * @param options - Additional options
+ * @param options.includeName - Whether to include the tool name
+ * @param options.toolCallId - The tool call ID
  */
 function createTestModelToolMessage(
   failures: TestFailure[],

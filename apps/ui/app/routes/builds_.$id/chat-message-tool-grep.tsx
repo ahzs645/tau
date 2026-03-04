@@ -22,7 +22,7 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
       const pattern = input?.pattern ?? 'pattern';
 
       return (
-        <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
               <ChatToolAction>Searching for</ChatToolAction>{' '}
@@ -49,12 +49,12 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
       }
 
       return (
-        <ChatToolCard variant="minimal" status="ready" isDefaultOpen={false}>
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Search} />
             <ChatToolCardTitle>
               <ChatToolAction>
-                <span className="font-mono">/{pattern}/</span>
+                <span className='font-mono'>/{pattern}/</span>
               </ChatToolAction>{' '}
               <ChatToolDescription>
                 ({totalMatches} match{totalMatches === 1 ? '' : 'es'}
@@ -63,26 +63,26 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
-            <ChatToolCardList maxHeight="max-h-40">
+            <ChatToolCardList maxHeight='max-h-40'>
               {matches.length === 0 ? (
-                <ChatToolCardListItem className="text-muted-foreground/70 italic">
+                <ChatToolCardListItem className='text-muted-foreground/70 italic'>
                   No matches found
                 </ChatToolCardListItem>
               ) : (
                 [...matchesByFile.entries()].slice(0, 5).map(([file, fileMatches]) => (
-                  <div key={file} className="py-1">
-                    <div className="text-xs font-medium text-foreground/80">{file}</div>
+                  <div key={file} className='py-1'>
+                    <div className='text-xs font-medium text-foreground/80'>{file}</div>
                     {fileMatches.slice(0, 3).map((match) => (
                       <div
                         key={`${match.file}:${match.line}`}
-                        className="flex gap-2 pl-2 text-xs text-muted-foreground"
+                        className='flex gap-2 pl-2 text-xs text-muted-foreground'
                       >
-                        <span className="shrink-0 font-mono opacity-60">{match.line}:</span>
-                        <span className="truncate font-mono">{match.content.trim()}</span>
+                        <span className='shrink-0 font-mono opacity-60'>{match.line}:</span>
+                        <span className='truncate font-mono'>{match.content.trim()}</span>
                       </div>
                     ))}
                     {fileMatches.length > 3 ? (
-                      <div className="pl-2 text-xs text-muted-foreground/70 italic">
+                      <div className='pl-2 text-xs text-muted-foreground/70 italic'>
                         ... {fileMatches.length - 3} more matches
                       </div>
                     ) : undefined}
@@ -90,7 +90,7 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
                 ))
               )}
               {matchesByFile.size > 5 ? (
-                <ChatToolCardListItem className="text-muted-foreground/70 italic">
+                <ChatToolCardListItem className='text-muted-foreground/70 italic'>
                   ... {matchesByFile.size - 5} more files
                 </ChatToolCardListItem>
               ) : undefined}
@@ -101,7 +101,7 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Search} fallbackTitle="Search failed" />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Search} fallbackTitle='Search failed' />;
     }
 
     case 'approval-requested':

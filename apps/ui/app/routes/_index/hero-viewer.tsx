@@ -144,36 +144,36 @@ function HeroViewerInner(): React.JSX.Element {
   const canExport = geometries.length > 0;
 
   return (
-    <div className="space-y-6">
+    <div className='space-y-6'>
       {/* Hero Text */}
-      <div className="text-center">
-        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">See It in Action</h2>
-        <p className="mt-2 text-muted-foreground">
+      <div className='text-center'>
+        <h2 className='text-2xl font-semibold tracking-tight md:text-3xl'>See It in Action</h2>
+        <p className='mt-2 text-muted-foreground'>
           Tweak parameters, watch the model update instantly, then export to any format.
         </p>
-        <p className="mt-1 text-sm text-muted-foreground/70">Try scanning the QR code with your phone!</p>
+        <p className='mt-1 text-sm text-muted-foreground/70'>Try scanning the QR code with your phone!</p>
       </div>
 
-      <div className="flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row">
+      <div className='flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row'>
         {/* 3D Viewer */}
-        <div className="relative h-[300px] md:h-full md:flex-1">
-          <CadPreviewStatus className="top-auto right-4 bottom-4" />
+        <div className='relative h-[300px] md:h-full md:flex-1'>
+          <CadPreviewStatus className='top-auto right-4 bottom-4' />
 
           {/* Continue in Editor Button */}
           <Button
-            variant="outline"
-            size="sm"
-            className="absolute top-2 right-2 z-10 gap-1.5 bg-background/80 backdrop-blur-sm"
+            variant='outline'
+            size='sm'
+            className='absolute top-2 right-2 z-10 gap-1.5 bg-background/80 backdrop-blur-sm'
             disabled={isCreatingBuild}
             onClick={handleContinueInEditor}
           >
             <span>Continue in Editor</span>
-            {isCreatingBuild ? <Loader className="size-4" /> : <ArrowUpRight className="size-4" />}
+            {isCreatingBuild ? <Loader className='size-4' /> : <ArrowUpRight className='size-4' />}
           </Button>
 
           <CadPreviewViewer
             enablePan
-            className="size-full"
+            className='size-full'
             stageOptions={{ zoomLevel: 1.2 }}
             graphicsOptions={{ enableGrid: true, enableAxes: true }}
           />
@@ -181,30 +181,30 @@ function HeroViewerInner(): React.JSX.Element {
 
         {/* Parameters Panel */}
         {hasParameters ? (
-          <div className="border-t bg-background md:w-80 md:border-t-0 md:border-l">
-            <div className="flex h-full flex-col">
-              <div className="border-b p-3">
-                <h3 className="text-sm font-semibold">Parameters</h3>
-                <p className="text-xs text-muted-foreground">Adjust the QR code settings</p>
+          <div className='border-t bg-background md:w-80 md:border-t-0 md:border-l'>
+            <div className='flex h-full flex-col'>
+              <div className='border-b p-3'>
+                <h3 className='text-sm font-semibold'>Parameters</h3>
+                <p className='text-xs text-muted-foreground'>Adjust the QR code settings</p>
               </div>
-              <div className="h-[280px] overflow-hidden md:h-auto md:flex-1">
+              <div className='h-[280px] overflow-hidden md:h-auto md:flex-1'>
                 <Parameters
                   isInitialExpanded={false}
                   parameters={parameters}
                   defaultParameters={defaultParameters}
                   jsonSchema={jsonSchema}
                   units={units}
-                  emptyDescription="Loading parameters..."
+                  emptyDescription='Loading parameters...'
                   onParametersChange={handleParametersChange}
                 />
               </div>
               {/* Export Controls */}
-              <div className="border-t p-3">
-                <div className="flex items-center gap-2">
+              <div className='border-t p-3'>
+                <div className='flex items-center gap-2'>
                   <ComboBoxResponsive
-                    searchPlaceHolder="Search formats..."
-                    title="Export Format"
-                    description="Select a format to export the model"
+                    searchPlaceHolder='Search formats...'
+                    title='Export Format'
+                    description='Select a format to export the model'
                     groupedItems={[
                       {
                         name: 'Formats',
@@ -214,32 +214,32 @@ function HeroViewerInner(): React.JSX.Element {
                     defaultValue={selectedFormat}
                     getValue={(item) => item.format}
                     renderLabel={(item, selected) => (
-                      <span className="flex w-full items-center justify-between">
-                        <span className="flex items-center gap-2">
-                          <FileExtensionIcon filename={`file.${item.format}`} className="size-4" />
+                      <span className='flex w-full items-center justify-between'>
+                        <span className='flex items-center gap-2'>
+                          <FileExtensionIcon filename={`file.${item.format}`} className='size-4' />
                           <span>{item.label}</span>
                         </span>
-                        {selected?.format === item.format ? <Check className="size-4" /> : null}
+                        {selected?.format === item.format ? <Check className='size-4' /> : null}
                       </span>
                     )}
-                    className="min-w-0 flex-1"
+                    className='min-w-0 flex-1'
                     isSearchEnabled={false}
                     onSelect={handleFormatSelect}
                   >
-                    <Button variant="outline" size="sm" className="min-w-0 grow justify-start gap-2">
-                      <FileExtensionIcon filename={`file.${selectedFormat.format}`} className="size-4 shrink-0" />
-                      <span className="truncate">{selectedFormat.label}</span>
-                      <ChevronDown className="ml-auto size-3 shrink-0 opacity-50" />
+                    <Button variant='outline' size='sm' className='min-w-0 grow justify-start gap-2'>
+                      <FileExtensionIcon filename={`file.${selectedFormat.format}`} className='size-4 shrink-0' />
+                      <span className='truncate'>{selectedFormat.label}</span>
+                      <ChevronDown className='ml-auto size-3 shrink-0 opacity-50' />
                     </Button>
                   </ComboBoxResponsive>
                   <Button
-                    size="sm"
-                    className="shrink-0"
+                    size='sm'
+                    className='shrink-0'
                     disabled={!canExport}
                     title={canExport ? `Download as ${selectedFormat.label}` : 'Model not ready'}
                     onClick={handleExport}
                   >
-                    <Download className="size-4" />
+                    <Download className='size-4' />
                   </Button>
                 </div>
               </div>

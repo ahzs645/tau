@@ -205,11 +205,11 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
  * ```
  */
 export class OpenScadStderrParser {
-  /* eslint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
+  /* oxlint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
   private readonly addError: AddErrorFn;
   private readonly getFileContents?: GetFileContentsFn;
   private readonly mainFilePath?: string;
-  /* eslint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
+  /* oxlint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
 
   /** Reference to the last error added, so TRACE lines can append stack frames to it. */
   private lastError: KernelIssue | undefined;
@@ -462,7 +462,14 @@ export class OpenScadStderrParser {
   private buildIncludeChain(topLevelFile: string, errorFile: string): KernelStackFrame[] {
     if (!this.getFileContents) {
       // Without file contents, we can only show the top-level file
-      return [{ functionName: 'include', fileName: topLevelFile, lineNumber: 1, context: 'user' as const }];
+      return [
+        {
+          functionName: 'include',
+          fileName: topLevelFile,
+          lineNumber: 1,
+          context: 'user' as const,
+        },
+      ];
     }
 
     // Walk from topLevelFile, following include/use directives toward errorFile.
@@ -473,7 +480,12 @@ export class OpenScadStderrParser {
       // Couldn't trace the chain — fall back to showing just the top-level file
       const directLine = this.findIncludeLineInFile(topLevelFile, errorFile);
       return [
-        { functionName: 'include', fileName: topLevelFile, lineNumber: directLine ?? 1, context: 'user' as const },
+        {
+          functionName: 'include',
+          fileName: topLevelFile,
+          lineNumber: directLine ?? 1,
+          context: 'user' as const,
+        },
       ];
     }
 
@@ -492,7 +504,10 @@ export class OpenScadStderrParser {
     const targetBasename = getBasename(targetFile);
 
     // Each entry: [currentFile, path of (parentFile, lineNumber) pairs leading here]
-    type BfsEntry = { file: string; path: Array<{ file: string; line: number }> };
+    type BfsEntry = {
+      file: string;
+      path: Array<{ file: string; line: number }>;
+    };
     const queue: BfsEntry[] = [{ file: startFile, path: [] }];
     const visited = new Set<string>([startFile]);
 

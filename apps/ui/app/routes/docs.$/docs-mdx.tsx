@@ -26,7 +26,7 @@ export function getMdxComponents(): MDXComponents {
       const text = extractTextFromChildren(children).replace(/\n$/, '');
 
       return (
-        <DocsCodeBlock className="bg-muted/60" title={title} text={text}>
+        <DocsCodeBlock className='bg-muted/60' title={title} text={text}>
           <Pre {...properties} language={language} />
         </DocsCodeBlock>
       );

@@ -88,11 +88,11 @@ export function DateRangePicker({
     <Popover>
       <PopoverTrigger asChild>
         <Button
-          variant="outline"
+          variant='outline'
           disabled={isDisabled}
           className={cn('justify-start px-2.5 font-normal', !date && 'text-muted-foreground', className)}
         >
-          <CalendarIcon className="mr-2 size-4" />
+          <CalendarIcon className='mr-2 size-4' />
           {date?.from ? (
             date.to ? (
               <>
@@ -106,16 +106,16 @@ export function DateRangePicker({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align={align}>
+      <PopoverContent className='w-auto p-0' align={align}>
         {withPresets && presets.length > 0 ? (
-          <div className="flex flex-col gap-2 border-b p-3">
-            <div className="flex flex-wrap gap-2">
+          <div className='flex flex-col gap-2 border-b p-3'>
+            <div className='flex flex-wrap gap-2'>
               {presets.map((preset) => (
                 <Button
                   key={preset.label}
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
+                  variant='outline'
+                  size='sm'
+                  className='h-7 text-xs'
                   onClick={() => {
                     handlePresetClick(preset);
                   }}
@@ -124,9 +124,9 @@ export function DateRangePicker({
                 </Button>
               ))}
               <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs text-muted-foreground"
+                variant='ghost'
+                size='sm'
+                className='h-7 text-xs text-muted-foreground'
                 onClick={() => {
                   setDate(undefined);
                 }}
@@ -137,7 +137,7 @@ export function DateRangePicker({
           </div>
         ) : undefined}
         <Calendar
-          mode="range"
+          mode='range'
           defaultMonth={date?.from}
           selected={date}
           numberOfMonths={2}

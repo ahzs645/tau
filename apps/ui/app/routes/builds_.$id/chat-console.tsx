@@ -67,14 +67,14 @@ function ComponentBadge({ origin, searchTerm }: { readonly origin?: LogOrigin; r
 
   return (
     <Badge
-      className="rounded-sm rounded-xs px-0.5 py-0 text-xs font-normal"
-      variant="outline"
+      className='rounded-sm rounded-xs px-0.5 py-0 text-xs font-normal'
+      variant='outline'
       style={{
         borderColor: bgColor,
         backgroundColor: bgColor,
       }}
     >
-      <span className="inline-block whitespace-nowrap">
+      <span className='inline-block whitespace-nowrap'>
         <HighlightText text={origin.component} searchTerm={searchTerm} />
       </span>
     </Badge>
@@ -155,7 +155,7 @@ export const ChatConsole = memo(function ({
   // Snapshot logs only when version changes
   const allLogs = useMemo(
     () => logRef.getSnapshot().context.logBuffer.toArray(),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- logVersion tracks buffer mutations
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- logVersion tracks buffer mutations
     [logRef, logVersion],
   );
 
@@ -240,46 +240,46 @@ export const ChatConsole = memo(function ({
       )}
       {...properties}
     >
-      <div className="sticky top-0 flex flex-row gap-2 border-b bg-sidebar p-2 text-muted-foreground">
+      <div className='sticky top-0 flex flex-row gap-2 border-b bg-sidebar p-2 text-muted-foreground'>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              variant="outline"
-              className="size-7 gap-1 has-[>svg]:px-2 @xs/console:w-fit"
+              variant='outline'
+              className='size-7 gap-1 has-[>svg]:px-2 @xs/console:w-fit'
               onClick={(event) => onButtonClick?.(event)}
             >
-              <span className="hidden font-normal @xs/console:block">Console</span>
+              <span className='hidden font-normal @xs/console:block'>Console</span>
               <ChevronsDown
                 // IMPORTANT: Update this when collapsedConsoleSize changes
-                className={`transition-transform duration-200 ease-in-out group-data-[panel-size="4.0"]/console-resizable:rotate-180`}
+                className='transition-transform duration-200 ease-in-out group-data-[panel-size="4.0"]/console-resizable:rotate-180'
               />
             </Button>
           </TooltipTrigger>
           <TooltipContent>
             Toggle console
             {keyCombination ? (
-              <KeyShortcut variant="tooltip" className="ml-1">
+              <KeyShortcut variant='tooltip' className='ml-1'>
                 {keyCombination}
               </KeyShortcut>
             ) : null}
           </TooltipContent>
         </Tooltip>
         <SearchInput
-          autoComplete="off"
-          className="h-7 w-full bg-background"
-          placeholder="Filter logs..."
+          autoComplete='off'
+          className='h-7 w-full bg-background'
+          placeholder='Filter logs...'
           value={filter}
           onChange={handleFilterChange}
           onClear={handleClearFilter}
         />
 
-        <div className="flex flex-row gap-2">
+        <div className='flex flex-row gap-2'>
           {/* Verbosity filter dropdown */}
           <DropdownMenu modal={false}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" className={cn('size-7 gap-2 [&>svg]:size-3')}>
+                  <Button variant='outline' size='icon' className={cn('size-7 gap-2 [&>svg]:size-3')}>
                     <Filter />
                   </Button>
                 </DropdownMenuTrigger>
@@ -288,7 +288,7 @@ export const ChatConsole = memo(function ({
                 <span>Filter by log level</span>
               </TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align='end'>
               <DropdownMenuLabel>Log Levels</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {Object.values(logLevels).map((level) => (
@@ -313,7 +313,7 @@ export const ChatConsole = memo(function ({
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" className={cn('size-7 gap-2 [&>svg]:size-3')}>
+                  <Button variant='outline' size='icon' className={cn('size-7 gap-2 [&>svg]:size-3')}>
                     <Settings />
                   </Button>
                 </DropdownMenuTrigger>
@@ -322,7 +322,7 @@ export const ChatConsole = memo(function ({
                 <span>Console settings</span>
               </TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align='end' className='w-56'>
               <DropdownMenuLabel>Display Options</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {(Object.keys(defaultDisplayConfig) as Array<keyof typeof defaultDisplayConfig>).map((key) => (
@@ -345,8 +345,8 @@ export const ChatConsole = memo(function ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="outline"
-                size="icon"
+                variant='outline'
+                size='icon'
                 className={cn('size-7 gap-2 [&>svg]:size-3')}
                 onClick={handleClearLogs}
               >
@@ -357,7 +357,7 @@ export const ChatConsole = memo(function ({
           </Tooltip>
         </div>
       </div>
-      <div className="flex min-h-0 grow flex-col-reverse gap-0.25 overflow-x-hidden overflow-y-auto bg-background p-2">
+      <div className='flex min-h-0 grow flex-col-reverse gap-0.25 overflow-x-hidden overflow-y-auto bg-background p-2'>
         {/* Display console logs */}
         {filteredLogs.length > 0 ? (
           filteredLogs.map((log) => (
@@ -372,26 +372,26 @@ export const ChatConsole = memo(function ({
                 'bg-feature/10 text-feature hover:bg-feature/20': log.level === logLevels.trace,
               })}
             >
-              <span className="flex flex-wrap items-baseline gap-2">
+              <span className='flex flex-wrap items-baseline gap-2'>
                 {displayConfig.showTimestamp ? (
-                  <span className="shrink-0 opacity-60">
+                  <span className='shrink-0 opacity-60'>
                     [<HighlightText text={formatTimestamp(log.timestamp)} searchTerm={filter} />]
                   </span>
                 ) : null}
                 {displayConfig.showComponent ? <ComponentBadge origin={log.origin} searchTerm={filter} /> : null}
-                <span className="mr-auto break-all">
+                <span className='mr-auto break-all'>
                   <HighlightText text={log.message} searchTerm={filter} />
                 </span>
               </span>
               {log.data !== undefined && displayConfig.showData ? (
-                <span className="block break-all">
+                <span className='block break-all'>
                   <HighlightText text={JSON.stringify(log.data, undefined, 2)} searchTerm={filter} />
                 </span>
               ) : null}
             </pre>
           ))
         ) : (
-          <EmptyItems className="m-0">No logs to display</EmptyItems>
+          <EmptyItems className='m-0'>No logs to display</EmptyItems>
         )}
       </div>
     </div>

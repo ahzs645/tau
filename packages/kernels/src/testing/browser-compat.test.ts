@@ -10,27 +10,27 @@ import { describe, it, expect } from 'vitest';
 
 describe('Browser compatibility (jsdom)', () => {
   it('should import the main entry point without errors', async () => {
-    const mod = await import('#index.js');
-    expect(mod.presets).toBeDefined();
-    expect(mod.createBridgePort).toBeTypeOf('function');
-    expect(mod.createKernelSuccess).toBeTypeOf('function');
-    expect(mod.createKernelError).toBeTypeOf('function');
-    expect(mod.fromFsLike).toBeTypeOf('function');
+    const module_ = await import('#index.js');
+    expect(module_.presets).toBeDefined();
+    expect(module_.createBridgePort).toBeTypeOf('function');
+    expect(module_.createKernelSuccess).toBeTypeOf('function');
+    expect(module_.createKernelError).toBeTypeOf('function');
+    expect(module_.fromFsLike).toBeTypeOf('function');
   });
 
   it('should import the filesystem subpath without errors', async () => {
-    const mod = await import('#filesystem/index.js');
-    expect(mod.exposeFileSystem).toBeTypeOf('function');
-    expect(mod.createFileSystemBridge).toBeTypeOf('function');
-    expect(mod.createBridgeServer).toBeTypeOf('function');
-    expect(mod.createBridgeProxy).toBeTypeOf('function');
-    expect(mod.createBridgePort).toBeTypeOf('function');
+    const module_ = await import('#filesystem/index.js');
+    expect(module_.exposeFileSystem).toBeTypeOf('function');
+    expect(module_.createFileSystemBridge).toBeTypeOf('function');
+    expect(module_.createBridgeServer).toBeTypeOf('function');
+    expect(module_.createBridgeProxy).toBeTypeOf('function');
+    expect(module_.createBridgePort).toBeTypeOf('function');
   });
 
   it('should import the middleware entry point without errors', async () => {
-    const mod = await import('#middleware/kernel-middleware.js');
-    expect(mod.defineMiddleware).toBeTypeOf('function');
-    expect(mod.createMiddlewareRuntime).toBeTypeOf('function');
+    const module_ = await import('#middleware/kernel-middleware.js');
+    expect(module_.defineMiddleware).toBeTypeOf('function');
+    expect(module_.createMiddlewareRuntime).toBeTypeOf('function');
   });
 
   it('presets.all() should return valid plugin configuration', async () => {

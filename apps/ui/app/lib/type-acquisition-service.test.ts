@@ -174,7 +174,7 @@ function createMockMonaco(): {
 vi.mock('es-module-lexer', () => {
   let initialized = false;
   return {
-    // eslint-disable-next-line promise/prefer-await-to-then -- test setup
+    // oxlint-disable-next-line promise/prefer-await-to-then -- test setup
     init: Promise.resolve().then(() => {
       initialized = true;
     }),
@@ -185,7 +185,7 @@ vi.mock('es-module-lexer', () => {
 
       // Simple regex-based import parser for tests
       const imports: Array<{ n: string; s: number; e: number; ss: number; se: number; d: number }> = [];
-      const importRegex = /import\s+(?:.*?\s+from\s+)?['"]([^'"]+)['"]/g;
+      const importRegex = /import\s+(?:.*?\s+from\s+)?["']([^"']+)["']/g;
       let match;
 
       while ((match = importRegex.exec(code)) !== null) {
@@ -466,7 +466,7 @@ describe('TypeAcquisitionService', () => {
       // Should fetch 'lodash' not 'lodash/debounce'
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/lodash',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -493,7 +493,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/@jscad/modeling',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -613,7 +613,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/lodash',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -647,7 +647,7 @@ describe('TypeAcquisitionService', () => {
       expect(mockFetch).toHaveBeenNthCalledWith(
         2,
         'https://esm.sh/v135/lodash@4.17.21/index.d.ts',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -852,7 +852,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.any(String),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1072,7 +1072,7 @@ describe('TypeAcquisitionService', () => {
       // Should have fetched types for the package
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/replicad-decorate',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1172,7 +1172,7 @@ describe('TypeAcquisitionService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/replicad-decorate',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1200,7 +1200,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/@jscad/modeling',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1323,7 +1323,7 @@ describe('TypeAcquisitionService', () => {
       // Should have fetched types for the package via esm.sh
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/qrcode-generator',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 

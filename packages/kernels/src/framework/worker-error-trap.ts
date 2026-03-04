@@ -100,13 +100,13 @@ function createNodeTrap(promise: Promise<never>, onRejection: (reason: unknown) 
     onRejection(reason);
   };
 
-  // eslint-disable-next-line n/prefer-global/process -- guarded by isNode()
+  // oxlint-disable-next-line n/prefer-global/process -- guarded by isNode()
   process.on('unhandledRejection', handler);
 
   return {
     promise,
     cleanup() {
-      // eslint-disable-next-line n/prefer-global/process -- guarded by isNode()
+      // oxlint-disable-next-line n/prefer-global/process -- guarded by isNode()
       process.off('unhandledRejection', handler);
     },
   };

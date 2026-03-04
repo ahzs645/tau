@@ -34,7 +34,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -55,7 +55,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={45}
             defaultValue={45}
-            descriptor="angle"
+            descriptor='angle'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -73,7 +73,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={5}
             defaultValue={5}
-            descriptor="count"
+            descriptor='count'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -92,7 +92,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={1.5}
             defaultValue={1.5}
-            descriptor="unitless"
+            descriptor='unitless'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -113,7 +113,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={25.4}
             defaultValue={25.4}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -136,7 +136,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -159,7 +159,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={25.4}
             defaultValue={25.4}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -182,7 +182,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={25.4}
             defaultValue={25.4}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -209,7 +209,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={123.456}
             defaultValue={123.456}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -231,7 +231,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={50}
             defaultValue={50}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -253,7 +253,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={50}
             defaultValue={50}
-            descriptor="length"
+            descriptor='length'
             min={10}
             max={100}
             units={defaultUnits}
@@ -276,7 +276,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={0}
             defaultValue={0}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -298,7 +298,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={-50}
             defaultValue={-50}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -322,7 +322,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={254}
             defaultValue={254}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -347,7 +347,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -371,7 +371,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -406,7 +406,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={inchUnits}
             onChange={mockOnChange}
           />
@@ -437,7 +437,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={25.4}
             defaultValue={25.4}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -466,7 +466,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={25.4}
             defaultValue={25.4}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -502,7 +502,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={12.7}
             defaultValue={12.7}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -531,7 +531,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={304.8}
             defaultValue={304.8}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -561,7 +561,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -585,7 +585,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -609,7 +609,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -651,7 +651,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -685,7 +685,7 @@ describe('ParametersNumber', () => {
             disabled
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -710,7 +710,7 @@ describe('ParametersNumber', () => {
             disabled
             value={10}
             defaultValue={10}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />
@@ -737,7 +737,7 @@ describe('ParametersNumber', () => {
           <ParametersNumber
             value={0.1}
             defaultValue={0.1}
-            descriptor="length"
+            descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
           />

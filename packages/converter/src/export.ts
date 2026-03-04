@@ -14,12 +14,18 @@ const exportConfigs = {
   fbx: { exporter: new AssimpExporter().initialize({ format: 'fbx' }) },
   glb: { exporter: new GltfExporter().initialize({ binary: true }) },
   gltf: { exporter: new GltfExporter().initialize({ binary: false }) },
+  // eslint-disable-next-line id-denylist -- obj is valid file format identifier
   obj: { exporter: new AssimpExporter().initialize({ format: 'obj' }) },
   ply: { exporter: new AssimpExporter().initialize({ format: 'ply' }) },
   stl: { exporter: new AssimpExporter().initialize({ format: 'stl' }) },
   // These formats are intentionally different. `step` is the most widely used extension,
   // whilst `stp` is the format supported by assimp.
-  step: { exporter: new AssimpExporter().initialize({ format: 'stp', targetExtension: 'step' }) },
+  step: {
+    exporter: new AssimpExporter().initialize({
+      format: 'stp',
+      targetExtension: 'step',
+    }),
+  },
   usda: { exporter: new AssimpExporter().initialize({ format: 'usda' }) },
   usdz: { exporter: new AssimpExporter().initialize({ format: 'usdz' }) },
   x: { exporter: new AssimpExporter().initialize({ format: 'x' }) },

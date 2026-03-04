@@ -8,12 +8,12 @@ export const mobileDrawerSnapPoints: Array<number | string> = [0.5, 0.85];
 export type PreviewState = {
   activeTab: PreviewTab;
   drawerOpen: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   activeSnapPoint: number | string | null;
   snapPoints: Array<number | string>;
   handleTabChange: (value: string) => void;
   handleDrawerChange: (value: boolean) => void;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   handleSnapChange: (value: number | string | null) => void;
 };
 
@@ -23,7 +23,7 @@ export type PreviewState = {
 export function usePreviewState(): PreviewState {
   const [activeTab, setActiveTab] = useState<PreviewTab>('model');
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   const [snapPoint, setSnapPoint] = useState<number | string | null>(mobileDrawerSnapPoints[0]!);
 
   const handleDrawerChange = (value: boolean): void => {
@@ -47,7 +47,7 @@ export function usePreviewState(): PreviewState {
     }
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   const handleSnapChange = (value: number | string | null): void => {
     setSnapPoint(value);
   };

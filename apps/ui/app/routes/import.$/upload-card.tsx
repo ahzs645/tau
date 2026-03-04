@@ -152,25 +152,25 @@ export function UploadCard({
       <input
         ref={folderInputRef}
         multiple
-        type="file"
+        type='file'
         disabled={isDisabled}
-        className="hidden"
+        className='hidden'
         // @ts-expect-error -- webkitdirectory is not in the standard types
-        webkitdirectory="true"
+        webkitdirectory='true'
         onChange={handleFolderChange}
       />
       <input
         ref={fileInputRef}
         multiple
-        type="file"
-        className="hidden"
+        type='file'
+        className='hidden'
         accept={importFileAcceptString}
         disabled={isDisabled}
         onChange={handleFileChange}
       />
 
       {/* Header - always visible */}
-      <div className="mb-4 flex items-center gap-3">
+      <div className='mb-4 flex items-center gap-3'>
         <div
           className={cn(
             'flex size-10 items-center justify-center rounded-full transition-colors duration-200',
@@ -178,13 +178,13 @@ export function UploadCard({
           )}
         >
           {isDropping ? (
-            <Download className="size-5 animate-bounce text-primary" />
+            <Download className='size-5 animate-bounce text-primary' />
           ) : (
-            <Upload className="size-5 text-primary" />
+            <Upload className='size-5 text-primary' />
           )}
         </div>
         <div>
-          <h2 className="font-medium">Upload from Disk</h2>
+          <h2 className='font-medium'>Upload from Disk</h2>
           <p
             className={cn(
               'text-xs transition-colors duration-200',
@@ -205,42 +205,42 @@ export function UploadCard({
       >
         {isFileSystemAccessSupported ? (
           <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="flex-1"
+            type='button'
+            variant='outline'
+            size='sm'
+            className='flex-1'
             disabled={isDisabled}
             onClick={handleDirectoryPick}
           >
-            <FolderOpen className="mr-1.5 size-4" />
-            <span className="hidden sm:inline">Open Directory</span>
-            <span className="sm:hidden">Directory</span>
+            <FolderOpen className='mr-1.5 size-4' />
+            <span className='hidden sm:inline'>Open Directory</span>
+            <span className='sm:hidden'>Directory</span>
           </Button>
         ) : (
           <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="flex-1"
+            type='button'
+            variant='outline'
+            size='sm'
+            className='flex-1'
             disabled={isDisabled}
             onClick={handleFolderClick}
           >
-            <Folder className="mr-1.5 size-4" />
-            <span className="hidden sm:inline">Select Folder</span>
-            <span className="sm:hidden">Folder</span>
+            <Folder className='mr-1.5 size-4' />
+            <span className='hidden sm:inline'>Select Folder</span>
+            <span className='sm:hidden'>Folder</span>
           </Button>
         )}
         <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="flex-1"
+          type='button'
+          variant='outline'
+          size='sm'
+          className='flex-1'
           disabled={isDisabled}
           onClick={handleFileClick}
         >
-          <Files className="mr-1.5 size-4" />
-          <span className="hidden sm:inline">Select Files</span>
-          <span className="sm:hidden">Files</span>
+          <Files className='mr-1.5 size-4' />
+          <span className='hidden sm:inline'>Select Files</span>
+          <span className='sm:hidden'>Files</span>
         </Button>
       </div>
     </div>

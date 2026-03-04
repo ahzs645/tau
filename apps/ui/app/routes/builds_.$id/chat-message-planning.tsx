@@ -90,7 +90,7 @@ export function ChatMessagePlanning({ messageId }: ChatMessagePlanningProperties
   // The parent's space-y-2 provides consistent vertical spacing for both cases
   return (
     <div className={isUser ? 'ml-2' : undefined}>
-      <ChatToolCard variant="minimal" status="loading" isCollapsible={false}>
+      <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
         <ChatToolCardHeader>
           <ChatToolCardIcon icon={Sparkles} />
           <ChatToolCardTitle>Planning next moves...</ChatToolCardTitle>

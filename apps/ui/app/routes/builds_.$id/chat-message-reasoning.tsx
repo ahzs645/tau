@@ -36,7 +36,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
   // Show "Thinking..." label when there is no reasoning content yet
   if (!hasReasoningText) {
     return (
-      <ChatToolCard variant="minimal" status="loading" isDefaultOpen={false}>
+      <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
         <ChatToolCardHeader>
           <ChatToolCardTitle>Thinking...</ChatToolCardTitle>
         </ChatToolCardHeader>
@@ -50,14 +50,14 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
   const shouldBeOpen = hasContent ? isOpen : !hasUserToggled.current || isOpen;
 
   return (
-    <ChatToolCard variant="minimal" status="ready" isOpen={shouldBeOpen} onOpenChange={handleOpenChange}>
+    <ChatToolCard variant='minimal' status='ready' isOpen={shouldBeOpen} onOpenChange={handleOpenChange}>
       <ChatToolCardHeader>
         <ChatToolCardIcon icon={Brain} />
         <ChatToolCardTitle>Thought process</ChatToolCardTitle>
       </ChatToolCardHeader>
-      <ChatToolCardContent className="border-l-0">
-        <div className="border-l border-foreground/20 pl-4 text-sm italic">
-          <MarkdownViewerChat className="text-muted-foreground" isStreaming={isStreaming}>
+      <ChatToolCardContent className='border-l-0'>
+        <div className='border-l border-foreground/20 pl-4 text-sm italic'>
+          <MarkdownViewerChat className='text-muted-foreground' isStreaming={isStreaming}>
             {part.text.trim()}
           </MarkdownViewerChat>
         </div>

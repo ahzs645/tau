@@ -1,4 +1,4 @@
-/* eslint-disable no-bitwise -- Encoding and decoding Base62 strings is a valid use of bitwise operations. */
+/* oxlint-disable no-bitwise -- Encoding and decoding Base62 strings is a valid use of bitwise operations. */
 /**
  * Taken from: https://github.com/sindresorhus/base62
  */

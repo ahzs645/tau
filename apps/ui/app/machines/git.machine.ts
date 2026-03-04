@@ -23,20 +23,21 @@ export function getBuildDirectory(buildId: string): string {
 /**
  * Wrap a simplified stat result into an isomorphic-git-compatible stat object.
  */
+
 function wrapStat(s: FileStat): {
-  isFile(): boolean;
-  isDirectory(): boolean;
-  isSymbolicLink(): boolean;
   size: number;
   mode: number;
   mtimeMs: number;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
 } {
   return {
     isFile: () => s.type === 'file',
     isDirectory: () => s.type === 'dir',
     isSymbolicLink: () => false,
     size: s.size,
-    mode: s.type === 'dir' ? 0o40755 : 0o100644,
+    mode: s.type === 'dir' ? 0o4_0755 : 0o10_0644,
     mtimeMs: s.mtimeMs,
   };
 }
@@ -97,9 +98,9 @@ function createGitFsAdapter(proxy: FileManagerProxy): GitFsAdapter {
  * Obtain a git-compatible fs adapter from a file manager actor ref.
  * Waits for the file manager to enter the 'ready' state, then wraps its proxy.
  */
-async function getGitFs(fileManagerRef: ActorRefFrom<FileManagerMachine>): Promise<GitFsAdapter> {
-  const snapshot = await waitFor(fileManagerRef, (state) => state.matches('ready'));
-  const proxy = snapshot.context.proxy;
+async function getGitFs(fileManagerReference: ActorRefFrom<FileManagerMachine>): Promise<GitFsAdapter> {
+  const snapshot = await waitFor(fileManagerReference, (state) => state.matches('ready'));
+  const { proxy } = snapshot.context;
   if (!proxy) {
     throw new Error('File manager proxy not available');
   }
@@ -161,19 +162,19 @@ type GitActorInput = {
 const initGitActor = fromPromise<{ buildId: string }, GitActorInput & { buildId: string; repository: GitRepository }>(
   async ({ input }) => {
     const fs = await getGitFs(input.fileManagerRef);
-    const dir = getBuildDirectory(input.buildId);
+    const directory = getBuildDirectory(input.buildId);
 
-    await git.init({ fs, dir, defaultBranch: input.repository.branch });
+    await git.init({ fs, dir: directory, defaultBranch: input.repository.branch });
 
     await git.addRemote({
       fs,
-      dir,
+      dir: directory,
       remote: 'origin',
       url: input.repository.url,
     });
 
     // Create .gitattributes file for binary file handling
-    const gitAttributesPath = joinPath(dir, '.gitattributes');
+    const gitAttributesPath = joinPath(directory, '.gitattributes');
     try {
       await fs.promises.stat(gitAttributesPath);
     } catch {
@@ -186,15 +187,20 @@ const initGitActor = fromPromise<{ buildId: string }, GitActorInput & { buildId:
 
 const cloneRepositoryActor = fromPromise<
   { buildId: string },
-  GitActorInput & { buildId: string; repository: GitRepository; accessToken: string; username: string }
+  GitActorInput & {
+    buildId: string;
+    repository: GitRepository;
+    accessToken: string;
+    username: string;
+  }
 >(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
-  const dir = getBuildDirectory(input.buildId);
+  const directory = getBuildDirectory(input.buildId);
 
   await git.clone({
     fs,
     http,
-    dir,
+    dir: directory,
     url: input.repository.url,
     ref: input.repository.branch,
     singleBranch: true,
@@ -210,11 +216,11 @@ const cloneRepositoryActor = fromPromise<
 
 const stageFileActor = fromPromise<string, GitActorInput & { buildId: string; path: string }>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
-  const dir = getBuildDirectory(input.buildId);
+  const directory = getBuildDirectory(input.buildId);
 
   await git.add({
     fs,
-    dir,
+    dir: directory,
     filepath: input.path,
   });
 
@@ -223,11 +229,11 @@ const stageFileActor = fromPromise<string, GitActorInput & { buildId: string; pa
 
 const unstageFileActor = fromPromise<string, GitActorInput & { buildId: string; path: string }>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
-  const dir = getBuildDirectory(input.buildId);
+  const directory = getBuildDirectory(input.buildId);
 
   await git.remove({
     fs,
-    dir,
+    dir: directory,
     filepath: input.path,
   });
 
@@ -236,14 +242,19 @@ const unstageFileActor = fromPromise<string, GitActorInput & { buildId: string; 
 
 const commitChangesActor = fromPromise<
   string,
-  GitActorInput & { buildId: string; message: string; username: string; email: string }
+  GitActorInput & {
+    buildId: string;
+    message: string;
+    username: string;
+    email: string;
+  }
 >(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
-  const dir = getBuildDirectory(input.buildId);
+  const directory = getBuildDirectory(input.buildId);
 
   const sha = await git.commit({
     fs,
-    dir,
+    dir: directory,
     message: input.message,
     author: {
       name: input.username,
@@ -256,15 +267,20 @@ const commitChangesActor = fromPromise<
 
 const pushChangesActor = fromPromise<
   boolean,
-  GitActorInput & { buildId: string; repository: GitRepository; accessToken: string; username: string }
+  GitActorInput & {
+    buildId: string;
+    repository: GitRepository;
+    accessToken: string;
+    username: string;
+  }
 >(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
-  const dir = getBuildDirectory(input.buildId);
+  const directory = getBuildDirectory(input.buildId);
 
   await git.push({
     fs,
     http,
-    dir,
+    dir: directory,
     remote: 'origin',
     ref: input.repository.branch,
     onAuth: () => ({
@@ -278,15 +294,20 @@ const pushChangesActor = fromPromise<
 
 const pullChangesActor = fromPromise<
   boolean,
-  GitActorInput & { buildId: string; repository: GitRepository; accessToken: string; username: string }
+  GitActorInput & {
+    buildId: string;
+    repository: GitRepository;
+    accessToken: string;
+    username: string;
+  }
 >(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
-  const dir = getBuildDirectory(input.buildId);
+  const directory = getBuildDirectory(input.buildId);
 
   await git.pull({
     fs,
     http,
-    dir,
+    dir: directory,
     ref: input.repository.branch,
     author: {
       name: input.username,
@@ -301,15 +322,15 @@ const pullChangesActor = fromPromise<
   return true;
 });
 
-// eslint-disable-next-line complexity -- TODO: address
+// oxlint-disable-next-line complexity -- TODO: address
 const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, GitActorInput & { buildId: string }>(
   async ({ input }) => {
     const fs = await getGitFs(input.fileManagerRef);
-    const dir = getBuildDirectory(input.buildId);
+    const directory = getBuildDirectory(input.buildId);
 
     try {
       // Get list of all files in the working directory
-      const statusMatrix = await git.statusMatrix({ fs, dir });
+      const statusMatrix = await git.statusMatrix({ fs, dir: directory });
       const fileStatuses = new Map<string, GitFileStatus>();
 
       for (const [filepath, headStatus, workdirStatus, stageStatus] of statusMatrix) {
@@ -400,7 +421,12 @@ type GitActorNames = keyof typeof gitActors;
  */
 type GitEventInternal =
   | { type: 'connect'; buildId: string }
-  | { type: 'authenticate'; accessToken: string; username: string; email: string }
+  | {
+      type: 'authenticate';
+      accessToken: string;
+      username: string;
+      email: string;
+    }
   | { type: 'selectRepository'; repository: GitRepository }
   | { type: 'createRepository'; name: string; isPrivate: boolean }
   | { type: 'clone'; repository: GitRepository }
@@ -455,13 +481,13 @@ type GitEmitted =
  */
 export const gitMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as GitContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as GitEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as GitEmitted,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as GitInput,
   },
   actors: gitActors,
@@ -710,7 +736,11 @@ export const gitMachine = setup({
         src: 'stageFileActor',
         input({ context, event }) {
           assertEvent(event, 'stageFile');
-          return { fileManagerRef: context.fileManagerRef, buildId: context.buildId!, path: event.path };
+          return {
+            fileManagerRef: context.fileManagerRef,
+            buildId: context.buildId!,
+            path: event.path,
+          };
         },
         onDone: {
           target: 'refreshingStatus',
@@ -743,7 +773,11 @@ export const gitMachine = setup({
         src: 'unstageFileActor',
         input({ context, event }) {
           assertEvent(event, 'unstageFile');
-          return { fileManagerRef: context.fileManagerRef, buildId: context.buildId!, path: event.path };
+          return {
+            fileManagerRef: context.fileManagerRef,
+            buildId: context.buildId!,
+            path: event.path,
+          };
         },
         onDone: {
           target: 'refreshingStatus',

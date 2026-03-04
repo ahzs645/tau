@@ -89,7 +89,7 @@ export function convertParameterDefinitionsToDefaults(
  * @internal This is a helper function used by convertParameterDefinitionsToJsonSchema.
  *           Type inference is used as a fallback when no explicit type is specified.
  */
-// eslint-disable-next-line complexity -- JSCAD has many parameter types to handle
+// oxlint-disable-next-line complexity -- JSCAD has many parameter types to handle
 function convertParameterDefinitionToJsonSchemaProperty(definition: JscadParameterDefinition): JSONSchema7 {
   const schema: JSONSchema7 = {};
 

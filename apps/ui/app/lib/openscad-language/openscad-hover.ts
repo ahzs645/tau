@@ -1,4 +1,4 @@
-/* eslint-disable max-params, max-depth  -- TODO: refactor */
+/* oxlint-disable max-params, max-depth  -- TODO: refactor */
 /**
  * An naive hover provider for OpenSCAD.
  *
@@ -313,7 +313,7 @@ function createVariableHover(
   const builtInSymbol = allSymbols.find((sym) => sym.name === variableInfo.name);
 
   // Variable signature - prefer built-in signature if available
-  if (builtInSymbol && builtInSymbol.type === 'constant') {
+  if (builtInSymbol?.type === 'constant') {
     const signature = `${signatureSymbolDescriptor.constant} ${builtInSymbol.name}: ${variableInfo.type}`;
     contents.push({
       value: `\`\`\`openscad\n${signature}\n\`\`\``,
@@ -452,7 +452,7 @@ type ParameterContext = {
   isBuiltIn: boolean;
 };
 
-// eslint-disable-next-line complexity -- TODO: refactor
+// oxlint-disable-next-line complexity -- TODO: refactor
 function findParameterContext(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
@@ -497,9 +497,9 @@ function findParameterContext(
             const searchStart = nameLineIndex === currentLineIndex ? nameEnd : nameLine.length - 1;
 
             let found = false;
-            for (let j = searchStart; j >= 0; j--) {
-              if (!/\s/.test(nameLine[j]!)) {
-                nameEnd = j;
+            for (let charIndex = searchStart; charIndex >= 0; charIndex--) {
+              if (!/\s/.test(nameLine[charIndex]!)) {
+                nameEnd = charIndex;
                 found = true;
                 break;
               }
@@ -635,7 +635,7 @@ function createParameterHover(
 
 export function createHoverProvider(monaco: typeof Monaco): Monaco.languages.HoverProvider {
   return {
-    // eslint-disable-next-line complexity -- this is a complex function
+    // oxlint-disable-next-line complexity -- this is a complex function
     provideHover(model, position) {
       const word = model.getWordAtPosition(position);
       if (!word?.word) {

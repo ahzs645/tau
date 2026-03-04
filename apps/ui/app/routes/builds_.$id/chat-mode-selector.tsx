@@ -61,19 +61,19 @@ export const ChatModeSelector = memo(function ({
   return (
     <DropdownMenu>
       <Tooltip>
-        <Button asChild variant="ghost" className="gap-2">
+        <Button asChild variant='ghost' className='gap-2'>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger>
-              {currentMode?.icon ? <currentMode.icon className="size-4" /> : null}
+              {currentMode?.icon ? <currentMode.icon className='size-4' /> : null}
               <span>{currentMode?.label}</span>
             </DropdownMenuTrigger>
           </TooltipTrigger>
         </Button>
-        <TooltipContent side="bottom">Select mode</TooltipContent>
+        <TooltipContent side='bottom'>Select mode</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent align='start'>
         <DropdownMenuLabel>Mode</DropdownMenuLabel>
-        <DropdownMenuRadioGroup className="flex flex-col gap-1" value={selectedMode} onValueChange={handleModeChange}>
+        <DropdownMenuRadioGroup className='flex flex-col gap-1' value={selectedMode} onValueChange={handleModeChange}>
           {chatModes.map((mode) => {
             const Icon = mode.icon;
             return (
@@ -83,9 +83,9 @@ export const ChatModeSelector = memo(function ({
                 value={mode.id}
               >
                 <Icon />
-                <div className="flex flex-col">
-                  <span className="font-medium">{mode.label}</span>
-                  <span className="text-xs text-muted-foreground">{mode.description}</span>
+                <div className='flex flex-col'>
+                  <span className='font-medium'>{mode.label}</span>
+                  <span className='text-xs text-muted-foreground'>{mode.description}</span>
                 </div>
               </DropdownMenuRadioItem>
             );

@@ -1,11 +1,11 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call -- TODO: fix types here */
-/* eslint-disable max-lines -- This is a port of the original transform-controls.ts file */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment -- TODO: fix types here */
+/* oxlint-disable @typescript-eslint/no-unsafe-call -- TODO: fix types here */
+/* oxlint-disable max-lines -- This is a port of the original transform-controls.ts file */
+/* oxlint-disable @typescript-eslint/no-unsafe-assignment -- TODO: fix types here */
 /* eslint-disable @typescript-eslint/naming-convention -- This is a port of the original transform-controls.ts file  */
-/* eslint-disable new-cap -- This is a port of the original transform-controls.ts file  */
-/* eslint-disable @typescript-eslint/class-literal-property-style -- This is a port of the original transform-controls.ts file   */
-/* eslint-disable max-depth -- This is a port of the original transform-controls.ts file */
-/* eslint-disable complexity -- This is a port of the original transform-controls.ts file */
+/* oxlint-disable new-cap -- This is a port of the original transform-controls.ts file  */
+/* oxlint-disable @typescript-eslint/class-literal-property-style -- This is a port of the original transform-controls.ts file   */
+/* oxlint-disable max-depth -- This is a port of the original transform-controls.ts file */
+/* oxlint-disable complexity -- This is a port of the original transform-controls.ts file */
 import type { OrthographicCamera, PerspectiveCamera, Intersection, Camera, Vector2 } from 'three';
 import {
   Material,
@@ -133,32 +133,32 @@ class TransformControls<TCamera extends Camera = Camera> extends Object3D {
     this.add(this.plane);
 
     // Defined getter, setter and store for a property
-    const defineProperty = <TValue>(propName: string, defaultValue: TValue): void => {
-      let propValue = defaultValue;
+    const defineProperty = <TValue>(propertyName: string, defaultValue: TValue): void => {
+      let propertyValue = defaultValue;
 
-      Object.defineProperty(this, propName, {
+      Object.defineProperty(this, propertyName, {
         get() {
-          return propValue ?? defaultValue;
+          return propertyValue ?? defaultValue;
         },
 
         set(value) {
-          if (propValue !== value) {
-            propValue = value;
-            this.plane[propName] = value;
-            this.gizmo[propName] = value;
+          if (propertyValue !== value) {
+            propertyValue = value;
+            this.plane[propertyName] = value;
+            this.gizmo[propertyName] = value;
 
-            this.dispatchEvent({ type: propName + '-changed', value });
+            this.dispatchEvent({ type: propertyName + '-changed', value });
             this.dispatchEvent(this.changeEvent);
           }
         },
       });
 
       // @ts-expect-error -- custom controls event, needs augmentation
-      this[propName] = defaultValue;
+      this[propertyName] = defaultValue;
       // @ts-expect-error -- custom controls event, needs augmentation
-      this.plane[propName] = defaultValue;
+      this.plane[propertyName] = defaultValue;
       // @ts-expect-error -- custom controls event, needs augmentation
-      this.gizmo[propName] = defaultValue;
+      this.gizmo[propertyName] = defaultValue;
     };
 
     defineProperty('camera', this.camera);
@@ -568,7 +568,7 @@ class TransformControls<TCamera extends Camera = Camera> extends Object3D {
         );
         const cameraMaybePerspective = this.camera as unknown as PerspectiveCamera;
         let fovFactor = 1;
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- type guard
+        // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- type guard
         if (cameraMaybePerspective.isPerspectiveCamera) {
           fovFactor = Math.tan((cameraMaybePerspective.fov * Math.PI) / 360);
           if (!Number.isFinite(fovFactor) || fovFactor === 0) {
@@ -670,7 +670,7 @@ class TransformControls<TCamera extends Camera = Camera> extends Object3D {
       };
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- type guard
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- type guard
     const pointer = (event as TouchEvent).changedTouches
       ? (event as TouchEvent).changedTouches[0]!
       : (event as MouseEvent);
@@ -1360,7 +1360,7 @@ class TransformControlsGizmo extends Object3D {
     ): Object3D => {
       const gizmo = new Object3D();
 
-      // eslint-disable-next-line guard-for-in -- TODO
+      // oxlint-disable-next-line guard-for-in -- TODO
       for (const name in gizmoMap) {
         for (let i = gizmoMap[name]!.length; i--; ) {
           const object = gizmoMap[name]![i]![0].clone();
@@ -1409,11 +1409,11 @@ class TransformControlsGizmo extends Object3D {
       return gizmo;
     };
 
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- TODO: fix typings
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TODO: fix typings
     this.gizmo = {} as TransformControlsGizmoPrivateGizmos;
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- TODO: fix typings
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TODO: fix typings
     this.picker = {} as TransformControlsGizmoPrivateGizmos;
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- TODO: fix typings
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TODO: fix typings
     this.helper = {} as TransformControlsGizmoPrivateGizmos;
 
     // @ts-expect-error -- fix typings
@@ -1477,7 +1477,7 @@ class TransformControlsGizmo extends Object3D {
 
       let factor;
 
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera is possible perspective or orthographic
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera is possible perspective or orthographic
       if ((this.camera as OrthographicCamera).isOrthographicCamera) {
         factor =
           ((this.camera as OrthographicCamera).top - (this.camera as OrthographicCamera).bottom) /
@@ -1532,20 +1532,20 @@ class TransformControlsGizmo extends Object3D {
             // Dynamically size and center the axis helper near the gizmo so dash density
             // stays consistent on screen and isn't skewed by extreme world lengths.
             // Local line geometry runs along +X; we align quaternion above per-axis.
-            const axisWorldDir = new Vector3(1, 0, 0).applyQuaternion(handle.quaternion).normalize();
+            const axisWorldDirectory = new Vector3(1, 0, 0).applyQuaternion(handle.quaternion).normalize();
             const axisHelperLength = Math.max(factor * 10, 1); // World units, camera-relative
             const halfLength = axisHelperLength * 0.5;
 
             // Center around pivot
             handle.position
               .copy(this.dragging ? this.worldPositionStart : this.worldPosition)
-              .addScaledVector(axisWorldDir, -halfLength);
+              .addScaledVector(axisWorldDirectory, -halfLength);
 
             // Stretch the 1-unit line to the desired length
             handle.scale.set(axisHelperLength, 1, 1);
 
             const dashedMaterial = (handle as Line).material as LineDashedMaterial;
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- ensure existence
+            // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- ensure existence
             if (dashedMaterial) {
               // Compensate for object scale so dashes stay constant in world units,
               // then scale dash/gap with camera factor so they stay constant on screen.
@@ -1558,12 +1558,11 @@ class TransformControlsGizmo extends Object3D {
               dashed.userData.baseDashSize ??= dashed.dashSize;
               dashed.userData.baseGapSize ??= dashed.gapSize;
 
-              const baseDash = dashed.userData.baseDashSize ?? dashed.dashSize;
-              const baseGap = dashed.userData.baseGapSize ?? dashed.gapSize;
+              const { baseDashSize, baseGapSize } = dashed.userData;
 
               const dashZoomScale = Math.max(factor / 200, 0.001);
-              dashed.dashSize = baseDash * dashZoomScale;
-              dashed.gapSize = baseGap * dashZoomScale;
+              dashed.dashSize = baseDashSize * dashZoomScale;
+              dashed.gapSize = baseGapSize * dashZoomScale;
               dashed.needsUpdate = true;
             }
 
@@ -1590,7 +1589,7 @@ class TransformControlsGizmo extends Object3D {
 
             // Keep start marker a constant on-screen size based on its own distance to the camera
             let startFactor: number;
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera can be ortho or perspective
+            // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera can be ortho or perspective
             if ((this.camera as OrthographicCamera).isOrthographicCamera) {
               startFactor =
                 ((this.camera as OrthographicCamera).top - (this.camera as OrthographicCamera).bottom) /
@@ -1615,7 +1614,7 @@ class TransformControlsGizmo extends Object3D {
 
             // Keep end marker a constant on-screen size based on its own distance to the camera
             let endFactor: number;
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera can be ortho or perspective
+            // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera can be ortho or perspective
             if ((this.camera as OrthographicCamera).isOrthographicCamera) {
               endFactor =
                 ((this.camera as OrthographicCamera).top - (this.camera as OrthographicCamera).bottom) /
@@ -1650,7 +1649,7 @@ class TransformControlsGizmo extends Object3D {
             const worldLength = this.tempVector.length();
             const scaleFactor = worldLength / baseLength || 1;
             const dashedMaterial = (handle as Line).material as LineDashedMaterial;
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- ensure the cast worked
+            // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- ensure the cast worked
             if (dashedMaterial && typeof dashedMaterial.scale === 'number') {
               dashedMaterial.scale = scaleFactor;
               // Also make the dash/gap appear constant in screen-space like rotation helper,
@@ -1669,7 +1668,7 @@ class TransformControlsGizmo extends Object3D {
               if (dashed.userData.dashZoomScaleAtStart === undefined) {
                 // Compute zoom factor anchored at the drag start position
                 let startFactor: number;
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera can be ortho or perspective
+                // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- camera can be ortho or perspective
                 if ((this.camera as OrthographicCamera).isOrthographicCamera) {
                   startFactor =
                     ((this.camera as OrthographicCamera).top - (this.camera as OrthographicCamera).bottom) /
@@ -1686,18 +1685,16 @@ class TransformControlsGizmo extends Object3D {
                 dashed.userData.dashZoomScaleAtStart = Math.max(startFactor / 200, 0.001);
               }
 
-              const baseDash = dashed.userData.baseDashSize ?? dashed.dashSize;
-              const baseGap = dashed.userData.baseGapSize ?? dashed.gapSize;
-              const dashZoom = dashed.userData.dashZoomScaleAtStart ?? 1;
-              dashed.dashSize = baseDash * dashZoom;
-              dashed.gapSize = baseGap * dashZoom;
+              const { baseDashSize, baseGapSize, dashZoomScaleAtStart } = dashed.userData;
+              dashed.dashSize = baseDashSize * dashZoomScaleAtStart;
+              dashed.gapSize = baseGapSize * dashZoomScaleAtStart;
               dashed.needsUpdate = true;
 
               // If dragging has ended, clear the cached zoom scale and restore base sizes
               if (!this.dragging) {
                 dashed.userData.dashZoomScaleAtStart = undefined;
-                dashed.dashSize = dashed.userData.baseDashSize ?? dashed.dashSize;
-                dashed.gapSize = dashed.userData.baseGapSize ?? dashed.gapSize;
+                dashed.dashSize = baseDashSize;
+                dashed.gapSize = baseGapSize;
                 dashed.needsUpdate = true;
               }
             }
@@ -1858,7 +1855,7 @@ class TransformControlsGizmo extends Object3D {
             handle.visible = false;
           }
         }
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhausive check
+        // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhausive check
       } else if (this.mode === 'rotate') {
         // Align handles to current local or world rotation
 
@@ -2072,7 +2069,7 @@ class TransformControlsPlane extends Mesh<PlaneGeometry, MeshBasicMaterial> {
         break;
       }
 
-      // eslint-disable-next-line unicorn/no-useless-switch-case -- exhaustive check
+      // oxlint-disable-next-line unicorn/no-useless-switch-case -- exhaustive check
       case 'rotate':
       default: {
         // Special case for rotate

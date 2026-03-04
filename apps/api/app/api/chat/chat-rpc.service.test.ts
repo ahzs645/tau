@@ -54,7 +54,7 @@ describe('ChatRpcService', () => {
 
       expect(result).toEqual({
         errorCode: 'NO_CONNECTION',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest assertion
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest assertion
         message: expect.stringContaining('No WebSocket connection to the browser'),
         rpcName: 'read_file',
       });
@@ -72,7 +72,7 @@ describe('ChatRpcService', () => {
 
       expect(result).toEqual({
         errorCode: 'NO_CONNECTION',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest assertion
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Vitest assertion
         message: expect.stringContaining('No WebSocket connection to the browser'),
         rpcName: 'read_file',
       });

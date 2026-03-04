@@ -37,7 +37,7 @@ let isConfigured = false;
  * bundle size. Idempotent -- safe to call from multiple entry points.
  */
 export const configureMonaco = async (): Promise<void> => {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be undefined in SSR
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be undefined in SSR
   if (isConfigured || globalThis.self === undefined) {
     return;
   }

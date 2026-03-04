@@ -65,16 +65,19 @@ function triangulateFace(
     throw new Error(`Invalid face indices: ${face.join(', ')}`);
   }
 
-  const triangles: Array<{ vertices: [number, number, number]; colorIndex: number }> = [];
+  const triangles: Array<{
+    vertices: [number, number, number];
+    colorIndex: number;
+  }> = [];
 
   // Fan triangulation: connect first vertex to all other triangles
-  for (let i = 1; i < face.length - 1; i++) {
+  for (let index = 1; index < face.length - 1; index++) {
     const v0 = face[0];
-    const v1 = face[i];
-    const v2 = face[i + 1];
+    const v1 = face[index];
+    const v2 = face[index + 1];
 
     if (v0 === undefined || v1 === undefined || v2 === undefined) {
-      throw new Error(`Undefined vertex index in face: [${face.join(', ')}] at triangle ${i}`);
+      throw new Error(`Undefined vertex index in face: [${face.join(', ')}] at triangle ${index}`);
     }
 
     triangles.push({
@@ -107,7 +110,10 @@ export function export3mf(
     data.colors.length > 0 ? data.colors.map((color) => [color[0], color[1], color[2]]) : [[1, 1, 1]];
 
   // Convert face indices to triangulated faces with color information
-  const triangulatedFaces: Array<{ vertices: [number, number, number]; colorIndex: number }> = [];
+  const triangulatedFaces: Array<{
+    vertices: [number, number, number];
+    colorIndex: number;
+  }> = [];
 
   for (const [faceIndex, face] of data.faces.entries()) {
     // Use face index as color index, clamped to available colors (with safe fallback)
@@ -129,7 +135,7 @@ export function export3mf(
 
   if (extruderColors) {
     extruderIndexByColorIndex = getColorMapping(colors, extruderColors);
-    paintColorByColorIndex = extruderIndexByColorIndex.map((i) => paintColorMap[i] ?? '');
+    paintColorByColorIndex = extruderIndexByColorIndex.map((index) => paintColorMap[index] ?? '');
 
     console.log('Extruder colors:');
     for (const [index, color] of extruderColors.entries()) {
@@ -137,8 +143,8 @@ export function export3mf(
     }
 
     console.log('Model color mapping:');
-    for (const [i, fromColor] of colors.entries()) {
-      const extruderIndex = extruderIndexByColorIndex[i]!;
+    for (const [index, fromColor] of colors.entries()) {
+      const extruderIndex = extruderIndexByColorIndex[index]!;
       const toColor = extruderColors[extruderIndex];
       console.log(
         `- ${rgbToHex(fromColor)} -> ${toColor ? rgbToHex(toColor) : 'unknown'} (${paintColorMap[extruderIndex] ?? ''})`,
@@ -155,7 +161,7 @@ export function export3mf(
     '  <meta name="slic3rpe:MmPaintingVersion" value="1"/>',
     '  <resources>',
     '    <basematerials id="2">',
-    ...colors.map((color, i) => `      <base name="color_${i}" displaycolor="${rgbToHex(color)}"/>`),
+    ...colors.map((color, index) => `      <base name="color_${index}" displaycolor="${rgbToHex(color)}"/>`),
     '    </basematerials>',
     `    <object id="1" name="OpenSCAD Model" type="model" p:UUID="${objectUuid}" pid="2" pindex="0">`,
     '      <mesh>',
@@ -165,18 +171,18 @@ export function export3mf(
     '        <triangles>',
     ...triangulatedFaces.map((triangle) => {
       const { vertices, colorIndex } = triangle;
-      const attrs = vertices.map((v, i) => `v${i + 1}="${v}"`);
+      const attributes = vertices.map((v, i) => `v${i + 1}="${v}"`);
 
       if (colorIndex > 0) {
-        attrs.push(`pid="2" p1="${colorIndex}"`);
+        attributes.push(`pid="2" p1="${colorIndex}"`);
       }
 
       const paintColor = paintColorByColorIndex?.[colorIndex];
       if (paintColor) {
-        attrs.push(`paint_color="${paintColor}"`);
+        attributes.push(`paint_color="${paintColor}"`);
       }
 
-      return `          <triangle ${attrs.join(' ')} />`;
+      return `          <triangle ${attributes.join(' ')} />`;
     }),
     '        </triangles>',
     '      </mesh>',

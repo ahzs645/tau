@@ -146,9 +146,17 @@ describe('kernel-filesystem-bridge', () => {
       const channel = new MessageChannel();
       createBridgeServer(fs, channel.port1);
 
-      const result = await new Promise<{ id: number; error?: { message: string; name: string } }>((resolve) => {
+      const result = await new Promise<{
+        id: number;
+        error?: { message: string; name: string };
+      }>((resolve) => {
         const handler = (event: MessageEvent): void => {
-          resolve(event.data as { id: number; error?: { message: string; name: string } });
+          resolve(
+            event.data as {
+              id: number;
+              error?: { message: string; name: string };
+            },
+          );
           channel.port2.removeEventListener('message', handler);
         };
 
@@ -230,7 +238,7 @@ describe('kernel-filesystem-bridge', () => {
     it('should handle non-Error throws gracefully', async () => {
       const handlers = {
         async fail() {
-          // eslint-disable-next-line @typescript-eslint/only-throw-error -- testing non-Error throw
+          // oxlint-disable-next-line @typescript-eslint/only-throw-error -- testing non-Error throw
           throw 'string error';
         },
       };
@@ -561,7 +569,7 @@ describe('kernel-filesystem-bridge', () => {
         setTimeout(resolve, 50);
       });
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
       channel.port1.onmessage = (event: MessageEvent): void => {
         received.push(event.data as string);
       };
@@ -589,7 +597,7 @@ describe('kernel-filesystem-bridge', () => {
         setTimeout(resolve, 50);
       });
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
       channel.port1.onmessage = (event: MessageEvent): void => {
         received.push(event.data as number);
       };

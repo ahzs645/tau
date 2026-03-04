@@ -25,7 +25,7 @@ const log = createKclLogger('Hover Provider');
  *   <documentation>
  *   from "path"
  */
-// eslint-disable-next-line max-params -- Distinct parameters for import resolution
+// oxlint-disable-next-line max-params -- Distinct parameters for import resolution
 async function resolveImportSymbolHover(
   symbolService: KclSymbolService,
   uri: string,

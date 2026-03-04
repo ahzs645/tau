@@ -49,12 +49,12 @@ export function GraphicsProvider({
  * Use for `.send()` calls to dispatch events to the graphics machine.
  */
 export function useGraphics(): GraphicsActorRef {
-  const ctx = useContext(GraphicsContext);
-  if (!ctx) {
+  const context = useContext(GraphicsContext);
+  if (!context) {
     throw new Error('useGraphics must be used within a GraphicsProvider');
   }
 
-  return ctx.graphicsRef;
+  return context.graphicsRef;
 }
 
 /**
@@ -62,12 +62,12 @@ export function useGraphics(): GraphicsActorRef {
  * Use for registering Three.js capture context and taking screenshots.
  */
 export function useScreenshotCapability(): ScreenshotCapabilityRef {
-  const ctx = useContext(GraphicsContext);
-  if (!ctx) {
+  const context = useContext(GraphicsContext);
+  if (!context) {
     throw new Error('useScreenshotCapability must be used within a GraphicsProvider');
   }
 
-  return ctx.screenshotRef;
+  return context.screenshotRef;
 }
 
 /**
@@ -75,12 +75,12 @@ export function useScreenshotCapability(): ScreenshotCapabilityRef {
  * Use for registering camera reset functions and triggering resets.
  */
 export function useCameraCapability(): CameraCapabilityRef {
-  const ctx = useContext(GraphicsContext);
-  if (!ctx) {
+  const context = useContext(GraphicsContext);
+  if (!context) {
     throw new Error('useCameraCapability must be used within a GraphicsProvider');
   }
 
-  return ctx.cameraRef;
+  return context.cameraRef;
 }
 
 /**

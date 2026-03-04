@@ -16,14 +16,14 @@ import { z } from 'zod';
  * @param schema A Zod schema to encode and decode JSON.
  * @returns A Zod codec that encodes and decodes JSON.
  */
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
 export const jsonCodec = <T extends z.core.$ZodType>(schema: T) =>
   z.codec(z.string(), schema, {
-    decode(jsonString, ctx) {
+    decode(jsonString, context) {
       try {
         return JSON.parse(jsonString) as never;
       } catch (error: unknown) {
-        ctx.issues.push({
+        context.issues.push({
           code: 'invalid_format',
           format: 'json',
           input: jsonString,

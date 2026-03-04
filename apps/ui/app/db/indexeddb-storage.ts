@@ -47,9 +47,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       const request = store.add(buildWithId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -96,9 +96,7 @@ export class IndexedDbStorageProvider implements StorageProvider {
     } else {
       // Partial update - use deepmerge for backward compatibility
       const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
-      const optionalParameters = {
-        ...(options?.noUpdatedAt ? {} : { updatedAt: Date.now() }),
-      };
+      const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
 
       updatedBuild = deepmerge(
         existingBuild,
@@ -121,9 +119,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       const request = store.put(updatedBuild);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -145,9 +143,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.buildsStoreName);
       const request = store.getAll();
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -172,9 +170,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.buildsStoreName);
       const request = store.get(buildId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -225,9 +223,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       const request = store.add(chatWithId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -267,9 +265,7 @@ export class IndexedDbStorageProvider implements StorageProvider {
     } else {
       // Partial update - use deepmerge
       const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
-      const optionalParameters = {
-        ...(options?.noUpdatedAt ? {} : { updatedAt: Date.now() }),
-      };
+      const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
 
       updatedChat = deepmerge(
         existingChat,
@@ -292,9 +288,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       const request = store.put(updatedChat);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -316,9 +312,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.chatsStoreName);
       const request = store.get(chatId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -341,9 +337,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const index = store.index('resourceId');
       const request = index.getAll(resourceId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -418,9 +414,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.editorStoreName);
       const request = store.get(buildId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -443,9 +439,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.editorStoreName);
       const request = store.put(stateWithTimestamp);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -467,9 +463,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.editorStoreName);
       const request = store.delete(buildId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -491,9 +487,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.version);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 

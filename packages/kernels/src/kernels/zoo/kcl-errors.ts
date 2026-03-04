@@ -102,7 +102,10 @@ export class KclConnectionError extends KclError {
     const baseMessage =
       'The Zoo CAD API is currently unavailable. This could be due to network issues or the service being temporarily down.';
     const message = details ? `${baseMessage} Details: ${details}` : baseMessage;
-    return new KclConnectionError(message, { isApiUnavailable: true, statusCode: 503 });
+    return new KclConnectionError(message, {
+      isApiUnavailable: true,
+      statusCode: 503,
+    });
   }
 
   /**

@@ -10,7 +10,7 @@ import type {
 } from '@taucad/chat';
 import { boundingBoxExpectedSchema } from '@taucad/chat';
 
-const DEFAULT_TOLERANCE = 0.1;
+const defaultTolerance = 0.1;
 
 type GeometryStats = {
   vertexCount: number;
@@ -26,7 +26,7 @@ export class GeometryAnalysisService {
   private readonly logger = new Logger(GeometryAnalysisService.name);
 
   public async runMeasurementTests(
-    glb: Uint8Array,
+    glb: Uint8Array<ArrayBuffer>,
     requirements: MeasurementTestRequirement[],
   ): Promise<TestModelOutput> {
     this.logger.log(`Running ${requirements.length} measurement tests`);
@@ -77,7 +77,7 @@ export class GeometryAnalysisService {
     };
   }
 
-  private async analyzeGlb(glb: Uint8Array): Promise<GeometryStats> {
+  private async analyzeGlb(glb: Uint8Array<ArrayBuffer>): Promise<GeometryStats> {
     const io = new NodeIO();
     // Node.js Buffers from Socket.IO may have a non-zero byteOffset into a
     // shared pool ArrayBuffer (https://github.com/nodejs/node/issues/2888).
@@ -120,7 +120,7 @@ export class GeometryAnalysisService {
     requirement: MeasurementTestRequirement,
     stats: GeometryStats,
   ): { passed: boolean; reason: string; suggestion: string } {
-    const tolerance = requirement.tolerance ?? DEFAULT_TOLERANCE;
+    const tolerance = requirement.tolerance ?? defaultTolerance;
 
     switch (requirement.check) {
       case 'boundingBox': {
@@ -164,7 +164,7 @@ export class GeometryAnalysisService {
       default: {
         return {
           passed: false,
-          reason: `Unknown check type: ${requirement.check}`,
+          reason: `Unknown check type: ${String(requirement.check)}`,
           suggestion: 'Use one of: boundingBox, meshCount, vertexCount',
         };
       }
@@ -199,7 +199,7 @@ export class GeometryAnalysisService {
     const expected: BoundingBoxExpected = parseResult.data;
     const reasons: string[] = [];
 
-    if (expected.size) {
+    if (expected.size > 0) {
       const axes = ['x', 'y', 'z'] as const;
       for (const [i, axis] of axes.entries()) {
         const exp = expected.size[axis];

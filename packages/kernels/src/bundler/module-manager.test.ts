@@ -14,7 +14,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModuleManager } from '#bundler/module-manager.js';
-import { createMockFileSystem, type MockFileSystem } from '#testing/kernel-testing.utils.js';
+import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
+import type { MockFileSystem } from '#testing/kernel-testing.utils.js';
 
 // =============================================================================
 // Mock Fetch Helpers
@@ -90,7 +91,7 @@ describe('ModuleManager', () => {
       // Should have fetched from esm.sh
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/lodash?bundle',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest matcher returns `any`
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any() inherently returns any
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 
@@ -130,7 +131,7 @@ describe('ModuleManager', () => {
       // Should fetch the subpath-specific URL
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/lodash/debounce?bundle',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest matcher returns `any`
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any() inherently returns any
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 
@@ -146,7 +147,7 @@ describe('ModuleManager', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/@jscad/modeling/primitives?bundle',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest matcher returns `any`
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any() inherently returns any
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 
@@ -415,13 +416,13 @@ describe('ModuleManager', () => {
       expect(mockFetch).toHaveBeenNthCalledWith(
         1,
         'https://esm.sh/lodash?bundle',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest matcher returns `any`
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any() inherently returns any
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       expect(mockFetch).toHaveBeenNthCalledWith(
         2,
         'https://cdn.jsdelivr.net/npm/lodash/+esm',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest matcher returns `any`
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any() inherently returns any
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 
@@ -537,7 +538,9 @@ describe('ModuleManager', () => {
         (call[0] as string).endsWith('package.json'),
       );
       expect(packageJsonCall).toBeDefined();
-      const packageJson = JSON.parse(packageJsonCall![1] as string) as { version: string };
+      const packageJson = JSON.parse(packageJsonCall![1] as string) as {
+        version: string;
+      };
       expect(packageJson.version).toBe('4.17.21');
     });
 
@@ -553,7 +556,9 @@ describe('ModuleManager', () => {
         (call[0] as string).endsWith('package.json'),
       );
       expect(packageJsonCall).toBeDefined();
-      const packageJson = JSON.parse(packageJsonCall![1] as string) as { version: string };
+      const packageJson = JSON.parse(packageJsonCall![1] as string) as {
+        version: string;
+      };
       expect(packageJson.version).toBe('unknown');
     });
   });

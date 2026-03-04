@@ -51,12 +51,12 @@ async function parseGltfPrimitives(gltfContent: Uint8Array<ArrayBuffer>): Promis
         });
       } else if (primitive.getMode() === primitiveModeLines) {
         const posArray = positionAccessor?.getArray();
-        const idxArray = indexAccessor?.getArray();
+        const indexArray = indexAccessor?.getArray();
 
         linePrimitives.push({
           vertexCount: positionAccessor?.getCount() ?? 0,
           positions: posArray instanceof Float32Array ? posArray : undefined,
-          indices: idxArray instanceof Uint16Array || idxArray instanceof Uint32Array ? idxArray : undefined,
+          indices: indexArray instanceof Uint16Array || indexArray instanceof Uint32Array ? indexArray : undefined,
         });
       }
     }
@@ -76,10 +76,10 @@ function calculateBoundingBox(positions: Float32Array): {
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
 
-  for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i] ?? 0;
-    const y = positions[i + 1] ?? 0;
-    const z = positions[i + 2] ?? 0;
+  for (let index = 0; index < positions.length; index += 3) {
+    const x = positions[index] ?? 0;
+    const y = positions[index + 1] ?? 0;
+    const z = positions[index + 2] ?? 0;
 
     min[0] = Math.min(min[0], x);
     min[1] = Math.min(min[1], y);
@@ -105,35 +105,51 @@ describe('detectEdges', () => {
   describe('Simple geometry', () => {
     it('should detect all 12 edges of a cube from indexed triangles', () => {
       // Unit cube: 8 vertices, 12 triangles (2 per face)
-      // prettier-ignore
+      // prettier-ignore -- preserve vertex coordinate alignment
       const positions = new Float32Array([
         // Front face vertices (z = 1)
-        0, 0, 1,  // 0
-        1, 0, 1,  // 1
-        1, 1, 1,  // 2
-        0, 1, 1,  // 3
+        0,
+        0,
+        1, // 0
+        1,
+        0,
+        1, // 1
+        1,
+        1,
+        1, // 2
+        0,
+        1,
+        1, // 3
         // Back face vertices (z = 0)
-        0, 0, 0,  // 4
-        1, 0, 0,  // 5
-        1, 1, 0,  // 6
-        0, 1, 0,  // 7
+        0,
+        0,
+        0, // 4
+        1,
+        0,
+        0, // 5
+        1,
+        1,
+        0, // 6
+        0,
+        1,
+        0, // 7
       ]);
 
       // 12 triangles for 6 faces (2 triangles per face)
-      // prettier-ignore
+      // prettier-ignore -- preserve triangle index grouping
       const indices = new Uint16Array([
         // Front face
-        0, 1, 2,  2, 3, 0,
+        0, 1, 2, 2, 3, 0,
         // Back face
-        5, 4, 7,  7, 6, 5,
+        5, 4, 7, 7, 6, 5,
         // Top face
-        3, 2, 6,  6, 7, 3,
+        3, 2, 6, 6, 7, 3,
         // Bottom face
-        4, 5, 1,  1, 0, 4,
+        4, 5, 1, 1, 0, 4,
         // Right face
-        1, 5, 6,  6, 2, 1,
+        1, 5, 6, 6, 2, 1,
         // Left face
-        4, 0, 3,  3, 7, 4,
+        4, 0, 3, 3, 7, 4,
       ]);
 
       const result = detectEdges(positions, indices, 30);
@@ -240,7 +256,10 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker.createGeometry({ file: createGeometryFile('cube.scad'), parameters: {} });
+      const result = await worker.createGeometry({
+        file: createGeometryFile('cube.scad'),
+        parameters: {},
+      });
 
       expect(result.success).toBe(true);
 
@@ -266,7 +285,10 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker.createGeometry({ file: createGeometryFile('cube.scad'), parameters: {} });
+      const result = await worker.createGeometry({
+        file: createGeometryFile('cube.scad'),
+        parameters: {},
+      });
 
       expect(result.success).toBe(true);
 
@@ -311,7 +333,10 @@ describe.skip('Edge Detection Middleware', () => {
         'cube.scad': 'cube([10, 10, 10]);',
       });
 
-      const result = await worker.createGeometry({ file: createGeometryFile('cube.scad'), parameters: {} });
+      const result = await worker.createGeometry({
+        file: createGeometryFile('cube.scad'),
+        parameters: {},
+      });
 
       expect(result.success).toBe(true);
 
@@ -348,10 +373,10 @@ describe.skip('Edge Detection Middleware', () => {
       const uniqueY = new Set<number>();
       const uniqueZ = new Set<number>();
 
-      for (let i = 0; i < positions.length; i += 3) {
-        uniqueX.add(Math.round((positions[i] ?? 0) * 100_000) / 100_000);
-        uniqueY.add(Math.round((positions[i + 1] ?? 0) * 100_000) / 100_000);
-        uniqueZ.add(Math.round((positions[i + 2] ?? 0) * 100_000) / 100_000);
+      for (let index = 0; index < positions.length; index += 3) {
+        uniqueX.add(Math.round((positions[index] ?? 0) * 100_000) / 100_000);
+        uniqueY.add(Math.round((positions[index + 1] ?? 0) * 100_000) / 100_000);
+        uniqueZ.add(Math.round((positions[index + 2] ?? 0) * 100_000) / 100_000);
       }
 
       expect(uniqueX.has(0)).toBe(true);
@@ -370,7 +395,10 @@ describe.skip('Edge Detection Middleware', () => {
         'sphere.scad': '$fn=16; sphere(r=5);',
       });
 
-      const result = await worker.createGeometry({ file: createGeometryFile('sphere.scad'), parameters: {} });
+      const result = await worker.createGeometry({
+        file: createGeometryFile('sphere.scad'),
+        parameters: {},
+      });
 
       expect(result.success).toBe(true);
 

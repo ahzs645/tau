@@ -60,21 +60,21 @@ function formatRelativeTime(dateString: string | undefined): string {
   return `${years} ${years === 1 ? 'year' : 'years'} ago`;
 }
 
-// eslint-disable-next-line complexity -- acceptable for containment.
+// oxlint-disable-next-line complexity -- acceptable for containment.
 export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.Element {
   const { metadata, owner, repo, isLoading, className } = properties;
 
   if (isLoading) {
     return (
       <div className={cn('space-y-4 rounded-lg border bg-muted/50 p-4', className)}>
-        <div className="flex items-start gap-3">
-          <Skeleton className="size-16 rounded-full" />
-          <div className="flex-1 space-y-2">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-4 w-full" />
+        <div className='flex items-start gap-3'>
+          <Skeleton className='size-16 rounded-full' />
+          <div className='flex-1 space-y-2'>
+            <Skeleton className='h-5 w-48' />
+            <Skeleton className='h-4 w-full' />
           </div>
         </div>
-        <Skeleton className="h-10 w-full" />
+        <Skeleton className='h-10 w-full' />
       </div>
     );
   }
@@ -82,42 +82,42 @@ export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.
   return (
     <div className={cn('space-y-4 rounded-lg border bg-muted/50 p-4', className)}>
       {/* Header with avatar and name */}
-      <div className="flex items-start gap-3">
+      <div className='flex items-start gap-3'>
         {metadata?.avatarUrl ? (
-          <img src={metadata.avatarUrl} alt={`${owner} avatar`} className="size-16 rounded-full" />
+          <img src={metadata.avatarUrl} alt={`${owner} avatar`} className='size-16 rounded-full' />
         ) : (
-          <div className="flex size-16 items-center justify-center rounded-full bg-muted">
-            <span className="text-2xl font-semibold">{owner[0]?.toUpperCase()}</span>
+          <div className='flex size-16 items-center justify-center rounded-full bg-muted'>
+            <span className='text-2xl font-semibold'>{owner[0]?.toUpperCase()}</span>
           </div>
         )}
-        <div className="flex-1 space-y-1">
-          <ExternalLink href={`https://github.com/${owner}/${repo}`} className="font-mono text-lg font-semibold">
+        <div className='flex-1 space-y-1'>
+          <ExternalLink href={`https://github.com/${owner}/${repo}`} className='font-mono text-lg font-semibold'>
             {owner}/{repo}
           </ExternalLink>
           {metadata?.description ? (
-            <p className="line-clamp-2 text-sm text-muted-foreground">{metadata.description}</p>
+            <p className='line-clamp-2 text-sm text-muted-foreground'>{metadata.description}</p>
           ) : undefined}
         </div>
       </div>
 
       {/* Stats row */}
       {metadata?.stars !== undefined || metadata?.forks !== undefined || metadata?.watchers !== undefined ? (
-        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+        <div className='flex items-center gap-4 text-sm text-muted-foreground'>
           {metadata.stars === undefined ? undefined : (
-            <div className="flex items-center gap-1">
-              <Star className="size-4" />
+            <div className='flex items-center gap-1'>
+              <Star className='size-4' />
               <span>{metadata.stars.toLocaleString()}</span>
             </div>
           )}
           {metadata.forks === undefined ? undefined : (
-            <div className="flex items-center gap-1">
-              <GitFork className="size-4" />
+            <div className='flex items-center gap-1'>
+              <GitFork className='size-4' />
               <span>{metadata.forks.toLocaleString()}</span>
             </div>
           )}
           {metadata.watchers === undefined ? undefined : (
-            <div className="flex items-center gap-1">
-              <Eye className="size-4" />
+            <div className='flex items-center gap-1'>
+              <Eye className='size-4' />
               <span>{metadata.watchers.toLocaleString()}</span>
             </div>
           )}
@@ -125,18 +125,18 @@ export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.
       ) : undefined}
 
       {/* Bottom row with badges and info */}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <div className='flex flex-wrap items-center gap-2 text-sm'>
         {/* Visibility badge */}
         {metadata?.isPrivate === undefined ? undefined : (
-          <Badge variant="secondary" className="gap-1">
+          <Badge variant='secondary' className='gap-1'>
             {metadata.isPrivate ? (
               <>
-                <Lock className="size-3" />
+                <Lock className='size-3' />
                 Private
               </>
             ) : (
               <>
-                <Globe className="size-3" />
+                <Globe className='size-3' />
                 Public
               </>
             )}
@@ -145,16 +145,16 @@ export function RepositoryCard(properties: RepositoryCardProperties): React.JSX.
 
         {/* License badge */}
         {metadata?.license ? (
-          <Badge variant="secondary" className="gap-1">
-            <Scale className="size-3" />
+          <Badge variant='secondary' className='gap-1'>
+            <Scale className='size-3' />
             {metadata.license}
           </Badge>
         ) : undefined}
 
         {/* Last updated */}
         {metadata?.lastUpdated ? (
-          <Badge variant="secondary" className="gap-1">
-            <Clock className="size-3" />
+          <Badge variant='secondary' className='gap-1'>
+            <Clock className='size-3' />
             {formatRelativeTime(metadata.lastUpdated)}
           </Badge>
         ) : undefined}

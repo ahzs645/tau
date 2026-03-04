@@ -16,32 +16,32 @@ export const SvgGeometry = ({ svg, depth }: { svg: string; depth: number }): Buf
     }
 
     pts.reverse();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- SvgLoader adds this
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- SvgLoader adds this
     const { strokeWidth } = path.userData!['style'];
 
     const pPrevious = new Vector2();
     const pNext = new Vector2();
     const c = new Vector2();
     const offsetPts = [];
-    for (const [idx, p] of pts.entries()) {
-      let idxPrevious = idx - 1;
-      if (idxPrevious < 0) {
-        idxPrevious = pts.length - 1;
+    for (const [index, p] of pts.entries()) {
+      let indexPrevious = index - 1;
+      if (indexPrevious < 0) {
+        indexPrevious = pts.length - 1;
       }
 
-      let idxNext = idx + 1;
-      if (idxNext === pts.length) {
-        idxNext = 0;
+      let indexNext = index + 1;
+      if (indexNext === pts.length) {
+        indexNext = 0;
       }
 
-      pPrevious.subVectors(pts[idxPrevious]!, p).normalize();
-      pNext.subVectors(pts[idxNext]!, p).normalize();
+      pPrevious.subVectors(pts[indexPrevious]!, p).normalize();
+      pNext.subVectors(pts[indexNext]!, p).normalize();
       const anglePrevious = pPrevious.angle();
       const angleNext = pNext.angle();
       const angleMid = (angleNext - anglePrevious) * 0.5;
       pPrevious.rotateAround(c, angleMid);
-      const offsetDist = strokeWidth / Math.cos(angleMid - Math.PI * 0.5);
-      offsetPts.push(pPrevious.clone().setLength(offsetDist).add(p));
+      const offsetDistance = strokeWidth / Math.cos(angleMid - Math.PI * 0.5);
+      offsetPts.push(pPrevious.clone().setLength(offsetDistance).add(p));
     }
 
     const shape = new Shape(offsetPts);

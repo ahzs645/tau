@@ -16,7 +16,7 @@ async function cachePromise<T>(key: string, setPromise: () => Promise<T>): Promi
 
 const fontFamily = "'Geist Sans', ui-sans-serif, system-ui, sans-serif";
 
-const diagramCssVars = [
+const diagramCssVariables = [
   '--diagram-node',
   '--diagram-node-border',
   '--diagram-node-text',
@@ -29,7 +29,7 @@ const diagramCssVars = [
   '--diagram-accent',
 ] as const;
 
-type DiagramVariable = (typeof diagramCssVars)[number];
+type DiagramVariable = (typeof diagramCssVariables)[number];
 type DiagramColors = Record<DiagramVariable, string>;
 
 /**
@@ -40,7 +40,7 @@ function resolveDiagramColors(): DiagramColors {
   const container = document.createElement('div');
   container.style.display = 'none';
 
-  const probes = diagramCssVars.map((variable) => {
+  const probes = diagramCssVariables.map((variable) => {
     const element = document.createElement('span');
     element.style.color = `var(${variable})`;
     container.append(element);
@@ -51,7 +51,7 @@ function resolveDiagramColors(): DiagramColors {
 
   const result: Record<string, string> = {};
   for (const [index, element] of probes.entries()) {
-    const variable = diagramCssVars[index];
+    const variable = diagramCssVariables[index];
     if (variable) {
       result[variable] = computedColorToHex(getComputedStyle(element).color);
     }
@@ -168,16 +168,16 @@ function MermaidRenderer({ chart }: { readonly chart: string }): React.JSX.Eleme
   );
 
   return (
-    <div className="not-prose my-6 overflow-x-auto rounded-xl border border-border/50 bg-muted/30 px-4 py-6">
+    <div className='not-prose my-6 overflow-x-auto rounded-xl border border-border/50 bg-muted/30 px-4 py-6'>
       <div
-        // eslint-disable-next-line react/no-danger -- Mermaid returns pre-rendered SVG strings; dangerouslySetInnerHTML is the intended injection method.
+        // oxlint-disable-next-line react/no-danger -- Mermaid returns pre-rendered SVG strings; dangerouslySetInnerHTML is the intended injection method.
         dangerouslySetInnerHTML={{ __html: svg }}
         ref={(container) => {
           if (container) {
             bindFunctions?.(container);
           }
         }}
-        className="[&>svg]:mx-auto [&>svg]:block [&>svg]:bg-transparent!"
+        className='[&>svg]:mx-auto [&>svg]:block [&>svg]:bg-transparent!'
       />
     </div>
   );

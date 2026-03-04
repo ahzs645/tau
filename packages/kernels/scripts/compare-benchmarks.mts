@@ -1,4 +1,5 @@
-/* eslint-disable n/prefer-global/process -- CLI script requires direct process access */
+// oxlint-disable complexity -- CLI script with deeply nested benchmark comparison logic
+/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
 
 /**
  * Terminal benchmark comparison — prints a table comparing the latest
@@ -50,10 +51,10 @@ function stripTimestampPrefix(name: string): string {
   return name.replace(/^\d+T\d+_/, '');
 }
 
-function loadExperiment(dir: string): Experiment | undefined {
-  const name = basename(dir);
-  const benchDir = join(dir, 'benchmarks');
-  const benchRoot = existsSync(benchDir) ? benchDir : dir;
+function loadExperiment(directory: string): Experiment | undefined {
+  const name = basename(directory);
+  const benchDirectory = join(directory, 'benchmarks');
+  const benchRoot = existsSync(benchDirectory) ? benchDirectory : directory;
 
   const benchFiles = readdirSync(benchRoot).filter((f) => f.startsWith('benchmark-') && f.endsWith('.json'));
 
@@ -65,11 +66,11 @@ function loadExperiment(dir: string): Experiment | undefined {
   const benchmark = JSON.parse(readFileSync(join(benchRoot, latestBench), 'utf8')) as BenchmarkRun;
 
   let wasmSizeBytes = 0;
-  const unpackedDir = join(dir, 'unpacked');
-  if (existsSync(unpackedDir)) {
-    for (const f of readdirSync(unpackedDir)) {
+  const unpackedDirectory = join(directory, 'unpacked');
+  if (existsSync(unpackedDirectory)) {
+    for (const f of readdirSync(unpackedDirectory)) {
       if (f === 'replicad_single.wasm') {
-        wasmSizeBytes = statSync(join(unpackedDir, f)).size;
+        wasmSizeBytes = statSync(join(unpackedDirectory, f)).size;
         break;
       }
     }
@@ -92,7 +93,7 @@ function geometricMean(values: number[]): number {
     return 0;
   }
 
-  return values.reduce((acc, v) => acc * v, 1) ** (1 / values.length);
+  return values.reduce((accumulator, v) => accumulator * v, 1) ** (1 / values.length);
 }
 
 function formatMs(ms: number): string {
@@ -125,8 +126,8 @@ function main(): void {
   let baseline: Experiment | undefined;
 
   if (values.compare && values.compare.length > 0) {
-    for (const dir of values.compare) {
-      const fullPath = resolve(dir);
+    for (const directory of values.compare) {
+      const fullPath = resolve(directory);
       const exp = loadExperiment(fullPath);
       if (exp) {
         if (basename(fullPath).includes('baseline')) {
@@ -135,18 +136,18 @@ function main(): void {
           experiments.push(exp);
         }
       } else {
-        console.warn(`Could not load experiment: ${dir}`);
+        console.warn(`Could not load experiment: ${directory}`);
       }
     }
   } else {
-    const expDir = resolve(values.experiments ?? '../../tarballs/experiments');
-    if (!existsSync(expDir)) {
-      console.error(`Experiments directory not found: ${expDir}`);
+    const experimentDirectory = resolve(values.experiments ?? '../../tarballs/experiments');
+    if (!existsSync(experimentDirectory)) {
+      console.error(`Experiments directory not found: ${experimentDirectory}`);
       process.exit(1);
     }
 
-    for (const entry of readdirSync(expDir).sort()) {
-      const fullPath = join(expDir, entry);
+    for (const entry of readdirSync(experimentDirectory).sort()) {
+      const fullPath = join(experimentDirectory, entry);
       if (!statSync(fullPath).isDirectory()) {
         continue;
       }
@@ -179,7 +180,7 @@ function main(): void {
     ...experiments.map((experiment) => experiment.shortName.padStart(colW)),
   ];
 
-  const sep = '─'.repeat(header.join('│').length);
+  const separator = '─'.repeat(header.join('│').length);
 
   console.log();
   console.log('\u001B[1m  WASM Build Benchmark Comparison\u001B[0m');
@@ -207,9 +208,9 @@ function main(): void {
 
   // Benchmark table
   console.log('\u001B[1m  Benchmark Medians (ms):\u001B[0m');
-  console.log(`  ${sep}`);
+  console.log(`  ${separator}`);
   console.log(`  ${header.join('│')}`);
-  console.log(`  ${sep}`);
+  console.log(`  ${separator}`);
 
   const baselineMedians: Record<string, number> = {};
   if (baseline) {
@@ -262,7 +263,7 @@ function main(): void {
     }
   }
 
-  console.log(`  ${sep}`);
+  console.log(`  ${separator}`);
 
   // Geo-mean summary
   const baselineGeoMean = baseline ? geometricMean(baseline.benchmark.results.map((r) => r.median)) : 0;
@@ -296,7 +297,7 @@ function main(): void {
     ...experiments.map((experiment) => formatMs(experiment.benchmark.totalDurationMs).padStart(colW)),
   ];
   console.log(totalRow.join('│'));
-  console.log(`  ${sep}`);
+  console.log(`  ${separator}`);
 
   // Ranking
   console.log();
@@ -310,10 +311,10 @@ function main(): void {
     }))
     .sort((a, b) => a.geoMean - b.geoMean);
 
-  for (const [i, r] of ranked.entries()) {
-    const marker = i === 0 ? ' 🏆' : '';
+  for (const [index, r] of ranked.entries()) {
+    const marker = index === 0 ? ' 🏆' : '';
     console.log(
-      `  ${String(i + 1).padStart(2)}. ${r.name.padEnd(25)} ${formatMs(r.geoMean)} ms   ${formatMb(r.size)}${marker}`,
+      `  ${String(index + 1).padStart(2)}. ${r.name.padEnd(25)} ${formatMs(r.geoMean)} ms   ${formatMb(r.size)}${marker}`,
     );
   }
 

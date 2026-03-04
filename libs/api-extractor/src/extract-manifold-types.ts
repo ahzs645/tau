@@ -17,18 +17,18 @@ import process from 'node:process';
 // Configuration
 // =============================================================================
 
-const manifoldPkgDir = join(import.meta.dirname, '../../../packages/kernels/node_modules/manifold-3d');
+const manifoldPackageDirectory = join(import.meta.dirname, '../../../packages/kernels/node_modules/manifold-3d');
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
 function readManifoldFile(relativePath: string): string {
-  return readFileSync(join(manifoldPkgDir, relativePath), 'utf8');
+  return readFileSync(join(manifoldPackageDirectory, relativePath), 'utf8');
 }
 
 function stripLicenseHeader(content: string): string {
-  return content.replace(/^\/\/\s*Copyright[\s\S]*?\/\/\s*limitations under the License\.\s*\n*/m, '');
+  return content.replace(/^\/\/\s*Copyright[\S\s]*?\/\/\s*limitations under the License\.\s*\n*/m, '');
 }
 
 function indent(text: string, spaces = 2): string {
@@ -57,7 +57,7 @@ function buildRootModuleContent(): string {
 
   let encapsulatedTypes = stripLicenseHeader(readManifoldFile('manifold-encapsulated-types.d.ts'));
   encapsulatedTypes = encapsulatedTypes.replaceAll(
-    /import\s*{[^}]*}\s*from\s*['"]\.\/manifold-global-types['"];?\s*\n?/g,
+    /import\s*{[^}]*}\s*from\s*["']\.\/manifold-global-types["'];?\s*\n?/g,
     '',
   );
 
@@ -97,7 +97,7 @@ function buildManifoldCadContent(): string {
   content = content.replace(/\nexport\s*{\s*}\s*$/, '');
 
   // Strip the @packageDocumentation / @module JSDoc block
-  content = content.replace(/\/\*\*[\s\S]*?@packageDocumentation[\s\S]*?\*\/\s*\n?/, '');
+  content = content.replace(/\/\*\*[\S\s]*?@packageDocumentation[\S\s]*?\*\/\s*\n?/, '');
 
   // Convert `export declare` to `export` (inside declare module, declare is implicit)
   content = content.replaceAll(/export\s+declare\s+/g, 'export ');
@@ -140,12 +140,12 @@ function main(): void {
   try {
     console.log('Extracting manifold-3d type declarations...\n');
 
-    const outputDir = join(import.meta.dirname, 'generated/manifold');
-    mkdirSync(outputDir, { recursive: true });
-    console.log(`Output directory: ${outputDir}`);
+    const outputDirectory = join(import.meta.dirname, 'generated/manifold');
+    mkdirSync(outputDirectory, { recursive: true });
+    console.log(`Output directory: ${outputDirectory}`);
 
     const bundledTypes = buildBundledTypes();
-    const outputPath = join(outputDir, 'manifold.bundled.d.ts');
+    const outputPath = join(outputDirectory, 'manifold.bundled.d.ts');
     writeFileSync(outputPath, bundledTypes);
     console.log(`\nBundled type declarations written to ${outputPath}`);
     console.log(`Output size: ${(bundledTypes.length / 1024).toFixed(1)} KB`);

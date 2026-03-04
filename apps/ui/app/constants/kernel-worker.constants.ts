@@ -34,7 +34,11 @@ export const debugKernelOptions: KernelClientOptions = {
   ...defaultKernelOptions,
   kernels: defaultKernelOptions.kernels.map((kernel) =>
     kernel.id === 'replicad'
-      ? replicad({ wasm: 'single-exceptions', withBrepEdges: true, withSourceMapping: true })
+      ? replicad({
+          wasm: 'single-exceptions',
+          withBrepEdges: true,
+          withSourceMapping: true,
+        })
       : kernel,
   ),
 };

@@ -1,6 +1,6 @@
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
+// oxlint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
 /// <reference path="./types/assimpjs.d.ts" />
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
+// oxlint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
 /// <reference path="./types/occt-import-js.d.ts" />
 
 // Main conversion functions

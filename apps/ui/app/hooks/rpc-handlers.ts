@@ -63,16 +63,22 @@ function createBrowserRpcFileSystem(
       return decodeTextFile(data);
     },
     async writeFile(path: string, content: string): Promise<void> {
-      await fileManager.writeFile(path, encodeTextFile(content), { source: 'machine' });
+      await fileManager.writeFile(path, encodeTextFile(content), {
+        source: 'machine',
+      });
     },
-    async writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
-      await fileManager.writeFile(path, new Uint8Array(data.buffer) as Uint8Array<ArrayBuffer>, { source: 'machine' });
+    async writeBinaryFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void> {
+      await fileManager.writeFile(path, new Uint8Array(data.buffer), { source: 'machine' });
     },
     async deleteFile(path: string): Promise<void> {
       await fileManager.deleteFile(path, { source: 'machine' });
     },
     async readdir(path: string): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number }>> {
-      const entries: Array<{ name: string; type: 'file' | 'directory'; size: number }> = [];
+      const entries: Array<{
+        name: string;
+        type: 'file' | 'directory';
+        size: number;
+      }> = [];
 
       for (const [entryPath, entry] of fileTree.entries()) {
         const parentPath = entryPath.includes('/') ? entryPath.slice(0, entryPath.lastIndexOf('/')) : '';
@@ -102,13 +108,20 @@ function createBrowserKernelClient(buildRef: ActorRefFrom<typeof buildMachine>):
         let cadUnit = compilationUnits.get(targetFile);
 
         if (!cadUnit) {
-          buildRef.send({ type: 'createCompilationUnit', entryFile: targetFile });
+          buildRef.send({
+            type: 'createCompilationUnit',
+            entryFile: targetFile,
+          });
           const refreshed = buildRef.getSnapshot();
           cadUnit = refreshed.context.compilationUnits.get(targetFile);
         }
 
         if (!cadUnit) {
-          return { success: false, errorCode: 'UNKNOWN', message: 'Failed to create compilation unit' };
+          return {
+            success: false,
+            errorCode: 'UNKNOWN',
+            message: 'Failed to create compilation unit',
+          };
         }
 
         const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'ready' || state.value === 'error');
@@ -146,14 +159,22 @@ function createBrowserGraphicsClient(
         const mainUnit = compilationUnits.get(mainEntryFile);
 
         if (!mainUnit) {
-          return { success: false, errorCode: 'UNKNOWN', message: 'No compilation unit found for main entry file' };
+          return {
+            success: false,
+            errorCode: 'UNKNOWN',
+            message: 'No compilation unit found for main entry file',
+          };
         }
 
         const cadSnapshot = mainUnit.getSnapshot();
         const geometry = cadSnapshot.context.geometries.find((g) => g.format === 'gltf');
 
-        if (!geometry || geometry.format !== 'gltf') {
-          return { success: false, errorCode: 'UNKNOWN', message: 'No GLTF geometry available' };
+        if (geometry?.format !== 'gltf') {
+          return {
+            success: false,
+            errorCode: 'UNKNOWN',
+            message: 'No GLTF geometry available',
+          };
         }
 
         return { success: true, glb: geometry.content };
@@ -168,7 +189,7 @@ function createBrowserGraphicsClient(
 
     async captureScreenshot(): Promise<CaptureScreenshotRpcResult> {
       try {
-        const src = await new Promise<string>((resolve, reject) => {
+        const source = await new Promise<string>((resolve, reject) => {
           const screenshotActor = createActor(screenshotRequestMachine, {
             input: { graphicsRef },
           }).start();
@@ -205,7 +226,7 @@ function createBrowserGraphicsClient(
 
         return {
           success: true,
-          images: [{ view: 'current', dataUrl: src }],
+          images: [{ view: 'current', dataUrl: source }],
         };
       } catch (error) {
         return {
@@ -233,8 +254,8 @@ function createBrowserGraphicsClient(
             };
           }
 
-          // eslint-disable-next-line no-await-in-loop -- Sequential operation required
-          const src = await new Promise<string>((resolve, reject) => {
+          // oxlint-disable-next-line no-await-in-loop -- Sequential operation required
+          const source = await new Promise<string>((resolve, reject) => {
             const screenshotActor = createActor(screenshotRequestMachine, {
               input: { graphicsRef },
             }).start();
@@ -273,7 +294,7 @@ function createBrowserGraphicsClient(
           const observation: Observation = {
             id: generatePrefixedId(idPrefix.observation),
             side,
-            src,
+            src: source,
           };
 
           observations.push(observation);

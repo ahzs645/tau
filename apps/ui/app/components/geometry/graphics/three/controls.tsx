@@ -66,6 +66,7 @@ export const Controls = React.memo(function ({
 
       return 'yz';
     })();
+    // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- dir refers to direction vector, not directory
     const newDir: 1 | -1 = isInverse ? -1 : 1;
     graphicsActor.send({ type: 'selectSectionView', payload: base });
     graphicsActor.send({ type: 'setSectionViewDirection', payload: newDir });

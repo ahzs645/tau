@@ -34,6 +34,7 @@ async function ensureReady(): Promise<void> {
  * one at a time, preventing the race entirely. Read-only operations
  * (readFile, readdir, stat, exists) are not serialized and can run freely.
  */
+// oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
 let writeQueue: Promise<void> = Promise.resolve();
 
 let serializedQueueDepth = 0;
@@ -47,19 +48,19 @@ async function serialized<T>(operation: () => Promise<T>): Promise<T> {
   serializedQueueDepth++;
 
   const result = writeQueue
-    // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+    // oxlint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
     .catch(() => {
       // Swallow previous error so the queue continues
     })
-    // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+    // oxlint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
     .then(async () => operation());
 
   writeQueue = result
-    // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+    // oxlint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
     .catch(() => {
       // No-op
     })
-    // eslint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
+    // oxlint-disable-next-line promise/prefer-await-to-then -- Intentional promise chaining for queue serialization
     .then(() => {
       serializedQueueDepth--;
     });
@@ -83,7 +84,7 @@ export type FileTreeNode = {
 
 export type FileManager = {
   readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
   readFile(filepath: string, options?: {}): Promise<Uint8Array<ArrayBuffer>>;
   readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   writeFile(filepath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
@@ -120,11 +121,11 @@ export type FileManager = {
 
 // Internal implementation for readFile with proper overload handling
 async function readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
+// oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
 async function readFile(filepath: string, options?: {}): Promise<Uint8Array<ArrayBuffer>>;
 async function readFile(
   filepath: string,
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- preserving original API for binary reads
   options?: 'utf8' | { encoding: 'utf8' } | {},
 ): Promise<string | Uint8Array<ArrayBuffer>> {
   await ensureReady();
@@ -166,7 +167,7 @@ async function ensureDirectoryExistsInternal(targetPath: string): Promise<void> 
   for (const segment of segments) {
     currentPath += `/${segment}`;
     try {
-      // eslint-disable-next-line no-await-in-loop -- Need to create directories sequentially
+      // oxlint-disable-next-line no-await-in-loop -- Need to create directories sequentially
       await fsp.mkdir(currentPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -238,20 +239,20 @@ export const fileManager: FileManager = {
   async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void> {
     return serialized(async () => {
       await ensureReady();
-      const createdDirs = new Set<string>();
+      const createdDirectories = new Set<string>();
 
       for (const [path, file] of Object.entries(files)) {
         const lastSlashIndex = path.lastIndexOf('/');
         if (lastSlashIndex > 0) {
           const directoryPath = path.slice(0, lastSlashIndex);
-          if (!createdDirs.has(directoryPath)) {
-            // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+          if (!createdDirectories.has(directoryPath)) {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
             await ensureDirectoryExistsInternal(directoryPath);
-            createdDirs.add(directoryPath);
+            createdDirectories.add(directoryPath);
           }
         }
 
-        // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
         await fsp.writeFile(path, file.content);
       }
     });
@@ -317,7 +318,7 @@ export const fileManager: FileManager = {
 
       for (const entry of entries) {
         const fullPath = joinPath(currentPath, entry);
-        // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
+        // oxlint-disable-next-line no-await-in-loop -- Need to process directories sequentially
         const stats = await fsp.stat(fullPath);
 
         if (stats.isFile()) {
@@ -336,7 +337,7 @@ export const fileManager: FileManager = {
             mtimeMs: stats.mtimeMs,
           });
         } else {
-          // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
+          // oxlint-disable-next-line no-await-in-loop -- Need to process directories sequentially
           await collectStatsRecursive(fullPath, basePath);
         }
       }
@@ -363,16 +364,16 @@ export const fileManager: FileManager = {
 
       for (const entry of entries) {
         const fullPath = joinPath(currentPath, entry);
-        // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
+        // oxlint-disable-next-line no-await-in-loop -- Need to process directories sequentially
         const stats = await fsp.stat(fullPath);
 
         if (stats.isFile()) {
           const relativePath = basePath === '/' ? fullPath.slice(1) : fullPath.slice(basePath.length + 1);
-          // eslint-disable-next-line no-await-in-loop -- Need to read files sequentially
+          // oxlint-disable-next-line no-await-in-loop -- Need to read files sequentially
           const buffer = await fsp.readFile(fullPath);
           files[relativePath] = new Uint8Array(asBuffer(buffer.buffer), buffer.byteOffset, buffer.byteLength);
         } else {
-          // eslint-disable-next-line no-await-in-loop -- Need to process directories sequentially
+          // oxlint-disable-next-line no-await-in-loop -- Need to process directories sequentially
           await collectRecursive(fullPath, basePath);
         }
       }
@@ -410,11 +411,11 @@ export const fileManager: FileManager = {
         const lastSlashIndex = destinationFilePath.lastIndexOf('/');
         if (lastSlashIndex > 0) {
           const directoryPath = destinationFilePath.slice(0, lastSlashIndex);
-          // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+          // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
           await ensureDirectoryExistsInternal(directoryPath);
         }
 
-        // eslint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
         await fsp.writeFile(destinationFilePath, content);
       }
     });
@@ -468,13 +469,19 @@ export const fileManager: FileManager = {
     switch (backend) {
       case 'indexeddb': {
         const storeName = `${metaConfig.databasePrefix}fs`;
-        standaloneFs = await resolveMountConfig({ backend: IndexedDB, storeName });
+        standaloneFs = await resolveMountConfig({
+          backend: IndexedDB,
+          storeName,
+        });
         break;
       }
 
       case 'opfs': {
         const rootHandle = await navigator.storage.getDirectory();
-        standaloneFs = await resolveMountConfig({ backend: WebAccess, handle: rootHandle });
+        standaloneFs = await resolveMountConfig({
+          backend: WebAccess,
+          handle: rootHandle,
+        });
         break;
       }
 
@@ -506,10 +513,10 @@ export const fileManager: FileManager = {
       for (const entry of entries) {
         const fullPath = currentPath === '/' ? `/${entry}` : `${currentPath}/${entry}`;
         try {
-          // eslint-disable-next-line no-await-in-loop -- Sequential stat required for correct tree building
+          // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for correct tree building
           const stats = await standaloneFs.stat(fullPath);
           if (isDirectory(stats)) {
-            // eslint-disable-next-line no-await-in-loop -- Sequential traversal required for correct tree building
+            // oxlint-disable-next-line no-await-in-loop -- Sequential traversal required for correct tree building
             const children = await buildTree(fullPath);
             nodes.push({ id: fullPath, name: entry, children });
           } else {

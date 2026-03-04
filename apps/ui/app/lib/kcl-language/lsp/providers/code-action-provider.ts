@@ -19,7 +19,7 @@ export function createCodeActionProvider(
   client: KclLspClient,
 ): Monaco.languages.CodeActionProvider {
   return {
-    // eslint-disable-next-line max-params -- Monaco editor API contract
+    // oxlint-disable-next-line max-params -- Monaco editor API contract
     async provideCodeActions(
       model: Monaco.editor.ITextModel,
       range: Monaco.Range,
@@ -30,8 +30,14 @@ export function createCodeActionProvider(
       try {
         const diagnostics: LSP.Diagnostic[] = context.markers.map((marker) => ({
           range: {
-            start: { line: marker.startLineNumber - 1, character: marker.startColumn - 1 },
-            end: { line: marker.endLineNumber - 1, character: marker.endColumn - 1 },
+            start: {
+              line: marker.startLineNumber - 1,
+              character: marker.startColumn - 1,
+            },
+            end: {
+              line: marker.endLineNumber - 1,
+              character: marker.endColumn - 1,
+            },
           },
           message: marker.message,
           severity: markerSeverityToLsp(monaco, marker.severity),

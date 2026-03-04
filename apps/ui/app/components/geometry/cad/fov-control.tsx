@@ -63,7 +63,7 @@ export function FovControl({ className, isCompact = false }: FovControlProps): R
             max={90}
             step={isShiftHeld ? 5 : 1}
             value={[fovAngle]}
-            variant="inset"
+            variant='inset'
             // Inset-0 is used to make the entire button slideable for better UX
             className={cn(
               'size-full transition-[opacity] duration-300',
@@ -88,7 +88,7 @@ export function FovControl({ className, isCompact = false }: FovControlProps): R
             )}
           >
             <span>{isCompact ? 'Orth.' : 'Orthographic'}</span>
-            <div className="w-[3ch] text-center font-bold">{fovAngle}&deg;</div>
+            <div className='w-[3ch] text-center font-bold'>{fovAngle}&deg;</div>
             <span>{isCompact ? 'Persp.' : 'Perspective'}</span>
           </div>
         </div>
@@ -96,14 +96,14 @@ export function FovControl({ className, isCompact = false }: FovControlProps): R
       <TooltipContent forceMount>
         <span>Change field of view angle</span>
         <br />
-        <span className="inline-flex items-center gap-1 text-neutral-foreground/60 dark:text-foreground/50">
-          <Info className="size-3 stroke-2" /> Set to 0&deg; for orthographic view
+        <span className='inline-flex items-center gap-1 text-neutral-foreground/60 dark:text-foreground/50'>
+          <Info className='size-3 stroke-2' /> Set to 0&deg; for orthographic view
         </span>
         {/* Desktop only - shift key is usually not available on mobile */}
-        <br className="max-md:hidden" />
-        <span className="inline-flex items-center gap-1 text-neutral-foreground/60 max-md:hidden dark:text-foreground/50">
-          <Info className="size-3 stroke-2" /> Hold{' '}
-          <KeyShortcut variant="tooltip">{formatKeyCombination({ key: 'Shift' })}</KeyShortcut> for 5&deg; steps
+        <br className='max-md:hidden' />
+        <span className='inline-flex items-center gap-1 text-neutral-foreground/60 max-md:hidden dark:text-foreground/50'>
+          <Info className='size-3 stroke-2' /> Hold{' '}
+          <KeyShortcut variant='tooltip'>{formatKeyCombination({ key: 'Shift' })}</KeyShortcut> for 5&deg; steps
         </span>
       </TooltipContent>
     </Tooltip>

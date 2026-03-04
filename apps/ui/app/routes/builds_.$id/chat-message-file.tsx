@@ -19,7 +19,7 @@ export function ChatMessageFile({ part }: { readonly part: FileUIPart }): React.
         }}
       >
         <ImagePreviewTrigger>
-          <ImagePreviewImage className="size-12 rounded-lg border bg-background object-contain" />
+          <ImagePreviewImage className='size-12 rounded-lg border bg-background object-contain' />
         </ImagePreviewTrigger>
       </ImagePreview>
     );
@@ -27,20 +27,20 @@ export function ChatMessageFile({ part }: { readonly part: FileUIPart }): React.
 
   // Render non-image files or failed images as download links
   return (
-    <div className="flex items-center gap-2 rounded-lg border bg-background p-3">
-      <File className="size-5 text-muted-foreground" />
-      <div className="flex flex-1 flex-col gap-1">
+    <div className='flex items-center gap-2 rounded-lg border bg-background p-3'>
+      <File className='size-5 text-muted-foreground' />
+      <div className='flex flex-1 flex-col gap-1'>
         <a
           href={part.url}
           download={part.filename}
           className={cn('text-sm font-medium hover:underline', imageError && 'text-destructive')}
-          target="_blank"
-          rel="noopener noreferrer"
+          target='_blank'
+          rel='noopener noreferrer'
         >
           {part.filename ?? 'File'}
         </a>
-        {imageError ? <span className="text-xs text-destructive">Failed to load image. Click to download.</span> : null}
-        <span className="text-xs text-muted-foreground">{part.mediaType}</span>
+        {imageError ? <span className='text-xs text-destructive'>Failed to load image. Click to download.</span> : null}
+        <span className='text-xs text-muted-foreground'>{part.mediaType}</span>
       </div>
     </div>
   );

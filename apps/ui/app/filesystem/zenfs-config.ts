@@ -11,7 +11,7 @@
  * - '/': Main application filesystem
  * - '/git': Isolated filesystem for git operations (separate store)
  */
-import { configure, InMemory, fs as zenfs } from '@zenfs/core';
+import { configure, InMemory } from '@zenfs/core';
 import { IndexedDB, WebAccess } from '@zenfs/dom';
 import type { FileSystemBackend, FileSystemBackendConfig } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
@@ -232,6 +232,7 @@ export async function resetFileSystem(): Promise<void> {
     },
   });
   currentBackend = 'memory';
+  // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
   configurationPromise = Promise.resolve();
 }
 
@@ -258,5 +259,5 @@ export function getCurrentBackend(): FileSystemBackend | undefined {
  * ZenFS filesystem instance.
  * Provides Node.js-compatible filesystem API across all backends.
  */
-// eslint-disable-next-line unicorn/prefer-export-from -- Aliased export for cleaner imports throughout app
-export const fs = zenfs;
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- re-export for consumer convenience
+export { fs } from '@zenfs/core';

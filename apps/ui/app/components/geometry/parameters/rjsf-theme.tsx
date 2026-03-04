@@ -1,4 +1,4 @@
-/* eslint-disable react/prop-types -- causes false positives, they are actually typed */
+/* oxlint-disable react/prop-types -- causes false positives, they are actually typed */
 import type {
   RegistryWidgetsType,
   TemplatesType,
@@ -36,7 +36,7 @@ import { InlineCode } from '#components/code/code-block.js';
 import type { RJSFContext } from '#components/geometry/parameters/rjsf-context.js';
 
 // Custom Field Template with Reset Button and Search Filtering
-// eslint-disable-next-line complexity -- consider refactoring.
+// oxlint-disable-next-line complexity -- consider refactoring.
 function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSchema, RJSFContext>): React.ReactNode {
   const { label, help, required, description, errors, children, schema, formData, id, registry } = props;
 
@@ -60,7 +60,7 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
 
     return (
       <div
-        data-slot="field-group"
+        data-slot='field-group'
         className={cn(
           'field-group group/field-group',
 
@@ -110,7 +110,7 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
         const parentSegment = idParts[i];
         if (parentSegment) {
           const parentName = toTitleCase(parentSegment);
-          // eslint-disable-next-line max-depth -- consider refactoring.
+          // oxlint-disable-next-line max-depth -- consider refactoring.
           if (formContext.shouldShowField(parentName)) {
             isInMatchingGroup = true;
             break;
@@ -146,40 +146,40 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
   };
 
   return (
-    <div className="@container/parameter my-3 flex flex-col gap-0.5 px-3 transition-colors">
-      <div className="flex h-auto min-h-5 flex-row justify-between gap-2">
+    <div className='@container/parameter my-3 flex flex-col gap-0.5 px-3 transition-colors'>
+      <div className='flex h-auto min-h-5 flex-row justify-between gap-2'>
         <span
           className={cn('pb-0.25 text-sm', fieldHasValue ? 'font-medium' : 'font-normal')}
           aria-label={`Parameter: ${prettyLabel}`}
         >
           <HighlightText text={prettyLabel} searchTerm={formContext.searchTerm} />
-          {required ? <span className="text-destructive">*</span> : null}
+          {required ? <span className='text-destructive'>*</span> : null}
         </span>
         {fieldHasValue ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
-                size="xs"
-                className="h-5 text-muted-foreground"
+                variant='ghost'
+                size='xs'
+                className='h-5 text-muted-foreground'
                 aria-label={`Reset ${prettyLabel}`}
                 onClick={handleReset}
               >
-                <RefreshCcwDot className="size-3.5" />
+                <RefreshCcwDot className='size-3.5' />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="left">Reset &quot;{prettyLabel}&quot;</TooltipContent>
+            <TooltipContent side='left'>Reset &quot;{prettyLabel}&quot;</TooltipContent>
           </Tooltip>
         ) : null}
       </div>
       {descriptionText ? (
-        <div className="text-sm text-muted-foreground">
+        <div className='text-sm text-muted-foreground'>
           <HighlightText text={descriptionText} searchTerm={formContext.searchTerm} />
         </div>
       ) : (
         description
       )}
-      <div className="mt-auto flex w-full flex-row items-center gap-2">{children}</div>
+      <div className='mt-auto flex w-full flex-row items-center gap-2'>{children}</div>
       {help}
       {errors}
     </div>
@@ -223,11 +223,11 @@ function ObjectFieldTemplate(
 
   if (isRoot) {
     return (
-      <div className="[&:has(.properties:not(:empty))_.no-params]:hidden">
-        <EmptyItems className="no-params break-all group-data-[is-root-nested-only=true]/field-group:ml-5.5">
+      <div className='[&:has(.properties:not(:empty))_.no-params]:hidden'>
+        <EmptyItems className='no-params break-all group-data-[is-root-nested-only=true]/field-group:ml-5.5'>
           No parameters matching &quot;{formContext.searchTerm}&quot;
         </EmptyItems>
-        <div className="properties">{properties.map((element) => element.content)}</div>
+        <div className='properties'>{properties.map((element) => element.content)}</div>
       </div>
     );
   }
@@ -262,24 +262,24 @@ function ObjectFieldTemplate(
     : `(${totalPropertiesCount})`;
 
   return (
-    <Collapsible open={isOpen} className="w-full" onOpenChange={setIsOpen}>
+    <Collapsible open={isOpen} className='w-full' onOpenChange={setIsOpen}>
       <CollapsibleTrigger
-        className="group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/70"
+        className='group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/70'
         aria-label={`Group: ${prettyTitle}`}
       >
-        <h3 className="flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          <span className="truncate">
+        <h3 className='flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase'>
+          <span className='truncate'>
             <HighlightText text={prettyTitle} searchTerm={formContext.searchTerm} />
           </span>
           <span className={cn('ml-1.5 shrink-0 text-muted-foreground/50', isCountFiltered && 'italic')}>
             {countDisplay}
           </span>
         </h3>
-        <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
+        <ChevronRight className='size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
       </CollapsibleTrigger>
 
-      <CollapsibleContent className="px-0 py-0">
-        {description ? <div className="px-3 py-2 text-sm text-muted-foreground">{description}</div> : null}
+      <CollapsibleContent className='px-0 py-0'>
+        {description ? <div className='px-3 py-2 text-sm text-muted-foreground'>{description}</div> : null}
         {properties.map((element) => element.content)}
       </CollapsibleContent>
     </Collapsible>
@@ -323,26 +323,26 @@ function ArrayFieldTemplate(
   const countDisplay = `(${itemCount})`;
 
   return (
-    <Collapsible open={isOpen} className="w-full" onOpenChange={setIsOpen}>
+    <Collapsible open={isOpen} className='w-full' onOpenChange={setIsOpen}>
       <CollapsibleTrigger
-        className="group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/70"
+        className='group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/70'
         aria-label={`Group: ${prettyTitle}`}
       >
-        <h3 className="flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          <span className="truncate">
+        <h3 className='flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase'>
+          <span className='truncate'>
             <HighlightText text={prettyTitle} searchTerm={formContext.searchTerm} />
           </span>
-          <span className="ml-1.5 shrink-0 text-muted-foreground/50">{countDisplay}</span>
+          <span className='ml-1.5 shrink-0 text-muted-foreground/50'>{countDisplay}</span>
         </h3>
-        <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90" />
+        <ChevronRight className='size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
       </CollapsibleTrigger>
 
-      <CollapsibleContent className="px-0 py-0">
+      <CollapsibleContent className='px-0 py-0'>
         {items.map((item) => (
           <Fragment key={item.key}>{item.children}</Fragment>
         ))}
         {canAdd ? (
-          <Button type="button" variant="outline" size="sm" className="mx-2 my-2" onClick={onAddClick}>
+          <Button type='button' variant='outline' size='sm' className='mx-2 my-2' onClick={onAddClick}>
             Add item ({prettyTitle})
           </Button>
         ) : null}
@@ -353,7 +353,7 @@ function ArrayFieldTemplate(
 
 // Custom Select Widget for Enums
 function SelectWidget(props: WidgetProps): React.ReactNode {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
   const { options, value, onChange, placeholder, name } = props;
 
   const { enumOptions, enumDisabled } = options;
@@ -369,31 +369,31 @@ function SelectWidget(props: WidgetProps): React.ReactNode {
   const prettyLabel = name ? toTitleCase(name) : '';
 
   return (
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
     <Select value={value} onValueChange={handleChange}>
       <SelectTrigger
-        size="sm"
-        className="min-w-0 flex-1 bg-background"
+        size='sm'
+        className='min-w-0 flex-1 bg-background'
         aria-label={prettyLabel ? `Select for ${prettyLabel}` : undefined}
       >
         <SelectValue placeholder={placeholder ?? 'Choose an option'} />
       </SelectTrigger>
       <SelectContent>
         {placeholder ? (
-          <SelectItem value="" className="h-7">
-            <span className="truncate">{placeholder}</span>
+          <SelectItem value='' className='h-7'>
+            <span className='truncate'>{placeholder}</span>
           </SelectItem>
         ) : null}
         {enumOptions.map((option) => (
           <SelectItem
             key={String(option.value)}
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
             value={option.value}
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- value is untyped in RJSF
+            // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- value is untyped in RJSF
             disabled={enumDisabled?.includes(option.value)}
-            className="h-7"
+            className='h-7'
           >
-            <span className="truncate">{option.label}</span>
+            <span className='truncate'>{option.label}</span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -402,22 +402,22 @@ function SelectWidget(props: WidgetProps): React.ReactNode {
 }
 
 function CustomCheckboxWidget(props: WidgetProps): React.ReactNode {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
   const { value, onChange, name } = props;
   return <ParametersBoolean value={Boolean(value)} name={name} onChange={onChange} />;
 }
 
 function SimpleInputWidget(props: WidgetProps & { readonly inputType: string }): React.ReactNode {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
   const { value, onChange, inputType, schema, name } = props;
   const prettyLabel = name ? toTitleCase(name) : '';
   return (
     <Input
       type={inputType}
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
       value={value}
       defaultValue={schema.default as string}
-      className="h-6 flex-1 bg-background p-1"
+      className='h-6 flex-1 bg-background p-1'
       aria-label={prettyLabel ? `Input for ${prettyLabel}` : undefined}
       onChange={(event) => {
         onChange(event.target.value);
@@ -428,9 +428,9 @@ function SimpleInputWidget(props: WidgetProps & { readonly inputType: string }):
 
 export const widgets: RegistryWidgetsType = {
   CheckboxWidget: CustomCheckboxWidget,
-  EmailWidget: (props) => <SimpleInputWidget {...props} inputType="email" />,
-  HiddenWidget: (props) => <SimpleInputWidget {...props} inputType="hidden" />,
-  PasswordWidget: (props) => <SimpleInputWidget {...props} inputType="password" />,
+  EmailWidget: (props) => <SimpleInputWidget {...props} inputType='email' />,
+  HiddenWidget: (props) => <SimpleInputWidget {...props} inputType='hidden' />,
+  PasswordWidget: (props) => <SimpleInputWidget {...props} inputType='password' />,
   RangeWidget: ParametersWidget,
   SelectWidget,
   TextWidget: ParametersWidget,
@@ -441,27 +441,27 @@ export const templates: TemplatesType = {
   ButtonTemplates: {
     SubmitButton: () => null,
     AddButton: (props: IconButtonProps) => (
-      <Button type="button" variant="outline" size="sm" disabled={props.disabled} onClick={props.onClick}>
+      <Button type='button' variant='outline' size='sm' disabled={props.disabled} onClick={props.onClick}>
         Add
       </Button>
     ),
     CopyButton: (props: IconButtonProps) => (
-      <Button type="button" variant="outline" size="sm" disabled={props.disabled} onClick={props.onClick}>
+      <Button type='button' variant='outline' size='sm' disabled={props.disabled} onClick={props.onClick}>
         Copy
       </Button>
     ),
     MoveDownButton: (props: IconButtonProps) => (
-      <Button type="button" variant="outline" size="sm" disabled={props.disabled} onClick={props.onClick}>
+      <Button type='button' variant='outline' size='sm' disabled={props.disabled} onClick={props.onClick}>
         ↓
       </Button>
     ),
     MoveUpButton: (props: IconButtonProps) => (
-      <Button type="button" variant="outline" size="sm" disabled={props.disabled} onClick={props.onClick}>
+      <Button type='button' variant='outline' size='sm' disabled={props.disabled} onClick={props.onClick}>
         ↑
       </Button>
     ),
     RemoveButton: (props: IconButtonProps) => (
-      <Button type="button" variant="destructive" size="sm" disabled={props.disabled} onClick={props.onClick}>
+      <Button type='button' variant='destructive' size='sm' disabled={props.disabled} onClick={props.onClick}>
         Remove
       </Button>
     ),
@@ -470,43 +470,43 @@ export const templates: TemplatesType = {
   ObjectFieldTemplate,
   ArrayFieldTemplate,
   ArrayFieldDescriptionTemplate: ({ description }) =>
-    description ? <div className="mb-2 text-sm text-muted-foreground">{description}</div> : null,
+    description ? <div className='mb-2 text-sm text-muted-foreground'>{description}</div> : null,
   ArrayFieldItemTemplate: ({ children, hasRemove, onDropIndexClick, index }) => (
-    <div className="flex items-center gap-2">
-      <div className="flex-1">{children}</div>
+    <div className='flex items-center gap-2'>
+      <div className='flex-1'>{children}</div>
       {hasRemove ? (
-        <Button type="button" variant="destructive" size="sm" onClick={onDropIndexClick(index)}>
+        <Button type='button' variant='destructive' size='sm' onClick={onDropIndexClick(index)}>
           Remove
         </Button>
       ) : null}
     </div>
   ),
-  ArrayFieldTitleTemplate: ({ title }) => (title ? <h3 className="mb-2 font-medium">{title}</h3> : null),
+  ArrayFieldTitleTemplate: ({ title }) => (title ? <h3 className='mb-2 font-medium'>{title}</h3> : null),
   BaseInputTemplate: ({ value, onChange, schema }) => (
     <Input
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
       value={value}
       defaultValue={schema.default as string}
-      className="h-6 flex-1 bg-background p-1"
+      className='h-6 flex-1 bg-background p-1'
       onChange={(event) => {
         onChange(event.target.value);
       }}
     />
   ),
   DescriptionFieldTemplate: ({ description }) =>
-    description ? <div className="mb-2 text-sm text-muted-foreground">{description}</div> : null,
+    description ? <div className='mb-2 text-sm text-muted-foreground'>{description}</div> : null,
   ErrorListTemplate: ({ errors }: ErrorListProps) => (
-    <div className="space-y-1 px-3">
+    <div className='space-y-1 px-3'>
       {errors.map((error) => (
-        <div key={error.property} className="text-sm text-destructive">
+        <div key={error.property} className='text-sm text-destructive'>
           {error.stack}
         </div>
       ))}
     </div>
   ),
-  FieldErrorTemplate: ({ errors }) => (errors ? <div className="mt-1 text-xs text-destructive">{errors}</div> : null),
-  FieldHelpTemplate: ({ help }) => (help ? <div className="mt-1 text-xs text-muted-foreground">{help}</div> : null),
-  TitleFieldTemplate: ({ title }) => (title ? <h2 className="mb-2 text-lg font-medium">{title}</h2> : null),
+  FieldErrorTemplate: ({ errors }) => (errors ? <div className='mt-1 text-xs text-destructive'>{errors}</div> : null),
+  FieldHelpTemplate: ({ help }) => (help ? <div className='mt-1 text-xs text-muted-foreground'>{help}</div> : null),
+  TitleFieldTemplate: ({ title }) => (title ? <h2 className='mb-2 text-lg font-medium'>{title}</h2> : null),
   UnsupportedFieldTemplate({ reason, schema, idSchema }) {
     const fieldPath = idSchema?.$id ? rjsfIdToJsonPath(idSchema.$id) : [];
     const fieldName = fieldPath.at(-1) ?? 'root';
@@ -527,25 +527,25 @@ export const templates: TemplatesType = {
           !isArrayType && !isObjectType && 'rounded-md border',
         )}
       >
-        <div className="flex items-start gap-2">
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex flex-wrap items-baseline gap-1.5">
-              <span className="font-semibold">Invalid Field</span>
-              <span className="text-muted-foreground/40">&mdash;</span>
-              <InlineCode className="text-sm font-medium">{fieldName}</InlineCode>
+        <div className='flex items-start gap-2'>
+          <div className='flex min-w-0 flex-1 flex-col gap-1.5'>
+            <div className='flex flex-wrap items-baseline gap-1.5'>
+              <span className='font-semibold'>Invalid Field</span>
+              <span className='text-muted-foreground/40'>&mdash;</span>
+              <InlineCode className='text-sm font-medium'>{fieldName}</InlineCode>
             </div>
             {reason ? (
-              <p aria-label={`Invalid Field Reason: ${fieldName}`} className="text-sm text-muted-foreground">
+              <p aria-label={`Invalid Field Reason: ${fieldName}`} className='text-sm text-muted-foreground'>
                 Reason: {reason}
               </p>
             ) : null}
             {isArrayType ? (
               <div
                 aria-label={`Array Requirements: ${fieldName}`}
-                className="flex flex-col gap-1 rounded-md border border-warning/30 bg-background/80 p-2.5"
+                className='flex flex-col gap-1 rounded-md border border-warning/30 bg-background/80 p-2.5'
               >
-                <p className="text-sm font-medium">Array Requirements</p>
-                <p className="text-xs leading-relaxed text-muted-foreground">
+                <p className='text-sm font-medium'>Array Requirements</p>
+                <p className='text-xs leading-relaxed text-muted-foreground'>
                   All items must be the same type. Use a single type instead of using mixed types or tuples.
                 </p>
               </div>

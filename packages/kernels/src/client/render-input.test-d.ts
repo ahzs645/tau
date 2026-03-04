@@ -77,7 +77,10 @@ describe('CodeInput single-key (file optional)', () => {
 describe('CodeInput multi-key (file required)', () => {
   it('should compile with multi-key code and required file', () => {
     const input: CodeInput<{ 'main.ts': string; 'utils.ts': string }> = {
-      code: { 'main.ts': 'import "./utils"', 'utils.ts': 'export const x = 1;' },
+      code: {
+        'main.ts': 'import "./utils"',
+        'utils.ts': 'export const x = 1;',
+      },
       file: 'main.ts',
     };
     expectTypeOf(input.file).toBeString();
@@ -85,7 +88,10 @@ describe('CodeInput multi-key (file required)', () => {
 
   it('should compile with multi-key code, file, and parameters', () => {
     const input: CodeInput<{ 'main.ts': string; 'utils.ts': string }> = {
-      code: { 'main.ts': 'import "./utils"', 'utils.ts': 'export const x = 1;' },
+      code: {
+        'main.ts': 'import "./utils"',
+        'utils.ts': 'export const x = 1;',
+      },
       file: 'main.ts',
       parameters: { width: 50 },
     };
@@ -95,7 +101,10 @@ describe('CodeInput multi-key (file required)', () => {
   it('should NOT compile without file for multi-key code', () => {
     // @ts-expect-error -- file is required when code has multiple keys
     const input: CodeInput<{ 'main.ts': string; 'utils.ts': string }> = {
-      code: { 'main.ts': 'import "./utils"', 'utils.ts': 'export const x = 1;' },
+      code: {
+        'main.ts': 'import "./utils"',
+        'utils.ts': 'export const x = 1;',
+      },
     };
     void input;
   });
@@ -104,7 +113,10 @@ describe('CodeInput multi-key (file required)', () => {
     const geo: GeometryFile = { path: '/', filename: 'main.ts' };
 
     const input: CodeInput<{ 'main.ts': string; 'utils.ts': string }> = {
-      code: { 'main.ts': 'import "./utils"', 'utils.ts': 'export const x = 1;' },
+      code: {
+        'main.ts': 'import "./utils"',
+        'utils.ts': 'export const x = 1;',
+      },
       // @ts-expect-error -- GeometryFile is not assignable to string (code mode)
       file: geo,
     };
@@ -188,7 +200,7 @@ describe('FileInput (filesystem mode)', () => {
 // =============================================================================
 
 describe('KernelClient.render() overload resolution', () => {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
   const client = {} as KernelClient;
 
   it('should accept single-key code (file inferred)', () => {
@@ -198,7 +210,10 @@ describe('KernelClient.render() overload resolution', () => {
   it('should accept multi-key code with file', () => {
     expectTypeOf(
       client.render({
-        code: { 'main.ts': 'import "./utils"', 'utils.ts': 'export const x = 1;' },
+        code: {
+          'main.ts': 'import "./utils"',
+          'utils.ts': 'export const x = 1;',
+        },
         file: 'main.ts',
       }),
     ).toBeObject();
@@ -237,7 +252,7 @@ describe('KernelClient.render() overload resolution', () => {
 // =============================================================================
 
 describe('KernelClient.export() overload resolution', () => {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
   const client: KernelClient = {} as KernelClient;
 
   it('should accept format-only (export from last render)', () => {
@@ -245,7 +260,10 @@ describe('KernelClient.export() overload resolution', () => {
   });
 
   it('should accept format with tessellation options', () => {
-    const tessellation: Tessellation = { linearTolerance: 0.1, angularTolerance: 30 };
+    const tessellation: Tessellation = {
+      linearTolerance: 0.1,
+      angularTolerance: 30,
+    };
     expectTypeOf(client.export('step', { tessellation })).toEqualTypeOf<Promise<ExportResult>>();
   });
 

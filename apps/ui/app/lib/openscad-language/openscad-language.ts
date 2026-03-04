@@ -114,7 +114,7 @@ export function createOpenscadLanguageConfiguration(monaco: typeof Monaco): Mona
       ['[', ']'],
     ],
 
-    wordPattern: /(-?\d*\.\d\w*)|(?:\$[a-zA-Z_]|[a-zA-Z_])\w*/g,
+    wordPattern: /(-?\d*\.\d\w*)|(?:\$[A-Z_a-z]|[A-Z_a-z])\w*/g,
     comments: {
       lineComment: '//',
       blockComment: ['/*', '*/'],

@@ -129,8 +129,8 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
   // First pass: group triangles by color
   const colorGroups = new Map<string, { color: Color; triangles: TriangleData[] }>();
 
-  for (const [faceIdx, face] of faces.entries()) {
-    const faceColor: Color = colors[faceIdx] ?? [1, 1, 1, 1]; // Default to opaque white
+  for (const [faceIndex, face] of faces.entries()) {
+    const faceColor: Color = colors[faceIndex] ?? [1, 1, 1, 1]; // Default to opaque white
 
     if (face.length < 3) {
       continue; // Skip invalid faces
@@ -145,18 +145,18 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
     const group = colorGroups.get(colorKey)!;
 
     // Triangulate face using fan triangulation
-    for (let i = 1; i < face.length - 1; i++) {
-      const idx1 = face[0];
-      const idx2 = face[i];
-      const idx3 = face[i + 1];
+    for (let index = 1; index < face.length - 1; index++) {
+      const index1 = face[0];
+      const index2 = face[index];
+      const index3 = face[index + 1];
 
-      if (idx1 === undefined || idx2 === undefined || idx3 === undefined) {
+      if (index1 === undefined || index2 === undefined || index3 === undefined) {
         continue;
       }
 
-      const v1 = vertices[idx1];
-      const v2 = vertices[idx2];
-      const v3 = vertices[idx3];
+      const v1 = vertices[index1];
+      const v2 = vertices[index2];
+      const v3 = vertices[index3];
 
       if (!v1 || !v2 || !v3) {
         continue;
@@ -195,8 +195,8 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
     let positionIndex = 0;
     let normalIndex = 0;
 
-    for (let triIdx = 0; triIdx < numberTriangles; triIdx++) {
-      const tri = triangles[triIdx]!;
+    for (let triIndex = 0; triIndex < numberTriangles; triIndex++) {
+      const tri = triangles[triIndex]!;
 
       // Add positions
       positions[positionIndex++] = tri.v1[0];
@@ -225,9 +225,9 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
       normals[normalIndex++] = tri.normal[2];
 
       // Add triangle indices (non-indexed, each triangle uses its own vertices)
-      indices[triIdx * 3] = triIdx * 3;
-      indices[triIdx * 3 + 1] = triIdx * 3 + 1;
-      indices[triIdx * 3 + 2] = triIdx * 3 + 2;
+      indices[triIndex * 3] = triIndex * 3;
+      indices[triIndex * 3 + 1] = triIndex * 3 + 1;
+      indices[triIndex * 3 + 2] = triIndex * 3 + 2;
     }
 
     geometries.push({
@@ -289,10 +289,10 @@ function createGltfDocument(meshData: IndexedPolyhedron): Document {
     const linePositions = new Float32Array(originalLinePositions.length);
 
     // Transform line positions from z-up to y-up coordinate system and convert units (mm to m)
-    for (let i = 0; i < originalLinePositions.length; i += 3) {
-      const x = originalLinePositions[i];
-      const y = originalLinePositions[i + 1];
-      const z = originalLinePositions[i + 2];
+    for (let index = 0; index < originalLinePositions.length; index += 3) {
+      const x = originalLinePositions[index];
+      const y = originalLinePositions[index + 1];
+      const z = originalLinePositions[index + 2];
 
       if (x === undefined || y === undefined || z === undefined) {
         continue;
@@ -300,15 +300,15 @@ function createGltfDocument(meshData: IndexedPolyhedron): Document {
 
       const vertex: [number, number, number] = [x, y, z];
       const transformed = transformVerticesGltf(vertex);
-      linePositions[i] = transformed[0];
-      linePositions[i + 1] = transformed[1];
-      linePositions[i + 2] = transformed[2];
+      linePositions[index] = transformed[0];
+      linePositions[index + 1] = transformed[1];
+      linePositions[index + 2] = transformed[2];
     }
 
     // Create line indices - each pair of positions forms a line
     const lineIndices = new Uint32Array(linePositions.length / 3);
-    for (let i = 0; i < lineIndices.length; i++) {
-      lineIndices[i] = i;
+    for (let index = 0; index < lineIndices.length; index++) {
+      lineIndices[index] = index;
     }
 
     const lineMaterial = document
@@ -379,7 +379,7 @@ export async function createGltf(meshData: IndexedPolyhedron): Promise<Uint8Arra
         binaryString += String.fromCodePoint(byte);
       }
 
-      // eslint-disable-next-line no-restricted-globals -- btoa is available in browsers
+      // oxlint-disable-next-line no-restricted-globals -- btoa is available in browsers
       const base64Data = btoa(binaryString);
 
       buffer.uri = `data:application/octet-stream;base64,${base64Data}`;

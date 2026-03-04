@@ -100,7 +100,7 @@ function getCachePath(basePath: string, cacheKey: string): string {
  * @param basePath - The base path for the build
  * @returns The full path to the cache directory
  */
-function getCacheDir(basePath: string): string {
+function getCacheDirectory(basePath: string): string {
   return joinPath(basePath, '.tau/cache/geometry');
 }
 
@@ -121,21 +121,21 @@ function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolea
  */
 async function cleanupOldCacheEntries({
   filesystem,
-  cacheDir,
+  cacheDirectory,
   maxAgeMs,
   maxEntries,
 }: {
   /** The filesystem for file operations */
   filesystem: KernelFileSystem;
   /** The cache directory path */
-  cacheDir: string;
+  cacheDirectory: string;
   /** Maximum age in milliseconds for cache entries */
   maxAgeMs: number;
   /** Maximum number of cache entries to keep */
   maxEntries: number;
 }): Promise<void> {
   try {
-    const files = await filesystem.readdirStat(cacheDir);
+    const files = await filesystem.readdirStat(cacheDirectory);
 
     // Filter to only .bin cache files (MessagePack binary format)
     const cacheFiles = files.filter((file) => file.type === 'file' && file.name.endsWith('.bin'));
@@ -230,8 +230,8 @@ export const geometryCacheMiddleware = defineMiddleware({
       } else {
         try {
           // Ensure cache directory exists
-          const cacheDir = getCacheDir(basePath);
-          await filesystem.ensureDir(cacheDir);
+          const cacheDirectory = getCacheDirectory(basePath);
+          await filesystem.ensureDir(cacheDirectory);
 
           const serialized = serializeResult(result);
           await filesystem.writeFile(cachePath, serialized);
@@ -240,7 +240,7 @@ export const geometryCacheMiddleware = defineMiddleware({
           // Cleanup old cache entries to prevent unbounded growth
           await cleanupOldCacheEntries({
             filesystem,
-            cacheDir,
+            cacheDirectory,
             maxAgeMs: options.maxAgeMs,
             maxEntries: options.maxEntries,
           });
