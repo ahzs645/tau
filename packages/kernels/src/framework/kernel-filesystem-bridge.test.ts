@@ -206,6 +206,27 @@ describe('kernel-filesystem-bridge', () => {
       dispose();
     });
 
+    it('should preserve this binding when dispatching methods', async () => {
+      const handlers = {
+        async getValue(): Promise<string> {
+          return 'base';
+        },
+        async getDerived(): Promise<string> {
+          const base = await this.getValue();
+          return `${base}-derived`;
+        },
+      };
+      const channel = new MessageChannel();
+      createBridgeServer(handlers, channel.port1);
+
+      const { createBridgeCall } = await import('#framework/kernel-filesystem-bridge.js');
+      const { call, dispose } = createBridgeCall(channel.port2);
+
+      const result = await call('getDerived', []);
+      expect(result).toBe('base-derived');
+      dispose();
+    });
+
     it('should handle non-Error throws gracefully', async () => {
       const handlers = {
         async fail() {

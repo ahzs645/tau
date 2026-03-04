@@ -100,7 +100,7 @@ export function createBridgeServer<T extends Record<string, unknown>>(handlers: 
     }
 
     try {
-      const result: unknown = await fn(...args);
+      const result: unknown = await fn.call(handlers, ...args);
       const response = { id, result } satisfies BridgeResponse;
       const transferables = extractTransferables(result);
       try {
