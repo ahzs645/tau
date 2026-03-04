@@ -15,25 +15,7 @@
 
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
-import { formatOcExceptionMessage } from '#kernels/replicad/oc-exceptions.js';
-
-/**
- * Error subclass thrown when a WebAssembly.Exception from OC is caught at the
- * tracing proxy boundary. Preserves the decoded OC message and the JS call
- * stack from the user code call site.
- */
-export class OcKernelError extends Error {
-  public override readonly name = 'OcKernelError';
-  public readonly typeName: string;
-  public readonly rawMessage: string;
-
-  public constructor(typeName: string, rawMessage: string) {
-    const formatted = formatOcExceptionMessage(typeName, rawMessage);
-    super(formatted);
-    this.typeName = typeName;
-    this.rawMessage = rawMessage;
-  }
-}
+import { OcKernelError } from '#kernels/replicad/oc-kernel-error.js';
 
 /**
  * Configuration for OC API call tracing.
