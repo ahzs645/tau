@@ -1,16 +1,16 @@
-name: "v8-O0-noLTO-wasmOptO0-wasmExc-validation"
-description: "Fastest possible exceptions build for symbol validation (no optimization)"
+name: 'v8-O0-noLTO-wasmOptO0-wasmExc-validation'
+description: 'Fastest possible exceptions build for symbol validation (no optimization)'
 
 compilation:
-  optimization: "-O0"
+  optimization: '-O0'
   lto: false
-  exceptions: "wasm-native"
-  threading: "single-threaded"
+  exceptions: 'wasm-native'
+  threading: 'single-threaded'
 
 linking:
-  yaml: "custom_build_with_exceptions_v8.yml"
-  wasmOptLevel: "-O0"
+  yaml: 'custom_build_with_exceptions_v8.yml'
+  wasmOptLevel: '-O0'
 
 benchmark:
   iterations: 3
-  filter: ["primitives"]
+  filter: ['primitives']
