@@ -38,4 +38,4 @@ runs:
       shell: bash
 
     - name: Set NX SHAs
-      uses: nrwl/nx-set-shas@v4 
+      uses: nrwl/nx-set-shas@v4

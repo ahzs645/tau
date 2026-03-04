@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]  # Only run on pushes to main branch
+    branches: [main] # Only run on pushes to main branch
   pull_request:
     # Run CI on all pull requests
 
