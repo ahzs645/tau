@@ -1,4 +1,4 @@
-/* eslint-disable unicorn/no-array-push-push -- easier to read */
+/* oxlint-disable unicorn/no-array-push-push -- easier to read */
 /**
  * Generates a changelog for OpenCASCADE Technology from V7_6_2 to V8_0_0_rc4.
  *
@@ -51,7 +51,11 @@ type TagInfo = {
 };
 
 function run(command: string, cwd?: string): string {
-  return execSync(command, { cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }).trim();
+  return execSync(command, {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+  }).trim();
 }
 
 function formatTag(tag: string): string {

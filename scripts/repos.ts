@@ -7,6 +7,8 @@ if (command) {
   run(process.argv.slice(2));
 } else {
   const { tsImport } = await import('tsx/esm/api');
-  const { launch } = (await tsImport('./repos/ui.tsx', import.meta.url)) as { launch: () => void };
+  const { launch } = (await tsImport('./repos/ui.tsx', import.meta.url)) as {
+    launch: () => void;
+  };
   launch();
 }

@@ -160,7 +160,7 @@ async function scanDirectory(dir: string): Promise<PackageInfo[]> {
       const packagePath = join(dir, entryName);
 
       // Check if it's a directory (follows symlinks)
-      // eslint-disable-next-line no-await-in-loop -- Sequential scanning is intentional for memory efficiency
+      // oxlint-disable-next-line no-await-in-loop -- Sequential scanning is intentional for memory efficiency
       const isDir = await isDirectory(packagePath);
       if (!isDir) {
         continue;
@@ -168,14 +168,14 @@ async function scanDirectory(dir: string): Promise<PackageInfo[]> {
 
       // Handle scoped packages (@org/package)
       if (entryName.startsWith('@')) {
-        // eslint-disable-next-line no-await-in-loop -- Sequential scanning is intentional for memory efficiency
+        // oxlint-disable-next-line no-await-in-loop -- Sequential scanning is intentional for memory efficiency
         const scopedPackages = await scanDirectory(packagePath);
         packages.push(...scopedPackages);
       } else {
-        // eslint-disable-next-line no-await-in-loop -- Sequential scanning is intentional for memory efficiency
-        const pkgInfo = await readPackageJson(packagePath);
-        if (pkgInfo) {
-          packages.push(pkgInfo);
+        // oxlint-disable-next-line no-await-in-loop -- Sequential scanning is intentional for memory efficiency
+        const packageInfo = await readPackageJson(packagePath);
+        if (packageInfo) {
+          packages.push(packageInfo);
         }
       }
     }

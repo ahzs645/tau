@@ -251,10 +251,10 @@ function cmdExec(positional: string[], flags: Record<string, string | boolean>):
       continue;
     }
 
-    const dir = repoPath(name, repo, manifest, root);
+    const directory = repoPath(name, repo, manifest, root);
     console.log(`\n=== ${name} ===`);
     try {
-      execSync(cmd, { cwd: dir, stdio: 'inherit' });
+      execSync(cmd, { cwd: directory, stdio: 'inherit' });
     } catch {
       console.error(`  Command failed in ${name}`);
     }
@@ -311,7 +311,7 @@ function cmdAdd(positional: string[], flags: Record<string, string | boolean>): 
 
   let description: string | undefined;
   if (typeof flags['description'] === 'string') {
-    description = flags['description'];
+    ({ description } = flags);
   } else {
     try {
       const raw = execSync(`gh repo view ${slug} --json description -q .description`, {
