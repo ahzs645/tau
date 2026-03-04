@@ -792,6 +792,8 @@
           "db": false,
           "dev": false,
           "utils": false,
+          "lib": false,
+          "docs": false,
           "dir": { "directory": true, "direction": false },
           "dirs": { "directories": true, "directions": false }
         },

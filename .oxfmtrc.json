@@ -10,7 +10,17 @@
     "stylesheet": "./apps/ui/app/styles/global.css"
   },
   "sortPackageJson": false,
-  "ignorePatterns": ["/dist", "/coverage", "/.nx/cache", "/.nx/workspace-data", ".cursor/plans/**", "/tarballs/**", "/experiments/**"],
+  "ignorePatterns": [
+    "/dist",
+    "/coverage",
+    "/.nx/cache",
+    "/.nx/workspace-data",
+    ".cursor/plans/**",
+    "/tarballs/**",
+    "/experiments/**",
+    "/packages/kernels/occt-reports/**",
+    "/packages/converter/src/assets/**"
+  ],
   "overrides": [
     {
       "files": ["libs/tau-examples/src/kernels/**"],
