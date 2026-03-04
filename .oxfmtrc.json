@@ -19,7 +19,10 @@
     "/tarballs/**",
     "/experiments/**",
     "/packages/kernels/occt-reports/**",
-    "/packages/converter/src/assets/**"
+    "/packages/converter/src/assets/**",
+    "**/generated/**",
+    "**/assets/**",
+    "**/public/*.js"
   ],
   "overrides": [
     {
