@@ -35,7 +35,7 @@
     "jsdoc"
   ],
   "jsPlugins": [
-    "./tools/oxlint-plugins/no-abusive-eslint-disable.js",
+    "./tools/oxlint-plugins/tau-lint.js",
     { "name": "unicorn-js", "specifier": "eslint-plugin-unicorn" },
     { "name": "node-js", "specifier": "eslint-plugin-n" },
     "eslint-plugin-no-use-extend-native",
@@ -74,6 +74,7 @@
     "unicorn/no-abusive-eslint-disable": "off",
     "tau-lint/no-abusive-eslint-disable": "error",
     "tau-lint/require-disable-description": "error",
+    "tau-lint/require-ignore-description": "error",
     "unicorn/no-accessor-recursion": "error",
     "unicorn/no-anonymous-default-export": "error",
     "unicorn/no-array-callback-reference": "error",
