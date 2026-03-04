@@ -176,8 +176,10 @@ const config = [
 
   {
     ...tseslint.configs.base,
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- parserOptions is a runtime-resolved object
     languageOptions: {
       ...tseslint.configs.base.languageOptions,
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- parserOptions is a runtime-resolved object
       parserOptions: {
         ...tseslint.configs.base.languageOptions?.parserOptions,
         projectService: true,
@@ -266,6 +268,7 @@ const config = [
       '**/*.provider.ts',
       '**/*.resolver.ts',
     ],
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- plugins is a runtime-resolved object
     plugins: { 'max-params-no-constructor': maxParamsNoConstructorPlugin },
     rules: {
       'max-params-no-constructor/max-params-no-constructor': ['error', 3],
