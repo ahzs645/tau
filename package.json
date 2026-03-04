@@ -15,6 +15,8 @@
     "build": "nx run-many -t build",
     "extract-replicad-api": "node scripts/extract-replicad-api.ts",
     "analyze-replicad-api": "node scripts/use-extracted-api.ts",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "ci:affected": "CI=true nx affected --targets=test,build,lint,typecheck",
     "ci:all": "CI=true nx run-many --targets=test,build,lint,typecheck",
     "$infra:comment": "The new `docker compose` command is not supported outside of Docker Desktop, so we use the old `docker-compose` command. Migrate after it's ported to the `docker` CLI.",
