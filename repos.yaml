@@ -53,6 +53,7 @@ groups:
       - zod
       - v8
       - motion
+      - oxc
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -302,3 +303,6 @@ repos:
   motion:
     upstream: motiondivision/motion
     description: A modern animation library for React and JavaScript
+  oxc:
+    upstream: oxc-project/oxc
+    description: ⚓ A collection of high-performance JavaScript tools.
