@@ -29,7 +29,7 @@
   "oxc.enable": true,
   "oxc.lint.enable": true,
   "oxc.configPath": ".oxlintrc.json",
-  "oxc.path.oxlint": "node_modules/oxlint/dist/cli.js",
+  "oxc.path.oxlint": ".vscode/oxlint-debug-wrapper.mjs",
   "oxc.path.oxfmt": "node_modules/oxfmt/dist/cli.js",
   "oxc.fmt.configPath": ".oxfmtrc.json",
   "oxc.typeAware": true,

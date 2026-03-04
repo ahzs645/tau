@@ -152,6 +152,55 @@ diff --git a/apps/oxlint/test/fixtures/... b/apps/oxlint/test/fixtures/...
 
 Use child-process harness that closes stdout early and asserts non-abort exit semantics.
 
+### D) Add opt-in runtime invocation logging (for next crash cycle)
+
+#### Diff signature
+
+```diff
+diff --git a/apps/oxlint/src/run.rs b/apps/oxlint/src/run.rs
+@@
++const OXLINT_RUNTIME_DEBUG_ENV: &str = "OXLINT_RUNTIME_DEBUG";
++fn runtime_debug_log(...) { ... }
+@@ async fn lint_impl(...) -> CliRunResult {
++    runtime_debug_log("lint_impl_enter", ...);
++    runtime_debug_log("lint_impl_parsed_command", ...);
++    if command.lsp {
++        runtime_debug_log("lint_impl_enter_lsp", ...);
++        ...
++        runtime_debug_log("lint_impl_exit_lsp", ...);
++    } else {
++        runtime_debug_log("lint_impl_enter_cli_runner", ...);
++        ...
++        runtime_debug_log("lint_impl_exit_cli_runner", ...);
++    }
+ }
+```
+
+Behavior:
+
+- If `OXLINT_RUNTIME_DEBUG` is unset: no overhead / no runtime log file writes.
+- If `OXLINT_RUNTIME_DEBUG=1` (or `true` / empty): write to default temp file (`$TMPDIR/oxlint-runtime.log`).
+- If `OXLINT_RUNTIME_DEBUG=/path/to/file.log`: append runtime entries there.
+
+Current local sample confirms:
+
+- invocation args are captured
+- mode is captured (`cli` vs `lsp`)
+- selected env breadcrumbs are captured (`VSCODE_PID`, IPC hook, etc.)
+- final `CliRunResult` is captured
+
+## Local implementation status
+
+- `apps/oxlint/src/lint.rs`: patched `flush()` path (`or_else(check_for_writer_error)`).
+- `apps/oxlint/src/lint.rs`: added test `print_and_flush_stdout_ignores_broken_pipe_on_flush`.
+- `apps/oxlint/src/init.rs`: panic hook changed to file-first best-effort writes + non-panicking default hook call.
+- `apps/oxlint/src/run.rs`: added opt-in runtime invocation logging.
+- Rebuilt `oxlint` NAPI binding and deployed patched `.node` to local `node_modules` binding path with ad-hoc codesign.
+- Added workspace wrapper `.vscode/oxlint-debug-wrapper.mjs` and pointed `oxc.path.oxlint` to it.
+- Wrapper ensures default log targets for IDE sessions:
+  - runtime: `/tmp/oxlint-runtime.log`
+  - panic: `/tmp/oxlint-panic.log`
+
 ## Scope and non-goals
 
 - This fix does **not** change rule evaluation semantics or tsgolint behavior.
