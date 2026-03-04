@@ -46,7 +46,9 @@ import { createKernelClient, fromNodeFS } from '@taucad/kernels';
 import fs from 'node:fs';
 
 const client = createKernelClient({
-  kernels: [/* ... */],
+  kernels: [
+    /* ... */
+  ],
   fileSystem: fromNodeFS(fs),
 });
 ```
@@ -55,15 +57,15 @@ const client = createKernelClient({
 
 The package exposes multiple subpath imports for tree-shaking:
 
-| Import Path | Contents |
-|---|---|
-| `@taucad/kernels` | Client, filesystem constructors, helpers |
-| `@taucad/kernels/kernels` | Kernel factories (`replicad`, `manifold`, `openscad`, `jscad`, `zoo`) |
-| `@taucad/kernels/middleware` | `defineMiddleware` and built-in middleware |
-| `@taucad/kernels/bundler` | `defineBundler` and esbuild bundler |
-| `@taucad/kernels/transport` | Transport layer (`createWorkerTransport`) |
-| `@taucad/kernels/types` | All TypeScript type exports |
-| `@taucad/kernels/testing` | Testing utilities |
+| Import Path                  | Contents                                                              |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `@taucad/kernels`            | Client, filesystem constructors, helpers                              |
+| `@taucad/kernels/kernels`    | Kernel factories (`replicad`, `manifold`, `openscad`, `jscad`, `zoo`) |
+| `@taucad/kernels/middleware` | `defineMiddleware` and built-in middleware                            |
+| `@taucad/kernels/bundler`    | `defineBundler` and esbuild bundler                                   |
+| `@taucad/kernels/transport`  | Transport layer (`createWorkerTransport`)                             |
+| `@taucad/kernels/types`      | All TypeScript type exports                                           |
+| `@taucad/kernels/testing`    | Testing utilities                                                     |
 
 ## What's Next
 

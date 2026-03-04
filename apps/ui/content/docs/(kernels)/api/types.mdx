@@ -16,28 +16,28 @@ All kernel operations return a discriminated union: `KernelSuccessResult<T> | Ke
 type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 ```
 
-<auto-type-table path="./props/types.ts" name="KernelSuccessResult" />
+<auto-type-table path='./props/types.ts' name='KernelSuccessResult' />
 
-<auto-type-table path="./props/types.ts" name="KernelErrorResult" />
+<auto-type-table path='./props/types.ts' name='KernelErrorResult' />
 
 ## Issue and Location Types
 
-<auto-type-table path="./props/types.ts" name="KernelIssue" />
+<auto-type-table path='./props/types.ts' name='KernelIssue' />
 
-<auto-type-table path="./props/types.ts" name="KernelStackFrame" />
+<auto-type-table path='./props/types.ts' name='KernelStackFrame' />
 
-<auto-type-table path="./props/types.ts" name="ErrorLocation" />
+<auto-type-table path='./props/types.ts' name='ErrorLocation' />
 
 ## Geometry and Export Types
 
-| Type | Definition |
-|------|-----------|
-| `CreateGeometryResult` | `KernelResult<GeometryResponse[]>` |
-| `HashedGeometryResult` | `KernelResult<Geometry[]>` — with content-hash for React keys |
-| `GetParametersResult` | `KernelResult<{ defaultParameters: Record<string, unknown>; jsonSchema: unknown }>` |
-| `ExportResult` | `KernelResult<ExportFile>` — client-facing unwrapped type where `ExportFile = { name: string; bytes: Uint8Array; mimeType: string }` |
-| `ExportGeometryResult` | `KernelResult<ExportFile[]>` — internal pipeline type (middleware and kernel authors) |
-| `RenderPhase` | `string` — framework phases: `'resolvingDeps'`, `'bundling'`, `'extractingParams'`, `'computingGeometry'`, `'postProcessing'` |
+| Type                   | Definition                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `CreateGeometryResult` | `KernelResult<GeometryResponse[]>`                                                                                                   |
+| `HashedGeometryResult` | `KernelResult<Geometry[]>` — with content-hash for React keys                                                                        |
+| `GetParametersResult`  | `KernelResult<{ defaultParameters: Record<string, unknown>; jsonSchema: unknown }>`                                                  |
+| `ExportResult`         | `KernelResult<ExportFile>` — client-facing unwrapped type where `ExportFile = { name: string; bytes: Uint8Array; mimeType: string }` |
+| `ExportGeometryResult` | `KernelResult<ExportFile[]>` — internal pipeline type (middleware and kernel authors)                                                |
+| `RenderPhase`          | `string` — framework phases: `'resolvingDeps'`, `'bundling'`, `'extractingParams'`, `'computingGeometry'`, `'postProcessing'`        |
 
 ## Narrowing Results
 

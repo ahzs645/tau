@@ -50,17 +50,14 @@ import replicadDefinition from '@taucad/kernels/kernels/replicad';
 
 describe('Replicad kernel', () => {
   it('creates geometry from TypeScript', async () => {
-    const worker = await createTestWorker(
-      replicadDefinition,
-      {
-        'main.ts': `
+    const worker = await createTestWorker(replicadDefinition, {
+      'main.ts': `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {
             return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
           }
         `,
-      },
-    );
+    });
 
     const result = await worker.createGeometry({
       file: { filename: 'main.ts', path: '/builds/test' },
@@ -92,7 +89,11 @@ await seedTestFileSystem({
 const worker = new KernelRuntimeWorker();
 await initializeWorkerForTesting(worker, {
   onLog: ({ message }) => console.log(message),
-  workerOptions: { kernelModules: [/* ... */] },
+  workerOptions: {
+    kernelModules: [
+      /* ... */
+    ],
+  },
 });
 ```
 
@@ -122,11 +123,7 @@ Paths can be absolute or relative; relative paths are normalized to start with `
 For middleware unit tests, use mocks to avoid a real worker:
 
 ```typescript
-import {
-  createMockLogger,
-  createMockFileSystem,
-  createMockRuntime,
-} from '@taucad/kernels/testing';
+import { createMockLogger, createMockFileSystem, createMockRuntime } from '@taucad/kernels/testing';
 
 const logger = createMockLogger();
 const filesystem = createMockFileSystem({
@@ -153,7 +150,9 @@ Use `validateGlbData` to assert GLB format and `getInspectReport` for detailed g
 ```typescript
 import { validateGlbData, getInspectReport, extractGltfFromResult } from '@taucad/kernels/testing';
 
-const result = await worker.createGeometry({ /* ... */ });
+const result = await worker.createGeometry({
+  /* ... */
+});
 const glb = extractGltfFromResult(result);
 
 expect(glb).toBeDefined();
@@ -172,7 +171,9 @@ import { createGeometryTestHelpers } from '@taucad/kernels/testing';
 
 const helpers = createGeometryTestHelpers();
 
-const result = await worker.createGeometry({ /* ... */ });
+const result = await worker.createGeometry({
+  /* ... */
+});
 
 await helpers.expectValidGltf(result);
 await helpers.expectMeshCount(result, 1);

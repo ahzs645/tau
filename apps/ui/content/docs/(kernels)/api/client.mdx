@@ -10,15 +10,15 @@ Use the client API when you need to create a kernel runtime, configure filesyste
 
 ## createKernelClient
 
-<auto-type-table path="./props/client.ts" name="KernelClientOptions" />
+<auto-type-table path='./props/client.ts' name='KernelClientOptions' />
 
-<auto-type-table path="./props/client.ts" name="ConnectOptions" />
+<auto-type-table path='./props/client.ts' name='ConnectOptions' />
 
-<auto-type-table path="./props/client.ts" name="KernelClient" />
+<auto-type-table path='./props/client.ts' name='KernelClient' />
 
 ## Filesystem
 
-<auto-type-table path="./props/client.ts" name="KernelFileSystem" />
+<auto-type-table path='./props/client.ts' name='KernelFileSystem' />
 
 `fromMemoryFS`, `fromNodeFS`, and `fromFsLike` implement `KernelFileSystem` for in-memory, Node.js, and any fs-compatible backends respectively.
 
@@ -35,7 +35,9 @@ const client = createKernelClient({
   fileSystem: fromMemoryFS(),
 });
 
-const result = await client.render({ code: { 'main.ts': 'export default () => {}' } });
+const result = await client.render({
+  code: { 'main.ts': 'export default () => {}' },
+});
 client.terminate();
 ```
 

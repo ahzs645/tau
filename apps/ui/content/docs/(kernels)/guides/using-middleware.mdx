@@ -24,12 +24,7 @@ Configure a kernel client with middleware plugins to cache geometry and paramete
 All built-in middleware is exported from the `@taucad/kernels/middleware` subpath:
 
 ```typescript
-import {
-  geometryCache,
-  parameterCache,
-  gltfCoordinateTransform,
-  gltfEdgeDetection,
-} from '@taucad/kernels/middleware';
+import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
 ```
 
 ### 2. Add Middleware to createKernelClient
@@ -40,23 +35,13 @@ Pass the middleware array to the `middleware` option. Order matters: middleware 
 import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
 import { replicad } from '@taucad/kernels/kernels';
 import { esbuild } from '@taucad/kernels/bundler';
-import {
-  geometryCache,
-  parameterCache,
-  gltfCoordinateTransform,
-  gltfEdgeDetection,
-} from '@taucad/kernels/middleware';
+import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
 
 const client = createKernelClient({
   kernels: [replicad()],
   bundlers: [esbuild()],
   fileSystem: fromMemoryFS(),
-  middleware: [
-    parameterCache(),
-    geometryCache(),
-    gltfCoordinateTransform(),
-    gltfEdgeDetection(),
-  ],
+  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
 });
 ```
 

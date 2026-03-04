@@ -10,24 +10,24 @@ Use kernel factories when registering CAD engines with `createKernelClient`. Eac
 
 ## Types
 
-<auto-type-table path="./props/kernels.ts" name="KernelPlugin" />
+<auto-type-table path='./props/kernels.ts' name='KernelPlugin' />
 
-<auto-type-table path="./props/kernels.ts" name="ReplicadOptions" />
+<auto-type-table path='./props/kernels.ts' name='ReplicadOptions' />
 
-<auto-type-table path="./props/kernels.ts" name="ManifoldOptions" />
+<auto-type-table path='./props/kernels.ts' name='ManifoldOptions' />
 
-<auto-type-table path="./props/kernels.ts" name="ZooOptions" />
+<auto-type-table path='./props/kernels.ts' name='ZooOptions' />
 
 ## Factories
 
-| Factory | Extensions | Purpose |
-|---------|------------|---------|
-| `replicad(options?)` | `ts`, `js` | OpenCASCADE-based parametric BRep |
+| Factory              | Extensions | Purpose                                           |
+| -------------------- | ---------- | ------------------------------------------------- |
+| `replicad(options?)` | `ts`, `js` | OpenCASCADE-based parametric BRep                 |
 | `manifold(options?)` | `ts`, `js` | Mesh-first manifold modeling with robust booleans |
-| `openscad()` | `scad` | CSG modeling |
-| `jscad()` | `ts`, `js` | @jscad/modeling parametric CSG |
-| `zoo(options)` | `kcl` | KCL via Zoo API |
-| `tau()` | `*` | Catch-all for STEP, STL, 3MF |
+| `openscad()`         | `scad`     | CSG modeling                                      |
+| `jscad()`            | `ts`, `js` | @jscad/modeling parametric CSG                    |
+| `zoo(options)`       | `kcl`      | KCL via Zoo API                                   |
+| `tau()`              | `*`        | Catch-all for STEP, STL, 3MF                      |
 
 ## Usage
 

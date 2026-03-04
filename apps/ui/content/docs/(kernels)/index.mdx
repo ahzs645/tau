@@ -19,12 +19,14 @@ const client = createKernelClient({
 });
 
 const result = await client.export('step', {
-  code: { 'box.ts': `
+  code: {
+    'box.ts': `
     import { makeBaseBox } from 'replicad';
     export default function main() {
       return makeBaseBox(10, 20, 30);
     }
-  `},
+  `,
+  },
 });
 
 // result.data -> { name: 'box.step', bytes: Uint8Array, mimeType: 'model/step' }
@@ -32,13 +34,13 @@ const result = await client.export('step', {
 
 ## Supported Kernels
 
-| Kernel | Language | Strengths |
-|---|---|---|
-| **Replicad** | TypeScript/JS | Parametric BRep modeling via OpenCASCADE. STEP export. |
-| **Manifold** | TypeScript/JS | Robust mesh booleans with `manifold-3d`. Fast WASM workflows. |
-| **OpenSCAD** | OpenSCAD | CSG modeling for 3D printing. Familiar `.scad` syntax. |
-| **JSCAD** | TypeScript/JS | Parametric CSG with `@jscad/modeling`. |
-| **Zoo (KCL)** | KCL | Cloud-native CAD with AI integration via Zoo API. |
+| Kernel        | Language      | Strengths                                                     |
+| ------------- | ------------- | ------------------------------------------------------------- |
+| **Replicad**  | TypeScript/JS | Parametric BRep modeling via OpenCASCADE. STEP export.        |
+| **Manifold**  | TypeScript/JS | Robust mesh booleans with `manifold-3d`. Fast WASM workflows. |
+| **OpenSCAD**  | OpenSCAD      | CSG modeling for 3D printing. Familiar `.scad` syntax.        |
+| **JSCAD**     | TypeScript/JS | Parametric CSG with `@jscad/modeling`.                        |
+| **Zoo (KCL)** | KCL           | Cloud-native CAD with AI integration via Zoo API.             |
 
 ## Key Capabilities
 

@@ -96,36 +96,36 @@ Use this when you have a `node:fs`-compatible object in any environment -- brows
 
 Filesystem backends implement `KernelFileSystemBase` -- 11 primitives matching `fs.promises` semantics:
 
-| Method | Signature | Purpose |
-|--------|-----------|---------|
-| `readFile` | `(path, encoding?) => Promise<string \| Uint8Array>` | Read file as text (`'utf8'`) or binary |
-| `writeFile` | `(path, data) => Promise<void>` | Write text or binary |
-| `mkdir` | `(path, options?) => Promise<void>` | Create directory (supports `{ recursive: true }`) |
-| `readdir` | `(path) => Promise<string[]>` | List directory entries |
-| `unlink` | `(path) => Promise<void>` | Delete file |
-| `rmdir` | `(path) => Promise<void>` | Remove directory |
-| `rename` | `(oldPath, newPath) => Promise<void>` | Rename/move file or directory |
-| `stat` | `(path) => Promise<FileStat>` | Get file/dir metadata (`FileStat` from `@taucad/types`) |
-| `lstat` | `(path) => Promise<FileStat>` | Like stat, but does not follow symlinks |
-| `exists` | `(path) => Promise<boolean>` | Check if path exists |
+| Method      | Signature                                            | Purpose                                                 |
+| ----------- | ---------------------------------------------------- | ------------------------------------------------------- |
+| `readFile`  | `(path, encoding?) => Promise<string \| Uint8Array>` | Read file as text (`'utf8'`) or binary                  |
+| `writeFile` | `(path, data) => Promise<void>`                      | Write text or binary                                    |
+| `mkdir`     | `(path, options?) => Promise<void>`                  | Create directory (supports `{ recursive: true }`)       |
+| `readdir`   | `(path) => Promise<string[]>`                        | List directory entries                                  |
+| `unlink`    | `(path) => Promise<void>`                            | Delete file                                             |
+| `rmdir`     | `(path) => Promise<void>`                            | Remove directory                                        |
+| `rename`    | `(oldPath, newPath) => Promise<void>`                | Rename/move file or directory                           |
+| `stat`      | `(path) => Promise<FileStat>`                        | Get file/dir metadata (`FileStat` from `@taucad/types`) |
+| `lstat`     | `(path) => Promise<FileStat>`                        | Like stat, but does not follow symlinks                 |
+| `exists`    | `(path) => Promise<boolean>`                         | Check if path exists                                    |
 
 The framework wraps the base with `createKernelFileSystem(base)` to add enhanced helper methods with default implementations:
 
-| Method | Signature | Default Implementation |
-|--------|-----------|----------------------|
-| `readFiles` | `(paths) => Promise<Record<string, Uint8Array>>` | `Promise.all(paths.map(readFile))` |
+| Method            | Signature                                          | Default Implementation                       |
+| ----------------- | -------------------------------------------------- | -------------------------------------------- |
+| `readFiles`       | `(paths) => Promise<Record<string, Uint8Array>>`   | `Promise.all(paths.map(readFile))`           |
 | `readdirContents` | `(dirPath) => Promise<Record<string, Uint8Array>>` | `readdir` + `stat` + `readFile` (files only) |
-| `readdirStat` | `(dirPath) => Promise<FileStatEntry[]>` | `readdir` + `stat` per entry |
-| `ensureDir` | `(path) => Promise<void>` | `mkdir(path, { recursive: true })` |
+| `readdirStat`     | `(dirPath) => Promise<FileStatEntry[]>`            | `readdir` + `stat` per entry                 |
+| `ensureDir`       | `(path) => Promise<void>`                          | `mkdir(path, { recursive: true })`           |
 
 All paths are absolute. Backends can supply optimized overrides for any enhanced method (e.g., batch reads at the storage layer).
 
 ## When to Use Each
 
-| Constructor | Use when |
-|-------------|----------|
-| `fromNodeFS(basePath)` | Node.js environment, disk-based projects, persistent cache |
-| `fromMemoryFS(files?)` | Editor-driven content, tests, no disk I/O, ephemeral cache |
+| Constructor                 | Use when                                                      |
+| --------------------------- | ------------------------------------------------------------- |
+| `fromNodeFS(basePath)`      | Node.js environment, disk-based projects, persistent cache    |
+| `fromMemoryFS(files?)`      | Editor-driven content, tests, no disk I/O, ephemeral cache    |
 | `fromFsLike(fs, rootPath?)` | Any fs-compatible object (ZenFS, BrowserFS, memfs, polyfills) |
 
 ## Variations

@@ -25,11 +25,7 @@ Implement a kernel that handles a custom file type, produces geometry, and suppo
 Import `defineKernel` and result helpers from `@taucad/kernels`:
 
 ```typescript
-import {
-  defineKernel,
-  createKernelSuccess,
-  createKernelError,
-} from '@taucad/kernels';
+import { defineKernel, createKernelSuccess, createKernelError } from '@taucad/kernels';
 ```
 
 ### 2. Implement the Kernel Definition
@@ -38,11 +34,7 @@ Use `defineKernel` with a definition object. You must implement `initialize`, `g
 
 ```typescript
 // my-kernel.kernel.ts
-import {
-  defineKernel,
-  createKernelSuccess,
-  createKernelError,
-} from '@taucad/kernels';
+import { defineKernel, createKernelSuccess, createKernelError } from '@taucad/kernels';
 
 type MyContext = {
   engine: unknown; // Your CAD engine instance
@@ -69,7 +61,11 @@ export default defineKernel<MyContext, MyNativeHandle>({
   async getParameters(input, runtime, _context) {
     return createKernelSuccess({
       defaultParameters: {},
-      jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+      jsonSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
     });
   },
 
@@ -84,7 +80,11 @@ export default defineKernel<MyContext, MyNativeHandle>({
   async exportGeometry({ fileType, nativeHandle }, { logger }, _context) {
     if (fileType !== 'glb') {
       return createKernelError([
-        { message: `Unsupported export format: ${fileType}`, type: 'runtime', severity: 'error' },
+        {
+          message: `Unsupported export format: ${fileType}`,
+          type: 'runtime',
+          severity: 'error',
+        },
       ]);
     }
     // Convert nativeHandle to ExportFile using createExportFile
@@ -106,9 +106,7 @@ return createKernelSuccess({ defaultParameters: {}, jsonSchema: {} });
 return createKernelSuccess([createExportFile('glb', 'model.glb', glbData)]);
 
 // Error: wrap one or more issues
-return createKernelError([
-  { message: 'File not found', type: 'runtime', severity: 'error' },
-]);
+return createKernelError([{ message: 'File not found', type: 'runtime', severity: 'error' }]);
 ```
 
 For `createGeometry`, return `{ geometry, nativeHandle }` directly. Throw or return `createKernelError` when the operation fails.

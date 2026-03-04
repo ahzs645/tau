@@ -10,7 +10,7 @@ Use the transport API when configuring how the kernel client communicates with w
 
 ## Types
 
-<auto-type-table path="./props/transport.ts" name="KernelTransport" />
+<auto-type-table path='./props/transport.ts' name='KernelTransport' />
 
 ## createWorkerTransport
 
@@ -24,9 +24,7 @@ import { replicad } from '@taucad/kernels/kernels';
 import { esbuild } from '@taucad/kernels/bundler';
 import { createWorkerTransport } from '@taucad/kernels/transport';
 
-const transport = createWorkerTransport(
-  new URL('@taucad/kernels/worker', import.meta.url).href,
-);
+const transport = createWorkerTransport(new URL('@taucad/kernels/worker', import.meta.url).href);
 
 const client = createKernelClient({
   kernels: [replicad()],

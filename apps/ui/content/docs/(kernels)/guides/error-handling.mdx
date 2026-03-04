@@ -96,14 +96,14 @@ const issue: KernelIssue = {
 };
 ```
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `message` | `string` | Human-readable error message |
-| `severity` | `'error' \| 'warning' \| 'info'` | Issue severity |
-| `type` | `'compilation' \| 'runtime' \| 'kernel' \| 'connection' \| 'unknown'` | Error origin |
-| `location` | `ErrorLocation?` | File and range for editor integration |
-| `stack` | `string?` | Raw stack trace |
-| `stackFrames` | `KernelStackFrame[]?` | Parsed frames with `context` (user, library, framework, runtime) |
+| Field         | Type                                                                  | Purpose                                                          |
+| ------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `message`     | `string`                                                              | Human-readable error message                                     |
+| `severity`    | `'error' \| 'warning' \| 'info'`                                      | Issue severity                                                   |
+| `type`        | `'compilation' \| 'runtime' \| 'kernel' \| 'connection' \| 'unknown'` | Error origin                                                     |
+| `location`    | `ErrorLocation?`                                                      | File and range for editor integration                            |
+| `stack`       | `string?`                                                             | Raw stack trace                                                  |
+| `stackFrames` | `KernelStackFrame[]?`                                                 | Parsed frames with `context` (user, library, framework, runtime) |
 
 ### 4. Handle Errors in Render Calls
 
