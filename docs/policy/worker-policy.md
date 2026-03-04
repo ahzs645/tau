@@ -15,14 +15,14 @@ Standard patterns for creating, managing, and terminating Web Workers in the Tau
 CREATE → INITIALIZE → ACTIVE → (IDLE) → TERMINATE → DISPOSED
 ```
 
-| Phase | Entry condition | Exit condition |
-|---|---|---|
-| **CREATE** | Owner allocates `new Worker(url)` | Worker's `message` handler is registered |
-| **INITIALIZE** | First message exchange (handshake, WASM init) | Worker reports ready |
-| **ACTIVE** | Work items dispatched | No pending work |
-| **IDLE** | No work for `idleTimeout` duration | New work arrives or timeout expires |
-| **TERMINATE** | Owner calls `worker.terminate()` | Worker thread destroyed |
-| **DISPOSED** | All references cleared (ports, listeners, refs) | GC collects |
+| Phase          | Entry condition                                 | Exit condition                           |
+| -------------- | ----------------------------------------------- | ---------------------------------------- |
+| **CREATE**     | Owner allocates `new Worker(url)`               | Worker's `message` handler is registered |
+| **INITIALIZE** | First message exchange (handshake, WASM init)   | Worker reports ready                     |
+| **ACTIVE**     | Work items dispatched                           | No pending work                          |
+| **IDLE**       | No work for `idleTimeout` duration              | New work arrives or timeout expires      |
+| **TERMINATE**  | Owner calls `worker.terminate()`                | Worker thread destroyed                  |
+| **DISPOSED**   | All references cleared (ports, listeners, refs) | GC collects                              |
 
 ---
 
@@ -51,11 +51,11 @@ const worker = new Worker(workerUrl, { type: 'module' }); // Created even if nev
 
 Store worker references in locations that survive re-renders and closures.
 
-| Pattern | When to use |
-|---|---|
-| `useRef<Worker>` | Component-scoped workers |
-| Machine context | XState-managed workers |
-| Module-level variable | Singleton workers |
+| Pattern               | When to use              |
+| --------------------- | ------------------------ |
+| `useRef<Worker>`      | Component-scoped workers |
+| Machine context       | XState-managed workers   |
+| Module-level variable | Singleton workers        |
 
 Never store workers in `useState` (triggers re-renders) or local variables (lost on scope exit).
 
@@ -72,11 +72,11 @@ URL.revokeObjectURL(url); // Worker has already loaded the script
 
 ### Rule 4: Worker count budgets
 
-| Device class | Max concurrent workers | Detection |
-|---|---|---|
-| Mobile (≤4 cores) | 2 | `navigator.hardwareConcurrency <= 4` |
-| Tablet (4-8 cores) | 4 | `navigator.hardwareConcurrency <= 8` |
-| Desktop (8+ cores) | `hardwareConcurrency` | Default |
+| Device class       | Max concurrent workers | Detection                            |
+| ------------------ | ---------------------- | ------------------------------------ |
+| Mobile (≤4 cores)  | 2                      | `navigator.hardwareConcurrency <= 4` |
+| Tablet (4-8 cores) | 4                      | `navigator.hardwareConcurrency <= 8` |
+| Desktop (8+ cores) | `hardwareConcurrency`  | Default                              |
 
 Kernel workers consume 120+ MB each (WASM heap). On mobile Safari, exceeding ~200 MB total page memory causes silent tab crashes.
 
@@ -130,14 +130,14 @@ When terminating a worker, clean up in this order:
 
 ```typescript
 function dispose(): void {
-  destroyed = true;                    // 1. Flag
-  worker.onmessage = null;             // 2. Listeners
+  destroyed = true; // 1. Flag
+  worker.onmessage = null; // 2. Listeners
   worker.onerror = null;
   for (const port of ports) {
-    port.close();                      // 3. Ports
+    port.close(); // 3. Ports
   }
-  worker.terminate();                  // 4. Terminate
-  worker = undefined;                  // 5. Null ref
+  worker.terminate(); // 4. Terminate
+  worker = undefined; // 5. Null ref
   ports.clear();
 }
 ```
@@ -286,8 +286,8 @@ setup({
         context.worker.terminate();
         context.worker = undefined;
       }
-    }
-  }
+    },
+  },
 }).createMachine({
   exit: ['destroyWorker'],
   // ...
@@ -330,12 +330,12 @@ states: {
 
 ### XState cleanup guarantees
 
-| Mechanism | Cleanup guarantee | Use case |
-|---|---|---|
+| Mechanism                      | Cleanup guarantee                                 | Use case                         |
+| ------------------------------ | ------------------------------------------------- | -------------------------------- |
 | `fromCallback` return function | Called on actor stop (state exit or machine stop) | Worker lifecycle tied to a state |
-| `fromPromise` abort signal | Aborted on actor stop | Async initialization |
-| Machine `exit` action | Runs on `XSTATE_STOP` | Machine-wide cleanup |
-| `stopChild(ref)` | Sends `XSTATE_STOP` to the child | Dynamic child actor cleanup |
+| `fromPromise` abort signal     | Aborted on actor stop                             | Async initialization             |
+| Machine `exit` action          | Runs on `XSTATE_STOP`                             | Machine-wide cleanup             |
+| `stopChild(ref)`               | Sends `XSTATE_STOP` to the child                  | Dynamic child actor cleanup      |
 
 **Known limitation**: The XState v5 source contains a TODO noting that if exit actions or `stopChildren` throw, child actors may be orphaned. Always use error-isolated cleanup (Rule 5).
 
@@ -365,13 +365,13 @@ function useKernelWorker(url: string): Worker | undefined {
 
 ### Anti-patterns
 
-| Pattern | Problem | Fix |
-|---|---|---|
-| `useState(new Worker(...))` | Re-created on re-renders | Use `useRef` |
-| Module-scope `new Worker(...)` | Created before component mounts | Lazy init in `useEffect` |
-| Missing cleanup return | Worker leaks on unmount | Always `return () => worker.terminate()` |
-| `void (async () => { ... })()` in useEffect | Not cancellable | Use AbortController + cancelled flag |
-| Relying on `useActorRef` input changes | `useActorRef` does not recreate actors on input change | Use `key` prop or explicit events |
+| Pattern                                     | Problem                                                | Fix                                      |
+| ------------------------------------------- | ------------------------------------------------------ | ---------------------------------------- |
+| `useState(new Worker(...))`                 | Re-created on re-renders                               | Use `useRef`                             |
+| Module-scope `new Worker(...)`              | Created before component mounts                        | Lazy init in `useEffect`                 |
+| Missing cleanup return                      | Worker leaks on unmount                                | Always `return () => worker.terminate()` |
+| `void (async () => { ... })()` in useEffect | Not cancellable                                        | Use AbortController + cancelled flag     |
+| Relying on `useActorRef` input changes      | `useActorRef` does not recreate actors on input change | Use `key` prop or explicit events        |
 
 ---
 
@@ -447,11 +447,13 @@ if (import.meta.env.DEV) {
       console.debug(`[Worker] terminated: ${id}, total: ${activeWorkers.size}`);
     },
     dump() {
-      console.table([...activeWorkers.entries()].map(([id, info]) => ({
-        id,
-        url: info.url,
-        aliveFor: `${((Date.now() - info.created) / 1000).toFixed(1)}s`,
-      })));
+      console.table(
+        [...activeWorkers.entries()].map(([id, info]) => ({
+          id,
+          url: info.url,
+          aliveFor: `${((Date.now() - info.created) / 1000).toFixed(1)}s`,
+        })),
+      );
     },
   };
 }
@@ -465,7 +467,7 @@ Use `performance.measureUserAgentSpecificMemory()` (requires cross-origin isolat
 if (crossOriginIsolated && performance.measureUserAgentSpecificMemory) {
   const result = await performance.measureUserAgentSpecificMemory();
   const workerBytes = result.breakdown
-    .filter(entry => entry.types.includes('Worker'))
+    .filter((entry) => entry.types.includes('Worker'))
     .reduce((sum, entry) => sum + entry.bytes, 0);
   console.log(`Worker memory: ${(workerBytes / 1024 / 1024).toFixed(1)} MB`);
 }

@@ -10,22 +10,22 @@
 
 ## Release Summary
 
-| Version | Date | Commits | Type |
-|---------|------|---------|------|
-| V7.6.3 | 2022-07-22 | 20 | Maintenance |
-| V7.7.0 | 2022-11-12 | 293 | Minor |
-| V7.7.1 | 2023-03-21 | 57 | Maintenance |
-| V7.7.2 | 2023-07-21 | 21 | Maintenance |
-| V7.8.0 | 2023-12-26 | 117 | Minor |
-| V7.8.1 | 2024-03-31 | 19 | Maintenance |
-| V7.9.0 | 2025-02-17 | 272 | Minor |
-| V7.9.1 | 2025-05-20 | 34 | Maintenance |
-| V7.9.2 | 2025-10-19 | 27 | Maintenance |
-| V7.9.3 | 2025-12-05 | 17 | Maintenance |
-| V8.0.0.rc1 | 2025-04-13 | 57 | Release Candidate |
-| V8.0.0.rc2 | 2025-07-29 | 78 | Release Candidate |
-| V8.0.0.rc3 | 2025-12-15 | 157 | Release Candidate |
-| V8.0.0.rc4 | 2026-02-16 | 111 | Release Candidate |
+| Version    | Date       | Commits | Type              |
+| ---------- | ---------- | ------- | ----------------- |
+| V7.6.3     | 2022-07-22 | 20      | Maintenance       |
+| V7.7.0     | 2022-11-12 | 293     | Minor             |
+| V7.7.1     | 2023-03-21 | 57      | Maintenance       |
+| V7.7.2     | 2023-07-21 | 21      | Maintenance       |
+| V7.8.0     | 2023-12-26 | 117     | Minor             |
+| V7.8.1     | 2024-03-31 | 19      | Maintenance       |
+| V7.9.0     | 2025-02-17 | 272     | Minor             |
+| V7.9.1     | 2025-05-20 | 34      | Maintenance       |
+| V7.9.2     | 2025-10-19 | 27      | Maintenance       |
+| V7.9.3     | 2025-12-05 | 17      | Maintenance       |
+| V8.0.0.rc1 | 2025-04-13 | 57      | Release Candidate |
+| V8.0.0.rc2 | 2025-07-29 | 78      | Release Candidate |
+| V8.0.0.rc3 | 2025-12-15 | 157     | Release Candidate |
+| V8.0.0.rc4 | 2026-02-16 | 111     | Release Candidate |
 
 ---
 
@@ -152,7 +152,7 @@ Publication date: July 27, 2022.
 
 [GitHub Release](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V7_7_0) · [Full Changelog](https://github.com/Open-Cascade-SAS/OCCT/compare/V7_6_3...V7_7_0)
 
-Open CASCADE Technology version 7.7.0 is a minor release, which includes more than 250 improvements and corrections over the previous minor release 7.6.0. Version 7.7.0  introduces new features of most OCCT modules and components.  New in OCCT 7.7.0 (see also [Release Notes](https://dev.opencascade.org/content/open-cascade-technology-770-released) and [Documentation](https://dev.opencascade.org/doc/occt-7.7.0/overview)):
+Open CASCADE Technology version 7.7.0 is a minor release, which includes more than 250 improvements and corrections over the previous minor release 7.6.0. Version 7.7.0  introduces new features of most OCCT modules and components. New in OCCT 7.7.0 (see also [Release Notes](https://dev.opencascade.org/content/open-cascade-technology-770-released) and [Documentation](https://dev.opencascade.org/doc/occt-7.7.0/overview)):
 
 **General**
 
@@ -210,6 +210,7 @@ Publication date: September 11, 2022.
 [GitHub Release](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V7_7_1) · [Full Changelog](https://github.com/Open-Cascade-SAS/OCCT/compare/V7_7_0...V7_7_1)
 
 This maintenance release fixes the following critical problems (see also [Release Notes](https://dev.opencascade.org/content/open-cascade-technology-771-maintenance-release)):
+
 <ul>
 	<li><a href="https://tracker.dev.opencascade.org/view.php?id=33171">33171</a>: Modeling Algorithms - The compound with the few solids connected through shared faces becomes invalid after same domain faces unification</li>
 	<li><a href="https://tracker.dev.opencascade.org/view.php?id=32977">32977</a>: Data Exchange – Can’t read STEP color correctly for the referenced root label</li>
@@ -276,6 +277,7 @@ Publication date: April 6, 2023.
 [GitHub Release](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V7_7_2) · [Full Changelog](https://github.com/Open-Cascade-SAS/OCCT/compare/V7_7_1...V7_7_2)
 
 This maintenance release fixes the following critical problems (see also [Release Notes](https://dev.opencascade.org/content/open-cascade-technology-772-maintenance-release)):
+
 <ul>
 	<li><a href="https://tracker.dev.opencascade.org/view.php?id=23638">23638</a>: Data Exchange - Reading IGES file produced invalid shape</li>
 	<li><a href="https://tracker.dev.opencascade.org/view.php?id=33377">33377</a>: Data Exchange - STEPCAFControl_Reader crash in OCC 7.7.0</li>
@@ -425,95 +427,95 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 
 ### Core
 
-*   Improved code quality through static analysis and consistent code formatting with Clang-Format.
-*   Enhanced `Standard_Type` implementation for better RTTI support and optimized `IsKind` operations.
-*   Reorganized foundation classes for improved performance, including inlining `Standard_Type` instances.
-*   Deprecated the old aliasing for Handle types (e.g., `Handle_<Type>`).
-*   Improved memory management and container optimization, including refactoring `ShapeHealingMap` to `NCollection`.
-*   Updated map operations with the new `NCollection_MapAlgo` for union, intersection, and other set operations.
-*   Updated the `RemoveAll` method in `AsciiString` to correctly truncate the string.
+- Improved code quality through static analysis and consistent code formatting with Clang-Format.
+- Enhanced `Standard_Type` implementation for better RTTI support and optimized `IsKind` operations.
+- Reorganized foundation classes for improved performance, including inlining `Standard_Type` instances.
+- Deprecated the old aliasing for Handle types (e.g., `Handle_<Type>`).
+- Improved memory management and container optimization, including refactoring `ShapeHealingMap` to `NCollection`.
+- Updated map operations with the new `NCollection_MapAlgo` for union, intersection, and other set operations.
+- Updated the `RemoveAll` method in `AsciiString` to correctly truncate the string.
 
 ### Build System
 
-*   Added VCPKG manifest mode support (beta) for managing third-party dependencies.
-*   Improved handling of third-party dependencies, including Draco, VTK, and OpenVR from Ubuntu packages.
-*   Updated the minimum CMake version requirement to 3.10.
-*   Added an option to enable/disable Git hash extraction in the version string.
-*   Introduced a warning message regarding LGPL 2.1 licensing limitations for static linking.
-*   Fixed an issue where `custom.bat/sh` was not regenerated in the build directory.
-*   Added compiler version checks for C++17 support.
-*   Removed Genproj.
-*   Fixed static linking failures.
-*   Implemented new PCH for faster compilation.
-*   Added MinGW default third-party package support.
+- Added VCPKG manifest mode support (beta) for managing third-party dependencies.
+- Improved handling of third-party dependencies, including Draco, VTK, and OpenVR from Ubuntu packages.
+- Updated the minimum CMake version requirement to 3.10.
+- Added an option to enable/disable Git hash extraction in the version string.
+- Introduced a warning message regarding LGPL 2.1 licensing limitations for static linking.
+- Fixed an issue where `custom.bat/sh` was not regenerated in the build directory.
+- Added compiler version checks for C++17 support.
+- Removed Genproj.
+- Fixed static linking failures.
+- Implemented new PCH for faster compilation.
+- Added MinGW default third-party package support.
 
 ### Modeling
 
-*   Fixed multiple issues in the `UnifySameDomain` algorithm, including cases with `SurfaceOfRevolution` or `SurfaceOfLinearExtrusion` based on `TrimmedCurve`.
-*   Improved `BRepOffset` and `BRepFill` algorithms, including skipping degenerated curves in `BRepOffset_Tool::TryProject` and adding boundary checks in `BRepFill_Filling`.
-*   Enhanced shape processing and transformation handling, including the removal of surfaces after transformation.
-*   Fixed various geometric computation issues, including resetting Plane YVector and enhancing intersection handling for closed curves in `IntPatch_Intersection`.
-*   Improved the robustness of boolean operations.
-*   Added a warning for incomplete wire detection in `WireFromList`.
-*   Fixed NURB conversion for degenerated cases.
-*   Disabled exception with scaling transformation.
-*   Fixed degenerated curves in offset operations.
-*   Corrected intersection curves handling.
-*   Resolved BRepOffset_Tool segmentation fault.
-*   Fixed sphere cutting and Boolean operations.
+- Fixed multiple issues in the `UnifySameDomain` algorithm, including cases with `SurfaceOfRevolution` or `SurfaceOfLinearExtrusion` based on `TrimmedCurve`.
+- Improved `BRepOffset` and `BRepFill` algorithms, including skipping degenerated curves in `BRepOffset_Tool::TryProject` and adding boundary checks in `BRepFill_Filling`.
+- Enhanced shape processing and transformation handling, including the removal of surfaces after transformation.
+- Fixed various geometric computation issues, including resetting Plane YVector and enhancing intersection handling for closed curves in `IntPatch_Intersection`.
+- Improved the robustness of boolean operations.
+- Added a warning for incomplete wire detection in `WireFromList`.
+- Fixed NURB conversion for degenerated cases.
+- Disabled exception with scaling transformation.
+- Fixed degenerated curves in offset operations.
+- Corrected intersection curves handling.
+- Resolved BRepOffset_Tool segmentation fault.
+- Fixed sphere cutting and Boolean operations.
 
 ### Visualization
 
-*   Enhanced `AIS_Manipulator` functionality, including flat skin support and transformation depending on camera rotation.
-*   Improved selection handling and transformation persistence.
-*   Added support for flat skin in `AIS_Manipulator` presentation.
-*   Enhanced Z-layer handling in `V3d_View`, including an option to dump only a selection of z-layers.
-*   Improved transparency handling in various rendering modes.
-*   Implemented an interface to change `myToFlipOutput` of `OpenGl_View`.
-*   Fixed direction calculation for `Select3D_SensitiveCylinder` created from `Geom_CylindricalSurface`.
-*   Added support for vertical mouse movement zooming.
-*   Enhanced transparency handling for capping in 'Graphic3d_RTM_BLEND_OIT' mode.
-*   Fixed selection for simple shapes.
-*   Resolved manipulator interaction issues.
-*   Fixed transform persistence and view transformation.
-*   Addressed transparency and rendering issues.
+- Enhanced `AIS_Manipulator` functionality, including flat skin support and transformation depending on camera rotation.
+- Improved selection handling and transformation persistence.
+- Added support for flat skin in `AIS_Manipulator` presentation.
+- Enhanced Z-layer handling in `V3d_View`, including an option to dump only a selection of z-layers.
+- Improved transparency handling in various rendering modes.
+- Implemented an interface to change `myToFlipOutput` of `OpenGl_View`.
+- Fixed direction calculation for `Select3D_SensitiveCylinder` created from `Geom_CylindricalSurface`.
+- Added support for vertical mouse movement zooming.
+- Enhanced transparency handling for capping in 'Graphic3d_RTM_BLEND_OIT' mode.
+- Fixed selection for simple shapes.
+- Resolved manipulator interaction issues.
+- Fixed transform persistence and view transformation.
+- Addressed transparency and rendering issues.
 
 ### Data Exchange
 
-*   Migrated shape healing settings to a single object, `DE_ShapeFixParameters`.
-*   **STEP:**
-    *   Added metadata support for products, including product attributes.
-    *   Enhanced tessellated geometry handling.
-    *   Improved thread safety.
-    *   Fixed multiple crash issues, including those related to null curves and out-of-range indices.
-    *   Added support for `GENERAL_PROPERTY`.
-    *   Implemented common logic for scaling during the write procedure.
-*   **GLTF:**
-    *   Added vertex and edge support.
-    *   Improved material handling, including fixing material color space and edge colors.
-    *   Enhanced import/export functionality.
-    *   Added metadata support.
-*   Implemented `XCAFDoc` filter tree functionality.
-*   Improved handling of IGES imports, including fixing a resource leak when parsing an invalid file and addressing a crash with degenerated BSplines.
-*   Moved `StepData_ConfParameters` to the `DESTEP` package.
-*   Reorganized DE Wrapper classes to have a single style and logic: `DE<FORMAT>_Parameters`, `DE<FORMAT>_Provider`, and `DE<FORMAT>_ConfigurationNode`.
+- Migrated shape healing settings to a single object, `DE_ShapeFixParameters`.
+- **STEP:**
+  - Added metadata support for products, including product attributes.
+  - Enhanced tessellated geometry handling.
+  - Improved thread safety.
+  - Fixed multiple crash issues, including those related to null curves and out-of-range indices.
+  - Added support for `GENERAL_PROPERTY`.
+  - Implemented common logic for scaling during the write procedure.
+- **GLTF:**
+  - Added vertex and edge support.
+  - Improved material handling, including fixing material color space and edge colors.
+  - Enhanced import/export functionality.
+  - Added metadata support.
+- Implemented `XCAFDoc` filter tree functionality.
+- Improved handling of IGES imports, including fixing a resource leak when parsing an invalid file and addressing a crash with degenerated BSplines.
+- Moved `StepData_ConfParameters` to the `DESTEP` package.
+- Reorganized DE Wrapper classes to have a single style and logic: `DE<FORMAT>_Parameters`, `DE<FORMAT>_Provider`, and `DE<FORMAT>_ConfigurationNode`.
 
 ### Testing
 
-*   Implemented comprehensive GitHub Actions workflows for build validation (Ubuntu, Windows, MacOS), code formatting, and documentation building.
-*   Added automated documentation building.
-*   Enhanced test result comparison systems.
-*   Improved cross-platform testing support.
-*   Added WebAssembly build validation.
-*   Added a new TCL command to clear the test folder of skipped tests.
+- Implemented comprehensive GitHub Actions workflows for build validation (Ubuntu, Windows, MacOS), code formatting, and documentation building.
+- Added automated documentation building.
+- Enhanced test result comparison systems.
+- Improved cross-platform testing support.
+- Added WebAssembly build validation.
+- Added a new TCL command to clear the test folder of skipped tests.
 
 ### Documentation
 
-*   Updated code documentation and fixed various typos.
-*   Enhanced API documentation.
-*   Improved contributing guidelines.
-*   Updated issue templates and release notes.
-*   Updated links in the README.
+- Updated code documentation and fixed various typos.
+- Enhanced API documentation.
+- Improved contributing guidelines.
+- Updated issue templates and release notes.
+- Updated links in the README.
 
 ## How to Upgrade
 
@@ -542,6 +544,7 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 ## What's New in OCCT 7.9.1
 
 ### Configuration & Build System
+
 - Update VTK configuration and enable optional components ([#395](https://github.com/Open-Cascade-SAS/OCCT/pull/395))
 - Update file globbing and condition checks for installation paths ([#399](https://github.com/Open-Cascade-SAS/OCCT/pull/399))
 - Extend CMake file filter regex ([#400](https://github.com/Open-Cascade-SAS/OCCT/pull/400))
@@ -555,16 +558,19 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - Fixed paths to 3rd-party in cmake configuration ([#523](https://github.com/Open-Cascade-SAS/OCCT/pull/523))
 
 ### Testing & Quality
+
 - Repeating failed tests in GitHub Actions ([#412](https://github.com/Open-Cascade-SAS/OCCT/pull/412))
 - Inspector build error on latest CMake ([#477](https://github.com/Open-Cascade-SAS/OCCT/pull/477))
 - Add a new compilation on Clang without PCH ([#540](https://github.com/Open-Cascade-SAS/OCCT/pull/540))
 
 ### Foundation Classes
+
 - Host resolving by itself ([#457](https://github.com/Open-Cascade-SAS/OCCT/pull/457))
 - Update signal handling for GLIBC compatibility on Linux ([#458](https://github.com/Open-Cascade-SAS/OCCT/pull/458))
 - Checking for MallInfo version ([#459](https://github.com/Open-Cascade-SAS/OCCT/pull/459))
 
 ### Modeling
+
 - Degenerated curves were not handled by Arrange function ([#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396))
 - Improve handling of polygon parameters in NURBS conversion ([#410](https://github.com/Open-Cascade-SAS/OCCT/pull/410))
 - Handle void bounding box case in BRepBndLib::AddOptimal ([#470](https://github.com/Open-Cascade-SAS/OCCT/pull/470))
@@ -575,10 +581,12 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - General Fuse (BOPAlgo_PaveFiller) optimization ([#514](https://github.com/Open-Cascade-SAS/OCCT/pull/514))
 
 ### Visualization
+
 - Refactor mouse click handling logic for improved double-click detection ([#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385))
 - AIS_Shape bounding box re-computation is not working properly ([#422](https://github.com/Open-Cascade-SAS/OCCT/pull/422))
 
 ### Data Exchange
+
 - DE Wrapper invalidating parameters after 'Load' ([#393](https://github.com/Open-Cascade-SAS/OCCT/pull/393))
 - Datum Axis extraction issue ([#407](https://github.com/Open-Cascade-SAS/OCCT/pull/407))
 - STEP: AP242 SchemaName Remove dot ([#448](https://github.com/Open-Cascade-SAS/OCCT/pull/448))
@@ -586,6 +594,7 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - Small optimization of StepData_StepReaderData ([#543](https://github.com/Open-Cascade-SAS/OCCT/pull/543))
 
 ### Documentation
+
 - Enable server-based search and external search options in Doxyfile
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V7_9_0...V7_9_1
@@ -607,6 +616,7 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 ## What's New in OCCT 7.9.2
 
 ### Configuration & Build System
+
 - VCPKG add TclTk support ([#580](https://github.com/Open-Cascade-SAS/OCCT/pull/580))
 - Remove jemalloc port files ([#581](https://github.com/Open-Cascade-SAS/OCCT/pull/581))
 - Update C++ standard to C++17
@@ -614,14 +624,17 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - Fixed issue with CSF variable overwriting ([#561](https://github.com/Open-Cascade-SAS/OCCT/issues/561))
 
 ### Testing & Quality
+
 - Update samples C++ version ([#606](https://github.com/Open-Cascade-SAS/OCCT/pull/606))
 - Remove marking warnings as errors in CI builds
 
 ### Foundation Classes
+
 - Leak of WinAPI resources ([#625](https://github.com/Open-Cascade-SAS/OCCT/pull/625))
 - Matrix multiplied issue ([#522](https://github.com/Open-Cascade-SAS/OCCT/pull/522))
 
 ### Modeling
+
 - Fix array indexing bug in IntAna_IntQuadQuad::NextCurve method ([#703](https://github.com/Open-Cascade-SAS/OCCT/pull/703))
 - CornerMax incorrect realisation in Bnd_Box ([#664](https://github.com/Open-Cascade-SAS/OCCT/pull/664))
 - Fix null surface crash in fixshape ([#623](https://github.com/Open-Cascade-SAS/OCCT/pull/623))
@@ -631,12 +644,15 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - Infinite loop when Simplifying Fuse operation, CPU to 100% ([#557](https://github.com/Open-Cascade-SAS/OCCT/issues/557))
 
 ### Shape Healing
+
 - Revolved shape in STEP file is imported inverted ([#699](https://github.com/Open-Cascade-SAS/OCCT/pull/699))
 
 ### Visualization
+
 - Do not write comment into binary PPM image (Image_AlienPixMap)
 
 ### Data Exchange
+
 - Crash on empty list in STEP ([#671](https://github.com/Open-Cascade-SAS/OCCT/pull/671))
 - Facets with empty normals like 'f 1// 2// 3//' in RWObj_Reader ([#520](https://github.com/Open-Cascade-SAS/OCCT/pull/520))
 - Fix indices during parsing of arrays in GLTF Reader ([#602](https://github.com/Open-Cascade-SAS/OCCT/pull/602))
@@ -644,10 +660,12 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - Optimize entity graph evaluating ([#562](https://github.com/Open-Cascade-SAS/OCCT/issues/562))
 
 ### Draw
+
 - Fix message color mixing ([#685](https://github.com/Open-Cascade-SAS/OCCT/pull/685))
 - Misprint in vcomputehlr command leading to error if no Viewer ([#526](https://github.com/Open-Cascade-SAS/OCCT/pull/526))
 
 ### Coding
+
 - Reducing relying on exceptions ([#676](https://github.com/Open-Cascade-SAS/OCCT/pull/676))
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V7_9_1...V7_9_2
@@ -669,6 +687,7 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 ## What's New in OCCT 7.9.3
 
 ### Modeling
+
 - Fix memory consumption in BOPAlgo_PaveFiller_6.cxx ([#864](https://github.com/Open-Cascade-SAS/OCCT/pull/864))
 - Fix BRepBuilderAPI_GTransform face stretch crash ([#875](https://github.com/Open-Cascade-SAS/OCCT/pull/875))
 - Fix Boolean fuse segfaults on loft ([#860](https://github.com/Open-Cascade-SAS/OCCT/pull/860))
@@ -679,15 +698,19 @@ Open Cascade is delighted to announce the release of Open CASCADE Technology ver
 - Fix ShapeUpgrade_UnifySameDomain crash ([#876](https://github.com/Open-Cascade-SAS/OCCT/pull/876))
 
 ### Shape Healing
+
 - Optimize FixFaceOrientation ([#584](https://github.com/Open-Cascade-SAS/OCCT/pull/584))
 
 ### Visualization
+
 - Improve detection of full cylinder/cone parameters ([#830](https://github.com/Open-Cascade-SAS/OCCT/pull/830))
 
 ### Data Exchange
+
 - Fix hang in STEPCAFControl_Reader ([#733](https://github.com/Open-Cascade-SAS/OCCT/pull/733))
 
 ### Application Framework
+
 - Early-return null NamedShape when TNaming_UsedShapes is missing ([#760](https://github.com/Open-Cascade-SAS/OCCT/pull/760))
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V7_9_2...V7_9_3
@@ -714,126 +737,128 @@ The cycle for a release candidate is planned to be 5-10 weeks, while maintenance
 
 ### Core
 
-* Moved resource directories to `/resource` folder [#427](https://github.com/Open-Cascade-SAS/OCCT/pull/427), [#429](https://github.com/Open-Cascade-SAS/OCCT/pull/429)
-* Migration of Inspector to own repository [#438](https://github.com/Open-Cascade-SAS/OCCT/pull/438)
-* Migration of ExpToCas to own repository [#442](https://github.com/Open-Cascade-SAS/OCCT/pull/442)
-* Reorganize source directory to follow "src/Module/Toolkit/Package/File" template [#450](https://github.com/Open-Cascade-SAS/OCCT/pull/450)
-* Host search resolving by itself [#457](https://github.com/Open-Cascade-SAS/OCCT/pull/457)
-* Update signal handling for GLIBC compatibility on Linux [#458](https://github.com/Open-Cascade-SAS/OCCT/pull/458)
-* Checking for MallInfo version [#459](https://github.com/Open-Cascade-SAS/OCCT/pull/459)
-* Introducing `GTest` test system into OCCT as a new way to unit testing to improve stability [#443](https://github.com/Open-Cascade-SAS/OCCT/pull/443)
-* HashUtils NoExcept optimization [#473](https://github.com/Open-Cascade-SAS/OCCT/pull/473)
+- Moved resource directories to `/resource` folder [#427](https://github.com/Open-Cascade-SAS/OCCT/pull/427), [#429](https://github.com/Open-Cascade-SAS/OCCT/pull/429)
+- Migration of Inspector to own repository [#438](https://github.com/Open-Cascade-SAS/OCCT/pull/438)
+- Migration of ExpToCas to own repository [#442](https://github.com/Open-Cascade-SAS/OCCT/pull/442)
+- Reorganize source directory to follow "src/Module/Toolkit/Package/File" template [#450](https://github.com/Open-Cascade-SAS/OCCT/pull/450)
+- Host search resolving by itself [#457](https://github.com/Open-Cascade-SAS/OCCT/pull/457)
+- Update signal handling for GLIBC compatibility on Linux [#458](https://github.com/Open-Cascade-SAS/OCCT/pull/458)
+- Checking for MallInfo version [#459](https://github.com/Open-Cascade-SAS/OCCT/pull/459)
+- Introducing `GTest` test system into OCCT as a new way to unit testing to improve stability [#443](https://github.com/Open-Cascade-SAS/OCCT/pull/443)
+- HashUtils NoExcept optimization [#473](https://github.com/Open-Cascade-SAS/OCCT/pull/473)
 
 ### Build system
 
-* Fixed CMake configuration with VTK configuration built with OCCT [#395](https://github.com/Open-Cascade-SAS/OCCT/pull/395), [#403](https://github.com/Open-Cascade-SAS/OCCT/pull/403)
-* TBB configuration prioritization to release [#496](https://github.com/Open-Cascade-SAS/OCCT/pull/496)
-* Fixed issue with mismatching installation folder on Unix system [#399](https://github.com/Open-Cascade-SAS/OCCT/pull/399)
-* Fixed issue with build patch containing dot symbol [#400](https://github.com/Open-Cascade-SAS/OCCT/pull/400)
-* CMake Improvements to work with VTK 9x
-* Remove BUILD_PATCH option in CMake [#418](https://github.com/Open-Cascade-SAS/OCCT/pull/418)
-* Enhance Qt5 directory detection for Windows [#419](https://github.com/Open-Cascade-SAS/OCCT/pull/419)
-* Remove `-symbolic` linker flag from Unix system, which can lead to RTTI issues [#432](https://github.com/Open-Cascade-SAS/OCCT/pull/432)
-* Re-Configuration time optimization [#467](https://github.com/Open-Cascade-SAS/OCCT/pull/467)
+- Fixed CMake configuration with VTK configuration built with OCCT [#395](https://github.com/Open-Cascade-SAS/OCCT/pull/395), [#403](https://github.com/Open-Cascade-SAS/OCCT/pull/403)
+- TBB configuration prioritization to release [#496](https://github.com/Open-Cascade-SAS/OCCT/pull/496)
+- Fixed issue with mismatching installation folder on Unix system [#399](https://github.com/Open-Cascade-SAS/OCCT/pull/399)
+- Fixed issue with build patch containing dot symbol [#400](https://github.com/Open-Cascade-SAS/OCCT/pull/400)
+- CMake Improvements to work with VTK 9x
+- Remove BUILD_PATCH option in CMake [#418](https://github.com/Open-Cascade-SAS/OCCT/pull/418)
+- Enhance Qt5 directory detection for Windows [#419](https://github.com/Open-Cascade-SAS/OCCT/pull/419)
+- Remove `-symbolic` linker flag from Unix system, which can lead to RTTI issues [#432](https://github.com/Open-Cascade-SAS/OCCT/pull/432)
+- Re-Configuration time optimization [#467](https://github.com/Open-Cascade-SAS/OCCT/pull/467)
 
 ### Modeling
 
-* GeomFill updated with fix of incorrect arrangement of Degenerated BSpline curve [#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396)
-* Improve handling of polygon parameters in NURBS conversion [#410](https://github.com/Open-Cascade-SAS/OCCT/pull/410)
-* Fixed issue with calculation of bounding box with faces without PCurves in BRepBndLib::AddOptimal [#470](https://github.com/Open-Cascade-SAS/OCCT/pull/470)
-* Fixed issue with periodic BSpline within bounding box calculation [#493](https://github.com/Open-Cascade-SAS/OCCT/pull/493)
+- GeomFill updated with fix of incorrect arrangement of Degenerated BSpline curve [#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396)
+- Improve handling of polygon parameters in NURBS conversion [#410](https://github.com/Open-Cascade-SAS/OCCT/pull/410)
+- Fixed issue with calculation of bounding box with faces without PCurves in BRepBndLib::AddOptimal [#470](https://github.com/Open-Cascade-SAS/OCCT/pull/470)
+- Fixed issue with periodic BSpline within bounding box calculation [#493](https://github.com/Open-Cascade-SAS/OCCT/pull/493)
 
 ### Visualization
 
-* Added possibility to not write warnings about unsupported fonts [#392](https://github.com/Open-Cascade-SAS/OCCT/pull/392)
-* Improved double click detection event to prevent long click mismatching [#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385)
-* Changed selection behavior and allow HandleMouseClick for schemes, allowing to select an object [#416](https://github.com/Open-Cascade-SAS/OCCT/pull/416)
-* Fixed issue with re-computing Bounding box [#422](https://github.com/Open-Cascade-SAS/OCCT/pull/422)
+- Added possibility to not write warnings about unsupported fonts [#392](https://github.com/Open-Cascade-SAS/OCCT/pull/392)
+- Improved double click detection event to prevent long click mismatching [#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385)
+- Changed selection behavior and allow HandleMouseClick for schemes, allowing to select an object [#416](https://github.com/Open-Cascade-SAS/OCCT/pull/416)
+- Fixed issue with re-computing Bounding box [#422](https://github.com/Open-Cascade-SAS/OCCT/pull/422)
 
 ### Data Exchange
 
-* Added support for SurfaceStyleReflectanceAmbientDiffuse and SurfaceStyleReflectanceAmbientDiffuseSpecular classes and reorganized Rendering Parameters catching [#447](https://github.com/Open-Cascade-SAS/OCCT/pull/447)
-* Added option to decrease STP file size for export by removing duplicate entities. Average size improvement is 20% [#475](https://github.com/Open-Cascade-SAS/OCCT/pull/475)
-* Fixed issue with File and System coordinate system mixing on DE Wrapper interface for Mesh formats [#393](https://github.com/Open-Cascade-SAS/OCCT/pull/393)
-* Added stream to GLTF JSON parser to read lines and points [#489](https://github.com/Open-Cascade-SAS/OCCT/pull/489)
-* Fixed crash with Datum extraction from STP file [#407](https://github.com/Open-Cascade-SAS/OCCT/pull/407)
-* Removed dot from AP242 SchemaName in "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF. {1 0 10303 442 1 1 4 }" [#448](https://github.com/Open-Cascade-SAS/OCCT/pull/448)
-* Step entity Direction optimization with decreased memory footprint [#479](https://github.com/Open-Cascade-SAS/OCCT/pull/479)
+- Added support for SurfaceStyleReflectanceAmbientDiffuse and SurfaceStyleReflectanceAmbientDiffuseSpecular classes and reorganized Rendering Parameters catching [#447](https://github.com/Open-Cascade-SAS/OCCT/pull/447)
+- Added option to decrease STP file size for export by removing duplicate entities. Average size improvement is 20% [#475](https://github.com/Open-Cascade-SAS/OCCT/pull/475)
+- Fixed issue with File and System coordinate system mixing on DE Wrapper interface for Mesh formats [#393](https://github.com/Open-Cascade-SAS/OCCT/pull/393)
+- Added stream to GLTF JSON parser to read lines and points [#489](https://github.com/Open-Cascade-SAS/OCCT/pull/489)
+- Fixed crash with Datum extraction from STP file [#407](https://github.com/Open-Cascade-SAS/OCCT/pull/407)
+- Removed dot from AP242 SchemaName in "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF. {1 0 10303 442 1 1 4 }" [#448](https://github.com/Open-Cascade-SAS/OCCT/pull/448)
+- Step entity Direction optimization with decreased memory footprint [#479](https://github.com/Open-Cascade-SAS/OCCT/pull/479)
 
 ### Testing
 
-* Added option to repeat failed tests automatically in GH Actions [#412](https://github.com/Open-Cascade-SAS/OCCT/pull/412) 
-* Reorganized GitHub actions [#480](https://github.com/Open-Cascade-SAS/OCCT/pull/480)
-* GTest tests integration [#471](https://github.com/Open-Cascade-SAS/OCCT/pull/471), [#481](https://github.com/Open-Cascade-SAS/OCCT/pull/481), [#443](https://github.com/Open-Cascade-SAS/OCCT/pull/443)
+- Added option to repeat failed tests automatically in GH Actions [#412](https://github.com/Open-Cascade-SAS/OCCT/pull/412)
+- Reorganized GitHub actions [#480](https://github.com/Open-Cascade-SAS/OCCT/pull/480)
+- GTest tests integration [#471](https://github.com/Open-Cascade-SAS/OCCT/pull/471), [#481](https://github.com/Open-Cascade-SAS/OCCT/pull/481), [#443](https://github.com/Open-Cascade-SAS/OCCT/pull/443)
 
 ### Documentation
 
-* Fixed various typos found in codebase [#413](https://github.com/Open-Cascade-SAS/OCCT/pull/413), [#414](https://github.com/Open-Cascade-SAS/OCCT/pull/414), [#495](https://github.com/Open-Cascade-SAS/OCCT/pull/495)
-* Migrated documentation generation from TCL to CMake [#441](https://github.com/Open-Cascade-SAS/OCCT/pull/441)
+- Fixed various typos found in codebase [#413](https://github.com/Open-Cascade-SAS/OCCT/pull/413), [#414](https://github.com/Open-Cascade-SAS/OCCT/pull/414), [#495](https://github.com/Open-Cascade-SAS/OCCT/pull/495)
+- Migrated documentation generation from TCL to CMake [#441](https://github.com/Open-Cascade-SAS/OCCT/pull/441)
 
 ## How to Upgrade
 
 There are no critical changes at the API level. Migration should proceed without issues.
 
 ## What's Changed
-* Coding - Add flag for font mgr to avoid error message [#392](https://github.com/Open-Cascade-SAS/OCCT/pull/392)
-* Data Exchange - DE Wrapper invalidating parameters after 'Load' [#393](https://github.com/Open-Cascade-SAS/OCCT/pull/393)
-* Visualization - Refactor mouse click handling logic for improved double-click detection [#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385)
-* Modeling - Degenerated curves were not handled by Arrange function [#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396)
-* Configuration - Update VTK configuration and enable optional components [#395](https://github.com/Open-Cascade-SAS/OCCT/pull/395)
-* Configuration - Update file globbing and condition checks for installation paths [#399](https://github.com/Open-Cascade-SAS/OCCT/pull/399)
-* Configuration - Extend CMake file filter regex [#400](https://github.com/Open-Cascade-SAS/OCCT/pull/400)
-* Configuration - Modify VTK 9x handling [#401](https://github.com/Open-Cascade-SAS/OCCT/pull/401)
-* Data Exchange - Datum Axis extraction issue [#407](https://github.com/Open-Cascade-SAS/OCCT/pull/407)
-* Configuration - Update VTK optional components [#403](https://github.com/Open-Cascade-SAS/OCCT/pull/403)
-* Modeling - Improve handling of polygon parameters in NURBS conversion [#410](https://github.com/Open-Cascade-SAS/OCCT/pull/410)
-* Testing - Repeating failed tests in GH Action [#412](https://github.com/Open-Cascade-SAS/OCCT/pull/412)
-* Documentation - Fix various typos found in codebase [#413](https://github.com/Open-Cascade-SAS/OCCT/pull/413)
-* Documentation - Fix various typos found in codebase [#414](https://github.com/Open-Cascade-SAS/OCCT/pull/414)
-* Visualization, Selection - allow HandleMouseClick for schemes, allowing to select an object [#416](https://github.com/Open-Cascade-SAS/OCCT/pull/416)
-* Configuration - Remove BUILD_PATCH option in CMake [#418](https://github.com/Open-Cascade-SAS/OCCT/pull/418)
-* Configuration - Checking for FILES content [#424](https://github.com/Open-Cascade-SAS/OCCT/pull/424)
-* Visualization - AIS_Shape bounding box re-computation is not working properly [#422](https://github.com/Open-Cascade-SAS/OCCT/pull/422)
-* Coding - Include gxx files from global path [#423](https://github.com/Open-Cascade-SAS/OCCT/pull/423)
-* Configuration - Enhance Qt5 directory detection for Windows [#419](https://github.com/Open-Cascade-SAS/OCCT/pull/419)
-* Configuration - Remove -symbolic linker flag [#432](https://github.com/Open-Cascade-SAS/OCCT/pull/432)
-* Configuration - Adding resource packages to toolkit [#427](https://github.com/Open-Cascade-SAS/OCCT/pull/427)
-* Data Exchange, Step - AP242 SchemaName remove dot [#448](https://github.com/Open-Cascade-SAS/OCCT/pull/448)
-* Coding - Migration of Inspector to own repository [#438](https://github.com/Open-Cascade-SAS/OCCT/pull/438)
-* Coding - Migration of ExpToCas to own repository [#442](https://github.com/Open-Cascade-SAS/OCCT/pull/442)
-* Configuration - Resource structure reorganization [#429](https://github.com/Open-Cascade-SAS/OCCT/pull/429)
-* Documentation - Migration to CMake from TCL [#441](https://github.com/Open-Cascade-SAS/OCCT/pull/441)
-* Configuration - Reorganize repository structure [#450](https://github.com/Open-Cascade-SAS/OCCT/pull/450)
-* Configuration - Resource generation source path fix [#453](https://github.com/Open-Cascade-SAS/OCCT/pull/453)
-* Documentation - Generation schema fixing [#452](https://github.com/Open-Cascade-SAS/OCCT/pull/452)
-* Configuration - Update resource path references in build scripts [#454](https://github.com/Open-Cascade-SAS/OCCT/pull/454)
-* Foundation Classes - Host resolving by itself [#457](https://github.com/Open-Cascade-SAS/OCCT/pull/457)
-* Documentation - Convert module and toolkit names to lowercase for URL generation [#460](https://github.com/Open-Cascade-SAS/OCCT/pull/460)
-* Foundation Classes - Update signal handling for GLIBC compatibility on Linux [#458](https://github.com/Open-Cascade-SAS/OCCT/pull/458)
-* Foundation Classes - Checking for MallInfo version [#459](https://github.com/Open-Cascade-SAS/OCCT/pull/459)
-* Configuration - Add support for Google Test framework in CMake [#443](https://github.com/Open-Cascade-SAS/OCCT/pull/443)
-* Testing - Remove PLib_JacobiPolynomial_Test.cxx from GTests [#463](https://github.com/Open-Cascade-SAS/OCCT/pull/463)
-* Configure - Fixed issue with static build of DRAWEXE [#462](https://github.com/Open-Cascade-SAS/OCCT/pull/462)
-* Configuration - Re-Configuration time optimization [#467](https://github.com/Open-Cascade-SAS/OCCT/pull/467)
-* Modeling - Handle void bounding box case in BRepBndLib::AddOptimal [#470](https://github.com/Open-Cascade-SAS/OCCT/pull/470)
-* Modeling - Bounding BSpline periodic tolerance issue [#468](https://github.com/Open-Cascade-SAS/OCCT/pull/468)
-* Modeling - ElCLib Optimization and testing [#471](https://github.com/Open-Cascade-SAS/OCCT/pull/471)
-* Testing - Inspector build error on latest CMake [#477](https://github.com/Open-Cascade-SAS/OCCT/pull/477)
-* Foundation Classes - HashUtils NoExcept optimization [#473](https://github.com/Open-Cascade-SAS/OCCT/pull/473)
-* Testing - Units Tests for NCollection package [#481](https://github.com/Open-Cascade-SAS/OCCT/pull/481)
-* Testing - Reorginize GitHub actions by actions [#480](https://github.com/Open-Cascade-SAS/OCCT/pull/480)
-* Data Exchange - Step Direction optimization [#479](https://github.com/Open-Cascade-SAS/OCCT/pull/479)
-* Data Exchange, Step - Vis Material support [#447](https://github.com/Open-Cascade-SAS/OCCT/pull/447)
-* Modeling - Periodic BSpline curve bounding [#493](https://github.com/Open-Cascade-SAS/OCCT/pull/493)
-* Data Exchange, GLTF Reader - Add stream to json parser to read lines and points [#489](https://github.com/Open-Cascade-SAS/OCCT/pull/489)
-* Documentation - Fix various typos found in codebase [#495](https://github.com/Open-Cascade-SAS/OCCT/pull/495)
-* Configuration - TBB configuration prioritization to release [#496](https://github.com/Open-Cascade-SAS/OCCT/pull/496)
-* Coding - MSVC warning fix for STEP Rendering properties [#498](https://github.com/Open-Cascade-SAS/OCCT/pull/498)
+
+- Coding - Add flag for font mgr to avoid error message [#392](https://github.com/Open-Cascade-SAS/OCCT/pull/392)
+- Data Exchange - DE Wrapper invalidating parameters after 'Load' [#393](https://github.com/Open-Cascade-SAS/OCCT/pull/393)
+- Visualization - Refactor mouse click handling logic for improved double-click detection [#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385)
+- Modeling - Degenerated curves were not handled by Arrange function [#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396)
+- Configuration - Update VTK configuration and enable optional components [#395](https://github.com/Open-Cascade-SAS/OCCT/pull/395)
+- Configuration - Update file globbing and condition checks for installation paths [#399](https://github.com/Open-Cascade-SAS/OCCT/pull/399)
+- Configuration - Extend CMake file filter regex [#400](https://github.com/Open-Cascade-SAS/OCCT/pull/400)
+- Configuration - Modify VTK 9x handling [#401](https://github.com/Open-Cascade-SAS/OCCT/pull/401)
+- Data Exchange - Datum Axis extraction issue [#407](https://github.com/Open-Cascade-SAS/OCCT/pull/407)
+- Configuration - Update VTK optional components [#403](https://github.com/Open-Cascade-SAS/OCCT/pull/403)
+- Modeling - Improve handling of polygon parameters in NURBS conversion [#410](https://github.com/Open-Cascade-SAS/OCCT/pull/410)
+- Testing - Repeating failed tests in GH Action [#412](https://github.com/Open-Cascade-SAS/OCCT/pull/412)
+- Documentation - Fix various typos found in codebase [#413](https://github.com/Open-Cascade-SAS/OCCT/pull/413)
+- Documentation - Fix various typos found in codebase [#414](https://github.com/Open-Cascade-SAS/OCCT/pull/414)
+- Visualization, Selection - allow HandleMouseClick for schemes, allowing to select an object [#416](https://github.com/Open-Cascade-SAS/OCCT/pull/416)
+- Configuration - Remove BUILD_PATCH option in CMake [#418](https://github.com/Open-Cascade-SAS/OCCT/pull/418)
+- Configuration - Checking for FILES content [#424](https://github.com/Open-Cascade-SAS/OCCT/pull/424)
+- Visualization - AIS_Shape bounding box re-computation is not working properly [#422](https://github.com/Open-Cascade-SAS/OCCT/pull/422)
+- Coding - Include gxx files from global path [#423](https://github.com/Open-Cascade-SAS/OCCT/pull/423)
+- Configuration - Enhance Qt5 directory detection for Windows [#419](https://github.com/Open-Cascade-SAS/OCCT/pull/419)
+- Configuration - Remove -symbolic linker flag [#432](https://github.com/Open-Cascade-SAS/OCCT/pull/432)
+- Configuration - Adding resource packages to toolkit [#427](https://github.com/Open-Cascade-SAS/OCCT/pull/427)
+- Data Exchange, Step - AP242 SchemaName remove dot [#448](https://github.com/Open-Cascade-SAS/OCCT/pull/448)
+- Coding - Migration of Inspector to own repository [#438](https://github.com/Open-Cascade-SAS/OCCT/pull/438)
+- Coding - Migration of ExpToCas to own repository [#442](https://github.com/Open-Cascade-SAS/OCCT/pull/442)
+- Configuration - Resource structure reorganization [#429](https://github.com/Open-Cascade-SAS/OCCT/pull/429)
+- Documentation - Migration to CMake from TCL [#441](https://github.com/Open-Cascade-SAS/OCCT/pull/441)
+- Configuration - Reorganize repository structure [#450](https://github.com/Open-Cascade-SAS/OCCT/pull/450)
+- Configuration - Resource generation source path fix [#453](https://github.com/Open-Cascade-SAS/OCCT/pull/453)
+- Documentation - Generation schema fixing [#452](https://github.com/Open-Cascade-SAS/OCCT/pull/452)
+- Configuration - Update resource path references in build scripts [#454](https://github.com/Open-Cascade-SAS/OCCT/pull/454)
+- Foundation Classes - Host resolving by itself [#457](https://github.com/Open-Cascade-SAS/OCCT/pull/457)
+- Documentation - Convert module and toolkit names to lowercase for URL generation [#460](https://github.com/Open-Cascade-SAS/OCCT/pull/460)
+- Foundation Classes - Update signal handling for GLIBC compatibility on Linux [#458](https://github.com/Open-Cascade-SAS/OCCT/pull/458)
+- Foundation Classes - Checking for MallInfo version [#459](https://github.com/Open-Cascade-SAS/OCCT/pull/459)
+- Configuration - Add support for Google Test framework in CMake [#443](https://github.com/Open-Cascade-SAS/OCCT/pull/443)
+- Testing - Remove PLib_JacobiPolynomial_Test.cxx from GTests [#463](https://github.com/Open-Cascade-SAS/OCCT/pull/463)
+- Configure - Fixed issue with static build of DRAWEXE [#462](https://github.com/Open-Cascade-SAS/OCCT/pull/462)
+- Configuration - Re-Configuration time optimization [#467](https://github.com/Open-Cascade-SAS/OCCT/pull/467)
+- Modeling - Handle void bounding box case in BRepBndLib::AddOptimal [#470](https://github.com/Open-Cascade-SAS/OCCT/pull/470)
+- Modeling - Bounding BSpline periodic tolerance issue [#468](https://github.com/Open-Cascade-SAS/OCCT/pull/468)
+- Modeling - ElCLib Optimization and testing [#471](https://github.com/Open-Cascade-SAS/OCCT/pull/471)
+- Testing - Inspector build error on latest CMake [#477](https://github.com/Open-Cascade-SAS/OCCT/pull/477)
+- Foundation Classes - HashUtils NoExcept optimization [#473](https://github.com/Open-Cascade-SAS/OCCT/pull/473)
+- Testing - Units Tests for NCollection package [#481](https://github.com/Open-Cascade-SAS/OCCT/pull/481)
+- Testing - Reorginize GitHub actions by actions [#480](https://github.com/Open-Cascade-SAS/OCCT/pull/480)
+- Data Exchange - Step Direction optimization [#479](https://github.com/Open-Cascade-SAS/OCCT/pull/479)
+- Data Exchange, Step - Vis Material support [#447](https://github.com/Open-Cascade-SAS/OCCT/pull/447)
+- Modeling - Periodic BSpline curve bounding [#493](https://github.com/Open-Cascade-SAS/OCCT/pull/493)
+- Data Exchange, GLTF Reader - Add stream to json parser to read lines and points [#489](https://github.com/Open-Cascade-SAS/OCCT/pull/489)
+- Documentation - Fix various typos found in codebase [#495](https://github.com/Open-Cascade-SAS/OCCT/pull/495)
+- Configuration - TBB configuration prioritization to release [#496](https://github.com/Open-Cascade-SAS/OCCT/pull/496)
+- Coding - MSVC warning fix for STEP Rendering properties [#498](https://github.com/Open-Cascade-SAS/OCCT/pull/498)
 
 ## New Contributors
-* @sshutina made their first contribution in [#392](https://github.com/Open-Cascade-SAS/OCCT/pull/392)
-* @jboissy-mediasofts made their first contribution in [#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385)
-* @Xargas made their first contribution in [#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396)
+
+- @sshutina made their first contribution in [#392](https://github.com/Open-Cascade-SAS/OCCT/pull/392)
+- @jboissy-mediasofts made their first contribution in [#385](https://github.com/Open-Cascade-SAS/OCCT/pull/385)
+- @Xargas made their first contribution in [#396](https://github.com/Open-Cascade-SAS/OCCT/pull/396)
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V7_9_0...V8_0_0_rc1
 
@@ -863,114 +888,116 @@ The cycle for a release candidate is planned to be 5-10 weeks, while maintenance
 
 ### Core
 
-* Upgraded minimum C++ version requirement to C++17 [#537](https://github.com/Open-Cascade-SAS/OCCT/pull/537)
-* **Geometric Classes Optimization**: Significantly optimized gp_Vec, gp_Vec2d, gp_XY, and gp_XYZ classes by simplifying mathematical computations, replacing indirect API calls with direct data member access in performance-critical sections, and improving matrix operations including inversion, transposition, and power calculations [#578](https://github.com/Open-Cascade-SAS/OCCT/pull/578)
-* Reworked atomic and Standard_Condition implementation [#598](https://github.com/Open-Cascade-SAS/OCCT/pull/598)
-* Optimized NCollection_Array1 with type-specific improvements [#608](https://github.com/Open-Cascade-SAS/OCCT/pull/608)
-* Reworked math_DoubleTab to use NCollection container [#607](https://github.com/Open-Cascade-SAS/OCCT/pull/607)
-* Fixed WinAPI resource leaks [#625](https://github.com/Open-Cascade-SAS/OCCT/pull/625)
-* Fixed include brackets type issues [#635](https://github.com/Open-Cascade-SAS/OCCT/pull/635)
-* Geom package copy optimization [#645](https://github.com/Open-Cascade-SAS/OCCT/pull/645)
+- Upgraded minimum C++ version requirement to C++17 [#537](https://github.com/Open-Cascade-SAS/OCCT/pull/537)
+- **Geometric Classes Optimization**: Significantly optimized gp_Vec, gp_Vec2d, gp_XY, and gp_XYZ classes by simplifying mathematical computations, replacing indirect API calls with direct data member access in performance-critical sections, and improving matrix operations including inversion, transposition, and power calculations [#578](https://github.com/Open-Cascade-SAS/OCCT/pull/578)
+- Reworked atomic and Standard_Condition implementation [#598](https://github.com/Open-Cascade-SAS/OCCT/pull/598)
+- Optimized NCollection_Array1 with type-specific improvements [#608](https://github.com/Open-Cascade-SAS/OCCT/pull/608)
+- Reworked math_DoubleTab to use NCollection container [#607](https://github.com/Open-Cascade-SAS/OCCT/pull/607)
+- Fixed WinAPI resource leaks [#625](https://github.com/Open-Cascade-SAS/OCCT/pull/625)
+- Fixed include brackets type issues [#635](https://github.com/Open-Cascade-SAS/OCCT/pull/635)
+- Geom package copy optimization [#645](https://github.com/Open-Cascade-SAS/OCCT/pull/645)
 
 ### Build System and Configuration
 
-* **Comprehensive VCPKG Support**: Added full VCPKG layout configuration with CMake file placement in share/ directory for compliance, introduced OCCT_PROJECT_NAME parameter for customizing directory structure, and updated environment scripts while maintaining backward compatibility [#618](https://github.com/Open-Cascade-SAS/OCCT/pull/618), [#637](https://github.com/Open-Cascade-SAS/OCCT/pull/637), [#638](https://github.com/Open-Cascade-SAS/OCCT/pull/638)
-* Added VCPKG port opencascade with TclTk and GTest support [#580](https://github.com/Open-Cascade-SAS/OCCT/pull/580), [#616](https://github.com/Open-Cascade-SAS/OCCT/pull/616)
-* Implemented flexible project root configuration [#641](https://github.com/Open-Cascade-SAS/OCCT/pull/641)
-* Fixed build config file validation issues [#647](https://github.com/Open-Cascade-SAS/OCCT/pull/647)
-* Disabled GLTF build without RapidJSON [#646](https://github.com/Open-Cascade-SAS/OCCT/pull/646)
-* Fixed link errors on macOS when not building using vcpkg [#609](https://github.com/Open-Cascade-SAS/OCCT/pull/609)
-* Fixed CSF variable overwriting issues [#561](https://github.com/Open-Cascade-SAS/OCCT/pull/561)
-* Fixed paths to 3rd-party in cmake configuration [#523](https://github.com/Open-Cascade-SAS/OCCT/pull/523)
-* Fixed ARCH detection for older 32-bit Macs [#626](https://github.com/Open-Cascade-SAS/OCCT/pull/626)
-* Removed unused CMake scripts and dependencies [#644](https://github.com/Open-Cascade-SAS/OCCT/pull/644), [#581](https://github.com/Open-Cascade-SAS/OCCT/pull/581)
-* Fixed samples CMake configuration [#643](https://github.com/Open-Cascade-SAS/OCCT/pull/643)
+- **Comprehensive VCPKG Support**: Added full VCPKG layout configuration with CMake file placement in share/ directory for compliance, introduced OCCT_PROJECT_NAME parameter for customizing directory structure, and updated environment scripts while maintaining backward compatibility [#618](https://github.com/Open-Cascade-SAS/OCCT/pull/618), [#637](https://github.com/Open-Cascade-SAS/OCCT/pull/637), [#638](https://github.com/Open-Cascade-SAS/OCCT/pull/638)
+- Added VCPKG port opencascade with TclTk and GTest support [#580](https://github.com/Open-Cascade-SAS/OCCT/pull/580), [#616](https://github.com/Open-Cascade-SAS/OCCT/pull/616)
+- Implemented flexible project root configuration [#641](https://github.com/Open-Cascade-SAS/OCCT/pull/641)
+- Fixed build config file validation issues [#647](https://github.com/Open-Cascade-SAS/OCCT/pull/647)
+- Disabled GLTF build without RapidJSON [#646](https://github.com/Open-Cascade-SAS/OCCT/pull/646)
+- Fixed link errors on macOS when not building using vcpkg [#609](https://github.com/Open-Cascade-SAS/OCCT/pull/609)
+- Fixed CSF variable overwriting issues [#561](https://github.com/Open-Cascade-SAS/OCCT/pull/561)
+- Fixed paths to 3rd-party in cmake configuration [#523](https://github.com/Open-Cascade-SAS/OCCT/pull/523)
+- Fixed ARCH detection for older 32-bit Macs [#626](https://github.com/Open-Cascade-SAS/OCCT/pull/626)
+- Removed unused CMake scripts and dependencies [#644](https://github.com/Open-Cascade-SAS/OCCT/pull/644), [#581](https://github.com/Open-Cascade-SAS/OCCT/pull/581)
+- Fixed samples CMake configuration [#643](https://github.com/Open-Cascade-SAS/OCCT/pull/643)
 
 ### Modeling
 
-* **New Helix Toolkit**: Implemented a complete TKHelix toolkit with geometric helix curve adaptor and topological builders, featuring advanced B-spline approximation algorithms for high-quality helix representation and comprehensive TCL command interface [#648](https://github.com/Open-Cascade-SAS/OCCT/pull/648)
-* Added option to not build history in BRepFill_PipeShell [#632](https://github.com/Open-Cascade-SAS/OCCT/pull/632)
-* Fixed GeomFill_CorrectedFrenet hanging in some cases [#630](https://github.com/Open-Cascade-SAS/OCCT/pull/630)
-* Fixed infinite loop in Simplifying Fuse operation [#557](https://github.com/Open-Cascade-SAS/OCCT/pull/557)
-* Fixed Bnd_BoundSortBox::Compare failures in some cases [#518](https://github.com/Open-Cascade-SAS/OCCT/pull/518)
-* **General Fuse Optimization**: Improved BOPAlgo_PaveFiller performance by adding null checks for triangulation in BRep_Tool::IsClosed, simplifying index lookup logic in BOPDS_DS, and introducing helper functions for better clarity and robustness [#514](https://github.com/Open-Cascade-SAS/OCCT/pull/514)
-* Fixed BRepFilletAPI_MakeFiller segfault with two curves and rim [#532](https://github.com/Open-Cascade-SAS/OCCT/pull/532)
-* Fixed mismatch between projected point and parameter in ShapeAnalysis_Curve [#600](https://github.com/Open-Cascade-SAS/OCCT/pull/600)
+- **New Helix Toolkit**: Implemented a complete TKHelix toolkit with geometric helix curve adaptor and topological builders, featuring advanced B-spline approximation algorithms for high-quality helix representation and comprehensive TCL command interface [#648](https://github.com/Open-Cascade-SAS/OCCT/pull/648)
+- Added option to not build history in BRepFill_PipeShell [#632](https://github.com/Open-Cascade-SAS/OCCT/pull/632)
+- Fixed GeomFill_CorrectedFrenet hanging in some cases [#630](https://github.com/Open-Cascade-SAS/OCCT/pull/630)
+- Fixed infinite loop in Simplifying Fuse operation [#557](https://github.com/Open-Cascade-SAS/OCCT/pull/557)
+- Fixed Bnd_BoundSortBox::Compare failures in some cases [#518](https://github.com/Open-Cascade-SAS/OCCT/pull/518)
+- **General Fuse Optimization**: Improved BOPAlgo_PaveFiller performance by adding null checks for triangulation in BRep_Tool::IsClosed, simplifying index lookup logic in BOPDS_DS, and introducing helper functions for better clarity and robustness [#514](https://github.com/Open-Cascade-SAS/OCCT/pull/514)
+- Fixed BRepFilletAPI_MakeFiller segfault with two curves and rim [#532](https://github.com/Open-Cascade-SAS/OCCT/pull/532)
+- Fixed mismatch between projected point and parameter in ShapeAnalysis_Curve [#600](https://github.com/Open-Cascade-SAS/OCCT/pull/600)
 
 ### Shape Healing
 
-* Implemented reusing Surface Analysis for Wire fixing [#565](https://github.com/Open-Cascade-SAS/OCCT/pull/565)
+- Implemented reusing Surface Analysis for Wire fixing [#565](https://github.com/Open-Cascade-SAS/OCCT/pull/565)
 
 ### Visualization
 
-* Enhanced FFmpeg Compatibility Layer and updated Video Recorder [#582](https://github.com/Open-Cascade-SAS/OCCT/pull/582)
-* Fixed binary PPM image comment writing in Image_AlienPixMap [#413c08272b](https://github.com/Open-Cascade-SAS/OCCT/commit/413c08272b)
-* Updated Graphic3d_Aspects::PolygonOffsets documentation [#519](https://github.com/Open-Cascade-SAS/OCCT/pull/519)
-* Marked Immediate Mode rendering methods as deprecated in AIS_InteractiveContext [#521](https://github.com/Open-Cascade-SAS/OCCT/pull/521)
+- Enhanced FFmpeg Compatibility Layer and updated Video Recorder [#582](https://github.com/Open-Cascade-SAS/OCCT/pull/582)
+- Fixed binary PPM image comment writing in Image_AlienPixMap [#413c08272b](https://github.com/Open-Cascade-SAS/OCCT/commit/413c08272b)
+- Updated Graphic3d_Aspects::PolygonOffsets documentation [#519](https://github.com/Open-Cascade-SAS/OCCT/pull/519)
+- Marked Immediate Mode rendering methods as deprecated in AIS_InteractiveContext [#521](https://github.com/Open-Cascade-SAS/OCCT/pull/521)
 
 ### Data Exchange
 
-* Fixed GLTF indices parsing during array processing [#602](https://github.com/Open-Cascade-SAS/OCCT/pull/602)
-* Implemented non-uniform scaling in GLTF Import [#503](https://github.com/Open-Cascade-SAS/OCCT/pull/503)
-* Fixed GLTF saving edges when Merge Faces is enabled [#554](https://github.com/Open-Cascade-SAS/OCCT/pull/554)
-* Changed GLTF export line type to LINE_STRIP [#535](https://github.com/Open-Cascade-SAS/OCCT/pull/535)
-* Fixed missing GDT values in STP Import [#617](https://github.com/Open-Cascade-SAS/OCCT/pull/617)
-* Preserved control directives in Step Export [#601](https://github.com/Open-Cascade-SAS/OCCT/pull/601)
-* Ignored unit factors during tessellation export [#577](https://github.com/Open-Cascade-SAS/OCCT/pull/577)
-* Applied scaling transformation in Step Export [#513](https://github.com/Open-Cascade-SAS/OCCT/pull/513)
-* Fixed missing Model Curves in IGES Export transfer cache [#483](https://github.com/Open-Cascade-SAS/OCCT/pull/483)
-* Fixed XCAFDoc_Editor::RescaleGeometry not rescaling translation of roots reference [#529](https://github.com/Open-Cascade-SAS/OCCT/pull/529)
-* Fixed facets with empty normals handling in RWObj_Reader [#520](https://github.com/Open-Cascade-SAS/OCCT/pull/520)
-* Added conversion utilities for STEP geometrical and visual enumerations [#545](https://github.com/Open-Cascade-SAS/OCCT/pull/545)
-* Added missing headers [#530](https://github.com/Open-Cascade-SAS/OCCT/pull/530)
-* Optimized StepData_StepReaderData [#543](https://github.com/Open-Cascade-SAS/OCCT/pull/543)
-* Optimized entity graph evaluating [#562](https://github.com/Open-Cascade-SAS/OCCT/pull/562)
-* Removed GLTF files from XDEDRAW [#649](https://github.com/Open-Cascade-SAS/OCCT/pull/649)
-* Removed unused dependencies from TKXDEDRAW [#650](https://github.com/Open-Cascade-SAS/OCCT/pull/650)
+- Fixed GLTF indices parsing during array processing [#602](https://github.com/Open-Cascade-SAS/OCCT/pull/602)
+- Implemented non-uniform scaling in GLTF Import [#503](https://github.com/Open-Cascade-SAS/OCCT/pull/503)
+- Fixed GLTF saving edges when Merge Faces is enabled [#554](https://github.com/Open-Cascade-SAS/OCCT/pull/554)
+- Changed GLTF export line type to LINE_STRIP [#535](https://github.com/Open-Cascade-SAS/OCCT/pull/535)
+- Fixed missing GDT values in STP Import [#617](https://github.com/Open-Cascade-SAS/OCCT/pull/617)
+- Preserved control directives in Step Export [#601](https://github.com/Open-Cascade-SAS/OCCT/pull/601)
+- Ignored unit factors during tessellation export [#577](https://github.com/Open-Cascade-SAS/OCCT/pull/577)
+- Applied scaling transformation in Step Export [#513](https://github.com/Open-Cascade-SAS/OCCT/pull/513)
+- Fixed missing Model Curves in IGES Export transfer cache [#483](https://github.com/Open-Cascade-SAS/OCCT/pull/483)
+- Fixed XCAFDoc_Editor::RescaleGeometry not rescaling translation of roots reference [#529](https://github.com/Open-Cascade-SAS/OCCT/pull/529)
+- Fixed facets with empty normals handling in RWObj_Reader [#520](https://github.com/Open-Cascade-SAS/OCCT/pull/520)
+- Added conversion utilities for STEP geometrical and visual enumerations [#545](https://github.com/Open-Cascade-SAS/OCCT/pull/545)
+- Added missing headers [#530](https://github.com/Open-Cascade-SAS/OCCT/pull/530)
+- Optimized StepData_StepReaderData [#543](https://github.com/Open-Cascade-SAS/OCCT/pull/543)
+- Optimized entity graph evaluating [#562](https://github.com/Open-Cascade-SAS/OCCT/pull/562)
+- Removed GLTF files from XDEDRAW [#649](https://github.com/Open-Cascade-SAS/OCCT/pull/649)
+- Removed unused dependencies from TKXDEDRAW [#650](https://github.com/Open-Cascade-SAS/OCCT/pull/650)
 
 ### Testing
 
-* Updated GitHub Actions to use latest versions [#640](https://github.com/Open-Cascade-SAS/OCCT/pull/640)
-* Added performance summary posting to PR [#612](https://github.com/Open-Cascade-SAS/OCCT/pull/612)
-* Fixed master validation workflow [#611](https://github.com/Open-Cascade-SAS/OCCT/pull/611)
-* Added daily vcpkg package validation [#605](https://github.com/Open-Cascade-SAS/OCCT/pull/605)
-* Updated samples C++ version [#606](https://github.com/Open-Cascade-SAS/OCCT/pull/606)
-* Removed extra GitHub jobs [#594](https://github.com/Open-Cascade-SAS/OCCT/pull/594)
-* Added ASCII code validation [#593](https://github.com/Open-Cascade-SAS/OCCT/pull/593)
-* Migrated PR actions to VCPKG-based [#587](https://github.com/Open-Cascade-SAS/OCCT/pull/587)
-* Added compilation on Clang without PCH [#540](https://github.com/Open-Cascade-SAS/OCCT/pull/540)
-* Enabled IR integration concurrency [#531](https://github.com/Open-Cascade-SAS/OCCT/pull/531), [#536](https://github.com/Open-Cascade-SAS/OCCT/pull/536)
+- Updated GitHub Actions to use latest versions [#640](https://github.com/Open-Cascade-SAS/OCCT/pull/640)
+- Added performance summary posting to PR [#612](https://github.com/Open-Cascade-SAS/OCCT/pull/612)
+- Fixed master validation workflow [#611](https://github.com/Open-Cascade-SAS/OCCT/pull/611)
+- Added daily vcpkg package validation [#605](https://github.com/Open-Cascade-SAS/OCCT/pull/605)
+- Updated samples C++ version [#606](https://github.com/Open-Cascade-SAS/OCCT/pull/606)
+- Removed extra GitHub jobs [#594](https://github.com/Open-Cascade-SAS/OCCT/pull/594)
+- Added ASCII code validation [#593](https://github.com/Open-Cascade-SAS/OCCT/pull/593)
+- Migrated PR actions to VCPKG-based [#587](https://github.com/Open-Cascade-SAS/OCCT/pull/587)
+- Added compilation on Clang without PCH [#540](https://github.com/Open-Cascade-SAS/OCCT/pull/540)
+- Enabled IR integration concurrency [#531](https://github.com/Open-Cascade-SAS/OCCT/pull/531), [#536](https://github.com/Open-Cascade-SAS/OCCT/pull/536)
 
 ### Draw and Tools
 
-* Fixed vcomputehlr misprint leading to error if no Viewer [#526](https://github.com/Open-Cascade-SAS/OCCT/pull/526)
-* Updated DrawDefault script to handle missing directory cases [#542](https://github.com/Open-Cascade-SAS/OCCT/pull/542)
+- Fixed vcomputehlr misprint leading to error if no Viewer [#526](https://github.com/Open-Cascade-SAS/OCCT/pull/526)
+- Updated DrawDefault script to handle missing directory cases [#542](https://github.com/Open-Cascade-SAS/OCCT/pull/542)
 
 ### Documentation
 
-* Added missing description to HLRBRep_HLRToShape methods [#525](https://github.com/Open-Cascade-SAS/OCCT/pull/525)
-* Added Copilot instructions for OCCT development [#589](https://github.com/Open-Cascade-SAS/OCCT/pull/589)
+- Added missing description to HLRBRep_HLRToShape methods [#525](https://github.com/Open-Cascade-SAS/OCCT/pull/525)
+- Added Copilot instructions for OCCT development [#589](https://github.com/Open-Cascade-SAS/OCCT/pull/589)
 
 ## How to Upgrade
 
 There are no critical breaking changes at the API level, however note the following:
 
-* **C++17 Requirement**: The minimum C++ version has been upgraded to C++17. Ensure your compiler supports this standard.
-* **Deprecated Methods**: Some Immediate Mode rendering methods in AIS_InteractiveContext have been marked as deprecated.
+- **C++17 Requirement**: The minimum C++ version has been upgraded to C++17. Ensure your compiler supports this standard.
+- **Deprecated Methods**: Some Immediate Mode rendering methods in AIS_InteractiveContext have been marked as deprecated.
 
 Migration should proceed smoothly for most applications.
 
 ## Performance Improvements
 
 This release includes several significant performance optimizations:
-* **Geometric Classes**: Major performance improvements in gp_Vec, gp_Vec2d, gp_XY, and gp_XYZ classes through direct data access and simplified computations
-* **Boolean Operations**: General Fuse algorithm optimization with improved index lookup and null safety checks
-* **Memory Management**: Geom package copy optimization and NCollection_Array1 type-specific improvements
-* **Data Exchange**: StepData_StepReaderData optimization for faster STEP file processing
-* **Foundation Classes**: math_DoubleTab rework using NCollection containers for better memory efficiency
+
+- **Geometric Classes**: Major performance improvements in gp_Vec, gp_Vec2d, gp_XY, and gp_XYZ classes through direct data access and simplified computations
+- **Boolean Operations**: General Fuse algorithm optimization with improved index lookup and null safety checks
+- **Memory Management**: Geom package copy optimization and NCollection_Array1 type-specific improvements
+- **Data Exchange**: StepData_StepReaderData optimization for faster STEP file processing
+- **Foundation Classes**: math_DoubleTab rework using NCollection containers for better memory efficiency
 
 ## New Contributors
-* @iosdevzone made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/609
+
+- @iosdevzone made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/609
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V8_0_0_rc1...V8_0_0_rc2
 
@@ -992,6 +1019,7 @@ Open Cascade is delighted to announce the release of **Open CASCADE Technology v
 Version **8.0.0-rc3** is a candidate release incorporating **157 improvements and bug fixes** compared to version 8.0.0-rc2, bringing the total improvements since version 7.9.0 to over **290 changes**.
 
 This release focuses on:
+
 - **Modernization of math functions** with migration to C++ standard library
 - **Threading improvements** with migration from `Standard_Mutex` to `std::mutex`
 - **Performance optimizations** across Foundation Classes, especially BSpline computations
@@ -1009,6 +1037,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 ### Foundation Classes
 
 #### Math Functions Modernization
+
 - **Deprecated math global functions in favor of `std` equivalents** [#833](https://github.com/Open-Cascade-SAS/OCCT/pull/833): The following functions are now deprecated and will be removed in future releases:
   - `ACos()`, `ASin()`, `ATan()`, `ATan2()` → use `std::acos`, `std::asin`, `std::atan`, `std::atan2`
   - `Sinh()`, `Cosh()`, `Tanh()` → use `std::sinh`, `std::cosh`, `std::tanh`
@@ -1022,27 +1051,33 @@ A Release Candidate is a tag on the master branch that has completed all test ro
   - `NextAfter()` → use `std::nextafter`
 
 #### Threading Modernization
+
 - **Replaced `Standard_Mutex` with `std::mutex`** [#766](https://github.com/Open-Cascade-SAS/OCCT/pull/766): Migrated from legacy mutex implementation to standard C++ mutexes across all modules:
   - Use `std::lock_guard` or `std::unique_lock` instead of `Standard_Mutex::Sentry`
   - Use `std::mutex` instead of `Standard_Mutex`
   - Optional mutex holders now use `std::unique_ptr<std::mutex>`
 
 #### Geometric Primitives (`gp`)
+
 - **Added standard direction enumerations** [#803](https://github.com/Open-Cascade-SAS/OCCT/pull/803): New `gp_Dir::D` and `gp_Dir2d::D` enums for standard directions (X, Y, Z, NX, NY, NZ)
 - **Enhanced constructors with `constexpr`/`noexcept`** [#798](https://github.com/Open-Cascade-SAS/OCCT/pull/798), [#796](https://github.com/Open-Cascade-SAS/OCCT/pull/796), [#790](https://github.com/Open-Cascade-SAS/OCCT/pull/790): Geometric primitives (circles, cones, cylinders, axes) now have constexpr constructors
 
 #### Strings
+
 - **Added `EmptyString()` methods** [#788](https://github.com/Open-Cascade-SAS/OCCT/pull/788): New `TCollection_AsciiString::EmptyString()` and `TCollection_ExtendedString::EmptyString()` for efficient empty string access
 - **Optimized `TCollection_AsciiString`** [#752](https://github.com/Open-Cascade-SAS/OCCT/pull/752): Pre-defined string optimization for better performance
 
 #### Math Containers
+
 - **Move semantics for `math_Matrix` and `math_Vector`** [#841](https://github.com/Open-Cascade-SAS/OCCT/pull/841): Added move constructors and move assignment operators for efficient container transfers
 
 #### BSpline Optimizations
+
 - **Optimized BSpline cache** [#906](https://github.com/Open-Cascade-SAS/OCCT/pull/906), [#897](https://github.com/Open-Cascade-SAS/OCCT/pull/897): Improved BSpline data containers with `constexpr` and validation, optimized local calls
 - **Enhanced B-Spline curve computation** [#855](https://github.com/Open-Cascade-SAS/OCCT/pull/855): Performance improvements for curve calculations
 
 #### Other Foundation Improvements
+
 - **Optimized `Bnd` package** [#839](https://github.com/Open-Cascade-SAS/OCCT/pull/839), [#856](https://github.com/Open-Cascade-SAS/OCCT/pull/856): Bounding box optimizations and fixes
 - **Modernized `Bnd_B2` and `Bnd_B3`** [#838](https://github.com/Open-Cascade-SAS/OCCT/pull/838): Template-based implementation
 - **Enhanced BVH implementation** [#842](https://github.com/Open-Cascade-SAS/OCCT/pull/842), [#858](https://github.com/Open-Cascade-SAS/OCCT/pull/858): Generic vector types and transformation tests
@@ -1076,9 +1111,11 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 ### Data Exchange
 
 #### Stream Support
+
 - **Implemented stream support for `DE_Wrapper`** [#663](https://github.com/Open-Cascade-SAS/OCCT/pull/663): Stream-based read/write methods for STEP, STL, VRML, and other formats with validation utilities
 
 #### STEP Improvements
+
 - **STEP General Attributes export** [#634](https://github.com/Open-Cascade-SAS/OCCT/pull/634): Export string metadata as STEP `property_definition` entities
 - **STEP coordinate system connection points import** [#779](https://github.com/Open-Cascade-SAS/OCCT/pull/779)
 - **`std::string_view` for STEP type names** [#784](https://github.com/Open-Cascade-SAS/OCCT/pull/784): Performance improvement using `std::string_view` for type recognition
@@ -1086,6 +1123,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Custom hasher for string_view types in `RWStepAP214`** [#888](https://github.com/Open-Cascade-SAS/OCCT/pull/888)
 
 #### Plugin System
+
 - **Reorganized DE plugin system** [#696](https://github.com/Open-Cascade-SAS/OCCT/pull/696): New `Register`/`UnRegister` methods for configuration nodes, `DE_MultiPluginHolder` for multiple registrations
 
 ### Visualization
@@ -1119,6 +1157,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 ## Bug Fixes
 
 ### Modeling
+
 - **Fixed thickness operation regression on circle-to-polygon lofts** [#889](https://github.com/Open-Cascade-SAS/OCCT/pull/889)
 - **Fixed `ShapeUpgrade_UnifySameDomain` crash** [#876](https://github.com/Open-Cascade-SAS/OCCT/pull/876)
 - **Fixed `BRepBuilderAPI_GTransform` face stretch crash** [#875](https://github.com/Open-Cascade-SAS/OCCT/pull/875)
@@ -1135,25 +1174,31 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Fixed memory consumption in `BOPAlgo_PaveFiller_6`** [#864](https://github.com/Open-Cascade-SAS/OCCT/pull/864)
 
 ### Shape Healing
+
 - **Fixed regression after #584** [#753](https://github.com/Open-Cascade-SAS/OCCT/pull/753), [#769](https://github.com/Open-Cascade-SAS/OCCT/pull/769)
 - **Fixed inverted revolved shape import from STEP** [#699](https://github.com/Open-Cascade-SAS/OCCT/pull/699)
 - **Reverted BSpline check for `ShapeConstruct_ProjectCurveOnSurface`** [#894](https://github.com/Open-Cascade-SAS/OCCT/pull/894)
 
 ### Data Exchange
+
 - **Fixed STEP import crash on empty list** [#671](https://github.com/Open-Cascade-SAS/OCCT/pull/671)
 - **Fixed `STEPCAFControl_Reader` hang** [#733](https://github.com/Open-Cascade-SAS/OCCT/pull/733)
 
 ### Mesh
+
 - **Fixed stack overflow when meshing** [#695](https://github.com/Open-Cascade-SAS/OCCT/pull/695)
 - **Fixed STEP file import crash when visualizing boundary curves** [#745](https://github.com/Open-Cascade-SAS/OCCT/pull/745)
 
 ### Application Framework
+
 - **Early-return null `NamedShape` when `TNaming_UsedShapes` is missing** [#760](https://github.com/Open-Cascade-SAS/OCCT/pull/760)
 
 ### Visualization
+
 - **Fixed unexpected moving with `AIS_ViewCube`** [#727](https://github.com/Open-Cascade-SAS/OCCT/pull/727)
 
 ### Draw
+
 - **Fixed message color mixing** [#685](https://github.com/Open-Cascade-SAS/OCCT/pull/685)
 - **Fixed dangerous use of 'cin'** [#681](https://github.com/Open-Cascade-SAS/OCCT/pull/681)
 - **Fixed incorrect return-value check for scanf-like functions** [#680](https://github.com/Open-Cascade-SAS/OCCT/pull/680)
@@ -1182,35 +1227,35 @@ double val = std::abs(x);
 
 #### Complete Mapping
 
-| Deprecated Function | Standard Replacement |
-|---------------------|---------------------|
-| `ACos(x)` | `std::acos(x)` |
-| `ASin(x)` | `std::asin(x)` |
-| `ATan(x)` | `std::atan(x)` |
-| `ATan2(y, x)` | `std::atan2(y, x)` |
-| `Cos(x)` | `std::cos(x)` |
-| `Sin(x)` | `std::sin(x)` |
-| `Tan(x)` | `std::tan(x)` |
-| `Cosh(x)` | `std::cosh(x)` |
-| `Sinh(x)` | `std::sinh(x)` |
-| `Tanh(x)` | `std::tanh(x)` |
-| `ACosh(x)` | `std::acosh(x)` |
-| `ASinh(x)` | `std::asinh(x)` |
-| `ATanh(x)` | `std::atanh(x)` |
-| `Sqrt(x)` | `std::sqrt(x)` |
-| `Log(x)` | `std::log(x)` |
-| `Log10(x)` | `std::log10(x)` |
-| `Exp(x)` | `std::exp(x)` |
-| `Pow(x, y)` | `std::pow(x, y)` |
-| `Abs(x)` | `std::abs(x)` |
-| `Sign(a, b)` | `std::copysign(a, b)` |
-| `Floor(x)` | `std::floor(x)` |
-| `Ceiling(x)` | `std::ceil(x)` |
-| `Round(x)` | `std::round(x)` |
-| `IntegerPart(x)` | `std::trunc(x)` |
-| `Min(a, b)` | `std::min(a, b)` |
-| `Max(a, b)` | `std::max(a, b)` |
-| `NextAfter(x, y)` | `std::nextafter(x, y)` |
+| Deprecated Function | Standard Replacement   |
+| ------------------- | ---------------------- |
+| `ACos(x)`           | `std::acos(x)`         |
+| `ASin(x)`           | `std::asin(x)`         |
+| `ATan(x)`           | `std::atan(x)`         |
+| `ATan2(y, x)`       | `std::atan2(y, x)`     |
+| `Cos(x)`            | `std::cos(x)`          |
+| `Sin(x)`            | `std::sin(x)`          |
+| `Tan(x)`            | `std::tan(x)`          |
+| `Cosh(x)`           | `std::cosh(x)`         |
+| `Sinh(x)`           | `std::sinh(x)`         |
+| `Tanh(x)`           | `std::tanh(x)`         |
+| `ACosh(x)`          | `std::acosh(x)`        |
+| `ASinh(x)`          | `std::asinh(x)`        |
+| `ATanh(x)`          | `std::atanh(x)`        |
+| `Sqrt(x)`           | `std::sqrt(x)`         |
+| `Log(x)`            | `std::log(x)`          |
+| `Log10(x)`          | `std::log10(x)`        |
+| `Exp(x)`            | `std::exp(x)`          |
+| `Pow(x, y)`         | `std::pow(x, y)`       |
+| `Abs(x)`            | `std::abs(x)`          |
+| `Sign(a, b)`        | `std::copysign(a, b)`  |
+| `Floor(x)`          | `std::floor(x)`        |
+| `Ceiling(x)`        | `std::ceil(x)`         |
+| `Round(x)`          | `std::round(x)`        |
+| `IntegerPart(x)`    | `std::trunc(x)`        |
+| `Min(a, b)`         | `std::min(a, b)`       |
+| `Max(a, b)`         | `std::max(a, b)`       |
+| `NextAfter(x, y)`   | `std::nextafter(x, y)` |
 
 **Note:** `ACosApprox()` is also deprecated; use `std::acos()` instead.
 
@@ -1239,6 +1284,7 @@ std::unique_lock<std::mutex> aLock(myMutex);
 ```
 
 For optional/heap-allocated mutexes:
+
 ```cpp
 // Before
 Standard_Mutex* myOptionalMutex;
@@ -1330,24 +1376,24 @@ const TCollection_ExtendedString& anEmptyExt = TCollection_ExtendedString::Empty
 
 ## Removed Functionality
 
-| Item | Commit | Replacement |
-|------|--------|-------------|
-| `OSD_MAllocHook` class | [#707](https://github.com/Open-Cascade-SAS/OCCT/pull/707) | Platform memory tools |
-| `PLib_Base` class | [#795](https://github.com/Open-Cascade-SAS/OCCT/pull/795) | Direct value types |
-| `PLib_DoubleJacobiPolynomial` | [#781](https://github.com/Open-Cascade-SAS/OCCT/pull/781) | `PLib_JacobiPolynomial` |
-| `TopTools_MutexForShapeProvider` | [#766](https://github.com/Open-Cascade-SAS/OCCT/pull/766) | `std::mutex` |
-| `QANCollection` package | [#718](https://github.com/Open-Cascade-SAS/OCCT/pull/718) | GTests |
-| `Standard_Mutex` (effectively) | [#766](https://github.com/Open-Cascade-SAS/OCCT/pull/766) | `std::mutex` |
+| Item                             | Commit                                                    | Replacement             |
+| -------------------------------- | --------------------------------------------------------- | ----------------------- |
+| `OSD_MAllocHook` class           | [#707](https://github.com/Open-Cascade-SAS/OCCT/pull/707) | Platform memory tools   |
+| `PLib_Base` class                | [#795](https://github.com/Open-Cascade-SAS/OCCT/pull/795) | Direct value types      |
+| `PLib_DoubleJacobiPolynomial`    | [#781](https://github.com/Open-Cascade-SAS/OCCT/pull/781) | `PLib_JacobiPolynomial` |
+| `TopTools_MutexForShapeProvider` | [#766](https://github.com/Open-Cascade-SAS/OCCT/pull/766) | `std::mutex`            |
+| `QANCollection` package          | [#718](https://github.com/Open-Cascade-SAS/OCCT/pull/718) | GTests                  |
+| `Standard_Mutex` (effectively)   | [#766](https://github.com/Open-Cascade-SAS/OCCT/pull/766) | `std::mutex`            |
 
 ---
 
 ## Deprecated Functionality
 
-| Item | Commit | Replacement |
-|------|--------|-------------|
+| Item                                        | Commit                                                    | Replacement         |
+| ------------------------------------------- | --------------------------------------------------------- | ------------------- |
 | Math global functions (`ACos`, `Sin`, etc.) | [#833](https://github.com/Open-Cascade-SAS/OCCT/pull/833) | `std::` equivalents |
-| `ACosApprox()` | [#833](https://github.com/Open-Cascade-SAS/OCCT/pull/833) | `std::acos()` |
-| `Transfer_TransferDeadLoop` exception | [#817](https://github.com/Open-Cascade-SAS/OCCT/pull/817) | Status flags |
+| `ACosApprox()`                              | [#833](https://github.com/Open-Cascade-SAS/OCCT/pull/833) | `std::acos()`       |
+| `Transfer_TransferDeadLoop` exception       | [#817](https://github.com/Open-Cascade-SAS/OCCT/pull/817) | Status flags        |
 
 ---
 
@@ -1375,6 +1421,7 @@ const TCollection_ExtendedString& anEmptyExt = TCollection_ExtendedString::Empty
 ## Documentation
 
 Extensive documentation improvements including:
+
 - Whitespace and typo fixes across the codebase [#806-#824](https://github.com/Open-Cascade-SAS/OCCT/pull/806)
 - Comment uniformity improvements [#767](https://github.com/Open-Cascade-SAS/OCCT/pull/767), [#771](https://github.com/Open-Cascade-SAS/OCCT/pull/771)
 - Updated AI Assistant guidelines [#854](https://github.com/Open-Cascade-SAS/OCCT/pull/854)
@@ -1387,10 +1434,11 @@ Extensive documentation improvements including:
 We thank all contributors who helped make this release possible through their code contributions, bug reports, and testing.
 
 ## New Contributors
-* @sander-adamson-cloudnc made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/624
-* @petrasvestartas made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/634
-* @Rodrigo-BLyra made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/735
-* @gsegon made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/741
+
+- @sander-adamson-cloudnc made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/624
+- @petrasvestartas made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/634
+- @Rodrigo-BLyra made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/735
+- @gsegon made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/741
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V8_0_0_rc2...V8_0_0_rc3
 
@@ -1413,6 +1461,7 @@ Open Cascade is delighted to announce the release of **Open CASCADE Technology v
 Version **8.0.0-rc4** is a candidate release incorporating **111 improvements and bug fixes** compared to version 8.0.0-rc3, bringing the total improvements since version 7.9.0 to over **400 changes**.
 
 This release focuses on:
+
 - **Redesigned geometry evaluation architecture**: New `EvalD*` API with POD result structs replaces old virtual `D0/D1/D2/D3` methods, elementary geometry evaluation devirtualized via `std::variant` dispatch, new EvalRep descriptor system decouples geometry identity from evaluation strategy, all 29 leaf Geom/Geom2d classes marked `final`
 - **Elimination of heap indirection in core geometry classes**: BSpline/Bezier classes use direct value-member arrays instead of handle-wrapped heap storage, always-populated weights via static unit-weights buffer eliminates pervasive null-check patterns across ~100 call sites
 - **Topological data structure overhaul**: `TopoDS_TShape` hierarchy replaces linked-list child storage with contiguous arrays, bit-packs shape state into `uint16_t`, devirtualizes `ShapeType()`, and introduces index-based iteration
@@ -1432,6 +1481,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 ### Foundation Classes
 
 #### High-Performance Collections
+
 - **New `NCollection_FlatDataMap` and `NCollection_FlatMap`** [#1015](https://github.com/Open-Cascade-SAS/OCCT/pull/1015): Cache-friendly open-addressing hash containers with Robin Hood hashing:
   - All key-value pairs stored inline in contiguous array (eliminates per-element heap allocations)
   - Robin Hood hashing reduces probe sequence variance for more predictable performance
@@ -1450,7 +1500,8 @@ A Release Candidate is a tag on the master branch that has completed all test ro
   - Deterministic iteration in insertion order
   - O(1) removal (unlike `NCollection_IndexedMap` which requires O(n) swap-and-shrink)
 
-- **Try* and Emplace methods for NCollection maps** [#1022](https://github.com/Open-Cascade-SAS/OCCT/pull/1022): Non-throwing lookup operations and in-place construction:
+- **Try\* and Emplace methods for NCollection maps** [#1022](https://github.com/Open-Cascade-SAS/OCCT/pull/1022): Non-throwing lookup operations and in-place construction:
+
   ```cpp
   if (auto* pValue = aMap.TryBind(key, defaultValue)) { /* use pValue */ }
   aMap.Emplace(key, constructorArgs...);  // No copy/move!
@@ -1459,9 +1510,11 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Emplace methods for NCollection containers** [#1035](https://github.com/Open-Cascade-SAS/OCCT/pull/1035): In-place construction support for `NCollection_List` (`EmplaceAppend`, `EmplacePrepend`, `EmplaceBefore`, `EmplaceAfter`), `NCollection_Sequence`, `NCollection_DynamicArray`, `NCollection_Array1`, and `NCollection_Array2`
 
 - **Items() views with C++17 structured bindings** [#1038](https://github.com/Open-Cascade-SAS/OCCT/pull/1038): Key-value pair iteration for NCollection map classes:
+
   ```cpp
   for (auto [aKey, aValue] : aMap.Items()) { ... }
   ```
+
   Added `Items()` for DataMap, FlatDataMap, IndexedDataMap and `IndexedItems()` for IndexedMap and IndexedDataMap
 
 - **NCollection_List optimization** [#1040](https://github.com/Open-Cascade-SAS/OCCT/pull/1040): `std::initializer_list` constructor, improved const-correctness, optimized move constructor, `Exchange()` method
@@ -1478,6 +1531,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Keep deprecated NCollection aliases** [#1026](https://github.com/Open-Cascade-SAS/OCCT/pull/1026): Deprecated package type aliases (`TColStd_*`, `TopTools_*`) kept for backward compatibility with deprecation warnings
 
 #### Exception Handling Revolution
+
 - **Standard_Failure inherits from std::exception** [#984](https://github.com/Open-Cascade-SAS/OCCT/pull/984): Bridges OCCT's exception system with standard C++:
   - OCCT exceptions now caught by standard `catch (const std::exception&)` blocks
   - Internal storage switched from `occ::handle` to `std::shared_ptr`
@@ -1496,6 +1550,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Use throw instead of legacy Standard_Failure::Raise** [#983](https://github.com/Open-Cascade-SAS/OCCT/pull/983): Migrated codebase to modern C++ exception throwing
 
 #### Math and Solver Enhancements
+
 - **Cache-friendly matrix multiplication** [#1015](https://github.com/Open-Cascade-SAS/OCCT/pull/1015): Changed `math_Matrix::Multiply()` from i-j-k to i-k-j loop order for row-major storage with significant speedup for large matrices
 
 - **SIMD-friendly vector norm** [#1015](https://github.com/Open-Cascade-SAS/OCCT/pull/1015): 4-way loop unrolling for `math_VectorBase::Norm()/Norm2()` with pairwise partial sum combination
@@ -1513,18 +1568,22 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **math_Vector Resize functionality** [#957](https://github.com/Open-Cascade-SAS/OCCT/pull/957)
 
 #### Bnd Package Improvements
+
 - **Bnd package improvements** [#1051](https://github.com/Open-Cascade-SAS/OCCT/pull/1051): Multiple bug fixes (`Bnd_Box::Add`, `IsOut`, `Distance`; `Bnd_Range::Common`; `Bnd_Sphere::SquareDistances`; `Bnd_OBB` degenerate cases), performance optimizations (early return fast paths for `IsOut`), and API improvements (`Contains()`/`Intersects()` wrappers, `Center()`/`Min()`/`Max()`/`Get()` returning `std::optional`, `IntersectStatus` enum). Added `[[nodiscard]]` and `noexcept` annotations
 
 - **BVH Box and Rays improvements** [#882](https://github.com/Open-Cascade-SAS/OCCT/pull/882)
 
 #### String Enhancements
+
 - **std::u16string_view support for TCollection_ExtendedString** [#1009](https://github.com/Open-Cascade-SAS/OCCT/pull/1009): Modern Unicode string handling
 - **TCollection_AsciiString UTF-8 fix** [#1070](https://github.com/Open-Cascade-SAS/OCCT/pull/1070): Fixed multibyte UTF-8 handling in `UsefullLength()` which was treating individual UTF-8 continuation bytes as non-graphic, causing premature truncation of strings ending with non-ASCII characters
 
 #### Convert Package Refactoring
+
 - **Replace handle-based APIs with direct array access** [#1057](https://github.com/Open-Cascade-SAS/OCCT/pull/1057): Replaced heap-allocated handle-based storage with direct `NCollection_Array` members throughout the Convert package. Deprecated single-element accessors in favor of batch const-reference accessors
 
 #### Other Foundation Improvements
+
 - **TopLoc_Location::HashCode optimization** [#1006](https://github.com/Open-Cascade-SAS/OCCT/pull/1006): Faster hash computation for location objects
 - **gp_Pln refactoring** [#1003](https://github.com/Open-Cascade-SAS/OCCT/pull/1003): Improved plane geometry class
 - **Extend precompiled headers** [#1029](https://github.com/Open-Cascade-SAS/OCCT/pull/1029): Faster compilation times
@@ -1532,6 +1591,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 ### Modeling Data
 
 #### BSpline/Bezier Memory Optimization
+
 - **BSpline/Bezier classes refactored to direct array members** [#1056](https://github.com/Open-Cascade-SAS/OCCT/pull/1056): Replaced handle-based `NCollection_HArray1`/`HArray2` members with direct `NCollection_Array1`/`Array2` value members in all Geom BSpline and Bezier classes (curves and surfaces). Eliminates heap indirection and reference counting overhead. Bug fixes for `Geom_BSplineCurve::IsEqual` skipping knot comparison, `Geom_BSplineSurface::SetUNotPeriodic`/`SetVNotPeriodic` wrong constructor, `Geom_BezierSurface::Increase` self-referencing `Init`
 
 - **Always-populated weights and direct array access** [#1058](https://github.com/Open-Cascade-SAS/OCCT/pull/1058): BSpline/Bezier weights arrays are now always populated (non-rational geometry uses non-owning view over static unit-weights buffer, zero allocation). New `WeightsArray()` accessor always returns valid reference. Bug fix in `Hermit.cxx`: fixed long-standing typo `Pole0 < 3` that should be `Pole0 < Pole3`
@@ -1539,6 +1599,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Optimize BSplCLib interpolation and blend evaluation** [#1082](https://github.com/Open-Cascade-SAS/OCCT/pull/1082): Four categories of hot-path optimization: (1) static initialization for GeomFill convertor matrices that were recomputed on every call, (2) stack allocation for small matrices/arrays to avoid heap allocation, (3) raw pointer access in hot loops replacing multi-layer accessor chains with bounds checks, (4) eliminated redundant recomputation with cached solver instances and `NbPoles()` results. Also fixes undefined behavior in `BSplCLib::NbPoles`
 
 #### Geometry Evaluation Overhaul
+
 - **EvalRep descriptors and dispatch for Geom/Geom2d** [#1089](https://github.com/Open-Cascade-SAS/OCCT/pull/1089): New extensible evaluation dispatch architecture that decouples geometry identity from evaluation strategy. Per-object `Set`/`Get`/`Clear` EvalRep API with support for full, derivative-bounded, and parameter-mapped descriptors. Enables alternate evaluation paths -- e.g., an offset surface can carry its equivalent non-offset surface as an EvalRep, bypassing the expensive offset evaluation path. Migrated `Geom_OffsetSurface` equivalent-surface path as proof-of-concept
 
 - **Redesigned evaluation hierarchy with EvalD0/D1/D2/D3 API** [#1064](https://github.com/Open-Cascade-SAS/OCCT/pull/1064), [#1094](https://github.com/Open-Cascade-SAS/OCCT/pull/1094): Fundamental redesign of the geometry evaluation dispatch hierarchy across all 32 Geom/Geom2d curve and surface classes. New `EvalD0`/`EvalD1`/`EvalD2`/`EvalD3`/`EvalDN` virtual methods serve as the primary dispatch points, returning new POD result structs (`Geom_CurveD1`/`D2`/`D3`, `Geom_SurfD1`/`D2`/`D3`, `Geom2d_CurveD1`/`D2`/`D3`). Old `D0`/`D1`/`D2`/`D3`/`DN` methods retained as non-virtual inline backward-compatible wrappers. The final API uses direct struct returns with exception-based error handling (chosen over `std::optional` wrapping for evaluation hot-path performance)
@@ -1550,6 +1611,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Optimize adaptor Bezier cache and grid eval threshold** [#1084](https://github.com/Open-Cascade-SAS/OCCT/pull/1084): Removed redundant `IsCacheValid()` checks for Bezier curves/surfaces (single span, always valid), lowered cache threshold for more aggressive cache-based evaluation
 
 #### TShape Hierarchy Optimization
+
 - **TShape hierarchy redesign for performance and memory efficiency** [#1027](https://github.com/Open-Cascade-SAS/OCCT/pull/1027): Fundamental redesign of OCCT's most critical topological data structure:
   - Child storage changed from `NCollection_List` (linked list) to `NCollection_DynamicArray` (contiguous memory) with type-specific default bucket sizes (e.g., TEdge=2 for vertices, TWire=8 for edges)
   - `ShapeType()` now non-virtual - embedded in compact `uint16_t myState` bit-packed field (4 bits for type, 8 bits for flags)
@@ -1559,17 +1621,20 @@ A Release Candidate is a tag on the master branch that has completed all test ro
   - Result: Smaller TShape objects, cache-friendly child traversal, faster shape exploration
 
 #### Other Modeling Data Improvements
+
 - **Simplify EmplaceValue in Array1 and Array2** [#1087](https://github.com/Open-Cascade-SAS/OCCT/pull/1087)
 
 ### Modeling Algorithms
 
 #### Geometry Evaluation Optimization
+
 - **GeomGridEval optimization and simplification** [#908](https://github.com/Open-Cascade-SAS/OCCT/pull/908), [#951](https://github.com/Open-Cascade-SAS/OCCT/pull/951), [#952](https://github.com/Open-Cascade-SAS/OCCT/pull/952), [#1031](https://github.com/Open-Cascade-SAS/OCCT/pull/1031): Improved surface grid evaluation with sequential processing
 - **Bnd_BoundSortBox optimization** [#958](https://github.com/Open-Cascade-SAS/OCCT/pull/958)
 - **Optimized point-to-plane projection helper** [#959](https://github.com/Open-Cascade-SAS/OCCT/pull/959): Batch processing support
 - **Optimize properties computation for complex compounds** [#1091](https://github.com/Open-Cascade-SAS/OCCT/pull/1091): Reduced `TopLoc_Location` composition overhead in edge pcurve lookup, added fast-path exits in `TopLoc_Location::Predivided()` for identity and equal-location cases, cached face surface/location in `BRepGProp_Face`
 
 #### Algorithm Refactoring
+
 - **IntCurveSurface and HLRBRep intersection refactoring** [#912](https://github.com/Open-Cascade-SAS/OCCT/pull/912), [#936](https://github.com/Open-Cascade-SAS/OCCT/pull/936): Complete code sharing for Polyhedron classes
 - **Offset curve and surface evaluators refactoring** [#930](https://github.com/Open-Cascade-SAS/OCCT/pull/930)
 - **Extrusion and revolution Utils refactoring** [#948](https://github.com/Open-Cascade-SAS/OCCT/pull/948): Accept pre-computed curve values
@@ -1581,6 +1646,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Update tolerance settings in BRepBlend_AppFuncRoot** [#1083](https://github.com/Open-Cascade-SAS/OCCT/pull/1083): Regression fix after BSplCLib interpolation optimization
 
 #### Bug Fixes
+
 - **Fixed solid-level caching bugs in BRepGProp volume properties** [#1092](https://github.com/Open-Cascade-SAS/OCCT/pull/1092): Fixed SkipShared semantics broken for same-placement duplicates causing double-counting, and free faces/shells dropped when shared solids exist
 - **Fixed crash in ComputePolesIndexes()** [#1049](https://github.com/Open-Cascade-SAS/OCCT/pull/1049): Fixed bounds checking where `theOutMinIdx` could exceed upper bound and `theOutMaxIdx` could be less than lower bound
 - **Fixed partial torus creation with inverted V range** [#928](https://github.com/Open-Cascade-SAS/OCCT/pull/928)
@@ -1636,6 +1702,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 ### Coding Quality
 
 #### Global Refactoring
+
 - **Global Refactoring OCCT as part of 8.0.0** [#955](https://github.com/Open-Cascade-SAS/OCCT/pull/955): Comprehensive codebase modernization
 - **Clang-Tidy application with refactoring** [#965](https://github.com/Open-Cascade-SAS/OCCT/pull/965), [#977](https://github.com/Open-Cascade-SAS/OCCT/pull/977)
 - **Fix GCC warnings** [#975](https://github.com/Open-Cascade-SAS/OCCT/pull/975)
@@ -1646,6 +1713,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Fix compilation warnings** [#1034](https://github.com/Open-Cascade-SAS/OCCT/pull/1034)
 
 #### Code Cleanup
+
 - **HArray and HSequence Definitions refactoring** [#962](https://github.com/Open-Cascade-SAS/OCCT/pull/962)
 - **HLRBRep algorithms: Replace Standard_Address with typed pointers** [#947](https://github.com/Open-Cascade-SAS/OCCT/pull/947), [#961](https://github.com/Open-Cascade-SAS/OCCT/pull/961)
 - **Remove unused typedefs and includes** [#971](https://github.com/Open-Cascade-SAS/OCCT/pull/971)
@@ -1663,6 +1731,7 @@ A Release Candidate is a tag on the master branch that has completed all test ro
 - **Remove redundant pragma lib comment in OSD_Host.cxx** [#902](https://github.com/Open-Cascade-SAS/OCCT/pull/902)
 
 #### Temporary Changes
+
 - **Temporarily remove samples from the repository** [#960](https://github.com/Open-Cascade-SAS/OCCT/pull/960)
 
 ### Documentation
@@ -1697,19 +1766,19 @@ adm\scripts\migration_800\run_migration.bat /path/to/your/src --dry-run
 
 The full migration runs 12 phases in order:
 
-| Phase | Script | What It Does | Approximate Scope |
-|-------|--------|-------------|-------------------|
-| 1-2 | `migrate_handles.py` | `Handle(Class)` to `occ::handle<Class>`, `Handle(T)::DownCast()` to `occ::down_cast<T>()` | ~90,600 replacements |
-| 3 | `migrate_standard_types.py` | `Standard_Boolean/Integer/Real` to `bool/int/double`, `Standard_True/False` to `true/false` | ~198,000 replacements |
-| 4 | `migrate_macros.py` | `Standard_OVERRIDE` to `override`, `Standard_NODISCARD` to `[[nodiscard]]`, etc. | ~7,730 replacements |
-| 5 | `cleanup_define_handle.py` | Remove redundant `DEFINE_STANDARD_HANDLE` macros | ~1,970 removals |
-| 6 | `cleanup_deprecated_typedefs.py` | Remove deprecated typedef/using declarations, replace usages | ~1,800 cleanups |
-| 7 | `collect_typedefs.py` | Collect NCollection typedef mappings to JSON | Analysis phase |
-| 8 | `replace_typedefs.py` | Replace `TColStd_*`/`TopTools_*` with `NCollection_*<T>` | ~31,000 replacements |
-| 9 | `remove_typedef_headers.py` | Remove typedef-only headers, update FILES.cmake | Header cleanup |
-| 10 | `cleanup_forwarding_headers.py` | Clean up forwarding/include-only headers | Header cleanup |
-| 11 | `cleanup_unused_typedefs.py` | Remove unused typedef declarations | Final cleanup |
-| 12 | `cleanup_access_specifiers.py` | Remove redundant access specifiers | Code cleanup |
+| Phase | Script                           | What It Does                                                                                | Approximate Scope     |
+| ----- | -------------------------------- | ------------------------------------------------------------------------------------------- | --------------------- |
+| 1-2   | `migrate_handles.py`             | `Handle(Class)` to `occ::handle<Class>`, `Handle(T)::DownCast()` to `occ::down_cast<T>()`   | ~90,600 replacements  |
+| 3     | `migrate_standard_types.py`      | `Standard_Boolean/Integer/Real` to `bool/int/double`, `Standard_True/False` to `true/false` | ~198,000 replacements |
+| 4     | `migrate_macros.py`              | `Standard_OVERRIDE` to `override`, `Standard_NODISCARD` to `[[nodiscard]]`, etc.            | ~7,730 replacements   |
+| 5     | `cleanup_define_handle.py`       | Remove redundant `DEFINE_STANDARD_HANDLE` macros                                            | ~1,970 removals       |
+| 6     | `cleanup_deprecated_typedefs.py` | Remove deprecated typedef/using declarations, replace usages                                | ~1,800 cleanups       |
+| 7     | `collect_typedefs.py`            | Collect NCollection typedef mappings to JSON                                                | Analysis phase        |
+| 8     | `replace_typedefs.py`            | Replace `TColStd_*`/`TopTools_*` with `NCollection_*<T>`                                    | ~31,000 replacements  |
+| 9     | `remove_typedef_headers.py`      | Remove typedef-only headers, update FILES.cmake                                             | Header cleanup        |
+| 10    | `cleanup_forwarding_headers.py`  | Clean up forwarding/include-only headers                                                    | Header cleanup        |
+| 11    | `cleanup_unused_typedefs.py`     | Remove unused typedef declarations                                                          | Final cleanup         |
+| 12    | `cleanup_access_specifiers.py`   | Remove redundant access specifiers                                                          | Code cleanup          |
 
 After all phases, `verify_migration.py` runs automatically to report any remaining legacy patterns.
 
@@ -1718,19 +1787,23 @@ After all phases, `verify_migration.py` runs automatically to report any remaini
 Each script can be run independently for granular control:
 
 ##### Handle Migration
+
 ```bash
 python3 adm/scripts/migration_800/migrate_handles.py --dry-run /path/to/your/src
 ```
+
 ```cpp
 // Before                                    // After
 Handle(Geom_Circle) aCircle;                 occ::handle<Geom_Circle> aCircle;
 Handle(Geom_Circle)::DownCast(aCurve);       occ::down_cast<Geom_Circle>(aCurve);
 ```
 
-##### Standard_* Type Migration
+##### Standard\_\* Type Migration
+
 ```bash
 python3 adm/scripts/migration_800/migrate_standard_types.py --dry-run /path/to/your/src
 ```
+
 ```cpp
 // Before                                    // After
 Standard_Boolean isOk = Standard_True;       bool isOk = true;
@@ -1741,38 +1814,41 @@ Standard_CString aName = "test";             const char* aName = "test";
 
 Full type mapping:
 
-| Deprecated | Replacement | | Deprecated | Replacement |
-|------------|-------------|-|------------|-------------|
-| `Standard_Boolean` | `bool` | | `Standard_Byte` | `uint8_t` |
-| `Standard_Integer` | `int` | | `Standard_Size` | `size_t` |
-| `Standard_Real` | `double` | | `Standard_Address` | `void*` |
-| `Standard_ShortReal` | `float` | | `Standard_CString` | `const char*` |
-| `Standard_Character` | `char` | | `Standard_ExtCharacter` | `char16_t` |
-| `Standard_True/False` | `true/false` | | `Standard_Time` | `std::time_t` |
+| Deprecated            | Replacement  |     | Deprecated              | Replacement   |
+| --------------------- | ------------ | --- | ----------------------- | ------------- |
+| `Standard_Boolean`    | `bool`       |     | `Standard_Byte`         | `uint8_t`     |
+| `Standard_Integer`    | `int`        |     | `Standard_Size`         | `size_t`      |
+| `Standard_Real`       | `double`     |     | `Standard_Address`      | `void*`       |
+| `Standard_ShortReal`  | `float`      |     | `Standard_CString`      | `const char*` |
+| `Standard_Character`  | `char`       |     | `Standard_ExtCharacter` | `char16_t`    |
+| `Standard_True/False` | `true/false` |     | `Standard_Time`         | `std::time_t` |
 
-##### Standard_* Macro Migration
+##### Standard\_\* Macro Migration
+
 ```bash
 python3 adm/scripts/migration_800/migrate_macros.py --dry-run /path/to/your/src
 ```
 
-| Deprecated Macro | Replacement |
-|-----------------|-------------|
-| `Standard_OVERRIDE` | `override` |
-| `Standard_NODISCARD` | `[[nodiscard]]` |
+| Deprecated Macro       | Replacement        |
+| ---------------------- | ------------------ |
+| `Standard_OVERRIDE`    | `override`         |
+| `Standard_NODISCARD`   | `[[nodiscard]]`    |
 | `Standard_FALLTHROUGH` | `[[fallthrough]];` |
-| `Standard_Noexcept` | `noexcept` |
-| `Standard_DELETE` | `= delete` |
-| `Standard_THREADLOCAL` | `thread_local` |
-| `Standard_ATOMIC(T)` | `std::atomic<T>` |
+| `Standard_Noexcept`    | `noexcept`         |
+| `Standard_DELETE`      | `= delete`         |
+| `Standard_THREADLOCAL` | `thread_local`     |
+| `Standard_ATOMIC(T)`   | `std::atomic<T>`   |
 
 > **Note:** `Standard_UNUSED` requires manual migration to `[[maybe_unused]]` due to stricter placement rules.
 
 ##### NCollection Typedef Migration
+
 ```bash
 # Step 1: Use pre-generated JSON from OCCT (or collect from source)
 python3 adm/scripts/migration_800/replace_typedefs.py --dry-run \
     --input adm/scripts/migration_800/collected_typedefs.json /path/to/your/src
 ```
+
 ```cpp
 // Before                                    // After
 TColStd_ListOfInteger aList;                 NCollection_List<int> aList;
@@ -1782,13 +1858,16 @@ TColgp_SequenceOfPnt aSeq;                   NCollection_Sequence<gp_Pnt> aSeq;
 ```
 
 Pre-generated JSON files are included in `adm/scripts/migration_800/` so external projects do not need to re-scan the OCCT source:
+
 - `collected_typedefs.json` - NCollection typedef mappings
 - `collected_deprecated_typedefs.json` - Deprecated typedef patterns and replacements
 
 ##### Exception Raise Migration
+
 ```bash
 python3 adm/scripts/migration_800/migrate_raise_to_throw.py --dry-run
 ```
+
 ```cpp
 // Before (removed)                          // After (required)
 Standard_Failure::Raise("error");            throw Standard_Failure("error");
@@ -1796,14 +1875,17 @@ Standard_OutOfRange::Raise("index");         throw Standard_OutOfRange("index");
 ```
 
 ##### H-Collection Macro Migration
+
 ```bash
 python3 adm/scripts/migration_800/migrate_hcollections.py --dry-run
 ```
+
 Converts `DEFINE_HARRAY1`, `DEFINE_HARRAY2`, and `DEFINE_HSEQUENCE` macros to the new `NCollection_HArray1`/`HArray2`/`HSequence` template classes.
 
 #### Verification
 
 After migration, verify completeness:
+
 ```bash
 python3 adm/scripts/migration_800/verify_migration.py --verbose /path/to/your/src
 ```
@@ -1933,32 +2015,32 @@ All 29 concrete leaf classes in `Geom_*` and `Geom2d_*` hierarchies are now mark
 
 ## Removed Functionality
 
-| Item | Commit | Replacement |
-|------|--------|-------------|
-| `Standard_Failure::Raise()` static method | [#984](https://github.com/Open-Cascade-SAS/OCCT/pull/984) | `throw Standard_Failure()` |
-| `Standard_ErrorHandler::Catches()` | [#980](https://github.com/Open-Cascade-SAS/OCCT/pull/980) | Implicit from execution flow |
-| `Standard_ErrorHandler::LastCaughtError()` | [#980](https://github.com/Open-Cascade-SAS/OCCT/pull/980) | Accessed via variant in handler |
-| `NCollection_Map::Seek()`/`ChangeSeek()` | [#1065](https://github.com/Open-Cascade-SAS/OCCT/pull/1065) | `Contained()` returning `std::optional` |
-| `BRepMesh_PluginMacro.hxx` | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | `BRepMesh_DiscretAlgoFactory` |
-| `BRepMesh_PluginEntryType.hxx` | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | Factory registration |
-| `BRepMesh_FactoryError.hxx` | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | Standard exceptions |
-| Draw commands: `mpsetfunctionname`, `mpgetfunctionname`, `mperror` | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | Not needed with factory pattern |
-| Draw command: `BUC60720` | [#1069](https://github.com/Open-Cascade-SAS/OCCT/pull/1069) | Not needed |
-| `QABugs_PresentableObject` | [#1069](https://github.com/Open-Cascade-SAS/OCCT/pull/1069) | Not needed |
-| `NCollection_SparseArrayBase` vtable | [#1074](https://github.com/Open-Cascade-SAS/OCCT/pull/1074) | Function pointers |
-| Samples directory | [#960](https://github.com/Open-Cascade-SAS/OCCT/pull/960) | Temporary removal |
+| Item                                                               | Commit                                                      | Replacement                             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------- |
+| `Standard_Failure::Raise()` static method                          | [#984](https://github.com/Open-Cascade-SAS/OCCT/pull/984)   | `throw Standard_Failure()`              |
+| `Standard_ErrorHandler::Catches()`                                 | [#980](https://github.com/Open-Cascade-SAS/OCCT/pull/980)   | Implicit from execution flow            |
+| `Standard_ErrorHandler::LastCaughtError()`                         | [#980](https://github.com/Open-Cascade-SAS/OCCT/pull/980)   | Accessed via variant in handler         |
+| `NCollection_Map::Seek()`/`ChangeSeek()`                           | [#1065](https://github.com/Open-Cascade-SAS/OCCT/pull/1065) | `Contained()` returning `std::optional` |
+| `BRepMesh_PluginMacro.hxx`                                         | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | `BRepMesh_DiscretAlgoFactory`           |
+| `BRepMesh_PluginEntryType.hxx`                                     | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | Factory registration                    |
+| `BRepMesh_FactoryError.hxx`                                        | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | Standard exceptions                     |
+| Draw commands: `mpsetfunctionname`, `mpgetfunctionname`, `mperror` | [#1033](https://github.com/Open-Cascade-SAS/OCCT/pull/1033) | Not needed with factory pattern         |
+| Draw command: `BUC60720`                                           | [#1069](https://github.com/Open-Cascade-SAS/OCCT/pull/1069) | Not needed                              |
+| `QABugs_PresentableObject`                                         | [#1069](https://github.com/Open-Cascade-SAS/OCCT/pull/1069) | Not needed                              |
+| `NCollection_SparseArrayBase` vtable                               | [#1074](https://github.com/Open-Cascade-SAS/OCCT/pull/1074) | Function pointers                       |
+| Samples directory                                                  | [#960](https://github.com/Open-Cascade-SAS/OCCT/pull/960)   | Temporary removal                       |
 
 ---
 
 ## Deprecated Functionality
 
-| Item | Commit | Replacement |
-|------|--------|-------------|
-| Package type aliases (`TColStd_*`, `TopTools_*`, etc.) | [#1026](https://github.com/Open-Cascade-SAS/OCCT/pull/1026) | `NCollection_*<T>` templates |
-| `Standard_Failure::GetMessageString()` | [#984](https://github.com/Open-Cascade-SAS/OCCT/pull/984) | `what()` (std::exception interface) |
-| BSpline/Bezier copy-out accessor overloads | [#1056](https://github.com/Open-Cascade-SAS/OCCT/pull/1056) | Const-reference returning versions |
-| Convert package single-element accessors | [#1057](https://github.com/Open-Cascade-SAS/OCCT/pull/1057) | Batch const-reference accessors |
-| Nullable `Weights()` pattern | [#1058](https://github.com/Open-Cascade-SAS/OCCT/pull/1058) | `WeightsArray()` (always valid) |
+| Item                                                   | Commit                                                      | Replacement                         |
+| ------------------------------------------------------ | ----------------------------------------------------------- | ----------------------------------- |
+| Package type aliases (`TColStd_*`, `TopTools_*`, etc.) | [#1026](https://github.com/Open-Cascade-SAS/OCCT/pull/1026) | `NCollection_*<T>` templates        |
+| `Standard_Failure::GetMessageString()`                 | [#984](https://github.com/Open-Cascade-SAS/OCCT/pull/984)   | `what()` (std::exception interface) |
+| BSpline/Bezier copy-out accessor overloads             | [#1056](https://github.com/Open-Cascade-SAS/OCCT/pull/1056) | Const-reference returning versions  |
+| Convert package single-element accessors               | [#1057](https://github.com/Open-Cascade-SAS/OCCT/pull/1057) | Batch const-reference accessors     |
+| Nullable `Weights()` pattern                           | [#1058](https://github.com/Open-Cascade-SAS/OCCT/pull/1058) | `WeightsArray()` (always valid)     |
 
 ---
 
@@ -1995,7 +2077,8 @@ All 29 concrete leaf classes in `Geom_*` and `Geom2d_*` hierarchies are now mark
 We thank all contributors who helped make this release possible through their code contributions, bug reports, and testing.
 
 ## New Contributors
-* @Andrej730 made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/902
+
+- @Andrej730 made their first contribution in https://github.com/Open-Cascade-SAS/OCCT/pull/902
 
 **Full Changelog**: https://github.com/Open-Cascade-SAS/OCCT/compare/V8_0_0_rc3...V8_0_0_rc4
 

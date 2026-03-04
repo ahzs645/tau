@@ -8,7 +8,7 @@ Static top-level imports of variant modules force all variants into the bundle, 
 
 ```typescript
 // BAD: both variants always bundled (~225KB total)
-import single from 'replicad-opencascadejs/src/replicad_single.js';          // ~112KB
+import single from 'replicad-opencascadejs/src/replicad_single.js'; // ~112KB
 import exceptions from 'replicad-opencascadejs/src/replicad_with_exceptions.js'; // ~113KB
 ```
 
@@ -43,11 +43,11 @@ async function loadCustomBindings(url: string) {
 
 **Bundler compatibility for ignore comments**:
 
-| Bundler | Comment | Behavior |
-|---|---|---|
-| Vite | `/* @vite-ignore */` | Suppresses warning, preserves as runtime import |
-| Rollup | _(none needed)_ | Warns, preserves as-is (suppress via `onwarn`) |
-| esbuild | _(none needed)_ | Warns, preserves as-is |
+| Bundler | Comment                     | Behavior                                        |
+| ------- | --------------------------- | ----------------------------------------------- |
+| Vite    | `/* @vite-ignore */`        | Suppresses warning, preserves as runtime import |
+| Rollup  | _(none needed)_             | Warns, preserves as-is (suppress via `onwarn`)  |
+| esbuild | _(none needed)_             | Warns, preserves as-is                          |
 | webpack | `/* webpackIgnore: true */` | Suppresses warning, preserves as runtime import |
 
 **CJS limitation**: Runtime `import(url)` in browsers requires the target to be an ES module. CJS-to-ESM transformation only happens for static-string imports that bundlers process at build time. In Node.js, `import()` handles CJS files natively. Custom URL injection is therefore primarily a **Node.js-first** capability (benchmarks, CI, testing).
@@ -78,6 +78,7 @@ Therefore, WASM configuration must be expressed as plain strings (URL strings), 
 The recommended architecture for factory options that select between heavy asset variants:
 
 1. **Consumer API**: Union type of preset strings and a custom config object
+
    ```typescript
    type WasmOption = 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindingsUrl: string };
    ```
@@ -106,12 +107,12 @@ When Vite inlines a WASM binary, three things go wrong simultaneously:
 
 Vite's `assetsInlineLimit` callback has **unintuitive return semantics**:
 
-| Return value | Behavior |
-|---|---|
-| `true` | **Force inline** — regardless of file size |
-| `false` | **Never inline** — always emit as separate file |
-| `undefined` | Use the default 4 KB threshold |
-| `number` | Inline only if file is smaller than this value |
+| Return value | Behavior                                        |
+| ------------ | ----------------------------------------------- |
+| `true`       | **Force inline** — regardless of file size      |
+| `false`      | **Never inline** — always emit as separate file |
+| `undefined`  | Use the default 4 KB threshold                  |
+| `number`     | Inline only if file is smaller than this value  |
 
 A common mistake is writing a callback that returns a boolean to exclude one file type, inadvertently force-inlining everything else:
 
@@ -163,12 +164,12 @@ To ensure V8 bytecode caching works reliably across browsers and cache configura
 
 ### Impact: Verified Performance Data
 
-| Metric | With WASM inlining | Without (fixed) |
-|---|---|---|
-| `replicad.kernel` chunk size | 57 MB | 308 KB |
-| V8 compile time (per reload) | 232ms | < 1ms (cached) |
-| `kernel.select` latency | 936ms-1.15s | < 1ms |
-| Total render time | 1.26-1.56s | 229ms |
+| Metric                       | With WASM inlining | Without (fixed) |
+| ---------------------------- | ------------------ | --------------- |
+| `replicad.kernel` chunk size | 57 MB              | 308 KB          |
+| V8 compile time (per reload) | 232ms              | < 1ms (cached)  |
+| `kernel.select` latency      | 936ms-1.15s        | < 1ms           |
+| Total render time            | 1.26-1.56s         | 229ms           |
 
 > For the full investigation, see [Dynamic ES Module Research](../research/dynamic-es-modules.md).
 
@@ -184,13 +185,14 @@ This is the same "object pooling" approach used by [PSPDFKit](https://pspdfkit.c
 
 When the user navigates to a different build (project), workers are destroyed and recreated. With V8's caching layers working correctly, the init cost is modest:
 
-| Cost | Duration (warm caches) | Cause |
-|---|---|---|
-| `wasm.compile` | ~20-30ms | Streaming pipeline: HTTP cache fetch via Mojo IPC + NativeModuleCache lookup + TurboFan deserialization |
-| `wasm.emscripten-init` | ~27-30ms | C++ global constructors + Emscripten FS setup |
-| **Total per build switch** | **~50-60ms** | Negligible compared to geometry computation (100-500ms+) |
+| Cost                       | Duration (warm caches) | Cause                                                                                                   |
+| -------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `wasm.compile`             | ~20-30ms               | Streaming pipeline: HTTP cache fetch via Mojo IPC + NativeModuleCache lookup + TurboFan deserialization |
+| `wasm.emscripten-init`     | ~27-30ms               | C++ global constructors + Emscripten FS setup                                                           |
+| **Total per build switch** | **~50-60ms**           | Negligible compared to geometry computation (100-500ms+)                                                |
 
 V8's caching layers handle compilation efficiently:
+
 - **NativeModuleCache** (process-global): Shares compiled `NativeModule` across isolates. Lookup takes <1ms.
 - **GeneratedCodeCache** (disk): Persists TurboFan-optimized code across browser sessions. Deserialization takes ~8ms.
 - **`compileStreaming(fetch(url))`** leverages both caches automatically. The remaining ~20-30ms is the irreducible cost of the HTTP cache fetch IPC and streaming finalization — not recompilation.
@@ -202,6 +204,7 @@ When switching between builds that use the same kernel type, the worker could be
 **Emscripten constraint**: C++ global constructors only run once per instance. OpenCASCADE's global state is initialized during these constructors and cannot be re-run. State cleanup must happen at the application level (e.g., deleting shapes), not by re-creating the Emscripten instance.
 
 This is low priority because:
+
 - The ~56ms init cost only occurs on project navigation, not during the iterative edit→render loop
 - The cost is small relative to build loading, file system initialization, and geometry computation that follow
 - The existing within-build pooling already covers the primary workflow
@@ -221,11 +224,11 @@ If `wasm.compile` costs grow (e.g., larger WASM binaries or degraded cache behav
 
 ### V8 isolate cache boundaries
 
-| Cache Level | Scope | Survives Worker Termination |
-|---|---|---|
-| NativeModuleCache | Renderer process | Yes |
-| GeneratedCodeCache (disk) | Browser profile | Yes |
-| Compiled instance (in-isolate) | Worker V8 isolate | **No** |
+| Cache Level                    | Scope             | Survives Worker Termination |
+| ------------------------------ | ----------------- | --------------------------- |
+| NativeModuleCache              | Renderer process  | Yes                         |
+| GeneratedCodeCache (disk)      | Browser profile   | Yes                         |
+| Compiled instance (in-isolate) | Worker V8 isolate | **No**                      |
 
 ### Deprecated approaches
 

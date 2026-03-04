@@ -15,14 +15,24 @@ export const myMachine = setup({
     events: {} as MyEvent,
     input: {} as MyInput,
   },
-  actors: { /* named actor logic */ },
-  actions: { /* named action implementations */ },
-  guards: { /* named guard implementations */ },
+  actors: {
+    /* named actor logic */
+  },
+  actions: {
+    /* named action implementations */
+  },
+  guards: {
+    /* named guard implementations */
+  },
 }).createMachine({
   id: 'my-machine',
-  context: ({ input }) => ({ /* ... */ }),
+  context: ({ input }) => ({
+    /* ... */
+  }),
   initial: 'idle',
-  states: { /* ... */ },
+  states: {
+    /* ... */
+  },
 });
 ```
 
@@ -96,13 +106,13 @@ Use `assign` for all context updates. Prefer the property-based form for targete
 assign({
   count: ({ context }) => context.count + 1,
   name: ({ event }) => event.name,
-})
+});
 
 // Function-based (for returning full context shape)
 assign(({ context, event }) => ({
   ...context,
   count: context.count + event.value,
-}))
+}));
 ```
 
 ### No side effects in `assign`
@@ -113,16 +123,16 @@ assign(({ context, event }) => ({
 // WRONG — mutation inside assign
 assign({
   version({ context }) {
-    context.buffer.push(newEntry);  // Side effect!
+    context.buffer.push(newEntry); // Side effect!
     return context.version + 1;
   },
-})
+});
 
 // CORRECT — return new value
 assign(({ context }) => ({
   buffer: context.buffer.withEntry(newEntry),
   version: context.version + 1,
-}))
+}));
 ```
 
 ### `enqueueActions` for conditional multi-action composition
@@ -140,7 +150,7 @@ enqueueActions(({ enqueue, context, check }) => {
   for (const child of context.children) {
     enqueue.stopChild(child);
   }
-})
+});
 ```
 
 Do not use `enqueueActions` when `assign` alone suffices.
@@ -182,13 +192,13 @@ registerParentRef: assign({
 
 ### When to use each actor type
 
-| Actor | Lifecycle | Cancellation | Use case |
-|---|---|---|---|
-| `invoke` with `fromPromise` | State-scoped (auto-stop on exit) | `AbortSignal` | One-shot async (API calls, initialization) |
-| `invoke` with `fromCallback` | State-scoped (auto-stop on exit) | Cleanup function return | Long-running processes (event listeners, polling) |
-| `invoke` with `fromObservable` | State-scoped (auto-stop on exit) | Unsubscribe | Streaming data sources |
-| `spawn` (inside `assign`) | Manual (explicit `stopChild`) | Manual | Dynamic actors needing a context reference |
-| `spawnChild` (action) | Manual (explicit `stopChild`) | Manual | Dynamic actors without context reference |
+| Actor                          | Lifecycle                        | Cancellation            | Use case                                          |
+| ------------------------------ | -------------------------------- | ----------------------- | ------------------------------------------------- |
+| `invoke` with `fromPromise`    | State-scoped (auto-stop on exit) | `AbortSignal`           | One-shot async (API calls, initialization)        |
+| `invoke` with `fromCallback`   | State-scoped (auto-stop on exit) | Cleanup function return | Long-running processes (event listeners, polling) |
+| `invoke` with `fromObservable` | State-scoped (auto-stop on exit) | Unsubscribe             | Streaming data sources                            |
+| `spawn` (inside `assign`)      | Manual (explicit `stopChild`)    | Manual                  | Dynamic actors needing a context reference        |
+| `spawnChild` (action)          | Manual (explicit `stopChild`)    | Manual                  | Dynamic actors without context reference          |
 
 ### Prefer `invoke` over `spawn` when possible
 
@@ -202,7 +212,7 @@ Spawned actors are NOT automatically stopped when the parent machine stops. Alwa
 // Spawn
 entry: assign({
   workerRef: ({ spawn }) => spawn('workerActor', { id: 'my-worker' }),
-})
+});
 
 // Stop — in exit action or explicit cleanup
 exit: enqueueActions(({ enqueue, context }) => {
@@ -210,7 +220,7 @@ exit: enqueueActions(({ enqueue, context }) => {
     enqueue.stopChild(context.workerRef);
     enqueue.assign({ workerRef: undefined });
   }
-})
+});
 ```
 
 ### Always handle `onError` for invoked promises
@@ -389,6 +399,7 @@ When a component wraps a machine whose identity changes (e.g., different build I
 ```
 
 This ensures:
+
 1. Old actor is stopped (cleanup runs)
 2. New actor is created with fresh input
 
@@ -413,7 +424,7 @@ const kernelRef = parentActor.getSnapshot().context.kernelRef;
 ### Parent-to-child: `sendTo`
 
 ```typescript
-sendTo(({ context }) => context.childRef, { type: 'doWork', data: 42 })
+sendTo(({ context }) => context.childRef, { type: 'doWork', data: 42 });
 ```
 
 ### Child-to-parent: `sendTo` with parent ref (preferred over `sendParent`)
@@ -423,16 +434,14 @@ Pass the parent ref via `input` to avoid tight coupling:
 ```typescript
 // Parent spawns child with self reference
 entry: assign({
-  childRef: ({ spawn, self }) => spawn('child', {
-    input: { parentRef: self },
-  }),
-})
+  childRef: ({ spawn, self }) =>
+    spawn('child', {
+      input: { parentRef: self },
+    }),
+});
 
 // Child sends to parent via stored ref
-entry: sendTo(
-  ({ context }) => context.parentRef,
-  { type: 'childReady' },
-)
+entry: sendTo(({ context }) => context.parentRef, { type: 'childReady' });
 ```
 
 ### Guard `sendTo` targets against undefined
@@ -441,14 +450,14 @@ When the target actor ref may be undefined in some machine states, use `enqueueA
 
 ```typescript
 // RISKY — parentRef may be undefined
-sendTo(({ context }) => context.parentRef!, { type: 'event' })
+sendTo(({ context }) => context.parentRef!, { type: 'event' });
 
 // SAFE — guarded
 enqueueActions(({ context, enqueue }) => {
   if (context.parentRef) {
     enqueue.sendTo(context.parentRef, { type: 'event' });
   }
-})
+});
 ```
 
 ### Decoupled communication: `emit`
@@ -457,18 +466,17 @@ Use `emit` for events that parent components observe via `.on()` subscriptions, 
 
 ```typescript
 // Machine emits
-emitBuildLoaded: emit(({ event }) => ({
+emitBuildLoaded: (emit(({ event }) => ({
   type: 'buildLoaded',
   build: event.output,
 })),
-
-// React component subscribes
-useEffect(() => {
-  const sub = actorRef.on('buildLoaded', (event) => {
-    // Handle event
-  });
-  return () => sub.unsubscribe();
-}, [actorRef]);
+  // React component subscribes
+  useEffect(() => {
+    const sub = actorRef.on('buildLoaded', (event) => {
+      // Handle event
+    });
+    return () => sub.unsubscribe();
+  }, [actorRef]));
 ```
 
 ---
@@ -510,7 +518,9 @@ const testMachine = machine.provide({
     fetchData: fromPromise(async () => mockData),
   },
   actions: {
-    logAnalytics: () => { /* no-op */ },
+    logAnalytics: () => {
+      /* no-op */
+    },
   },
   guards: {
     isAuthenticated: () => true,
@@ -530,10 +540,12 @@ export function isBuildIdChanging({ context, event }: GuardArgs): boolean {
 
 // In test file
 test('isBuildIdChanging returns true for different IDs', () => {
-  expect(isBuildIdChanging({
-    context: { buildId: 'a' },
-    event: { type: 'loadBuild', buildId: 'b' },
-  })).toBe(true);
+  expect(
+    isBuildIdChanging({
+      context: { buildId: 'a' },
+      event: { type: 'loadBuild', buildId: 'b' },
+    }),
+  ).toBe(true);
 });
 ```
 

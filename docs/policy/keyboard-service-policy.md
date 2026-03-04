@@ -34,6 +34,7 @@ metaKey    →    Cmd (meta)      Meta/Win (unusable)
 The 11 `ctrlKey` panel toggles (Ctrl+C, Ctrl+A, Ctrl+X, Ctrl+F, Ctrl+N, Ctrl+D, Ctrl+G, Ctrl+E, Ctrl+L, Ctrl+I, Ctrl+Shift+C) conflict with system/browser shortcuts on Windows/Linux. These were designed for macOS where Ctrl is a secondary modifier that doesn't conflict with system shortcuts (Cmd handles those).
 
 **Follow-up**: Audit and reassign these keybindings for cross-platform safety. Options:
+
 - Ctrl+Shift+key (avoids bare Ctrl conflicts)
 - Alt+key (free on Windows/Linux)
 - Chord sequences (e.g., Ctrl+K, Ctrl+N -- VS Code web pattern)

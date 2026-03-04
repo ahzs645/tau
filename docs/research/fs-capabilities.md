@@ -98,14 +98,14 @@ This is a known gap in ZenFS -- the plumbing exists but is unused.
 
 ### Impact Assessment
 
-| Operation | Typical Size | Current Cost | With Transfer |
-|-----------|-------------|-------------|---------------|
-| `readFile` (STL) | 1-50 MB | 2 copies (2-100 MB) | 0 copies |
-| `readFile` (KCL source) | 1-100 KB | 2 copies (negligible) | 0 copies |
-| `writeFile` (STEP) | 5-200 MB | 2 copies (10-400 MB) | 0 copies |
-| `readFiles` (project load) | 10-500 files | 2 copies per file | 0 copies |
-| `getDirectoryContents` | Entire dir tree | 2 copies per file | 0 copies |
-| `getZippedDirectory` | Blob result | 1 copy (Blob is cloned) | 0 copies |
+| Operation                  | Typical Size    | Current Cost            | With Transfer |
+| -------------------------- | --------------- | ----------------------- | ------------- |
+| `readFile` (STL)           | 1-50 MB         | 2 copies (2-100 MB)     | 0 copies      |
+| `readFile` (KCL source)    | 1-100 KB        | 2 copies (negligible)   | 0 copies      |
+| `writeFile` (STEP)         | 5-200 MB        | 2 copies (10-400 MB)    | 0 copies      |
+| `readFiles` (project load) | 10-500 files    | 2 copies per file       | 0 copies      |
+| `getDirectoryContents`     | Entire dir tree | 2 copies per file       | 0 copies      |
+| `getZippedDirectory`       | Blob result     | 1 copy (Blob is cloned) | 0 copies      |
 
 For a CAD application dealing with large binary files, this is the **single biggest performance win** available.
 
@@ -137,6 +137,7 @@ port.postMessage({ id, method, args }, transferables);
 ```
 
 **Caveat**: After transfer, the sender's `ArrayBuffer` becomes detached. This is fine for:
+
 - `readFile` responses (file-manager worker doesn't need the buffer after sending)
 - `writeFile` requests (caller doesn't need the buffer after sending)
 
@@ -180,25 +181,26 @@ ZenFS's RPC protocol:
 
 RPC Methods (lower-level than `fs.promises`):
 
-| Method | Parameters | Returns |
-|--------|-----------|---------|
-| `ready` | (none) | void |
-| `usage` | (none) | UsageInfo |
-| `rename` | (oldPath, newPath) | void |
-| `createFile` | (path, options) | Uint8Array (inode) |
-| `unlink` | (path) | void |
-| `rmdir` | (path) | void |
-| `mkdir` | (path, options) | Uint8Array (inode) |
-| `readdir` | (path) | string[] |
-| `touch` | (path, metadata) | void |
-| `exists` | (path) | boolean |
-| `link` | (target, link) | void |
-| `sync` | (none) | void |
-| `read` | (path, buffer, start, end) | Uint8Array |
-| `write` | (path, buffer, offset) | void |
-| `stat` | (path) | Uint8Array (inode) |
+| Method       | Parameters                 | Returns            |
+| ------------ | -------------------------- | ------------------ |
+| `ready`      | (none)                     | void               |
+| `usage`      | (none)                     | UsageInfo          |
+| `rename`     | (oldPath, newPath)         | void               |
+| `createFile` | (path, options)            | Uint8Array (inode) |
+| `unlink`     | (path)                     | void               |
+| `rmdir`      | (path)                     | void               |
+| `mkdir`      | (path, options)            | Uint8Array (inode) |
+| `readdir`    | (path)                     | string[]           |
+| `touch`      | (path, metadata)           | void               |
+| `exists`     | (path)                     | boolean            |
+| `link`       | (target, link)             | void               |
+| `sync`       | (none)                     | void               |
+| `read`       | (path, buffer, start, end) | Uint8Array         |
+| `write`      | (path, buffer, offset)     | void               |
+| `stat`       | (path)                     | Uint8Array (inode) |
 
 Key differences from our approach:
+
 - ZenFS works at the **inode level** (raw `Uint8Array` for metadata), not the `readFile`/`writeFile` level
 - `read`/`write` are buffer-based (offset + length), not whole-file
 - `stat` returns serialized `Inode` (a `Uint8Array`), not a plain object
@@ -213,6 +215,7 @@ PortFS bridges a remote filesystem over a MessagePort-like channel:
 - `sync()` flushes the local cache to the remote
 
 Key pattern -- **sync cache with async pipeline**:
+
 ```
 Sync call → local InMemory cache → eventual async pipeline to remote
 Async call → RPC request/response to remote
@@ -262,22 +265,26 @@ Provides synchronous method implementations on async backends:
 ### 1. PortFS as an Alternative to Our Bridge
 
 Currently, our architecture:
+
 ```
 Kernel Worker → createBridgeProxy<KernelFileSystemBase>(port) → our bridge RPC → file-manager worker → ZenFS
 ```
 
 ZenFS's PortFS can do:
+
 ```
 Kernel Worker → PortFS(port) → ZenFS RPC → file-manager worker → attachFS(port, fs) → ZenFS
 ```
 
 **Pros of using ZenFS PortFS directly**:
+
 - Full `node:fs` API surface automatically (including streams, watchers, etc.)
 - `Async` mixin provides sync cache for free (useful for WASM kernels)
 - Battle-tested message buffering during initialization (`catchMessages`)
 - Less code to maintain in our bridge layer
 
 **Cons**:
+
 - Tight coupling to ZenFS in the `@taucad/kernels` package (which we explicitly decoupled)
 - ZenFS's RPC is lower-level (inode-based), more verbose than our method-based bridge
 - No transfer list optimization (same as our current bridge)
@@ -318,6 +325,7 @@ const data = fs.readSync('/model.step'); // No RPC, no async, no copy
 ### 4. `CopyOnWrite` Backend for Snapshots
 
 ZenFS's CopyOnWrite backend layers a writable FS over a read-only FS. This could be useful for:
+
 - Build snapshots (read from IndexedDB, write to InMemory during a build)
 - Undo/redo at the filesystem level
 - Testing (overlay test data without modifying the real FS)
@@ -416,28 +424,30 @@ Use ZenFS's `CopyOnWrite` backend to layer an in-memory write cache over the Ind
 
 ## ZenFS RPC vs Tau Bridge Comparison
 
-| Aspect | ZenFS RPC | Tau Bridge |
-|--------|-----------|------------|
-| **Message shape (request)** | `{ _zenfs, id, method, args, stack }` | `{ id, method, args }` |
-| **Message shape (response)** | `{ _zenfs, id, method, error?, value }` | `{ id, result?, error? }` |
-| **API level** | Low-level inode ops (`read(path,buf,start,end)`) | High-level (`readFile(path)`) |
-| **Binary serialization** | Structured clone (MessagePort), base64 (WebSocket) | Structured clone only |
-| **Transfer lists** | Plumbed but unused (`transferList = []`) | Not plumbed |
-| **Channel support** | MessagePort, Worker, WebSocket, Node MessagePort | MessagePort only |
-| **Error format** | `ExceptionJSON` (errno, code, message, stack) | `BridgeError` (name, message, stack, code, metadata) |
-| **Initialization safety** | `catchMessages` buffers during setup | Relies on machine state ordering |
-| **Sync cache** | `Async` mixin with `InMemory` sync cache | None (fully async) |
-| **Attach/detach** | `attachFS`/`detachFS` lifecycle management | `createBridgeServer` (no detach) |
-| **Timeout** | 250ms default (PortFS), 1000ms (generic RPC) | 30,000ms |
-| **Message discrimination** | `_zenfs: true` marker on all messages | None (assumes all messages are bridge protocol) |
+| Aspect                       | ZenFS RPC                                          | Tau Bridge                                           |
+| ---------------------------- | -------------------------------------------------- | ---------------------------------------------------- |
+| **Message shape (request)**  | `{ _zenfs, id, method, args, stack }`              | `{ id, method, args }`                               |
+| **Message shape (response)** | `{ _zenfs, id, method, error?, value }`            | `{ id, result?, error? }`                            |
+| **API level**                | Low-level inode ops (`read(path,buf,start,end)`)   | High-level (`readFile(path)`)                        |
+| **Binary serialization**     | Structured clone (MessagePort), base64 (WebSocket) | Structured clone only                                |
+| **Transfer lists**           | Plumbed but unused (`transferList = []`)           | Not plumbed                                          |
+| **Channel support**          | MessagePort, Worker, WebSocket, Node MessagePort   | MessagePort only                                     |
+| **Error format**             | `ExceptionJSON` (errno, code, message, stack)      | `BridgeError` (name, message, stack, code, metadata) |
+| **Initialization safety**    | `catchMessages` buffers during setup               | Relies on machine state ordering                     |
+| **Sync cache**               | `Async` mixin with `InMemory` sync cache           | None (fully async)                                   |
+| **Attach/detach**            | `attachFS`/`detachFS` lifecycle management         | `createBridgeServer` (no detach)                     |
+| **Timeout**                  | 250ms default (PortFS), 1000ms (generic RPC)       | 30,000ms                                             |
+| **Message discrimination**   | `_zenfs: true` marker on all messages              | None (assumes all messages are bridge protocol)      |
 
 ### What We Do Better
+
 - Higher-level API matches consumer needs (`readFile`/`writeFile` vs `read`/`write`)
 - Richer error metadata (`BridgeError` with `metadata` field)
 - Generous timeout (30s) appropriate for large file operations
 - Clean generic bridge (generic `<T extends Record<string, unknown>>`) not tied to FS methods
 
 ### What ZenFS Does Better
+
 - Message buffering during initialization (`catchMessages`)
 - Sync cache via `Async` mixin (enables sync operations on async backends)
 - Multi-channel support (WebSocket, Node.js `worker_threads`)
@@ -448,11 +458,11 @@ Use ZenFS's `CopyOnWrite` backend to layer an in-memory write cache over the Ind
 
 ## Recommendations Summary
 
-| # | Item | Priority | Impact | Effort |
-|---|------|----------|--------|--------|
-| 1 | Add `Transferable` support to bridge `postMessage` | Critical | High | Small |
-| 2 | Add batch `readFiles` to `KernelFileSystem` interface | High | Medium | Small |
-| 3 | Use ZenFS `PortFS` for main-thread proxy in `apps/ui` | Medium | Medium | Medium |
-| 4 | Adopt `catchMessages` pattern for init safety | Medium | Low | Small |
-| 5 | Investigate `SharedArrayBuffer` + `SingleBuffer` for WASM | Low | High (future) | Large |
-| 6 | `CopyOnWrite` backend for build isolation | Low | Low | Medium |
+| #   | Item                                                      | Priority | Impact        | Effort |
+| --- | --------------------------------------------------------- | -------- | ------------- | ------ |
+| 1   | Add `Transferable` support to bridge `postMessage`        | Critical | High          | Small  |
+| 2   | Add batch `readFiles` to `KernelFileSystem` interface     | High     | Medium        | Small  |
+| 3   | Use ZenFS `PortFS` for main-thread proxy in `apps/ui`     | Medium   | Medium        | Medium |
+| 4   | Adopt `catchMessages` pattern for init safety             | Medium   | Low           | Small  |
+| 5   | Investigate `SharedArrayBuffer` + `SingleBuffer` for WASM | Low      | High (future) | Large  |
+| 6   | `CopyOnWrite` backend for build isolation                 | Low      | Low           | Medium |

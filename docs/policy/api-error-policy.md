@@ -95,9 +95,9 @@ LangGraph propagates abort to internal operations
 
 ## Key Files
 
-| File | Role |
-|---|---|
-| `apps/api/app/api/chat/utils/chat-abort.ts` | `ChatAbortError`, `isChatAbortError`, tracker utilities |
-| `apps/api/app/api/chat/utils/chat-abort.test.ts` | Tests for all abort utilities |
-| `apps/api/app/api/chat/chat.controller.ts` | Controller catch block (Layer 1) |
-| `apps/api/app/main.ts` | Process handler (Layer 2) |
+| File                                             | Role                                                    |
+| ------------------------------------------------ | ------------------------------------------------------- |
+| `apps/api/app/api/chat/utils/chat-abort.ts`      | `ChatAbortError`, `isChatAbortError`, tracker utilities |
+| `apps/api/app/api/chat/utils/chat-abort.test.ts` | Tests for all abort utilities                           |
+| `apps/api/app/api/chat/chat.controller.ts`       | Controller catch block (Layer 1)                        |
+| `apps/api/app/main.ts`                           | Process handler (Layer 2)                               |

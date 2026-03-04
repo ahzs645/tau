@@ -29,62 +29,62 @@ Based on the 3MF Core Specification v1.4.0 and extension specifications. Assesse
 
 ### 1.1 Core Specification
 
-| Feature | 3MF Spec | Importer | Exporter | Gap Severity |
-|---------|----------|----------|----------|-------------|
-| Model element with `unit` attribute | Required | Partial (parsed but not applied) | Hardcoded `millimeter` | Low |
-| Mesh vertices (`<vertices>`) | Required | Supported | Supported | None |
-| Mesh triangles (`<triangles>`) | Required | Supported | Supported | None |
-| Triangle property indices `p1` | Optional | Supported | Supported (hardcoded to `pid="1"`) | Medium |
-| Triangle property indices `p2`, `p3` | Optional | Supported | **Missing** | High |
-| Base materials (`<basematerials>`) | Optional | Supported | Supported (diffuse color only) | Low |
-| Material `displaycolor` (sRGB) | Required per base | Supported | Supported | None |
-| Material `name` | Required per base | Supported | Supported | None |
-| Object `id` attribute | Required | Supported | Supported (auto-incremented from 2) | Low |
-| Object `type` attribute | Optional | Supported | Hardcoded `"model"` | Medium |
-| Object `name` attribute | Optional | Supported | **Missing** | Medium |
-| Object `partnumber` attribute | Optional | **Missing** | **Missing** | Low |
-| Object `thumbnail` attribute | Optional | **Missing** | **Missing** | Low |
-| Object `pid`/`pindex` (default material) | Optional | Supported | **Missing** | High |
-| Components (`<components>`) | Optional | Supported | **Missing** | Critical |
-| Component `transform` | Optional | Supported | **Missing** | Critical |
-| Build items (`<item>`) | Required | Supported | Supported | None |
-| Build item `transform` | Optional | Supported | **Missing** | Critical |
-| Build item `partnumber` | Optional | **Missing** | **Missing** | Low |
-| Metadata (`<metadata>`) at model level | Optional | Supported | Supported | None |
-| Metadata at object level (`<metadatagroup>`) | Optional | **Missing** | **Missing** | Medium |
-| Metadata at item level (`<metadatagroup>`) | Optional | **Missing** | **Missing** | Medium |
-| OPC ZIP container | Required | Supported | Supported | None |
-| `[Content_Types].xml` | Required | Supported | Supported | None |
-| `_rels/.rels` relationships | Required | Supported | Supported | None |
-| Package thumbnails | Optional | Recognized, not processed | **Missing** | Medium |
-| PrintTicket | Optional | Recognized, not processed | **Missing** | Medium |
-| Triangle Sets extension | Optional | **Missing** | **Missing** | Low |
-| `requiredextensions` attribute | Optional | **Missing** | **Missing** | Medium |
-| `recommendedextensions` attribute | Optional | **Missing** | **Missing** | Low |
+| Feature                                      | 3MF Spec          | Importer                         | Exporter                            | Gap Severity |
+| -------------------------------------------- | ----------------- | -------------------------------- | ----------------------------------- | ------------ |
+| Model element with `unit` attribute          | Required          | Partial (parsed but not applied) | Hardcoded `millimeter`              | Low          |
+| Mesh vertices (`<vertices>`)                 | Required          | Supported                        | Supported                           | None         |
+| Mesh triangles (`<triangles>`)               | Required          | Supported                        | Supported                           | None         |
+| Triangle property indices `p1`               | Optional          | Supported                        | Supported (hardcoded to `pid="1"`)  | Medium       |
+| Triangle property indices `p2`, `p3`         | Optional          | Supported                        | **Missing**                         | High         |
+| Base materials (`<basematerials>`)           | Optional          | Supported                        | Supported (diffuse color only)      | Low          |
+| Material `displaycolor` (sRGB)               | Required per base | Supported                        | Supported                           | None         |
+| Material `name`                              | Required per base | Supported                        | Supported                           | None         |
+| Object `id` attribute                        | Required          | Supported                        | Supported (auto-incremented from 2) | Low          |
+| Object `type` attribute                      | Optional          | Supported                        | Hardcoded `"model"`                 | Medium       |
+| Object `name` attribute                      | Optional          | Supported                        | **Missing**                         | Medium       |
+| Object `partnumber` attribute                | Optional          | **Missing**                      | **Missing**                         | Low          |
+| Object `thumbnail` attribute                 | Optional          | **Missing**                      | **Missing**                         | Low          |
+| Object `pid`/`pindex` (default material)     | Optional          | Supported                        | **Missing**                         | High         |
+| Components (`<components>`)                  | Optional          | Supported                        | **Missing**                         | Critical     |
+| Component `transform`                        | Optional          | Supported                        | **Missing**                         | Critical     |
+| Build items (`<item>`)                       | Required          | Supported                        | Supported                           | None         |
+| Build item `transform`                       | Optional          | Supported                        | **Missing**                         | Critical     |
+| Build item `partnumber`                      | Optional          | **Missing**                      | **Missing**                         | Low          |
+| Metadata (`<metadata>`) at model level       | Optional          | Supported                        | Supported                           | None         |
+| Metadata at object level (`<metadatagroup>`) | Optional          | **Missing**                      | **Missing**                         | Medium       |
+| Metadata at item level (`<metadatagroup>`)   | Optional          | **Missing**                      | **Missing**                         | Medium       |
+| OPC ZIP container                            | Required          | Supported                        | Supported                           | None         |
+| `[Content_Types].xml`                        | Required          | Supported                        | Supported                           | None         |
+| `_rels/.rels` relationships                  | Required          | Supported                        | Supported                           | None         |
+| Package thumbnails                           | Optional          | Recognized, not processed        | **Missing**                         | Medium       |
+| PrintTicket                                  | Optional          | Recognized, not processed        | **Missing**                         | Medium       |
+| Triangle Sets extension                      | Optional          | **Missing**                      | **Missing**                         | Low          |
+| `requiredextensions` attribute               | Optional          | **Missing**                      | **Missing**                         | Medium       |
+| `recommendedextensions` attribute            | Optional          | **Missing**                      | **Missing**                         | Low          |
 
 ### 1.2 Materials and Properties Extension
 
-| Feature | Spec | Importer | Exporter | Gap Severity |
-|---------|------|----------|----------|-------------|
-| Color groups (`<m:colorgroup>`) | Optional | Supported | **Missing** | Critical |
-| Per-vertex colors (`<m:color>`) | Optional | Supported | **Missing** | Critical |
-| Texture2D resources (`<m:texture2d>`) | Optional | Supported | **Missing** | Critical |
-| Texture2D groups (`<m:texture2dgroup>`) | Optional | Supported | **Missing** | Critical |
-| Texture coordinates (`<m:tex2coord>`) | Optional | Supported | **Missing** | Critical |
-| Embedded texture files in ZIP | Optional | Supported | **Missing** | Critical |
-| Composite materials (`<m:compositematerials>`) | Optional | **Missing** | **Missing** | Medium |
-| Multi-property groups (`<m:multiproperties>`) | Optional | **Missing** | **Missing** | Medium |
-| PBR materials (metallic/roughness) | Optional | **Missing** | **Missing** | High |
+| Feature                                        | Spec     | Importer    | Exporter    | Gap Severity |
+| ---------------------------------------------- | -------- | ----------- | ----------- | ------------ |
+| Color groups (`<m:colorgroup>`)                | Optional | Supported   | **Missing** | Critical     |
+| Per-vertex colors (`<m:color>`)                | Optional | Supported   | **Missing** | Critical     |
+| Texture2D resources (`<m:texture2d>`)          | Optional | Supported   | **Missing** | Critical     |
+| Texture2D groups (`<m:texture2dgroup>`)        | Optional | Supported   | **Missing** | Critical     |
+| Texture coordinates (`<m:tex2coord>`)          | Optional | Supported   | **Missing** | Critical     |
+| Embedded texture files in ZIP                  | Optional | Supported   | **Missing** | Critical     |
+| Composite materials (`<m:compositematerials>`) | Optional | **Missing** | **Missing** | Medium       |
+| Multi-property groups (`<m:multiproperties>`)  | Optional | **Missing** | **Missing** | Medium       |
+| PBR materials (metallic/roughness)             | Optional | **Missing** | **Missing** | High         |
 
 ### 1.3 Other Extensions
 
-| Extension | Importer | Exporter | Relevance for Slicers |
-|-----------|----------|----------|----------------------|
-| Production Extension | **Missing** | **Missing** | High (multi-part files, sub-models) |
-| Beam Lattice Extension | **Missing** | **Missing** | Medium (lattice structures) |
-| Slice Extension | **Missing** | **Missing** | High (pre-sliced data for slicers) |
-| Volumetric Extension | **Missing** | **Missing** | Low (advanced material grading) |
-| Secure Content Extension | **Missing** | **Missing** | Low (DRM, encryption) |
+| Extension                | Importer    | Exporter    | Relevance for Slicers               |
+| ------------------------ | ----------- | ----------- | ----------------------------------- |
+| Production Extension     | **Missing** | **Missing** | High (multi-part files, sub-models) |
+| Beam Lattice Extension   | **Missing** | **Missing** | Medium (lattice structures)         |
+| Slice Extension          | **Missing** | **Missing** | High (pre-sliced data for slicers)  |
+| Volumetric Extension     | **Missing** | **Missing** | Low (advanced material grading)     |
+| Secure Content Extension | **Missing** | **Missing** | Low (DRM, encryption)               |
 
 ---
 
@@ -118,26 +118,27 @@ ZIP archive containing:
 
 ### 2.2 Feature Support by Slicer
 
-| Feature | BambuStudio | PrusaSlicer | OrcaSlicer | Assimp Exporter |
-|---------|-------------|-------------|------------|-----------------|
-| Core mesh (vertices/triangles) | Yes | Yes | Yes | Yes |
-| Build item transforms | Yes | Yes | Yes | **No** |
-| Object type validation | `model`, `other` only | `model` only | `model`, `other` only | Hardcoded `model` |
-| Components | Yes | Yes | Yes | **No** |
-| Base materials | Yes | Yes | Yes | Yes (basic) |
-| Color groups (`m:colorgroup`) | Yes | **No** | Yes | **No** |
-| Texture resources | **No** | **No** | **No** | **No** |
-| Production Extension (`p:`) | Yes | **No** | Yes | **No** |
-| Multi-material painting | `paint_color` attr | `slic3rpe:mmu_segmentation` | Both | **No** |
-| Custom metadata | BambuStudio namespace | slic3rpe namespace | Both | **No** |
-| Embedded print settings | Yes (`Metadata/` dir) | Yes (`Metadata/` dir) | Yes (`Metadata/` dir) | **No** |
-| Thumbnails | Yes (multiple sizes) | **No** | Yes (multiple sizes) | **No** |
+| Feature                        | BambuStudio           | PrusaSlicer                 | OrcaSlicer            | Assimp Exporter   |
+| ------------------------------ | --------------------- | --------------------------- | --------------------- | ----------------- |
+| Core mesh (vertices/triangles) | Yes                   | Yes                         | Yes                   | Yes               |
+| Build item transforms          | Yes                   | Yes                         | Yes                   | **No**            |
+| Object type validation         | `model`, `other` only | `model` only                | `model`, `other` only | Hardcoded `model` |
+| Components                     | Yes                   | Yes                         | Yes                   | **No**            |
+| Base materials                 | Yes                   | Yes                         | Yes                   | Yes (basic)       |
+| Color groups (`m:colorgroup`)  | Yes                   | **No**                      | Yes                   | **No**            |
+| Texture resources              | **No**                | **No**                      | **No**                | **No**            |
+| Production Extension (`p:`)    | Yes                   | **No**                      | Yes                   | **No**            |
+| Multi-material painting        | `paint_color` attr    | `slic3rpe:mmu_segmentation` | Both                  | **No**            |
+| Custom metadata                | BambuStudio namespace | slic3rpe namespace          | Both                  | **No**            |
+| Embedded print settings        | Yes (`Metadata/` dir) | Yes (`Metadata/` dir)       | Yes (`Metadata/` dir) | **No**            |
+| Thumbnails                     | Yes (multiple sizes)  | **No**                      | Yes (multiple sizes)  | **No**            |
 
 ### 2.3 Critical Compatibility Findings
 
 **Object type rejection**: All three slicers reject objects with type `"solidsupport"`, `"support"`, or `"surface"`. BambuStudio and OrcaSlicer accept `"other"` in addition to `"model"`. PrusaSlicer only accepts `"model"`. The assimp exporter hardcodes `type="model"`, which is safe but inflexible.
 
 **Multi-material divergence**: The three slicers use incompatible approaches to multi-material:
+
 - BambuStudio/OrcaSlicer: `m:colorgroup` + `m:color` (Materials Extension), `paint_color` triangle attribute
 - PrusaSlicer: `slic3rpe:mmu_segmentation` triangle attribute (proprietary), reads `paint_color` as fallback
 - For maximum compatibility, files should include both `m:colorgroup` AND slicer-specific painting attributes
@@ -151,6 +152,7 @@ ZIP archive containing:
 ## 3. Assimp 3MF Exporter Gap Analysis
 
 Source files:
+
 - `repos/assimpjs/assimp/code/AssetLib/3MF/D3MFExporter.h`
 - `repos/assimpjs/assimp/code/AssetLib/3MF/D3MFExporter.cpp`
 
@@ -173,6 +175,7 @@ ExportScene3MF()
 ### 3.1 Critical Bugs and Limitations
 
 **Hardcoded material ID** (`D3MFExporter.cpp`, line 352): Every triangle references `pid="1"` regardless of the actual material group ID. This means multi-object scenes with different material groups will have incorrect material assignments:
+
 ```cpp
 mModelOutput << "<" << XmlTag::triangle << " v1=\"" << currentFace.mIndices[0] << "\" v2=\""
              << currentFace.mIndices[1] << "\" v3=\"" << currentFace.mIndices[2]
@@ -180,11 +183,13 @@ mModelOutput << "<" << XmlTag::triangle << " v1=\"" << currentFace.mIndices[0] <
 ```
 
 **Object IDs start at 2** (`D3MFExporter.cpp`, line 289): Object IDs are auto-generated as `i + 2` (where `i` is the child node index), with material group hardcoded to `id="1"`. This is fragile and breaks if a scene has more resources:
+
 ```cpp
 mModelOutput << "<" << XmlTag::object << " id=\"" << i + 2 << "\" type=\"model\">";
 ```
 
 **No transforms** (`D3MFExporter.cpp`, line 368): Build items are written without transform attributes, meaning all objects are placed at origin:
+
 ```cpp
 mModelOutput << "<" << XmlTag::item << " objectid=\"" << i + 2 << "\"/>";
 ```
@@ -192,6 +197,7 @@ mModelOutput << "<" << XmlTag::item << " objectid=\"" << i + 2 << "\"/>";
 **Only single material per mesh**: The exporter uses `mesh->mMaterialIndex` as a flat index into the basematerials group. Per-face material variation requires `p1`/`p2`/`p3` which are not implemented.
 
 **Non-recursive node traversal** (`D3MFExporter.cpp`, line 284): Only iterates `root->mChildren`, ignoring deeper hierarchy. Components are not supported at all:
+
 ```cpp
 for (unsigned int i = 0; i < root->mNumChildren; ++i) {
     aiNode *currentNode(root->mChildren[i]);
@@ -200,6 +206,7 @@ for (unsigned int i = 0; i < root->mNumChildren; ++i) {
 **Memory management**: Uses raw `new`/`delete` for `OpcPackageRelationship` objects (`mRelations` vector), with manual cleanup in the destructor. Not a crash risk but is a code quality concern.
 
 **Disabled tests** (`test/unit/utD3MFImportExport.cpp`): Both export and roundtrip tests are commented out:
+
 ```cpp
 TEST_F(utD3MFImporterExporter, export3MFtoMemTest) {
     //EXPECT_TRUE(exporterTest());
@@ -230,6 +237,7 @@ TEST_F(utD3MFImporterExporter, roundtrip3MFtoMemTest) {
 ## 4. Assimp 3MF Importer Gap Analysis
 
 Source files:
+
 - `repos/assimpjs/assimp/code/AssetLib/3MF/D3MFImporter.h` / `.cpp`
 - `repos/assimpjs/assimp/code/AssetLib/3MF/XmlSerializer.h` / `.cpp`
 - `repos/assimpjs/assimp/code/AssetLib/3MF/D3MFOpcPackage.h` / `.cpp`
@@ -251,6 +259,7 @@ The importer is significantly more capable than the exporter, covering core spec
 - OPC container reading (ZIP, relationships, content types)
 
 Import pipeline:
+
 ```
 D3MFImporter::InternReadFile()
   └── D3MFOpcPackage()              → Opens ZIP, finds root model
@@ -266,31 +275,33 @@ D3MFImporter::InternReadFile()
 
 ### 4.2 Missing Features
 
-| Feature | Severity | Notes |
-|---------|----------|-------|
-| PBR materials (metallic, roughness, specular) | High | Materials Extension defines these but importer ignores them |
-| Composite materials (`m:compositematerials`) | Medium | Multi-material blending not parsed |
-| Multi-property groups (`m:multiproperties`) | Medium | Property layering not parsed |
-| Production Extension sub-models | High | Multi-part files not supported |
-| Beam Lattice Extension | Medium | Lattice structures not parsed |
-| Slice Extension | High | Pre-sliced polygon data not parsed |
-| Volumetric Extension | Low | Advanced material grading |
-| Secure Content Extension | Low | Encryption/DRM |
-| Object-level metadata groups | Medium | `<metadatagroup>` on objects not parsed |
-| Item-level metadata groups | Medium | `<metadatagroup>` on build items not parsed |
-| Print tickets | Medium | Recognized in OPC but not processed |
-| Thumbnails | Low | Recognized in OPC but not processed |
-| Triangle Sets | Low | Core extension for triangle grouping |
-| Unit conversion | Medium | `unit` attribute parsed but not applied to vertex coordinates |
+| Feature                                       | Severity | Notes                                                         |
+| --------------------------------------------- | -------- | ------------------------------------------------------------- |
+| PBR materials (metallic, roughness, specular) | High     | Materials Extension defines these but importer ignores them   |
+| Composite materials (`m:compositematerials`)  | Medium   | Multi-material blending not parsed                            |
+| Multi-property groups (`m:multiproperties`)   | Medium   | Property layering not parsed                                  |
+| Production Extension sub-models               | High     | Multi-part files not supported                                |
+| Beam Lattice Extension                        | Medium   | Lattice structures not parsed                                 |
+| Slice Extension                               | High     | Pre-sliced polygon data not parsed                            |
+| Volumetric Extension                          | Low      | Advanced material grading                                     |
+| Secure Content Extension                      | Low      | Encryption/DRM                                                |
+| Object-level metadata groups                  | Medium   | `<metadatagroup>` on objects not parsed                       |
+| Item-level metadata groups                    | Medium   | `<metadatagroup>` on build items not parsed                   |
+| Print tickets                                 | Medium   | Recognized in OPC but not processed                           |
+| Thumbnails                                    | Low      | Recognized in OPC but not processed                           |
+| Triangle Sets                                 | Low      | Core extension for triangle grouping                          |
+| Unit conversion                               | Medium   | `unit` attribute parsed but not applied to vertex coordinates |
 
 ### 4.3 Known Bugs
 
 **Texture2DGroup static cast** (`XmlSerializer.cpp`, line 483): A comment marks a bug fix with a bare cast, suggesting fragility:
+
 ```cpp
 Texture2DGroup *group = static_cast<Texture2DGroup *>(it->second); // fix bug
 ```
 
 **ZIP path double-slash workaround** (`D3MFOpcPackage.cpp`, lines 157-162):
+
 ```cpp
 if (!rootFile.empty() && rootFile[0] == '/') {
     rootFile = rootFile.substr(1);
@@ -310,6 +321,7 @@ if (!rootFile.empty() && rootFile[0] == '/') {
 The assimp codebase at `repos/assimpjs/assimp/` uses two patterns for third-party library integration:
 
 **Pattern A: Bundled contrib** (small, stable libraries):
+
 - `contrib/zlib/` -- compression
 - `contrib/pugixml/` -- XML parsing (header-only + single .cpp)
 - `contrib/zip/` -- ZIP creation for 3MF exporter (kuba--/zip, conditionally compiled)
@@ -317,11 +329,13 @@ The assimp codebase at `repos/assimpjs/assimp/` uses two patterns for third-part
 - `contrib/stb/` -- image loading (header-only)
 
 **Pattern B: FetchContent** (large, actively developed libraries):
+
 - `contrib/tinyusdz/autoclone/` -- USD support, FetchContent from GitHub, pinned to git tag `48e327dd...`, ~5.5MB WASM impact
 - `contrib/web-ifc/autoclone/` -- IFC support, FetchContent from GitHub, pinned to git tag `04f5fa47...`, ~900KB WASM impact, requires C++20
 - `contrib/meshlab/autoclone/` -- VRML support, FetchContent from GitHub
 
 The FetchContent pattern in `code/CMakeLists.txt` follows a consistent structure:
+
 1. Check if format is enabled (`IF (ASSIMP_BUILD_XXX_IMPORTER)`)
 2. Set base path in `contrib/` and autoclone directory
 3. Declare FetchContent with git repository URL and tag
@@ -350,6 +364,7 @@ The FetchContent pattern in `code/CMakeLists.txt` follows a consistent structure
 | LibreSSL 3.8.2 | ~2-3MB | Not needed -- only used in tests, Secure Content uses callbacks |
 
 **WASM compatibility**:
+
 - No threading (single-threaded, no pthread/mutex)
 - Memory-based streams available (`NMR_ImportStream_Memory.cpp`, `NMR_ExportStream_Memory.cpp`) -- no native file I/O required
 - `USE_PLATFORM_UUID=OFF` provides non-platform UUID generation (needed for Emscripten)
@@ -357,6 +372,7 @@ The FetchContent pattern in `code/CMakeLists.txt` follows a consistent structure
 - No problematic platform-specific code for Emscripten
 
 **Modular extension directories** (can selectively include/exclude):
+
 - `Source/Model/Reader/v100/` -- Core 3MF 1.0 reader (~25 files)
 - `Source/Model/Reader/v093/` -- Legacy 0.93 reader (~15 files, can exclude)
 - `Source/Model/Reader/Slice1507/` -- Slice extension (~9 files)
@@ -367,10 +383,12 @@ The FetchContent pattern in `code/CMakeLists.txt` follows a consistent structure
 ### 5.3 WASM Size Impact
 
 Current WASM binary sizes:
+
 - `assimpjs-all.wasm`: **12MB** (all importers including IFC, USD, X3D)
 - `assimpjs-exporter.wasm`: **8.7MB** (all exporters, minimal importers, includes tinyusdz for USD)
 
 Reference contrib sizes:
+
 - web-ifc (IFC): ~900KB WASM impact
 - tinyusdz (USD): ~5.5MB WASM impact
 - lib3mf (estimated): **~2-3MB** for Core + Materials + Production extensions
@@ -378,6 +396,7 @@ Reference contrib sizes:
 With LTO (`-flto`) already enabled in the assimpjs build, dead code elimination will remove unused lib3mf code paths. Excluding Volumetric, Secure Content, and legacy v093 readers could reduce the impact to ~2MB.
 
 **Size impact by build profile** (defined in `repos/assimpjs/CMakeLists.txt`):
+
 - **ReleaseExporter** (primary target): 8.7MB -> ~11MB (+2-3MB). This is the WASM used for export in `packages/converter`.
 - **ReleaseAll**: 12MB -> ~14MB (+2-3MB). This is the WASM used for import.
 - **ReleaseMini**: No impact (no exporters besides GLTF/ASSJSON, 3MF import could optionally use lib3mf).
@@ -402,6 +421,7 @@ repos/assimpjs/assimp/
 The bridge layer (`Lib3MFBridge.cpp`) would handle bidirectional conversion:
 
 **Export (aiScene -> 3MF)**:
+
 1. Create lib3mf `IModel` instance
 2. Iterate `aiScene` meshes -> create lib3mf `IMeshObject` resources
 3. Convert `aiMaterial` -> lib3mf `IBaseMaterialGroup`, `IColorGroup`, `ITexture2D`, etc.
@@ -412,6 +432,7 @@ The bridge layer (`Lib3MFBridge.cpp`) would handle bidirectional conversion:
 8. Write buffer through assimp's IOSystem
 
 **Import (3MF -> aiScene)**:
+
 1. Read 3MF ZIP data through assimp's IOSystem
 2. Use lib3mf `IReader` to parse into `IModel`
 3. Iterate lib3mf mesh objects -> create `aiMesh` instances
@@ -443,20 +464,24 @@ The lib3mf contrib approach is strongly recommended because:
 **Status**: 3MF export is disabled.
 
 `packages/converter/src/export.ts`, line 29:
+
 ```typescript
 // '3mf': { exporter: new AssimpExporter().initialize({ format: '3mf' }) }, // Fix assimp 3mf exporter
 ```
 
 3MF is absent from:
+
 - `assimpExportFormats` array in `packages/converter/src/exporters/assimp.exporter.ts`
 - `supportedOutputFormats` array in `packages/converter/src/types.ts`
 
 3MF import works and is present in:
+
 - `supportedInputFormats` array in `packages/converter/src/types.ts`
 - Import config in `packages/converter/src/import.ts` using `AssimpLoader`
 - Import test in `packages/converter/src/import.test.ts` with `cube.3mf` fixture
 
 The converter uses two WASM binaries:
+
 - `assimpjs-all.wasm` (12MB) for import (all formats)
 - `assimpjs-exporter.wasm` (8.7MB) for export (GLTF input -> target format)
 
@@ -465,6 +490,7 @@ The converter uses two WASM binaries:
 A standalone TypeScript 3MF generator exists at `packages/kernels/src/utils/export-3mf.ts`, used exclusively by the OpenSCAD kernel for OFF-to-3MF conversion.
 
 **Capabilities**:
+
 - Takes `IndexedPolyhedron` (vertices, faces, per-face colors) as input
 - Fan triangulation of non-triangle faces
 - Per-face color support via base materials
@@ -474,6 +500,7 @@ A standalone TypeScript 3MF generator exists at `packages/kernels/src/utils/expo
 - ZIP packaging via `UZIP` library
 
 **Limitations**:
+
 - No texture/UV mapping support
 - No alpha channel (RGB only)
 - No unit handling (assumes millimeters)
@@ -484,6 +511,7 @@ A standalone TypeScript 3MF generator exists at `packages/kernels/src/utils/expo
 - No validation
 
 **Usage path**:
+
 ```
 OpenSCAD kernel → OFF file → parseOff() → IndexedPolyhedron → export3mf() → 3MF Blob
 ```
@@ -493,6 +521,7 @@ This implementation is adequate for simple OpenSCAD geometry with colors but can
 ### 6.3 assimpjs Binding Layer
 
 The assimpjs binding code (`repos/assimpjs/assimpjs/src/assimpjs.cpp`) already includes 3MF in its format mapping:
+
 ```cpp
 } else if (format == "3mf") {
     fileName += ".3mf";
@@ -510,6 +539,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 **Objective**: Add lib3mf to the assimp build system following the tinyusdz/web-ifc pattern.
 
 **Tasks**:
+
 1. Create `repos/assimpjs/assimp/contrib/lib3mf/autoclone/` directory
 2. Add FetchContent declaration in `repos/assimpjs/assimp/code/CMakeLists.txt`:
    - Pin to a stable lib3mf release tag
@@ -528,6 +558,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 **Objective**: Replace the minimal exporter with a full-featured implementation backed by lib3mf.
 
 **Tasks**:
+
 1. Create `Lib3MFBridge.h/.cpp` for `aiScene` <-> lib3mf `IModel` conversion
 2. Implement mesh conversion: `aiMesh` -> lib3mf `IMeshObject`
    - Vertices, triangles, per-triangle properties
@@ -550,6 +581,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 **Objective**: Improve import fidelity by using lib3mf's reader instead of the manual XML parser.
 
 **Tasks**:
+
 1. Implement lib3mf `IReader` integration in `D3MFImporter`
 2. Convert lib3mf model -> `aiScene` (reverse of Phase 2 bridge)
 3. Add support for Production Extension sub-models
@@ -563,6 +595,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 **Objective**: Enable 3MF export in the converter package and verify end-to-end GLTF->3MF pipeline.
 
 **Tasks**:
+
 1. Rebuild assimpjs WASM binaries with lib3mf integration
 2. Update `packages/converter/src/assets/assimpjs/assimpjs-exporter.wasm`
 3. Add `'3mf'` to `assimpExportFormats` in `packages/converter/src/exporters/assimp.exporter.ts`
@@ -576,6 +609,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 **Objective**: Ensure exported 3MF files work seamlessly with all major slicers.
 
 **Tasks**:
+
 1. Add version metadata for slicer detection:
    - `BambuStudio:3mfVersion`
    - `slic3rpe:Version3mf`
@@ -599,6 +633,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 **Namespace**: `xmlns:BambuStudio="http://schemas.bambulab.com/package/2021"`
 
 **Custom metadata keys**:
+
 - `BambuStudio:3mfVersion` -- File format version (integer)
 - `model_id` -- Model identifier
 - `Title`, `Designer`, `DesignerUserId`, `DesignId` -- Attribution
@@ -608,6 +643,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 - `MakerLab`, `MakerLabVersion` -- MakerLab metadata
 
 **Custom elements**:
+
 - `<BambuStudioShape>` -- SVG shape embossing data
 - `<plate>` -- Build plate information (multi-plate support)
 - `<part>` -- Part information within plates
@@ -616,6 +652,7 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 - `<slice_warning>` -- Slice warning data
 
 **Custom triangle attributes**:
+
 - `paint_supports` -- Support painting data (per-triangle)
 - `paint_fuzzy_skin` -- Fuzzy skin painting data
 - `paint_seam` -- Seam painting data
@@ -623,12 +660,14 @@ The export flow is: `ConvertFileList(fileList, "3mf")` -> `ExportScene()` -> `As
 - `face_property` -- Face-level properties
 
 **Custom object attributes**:
+
 - `locked` -- Object lock state
 - `bed_type` -- Bed type preference
 - `print_sequence` -- Print sequence order
 - `filament_maps` -- Filament mapping for multi-material
 
 **Metadata directory structure**:
+
 ```
 Metadata/
 ├── plate_N.png              # Plate thumbnails
@@ -647,6 +686,7 @@ Metadata/
 ```
 
 **Relationship types**:
+
 - `http://schemas.bambulab.com/package/2021/cover-thumbnail-middle` -- Middle thumbnail
 - `http://schemas.bambulab.com/package/2021/cover-thumbnail-small` -- Small thumbnail
 - `http://schemas.bambulab.com/package/2021/gcode` -- G-code relationship
@@ -660,24 +700,28 @@ Metadata/
 **Namespace**: `xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06"`
 
 **Custom metadata keys**:
+
 - `slic3rpe:Version3mf` -- File format version (integer, currently 1)
 - `slic3rpe:FdmSupportsPaintingVersion` -- FDM support painting version
 - `slic3rpe:SeamPaintingVersion` -- Seam painting version
 - `slic3rpe:MmPaintingVersion` -- Multi-material painting version
 
 **Custom triangle attributes**:
+
 - `slic3rpe:custom_supports` -- Support painting data (per-triangle, serialized)
 - `slic3rpe:custom_seam` -- Seam painting data (per-triangle, serialized)
 - `slic3rpe:mmu_segmentation` -- Multi-material segmentation data (per-triangle, serialized)
 - `slic3rpe:fuzzy_skin` -- Fuzzy skin data (per-triangle)
 
 **Custom elements**:
+
 - `slic3rpe:text` -- Text embossing configuration
 - `slic3rpe:shape` -- SVG shape embossing configuration
 
 **Object type handling**: PrusaSlicer only accepts `type="model"`. All other types (`other`, `solidsupport`, `support`, `surface`) are rejected. Empty type defaults to `"model"`.
 
 **Multi-material compatibility**: PrusaSlicer reads `paint_color` attribute as a fallback for `slic3rpe:mmu_segmentation`, providing backward compatibility with BambuStudio files:
+
 ```cpp
 std::string mm_segmentation_serialized =
     get_attribute_value_string(attributes, num_attributes, MM_SEGMENTATION_ATTR);
@@ -695,6 +739,7 @@ if (mm_segmentation_serialized.empty())
 OrcaSlicer maintains dual importers: a PrusaSlicer-compatible importer (`3mf.cpp`) and a BambuStudio-specific importer (`bbs_3mf.cpp`).
 
 **Supported namespaces**:
+
 - Core: `http://schemas.microsoft.com/3dmanufacturing/core/2015/02`
 - Production: `http://schemas.microsoft.com/3dmanufacturing/production/2015/06`
 - PrusaSlicer: `http://schemas.slic3r.org/3mf/2017/06`
@@ -703,6 +748,7 @@ OrcaSlicer maintains dual importers: a PrusaSlicer-compatible importer (`3mf.cpp
 **Material handling**: Full Materials Extension support -- `m:colorgroup` and `m:color` elements with per-triangle color assignment via `pid` and `p1` attributes. Also supports BambuStudio `paint_color` attribute.
 
 **Additional features over PrusaSlicer**:
+
 - Multi-plate system (multiple build plates per file)
 - G-code embedding (`Metadata/plate_*.gcode`)
 - Multiple thumbnail sizes (small, middle, cover)

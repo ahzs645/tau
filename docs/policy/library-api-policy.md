@@ -37,10 +37,15 @@ Prefer flat option objects over deeply nested configuration. Use optional fields
 
 ```typescript
 // Good: flat, obvious defaults
-replicad({ wasm: 'single-exceptions', linearTolerance: 0.1 })
+replicad({ wasm: 'single-exceptions', linearTolerance: 0.1 });
 
 // Avoid: deeply nested, hard to read
-replicad({ options: { exceptions: { enabled: true }, mesh: { tolerances: { linear: 0.1 } } } })
+replicad({
+  options: {
+    exceptions: { enabled: true },
+    mesh: { tolerances: { linear: 0.1 } },
+  },
+});
 ```
 
 ## 4. Parameter Design
@@ -53,11 +58,11 @@ Maximum **3 positional parameters**. Prefer fewer. Each positional parameter mus
 
 ```typescript
 // Good: single object -- self-documenting, easy to extend
-createKernelClient({ kernels: [replicad()], transport: workerTransport })
-render({ file, parameters, tessellation })
+createKernelClient({ kernels: [replicad()], transport: workerTransport });
+render({ file, parameters, tessellation });
 
 // Avoid: positional args for same-concern data
-render(file, parameters, tessellation)
+render(file, parameters, tessellation);
 ```
 
 **2 params (primary + config)** -- When there is one clear "subject" and a bag of optional configuration. The first param answers "what", the second answers "how".
@@ -146,32 +151,40 @@ Names should describe **what** the code does, not **how** the framework routes i
 
 ```typescript
 // Good: describes the action
-client.render({ file, parameters })
-worker.initialize(input)
+client.render({ file, parameters });
+worker.initialize(input);
 
 // Avoid: leaks internal dispatch architecture
-worker.renderEntry(input)
-worker.initializeEntry(input)
+worker.renderEntry(input);
+worker.initializeEntry(input);
 ```
 
-**Describe the concept, not the container.** Type names should say what the object *is*, not where it lives in an array.
+**Describe the concept, not the container.** Type names should say what the object _is_, not where it lives in an array.
 
 ```typescript
 // Good: says what the object represents
-type KernelRegistration = { id: string; extensions: string[]; moduleUrl: string };
+type KernelRegistration = {
+  id: string;
+  extensions: string[];
+  moduleUrl: string;
+};
 
 // Avoid: says where it lives (an "entry" in a list)
-type KernelWorkerEntry = { id: string; extensions: string[]; kernelModuleUrl: string };
+type KernelWorkerEntry = {
+  id: string;
+  extensions: string[];
+  kernelModuleUrl: string;
+};
 ```
 
 **No abbreviations in public API.** Use full words for exported symbols and parameters. Internal code follows the same principle for readability, with narrow exceptions for universally understood abbreviations (`id`, `url`, `fs`).
 
 ```typescript
 // Good
-tessellation, context, module, buffer, path
+(tessellation, context, module, buffer, path);
 
 // Avoid
-tess, ctx, mod, buf, p
+(tess, ctx, mod, buf, p);
 ```
 
 **Avoid overloading terms.** If a word is already used for one concept, don't reuse it for another. For example, "entry" was previously overloaded as both "item in a registration list" (`MiddlewareEntry`) and "method entry point" (`renderEntry`), which motivated the rename to `MiddlewareRegistration` and `render()`.
@@ -180,13 +193,13 @@ tess, ctx, mod, buf, p
 
 Each naming prefix signals a specific role:
 
-| Prefix | Role | Examples |
-|---|---|---|
-| `create*` | Factory function | `createKernelClient`, `createBridgePort` |
-| `define*` | Plugin definition | `defineKernel`, `defineMiddleware`, `defineBundler` |
-| `is*` | Type guard | `isGeometryFile`, `isKernelPlugin` |
-| `from*` | Conversion constructor | `fromNodeFS`, `fromMemoryFS`, `fromFsLike` |
-| `on*` | Framework hook / event callback | `onInitialize`, `onLog`, `onProgress` |
+| Prefix    | Role                            | Examples                                            |
+| --------- | ------------------------------- | --------------------------------------------------- |
+| `create*` | Factory function                | `createKernelClient`, `createBridgePort`            |
+| `define*` | Plugin definition               | `defineKernel`, `defineMiddleware`, `defineBundler` |
+| `is*`     | Type guard                      | `isGeometryFile`, `isKernelPlugin`                  |
+| `from*`   | Conversion constructor          | `fromNodeFS`, `fromMemoryFS`, `fromFsLike`          |
+| `on*`     | Framework hook / event callback | `onInitialize`, `onLog`, `onProgress`               |
 
 ### Callback and hook naming
 
@@ -288,7 +301,7 @@ type KernelFileSystem = {
 // Avoid: optional methods that need fallback logic everywhere
 type KernelFileSystem = {
   readFile(path: string): Promise<string>;
-  mkdir?(path: string): Promise<void>;        // optional = complexity
+  mkdir?(path: string): Promise<void>; // optional = complexity
   ensureDirectoryExists?(path: string): void; // maybe exists, maybe not
 };
 ```
@@ -319,8 +332,14 @@ Use `package.json` export conditions for environment-specific code:
 {
   "exports": {
     ".": {
-      "import": { "types": "./dist/esm/index.d.ts", "default": "./dist/esm/index.js" },
-      "require": { "types": "./dist/cjs/index.d.cts", "default": "./dist/cjs/index.cjs" }
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
     }
   }
 }
@@ -352,36 +371,206 @@ See [ES Module Policy](es-module-policy.md) for the full pattern, bundler compat
 
 ## 17. Resource Cleanup Conventions
 
-Use a **layered vocabulary** where each term maps to a specific resource scope. The terminology aligns with TC39 Explicit Resource Management, Web APIs, and the Monaco/Three.js ecosystems already used in this project.
+Every object that holds resources must implement the `Disposable` interface so it can participate in bulk cleanup. Semantic method names (`close`, `terminate`, `stop`) coexist as the discoverable, domain-specific API; `dispose()` is the universal protocol that enables infrastructure-level patterns like `DisposableStore` and TC39's `using` declarations.
 
-### Vocabulary
+This design follows the convergent pattern of TC39 Explicit Resource Management (`Symbol.dispose`, `DisposableStack`), .NET Framework Design Guidelines (`IDisposable` + domain aliases), and VSCode/Monaco (`IDisposable`, `toDisposable`, `DisposableStore`).
 
-| Term | Scope | Web/TC39 alignment | Example |
-|------|-------|---------------------|---------|
-| `dispose()` | General resource release on an object | TC39 `Symbol.dispose`, Monaco `IDisposable`, Three.js | `bridge.dispose()`, `collector.dispose()` |
-| `close()` | Connections, transports, streams | `WebSocket.close()`, `MessagePort.close()`, `IDBDatabase.close()` | `transport.close()`, `port.close()` |
-| `terminate()` | Workers and processes | `Worker.terminate()` | `client.terminate()`, `worker.terminate()` |
-| `stop()` | Running computations, actors | XState `actor.stop()`, AI SDK `chat.stop()` | `actor.stop()` |
-| Return `() => void` | Subscriptions and one-time registrations | React `useEffect` cleanup, RxJS `unsubscribe` | `client.on('progress', handler)` returns `() => void` |
+### The universal interface
 
-**`dispose` is the default.** When none of the specific terms (`close`, `terminate`, `stop`) apply, use `dispose`.
+Define in `libs/types`:
+
+```typescript
+type Disposable = {
+  dispose(): void;
+};
+```
+
+Every object that needs cleanup implements `Disposable`. This is the single requirement for bulk management. Async variants return `Promise<void>` from `dispose()` when teardown requires async work.
+
+### Semantic vocabulary
+
+Semantic names provide discoverability and describe **what** the cleanup does. They are the primary API consumers call directly. The `dispose()` method delegates to the semantic method (or vice versa when `dispose` is itself the natural term).
+
+| Term                | Scope                                                         | Web/TC39 alignment                                    |
+| ------------------- | ------------------------------------------------------------- | ----------------------------------------------------- |
+| `dispose()`         | General resource release (the default and universal protocol) | TC39 `Symbol.dispose`, Monaco `IDisposable`, Three.js |
+| `close()`           | Connections, transports, streams                              | `WebSocket.close()`, `MessagePort.close()`            |
+| `terminate()`       | Workers and processes                                         | `Worker.terminate()`                                  |
+| `stop()`            | Running computations, actors                                  | XState `actor.stop()`, AI SDK `chat.stop()`           |
+| Return `() => void` | Subscriptions and one-time registrations                      | React `useEffect`, RxJS                               |
+
+**`dispose` is the default.** When none of the specific terms (`close`, `terminate`, `stop`) apply, `dispose` is both the semantic name and the protocol method.
+
+### How semantic names and `Disposable` coexist
+
+When an object has a meaningful semantic cleanup name, it exposes **both** the semantic method and `dispose()`. The semantic method contains the real logic; `dispose()` delegates to it:
+
+```typescript
+// Transport: close() is the semantic API, dispose() adapts
+type KernelTransport = Disposable & {
+  send(message: KernelCommand): void;
+  onMessage(handler: (message: KernelResponse) => void): void;
+  close(): void;
+};
+
+// Implementation: dispose delegates to close
+function createWorkerTransport(worker: Worker): KernelTransport {
+  return {
+    send(message) {
+      worker.postMessage(message);
+    },
+    onMessage(handler) {
+      worker.addEventListener('message', (event) => handler(event.data));
+    },
+    close() {
+      worker.terminate();
+    },
+    dispose() {
+      this.close();
+    },
+  };
+}
+
+// KernelClient: terminate() is the semantic API, dispose() adapts
+type KernelClient = Disposable & {
+  render(input: RenderInput): Promise<void>;
+  terminate(): void;
+};
+```
+
+When `dispose` IS the natural semantic term (bridges, proxies, telemetry, Three.js objects), there is no separate semantic method — `dispose()` serves both roles:
+
+```typescript
+// Bridge: dispose is already the right semantic name
+type BridgeHandle = Disposable & {
+  port: MessagePort;
+};
+```
 
 ### Choosing the right term
 
-Use this decision tree:
+Use this decision tree to pick the semantic name. Regardless of choice, always implement `Disposable`:
 
-1. **Is the resource a connection, transport, or stream?** → `close()`
-2. **Is the resource a Worker or subprocess?** → `terminate()`
-3. **Is the resource a running computation or actor?** → `stop()`
+1. **Is the resource a connection, transport, or stream?** → `close()` + `Disposable`
+2. **Is the resource a Worker or subprocess?** → `terminate()` + `Disposable`
+3. **Is the resource a running computation or actor?** → `stop()` + `Disposable`
 4. **Is the resource an event subscription?** → return `() => void` (see Section 7)
-5. **Everything else** → `dispose()`
+5. **Everything else** → `dispose()` alone (serves as both semantic name and protocol)
+
+### Adapter utilities
+
+Two utility functions bridge non-conforming resources into the `Disposable` protocol:
+
+#### `toDisposable(fn)`
+
+Wraps a bare `() => void` cleanup function into a `Disposable` object. Guarantees the function is called at most once. Modeled after VSCode's `toDisposable`.
+
+```typescript
+function toDisposable(fn: () => void): Disposable {
+  let disposed = false;
+  return {
+    dispose() {
+      if (!disposed) {
+        disposed = true;
+        fn();
+      }
+    },
+  };
+}
+```
+
+Use cases:
+
+- Wrapping the return value of `client.on('progress', handler)` before storing
+- Wrapping `() => worker.terminate()` for external `Worker` objects we don't control
+- Wrapping `clearInterval` / `removeEventListener` calls
+
+```typescript
+// Wrap a subscription cleanup
+const unsubscribe = client.on('progress', handler);
+store.add(toDisposable(unsubscribe));
+
+// Wrap an external Worker
+store.add(toDisposable(() => worker.terminate()));
+
+// Wrap a timer
+const id = setInterval(poll, 5000);
+store.add(toDisposable(() => clearInterval(id)));
+```
+
+#### `isDisposable(value)`
+
+Type guard for duck-typing disposable objects:
+
+```typescript
+function isDisposable(value: unknown): value is Disposable {
+  return typeof value === 'object' && value !== null && 'dispose' in value && typeof value.dispose === 'function';
+}
+```
+
+### Bulk cleanup with `DisposableStore`
+
+`DisposableStore` replaces ad-hoc `(() => void)[]` arrays and provides safe bulk cleanup. Modeled after VSCode's `DisposableStore` (PR #80661), which replaced bare `IDisposable[]` because arrays silently leak resources added after disposal.
+
+```typescript
+class DisposableStore implements Disposable {
+  private readonly items = new Set<Disposable>();
+  private disposed = false;
+
+  add<T extends Disposable>(disposable: T): T {
+    if (this.disposed) {
+      console.warn('Adding to an already-disposed store — resource will leak');
+    }
+    this.items.add(disposable);
+    return disposable;
+  }
+
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    const errors: unknown[] = [];
+    for (const item of this.items) {
+      try {
+        item.dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.items.clear();
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Errors during disposal');
+    }
+  }
+}
+```
+
+Usage in practice:
+
+```typescript
+// XState machine context: one store replaces multiple ad-hoc arrays
+type KernelMachineContext = {
+  resources: DisposableStore;
+  kernelClient?: KernelClient;
+};
+
+// During initialization: add heterogeneous resources to one store
+const store = context.resources;
+store.add(client); // KernelClient (has dispose → terminate)
+store.add(bridge); // BridgeHandle (has dispose)
+store.add(toDisposable(client.on('progress', handler))); // wrapped subscription
+store.add(toDisposable(client.on('log', handler))); // wrapped subscription
+
+// During teardown: one call cleans up everything
+context.resources.dispose();
+```
 
 ### Patterns
 
-**Objects that own resources** — add a `dispose()` method:
+**Factory functions returning handles** — return a `Disposable` object:
 
 ```typescript
-// Factory returning a handle with dispose
 function createFileSystemBridge(worker: Worker): BridgeHandle {
   const channel = new MessageChannel();
   worker.postMessage({ type: 'bridge', port: channel.port1 }, [channel.port1]);
@@ -394,10 +583,9 @@ function createFileSystemBridge(worker: Worker): BridgeHandle {
 }
 ```
 
-**Listener registrations** — return a bare cleanup function:
+**Listener registrations** — return a bare `() => void` (wrap with `toDisposable` at the storage site):
 
 ```typescript
-// exposeFileSystem returns () => void, not { dispose }
 function exposeFileSystem(handlers: FileSystemHandlers): () => void {
   self.addEventListener('message', handler);
   return () => {
@@ -406,15 +594,23 @@ function exposeFileSystem(handlers: FileSystemHandlers): () => void {
 }
 ```
 
-**Orchestration methods** that tear down multiple sub-resources use `dispose()` as the method name and call the appropriate term on each sub-resource:
+**Orchestration methods** that tear down multiple sub-resources call the appropriate semantic method on each:
 
 ```typescript
-// Good: orchestration method is named dispose, calls correct term on each sub-resource
 public async dispose(): Promise<void> {
   this.telemetryCollector?.dispose();  // dispose sub-resource
   this.fileSystem?.dispose();          // dispose sub-resource
   this.transport?.close();             // close connection
   await this.onDispose();              // framework hook
+}
+```
+
+**Or, preferably, delegate to a `DisposableStore`:**
+
+```typescript
+public async dispose(): Promise<void> {
+  await this.onDispose();
+  this.resources.dispose();
 }
 ```
 
@@ -443,39 +639,43 @@ type KernelDefinition = {
 
 ### Naming stored cleanup references
 
-When storing a cleanup function in state (e.g., XState machine context, React refs), use the noun form matching the resource:
+Store the **resource handle** (which is `Disposable`), not a bare cleanup function. This preserves the resource's identity and enables type-safe access to its other properties:
 
 ```typescript
-// Good: name describes the resource, not the action
+// Good: store handles, use DisposableStore for bulk
 type MachineContext = {
-  bridge?: BridgeHandle;       // has .dispose()
-  worker?: Worker;             // has .terminate()
-  subscriptions: (() => void)[]; // array of unsubscribe functions
+  bridge?: BridgeHandle; // Disposable, also has .port
+  resources: DisposableStore; // bulk cleanup for subscriptions + handles
+  kernelClient?: KernelClient; // Disposable, also has .render(), .terminate()
 };
 
-// Good: destructure and store the handle
+// Good: add to store during setup
 const bridge = createFileSystemBridge(worker);
 context.bridge = bridge;
-// later: context.bridge.dispose();
+context.resources.add(bridge);
+context.resources.add(toDisposable(client.on('log', handler)));
 
-// Avoid: storing bare functions with action-verb names
+// Good: bulk cleanup
+context.resources.dispose();
+
+// Avoid: bare functions with verb names
 type MachineContext = {
-  bridgeDispose?: () => void;    // loses the resource identity
-  eventCleanups: (() => void)[]; // vague, mixes concerns
+  bridgeDispose?: () => void; // loses resource identity
+  eventCleanups: (() => void)[]; // unsafe, no leak detection
 };
 ```
-
-When multiple unrelated cleanup functions must be stored together, use `subscriptions` (for event/subscription cleanups) or keep the full handle objects and call their cleanup methods individually.
 
 ### The `cleanup` term
 
 **Do not use `cleanup` as a method name for resource release.** It is not aligned with any standard (TC39, Web APIs, Monaco, Three.js) and creates ambiguity with `dispose`.
 
 Permitted uses of `cleanup`:
+
 - **Domain-specific maintenance** that is not lifecycle teardown: `cleanupOldCacheEntries()`, `cleanupStaleSessions()`. These are operational housekeeping, not resource disposal.
 - **Internal implementation detail** inside a function body (local variable name in a `finally` block) where no public API is exposed.
 
 Migrate existing `cleanup` methods:
+
 - `KernelDefinition.cleanup?()` → `KernelDefinition.onDispose?()`
 - `BundlerDefinition.cleanup?()` → `BundlerDefinition.onDispose?()`
 - `KernelWorker.cleanup()` → `KernelWorker.dispose()`
@@ -486,7 +686,7 @@ Migrate existing `cleanup` methods:
 
 ### Async dispose
 
-When disposal requires async work (closing WebSocket, flushing buffers, WASM teardown), use an async `dispose()` method. Prefer `Promise<void>` return type over `Symbol.asyncDispose` until the TC39 proposal reaches broader runtime support:
+When disposal requires async work (closing WebSocket, flushing buffers, WASM teardown), return `Promise<void>` from `dispose()`. Prefer this over `Symbol.asyncDispose` until the TC39 proposal reaches broader runtime support:
 
 ```typescript
 // Good: async dispose for resources requiring teardown
@@ -501,6 +701,24 @@ async [Symbol.asyncDispose](): Promise<void> {
   await this.dispose();
 }
 ```
+
+### TC39 `DisposableStack` forward-compatibility
+
+The `toDisposable` / `DisposableStore` utilities are designed as stepping stones toward TC39's `DisposableStack`. When `DisposableStack` reaches baseline browser support, the migration path is direct:
+
+```typescript
+// Today (our utilities)
+const store = new DisposableStore();
+store.add(bridge);
+store.add(toDisposable(() => worker.terminate()));
+
+// Future (TC39 native)
+using stack = new DisposableStack();
+stack.use(bridge);
+stack.adopt(worker, (w) => w.terminate());
+```
+
+Our `Disposable` type is structurally compatible with TC39's `{ [Symbol.dispose](): void }` — adding the symbol method to existing `Disposable` implementations will be a non-breaking change.
 
 ### Anti-patterns
 
@@ -517,25 +735,36 @@ public teardown(): void { ... }
 // Bad: release as method name (use dispose, unless it's releaseLock on streams)
 public release(): void { ... }
 
+// Bad: ad-hoc cleanup arrays (use DisposableStore)
+const cleanups: (() => void)[] = [];
+cleanups.push(unsubscribe1, unsubscribe2);
+for (const fn of cleanups) fn();
+
 // Bad: storing bare cleanup functions with verb names
 context.bridgeDispose?.();
 
 // Bad: mixing dispose and cleanup on the same object
 class Worker {
-  dispose(): void { ... }   // which one releases resources?
-  cleanup(): void { ... }   // confusing
+  dispose(): void { ... }
+  cleanup(): void { ... }
 }
+
+// Bad: semantic method without Disposable (can't bulk-manage)
+type Transport = {
+  close(): void;    // no dispose() — can't add to DisposableStore
+};
 ```
 
 ### Summary table
 
-| Situation | Name | Returns |
-|-----------|------|---------|
-| Release an object's resources | `dispose()` | `void` or `Promise<void>` |
-| Close a connection/transport/stream | `close()` | `void` |
-| Stop a worker/process | `terminate()` | `void` |
-| Stop a computation/actor | `stop()` | `void` |
-| Event subscription | `on(event, handler)` | `() => void` |
-| One-time listener setup | `exposeX()` / `listenX()` | `() => void` |
-| Framework lifecycle hook | `onDispose()` | `Promise<void>` |
-| Domain housekeeping (not lifecycle) | descriptive verb, e.g. `cleanupStaleEntries()` | varies |
+| Situation                       | Semantic name                                  | `Disposable`                             | Returns                   |
+| ------------------------------- | ---------------------------------------------- | ---------------------------------------- | ------------------------- |
+| General resource release        | `dispose()` (is the semantic name)             | yes                                      | `void` or `Promise<void>` |
+| Connection / transport / stream | `close()`                                      | yes, `dispose()` calls `close()`         | `void`                    |
+| Worker / process                | `terminate()`                                  | yes, `dispose()` calls `terminate()`     | `void`                    |
+| Computation / actor             | `stop()`                                       | yes, `dispose()` calls `stop()`          | `void`                    |
+| Event subscription              | `on(event, handler)`                           | wrap with `toDisposable` at storage site | `() => void`              |
+| Listener setup                  | `exposeX()` / `listenX()`                      | wrap with `toDisposable` at storage site | `() => void`              |
+| Framework lifecycle hook        | `onDispose()`                                  | n/a (called by framework)                | `Promise<void>`           |
+| Bulk management                 | `DisposableStore.dispose()`                    | yes (is itself `Disposable`)             | `void`                    |
+| Domain housekeeping             | descriptive verb, e.g. `cleanupStaleEntries()` | no (not lifecycle)                       | varies                    |

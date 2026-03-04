@@ -49,11 +49,11 @@ Model-viewer implements AR through three distinct pathways, each targeting diffe
 
 ### Key Insight: Format Requirements per Platform
 
-| Platform | Input Format | AR Runtime | Notes |
-|----------|-------------|------------|-------|
-| WebXR (Chrome Android, headsets) | glTF/GLB (in-memory Three.js scene) | Browser WebXR API | Renders directly via WebGL in AR session |
-| Android Scene Viewer | glTF/GLB (URL) | Google Scene Viewer app | Model URL passed via Android Intent |
-| iOS Quick Look (ARKit) | **USDZ** | Apple AR Quick Look | Auto-generated from glTF or provided via `ios-src` |
+| Platform                         | Input Format                        | AR Runtime              | Notes                                              |
+| -------------------------------- | ----------------------------------- | ----------------------- | -------------------------------------------------- |
+| WebXR (Chrome Android, headsets) | glTF/GLB (in-memory Three.js scene) | Browser WebXR API       | Renders directly via WebGL in AR session           |
+| Android Scene Viewer             | glTF/GLB (URL)                      | Google Scene Viewer app | Model URL passed via Android Intent                |
+| iOS Quick Look (ARKit)           | **USDZ**                            | Apple AR Quick Look     | Auto-generated from glTF or provided via `ios-src` |
 
 ---
 
@@ -104,7 +104,7 @@ WebXR provides the most integrated AR experience, rendering the 3D model directl
 const session = await navigator.xr.requestSession('immersive-ar', {
   requiredFeatures: [],
   optionalFeatures: ['hit-test', 'dom-overlay', 'light-estimation'],
-  domOverlay: { root: overlayElement }
+  domOverlay: { root: overlayElement },
 });
 ```
 
@@ -116,7 +116,7 @@ All AR features are declared as **optional** so the session can start even if so
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local');
 await renderer.xr.setSession(session);
-renderer.xr.cameraAutoUpdate = false;  // manual camera updates from XR pose
+renderer.xr.cameraAutoUpdate = false; // manual camera updates from XR pose
 ```
 
 #### 3. Reference Space and Hit Testing
@@ -126,15 +126,16 @@ renderer.xr.cameraAutoUpdate = false;  // manual camera updates from XR pose
 const viewerRefSpace = await session.requestReferenceSpace('viewer');
 
 // Floor hit testing: ray cast downward at angle
-const ray = new XRRay(
-  new DOMPoint(0, 0, 0),
-  { x: 0, y: -Math.sin(radians), z: -Math.cos(radians) }
-);
+const ray = new XRRay(new DOMPoint(0, 0, 0), {
+  x: 0,
+  y: -Math.sin(radians),
+  z: -Math.cos(radians),
+});
 session.requestHitTestSource({ space: viewerRefSpace, offsetRay: ray });
 
 // Touch input hit testing
 session.requestHitTestSourceForTransientInput({
-  profile: 'generic-touchscreen'
+  profile: 'generic-touchscreen',
 });
 ```
 
@@ -210,6 +211,7 @@ xrLight.addEventListener('estimationstart', () => {
 ```
 
 Three.js `XREstimatedLight` wraps the WebXR `XRLightProbe` and `XRLightEstimate` APIs internally, providing:
+
 - Directional light direction and intensity
 - Spherical harmonics for ambient lighting
 - Environment cubemap for reflections
@@ -224,13 +226,13 @@ await session.end();
 
 ### WebXR Feature Summary
 
-| WebXR Feature | Purpose | Required? |
-|---------------|---------|-----------|
-| `hit-test` | Surface detection for object placement | Optional |
-| `dom-overlay` | HTML UI overlay in AR view | Optional |
-| `light-estimation` | Match virtual lighting to real environment | Optional |
-| `immersive-ar` | AR session mode | Required (session type) |
-| `local` reference space | Tracking relative to device start position | Required |
+| WebXR Feature           | Purpose                                    | Required?               |
+| ----------------------- | ------------------------------------------ | ----------------------- |
+| `hit-test`              | Surface detection for object placement     | Optional                |
+| `dom-overlay`           | HTML UI overlay in AR view                 | Optional                |
+| `light-estimation`      | Match virtual lighting to real environment | Optional                |
+| `immersive-ar`          | AR session mode                            | Required (session type) |
+| `local` reference space | Tracking relative to device start position | Required                |
 
 ---
 
@@ -242,7 +244,7 @@ iOS Quick Look is Apple's native AR viewer, accessible from Safari via a special
 
 ```typescript
 // 1. Generate or use provided USDZ
-const usdzUrl = iosSrc ?? await prepareUSDZ();
+const usdzUrl = iosSrc ?? (await prepareUSDZ());
 
 // 2. Configure URL parameters
 const modelUrl = new URL(usdzUrl, location.toString());
@@ -317,7 +319,8 @@ params.set('disable_occlusion', 'true');
 if (arScale === 'fixed') params.set('resizable', 'false');
 if (arPlacement === 'wall') params.set('enable_vertical_placement', 'true');
 
-const intent = `intent://arvr.google.com/scene-viewer/1.2?` +
+const intent =
+  `intent://arvr.google.com/scene-viewer/1.2?` +
   `${params.toString()}&file=${encodeURIComponent(modelUrl)}` +
   `#Intent;scheme=https;` +
   `package=com.google.android.googlequicksearchbox;` +
@@ -330,15 +333,15 @@ anchor.click();
 
 ### Scene Viewer Parameters
 
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `mode` | `ar_preferred` | Prefer AR mode, fall back to 3D viewer |
-| `file` | URL to glTF/GLB | Model to display |
-| `disable_occlusion` | `true` | Disable object occlusion (default) |
-| `resizable` | `false` | Disable user scaling (`arScale="fixed"`) |
-| `enable_vertical_placement` | `true` | Allow wall placement (`arPlacement="wall"`) |
-| `sound` | URL | Optional audio |
-| `link` | URL | Optional link button |
+| Parameter                   | Value           | Purpose                                     |
+| --------------------------- | --------------- | ------------------------------------------- |
+| `mode`                      | `ar_preferred`  | Prefer AR mode, fall back to 3D viewer      |
+| `file`                      | URL to glTF/GLB | Model to display                            |
+| `disable_occlusion`         | `true`          | Disable object occlusion (default)          |
+| `resizable`                 | `false`         | Disable user scaling (`arScale="fixed"`)    |
+| `enable_vertical_placement` | `true`          | Allow wall placement (`arPlacement="wall"`) |
+| `sound`                     | URL             | Optional audio                              |
+| `link`                      | URL             | Optional link button                        |
 
 ### Fallback Handling
 
@@ -410,24 +413,24 @@ ARKit requires files within the USDZ archive to be aligned on 64-byte boundaries
 
 ### Material Conversion: PBR → UsdPreviewSurface
 
-| Three.js Property | USD Property | Notes |
-|-------------------|-------------|-------|
-| `MeshStandardMaterial.color` | `diffuseColor` | sRGB color space |
-| `MeshStandardMaterial.map` | `diffuseColor` (texture) | Connected via UsdUVTexture |
-| `MeshStandardMaterial.emissive` | `emissiveColor` | |
-| `MeshStandardMaterial.emissiveMap` | `emissiveColor` (texture) | |
-| `MeshStandardMaterial.normalMap` | `normal` | |
-| `MeshStandardMaterial.roughness` | `roughness` | |
-| `MeshStandardMaterial.roughnessMap` | `roughness` (texture) | Green channel |
-| `MeshStandardMaterial.metalness` | `metallic` | |
-| `MeshStandardMaterial.metalnessMap` | `metallic` (texture) | Blue channel |
-| `MeshStandardMaterial.aoMap` | `occlusion` | Red channel, requires UV1 |
-| `MeshStandardMaterial.opacity` | `opacity` | |
-| `MeshStandardMaterial.alphaMap` | `opacity` (texture) | |
-| `MeshStandardMaterial.alphaTest` | `opacityThreshold` | |
-| `MeshPhysicalMaterial.clearcoat` | `clearcoat` | |
-| `MeshPhysicalMaterial.clearcoatRoughness` | `clearcoatRoughness` | |
-| `MeshPhysicalMaterial.ior` | `ior` | Index of refraction |
+| Three.js Property                         | USD Property              | Notes                      |
+| ----------------------------------------- | ------------------------- | -------------------------- |
+| `MeshStandardMaterial.color`              | `diffuseColor`            | sRGB color space           |
+| `MeshStandardMaterial.map`                | `diffuseColor` (texture)  | Connected via UsdUVTexture |
+| `MeshStandardMaterial.emissive`           | `emissiveColor`           |                            |
+| `MeshStandardMaterial.emissiveMap`        | `emissiveColor` (texture) |                            |
+| `MeshStandardMaterial.normalMap`          | `normal`                  |                            |
+| `MeshStandardMaterial.roughness`          | `roughness`               |                            |
+| `MeshStandardMaterial.roughnessMap`       | `roughness` (texture)     | Green channel              |
+| `MeshStandardMaterial.metalness`          | `metallic`                |                            |
+| `MeshStandardMaterial.metalnessMap`       | `metallic` (texture)      | Blue channel               |
+| `MeshStandardMaterial.aoMap`              | `occlusion`               | Red channel, requires UV1  |
+| `MeshStandardMaterial.opacity`            | `opacity`                 |                            |
+| `MeshStandardMaterial.alphaMap`           | `opacity` (texture)       |                            |
+| `MeshStandardMaterial.alphaTest`          | `opacityThreshold`        |                            |
+| `MeshPhysicalMaterial.clearcoat`          | `clearcoat`               |                            |
+| `MeshPhysicalMaterial.clearcoatRoughness` | `clearcoatRoughness`      |                            |
+| `MeshPhysicalMaterial.ior`                | `ior`                     | Index of refraction        |
 
 ### Texture Handling
 
@@ -455,12 +458,12 @@ ARKit requires files within the USDZ archive to be aligned on 64-byte boundaries
 await exporter.parseAsync(scene, {
   ar: {
     anchoring: { type: 'plane' },
-    planeAnchoring: { alignment: 'horizontal' }
+    planeAnchoring: { alignment: 'horizontal' },
   },
-  includeAnchoringProperties: true,  // Include AR anchoring metadata
-  quickLookCompatible: false,        // Workarounds for Apple bugs
-  maxTextureSize: 1024,              // Max texture dimension in pixels
-  onlyVisible: true                  // Skip invisible objects
+  includeAnchoringProperties: true, // Include AR anchoring metadata
+  quickLookCompatible: false, // Workarounds for Apple bugs
+  maxTextureSize: 1024, // Max texture dimension in pixels
+  onlyVisible: true, // Skip invisible objects
 });
 ```
 
@@ -573,14 +576,9 @@ new Blob([arraybuffer], { type: 'model/vnd.usdz+zip' })
 
 ```typescript
 // WebXR
-const HAS_WEBXR_DEVICE_API =
-  navigator.xr != null &&
-  self.XRSession != null &&
-  navigator.xr.isSessionSupported != null;
+const HAS_WEBXR_DEVICE_API = navigator.xr != null && self.XRSession != null && navigator.xr.isSessionSupported != null;
 
-const HAS_WEBXR_HIT_TEST_API =
-  HAS_WEBXR_DEVICE_API &&
-  XRSession.prototype.requestHitTestSource != null;
+const HAS_WEBXR_HIT_TEST_API = HAS_WEBXR_DEVICE_API && XRSession.prototype.requestHitTestSource != null;
 
 const IS_WEBXR_AR_CANDIDATE = HAS_WEBXR_HIT_TEST_API;
 
@@ -607,14 +605,14 @@ const IS_AR_QUICKLOOK_CANDIDATE = (() => {
 
 ### Browser Compatibility
 
-| Feature | Chrome Android | Safari iOS | Chrome iOS | Quest Browser |
-|---------|---------------|------------|------------|---------------|
-| WebXR AR | 83+ | No | No | Yes |
-| Scene Viewer | Yes | No | No | No |
-| Quick Look | No | 12+ | Yes (WKWebView) | No |
-| DOM Overlay | 83+ | No | No | Yes |
-| Hit Test | 81+ | No | No | Yes |
-| Light Estimation | 90+ | No | No | Partial |
+| Feature          | Chrome Android | Safari iOS | Chrome iOS      | Quest Browser |
+| ---------------- | -------------- | ---------- | --------------- | ------------- |
+| WebXR AR         | 83+            | No         | No              | Yes           |
+| Scene Viewer     | Yes            | No         | No              | No            |
+| Quick Look       | No             | 12+        | Yes (WKWebView) | No            |
+| DOM Overlay      | 83+            | No         | No              | Yes           |
+| Hit Test         | 81+            | No         | No              | Yes           |
+| Light Estimation | 90+            | No         | No              | Partial       |
 
 ---
 
@@ -647,6 +645,7 @@ CadPreviewProvider (existing)
 ```
 
 **Key packages to evaluate:**
+
 - `@react-three/xr` — React Three Fiber WebXR bindings
 - Native WebXR API via `useThree()` → `gl.xr` (Three.js WebGLRenderer XR manager)
 
@@ -744,15 +743,16 @@ Tau's CAD kernels produce geometry with materials that map to Three.js `MeshStan
 
 ```json
 {
-  "three": "^0.179.0",           // Already installed - includes USDZExporter
-  "@react-three/xr": "^6.x.x",  // Optional - for React Three Fiber WebXR
-  "fflate": "^0.8.x"             // Already a dep of Three.js USDZExporter
+  "three": "^0.179.0", // Already installed - includes USDZExporter
+  "@react-three/xr": "^6.x.x", // Optional - for React Three Fiber WebXR
+  "fflate": "^0.8.x" // Already a dep of Three.js USDZExporter
 }
 ```
 
 ### AR Button UX Pattern
 
 Model-viewer's AR button pattern is well-established:
+
 - Floating action button (FAB) positioned bottom-right
 - Only visible when `canActivateAR` is true
 - Customizable via slot/children

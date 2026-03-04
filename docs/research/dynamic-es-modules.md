@@ -30,15 +30,15 @@ builds regressed from fast (~200ms total) to consistently slow (~1.3s), with
 
 ### Observed Telemetry (5 consecutive reloads, same build assets)
 
-| Span | Time |
-|---|---|
-| `kernel.bootstrap` | 58-83ms |
-| `kernel.bundler-init` | 79-120ms |
-| `kernel.select` | 936ms-1.15s |
-| ├ `kernel.load-module` | 492-579ms |
-| ├ `replicad.resolve-bindings` | 90-194ms |
-| ├ `wasm.compile` | 253-314ms |
-| └ `wasm.emscripten-init` | 38-49ms |
+| Span                            | Time           |
+| ------------------------------- | -------------- |
+| `kernel.bootstrap`              | 58-83ms        |
+| `kernel.bundler-init`           | 79-120ms       |
+| `kernel.select`                 | 936ms-1.15s    |
+| ├ `kernel.load-module`          | 492-579ms      |
+| ├ `replicad.resolve-bindings`   | 90-194ms       |
+| ├ `wasm.compile`                | 253-314ms      |
+| └ `wasm.emscripten-init`        | 38-49ms        |
 | **Total `kernel.resolve-deps`** | **1.26-1.56s** |
 
 The startup penalty is **consistent across reloads** — no improvement from browser
@@ -62,6 +62,7 @@ build: {
 ```
 
 Vite's `assetsInlineLimit` callback semantics:
+
 - Return `true` → **force inline** (regardless of size)
 - Return `false` → **never inline**
 - Return `undefined` → use default size threshold (4096 bytes)
@@ -74,16 +75,17 @@ This causes Vite to base64-encode WASM binaries (19-22 MB each) and embed them a
 
 Build output analysis (`apps/ui/build/client/assets/`):
 
-| Chunk | Total Size | Inline Data | Actual Code |
-|---|---|---|---|
-| `replicad.kernel-CHV4DDRI.js` | **57 MB** | 56.7 MB (2 WASM + sourcemap + font) | ~300 KB |
-| `replicad_with_exceptions-*.js` | 30 MB | 29.6 MB (1 WASM) | ~100 KB |
-| `replicad_single-*.js` | 25 MB | 25.3 MB (1 WASM) | ~100 KB |
-| `esbuild.bundler-*.js` | 17 MB | 17.2 MB (1 WASM) | ~100 KB |
-| `kcl_wasm_lib-*.js` | 19 MB | — (code-heavy) | ~19 MB |
+| Chunk                           | Total Size | Inline Data                         | Actual Code |
+| ------------------------------- | ---------- | ----------------------------------- | ----------- |
+| `replicad.kernel-CHV4DDRI.js`   | **57 MB**  | 56.7 MB (2 WASM + sourcemap + font) | ~300 KB     |
+| `replicad_with_exceptions-*.js` | 30 MB      | 29.6 MB (1 WASM)                    | ~100 KB     |
+| `replicad_single-*.js`          | 25 MB      | 25.3 MB (1 WASM)                    | ~100 KB     |
+| `esbuild.bundler-*.js`          | 17 MB      | 17.2 MB (1 WASM)                    | ~100 KB     |
+| `kcl_wasm_lib-*.js`             | 19 MB      | — (code-heavy)                      | ~19 MB      |
 
 The `replicad.kernel` chunk contains **both** OpenCASCADE WASM variants inlined as
 base64 data URLs:
+
 - `data:application/wasm;base64,...` — 29.63 MB (exceptions variant)
 - `data:application/wasm;base64,...` — 25.29 MB (single variant)
 
@@ -95,10 +97,11 @@ The Emscripten-generated bindings files (e.g. `replicad_single.js`) use Vite's
 `new URL()` asset reference pattern to locate their companion WASM binary:
 
 ```javascript
-return new URL("replicad_single.wasm", import.meta.url).href
+return new URL('replicad_single.wasm', import.meta.url).href;
 ```
 
 When Vite encounters `new URL(staticPath, import.meta.url)`, it:
+
 1. Resolves the referenced file relative to the source module
 2. Checks `assetsInlineLimit` to decide whether to inline or emit
 3. If inlining: replaces the expression with a `data:` URL containing the
@@ -115,18 +118,22 @@ each JavaScript chunk that referenced a WASM file.
 Chrome traces (`chrome://tracing`) reveal the caching failure chain:
 
 **Step 1: Compile (every load)**
+
 ```
 v8.compileModule  replicad.kernel-CHV4DDRI.js
   dur=232ms  cacheKind=ABSENT  consumedCacheSize=ABSENT
 ```
+
 No cache metadata fields are present — the cache was never consulted.
 
 **Step 2: Cache Production (fires once)**
+
 ```
 v8.produceModuleCache  replicad.kernel-CHV4DDRI.js
   producedCacheSize=59,663,120 bytes (59.6 MB)
   dur=42.8ms
 ```
+
 V8 serializes 59.6 MB of bytecode and hands it to Chrome's storage layer.
 
 **Step 3: Cache Storage (silently fails)**
@@ -134,23 +141,25 @@ The 59.6 MB entry exceeds Chrome's `GeneratedCodeCache` per-entry limit. The wri
 fails silently. No cache is stored.
 
 **Step 4: Next reload (cache miss)**
+
 ```
 v8.compileModule  replicad.kernel-CHV4DDRI.js
   dur=228ms  cacheKind=ABSENT  consumedCacheSize=ABSENT
 ```
+
 Still no cache. The 232ms compile repeats on every reload.
 
 ### 2.4 Comparison with Working Modules
 
 Modules with bytecode caches ≤20 MB work correctly:
 
-| Module | JS Size | Cache Size | Cached? | Compile Time |
-|---|---|---|---|---|
-| `esbuild.bundler` | 17 MB | 18.0 MB | **YES** (always) | 5ms |
-| `kcl_wasm_lib` | 19 MB | 19.8 MB | **YES** (after 1st load) | 0.7ms |
-| `kcl_wasm_lib_bg` | 19 MB | 19.8 MB | **YES** (always) | <0.1ms |
-| `schemas` | 107 KB | 122 KB | **YES** (always) | 0.2ms |
-| **`replicad.kernel`** | **57 MB** | **59.6 MB** | **NEVER** | **232ms** |
+| Module                | JS Size   | Cache Size  | Cached?                  | Compile Time |
+| --------------------- | --------- | ----------- | ------------------------ | ------------ |
+| `esbuild.bundler`     | 17 MB     | 18.0 MB     | **YES** (always)         | 5ms          |
+| `kcl_wasm_lib`        | 19 MB     | 19.8 MB     | **YES** (after 1st load) | 0.7ms        |
+| `kcl_wasm_lib_bg`     | 19 MB     | 19.8 MB     | **YES** (always)         | <0.1ms       |
+| `schemas`             | 107 KB    | 122 KB      | **YES** (always)         | 0.2ms        |
+| **`replicad.kernel`** | **57 MB** | **59.6 MB** | **NEVER**                | **232ms**    |
 
 The threshold appears to be ~20-30 MB of bytecode. Everything below caches fine.
 The 59.6 MB `replicad.kernel` cache is 3x over the limit.
@@ -164,6 +173,7 @@ These had their bytecode cache established in prior sessions and are consumed
 by workers. All have cache sizes ≤ 18 MB.
 
 **Never-cached modules** (no `cacheKind` field on any load):
+
 1. **Worker entry points** — Chrome excludes the top-level module script of
    `new Worker(url, {type: 'module'})` from code caching. This is the
    `kNoCacheBecauseModule` reason in V8's `ScriptCompiler::NoCacheReason` enum.
@@ -215,6 +225,7 @@ Chrome stores bytecode caches in a `SimpleBackend` disk cache at:
 `~/.config/chromium/Default/Code Cache/js/` (Linux) or equivalent.
 
 Key constraints:
+
 - **Per-entry size limit**: Approximately 1/8 of total cache size. For a
   default 256 MB cache, max entry ≈ 32 MB. For smaller caches, the limit
   is proportionally lower.
@@ -258,14 +269,15 @@ build: {
 
 Build output comparison (before → after):
 
-| Chunk | Before | After | Reduction |
-|---|---|---|---|
-| `replicad.kernel` | 57 MB | **308 KB** | 185x |
-| `esbuild.bundler` | 17 MB | **81 KB** | 212x |
-| `replicad_with_exceptions` | 30 MB | **67 KB** | 447x |
-| `replicad_single` | 25 MB | **67 KB** | 373x |
+| Chunk                      | Before | After      | Reduction |
+| -------------------------- | ------ | ---------- | --------- |
+| `replicad.kernel`          | 57 MB  | **308 KB** | 185x      |
+| `esbuild.bundler`          | 17 MB  | **81 KB**  | 212x      |
+| `replicad_with_exceptions` | 30 MB  | **67 KB**  | 447x      |
+| `replicad_single`          | 25 MB  | **67 KB**  | 373x      |
 
 WASM files now emitted as separate assets:
+
 - `replicad_single-*.wasm` — 19.9 MB
 - `replicad_with_exceptions-*.wasm` — 23.3 MB
 - `esbuild-*.wasm` — 13.5 MB
@@ -278,12 +290,12 @@ With the fix applied, `kernel.select` no longer appears in telemetry
 (module loading is near-instant). The render is dominated by actual CAD
 computation:
 
-| Span | Before (broken) | After (fixed) |
-|---|---|---|
-| `kernel.select` | 936ms-1.15s | **not visible** (< 1ms) |
-| `kernel.load-module` | 492-579ms | **not visible** |
-| `replicad.run-main` | ~226ms | ~226ms (unchanged, actual work) |
-| **Total render** | **1.26-1.56s** | **229ms** |
+| Span                 | Before (broken) | After (fixed)                   |
+| -------------------- | --------------- | ------------------------------- |
+| `kernel.select`      | 936ms-1.15s     | **not visible** (< 1ms)         |
+| `kernel.load-module` | 492-579ms       | **not visible**                 |
+| `replicad.run-main`  | ~226ms          | ~226ms (unchanged, actual work) |
+| **Total render**     | **1.26-1.56s**  | **229ms**                       |
 
 ### 4.4 WASM Loading Path (after fix)
 
@@ -304,6 +316,7 @@ is NOT the root cause. The dynamic import itself works correctly:
 - `kcl_wasm_lib` is loaded via static import on the main thread and is cached.
 
 The dep injection pattern does introduce a **sequential waterfall**:
+
 ```
 worker entry → framework init → dynamic import(kernel) → dynamic import(bindings) → WASM load
 ```
@@ -315,13 +328,13 @@ compile step dominates.
 
 ### Waterfall After Fix (verified)
 
-| Step | Before (no cache) | After (cached) |
-|---|---|---|
-| `kernel.load-module` | 513ms | < 1ms (cached bytecode) |
-| `replicad.resolve-bindings` | 92ms | < 1ms |
-| `wasm.compile` | 255ms | < 1ms (cached after first load) |
-| `wasm.emscripten-init` | 39ms | ~39ms |
-| **Total overhead** | **~900ms** | **~40ms** |
+| Step                        | Before (no cache) | After (cached)                  |
+| --------------------------- | ----------------- | ------------------------------- |
+| `kernel.load-module`        | 513ms             | < 1ms (cached bytecode)         |
+| `replicad.resolve-bindings` | 92ms              | < 1ms                           |
+| `wasm.compile`              | 255ms             | < 1ms (cached after first load) |
+| `wasm.emscripten-init`      | 39ms              | ~39ms                           |
+| **Total overhead**          | **~900ms**        | **~40ms**                       |
 
 The WASM compile benefits from V8's `NativeModuleCache` (verified in traces:
 `CacheHit` for 14.9 MB OC binary). After the first render within a session,
@@ -334,6 +347,7 @@ WASM instantiation drops to ~1ms.
 ### Data from `trace_multi-reload-tracing.json.gz` (5 page reloads)
 
 **`replicad.kernel` cache lifecycle across reloads:**
+
 ```
 Load 1: v8.compileModule     dur=232ms  cacheKind=ABSENT   ← cold compile
 Load 2: v8.compileModule     dur=228ms  cacheKind=ABSENT   ← still cold
@@ -342,6 +356,7 @@ Load 3: v8.compileModule     dur=221ms  cacheKind=ABSENT   ← ...but never stor
 ```
 
 **`esbuild.bundler` cache lifecycle (comparison):**
+
 ```
 Load 1: v8.compileModule  dur=5ms  cacheKind=normal  consumed=18,052,912  ← hot
 Load 2: v8.compileModule  dur=5ms  cacheKind=normal  consumed=18,052,912  ← hot
@@ -349,6 +364,7 @@ Load 3: v8.compileModule  dur=5ms  cacheKind=normal  consumed=18,052,912  ← ho
 ```
 
 **Key contrast:**
+
 - `esbuild.bundler` (17 MB JS → 18 MB cache): `cacheKind=normal` ✓
 - `replicad.kernel` (57 MB JS → 59.6 MB cache): `cacheKind=ABSENT` ✗
 
@@ -394,7 +410,7 @@ reference pattern used by Emscripten-generated bindings. For example,
 `replicad_single.js` contains:
 
 ```javascript
-return new URL("replicad_single.wasm", import.meta.url).href
+return new URL('replicad_single.wasm', import.meta.url).href;
 ```
 
 This pattern is Vite's standard way to reference static assets from JavaScript.
@@ -432,17 +448,18 @@ the streaming pipeline has inherent overhead.
 V8's NativeModuleCache (process-level, shared across isolates) shows cache
 hits for all WASM modules:
 
-| Module | Wire Bytes | Cache Lookup | Status |
-|---|---|---|---|
-| `replicad_with_exceptions` | 22.2 MB | 0.13ms | HIT |
-| `esbuild` | 12.9 MB | 0.02ms | HIT |
-| `kcl_wasm_lib` | 14.2 MB | 1.24ms | HIT |
+| Module                     | Wire Bytes | Cache Lookup | Status |
+| -------------------------- | ---------- | ------------ | ------ |
+| `replicad_with_exceptions` | 22.2 MB    | 0.13ms       | HIT    |
+| `esbuild`                  | 12.9 MB    | 0.02ms       | HIT    |
+| `kcl_wasm_lib`             | 14.2 MB    | 1.24ms       | HIT    |
 
 ### 8.3 Where the 131ms Goes
 
 Despite cache hits, two costs are inherent per-worker-creation:
 
 **`wasm.compile` (79ms)** — Streaming pipeline overhead:
+
 - **55ms**: Fetching 22 MB through Chrome's Mojo data pipe, even from the
   HTTP disk cache. The data physically flows through the IPC pipeline;
   `compileStreaming(fetch(url))` cannot short-circuit before the fetch
@@ -454,6 +471,7 @@ Despite cache hits, two costs are inherent per-worker-creation:
 
 **`wasm.emscripten-init` (44ms, 37ms self-time)** — Emscripten runtime
 bootstrap:
+
 - **4-5ms**: `wasm.instantiate` — allocating linear memory, linking imports.
 - **~37ms**: Emscripten runtime initialization — C++ global constructors
   for OpenCASCADE, virtual filesystem setup, `GrowMemory` calls. This is
@@ -552,11 +570,11 @@ the first render is faster since all caches are warm.
 
 Each Web Worker has its own V8 isolate. WASM caching operates at two levels:
 
-| Cache Level | Scope | Survives Worker Termination | Lookup Cost |
-|---|---|---|---|
-| **NativeModuleCache** | Renderer process | **Yes** (process-level) | 0.02-1.3ms |
-| **GeneratedCodeCache** (disk) | Profile / origin | **Yes** (disk) | 3-11ms (deserialize) |
-| **Compiled instance** (in-isolate) | Worker isolate | **No** | 0ms (already loaded) |
+| Cache Level                        | Scope            | Survives Worker Termination | Lookup Cost          |
+| ---------------------------------- | ---------------- | --------------------------- | -------------------- |
+| **NativeModuleCache**              | Renderer process | **Yes** (process-level)     | 0.02-1.3ms           |
+| **GeneratedCodeCache** (disk)      | Profile / origin | **Yes** (disk)              | 3-11ms (deserialize) |
+| **Compiled instance** (in-isolate) | Worker isolate   | **No**                      | 0ms (already loaded) |
 
 When a worker is terminated and recreated, the in-isolate compiled instance
 is lost. V8 must deserialize from disk cache (3-11ms) or NativeModuleCache
@@ -579,12 +597,12 @@ guide (Thomas Steiner, reviewed by V8/Chrome engineers Andreas Haas, Jakob
 Kummerow, Deepti Gandluri) presents an escalating series of worker+WASM
 patterns:
 
-| Pattern | Approach | Our Status |
-|---|---|---|
-| Bad | Worker compiles on-demand, racy messages | N/A |
-| Better | Worker compiles on startup, stores promise | **Current** |
-| **Good** | Main thread compiles once, transfers `Module` to worker via `postMessage` | **Recommended** |
-| **Perfect** | Same as Good, worker inlined as `blob:` URL | Optional |
+| Pattern     | Approach                                                                  | Our Status      |
+| ----------- | ------------------------------------------------------------------------- | --------------- |
+| Bad         | Worker compiles on-demand, racy messages                                  | N/A             |
+| Better      | Worker compiles on startup, stores promise                                | **Current**     |
+| **Good**    | Main thread compiles once, transfers `Module` to worker via `postMessage` | **Recommended** |
+| **Perfect** | Same as Good, worker inlined as `blob:` URL                               | Optional        |
 
 The "Good" pattern directly maps to our Strategy 2. Key quote:
 
@@ -612,7 +630,7 @@ confirmed in V8 source (`src/wasm/wasm-engine.cc`):
 - This explains our trace findings: NativeModuleCache hits at 0.02-1.3ms
   even after worker termination. The bottleneck is not recompilation — it is
   the `compileStreaming(fetch())` streaming pipeline overhead (55ms Mojo IPC
-  + 20ms finalization) that runs before the cache is consulted.
+  - 20ms finalization) that runs before the cache is consulted.
 
 **Key implication**: transferring a `WebAssembly.Module` via `postMessage`
 bypasses the entire streaming pipeline. The receiving worker calls
@@ -660,7 +678,7 @@ Emscripten [officially documents](https://emscripten.org/docs/api_reference/modu
 pre-compiled modules:
 
 ```javascript
-Module['instantiateWasm'] = function(imports, successCallback) {
+Module['instantiateWasm'] = function (imports, successCallback) {
   var instance = new WebAssembly.Instance(precompiledModule, imports);
   successCallback(instance);
   return instance.exports;
@@ -708,7 +726,7 @@ The [esm-integration proposal](https://github.com/WebAssembly/esm-integration)
 (Phase 3) will eventually allow static WASM imports:
 
 ```javascript
-import { run } from "./module.wasm";
+import { run } from './module.wasm';
 ```
 
 Mozilla's [February 2026 blog post](https://hacks.mozilla.org/2026/02/making-webassembly-a-first-class-language-on-the-web/)
@@ -719,21 +737,21 @@ this is not yet available in browsers and does not help short-term.
 
 ### 9.8 Strategies Ruled Out by Research
 
-| Strategy | Reason |
-|---|---|
-| IndexedDB `WebAssembly.Module` cache | Deprecated, being removed from browsers |
-| Sharing `WebAssembly.Instance` via `postMessage` | Instances are not structured-cloneable |
-| `SharedArrayBuffer` for WASM memory | Does not help with compilation overhead; adds COOP/COEP header requirements |
-| `WebAssembly.compile(arrayBuffer)` for code caching | V8 only code-caches from `compileStreaming`, not `compile()` |
+| Strategy                                            | Reason                                                                      |
+| --------------------------------------------------- | --------------------------------------------------------------------------- |
+| IndexedDB `WebAssembly.Module` cache                | Deprecated, being removed from browsers                                     |
+| Sharing `WebAssembly.Instance` via `postMessage`    | Instances are not structured-cloneable                                      |
+| `SharedArrayBuffer` for WASM memory                 | Does not help with compilation overhead; adds COOP/COEP header requirements |
+| `WebAssembly.compile(arrayBuffer)` for code caching | V8 only code-caches from `compileStreaming`, not `compile()`                |
 
 ### 9.9 Validated Strategy Ranking
 
-| Strategy | Savings | Industry Validation | Status |
-|---|---|---|---|
-| **Within-build worker pooling** | Full WASM init avoided per render | PSPDFKit object pooling, web.dev "permanent worker" | **Already implemented** |
-| **Cross-build worker pooling** (Strategy 1) | ~56ms per project switch | PSPDFKit object pooling | Future (low priority) |
-| **Pre-warm at app startup** (Strategy 3) | First-load latency | web.dev `<link rel="preload">` | Future (low-cost complement) |
-| **Transfer pre-compiled Module** (Strategy 2) | ~20-30ms theoretical | web.dev "Good/Perfect" pattern | **Deferred** (see below) |
+| Strategy                                      | Savings                           | Industry Validation                                 | Status                       |
+| --------------------------------------------- | --------------------------------- | --------------------------------------------------- | ---------------------------- |
+| **Within-build worker pooling**               | Full WASM init avoided per render | PSPDFKit object pooling, web.dev "permanent worker" | **Already implemented**      |
+| **Cross-build worker pooling** (Strategy 1)   | ~56ms per project switch          | PSPDFKit object pooling                             | Future (low priority)        |
+| **Pre-warm at app startup** (Strategy 3)      | First-load latency                | web.dev `<link rel="preload">`                      | Future (low-cost complement) |
+| **Transfer pre-compiled Module** (Strategy 2) | ~20-30ms theoretical              | web.dev "Good/Perfect" pattern                      | **Deferred** (see below)     |
 
 **Current state**: The application already keeps workers alive within a
 build session. File changes, parameter changes, and re-renders all reuse
@@ -781,6 +799,7 @@ file changes, parameter changes, and re-renders. The ~56ms WASM init cost
 build session, not per render.
 
 Two low-priority future improvements exist:
+
 1. **Cross-build worker pooling** — keep workers alive when navigating between
    projects that use the same kernel type. Saves ~56ms per project switch,
    but this is an infrequent navigation event and the cost is small relative

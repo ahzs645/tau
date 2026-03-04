@@ -21,7 +21,7 @@ From the [TypeScript Handbook — Conditional Types](https://www.typescriptlang.
 > to perform overload resolution based on a list of argument types.
 
 This is documented in the official handbook under
-*"Inferring Within Conditional Types"* and is a fundamental architectural
+_"Inferring Within Conditional Types"_ and is a fundamental architectural
 constraint, not a bug. The related GitHub issue
 ([microsoft/TypeScript#28789](https://github.com/microsoft/TypeScript/issues/28789))
 was closed as **by design** and locked as **resolved**.
@@ -34,12 +34,12 @@ extracts the **last** overload signature.
 
 ```typescript
 type ReadFileFn = {
-  (path: string, encoding: 'utf8'): Promise<string>;       // ← ignored by infer
-  (path: string): Promise<Uint8Array<ArrayBuffer>>;         // ← only this is seen
+  (path: string, encoding: 'utf8'): Promise<string>; // ← ignored by infer
+  (path: string): Promise<Uint8Array<ArrayBuffer>>; // ← only this is seen
 };
 
-type P = Parameters<ReadFileFn>;  // [path: string]  (missing encoding overload)
-type R = ReturnType<ReadFileFn>;  // Promise<Uint8Array<ArrayBuffer>>
+type P = Parameters<ReadFileFn>; // [path: string]  (missing encoding overload)
+type R = ReturnType<ReadFileFn>; // Promise<Uint8Array<ArrayBuffer>>
 ```
 
 ---
@@ -78,16 +78,16 @@ type FileSystem = {
 };
 ```
 
-| Aspect                     | Rating |
-|----------------------------|--------|
-| Call-site DX               | ★★★★★ — perfect narrowing, no casts needed |
-| `Parameters<T>` compat    | ✗ — only last overload extracted |
-| `ReturnType<T>` compat    | ✗ — only last overload extracted |
-| Mock assignability         | ✗ — `Mock<T>` misses overloads |
-| Exponential growth risk    | ✗ — each new param variant doubles signatures |
+| Aspect                  | Rating                                        |
+| ----------------------- | --------------------------------------------- |
+| Call-site DX            | ★★★★★ — perfect narrowing, no casts needed    |
+| `Parameters<T>` compat  | ✗ — only last overload extracted              |
+| `ReturnType<T>` compat  | ✗ — only last overload extracted              |
+| Mock assignability      | ✗ — `Mock<T>` misses overloads                |
+| Exponential growth risk | ✗ — each new param variant doubles signatures |
 
 **Best for:** Public APIs consumed by humans, where call-site ergonomics
-outweigh generic-utility compat. *(This is our `KernelFileSystemBase` case.)*
+outweigh generic-utility compat. _(This is our `KernelFileSystemBase` case.)_
 
 ### 2. Conditional Return Type (generic single signature)
 
@@ -100,13 +100,13 @@ type FileSystem = {
 };
 ```
 
-| Aspect                     | Rating |
-|----------------------------|--------|
-| Call-site DX               | ★★★★★ — same narrowing as overloads |
-| `Parameters<T>` compat    | ★★★★ — extracts widened params from single signature |
-| `ReturnType<T>` compat    | ★★★ — returns union (`string \| Uint8Array`) |
-| Mock assignability         | ★★★ — widened return means mock is still not a perfect subtype |
-| Exponential growth risk    | ✓ — single signature handles all combinations |
+| Aspect                  | Rating                                                         |
+| ----------------------- | -------------------------------------------------------------- |
+| Call-site DX            | ★★★★★ — same narrowing as overloads                            |
+| `Parameters<T>` compat  | ★★★★ — extracts widened params from single signature           |
+| `ReturnType<T>` compat  | ★★★ — returns union (`string \| Uint8Array`)                   |
+| Mock assignability      | ★★★ — widened return means mock is still not a perfect subtype |
+| Exponential growth risk | ✓ — single signature handles all combinations                  |
 
 **Best for:** Library internals that need to compose with generics, wrappers,
 or type-level transforms. Good when you want one signature and don't need
@@ -125,13 +125,13 @@ type FileSystem = {
 };
 ```
 
-| Aspect                     | Rating |
-|----------------------------|--------|
-| Call-site DX               | ★★ — always returns union, callers must narrow |
-| `Parameters<T>` compat    | ★★★★★ |
-| `ReturnType<T>` compat    | ★★★★★ |
-| Mock assignability         | ★★★★★ — perfect match |
-| Exponential growth risk    | ✓ |
+| Aspect                  | Rating                                         |
+| ----------------------- | ---------------------------------------------- |
+| Call-site DX            | ★★ — always returns union, callers must narrow |
+| `Parameters<T>` compat  | ★★★★★                                          |
+| `ReturnType<T>` compat  | ★★★★★                                          |
+| Mock assignability      | ★★★★★ — perfect match                          |
+| Exponential growth risk | ✓                                              |
 
 **Best for:** Internal helper functions where the return type is immediately
 consumed and narrowed by the caller.
@@ -220,7 +220,7 @@ const filesystem = createMockFileSystem();
 // filesystem.mocks.readFile gives access to the vi.fn() for assertions ✓
 
 const plugin = createZenFsPlugin({
-  filesystem,                                // no assertion needed
+  filesystem, // no assertion needed
   moduleManager: new ModuleManager(filesystem), // no assertion needed
 });
 

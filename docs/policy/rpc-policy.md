@@ -97,13 +97,13 @@ const fs = createKernelFileSystem({ ...base, readFiles: optimizedBatchRead }); /
 
 Factory functions that create `KernelFileSystemBase` from various sources. Each normalizes a different source API into the 11-primitive contract.
 
-| Constructor | Source | Use Case |
-|---|---|---|
-| `fromNodeFS(basePath)` | Node.js `fs.promises` | CLI tools, benchmarks, SSR, tests |
-| `fromMemoryFS(files?)` | In-memory Map | Inline code rendering, unit tests |
+| Constructor                     | Source                         | Use Case                                                   |
+| ------------------------------- | ------------------------------ | ---------------------------------------------------------- |
+| `fromNodeFS(basePath)`          | Node.js `fs.promises`          | CLI tools, benchmarks, SSR, tests                          |
+| `fromMemoryFS(files?)`          | In-memory Map                  | Inline code rendering, unit tests                          |
 | `fromFsLike(fsLike, rootPath?)` | Any `{ promises: ... }` object | ZenFS, BrowserFS, memfs, or any fs.promises-compatible API |
 
-**Naming convention:** All constructors use the `from*` prefix per the library API policy. The name describes *what the source is*, not *what library it comes from*.
+**Naming convention:** All constructors use the `from*` prefix per the library API policy. The name describes _what the source is_, not _what library it comes from_.
 
 #### `fromNodeFS` vs `fromFsLike`: why both exist
 
@@ -134,19 +134,19 @@ Every request carries a monotonically increasing `id`. The server dispatches by 
 
 #### Primitives
 
-| Function | Level | Purpose |
-|---|---|---|
-| `createBridgeServer(handlers, port)` | Low | Serve an object's methods over a MessagePort |
-| `createBridgePort(handlers)` | Low | Convenience: createBridgeServer + MessageChannel |
-| `createBridgeCall(port)` | Low | Generic RPC client: `{ call, dispose }` |
-| `createBridgeProxy<T>(port)` | Low | Generic `Proxy`-based RPC client for any protocol type |
-| `catchMessages(port)` | Low | Buffer incoming messages during initialization, replay on demand |
-| `extractTransferables(value)` | Low | Walk nested values and collect `ArrayBuffer` transferables (de-duplicated) |
-| `createKernelFileSystem(base)` | Mid | Wrap `KernelFileSystemBase` with default enhanced method implementations |
-| `exposeFileSystem(handlers, options?)` | High | Worker-side: listen for incoming bridge ports |
-| `createFileSystemBridge(worker, options?)` | High | Main-thread: create channel + transfer port to worker |
+| Function                                   | Level | Purpose                                                                    |
+| ------------------------------------------ | ----- | -------------------------------------------------------------------------- |
+| `createBridgeServer(handlers, port)`       | Low   | Serve an object's methods over a MessagePort                               |
+| `createBridgePort(handlers)`               | Low   | Convenience: createBridgeServer + MessageChannel                           |
+| `createBridgeCall(port)`                   | Low   | Generic RPC client: `{ call, dispose }`                                    |
+| `createBridgeProxy<T>(port)`               | Low   | Generic `Proxy`-based RPC client for any protocol type                     |
+| `catchMessages(port)`                      | Low   | Buffer incoming messages during initialization, replay on demand           |
+| `extractTransferables(value)`              | Low   | Walk nested values and collect `ArrayBuffer` transferables (de-duplicated) |
+| `createKernelFileSystem(base)`             | Mid   | Wrap `KernelFileSystemBase` with default enhanced method implementations   |
+| `exposeFileSystem(handlers, options?)`     | High  | Worker-side: listen for incoming bridge ports                              |
+| `createFileSystemBridge(worker, options?)` | High  | Main-thread: create channel + transfer port to worker                      |
 
-**Naming split:** Generic bridge primitives use the `Bridge` prefix. Filesystem-typed functions use the `FileSystem` prefix. This distinction is intentional: `createBridgeServer` serves *any* object (generic `<T extends Record<string, unknown>>`), while `createBridgeProxy<KernelFileSystemBase>` returns a typed filesystem proxy.
+**Naming split:** Generic bridge primitives use the `Bridge` prefix. Filesystem-typed functions use the `FileSystem` prefix. This distinction is intentional: `createBridgeServer` serves _any_ object (generic `<T extends Record<string, unknown>>`), while `createBridgeProxy<KernelFileSystemBase>` returns a typed filesystem proxy.
 
 #### High-Level Wrappers: expose/bridge pair
 
@@ -169,8 +169,8 @@ The `KernelClient.connect()` method accepts two shapes, representing different a
 
 ```typescript
 type ConnectOptions =
-  | { fileSystem: KernelFileSystem }  // main-thread relay
-  | { port: MessagePort };            // direct bridge
+  | { fileSystem: KernelFileSystem } // main-thread relay
+  | { port: MessagePort }; // direct bridge
 ```
 
 ### Main-thread relay: `{ fileSystem }`
@@ -178,7 +178,10 @@ type ConnectOptions =
 The client creates a `MessageChannel` internally, serves the filesystem via `createBridgeServer` on `port1`, and transfers `port2` to the kernel worker. Simple but adds one hop: kernel worker → main thread → filesystem implementation.
 
 ```typescript
-const client = createKernelClient({ kernels: [replicad()], fileSystem: fromMemoryFS(files) });
+const client = createKernelClient({
+  kernels: [replicad()],
+  fileSystem: fromMemoryFS(files),
+});
 ```
 
 ### Direct bridge: `{ port }`
@@ -192,10 +195,10 @@ await client.connect({ port });
 
 **When to use which:**
 
-| Mode | Latency | Setup | Use Case |
-|---|---|---|---|
-| `{ fileSystem }` | +1 hop (main thread relay) | Zero config | CLI, tests, benchmarks, inline code |
-| `{ port }` | Direct worker-to-worker | Manual bridge setup | Browser app with dedicated FS worker |
+| Mode             | Latency                    | Setup               | Use Case                             |
+| ---------------- | -------------------------- | ------------------- | ------------------------------------ |
+| `{ fileSystem }` | +1 hop (main thread relay) | Zero config         | CLI, tests, benchmarks, inline code  |
+| `{ port }`       | Direct worker-to-worker    | Manual bridge setup | Browser app with dedicated FS worker |
 
 ## Subpath Export Structure
 
@@ -213,7 +216,7 @@ The main entry exports constructors because they're the most common consumer nee
 
 The kernels package must be completely decoupled from ZenFS. The package provides a `node:fs`-compatible interface (`KernelFileSystem`) and constructors that normalize various fs implementations into that interface. No ZenFS types, imports, or naming should appear in the public API.
 
-**Current state:** Completed. `fromZenFS` and `ZenFSLike` have been renamed to `fromFsLike` and `FsLike` respectively. The function accepts *any* object with a `promises` namespace -- not just ZenFS. The dead `fromProxy` code from the Comlink era has been removed.
+**Current state:** Completed. `fromZenFS` and `ZenFSLike` have been renamed to `fromFsLike` and `FsLike` respectively. The function accepts _any_ object with a `promises` namespace -- not just ZenFS. The dead `fromProxy` code from the Comlink era has been removed.
 
 **Exception:** Test utilities (`kernel-testing.utils.ts`) may import ZenFS directly as a concrete implementation for testing. This is acceptable because test utilities are not consumer-facing API.
 
@@ -231,9 +234,9 @@ The kernels package must be completely decoupled from ZenFS. The package provide
 
 5. **Initialization safety.** `catchMessages(port)` buffers incoming messages until the server is ready, then replays them. This prevents lost requests during worker initialization.
 
-4. **One serialization point per browser tab.** In the browser, all filesystem mutations flow through a single file-manager worker with a serialization queue. The bridge primitives enable multiple consumers (kernel workers, git, main thread) to connect to this single worker. This prevents the ZenFS TOCTOU race condition documented in `zen-fs/core#256`.
+6. **One serialization point per browser tab.** In the browser, all filesystem mutations flow through a single file-manager worker with a serialization queue. The bridge primitives enable multiple consumers (kernel workers, git, main thread) to connect to this single worker. This prevents the ZenFS TOCTOU race condition documented in `zen-fs/core#256`.
 
-5. **Errors propagate with full context.** `BridgeError` preserves the worker-side error's name, stack trace, errno code, and metadata. The consumer-side proxy reconstructs a proper `Error` object, so `catch` blocks and error boundaries work naturally.
+7. **Errors propagate with full context.** `BridgeError` preserves the worker-side error's name, stack trace, errno code, and metadata. The consumer-side proxy reconstructs a proper `Error` object, so `catch` blocks and error boundaries work naturally.
 
 ## Naming Rationale
 

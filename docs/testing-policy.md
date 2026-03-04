@@ -48,16 +48,16 @@ Use `it('should <verb> <outcome> [when <condition>]')` for consistency.
 
 ```typescript
 // Good
-it('should reject pending calls when disposed')
-it('should skip fetch for recently failed packages')
-it('should preserve error name across the bridge')
+it('should reject pending calls when disposed');
+it('should skip fetch for recently failed packages');
+it('should preserve error name across the bridge');
 
 // Avoid: imperative without "should"
-it('renders single-key code object')  // unclear what's being asserted
+it('renders single-key code object'); // unclear what's being asserted
 
 // Avoid: vague
-it('works correctly')
-it('handles errors')
+it('works correctly');
+it('handles errors');
 ```
 
 Nest `describe` blocks by feature or scenario:
@@ -199,8 +199,8 @@ it('should not mutate the original array', async () => {
 
   const result = transform(original);
 
-  expect(original).toEqual(originalCopy);  // input unchanged
-  expect(result).not.toBe(original);       // new reference
+  expect(original).toEqual(originalCopy); // input unchanged
+  expect(result).not.toBe(original); // new reference
 });
 ```
 
@@ -237,14 +237,14 @@ expect(result.data[0]).toEqual(
 
 ## 10. Test File Organization
 
-| Convention | Pattern |
-|-----------|---------|
-| Placement | `*.test.ts` co-located next to the source file |
-| Imports | `import { describe, it, expect, vi } from 'vitest'` |
-| Top `describe` | Module or unit under test |
-| Nested `describe` | Feature, scenario, or behavior group |
-| Section comments | Use `// ===` separators for large test files |
-| Shared helpers | Place in `testing/` directory with explicit exports |
+| Convention        | Pattern                                             |
+| ----------------- | --------------------------------------------------- |
+| Placement         | `*.test.ts` co-located next to the source file      |
+| Imports           | `import { describe, it, expect, vi } from 'vitest'` |
+| Top `describe`    | Module or unit under test                           |
+| Nested `describe` | Feature, scenario, or behavior group                |
+| Section comments  | Use `// ===` separators for large test files        |
+| Shared helpers    | Place in `testing/` directory with explicit exports |
 
 ## Summary Checklist
 

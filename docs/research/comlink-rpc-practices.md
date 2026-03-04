@@ -11,7 +11,7 @@
 
 ### The Problem
 
-JavaScript's Promise resolution mechanism checks if a resolved value has a `.then` method. A catch-all Proxy `get` trap returns a function for *any* property — including `then` — making the Proxy look like a thenable. When `resolve(proxy)` is called, the engine invokes `proxy.then(resolve, reject)`, which in an RPC proxy sends the `resolve`/`reject` **functions** over the MessagePort. Functions are not structured-clonable, causing a `DataCloneError` and a permanently pending Promise.
+JavaScript's Promise resolution mechanism checks if a resolved value has a `.then` method. A catch-all Proxy `get` trap returns a function for _any_ property — including `then` — making the Proxy look like a thenable. When `resolve(proxy)` is called, the engine invokes `proxy.then(resolve, reject)`, which in an RPC proxy sends the `resolve`/`reject` **functions** over the MessagePort. Functions are not structured-clonable, causing a `DataCloneError` and a permanently pending Promise.
 
 This is the exact bug we encountered: `readBackendFileTree` would call `getReadiedWorker()`, the Promise would resolve with the bridge proxy, but the `await` continuation never ran because `Promise.resolve(proxy)` triggered `proxy.then(...)` which silently failed.
 
@@ -21,12 +21,12 @@ Comlink uses a path-based proxy (each property access appends to a path array). 
 
 ```javascript
 // Root proxy (path.length === 0): make it non-thenable
-if (prop === "then") {
+if (prop === 'then') {
   if (path.length === 0) {
     return { then: () => proxy };
   }
   // Non-root: forward as a real GET then bind the result
-  const r = requestResponseMessage(ep, { type: "GET", path }).then(fromWireValue);
+  const r = requestResponseMessage(ep, { type: 'GET', path }).then(fromWireValue);
   return r.then.bind(r);
 }
 ```
@@ -82,10 +82,13 @@ We use **automatic detection** via `extractTransferables()`:
 export function extractTransferables(value: unknown): Transferable[] {
   const seen = new Set<ArrayBuffer>();
   function walk(v: unknown): void {
-    if (v instanceof ArrayBuffer) { seen.add(v); }
-    else if (ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer) { seen.add(v.buffer); }
-    else if (Array.isArray(v)) { for (const item of v) walk(item); }
-    else if (v !== null && typeof v === 'object') {
+    if (v instanceof ArrayBuffer) {
+      seen.add(v);
+    } else if (ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer) {
+      seen.add(v.buffer);
+    } else if (Array.isArray(v)) {
+      for (const item of v) walk(item);
+    } else if (v !== null && typeof v === 'object') {
       for (const prop of Object.values(v)) walk(prop);
     }
   }
@@ -105,15 +108,15 @@ This recursively walks values and collects `ArrayBuffer` instances. It handles:
 
 Our walker only finds `ArrayBuffer`. Other transferable types are not detected:
 
-| Type | Transferable? | Detected? | Used in our code? |
-|------|:---:|:---:|:---:|
-| `ArrayBuffer` | Yes | Yes | Yes |
-| `MessagePort` | Yes | No | No (transferred manually) |
-| `ImageBitmap` | Yes | No | No |
-| `OffscreenCanvas` | Yes | No | No |
-| `ReadableStream` | Yes | No | No |
-| `WritableStream` | Yes | No | No |
-| `TransformStream` | Yes | No | No |
+| Type              | Transferable? | Detected? |     Used in our code?     |
+| ----------------- | :-----------: | :-------: | :-----------------------: |
+| `ArrayBuffer`     |      Yes      |    Yes    |            Yes            |
+| `MessagePort`     |      Yes      |    No     | No (transferred manually) |
+| `ImageBitmap`     |      Yes      |    No     |            No             |
+| `OffscreenCanvas` |      Yes      |    No     |            No             |
+| `ReadableStream`  |      Yes      |    No     |            No             |
+| `WritableStream`  |      Yes      |    No     |            No             |
+| `TransformStream` |      Yes      |    No     |            No             |
 
 ### Verdict
 
@@ -239,14 +242,14 @@ dispose() {
 
 Comlink uses a rich protocol with multiple message types:
 
-| Type | Purpose |
-|------|---------|
-| `GET` | Read a property by path |
-| `SET` | Write a property by path |
-| `APPLY` | Call a function with arguments |
-| `CONSTRUCT` | `new` a constructor |
-| `ENDPOINT` | Create a new dedicated channel |
-| `RELEASE` | Release resources |
+| Type        | Purpose                        |
+| ----------- | ------------------------------ |
+| `GET`       | Read a property by path        |
+| `SET`       | Write a property by path       |
+| `APPLY`     | Call a function with arguments |
+| `CONSTRUCT` | `new` a constructor            |
+| `ENDPOINT`  | Create a new dedicated channel |
+| `RELEASE`   | Release resources              |
 
 Request IDs are UUID strings (`"a1b2-c3d4-e5f6-g7h8"`).
 
@@ -273,23 +276,23 @@ type BridgeResponse = { id: number; result?: unknown; error?: BridgeError };
 
 ### Comlink's Approach
 
-| Trap / Property | Handling |
-|-----------------|----------|
-| `then` | Non-thenable at root; bound `.then` for non-root |
-| `bind` | Ignored; returns parent proxy |
-| `apply` | Sends `APPLY` message |
-| `construct` | Sends `CONSTRUCT` message |
-| `set` | Sends `SET` message (returns Promise, not boolean) |
+| Trap / Property     | Handling                                                    |
+| ------------------- | ----------------------------------------------------------- |
+| `then`              | Non-thenable at root; bound `.then` for non-root            |
+| `bind`              | Ignored; returns parent proxy                               |
+| `apply`             | Sends `APPLY` message                                       |
+| `construct`         | Sends `CONSTRUCT` message                                   |
+| `set`               | Sends `SET` message (returns Promise, not boolean)          |
 | `Symbol(...)` paths | Stringified; symbols not properly supported across boundary |
 
 ### Our Approach
 
-| Trap / Property | Handling |
-|-----------------|----------|
-| `then` | Returns `undefined` |
-| `dispose` | Returns the dispose function |
-| All other strings | Returns async bridge-call function |
-| Symbols | Not handled (returns bridge-call function) |
+| Trap / Property   | Handling                                   |
+| ----------------- | ------------------------------------------ |
+| `then`            | Returns `undefined`                        |
+| `dispose`         | Returns the dispose function               |
+| All other strings | Returns async bridge-call function         |
+| Symbols           | Not handled (returns bridge-call function) |
 
 ### What We're Missing
 
@@ -328,9 +331,11 @@ When a `proxy()`-marked value is serialized:
 This enables patterns like:
 
 ```javascript
-await remoteWorker.subscribe(Comlink.proxy((data) => {
-  console.log('Got data:', data);
-}));
+await remoteWorker.subscribe(
+  Comlink.proxy((data) => {
+    console.log('Got data:', data);
+  }),
+);
 ```
 
 ### Our Approach
@@ -393,7 +398,10 @@ try {
   port.postMessage(response, transferables);
 } catch (postError) {
   console.error(`[BridgeServer] postMessage failed for method '${method}':`, postError);
-  const cloneSafe = structuredClone({ id, result: undefined }) satisfies BridgeResponse;
+  const cloneSafe = structuredClone({
+    id,
+    result: undefined,
+  }) satisfies BridgeResponse;
   port.postMessage(cloneSafe);
 }
 ```
@@ -424,23 +432,23 @@ We use per-call `setTimeout` (30 seconds). On timeout, the pending entry is remo
 
 ## Summary Comparison Table
 
-| Area | Comlink | Our Bridge | Status |
-|------|---------|------------|--------|
-| Thenable prevention | `{ then: () => proxy }` | `return undefined` | Equivalent |
-| Transferables | Explicit `transfer()` | Auto-detect `ArrayBuffer` | Sufficient |
-| Error serialization | `message`, `name`, `stack` | + `code`, `metadata` | Better |
-| Non-Error throws | Preserved as-is | Stringified | Minor gap |
-| Clone failure handling | Sends `TypeError` | Sends `undefined` | **Gap** |
-| Released proxy guard | Throws on use after release | No guard | **Gap** |
-| GC-based cleanup | `FinalizationRegistry` | Not implemented | Minor gap |
-| Server-side cleanup | `RELEASE` message + `finalizer` | Not implemented | Low priority |
-| Protocol richness | GET/SET/APPLY/CONSTRUCT | Method calls only | Sufficient |
-| Callback support | Via `proxy()` + MessageChannel | Not supported | Acceptable |
-| Special proxy traps | `then`, `bind` | `then`, `dispose` | Minor gap |
-| Symbol properties | Stringified (broken) | Not handled | Minor gap |
-| Timeout mechanism | None (relies on GC) | 30s per call | Better |
-| Endpoint abstraction | Worker/MessagePort/Window/Node | MessagePort only | Sufficient |
-| Origin validation | Configurable allowlist | Not needed (MessagePort) | N/A |
+| Area                   | Comlink                         | Our Bridge                | Status       |
+| ---------------------- | ------------------------------- | ------------------------- | ------------ |
+| Thenable prevention    | `{ then: () => proxy }`         | `return undefined`        | Equivalent   |
+| Transferables          | Explicit `transfer()`           | Auto-detect `ArrayBuffer` | Sufficient   |
+| Error serialization    | `message`, `name`, `stack`      | + `code`, `metadata`      | Better       |
+| Non-Error throws       | Preserved as-is                 | Stringified               | Minor gap    |
+| Clone failure handling | Sends `TypeError`               | Sends `undefined`         | **Gap**      |
+| Released proxy guard   | Throws on use after release     | No guard                  | **Gap**      |
+| GC-based cleanup       | `FinalizationRegistry`          | Not implemented           | Minor gap    |
+| Server-side cleanup    | `RELEASE` message + `finalizer` | Not implemented           | Low priority |
+| Protocol richness      | GET/SET/APPLY/CONSTRUCT         | Method calls only         | Sufficient   |
+| Callback support       | Via `proxy()` + MessageChannel  | Not supported             | Acceptable   |
+| Special proxy traps    | `then`, `bind`                  | `then`, `dispose`         | Minor gap    |
+| Symbol properties      | Stringified (broken)            | Not handled               | Minor gap    |
+| Timeout mechanism      | None (relies on GC)             | 30s per call              | Better       |
+| Endpoint abstraction   | Worker/MessagePort/Window/Node  | MessagePort only          | Sufficient   |
+| Origin validation      | Configurable allowlist          | Not needed (MessagePort)  | N/A          |
 
 ---
 
@@ -460,7 +468,10 @@ port.postMessage(cloneSafe);
 // Fixed:
 port.postMessage({
   id,
-  error: { message: `Return value for '${method}' could not be cloned`, name: 'TypeError' },
+  error: {
+    message: `Return value for '${method}' could not be cloned`,
+    name: 'TypeError',
+  },
 } satisfies BridgeResponse);
 ```
 

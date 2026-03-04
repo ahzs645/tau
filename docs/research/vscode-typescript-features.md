@@ -22,6 +22,7 @@ VSCode's TypeScript support is split across two layers:
 ### 1. Monaco Editor's Built-in TypeScript Support
 
 Monaco Editor bundles a TypeScript language worker that provides:
+
 - Syntax highlighting (tokenization)
 - Basic diagnostics
 - Completions
@@ -34,6 +35,7 @@ This is accessed via `monaco.languages.typescript.typescriptDefaults` API.
 ### 2. VSCode TypeScript Extension
 
 Located in `extensions/typescript-language-features/`, this extension provides full IDE features by:
+
 - Spawning a `tsserver` process (TypeScript's language server)
 - Communicating via JSON-RPC protocol
 - Registering VSCode language providers that delegate to tsserver
@@ -69,73 +71,73 @@ Request Queue → tsserver Process → Response → Callback → Provider → Ed
 
 ### Navigation Features
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Go to Definition | `definitions.ts` | `definitionAndBoundSpan` | `registerDefinitionProvider` |
-| Go to Type Definition | `typeDefinitions.ts` | `typeDefinition` | `registerTypeDefinitionProvider` |
-| Go to Implementation | `implementations.ts` | `implementation` | `registerImplementationProvider` |
-| Go to Source Definition | `sourceDefinition.ts` | `findSourceDefinition` | Command-based |
-| Find All References | `references.ts` | `references` | `registerReferenceProvider` |
-| File References | `fileReferences.ts` | N/A | Command-based |
+| Feature                 | VSCode File           | tsserver Command         | Monaco API                       |
+| ----------------------- | --------------------- | ------------------------ | -------------------------------- |
+| Go to Definition        | `definitions.ts`      | `definitionAndBoundSpan` | `registerDefinitionProvider`     |
+| Go to Type Definition   | `typeDefinitions.ts`  | `typeDefinition`         | `registerTypeDefinitionProvider` |
+| Go to Implementation    | `implementations.ts`  | `implementation`         | `registerImplementationProvider` |
+| Go to Source Definition | `sourceDefinition.ts` | `findSourceDefinition`   | Command-based                    |
+| Find All References     | `references.ts`       | `references`             | `registerReferenceProvider`      |
+| File References         | `fileReferences.ts`   | N/A                      | Command-based                    |
 
 ### Hover and Information
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Hover Information | `hover.ts` | `quickinfo` | `registerHoverProvider` |
-| Signature Help | `signatureHelp.ts` | `signatureHelp` | `registerSignatureHelpProvider` |
+| Feature           | VSCode File        | tsserver Command | Monaco API                      |
+| ----------------- | ------------------ | ---------------- | ------------------------------- |
+| Hover Information | `hover.ts`         | `quickinfo`      | `registerHoverProvider`         |
+| Signature Help    | `signatureHelp.ts` | `signatureHelp`  | `registerSignatureHelpProvider` |
 
 ### Completions
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Auto-completion | `completions.ts` | `completionInfo`, `completionDetails` | `registerCompletionItemProvider` |
-| JSDoc Completions | `jsDocCompletions.ts` | N/A | `registerCompletionItemProvider` |
-| Directive Comments | `directiveCommentCompletions.ts` | N/A | `registerCompletionItemProvider` |
+| Feature            | VSCode File                      | tsserver Command                      | Monaco API                       |
+| ------------------ | -------------------------------- | ------------------------------------- | -------------------------------- |
+| Auto-completion    | `completions.ts`                 | `completionInfo`, `completionDetails` | `registerCompletionItemProvider` |
+| JSDoc Completions  | `jsDocCompletions.ts`            | N/A                                   | `registerCompletionItemProvider` |
+| Directive Comments | `directiveCommentCompletions.ts` | N/A                                   | `registerCompletionItemProvider` |
 
 ### Refactoring and Code Actions
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Quick Fixes | `quickFix.ts` | `getCodeFixes` | `registerCodeActionProvider` |
-| Refactor Actions | `refactor.ts` | `getApplicableRefactors`, `getEditsForRefactor` | `registerCodeActionProvider` |
-| Organize Imports | `organizeImports.ts` | `organizeImports` | `registerCodeActionProvider` |
-| Fix All | `fixAll.ts` | `getCombinedCodeFix` | `registerCodeActionProvider` |
+| Feature          | VSCode File          | tsserver Command                                | Monaco API                   |
+| ---------------- | -------------------- | ----------------------------------------------- | ---------------------------- |
+| Quick Fixes      | `quickFix.ts`        | `getCodeFixes`                                  | `registerCodeActionProvider` |
+| Refactor Actions | `refactor.ts`        | `getApplicableRefactors`, `getEditsForRefactor` | `registerCodeActionProvider` |
+| Organize Imports | `organizeImports.ts` | `organizeImports`                               | `registerCodeActionProvider` |
+| Fix All          | `fixAll.ts`          | `getCombinedCodeFix`                            | `registerCodeActionProvider` |
 
 ### Rename
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Rename Symbol | `rename.ts` | `rename`, `getEditsForFileRename` | `registerRenameProvider` |
-| Update Paths on File Rename | `updatePathsOnRename.ts` | `getEditsForFileRename` | N/A |
+| Feature                     | VSCode File              | tsserver Command                  | Monaco API               |
+| --------------------------- | ------------------------ | --------------------------------- | ------------------------ |
+| Rename Symbol               | `rename.ts`              | `rename`, `getEditsForFileRename` | `registerRenameProvider` |
+| Update Paths on File Rename | `updatePathsOnRename.ts` | `getEditsForFileRename`           | N/A                      |
 
 ### Diagnostics
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Syntax Diagnostics | `diagnostics.ts` | `syntaxDiag` | Diagnostic markers |
-| Semantic Diagnostics | `diagnostics.ts` | `semanticDiag` | Diagnostic markers |
+| Feature                | VSCode File      | tsserver Command | Monaco API         |
+| ---------------------- | ---------------- | ---------------- | ------------------ |
+| Syntax Diagnostics     | `diagnostics.ts` | `syntaxDiag`     | Diagnostic markers |
+| Semantic Diagnostics   | `diagnostics.ts` | `semanticDiag`   | Diagnostic markers |
 | Suggestion Diagnostics | `diagnostics.ts` | `suggestionDiag` | Diagnostic markers |
 
 ### Code Lens
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| References Count | `codeLens/referencesCodeLens.ts` | `references` | `registerCodeLensProvider` |
+| Feature               | VSCode File                           | tsserver Command | Monaco API                 |
+| --------------------- | ------------------------------------- | ---------------- | -------------------------- |
+| References Count      | `codeLens/referencesCodeLens.ts`      | `references`     | `registerCodeLensProvider` |
 | Implementations Count | `codeLens/implementationsCodeLens.ts` | `implementation` | `registerCodeLensProvider` |
 
 ### Formatting
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Document Formatting | `formatting.ts` | `format` | `registerDocumentFormattingEditProvider` |
-| Range Formatting | `formatting.ts` | `format` | `registerDocumentRangeFormattingEditProvider` |
-| On-Type Formatting | `formatting.ts` | `formatonkey` | `registerOnTypeFormattingEditProvider` |
+| Feature             | VSCode File     | tsserver Command | Monaco API                                    |
+| ------------------- | --------------- | ---------------- | --------------------------------------------- |
+| Document Formatting | `formatting.ts` | `format`         | `registerDocumentFormattingEditProvider`      |
+| Range Formatting    | `formatting.ts` | `format`         | `registerDocumentRangeFormattingEditProvider` |
+| On-Type Formatting  | `formatting.ts` | `formatonkey`    | `registerOnTypeFormattingEditProvider`        |
 
 ### Semantic Highlighting
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
+| Feature         | VSCode File         | tsserver Command                      | Monaco API                               |
+| --------------- | ------------------- | ------------------------------------- | ---------------------------------------- |
 | Semantic Tokens | `semanticTokens.ts` | `encodedSemanticClassifications-full` | `registerDocumentSemanticTokensProvider` |
 
 **Token Types:** class, enum, interface, namespace, typeParameter, type, parameter, variable, enumMember, property, function, method
@@ -144,22 +146,22 @@ Request Queue → tsserver Process → Response → Callback → Provider → Ed
 
 ### Document Structure
 
-| Feature | VSCode File | tsserver Command | Monaco API |
-|---------|-------------|------------------|------------|
-| Document Symbols (Outline) | `documentSymbol.ts` | `navtree` | `registerDocumentSymbolProvider` |
-| Workspace Symbols | `workspaceSymbols.ts` | `navto` | `registerWorkspaceSymbolProvider` |
-| Folding Ranges | `folding.ts` | `getOutliningSpans` | `registerFoldingRangeProvider` |
-| Document Highlight | `documentHighlight.ts` | `documentHighlights` | `registerDocumentHighlightProvider` |
+| Feature                    | VSCode File            | tsserver Command     | Monaco API                          |
+| -------------------------- | ---------------------- | -------------------- | ----------------------------------- |
+| Document Symbols (Outline) | `documentSymbol.ts`    | `navtree`            | `registerDocumentSymbolProvider`    |
+| Workspace Symbols          | `workspaceSymbols.ts`  | `navto`              | `registerWorkspaceSymbolProvider`   |
+| Folding Ranges             | `folding.ts`           | `getOutliningSpans`  | `registerFoldingRangeProvider`      |
+| Document Highlight         | `documentHighlight.ts` | `documentHighlights` | `registerDocumentHighlightProvider` |
 
 ### Advanced Features
 
-| Feature | VSCode File | tsserver Command | Monaco API | Min TS Version |
-|---------|-------------|------------------|------------|----------------|
-| Call Hierarchy | `callHierarchy.ts` | `prepareCallHierarchy`, `provideCallHierarchy*` | `registerCallHierarchyProvider` | 3.8+ |
-| Inlay Hints | `inlayHints.ts` | `provideInlayHints` | `registerInlayHintsProvider` | 4.4+ |
-| Linked Editing (JSX tags) | `linkedEditing.ts` | `linkedEditingRange` | `registerLinkedEditingRangeProvider` | 5.1+ |
-| Smart Selection | `smartSelect.ts` | `selectionRange` | `registerSelectionRangeProvider` |
-| Tag Closing | `tagClosing.ts` | `jsxClosingTag` | N/A |
+| Feature                   | VSCode File        | tsserver Command                                | Monaco API                           | Min TS Version |
+| ------------------------- | ------------------ | ----------------------------------------------- | ------------------------------------ | -------------- |
+| Call Hierarchy            | `callHierarchy.ts` | `prepareCallHierarchy`, `provideCallHierarchy*` | `registerCallHierarchyProvider`      | 3.8+           |
+| Inlay Hints               | `inlayHints.ts`    | `provideInlayHints`                             | `registerInlayHintsProvider`         | 4.4+           |
+| Linked Editing (JSX tags) | `linkedEditing.ts` | `linkedEditingRange`                            | `registerLinkedEditingRangeProvider` | 5.1+           |
+| Smart Selection           | `smartSelect.ts`   | `selectionRange`                                | `registerSelectionRangeProvider`     |
+| Tag Closing               | `tagClosing.ts`    | `jsxClosingTag`                                 | N/A                                  |
 
 ---
 
@@ -173,21 +175,25 @@ monaco.languages.register({
   id: 'typescript',
   extensions: ['.ts', '.tsx'],
   aliases: ['TypeScript'],
-  mimetypes: ['text/typescript']
+  mimetypes: ['text/typescript'],
 });
 
 // Set language configuration (brackets, comments, etc.)
 monaco.languages.setLanguageConfiguration('typescript', {
   comments: { lineComment: '//', blockComment: ['/*', '*/'] },
-  brackets: [['{', '}'], ['[', ']'], ['(', ')']],
+  brackets: [
+    ['{', '}'],
+    ['[', ']'],
+    ['(', ')'],
+  ],
   autoClosingPairs: [
     { open: '{', close: '}' },
     { open: '[', close: ']' },
     { open: '(', close: ')' },
     { open: '"', close: '"' },
     { open: "'", close: "'" },
-    { open: '`', close: '`' }
-  ]
+    { open: '`', close: '`' },
+  ],
 });
 ```
 
@@ -245,9 +251,9 @@ tsDefaults.setDiagnosticsOptions({
 ```typescript
 // Create a model (represents a file)
 const model = monaco.editor.createModel(
-  content,      // File content
+  content, // File content
   'typescript', // Language ID
-  monaco.Uri.file('/main.ts')  // File URI
+  monaco.Uri.file('/main.ts'), // File URI
 );
 
 // Get existing model
@@ -355,6 +361,7 @@ enum BufferState {
 ```
 
 **URI Scheme Handling:**
+
 - `file://` - Direct filesystem path
 - `untitled://` - Unsaved files
 - `vscode-notebook-cell://` - Notebook cells
@@ -403,15 +410,15 @@ for (const file of projectFiles) {
 
 ### What Tau Currently Has
 
-| Feature | Implementation | Status |
-|---------|---------------|--------|
-| Syntax Highlighting | Monaco built-in | ✅ Working |
-| Basic Completions | Monaco built-in | ✅ Working |
-| Hover Information | Monaco built-in | ⚠️ Limited (no node_modules types) |
-| Go to Definition | `javascript-definition-provider.ts` | ⚠️ Custom, limited |
-| Diagnostics | Monaco built-in | ⚠️ Missing types show errors |
-| Project File Sync | `monaco-project-sync.ts` | ✅ Working |
-| Type Registration | `monaco.ts` + `addExtraLib` | ❌ Hardcoded, wrong types |
+| Feature             | Implementation                      | Status                             |
+| ------------------- | ----------------------------------- | ---------------------------------- |
+| Syntax Highlighting | Monaco built-in                     | ✅ Working                         |
+| Basic Completions   | Monaco built-in                     | ✅ Working                         |
+| Hover Information   | Monaco built-in                     | ⚠️ Limited (no node_modules types) |
+| Go to Definition    | `javascript-definition-provider.ts` | ⚠️ Custom, limited                 |
+| Diagnostics         | Monaco built-in                     | ⚠️ Missing types show errors       |
+| Project File Sync   | `monaco-project-sync.ts`            | ✅ Working                         |
+| Type Registration   | `monaco.ts` + `addExtraLib`         | ❌ Hardcoded, wrong types          |
 
 ### Key Issues
 
@@ -501,26 +508,26 @@ for (const file of projectFiles) {
 
 ### Immediate Fixes
 
-| File | Change |
-|------|--------|
-| `apps/ui/app/lib/monaco.ts` | Remove hardcoded type registration |
-| `libs/api-extractor/src/index.ts` | Export bundled jscad types |
-| `libs/api-extractor/src/extract-jscad-api.ts` | New: Bundle jscad types |
+| File                                          | Change                             |
+| --------------------------------------------- | ---------------------------------- |
+| `apps/ui/app/lib/monaco.ts`                   | Remove hardcoded type registration |
+| `libs/api-extractor/src/index.ts`             | Export bundled jscad types         |
+| `libs/api-extractor/src/extract-jscad-api.ts` | New: Bundle jscad types            |
 
 ### Phase 1 Implementation
 
-| File | Change |
-|------|--------|
-| `apps/ui/app/lib/monaco-types-service.ts` | Load types from filesystem |
+| File                                                             | Change                           |
+| ---------------------------------------------------------------- | -------------------------------- |
+| `apps/ui/app/lib/monaco-types-service.ts`                        | Load types from filesystem       |
 | `apps/ui/app/components/geometry/kernel/utils/module-manager.ts` | Write types with builtin modules |
-| `apps/ui/app/lib/monaco-project-sync.ts` | Sync node_modules types |
+| `apps/ui/app/lib/monaco-project-sync.ts`                         | Sync node_modules types          |
 
 ### Phase 2 Implementation
 
-| File | Change |
-|------|--------|
+| File                                                | Change              |
+| --------------------------------------------------- | ------------------- |
 | `apps/ui/app/lib/javascript-definition-provider.ts` | Handle node_modules |
-| `apps/ui/app/lib/javascript-module-resolver.ts` | Resolve types paths |
+| `apps/ui/app/lib/javascript-module-resolver.ts`     | Resolve types paths |
 
 ---
 

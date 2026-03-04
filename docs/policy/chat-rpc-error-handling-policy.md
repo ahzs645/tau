@@ -10,20 +10,20 @@ All errors produced by `ChatRpcService` are structured objects — never thrown 
 
 Infrastructure-level failures that prevent the RPC from completing. Produced by `ChatRpcService` itself.
 
-| Error Code | Trigger | Resolution |
-|---|---|---|
-| `TIMEOUT` | No response received within 60 seconds | Client may be unresponsive; tool layer reports timeout |
-| `CLIENT_DISCONNECTED` | Abort signal fired, last socket disconnected, or server shutting down | Request was cancelled or connection lost |
-| `NO_CONNECTION` | No connected socket exists for the chatId | User closed/navigated away from the page |
-| `UNHANDLED_CLIENT_ERROR` | Client returned an `error` field in `RpcResponse` | Client-side execution failed; error message forwarded |
+| Error Code               | Trigger                                                               | Resolution                                             |
+| ------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------ |
+| `TIMEOUT`                | No response received within 60 seconds                                | Client may be unresponsive; tool layer reports timeout |
+| `CLIENT_DISCONNECTED`    | Abort signal fired, last socket disconnected, or server shutting down | Request was cancelled or connection lost               |
+| `NO_CONNECTION`          | No connected socket exists for the chatId                             | User closed/navigated away from the page               |
+| `UNHANDLED_CLIENT_ERROR` | Client returned an `error` field in `RpcResponse`                     | Client-side execution failed; error message forwarded  |
 
 ### RPC Validation Errors
 
 Schema validation failures on input or output data.
 
-| Error Code | Trigger | Resolution |
-|---|---|---|
-| `INPUT_VALIDATION_FAILED` | `args` don't match the RPC's Zod input schema | LLM provided malformed arguments |
+| Error Code                 | Trigger                                                     | Resolution                            |
+| -------------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `INPUT_VALIDATION_FAILED`  | `args` don't match the RPC's Zod input schema               | LLM provided malformed arguments      |
 | `OUTPUT_VALIDATION_FAILED` | Client's `result` doesn't match the RPC's Zod result schema | Client returned unexpected data shape |
 
 ### Client Errors
@@ -101,10 +101,10 @@ This ensures that a user who cancels request A and immediately sends request B w
 
 Every `setTimeout` in `ChatRpcService` must be tracked and cancellable:
 
-| Timer | Storage | Cancelled by |
-|---|---|---|
-| RPC execution timeout (60s) | `PendingRequest.timeoutId` | Response received, disconnect, abort, shutdown |
-| Abort cleanup (5s) | `abortCleanupTimers` Map | New `registerAbortSignal` for same chatId, shutdown |
+| Timer                       | Storage                    | Cancelled by                                        |
+| --------------------------- | -------------------------- | --------------------------------------------------- |
+| RPC execution timeout (60s) | `PendingRequest.timeoutId` | Response received, disconnect, abort, shutdown      |
+| Abort cleanup (5s)          | `abortCleanupTimers` Map   | New `registerAbortSignal` for same chatId, shutdown |
 
 ### Invariants
 
@@ -172,11 +172,11 @@ These are independent mechanisms:
 
 Errors can occur before or during the SSE stream:
 
-| Phase | Handler | Format |
-|---|---|---|
-| Pre-stream (HTTP exceptions) | `ChatExceptionFilter` | `ChatError` JSON in HTTP response body |
-| During stream (LLM/tool errors) | `createErrorTransform` + `normalizeError` | `ChatError` JSON in SSE error chunk |
-| During stream (tool execution) | `toolErrorHandlerMiddleware` | `ToolMessage` with JSON `ToolExecutionError` content |
+| Phase                           | Handler                                   | Format                                               |
+| ------------------------------- | ----------------------------------------- | ---------------------------------------------------- |
+| Pre-stream (HTTP exceptions)    | `ChatExceptionFilter`                     | `ChatError` JSON in HTTP response body               |
+| During stream (LLM/tool errors) | `createErrorTransform` + `normalizeError` | `ChatError` JSON in SSE error chunk                  |
+| During stream (tool execution)  | `toolErrorHandlerMiddleware`              | `ToolMessage` with JSON `ToolExecutionError` content |
 
 All three paths produce structured error objects that the frontend can parse and display consistently.
 

@@ -4,12 +4,12 @@ This document defines the versioning, building, and publishing strategy for the 
 
 ## Packages in Scope
 
-| Package | Description |
-|---------|-------------|
-| `@taucad/kernels` | Multi-kernel CAD runtime framework for browser and Node.js |
-| `@taucad/converter` | CAD file format conversion (STL, STEP, IGES, USDZ, etc.) |
-| `@taucad/json-schema` | JSON to JSON Schema conversion |
-| `@taucad/js` | Tau JavaScript API |
+| Package               | Description                                                |
+| --------------------- | ---------------------------------------------------------- |
+| `@taucad/kernels`     | Multi-kernel CAD runtime framework for browser and Node.js |
+| `@taucad/converter`   | CAD file format conversion (STL, STEP, IGES, USDZ, etc.)   |
+| `@taucad/json-schema` | JSON to JSON Schema conversion                             |
+| `@taucad/js`          | Tau JavaScript API                                         |
 
 Internal workspace packages (`@taucad/types`, `@taucad/utils`, `@taucad/tau-examples`) are not published to npm and are consumed only within the monorepo.
 
@@ -71,10 +71,10 @@ Changelogs are generated automatically from version plan descriptions and conven
 
 All packages are built with [tsdown](https://tsdown.dev/) (Rolldown-based bundler) via a custom Nx plugin (`tools/tsdown.plugin.ts`). The build produces:
 
-| Output | Directory | Description |
-|--------|-----------|-------------|
-| ESM | `dist/esm/` | ES modules (`.js` + `.d.ts`) |
-| CJS | `dist/cjs/` | CommonJS (`.cjs` + `.d.cts`) |
+| Output | Directory   | Description                  |
+| ------ | ----------- | ---------------------------- |
+| ESM    | `dist/esm/` | ES modules (`.js` + `.d.ts`) |
+| CJS    | `dist/cjs/` | CommonJS (`.cjs` + `.d.cts`) |
 
 A post-build plugin (`tools/generate-cjs-dts.plugin.ts`) copies `.d.ts` files to `.d.cts` for CJS type resolution.
 
@@ -135,15 +135,15 @@ The release process is split between local and CI:
 ```
 Developer                          CI (GitHub Actions)
 ─────────                          ──────────────────
-1. nx release plan                 
-2. Commit + push PR               
-3. PR merged to main              
-4. nx release --skip-publish       
-   ├─ Apply version plans          
-   ├─ Update package.json versions 
-   ├─ Generate changelogs          
-   ├─ Commit + tag (v{version})    
-   └─ Push tag                     
+1. nx release plan
+2. Commit + push PR
+3. PR merged to main
+4. nx release --skip-publish
+   ├─ Apply version plans
+   ├─ Update package.json versions
+   ├─ Generate changelogs
+   ├─ Commit + tag (v{version})
+   └─ Push tag
                                    5. Tag triggers publish workflow
                                       ├─ Checkout at tag
                                       ├─ Build all packages
@@ -172,11 +172,11 @@ For alpha, beta, and release candidate versions:
 
 ## Decision Log
 
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-02 | Adopt Nx Release over Changesets | Native Nx integration; Version Plans provide same file-based workflow without extra tooling |
-| 2026-02 | Fixed versioning (all packages same version) | Packages are tightly coupled; simplifies compatibility story |
-| 2026-02 | npm Trusted Publishing (OIDC) | Eliminates stored secrets; automatic provenance; industry best practice since July 2025 |
-| 2026-02 | Build provenance via Sigstore | Supply chain transparency; required by Trusted Publishing; visible on npmjs.com |
-| 2026-02 | tsdown for package builds | Already in use; Rolldown-based, fast dual ESM/CJS output with tree-shaking |
-| 2026-02 | CI-only publishing | Prevents accidental or unauthorized publishes from dev machines |
+| Date    | Decision                                     | Rationale                                                                                   |
+| ------- | -------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 2026-02 | Adopt Nx Release over Changesets             | Native Nx integration; Version Plans provide same file-based workflow without extra tooling |
+| 2026-02 | Fixed versioning (all packages same version) | Packages are tightly coupled; simplifies compatibility story                                |
+| 2026-02 | npm Trusted Publishing (OIDC)                | Eliminates stored secrets; automatic provenance; industry best practice since July 2025     |
+| 2026-02 | Build provenance via Sigstore                | Supply chain transparency; required by Trusted Publishing; visible on npmjs.com             |
+| 2026-02 | tsdown for package builds                    | Already in use; Rolldown-based, fast dual ESM/CJS output with tree-shaking                  |
+| 2026-02 | CI-only publishing                           | Prevents accidental or unauthorized publishes from dev machines                             |

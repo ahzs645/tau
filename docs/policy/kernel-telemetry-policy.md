@@ -13,15 +13,15 @@ Internal reference for the kernel worker telemetry system: span naming, hierarch
 
 All span names follow the pattern `{subsystem}.{operation}`, inspired by OpenTelemetry semantic conventions.
 
-| Subsystem | Scope | Examples |
-|-----------|-------|---------|
-| `kernel.*` | Framework lifecycle and infra | `kernel.bootstrap`, `kernel.render`, `kernel.init`, `kernel.select`, `kernel.detect-import`, `kernel.bundle`, `kernel.execute`, `kernel.compute`, `kernel.extract-params`, `kernel.export`, `kernel.resolve-deps`, `kernel.load-middleware`, `kernel.bundler-init` |
-| `deps.*` | Dependency pipeline | `deps.discover`, `deps.read`, `deps.hash`, `deps.content-hash` |
-| `fs.*` | Filesystem operations | `fs.read`, `fs.readBatch`, `fs.exists`, `fs.readdir` |
-| `wasm.*` | WASM compilation | `wasm.compile` |
-| `middleware.*` | Middleware wrapping | `middleware.wrap({MiddlewareName})` |
-| `oc.*` | OpenCASCADE API calls | `oc.summary`, `oc.BRepPrimAPI_MakeBox`, `oc.BRepAlgoAPI_Fuse` |
-| `{kernelId}.*` | Kernel-authored spans | `replicad.wasm-init`, `replicad.run-main`, `replicad.font-load`, `replicad.mesh-to-gltf`, `openscad.wasm-init`, `openscad.call-main`, `openscad.mount-fonts`, `openscad.convert-geometry` |
+| Subsystem      | Scope                         | Examples                                                                                                                                                                                                                                                           |
+| -------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kernel.*`     | Framework lifecycle and infra | `kernel.bootstrap`, `kernel.render`, `kernel.init`, `kernel.select`, `kernel.detect-import`, `kernel.bundle`, `kernel.execute`, `kernel.compute`, `kernel.extract-params`, `kernel.export`, `kernel.resolve-deps`, `kernel.load-middleware`, `kernel.bundler-init` |
+| `deps.*`       | Dependency pipeline           | `deps.discover`, `deps.read`, `deps.hash`, `deps.content-hash`                                                                                                                                                                                                     |
+| `fs.*`         | Filesystem operations         | `fs.read`, `fs.readBatch`, `fs.exists`, `fs.readdir`                                                                                                                                                                                                               |
+| `wasm.*`       | WASM compilation              | `wasm.compile`                                                                                                                                                                                                                                                     |
+| `middleware.*` | Middleware wrapping           | `middleware.wrap({MiddlewareName})`                                                                                                                                                                                                                                |
+| `oc.*`         | OpenCASCADE API calls         | `oc.summary`, `oc.BRepPrimAPI_MakeBox`, `oc.BRepAlgoAPI_Fuse`                                                                                                                                                                                                      |
+| `{kernelId}.*` | Kernel-authored spans         | `replicad.wasm-init`, `replicad.run-main`, `replicad.font-load`, `replicad.mesh-to-gltf`, `openscad.wasm-init`, `openscad.call-main`, `openscad.mount-fonts`, `openscad.convert-geometry`                                                                          |
 
 ### Rules
 
@@ -34,11 +34,11 @@ All span names follow the pattern `{subsystem}.{operation}`, inspired by OpenTel
 
 Exactly three root spans are permitted per worker lifecycle:
 
-| Root Span | Lifecycle Phase | Context |
-|-----------|----------------|---------|
-| `kernel.bootstrap` | Worker initialization | Wraps middleware loading and kernel init |
-| `kernel.render` | Render cycle | Wraps deps, params, geometry, and middleware for a single render |
-| `kernel.export` | Geometry export | Wraps format conversion for file export |
+| Root Span          | Lifecycle Phase       | Context                                                          |
+| ------------------ | --------------------- | ---------------------------------------------------------------- |
+| `kernel.bootstrap` | Worker initialization | Wraps middleware loading and kernel init                         |
+| `kernel.render`    | Render cycle          | Wraps deps, params, geometry, and middleware for a single render |
+| `kernel.export`    | Geometry export       | Wraps format conversion for file export                          |
 
 All other spans MUST be children of one of these roots. If a span appears at root level in the telemetry tree, it is a bug.
 
@@ -93,31 +93,31 @@ The `kernel.select` subtree is absent. The `kernel.bundler-init` subtree is abse
 
 Attributes are `Record<string, string | number | boolean>` only. No objects, no arrays.
 
-| Span | Required Attributes | Optional Attributes |
-|------|-------------------|-------------------|
-| `kernel.bootstrap` | -- | `{ kernel }` (constructor name) |
-| `kernel.render` | `{ file }` | -- |
-| `kernel.export` | `{ format }` | -- |
-| `kernel.select` | `{ file }` | -- |
-| `kernel.detect-import` | `{ kernel }` (kernel ID being tested) | -- |
-| `kernel.init` | `{ kernel }` | -- |
-| `kernel.load-middleware` | `{ count }` | -- |
-| `kernel.bundle` | `{ entryPath }` | -- |
-| `kernel.bundler-init` | -- | -- |
-| `deps.discover` | -- | -- |
-| `deps.read` | `{ fileCount }` | -- |
-| `deps.hash` | `{ fileCount }` | -- |
-| `fs.read` | `{ path }` | -- |
-| `fs.readBatch` | `{ fileCount }` | -- |
-| `fs.exists` | `{ path }` | -- |
-| `fs.readdir` | `{ path }` | -- |
-| `wasm.compile` | `{ url }` | -- |
-| `middleware.wrap(...)` | `{ middleware, phase }` | -- |
-| `{kernelId}.wasm-init` | -- | `{ wasm }` |
-| `{kernelId}.run-main` | -- | -- |
-| `{kernelId}.mesh-to-gltf` | -- | `{ shapeCount }` |
-| `oc.summary` | `{ total.calls, total.ms, classes }` | `{ {ClassName}.calls, {ClassName}.ms }` per class |
-| `oc.{ClassName}` | `{ method }` (`constructor` or `apply`) | -- |
+| Span                      | Required Attributes                     | Optional Attributes                               |
+| ------------------------- | --------------------------------------- | ------------------------------------------------- |
+| `kernel.bootstrap`        | --                                      | `{ kernel }` (constructor name)                   |
+| `kernel.render`           | `{ file }`                              | --                                                |
+| `kernel.export`           | `{ format }`                            | --                                                |
+| `kernel.select`           | `{ file }`                              | --                                                |
+| `kernel.detect-import`    | `{ kernel }` (kernel ID being tested)   | --                                                |
+| `kernel.init`             | `{ kernel }`                            | --                                                |
+| `kernel.load-middleware`  | `{ count }`                             | --                                                |
+| `kernel.bundle`           | `{ entryPath }`                         | --                                                |
+| `kernel.bundler-init`     | --                                      | --                                                |
+| `deps.discover`           | --                                      | --                                                |
+| `deps.read`               | `{ fileCount }`                         | --                                                |
+| `deps.hash`               | `{ fileCount }`                         | --                                                |
+| `fs.read`                 | `{ path }`                              | --                                                |
+| `fs.readBatch`            | `{ fileCount }`                         | --                                                |
+| `fs.exists`               | `{ path }`                              | --                                                |
+| `fs.readdir`              | `{ path }`                              | --                                                |
+| `wasm.compile`            | `{ url }`                               | --                                                |
+| `middleware.wrap(...)`    | `{ middleware, phase }`                 | --                                                |
+| `{kernelId}.wasm-init`    | --                                      | `{ wasm }`                                        |
+| `{kernelId}.run-main`     | --                                      | --                                                |
+| `{kernelId}.mesh-to-gltf` | --                                      | `{ shapeCount }`                                  |
+| `oc.summary`              | `{ total.calls, total.ms, classes }`    | `{ {ClassName}.calls, {ClassName}.ms }` per class |
+| `oc.{ClassName}`          | `{ method }` (`constructor` or `apply`) | --                                                |
 
 ### Guidelines
 
@@ -132,11 +132,11 @@ The Replicad kernel supports automatic OpenCASCADE API call tracing via a JavaSc
 
 ### Modes
 
-| Mode | Overhead | Behavior | Default |
-|------|----------|----------|---------|
-| `summary` | ~2-5% | Accumulates per-class call counts and total durations. Emits a single `oc.summary` span at flush time with aggregated attributes. | Yes |
-| `per-call` | ~10-20% | Creates individual `oc.{ClassName}` spans via `tracer.startSpan()` for every OC constructor/method call. | No (opt-in) |
-| `off` | 0% | No OC tracing. | No |
+| Mode       | Overhead | Behavior                                                                                                                          | Default     |
+| ---------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `summary`  | ~2-5%    | Accumulates per-class call counts and total durations. Emits a single `oc.summary` span at flush time with aggregated attributes. | Yes         |
+| `per-call` | ~10-20%  | Creates individual `oc.{ClassName}` spans via `tracer.startSpan()` for every OC constructor/method call.                          | No (opt-in) |
+| `off`      | 0%       | No OC tracing.                                                                                                                    | No          |
 
 ### Proxy Architecture
 
@@ -198,13 +198,13 @@ kernel.compute
 
 ## Implementation References
 
-| Component | File | Role |
-|-----------|------|------|
-| `KernelTracer` | `packages/kernels/src/framework/kernel-tracer.ts` | Span creation with parent-child hierarchy |
-| `WorkerTelemetryCollector` | `packages/kernels/src/framework/worker-telemetry.ts` | Batched collection via PerformanceObserver |
-| `KernelWorkerDispatcher` | `packages/kernels/src/framework/kernel-worker-dispatcher.ts` | Telemetry flush on render completion |
-| `KernelWorker` | `packages/kernels/src/framework/kernel-worker.ts` | Framework span instrumentation |
-| `KernelRuntimeWorker` | `packages/kernels/src/framework/kernel-runtime-worker.ts` | Kernel selection spans |
-| `wrapOcWithTracing` | `packages/kernels/src/kernels/replicad/oc-tracing.ts` | OC API call tracing proxy |
-| `buildSpanTree` | `apps/ui/app/routes/builds_.$id/chat-kernel.tsx` | UI tree reconstruction |
-| `createTelemetryAggregator` | `apps/ui/app/machines/kernel.machine.ts` | Main-thread forwarding |
+| Component                   | File                                                         | Role                                       |
+| --------------------------- | ------------------------------------------------------------ | ------------------------------------------ |
+| `KernelTracer`              | `packages/kernels/src/framework/kernel-tracer.ts`            | Span creation with parent-child hierarchy  |
+| `WorkerTelemetryCollector`  | `packages/kernels/src/framework/worker-telemetry.ts`         | Batched collection via PerformanceObserver |
+| `KernelWorkerDispatcher`    | `packages/kernels/src/framework/kernel-worker-dispatcher.ts` | Telemetry flush on render completion       |
+| `KernelWorker`              | `packages/kernels/src/framework/kernel-worker.ts`            | Framework span instrumentation             |
+| `KernelRuntimeWorker`       | `packages/kernels/src/framework/kernel-runtime-worker.ts`    | Kernel selection spans                     |
+| `wrapOcWithTracing`         | `packages/kernels/src/kernels/replicad/oc-tracing.ts`        | OC API call tracing proxy                  |
+| `buildSpanTree`             | `apps/ui/app/routes/builds_.$id/chat-kernel.tsx`             | UI tree reconstruction                     |
+| `createTelemetryAggregator` | `apps/ui/app/machines/kernel.machine.ts`                     | Main-thread forwarding                     |

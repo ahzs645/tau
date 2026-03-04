@@ -22,13 +22,14 @@
 
 The application manages **6 distinct worker types** across 3 lifecycle patterns:
 
-| Pattern | Workers | Mechanism | Status |
-|---|---|---|---|
-| **XState-managed** | kernel-runtime, file-manager, object-store | Machine exit actions + `stopChild` | Corrected: error-isolated cleanup, invoked actors with AbortSignal |
-| **Manual lifecycle** | KCL LSP | `initialize()`/`dispose()` | Correct but depends on registry disposal |
-| **Framework-managed** | Monaco (JSON, TS, Editor) | Monaco internals | Uncontrolled; no explicit termination |
+| Pattern               | Workers                                    | Mechanism                          | Status                                                             |
+| --------------------- | ------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------ |
+| **XState-managed**    | kernel-runtime, file-manager, object-store | Machine exit actions + `stopChild` | Corrected: error-isolated cleanup, invoked actors with AbortSignal |
+| **Manual lifecycle**  | KCL LSP                                    | `initialize()`/`dispose()`         | Correct but depends on registry disposal                           |
+| **Framework-managed** | Monaco (JSON, TS, Editor)                  | Monaco internals                   | Uncontrolled; no explicit termination                              |
 
 **Status update**: Issues 1 and 2 below have been fully resolved:
+
 1. ~~Fire-and-forget async patterns in XState actions that escape machine lifecycle~~ — **Resolved**: `fireRender` converted to invoked `renderActor` with AbortSignal
 2. ~~Missing error isolation in cleanup chains~~ — **Resolved**: All cleanup uses `safeDispose()` from `@taucad/utils/dispose`
 3. `@xstate/react`'s `stopRootWithRehydration` restoring pre-stop snapshots (interferes with Strict Mode) — mitigated by using `assign()` instead of direct mutation
@@ -40,17 +41,18 @@ The application manages **6 distinct worker types** across 3 lifecycle patterns:
 
 ### 1. Kernel Runtime Workers
 
-| Property | Value |
-|---|---|
-| **Creation** | `createWorkerTransport()` → `new Worker(workerUrl, { type: 'module' })` |
-| **Entry module** | `kernel-runtime-worker.ts` |
-| **Size** | 120-175 MB per instance (includes WASM heap) |
-| **Termination** | `kernelClient.terminate()` → `workerClient.terminate()` → `transport.close()` → `worker.terminate()` |
-| **Owner** | `kernel.machine.ts` via `destroyWorkers` exit action |
-| **Expected count** | 1 per compilation unit (typically 1 per build) |
-| **Observed count** | 5-15+ (accumulating across navigation) |
+| Property           | Value                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Creation**       | `createWorkerTransport()` → `new Worker(workerUrl, { type: 'module' })`                              |
+| **Entry module**   | `kernel-runtime-worker.ts`                                                                           |
+| **Size**           | 120-175 MB per instance (includes WASM heap)                                                         |
+| **Termination**    | `kernelClient.terminate()` → `workerClient.terminate()` → `transport.close()` → `worker.terminate()` |
+| **Owner**          | `kernel.machine.ts` via `destroyWorkers` exit action                                                 |
+| **Expected count** | 1 per compilation unit (typically 1 per build)                                                       |
+| **Observed count** | 5-15+ (accumulating across navigation)                                                               |
 
 **Termination chain**:
+
 ```
 Component unmount
 → useActorRef cleanup (stopRootWithRehydration)
@@ -64,6 +66,7 @@ Component unmount
 ```
 
 **Files**:
+
 - `packages/kernels/src/transport/worker-transport.ts` — Worker creation and `close()`
 - `packages/kernels/src/client/kernel-client.ts` — `terminate()` method
 - `packages/kernels/src/framework/kernel-worker-client.ts` — `cleanup()` + `terminate()`
@@ -71,89 +74,94 @@ Component unmount
 
 ### 2. File Manager Worker
 
-| Property | Value |
-|---|---|
-| **Creation** | `new FileManagerWorker({ name: 'fm-root' })` via Vite `?worker` import |
-| **Entry module** | `file-manager.worker.ts` |
-| **Size** | ~19 MB |
-| **Termination** | `destroyWorker` machine exit action |
-| **Owner** | `file-manager.machine.ts` |
-| **Expected count** | 1 (root, shared via `SharedWorkerContext`) |
-| **Observed count** | 1 (correct) |
+| Property           | Value                                                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| **Creation**       | `new FileManagerWorker({ name: 'fm-root' })` via Vite `?worker` import |
+| **Entry module**   | `file-manager.worker.ts`                                               |
+| **Size**           | ~19 MB                                                                 |
+| **Termination**    | `destroyWorker` machine exit action                                    |
+| **Owner**          | `file-manager.machine.ts`                                              |
+| **Expected count** | 1 (root, shared via `SharedWorkerContext`)                             |
+| **Observed count** | 1 (correct)                                                            |
 
 **Design**: Single root worker pattern. Nested `FileManagerProvider` instances receive a shared reference via React context rather than creating their own workers. This is correct.
 
 **Files**:
+
 - `apps/ui/app/machines/file-manager.machine.ts` — Machine with `initializeWorkerActor`/`destroyWorker`
 - `apps/ui/app/machines/file-manager.worker.ts` — Worker entry using `exposeFileSystem()`
 - `apps/ui/app/hooks/use-file-manager.tsx` — Provider with `SharedWorkerContext`
 
 ### 3. Object Store Worker
 
-| Property | Value |
-|---|---|
-| **Creation** | `new ObjectStoreWorker()` via Vite `?worker` import |
-| **Entry module** | `object-store.worker.ts` |
-| **Size** | ~8.5 MB |
-| **Termination** | `destroyWorker` machine exit action |
-| **Owner** | `build-manager.machine.ts` |
-| **Expected count** | 1 (per build manager) |
-| **Observed count** | 1 (correct) |
+| Property           | Value                                               |
+| ------------------ | --------------------------------------------------- |
+| **Creation**       | `new ObjectStoreWorker()` via Vite `?worker` import |
+| **Entry module**   | `object-store.worker.ts`                            |
+| **Size**           | ~8.5 MB                                             |
+| **Termination**    | `destroyWorker` machine exit action                 |
+| **Owner**          | `build-manager.machine.ts`                          |
+| **Expected count** | 1 (per build manager)                               |
+| **Observed count** | 1 (correct)                                         |
 
 **Note**: Still uses Comlink (`expose`/`wrap`). This is the last remaining Comlink usage in the codebase.
 
 **Files**:
+
 - `apps/ui/app/hooks/build-manager.machine.ts` — Machine with worker lifecycle
 - `apps/ui/app/hooks/object-store.worker.ts` — Worker entry using Comlink `expose()`
 
 ### 4. KCL LSP Worker
 
-| Property | Value |
-|---|---|
-| **Creation** | `new Worker(new URL('kcl-lsp-worker.ts', import.meta.url), { type: 'module', name: 'kcl-lsp' })` |
-| **Entry module** | `kcl-lsp-worker.ts` |
-| **Size** | ~15 MB |
-| **Termination** | `lspClient.dispose()` → `worker.terminate()` |
-| **Owner** | `KclLspClient` via `kcl-register-language.ts` contribution registry |
-| **Expected count** | 0-1 (only when KCL language is active) |
-| **Observed count** | Typically correct |
+| Property           | Value                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| **Creation**       | `new Worker(new URL('kcl-lsp-worker.ts', import.meta.url), { type: 'module', name: 'kcl-lsp' })` |
+| **Entry module**   | `kcl-lsp-worker.ts`                                                                              |
+| **Size**           | ~15 MB                                                                                           |
+| **Termination**    | `lspClient.dispose()` → `worker.terminate()`                                                     |
+| **Owner**          | `KclLspClient` via `kcl-register-language.ts` contribution registry                              |
+| **Expected count** | 0-1 (only when KCL language is active)                                                           |
+| **Observed count** | Typically correct                                                                                |
 
 **Risk**: Disposal depends on `monacoLanguageRegistry.dispose()` → `kclContribution.dispose()` → `disposeKclLsp()` → `lspClient.dispose()`. If the registry is never disposed, the worker leaks.
 
 **Files**:
+
 - `apps/ui/app/lib/kcl-language/lsp/kcl-lsp-client.ts` — Worker creation and `dispose()`
 - `apps/ui/app/lib/kcl-language/kcl-register-language.ts` — Registration and disposal
 
 ### 5. Monaco Editor Workers
 
-| Property | Value |
-|---|---|
-| **Creation** | `MonacoEnvironment.getWorker()` returns `new JsonWorker()`, `new TsWorker()`, `new EditorWorker()` |
-| **Entry module** | Various (bundled by monaco-editor) |
-| **Size** | Variable |
-| **Termination** | Monaco-managed (no explicit `terminate()` in codebase) |
-| **Owner** | Monaco internals |
-| **Expected count** | Up to 3 (JSON, TypeScript, Editor) |
+| Property           | Value                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| **Creation**       | `MonacoEnvironment.getWorker()` returns `new JsonWorker()`, `new TsWorker()`, `new EditorWorker()` |
+| **Entry module**   | Various (bundled by monaco-editor)                                                                 |
+| **Size**           | Variable                                                                                           |
+| **Termination**    | Monaco-managed (no explicit `terminate()` in codebase)                                             |
+| **Owner**          | Monaco internals                                                                                   |
+| **Expected count** | Up to 3 (JSON, TypeScript, Editor)                                                                 |
 
 **Risk**: Monaco workers are never explicitly terminated. Their lifecycle is fully managed by the Monaco editor instance. If the editor is disposed, Monaco should clean up. But there is no explicit editor disposal in the current codebase; it relies on garbage collection.
 
 **Files**:
+
 - `apps/ui/app/lib/monaco.ts` — `MonacoEnvironment.getWorker` configuration
 
 ### 6. Kernel Model View Worker (Docs)
 
-| Property | Value |
-|---|---|
-| **Creation** | `createKernelClient()` inside `IntersectionObserver` callback |
-| **Entry module** | Same kernel-runtime-worker |
-| **Size** | 120+ MB |
-| **Termination** | `clientRef.current?.terminate()` in `useEffect` cleanup |
-| **Owner** | `kernel-model-view.tsx` component via `useRef` |
-| **Expected count** | 0-N (one per visible model in docs) |
+| Property           | Value                                                         |
+| ------------------ | ------------------------------------------------------------- |
+| **Creation**       | `createKernelClient()` inside `IntersectionObserver` callback |
+| **Entry module**   | Same kernel-runtime-worker                                    |
+| **Size**           | 120+ MB                                                       |
+| **Termination**    | `clientRef.current?.terminate()` in `useEffect` cleanup       |
+| **Owner**          | `kernel-model-view.tsx` component via `useRef`                |
+| **Expected count** | 0-N (one per visible model in docs)                           |
 
 **Risk**: Race condition between `IntersectionObserver` triggering creation and component unmount. If the component unmounts while `initializeAndRender` is in-flight, the worker may be created after the cleanup ran.
 
 **Files**:
+
 - `apps/ui/app/components/docs/kernel-model-view.tsx`
 
 ---
@@ -175,6 +183,7 @@ CadPreviewProvider mount / BuildProvider mount
 ```
 
 **Teardown path**:
+
 ```
 Component unmount / route change
   → useActorRef cleanup: stopRootWithRehydration(cadRef)
@@ -201,6 +210,7 @@ useEffect(() => {
 ```
 
 The `buildMachine` processes `loadBuild` with `isBuildIdChanging` guard:
+
 ```
 loadBuild (buildId changed)
   → stopStatefulActors: stopChild(gitRef), stopChild(each compilationUnit), stopChild(each viewGraphics)
@@ -279,6 +289,7 @@ fireRender({ context, event, self }) {
 ```
 
 **Problem**: XState actions are synchronous. The `void (async () => { ... })()` pattern creates an async task that is completely invisible to XState's lifecycle management. When the machine stops:
+
 - The async function continues running independently
 - `ensureKernelClient` may be mid-`await` and will resume after `destroyWorkers` has run
 - The `context.destroyed` guard mitigates the creation race, but does not handle in-flight render operations
@@ -317,10 +328,10 @@ destroyWorkers({ context }) {
 
 ```javascript
 // Captures snapshot BEFORE stop
-forEachActor(actorRef, ref => {
+forEachActor(actorRef, (ref) => {
   persistedSnapshots.push([ref, ref.getSnapshot()]);
 });
-actorRef.stop();  // Exit actions run, workers terminated
+actorRef.stop(); // Exit actions run, workers terminated
 // Restores ORIGINAL snapshot (before stop!)
 persistedSnapshots.forEach(([ref, snapshot]) => {
   ref._processingStatus = 0;
@@ -337,6 +348,7 @@ persistedSnapshots.forEach(([ref, snapshot]) => {
 ### Issue 4: No Centralized Worker Registry (MEDIUM)
 
 **Problem**: Each worker type has its own creation and termination pattern. There is no single place to:
+
 - Query how many workers exist
 - Verify all workers were cleaned up
 - Set limits on total worker count
@@ -378,14 +390,14 @@ persistedSnapshots.forEach(([ref, snapshot]) => {
 
 Observed memory distribution from a typical session with preview usage:
 
-| Worker | Count | Memory Each | Total |
-|---|---|---|---|
-| kernel-runtime-worker | 8-15 | 120-175 MB | 960-2,625 MB |
-| fm-root (file manager) | 1 | 19 MB | 19 MB |
-| object-store | 1 | 8.5 MB | 8.5 MB |
-| Monaco workers | 2-3 | 5-15 MB | 10-45 MB |
-| Main thread | 1 | 174 MB | 174 MB |
-| **Total** | | | **1,172-2,872 MB** |
+| Worker                 | Count | Memory Each | Total              |
+| ---------------------- | ----- | ----------- | ------------------ |
+| kernel-runtime-worker  | 8-15  | 120-175 MB  | 960-2,625 MB       |
+| fm-root (file manager) | 1     | 19 MB       | 19 MB              |
+| object-store           | 1     | 8.5 MB      | 8.5 MB             |
+| Monaco workers         | 2-3   | 5-15 MB     | 10-45 MB           |
+| Main thread            | 1     | 174 MB      | 174 MB             |
+| **Total**              |       |             | **1,172-2,872 MB** |
 
 The kernel runtime workers dominate memory consumption due to WASM heap allocations (OpenCASCADE, esbuild). Each worker maintains its own V8 isolate (~1.5 MB baseline) plus the WASM linear memory (up to 256 MB for OpenCASCADE).
 

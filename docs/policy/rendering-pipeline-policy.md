@@ -17,12 +17,12 @@ These values are defined in `libs/types/src/constants/material.constants.ts` as 
 
 ### Pipelines Covered
 
-| Pipeline | Source | File |
-|----------|--------|------|
-| OCCT (STEP/IGES/BREP) | `packages/converter` | `loaders/occt.loader.ts` |
-| Replicad Kernel | `apps/ui` | `kernel/replicad/utils/replicad-to-gltf.ts` |
-| JSCAD Kernel | `apps/ui` | `kernel/jscad/jscad-to-gltf.ts` |
-| OpenSCAD Kernel | `apps/ui` | `kernel/utils/export-glb.ts` |
+| Pipeline              | Source               | File                                        |
+| --------------------- | -------------------- | ------------------------------------------- |
+| OCCT (STEP/IGES/BREP) | `packages/converter` | `loaders/occt.loader.ts`                    |
+| Replicad Kernel       | `apps/ui`            | `kernel/replicad/utils/replicad-to-gltf.ts` |
+| JSCAD Kernel          | `apps/ui`            | `kernel/jscad/jscad-to-gltf.ts`             |
+| OpenSCAD Kernel       | `apps/ui`            | `kernel/utils/export-glb.ts`                |
 
 Edge/line materials use `metallicFactor: 0`, `roughnessFactor: 1`, as they are rendered as flat-shaded `LineMaterial` and do not participate in PBR lighting.
 
@@ -40,6 +40,7 @@ The renderer uses `ACESFilmicToneMapping` (React Three Fiber default) with `tone
 **Rationale**: Environment maps contain HDR values exceeding 1.0. Without tone mapping, bright reflections clip to pure white, losing surface detail. ACES filmic provides good highlight rolloff while preserving natural colour appearance. The 1.5x exposure boost compensates for ACES's aggressive highlight compression, ensuring specular highlights remain visible.
 
 **Decision gate for AgX**: If visual testing reveals unacceptable hue shifts under ACES (particularly in saturated reds/blues), switch to `THREE.AgXToneMapping` which preserves hues more accurately under bright lighting. Acceptance criteria:
+
 - Highlight rolloff: smooth gradation from specular peak to diffuse, no hard clipping
 - Color shift: saturated base colors (red, blue, green) should not visibly shift hue under bright environment
 - White clipping: no pure-white patches on curved metallic surfaces
@@ -58,6 +59,7 @@ distanceFalloff:   0.2         -- ratio of radius at which AO fades (for screen-
 ```
 
 **Rationale**: Professional CAD viewers (e.g. Onshape at 37.5% AO) use ambient occlusion to create depth perception. Without AO, the scene appears flat, especially from top-down and bottom-up views. N8AO was chosen because it:
+
 - Supports logarithmic depth buffers (auto-detected)
 - Supports stencil buffers (for section view compatibility)
 - Works with the `frameloop="demand"` mode (AO runs during render passes only)
@@ -84,12 +86,12 @@ The main CAD viewer uses an `<Environment>` component with `<Lightformer>` child
 
 ### Presets
 
-| Preset | Description |
-|--------|-------------|
-| `studio` | Full Lightformer rig -- key (8), fill (4), rim (2), ground (0.25). Default. |
-| `neutral` | Reduced intensity, minimal reflections. |
-| `soft` | Hemisphere + ambient only, no environment map. |
-| `performance` | No environment, minimal lights. Equivalent to matcap-era setup. |
+| Preset        | Description                                                                 |
+| ------------- | --------------------------------------------------------------------------- |
+| `studio`      | Full Lightformer rig -- key (8), fill (4), rim (2), ground (0.25). Default. |
+| `neutral`     | Reduced intensity, minimal reflections.                                     |
+| `soft`        | Hemisphere + ambient only, no environment map.                              |
+| `performance` | No environment, minimal lights. Equivalent to matcap-era setup.             |
 
 ## Color Pipeline
 
@@ -111,13 +113,13 @@ Source color (sRGB) --> GLTF baseColorFactor (linear via spec) --> Three.js line
 
 Current defaults per kernel:
 
-| Kernel | Linear Tolerance | Angular Tolerance | Notes |
-|--------|-----------------|-------------------|-------|
-| Replicad | 0.1mm | 30deg | Configurable via `meshConfiguration` |
-| Replicad (export) | 0.01mm | 30deg | Higher quality for file export |
-| JSCAD | N/A | N/A | Fan triangulation of CSG output polygons |
-| OpenSCAD | N/A | N/A | Manifold backend defaults |
-| OCCT (converter) | OCCT defaults | OCCT defaults | `undefined` passed to `ReadStepFile` |
+| Kernel            | Linear Tolerance | Angular Tolerance | Notes                                    |
+| ----------------- | ---------------- | ----------------- | ---------------------------------------- |
+| Replicad          | 0.1mm            | 30deg             | Configurable via `meshConfiguration`     |
+| Replicad (export) | 0.01mm           | 30deg             | Higher quality for file export           |
+| JSCAD             | N/A              | N/A               | Fan triangulation of CSG output polygons |
+| OpenSCAD          | N/A              | N/A               | Manifold backend defaults                |
+| OCCT (converter)  | OCCT defaults    | OCCT defaults     | `undefined` passed to `ReadStepFile`     |
 
 **Known limitation**: The OCCT converter does not expose tessellation quality parameters. This means curved surfaces may appear faceted on high-detail models. Future work: expose `linearDeflection` and `angularDeflection` options.
 

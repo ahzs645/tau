@@ -2,17 +2,17 @@
 
 Tau supports multiple CAD kernels. Specify the kernel when initializing the CAD machine or by loading an example that is tagged with the corresponding language.
 
-| Kernel      | `kernelType` | Language flag | Notes |
-|-------------|--------------|---------------|-------|
-| Replicad    | `"replicad"` | `replicad` (default) | Parametric TS/JS API backed by OpenCascade.js. |
-| OpenSCAD    | `"openscad"` | `openscad`            | WebAssembly build of OpenSCAD. Accepts standard `.scad` syntax. |
-| Zoo (KCL)   | `"zoo"`      | `zoo`                 | KittyCAD Language for cloud-native CAD with AI integration. |
+| Kernel    | `kernelType` | Language flag        | Notes                                                           |
+| --------- | ------------ | -------------------- | --------------------------------------------------------------- |
+| Replicad  | `"replicad"` | `replicad` (default) | Parametric TS/JS API backed by OpenCascade.js.                  |
+| OpenSCAD  | `"openscad"` | `openscad`           | WebAssembly build of OpenSCAD. Accepts standard `.scad` syntax. |
+| Zoo (KCL) | `"zoo"`      | `zoo`                | KittyCAD Language for cloud-native CAD with AI integration.     |
 
 ## Using the OpenSCAD kernel
 
 1. Load / create a file ending with `.scad` **or** set the build asset language to `openscad`.
 2. The CAD machine will automatically choose the OpenSCAD kernel and spin up the `openscad.worker`.
-3. All Replicad viewer features work (mesh display, export ‑ *STEP export coming soon*).
+3. All Replicad viewer features work (mesh display, export ‑ _STEP export coming soon_).
 
 Example:
 
@@ -60,13 +60,15 @@ const cube = startSketchOn('XY')
 ## Current limitations
 
 ### OpenSCAD
-* Only STL generation is wired; STEP export is a TODO.
-* Parameter extraction (Customizer comments) not yet implemented – OpenSCAD models currently show an empty parameter panel.
-* Error messages are raw stderr text.
+
+- Only STL generation is wired; STEP export is a TODO.
+- Parameter extraction (Customizer comments) not yet implemented – OpenSCAD models currently show an empty parameter panel.
+- Error messages are raw stderr text.
 
 ### Zoo (KCL)
-* Requires internet connection for Zoo API access.
-* API token required for full functionality.
-* Fallback to mock geometry when API is unavailable.
+
+- Requires internet connection for Zoo API access.
+- API token required for full functionality.
+- Fallback to mock geometry when API is unavailable.
 
 Contributions welcome!

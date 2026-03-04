@@ -15,17 +15,17 @@ Our best production build is `v8-O2-noLTO-wasmOptO3` at **17.80 MB** (single, no
 
 ### Identified Optimizations
 
-| # | Optimization | Target | Est. Impact | Risk | Status |
-|---|-------------|--------|-------------|------|--------|
-| 1 | `-fno-exceptions` on no-exc builds | Compile | Size reduction (EH tables removed) | N/A | **Blocked** |
-| 2 | `--closure 1` | Link | ~50% JS reduction (~56 KB) | Medium | **Not applied** |
-| 3 | `-sEVAL_CTORS` | Link | Faster startup | Low | **Not applied** |
-| 4 | `--converge` in wasm-opt | Post-link | Additional WASM size reduction | Low | **Not applied** |
-| 5 | `-fno-rtti` on OCCT sources | Compile | ~5-15% size reduction | **Blocked** | N/A |
-| 6 | `-sENVIRONMENT=web,worker` | Link | ~2 KB JS reduction | — | **Not applicable** |
-| 7 | `-DNo_Exception` | Compile | 100-300 KB WASM reduction | None | **Ready** |
-| 8 | `-UOCC_CONVERT_SIGNALS` | Compile | < 50 KB WASM reduction | None | **Ready** |
-| 9 | Stub `OCCT_DUMP_*` macros | Compile | 200-500 KB WASM reduction | Low | Requires OCCT source patch |
+| #   | Optimization                       | Target    | Est. Impact                        | Risk        | Status                     |
+| --- | ---------------------------------- | --------- | ---------------------------------- | ----------- | -------------------------- |
+| 1   | `-fno-exceptions` on no-exc builds | Compile   | Size reduction (EH tables removed) | N/A         | **Blocked**                |
+| 2   | `--closure 1`                      | Link      | ~50% JS reduction (~56 KB)         | Medium      | **Not applied**            |
+| 3   | `-sEVAL_CTORS`                     | Link      | Faster startup                     | Low         | **Not applied**            |
+| 4   | `--converge` in wasm-opt           | Post-link | Additional WASM size reduction     | Low         | **Not applied**            |
+| 5   | `-fno-rtti` on OCCT sources        | Compile   | ~5-15% size reduction              | **Blocked** | N/A                        |
+| 6   | `-sENVIRONMENT=web,worker`         | Link      | ~2 KB JS reduction                 | —           | **Not applicable**         |
+| 7   | `-DNo_Exception`                   | Compile   | 100-300 KB WASM reduction          | None        | **Ready**                  |
+| 8   | `-UOCC_CONVERT_SIGNALS`            | Compile   | < 50 KB WASM reduction             | None        | **Ready**                  |
+| 9   | Stub `OCCT_DUMP_*` macros          | Compile   | 200-500 KB WASM reduction          | Low         | Requires OCCT source patch |
 
 ---
 
@@ -42,6 +42,7 @@ emcc -std=c++17 <OPT_LEVEL> -frtti -DIGNORE_NO_ATOMICS=1 -DOCCT_NO_PLUGINS
 ```
 
 Flags set via environment:
+
 - `OCJS_OPT` → optimization level (default `-O2`)
 - `OCJS_LTO` → `-flto` at compile time (default `1`)
 - `OCJS_EXCEPTIONS` → `-fwasm-exceptions` (default `0`)
@@ -55,6 +56,7 @@ emcc -lembind <all .o files> -o <output.js> <emccFlags from YAML>
 ```
 
 Current YAML emccFlags (no-exceptions variant):
+
 ```
 -flto -O3 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=100MB
 -sMAXIMUM_MEMORY=4GB -sEXPORTED_RUNTIME_METHODS=["FS"] --no-entry
@@ -74,18 +76,19 @@ wasm-opt -O3 --strip-debug --strip-producers --enable-mutable-globals
 
 ## Existing Experiment Data
 
-| Experiment | Compile | LTO | Exceptions | wasm-opt | Single WASM | Exc WASM | JS |
-|-----------|---------|-----|------------|----------|-------------|----------|----|
-| v762-O0-noLTO-wasmOptO3 | -O0 | No | none | -O3 | 10.30 MB | — | 135 KB |
-| v8-O0-noLTO-wasmOptO3 | -O0 | No | none | -O3 | 16.97 MB | — | 112 KB |
-| v8-O0-noLTO-wasmOptO2 | -O0 | No | none | -O2 | 17.09 MB | — | 112 KB |
-| **v8-O2-noLTO-wasmOptO3** | **-O2** | **No** | **none** | **-O3** | **17.92 MB** | — | **112 KB** |
-| v8-O2-noLTO-wasmOptO3-hlr | -O2 | No | wasm-native | -O3 | 17.67 MB | 17.76 MB | 112 KB |
-| v8-O3-noLTO-wasmOptO3 | -O3 | No | none | -O3 | 19.23 MB | — | 112 KB |
-| O0-O0-validation | -O0 | No | none | -O0 | 17.20 MB | 18.18 MB | 112 KB |
-| O0-O0-wasmExc-validation | -O0 | No | wasm-native | -O0 | 17.20 MB | 18.73 MB | 112 KB |
+| Experiment                | Compile | LTO    | Exceptions  | wasm-opt | Single WASM  | Exc WASM | JS         |
+| ------------------------- | ------- | ------ | ----------- | -------- | ------------ | -------- | ---------- |
+| v762-O0-noLTO-wasmOptO3   | -O0     | No     | none        | -O3      | 10.30 MB     | —        | 135 KB     |
+| v8-O0-noLTO-wasmOptO3     | -O0     | No     | none        | -O3      | 16.97 MB     | —        | 112 KB     |
+| v8-O0-noLTO-wasmOptO2     | -O0     | No     | none        | -O2      | 17.09 MB     | —        | 112 KB     |
+| **v8-O2-noLTO-wasmOptO3** | **-O2** | **No** | **none**    | **-O3**  | **17.92 MB** | —        | **112 KB** |
+| v8-O2-noLTO-wasmOptO3-hlr | -O2     | No     | wasm-native | -O3      | 17.67 MB     | 17.76 MB | 112 KB     |
+| v8-O3-noLTO-wasmOptO3     | -O3     | No     | none        | -O3      | 19.23 MB     | —        | 112 KB     |
+| O0-O0-validation          | -O0     | No     | none        | -O0      | 17.20 MB     | 18.18 MB | 112 KB     |
+| O0-O0-wasmExc-validation  | -O0     | No     | wasm-native | -O0      | 17.20 MB     | 18.73 MB | 112 KB     |
 
 Key observations:
+
 - `-O2` compile + `-O3` wasm-opt is our best combination for size (17.92 MB)
 - `-O3` compile inflates the binary to 19.23 MB due to aggressive inlining
 - `-O0` compile + `-O3` wasm-opt produces 16.97 MB — smaller than -O2 because wasm-opt can de-duplicate more when functions aren't already inlined by LLVM
@@ -123,6 +126,7 @@ Key observations:
 **What it does**: Runs Google Closure Compiler on the generated JS glue, performing advanced minification, dead code elimination, and property renaming. Emscripten docs call this "highly recommended" and note it can "hugely reduce the size of the support JavaScript code."
 
 **Risk**: Medium. Known compatibility issues with Emscripten's embind in 2025-2026:
+
 - Public class fields in Emscripten's JS libraries require `--language-in UNSTABLE`
 - `assert` function may need to be declared in an externs file
 - Some EXPORT_ALL + O3 combinations cause missing function exports
@@ -182,7 +186,7 @@ Compiling with `-fno-rtti` would cause all `DownCast()` calls to fail at link ti
 
 ### Why -O3 Is Likely Counterproductive for WASM Performance
 
-`-O3` produces a larger binary (19.23 MB) than `-O2` (17.92 MB). More importantly, there are strong reasons to believe `-O3` also delivers *worse runtime performance* in a WASM JIT environment, despite being the "most optimized" level. This is a WASM-specific phenomenon that doesn't apply to native builds.
+`-O3` produces a larger binary (19.23 MB) than `-O2` (17.92 MB). More importantly, there are strong reasons to believe `-O3` also delivers _worse runtime performance_ in a WASM JIT environment, despite being the "most optimized" level. This is a WASM-specific phenomenon that doesn't apply to native builds.
 
 #### The WASM JIT double-compilation problem
 
@@ -206,7 +210,7 @@ Once LLVM has inlined at `-O3`, the duplicated code is specialized to each call 
 
 #### The -O0 paradox
 
-The `-O0` compile + `-O3` wasm-opt result (16.97 MB) is the *smallest* binary because Binaryen has maximum deduplication opportunity — LLVM emitted no inlining at all. However, runtime performance is worse because LLVM performed no per-function optimization (no register allocation improvement, no constant folding, no dead store elimination within functions).
+The `-O0` compile + `-O3` wasm-opt result (16.97 MB) is the _smallest_ binary because Binaryen has maximum deduplication opportunity — LLVM emitted no inlining at all. However, runtime performance is worse because LLVM performed no per-function optimization (no register allocation improvement, no constant folding, no dead store elimination within functions).
 
 #### Recommendation
 
@@ -226,27 +230,27 @@ Our current approach (different compile vs. link levels) is valid and even recom
 
 ### Flags We Use Correctly
 
-| Flag | Purpose | Notes |
-|------|---------|-------|
-| `-sALLOW_MEMORY_GROWTH=1` | Dynamic heap | Required for OCCT's unpredictable memory usage |
-| `-sINITIAL_MEMORY=100MB` | Starting heap | Avoids early growth overhead |
-| `-sMAXIMUM_MEMORY=4GB` | Memory cap | Max for wasm32 |
-| `-sSTACK_SIZE=8388608` | 8 MB C stack | Needed for OCCT's deep recursion |
-| `--no-entry` | Library/reactor mode | No `main()` function |
-| `-sEXPORT_ES6=1` | ESM output | Required for our module system |
-| `--strip-debug` | Remove DWARF | Production builds don't need it |
-| `-flto` (at link only) | Link-time optimization | YAML emccFlags apply Binaryen LTO at the link step |
+| Flag                      | Purpose                | Notes                                              |
+| ------------------------- | ---------------------- | -------------------------------------------------- |
+| `-sALLOW_MEMORY_GROWTH=1` | Dynamic heap           | Required for OCCT's unpredictable memory usage     |
+| `-sINITIAL_MEMORY=100MB`  | Starting heap          | Avoids early growth overhead                       |
+| `-sMAXIMUM_MEMORY=4GB`    | Memory cap             | Max for wasm32                                     |
+| `-sSTACK_SIZE=8388608`    | 8 MB C stack           | Needed for OCCT's deep recursion                   |
+| `--no-entry`              | Library/reactor mode   | No `main()` function                               |
+| `-sEXPORT_ES6=1`          | ESM output             | Required for our module system                     |
+| `--strip-debug`           | Remove DWARF           | Production builds don't need it                    |
+| `-flto` (at link only)    | Link-time optimization | YAML emccFlags apply Binaryen LTO at the link step |
 
 ### Flags We Don't Use (and Why)
 
-| Flag | Why Not |
-|------|---------|
-| `-fno-rtti` | OCCT's `Handle::DownCast()` requires `dynamic_cast` (RTTI) |
-| `-sMALLOC=emmalloc` | Slower than dlmalloc for OCCT's allocation patterns |
-| `-sFILESYSTEM=0` | STEP/IGES import/export uses Emscripten's virtual FS |
-| `-sSINGLE_FILE` | Would embed WASM in JS as base64, inflating download |
-| `-sMINIMAL_RUNTIME` | Incompatible with embind and FS requirements |
-| `-sSTANDALONE_WASM` | We need JS glue for embind and FS |
+| Flag                        | Why Not                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------ |
+| `-fno-rtti`                 | OCCT's `Handle::DownCast()` requires `dynamic_cast` (RTTI)                           |
+| `-sMALLOC=emmalloc`         | Slower than dlmalloc for OCCT's allocation patterns                                  |
+| `-sFILESYSTEM=0`            | STEP/IGES import/export uses Emscripten's virtual FS                                 |
+| `-sSINGLE_FILE`             | Would embed WASM in JS as base64, inflating download                                 |
+| `-sMINIMAL_RUNTIME`         | Incompatible with embind and FS requirements                                         |
+| `-sSTANDALONE_WASM`         | We need JS glue for embind and FS                                                    |
 | `OCJS_LTO=1` (compile-time) | Causes 2x+ binary bloat from LLVM cross-module inlining (see wasm-size-analysis doc) |
 
 ### WASM_BIGINT
@@ -264,23 +268,26 @@ Note: There are known compatibility issues between `WASM_BIGINT` and embind in E
 Build changes from current `O2-noLTO-single`:
 
 **Compilation** (Common.py / compileSources.py / compileBindings.py):
+
 - `-fno-exceptions` blocked (OCCT headers use `throw` in inline code); no compile-time changes
 
 **Linking** (YAML emccFlags):
+
 - Add `-sEVAL_CTORS=1`
 - Add `--closure 1` (test separately; revert if embind breaks)
 
 **Post-processing** (buildFromYaml.py):
+
 - Add `--converge` to wasm-opt invocation
 
 ### Expected Results
 
-| Metric | Current (O2-noLTO-wasmOptO3) | Expected (optimized) |
-|--------|------------------------------|----------------------|
-| WASM (single) | 17.92 MB | ~17.4-17.7 MB |
-| JS glue | 112 KB | ~55-60 KB (with closure) or ~110 KB (without) |
-| Startup time | Baseline | Faster (EVAL_CTORS) |
-| Runtime perf | Baseline | Same (Emscripten link-time exception stripping unchanged) |
+| Metric        | Current (O2-noLTO-wasmOptO3) | Expected (optimized)                                      |
+| ------------- | ---------------------------- | --------------------------------------------------------- |
+| WASM (single) | 17.92 MB                     | ~17.4-17.7 MB                                             |
+| JS glue       | 112 KB                       | ~55-60 KB (with closure) or ~110 KB (without)             |
+| Startup time  | Baseline                     | Faster (EVAL_CTORS)                                       |
+| Runtime perf  | Baseline                     | Same (Emscripten link-time exception stripping unchanged) |
 
 ### Implementation Checklist
 
@@ -319,14 +326,14 @@ Each eliminated call site removes: the `if` condition check, a string literal co
 
 **Measured call site counts across compiled modules:**
 
-| Module | `Raise_if` calls |
-|--------|-----------------|
-| FoundationClasses (TKernel, TKMath) | 544 |
-| ModelingData (TKG2d, TKG3d, TKGeomBase, TKBRep) | 282 |
-| ModelingAlgorithms (TKTopAlgo, TKBool, TKFillet, etc.) | 271 |
-| DataExchange (TKDESTEP, TKDESTL, TKXSBase) | 105 |
-| ApplicationFramework (TKCDF, TKLCAF, TKCAF, TKXCAF) | 49 |
-| **Total** | **1,251** |
+| Module                                                 | `Raise_if` calls |
+| ------------------------------------------------------ | ---------------- |
+| FoundationClasses (TKernel, TKMath)                    | 544              |
+| ModelingData (TKG2d, TKG3d, TKGeomBase, TKBRep)        | 282              |
+| ModelingAlgorithms (TKTopAlgo, TKBool, TKFillet, etc.) | 271              |
+| DataExchange (TKDESTEP, TKDESTL, TKXSBase)             | 105              |
+| ApplicationFramework (TKCDF, TKLCAF, TKCAF, TKXCAF)    | 49               |
+| **Total**                                              | **1,251**        |
 
 **Key detail**: `-DNo_Exception` does NOT affect the unconditional `Standard_OutOfRange_Always_Raise_if` macro or bare `throw` statements in `.cxx` files. Those are handled by Emscripten's link-time `-sDISABLE_EXCEPTION_CATCHING=1` (the default), which converts throws to `abort()`.
 
@@ -373,29 +380,32 @@ void Geom_Circle::DumpJson(Standard_OStream& theOStream, Standard_Integer theDep
 
 **Measured usage across compiled modules:**
 
-| Module | `DumpJson` refs | `OCCT_DUMP_*` macro calls |
-|--------|----------------|--------------------------|
-| FoundationClasses | 93 | 174 |
-| ModelingData | 129 | 293 |
-| ApplicationFramework | — | 252 |
-| DataExchange | — | 181 |
-| **Total (compiled)** | **222+** | **900+** |
+| Module               | `DumpJson` refs | `OCCT_DUMP_*` macro calls |
+| -------------------- | --------------- | ------------------------- |
+| FoundationClasses    | 93              | 174                       |
+| ModelingData         | 129             | 293                       |
+| ApplicationFramework | —               | 252                       |
+| DataExchange         | —               | 181                       |
+| **Total (compiled)** | **222+**        | **900+**                  |
 
 Note: ModelingAlgorithms has zero `DumpJson`/`OCCT_DUMP_*` usage — this is concentrated in data/framework classes.
 
 **Why it matters**: Unlike `OCCT_DEBUG`-guarded code, `DumpJson` implementations are **always compiled**. They are virtual methods, so the linker cannot strip them even if never called — they remain reachable through vtables. Each implementation contributes:
+
 - A vtable entry
 - String constants for field names
 - `Standard_Dump` utility calls for JSON formatting
 - The `Standard_Dump` implementation itself (~707 lines in `Standard_Dump.cxx`)
 
 **Risk**: Low with a source patch; medium without one. Stubbing requires either:
+
 1. Adding an `OCCT_NO_DUMP` guard to `Standard_Dump.hxx` that redefines all macros to `((void)0)`
 2. Or patching each `DumpJson` implementation (not viable at 222+ call sites)
 
 **Estimated impact**: 200-500 KB WASM reduction from eliminated virtual method bodies, string constants, and the Standard_Dump infrastructure.
 
 **Implementation**: Patch `Standard_Dump.hxx` to support:
+
 ```cpp
 #ifdef OCCT_NO_DUMP
   #define OCCT_DUMP_TRANSIENT_CLASS_BEGIN(theOStream)
@@ -405,6 +415,7 @@ Note: ModelingAlgorithms has zero `DumpJson`/`OCCT_DUMP_*` usage — this is con
   // ... existing implementations
 #endif
 ```
+
 Then pass `-DOCCT_NO_DUMP` in compile flags. This is a non-breaking change — the `DumpJson()` virtual methods still exist (required by vtable layout) but their bodies become empty.
 
 ### OCCT_DEBUG — Already Dead (No Action Needed)
@@ -415,11 +426,11 @@ Then pass `-DOCCT_NO_DUMP` in compile flags. This is a non-breaking change — t
 
 **Measured guard sites across compiled modules:**
 
-| Module | `OCCT_DEBUG` guard sites |
-|--------|------------------------|
-| ModelingAlgorithms | 2,000 |
-| ModelingData | 118 |
-| FoundationClasses | 85 |
+| Module             | `OCCT_DEBUG` guard sites |
+| ------------------ | ------------------------ |
+| ModelingAlgorithms | 2,000                    |
+| ModelingData       | 118                      |
+| FoundationClasses  | 85                       |
 
 Sampling confirmed that the 3,503 `cout` references in ModelingAlgorithms are **almost entirely** inside `#ifdef OCCT_DEBUG` blocks (verified in TKBool, TKFillet, TKFeat — every `cout` is guarded). This diagnostic output produces zero code in our builds.
 
@@ -438,17 +449,18 @@ Our builds do not define `_DEBUG`, so assert macros are already in their minimal
 
 The current `filterPackages.py` exclusions are thorough:
 
-| Category | Status |
-|----------|--------|
-| Draw module (Tcl/Tk harness) | Excluded |
+| Category                                                     | Status   |
+| ------------------------------------------------------------ | -------- |
+| Draw module (Tcl/Tk harness)                                 | Excluded |
 | Visualization (TKV3d, TKService, TKOpenGl, TKOpenGles, etc.) | Excluded |
-| IGES, VRML, GLTF, OBJ, PLY formats | Excluded |
-| TKDECascade, TKRWMesh | Excluded |
-| Persistence drivers (TKBin, TKXml, TKStd, TKTObj, etc.) | Excluded |
-| TKExpress (expression parser), TKHelix | Excluded |
-| TKDE plugin framework | Excluded |
+| IGES, VRML, GLTF, OBJ, PLY formats                           | Excluded |
+| TKDECascade, TKRWMesh                                        | Excluded |
+| Persistence drivers (TKBin, TKXml, TKStd, TKTObj, etc.)      | Excluded |
+| TKExpress (expression parser), TKHelix                       | Excluded |
+| TKDE plugin framework                                        | Excluded |
 
 **Retained modules** (required for replicad):
+
 - FoundationClasses (TKernel, TKMath)
 - ModelingData (TKG2d, TKG3d, TKGeomBase, TKBRep)
 - ModelingAlgorithms (all except TKExpress, TKHelix)
@@ -466,31 +478,31 @@ The `filterPackages.py` note correctly states: "With non-LTO builds (`OCJS_LTO=0
 
 From the V7.6.2 → V8.0.0-rc4 changelog (1,085 commits):
 
-| Change | Size Effect |
-|--------|------------|
-| `Standard_Failure` now inherits `std::exception` (rc4) | Emscripten's `-sDISABLE_EXCEPTION_CATCHING=1` can strip catch handlers more effectively |
-| 29 Geom/Geom2d classes marked `final` (rc4) | Enables devirtualization at `-O2` — compiler can inline virtual calls |
-| Robin-hood hash maps (`NCollection_FlatDataMap`) (rc4) | More template instantiations, but better runtime cache behavior |
-| `Handle(Class)` → `occ::handle<Class>` (~82,600 replacements) | Same code, different syntax — no size impact |
-| `Standard_*` type aliases → native C++ (~161,000 replacements) | Slight reduction from eliminated typedef indirection |
-| Thread-local error handlers (rc4) | `thread_local` in single-threaded WASM is essentially a global — minimal overhead |
-| Source directory reorganization (rc1) | No code size impact — build scripts adapted |
+| Change                                                         | Size Effect                                                                             |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `Standard_Failure` now inherits `std::exception` (rc4)         | Emscripten's `-sDISABLE_EXCEPTION_CATCHING=1` can strip catch handlers more effectively |
+| 29 Geom/Geom2d classes marked `final` (rc4)                    | Enables devirtualization at `-O2` — compiler can inline virtual calls                   |
+| Robin-hood hash maps (`NCollection_FlatDataMap`) (rc4)         | More template instantiations, but better runtime cache behavior                         |
+| `Handle(Class)` → `occ::handle<Class>` (~82,600 replacements)  | Same code, different syntax — no size impact                                            |
+| `Standard_*` type aliases → native C++ (~161,000 replacements) | Slight reduction from eliminated typedef indirection                                    |
+| Thread-local error handlers (rc4)                              | `thread_local` in single-threaded WASM is essentially a global — minimal overhead       |
+| Source directory reorganization (rc1)                          | No code size impact — build scripts adapted                                             |
 
 ### Optional 3rd-Party Dependencies — Already Minimal
 
-| Dependency | Status | Impact |
-|-----------|--------|--------|
-| FreeType (`HAVE_FREETYPE`) | Not set in our build | No text rendering code compiled |
-| FreeImage (`HAVE_FREEIMAGE`) | Not set | No image format code |
-| FFmpeg (`HAVE_FFMPEG`) | Not set | No video code |
-| OpenVR (`HAVE_OPENVR`) | Not set | No VR code |
-| RapidJSON (`HAVE_RAPIDJSON`) | Set (!) | glTF parsing code compiled — but TKDEGLTF is excluded by filterPackages |
-| Draco (`HAVE_DRACO`) | Not set | No mesh compression code |
-| TBB (`HAVE_TBB`) | Not set | No TBB parallelism |
-| Eigen (`HAVE_EIGEN`) | Not set | No Eigen math |
-| X11 (`HAVE_XLIB`) | OFF for Emscripten | No X11 code |
-| OpenGL (`HAVE_OPENGL`) | OFF for Emscripten | No desktop GL |
-| GLES2 (`HAVE_GLES2`) | ON for Emscripten (default) | WebGL code — but Visualization module is excluded |
+| Dependency                   | Status                      | Impact                                                                  |
+| ---------------------------- | --------------------------- | ----------------------------------------------------------------------- |
+| FreeType (`HAVE_FREETYPE`)   | Not set in our build        | No text rendering code compiled                                         |
+| FreeImage (`HAVE_FREEIMAGE`) | Not set                     | No image format code                                                    |
+| FFmpeg (`HAVE_FFMPEG`)       | Not set                     | No video code                                                           |
+| OpenVR (`HAVE_OPENVR`)       | Not set                     | No VR code                                                              |
+| RapidJSON (`HAVE_RAPIDJSON`) | Set (!)                     | glTF parsing code compiled — but TKDEGLTF is excluded by filterPackages |
+| Draco (`HAVE_DRACO`)         | Not set                     | No mesh compression code                                                |
+| TBB (`HAVE_TBB`)             | Not set                     | No TBB parallelism                                                      |
+| Eigen (`HAVE_EIGEN`)         | Not set                     | No Eigen math                                                           |
+| X11 (`HAVE_XLIB`)            | OFF for Emscripten          | No X11 code                                                             |
+| OpenGL (`HAVE_OPENGL`)       | OFF for Emscripten          | No desktop GL                                                           |
+| GLES2 (`HAVE_GLES2`)         | ON for Emscripten (default) | WebGL code — but Visualization module is excluded                       |
 
 **Note**: `HAVE_RAPIDJSON` is set (`-DHAVE_RAPIDJSON` in compile flags) but the packages that use it (TKDEGLTF/RWGltf) are excluded by `filterPackages.py`. The define is harmless — it only affects `#ifdef HAVE_RAPIDJSON` guards in excluded code. Removing it from compile flags would be a minor cleanup.
 
@@ -504,26 +516,26 @@ From the V7.6.2 → V8.0.0-rc4 changelog (1,085 commits):
 
 ### Immediate (No OCCT Source Changes)
 
-| # | Optimization | Mechanism | Est. Impact | Risk |
-|---|-------------|-----------|-------------|------|
-| 7 | `-DNo_Exception` | Compile flag | 100-300 KB | None |
-| 8 | `-UOCC_CONVERT_SIGNALS` | Compile flag | < 50 KB | None |
-| 2 | `--closure 1` | Link flag | ~56 KB JS | Medium |
-| 3 | `-sEVAL_CTORS=1` | Link flag | Startup perf | Low |
-| 4 | `--converge` | wasm-opt flag | 10-50 KB | None |
+| #   | Optimization            | Mechanism     | Est. Impact  | Risk   |
+| --- | ----------------------- | ------------- | ------------ | ------ |
+| 7   | `-DNo_Exception`        | Compile flag  | 100-300 KB   | None   |
+| 8   | `-UOCC_CONVERT_SIGNALS` | Compile flag  | < 50 KB      | None   |
+| 2   | `--closure 1`           | Link flag     | ~56 KB JS    | Medium |
+| 3   | `-sEVAL_CTORS=1`        | Link flag     | Startup perf | Low    |
+| 4   | `--converge`            | wasm-opt flag | 10-50 KB     | None   |
 
 ### Medium-Term (Requires OCCT Source Patch)
 
-| # | Optimization | Mechanism | Est. Impact | Risk |
-|---|-------------|-----------|-------------|------|
-| 9 | `OCCT_NO_DUMP` | Patch `Standard_Dump.hxx` + compile flag | 200-500 KB | Low |
+| #   | Optimization   | Mechanism                                | Est. Impact | Risk |
+| --- | -------------- | ---------------------------------------- | ----------- | ---- |
+| 9   | `OCCT_NO_DUMP` | Patch `Standard_Dump.hxx` + compile flag | 200-500 KB  | Low  |
 
 ### Blocked
 
-| # | Optimization | Reason |
-|---|-------------|--------|
-| 1 | `-fno-exceptions` | OCCT headers use `throw` in inline code |
-| 5 | `-fno-rtti` | `Handle::DownCast()` uses `dynamic_cast` |
+| #   | Optimization      | Reason                                   |
+| --- | ----------------- | ---------------------------------------- |
+| 1   | `-fno-exceptions` | OCCT headers use `throw` in inline code  |
+| 5   | `-fno-rtti`       | `Handle::DownCast()` uses `dynamic_cast` |
 
 ---
 

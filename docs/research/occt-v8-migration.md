@@ -26,16 +26,16 @@ The OCCT V8 migration upgrades the CAD kernel from V7.6.2 to V8.0.0-RC4 and the 
 
 ### Current State (as of 2026-02-27)
 
-| Metric | V7.6.2 Baseline | V8 Single (current) | V8 Multi |
-|--------|-----------------|---------------------|----------|
-| **WASM size** | 10.30 MB | 17.67 MB (+72%) | 17.06 MB (+66%) |
-| **Complex op speed** | baseline | 20-30% faster | 15-25% faster |
-| **Simple op speed** | baseline | parity or faster | parity or faster |
-| **Tests passing** | 753/757 | 753/757 | 753/757 |
-| **OCCT version** | V7_6_2 | V8_0_0-rc4 | V8_0_0-rc4 |
-| **Emscripten** | 3.1.14 (LLVM ~15) | 5.0.1 (LLVM/Clang 23) | 5.0.1 |
-| **Exception handling** | JS-based (`-fexceptions`) | Disabled (`-sDISABLE_EXCEPTION_CATCHING=1`) | Disabled |
-| **Build variants** | single + with_exceptions | single only (with_exceptions not yet built) | multi only |
+| Metric                 | V7.6.2 Baseline           | V8 Single (current)                         | V8 Multi         |
+| ---------------------- | ------------------------- | ------------------------------------------- | ---------------- |
+| **WASM size**          | 10.30 MB                  | 17.67 MB (+72%)                             | 17.06 MB (+66%)  |
+| **Complex op speed**   | baseline                  | 20-30% faster                               | 15-25% faster    |
+| **Simple op speed**    | baseline                  | parity or faster                            | parity or faster |
+| **Tests passing**      | 753/757                   | 753/757                                     | 753/757          |
+| **OCCT version**       | V7_6_2                    | V8_0_0-rc4                                  | V8_0_0-rc4       |
+| **Emscripten**         | 3.1.14 (LLVM ~15)         | 5.0.1 (LLVM/Clang 23)                       | 5.0.1            |
+| **Exception handling** | JS-based (`-fexceptions`) | Disabled (`-sDISABLE_EXCEPTION_CATCHING=1`) | Disabled         |
+| **Build variants**     | single + with_exceptions  | single only (with_exceptions not yet built) | multi only       |
 
 ### Key Decisions Made
 
@@ -57,25 +57,25 @@ The OCCT V8 migration upgrades the CAD kernel from V7.6.2 to V8.0.0-RC4 and the 
 
 ### Technology Stack Changes
 
-| Component | Before | After |
-|-----------|--------|-------|
-| **OCCT** | V7.6.2 | V8.0.0-RC4 |
-| **Emscripten** | 3.1.14 | 5.0.1 |
-| **LLVM** | ~15 | 23 (Clang 23) |
-| **Build system** | Docker (donalffons/opencascade.js) | Local (native macOS) |
-| **Package** | npm (replicad-opencascadejs v0.20.2) | Local tarball (v0.21.0-v8.25) |
-| **Build script** | Dockerfile-based | `repos/opencascade.js/build-wasm.sh` |
+| Component        | Before                               | After                                |
+| ---------------- | ------------------------------------ | ------------------------------------ |
+| **OCCT**         | V7.6.2                               | V8.0.0-RC4                           |
+| **Emscripten**   | 3.1.14                               | 5.0.1                                |
+| **LLVM**         | ~15                                  | 23 (Clang 23)                        |
+| **Build system** | Docker (donalffons/opencascade.js)   | Local (native macOS)                 |
+| **Package**      | npm (replicad-opencascadejs v0.20.2) | Local tarball (v0.21.0-v8.25)        |
+| **Build script** | Dockerfile-based                     | `repos/opencascade.js/build-wasm.sh` |
 
 ### OCCT V8 Algorithmic Improvements
 
-| Area | Change | Impact |
-|------|--------|--------|
-| **NCollection** | Robin-hood hash maps | Better cache performance, more template instantiations |
-| **BOPAlgo** | Improved PaveFiller interference handling | 20-30% faster booleans |
-| **BRepOffset** | Rewritten offset algorithm | Better handling of difficult offset cases |
-| **BRepMesh** | Improved triangulation quality | Higher quality meshes |
-| **STEP** | Updated to AP242 with PMI support | More complete data exchange |
-| **Standard_Handle** | Thread-safe reference counting | Enables multi-threading but adds atomics overhead |
+| Area                | Change                                    | Impact                                                 |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| **NCollection**     | Robin-hood hash maps                      | Better cache performance, more template instantiations |
+| **BOPAlgo**         | Improved PaveFiller interference handling | 20-30% faster booleans                                 |
+| **BRepOffset**      | Rewritten offset algorithm                | Better handling of difficult offset cases              |
+| **BRepMesh**        | Improved triangulation quality            | Higher quality meshes                                  |
+| **STEP**            | Updated to AP242 with PMI support         | More complete data exchange                            |
+| **Standard_Handle** | Thread-safe reference counting            | Enables multi-threading but adds atomics overhead      |
 
 ### Repository Structure
 
@@ -143,24 +143,24 @@ Reverted to `OCJS_LTO=0`. `-flto` in the YAML link flags enables binaryen's wasm
 
 **Compile time** (controlled by `build-wasm.sh` environment variables):
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `OCJS_OPT` | `-O2` | Optimization level for .o compilation |
-| `OCJS_LTO` | `1` (build-wasm.sh overrides to `0`) | LTO at compile: `0` = regular WASM .o, `1` = LLVM bitcode |
-| `OCJS_EXCEPTIONS` | `0` (via build-wasm.sh) | Exception handling mode |
-| `THREADING` | `single-threaded` | Threading mode |
+| Variable          | Default                              | Purpose                                                   |
+| ----------------- | ------------------------------------ | --------------------------------------------------------- |
+| `OCJS_OPT`        | `-O2`                                | Optimization level for .o compilation                     |
+| `OCJS_LTO`        | `1` (build-wasm.sh overrides to `0`) | LTO at compile: `0` = regular WASM .o, `1` = LLVM bitcode |
+| `OCJS_EXCEPTIONS` | `0` (via build-wasm.sh)              | Exception handling mode                                   |
+| `THREADING`       | `single-threaded`                    | Threading mode                                            |
 
 **Link time** (from YAML `emccFlags`):
 
-| Flag | single_v8 | multi_v8 | with_exceptions_v8 |
-|------|-----------|----------|-------------------|
-| `-flto` | Yes | Yes | Yes |
-| `-O3` | Yes | Yes | Yes |
-| `-sDISABLE_EXCEPTION_CATCHING` | `=1` | `=1` | `=0` |
-| `-fexceptions` | No | No | Yes |
-| `-pthread` | No | Yes (via `-sPTHREAD_POOL_SIZE`) | No |
-| `--emit-symbol-map` | Yes | Yes | No |
-| `-sSTACK_SIZE` | `8388608` | `8388608` | `8388608` |
+| Flag                           | single_v8 | multi_v8                        | with_exceptions_v8 |
+| ------------------------------ | --------- | ------------------------------- | ------------------ |
+| `-flto`                        | Yes       | Yes                             | Yes                |
+| `-O3`                          | Yes       | Yes                             | Yes                |
+| `-sDISABLE_EXCEPTION_CATCHING` | `=1`      | `=1`                            | `=0`               |
+| `-fexceptions`                 | No        | No                              | Yes                |
+| `-pthread`                     | No        | Yes (via `-sPTHREAD_POOL_SIZE`) | No                 |
+| `--emit-symbol-map`            | Yes       | Yes                             | No                 |
+| `-sSTACK_SIZE`                 | `8388608` | `8388608`                       | `8388608`          |
 
 **Critical detail**: Even with `OCJS_EXCEPTIONS=0`, all builds compile with `-fexceptions` at the source level (see `compileSources.py` line 79). The throw infrastructure (`__cxa_throw`, landing pads) is always present. Only the catch wrappers (`invoke_SIG` trampolines) are toggled by `DISABLE_EXCEPTION_CATCHING`.
 
@@ -170,14 +170,14 @@ Reverted to `OCJS_LTO=0`. `-flto` in the YAML link flags enables binaryen's wasm
 
 ### Size Evolution Through Optimization
 
-| Iteration | Configuration | WASM Size | Delta |
-|-----------|--------------|-----------|-------|
-| V7.6.2 baseline | `-O0` compile, `-O3` link, no LTO | **10.30 MB** | — |
-| V8 initial | `-O2` compile, LTO, `-O2` link | **22.41 MB** | +117% |
-| V8 LTO -Os | `-Os` compile, LTO, `-Os` link | **14.85 MB** | +44% |
-| V8 noLTO | `-O2` compile, no LTO, `-O3` link | **17.53 MB** | +70% |
-| V8 noLTO + embind fixes | + base class bindings | **17.67 MB** | +72% |
-| V8 noLTO + strip flags | + `--strip-debug --strip-producers` | **~17.4 MB** | +69% |
+| Iteration               | Configuration                       | WASM Size    | Delta |
+| ----------------------- | ----------------------------------- | ------------ | ----- |
+| V7.6.2 baseline         | `-O0` compile, `-O3` link, no LTO   | **10.30 MB** | —     |
+| V8 initial              | `-O2` compile, LTO, `-O2` link      | **22.41 MB** | +117% |
+| V8 LTO -Os              | `-Os` compile, LTO, `-Os` link      | **14.85 MB** | +44%  |
+| V8 noLTO                | `-O2` compile, no LTO, `-O3` link   | **17.53 MB** | +70%  |
+| V8 noLTO + embind fixes | + base class bindings               | **17.67 MB** | +72%  |
+| V8 noLTO + strip flags  | + `--strip-debug --strip-producers` | **~17.4 MB** | +69%  |
 
 ### Why V8 Is Larger Than V7.6.2
 
@@ -192,12 +192,12 @@ Even with the same noLTO pipeline, V8 is ~7 MB larger due to:
 
 Systematic attempts to filter OCCT packages all failed due to monolithic dependencies:
 
-| Filtered Packages | Reason for Failure |
-|-------------------|-------------------|
-| TopOpeBRep, BRepAlgo (legacy boolean) | Still called by BRepMesh and BRepBuilderAPI at runtime |
-| Geom2dHatch, GeomGridEval (specialized) | Transitively required by TKGeomAlgo during tessellation |
+| Filtered Packages                                | Reason for Failure                                                         |
+| ------------------------------------------------ | -------------------------------------------------------------------------- |
+| TopOpeBRep, BRepAlgo (legacy boolean)            | Still called by BRepMesh and BRepBuilderAPI at runtime                     |
+| Geom2dHatch, GeomGridEval (specialized)          | Transitively required by TKGeomAlgo during tessellation                    |
 | StepFEA, StepKinematics, StepElement, StepDimTol | `RWStepAP214_GeneralModule` monolithic registry includes ALL STEP entities |
-| DESTEP | `STEPCAFControl_Writer` requires `DESTEP_Parameters` at runtime |
+| DESTEP                                           | `STEPCAFControl_Writer` requires `DESTEP_Parameters` at runtime            |
 
 **Key insight**: LTO builds mask dependency failures. With LTO, filtered functions may still exist because they were inlined into non-filtered callers. Non-LTO builds expose true dependencies via `wasm-ld --gc-sections` — if a function's `.o` is excluded, the function is truly absent and call sites abort.
 
@@ -207,7 +207,7 @@ These are genuinely unused and safely excluded:
 
 - **Visualization**: TKService, TKV3d, TKVCAF (Three.js renders instead)
 - **Unused data exchange**: IGES, VRML, GLTF, OBJ, PLY, RWMesh
-- **Persistence drivers**: TKBin*, TKStd*, TKXml*, TKTObj
+- **Persistence drivers**: TKBin*, TKStd*, TKXml\*, TKTObj
 - **Specialized**: HLR, Expression parser, Helix geometry
 - **Platform-specific**: Draw, ViewerTest, QA, D3DHost, IVtk
 - **Plugin framework**: TKDE
@@ -216,12 +216,12 @@ These are genuinely unused and safely excluded:
 
 Emscripten's embind requires all classes in an inheritance chain to be registered. Missing base classes cause silent failures — the class object is created but no methods are registered. Types added to fix embind issues:
 
-| Missing Base | Required By | Impact |
-|-------------|-------------|--------|
-| `CDM_Document` | `TDocStd_Document` | STEP export failed |
-| `IFSelect_WorkSession` | `XSControl_WorkSession` | STEP I/O failed |
-| `MoniTool_TypedValue` | `Interface_Static` | Configuration methods missing |
-| `Interface_TypedValue` | `Interface_Static` | Same |
+| Missing Base           | Required By             | Impact                        |
+| ---------------------- | ----------------------- | ----------------------------- |
+| `CDM_Document`         | `TDocStd_Document`      | STEP export failed            |
+| `IFSelect_WorkSession` | `XSControl_WorkSession` | STEP I/O failed               |
+| `MoniTool_TypedValue`  | `Interface_Static`      | Configuration methods missing |
+| `Interface_TypedValue` | `Interface_Static`      | Same                          |
 
 ---
 
@@ -229,27 +229,27 @@ Emscripten's embind requires all classes in an inheritance chain to be registere
 
 ### V8 vs V7.6.2 Benchmark Comparison (median, ms)
 
-| Operation | V7.6.2 | V8 Single | Δ | V8 Multi | Δ |
-|-----------|--------|-----------|---|----------|---|
-| box | 14.4 | 13.9 | -3.5% | 13.3 | -7.6% |
-| cylinder | 12.5 | 12.8 | +2.4% | 13.5 | +8.0% |
-| sphere | 29.2 | 26.9 | -7.9% | 26.1 | -10.6% |
-| fuse-two-boxes | 26.6 | 20.7 | **-22.2%** | 21.0 | -21.1% |
-| cut-cylinder-from-box | 20.0 | 16.8 | **-16.0%** | 16.6 | -17.0% |
-| n-body-fuse | 65.1 | 48.3 | **-25.8%** | 50.0 | -23.2% |
-| box-fillet-all | 43.0 | 36.1 | **-16.0%** | 40.0 | -7.0% |
-| box-chamfer-all | 39.6 | 32.2 | **-18.7%** | 37.1 | -6.3% |
-| sketch-extrude | 12.8 | 11.6 | -9.4% | 12.3 | -3.9% |
-| sketch-revolve | 15.4 | 13.4 | -13.0% | 14.7 | -4.5% |
-| bracket | 63.8 | 48.9 | **-23.4%** | 51.8 | -18.8% |
-| enclosure | 26.1 | 19.1 | **-26.8%** | 22.2 | -14.9% |
-| multi-hole-plate | 242.2 | 185.8 | **-23.3%** | 204.6 | -15.5% |
-| tray | 34.0 | 29.0 | -14.7% | 32.5 | -4.4% |
-| birdhouse | 271.1 | 198.3 | **-26.9%** | 208.0 | -23.3% |
-| bottle | 342.3 | 254.4 | **-25.7%** | 264.1 | -22.8% |
-| gridfinity-box | 249.7 | 190.9 | **-23.5%** | 212.0 | -15.1% |
-| vase | 226.4 | 162.8 | **-28.1%** | 171.5 | -24.3% |
-| deep-boolean-chain | 132.1 | 91.7 | **-30.6%** | 101.3 | -23.3% |
+| Operation             | V7.6.2 | V8 Single | Δ          | V8 Multi | Δ      |
+| --------------------- | ------ | --------- | ---------- | -------- | ------ |
+| box                   | 14.4   | 13.9      | -3.5%      | 13.3     | -7.6%  |
+| cylinder              | 12.5   | 12.8      | +2.4%      | 13.5     | +8.0%  |
+| sphere                | 29.2   | 26.9      | -7.9%      | 26.1     | -10.6% |
+| fuse-two-boxes        | 26.6   | 20.7      | **-22.2%** | 21.0     | -21.1% |
+| cut-cylinder-from-box | 20.0   | 16.8      | **-16.0%** | 16.6     | -17.0% |
+| n-body-fuse           | 65.1   | 48.3      | **-25.8%** | 50.0     | -23.2% |
+| box-fillet-all        | 43.0   | 36.1      | **-16.0%** | 40.0     | -7.0%  |
+| box-chamfer-all       | 39.6   | 32.2      | **-18.7%** | 37.1     | -6.3%  |
+| sketch-extrude        | 12.8   | 11.6      | -9.4%      | 12.3     | -3.9%  |
+| sketch-revolve        | 15.4   | 13.4      | -13.0%     | 14.7     | -4.5%  |
+| bracket               | 63.8   | 48.9      | **-23.4%** | 51.8     | -18.8% |
+| enclosure             | 26.1   | 19.1      | **-26.8%** | 22.2     | -14.9% |
+| multi-hole-plate      | 242.2  | 185.8     | **-23.3%** | 204.6    | -15.5% |
+| tray                  | 34.0   | 29.0      | -14.7%     | 32.5     | -4.4%  |
+| birdhouse             | 271.1  | 198.3     | **-26.9%** | 208.0    | -23.3% |
+| bottle                | 342.3  | 254.4     | **-25.7%** | 264.1    | -22.8% |
+| gridfinity-box        | 249.7  | 190.9     | **-23.5%** | 212.0    | -15.1% |
+| vase                  | 226.4  | 162.8     | **-28.1%** | 171.5    | -24.3% |
+| deep-boolean-chain    | 132.1  | 91.7      | **-30.6%** | 101.3    | -23.3% |
 
 ### Key Performance Findings
 
@@ -266,10 +266,10 @@ Emscripten's embind requires all classes in an inheritance chain to be registere
 
 Historically, the project maintained two WASM build variants:
 
-| Variant | Exception Mode | WASM Size | Use Case |
-|---------|---------------|-----------|----------|
-| `replicad_single.wasm` | Disabled (`-sDISABLE_EXCEPTION_CATCHING=1`) | 10.30 MB (V7.6) | Production — fast, small |
-| `replicad_with_exceptions.wasm` | Enabled (`-fexceptions -sDISABLE_EXCEPTION_CATCHING=0`) | ~19 MB (V7.6) | Debug — decoded error messages |
+| Variant                         | Exception Mode                                          | WASM Size       | Use Case                       |
+| ------------------------------- | ------------------------------------------------------- | --------------- | ------------------------------ |
+| `replicad_single.wasm`          | Disabled (`-sDISABLE_EXCEPTION_CATCHING=1`)             | 10.30 MB (V7.6) | Production — fast, small       |
+| `replicad_with_exceptions.wasm` | Enabled (`-fexceptions -sDISABLE_EXCEPTION_CATCHING=0`) | ~19 MB (V7.6)   | Debug — decoded error messages |
 
 The ~80% size increase from enabling exceptions comes from **`invoke_SIG` JavaScript trampolines**. Emscripten wraps every potentially-throwing C++ function call in a JS trampoline:
 
@@ -278,7 +278,7 @@ function invoke_viii(index, a1, a2, a3) {
   var sp = stackSave();
   try {
     getWasmTableEntry(index)(a1, a2, a3);
-  } catch(e) {
+  } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
     _setThrew(1, 0);
@@ -299,6 +299,7 @@ With `DISABLE_EXCEPTION_CATCHING=1` (current single build):
 5. **Error appears as**: `KernelError: Unknown kernel error (code 12324784)` — the pointer can't be decoded without the `OCJS.getStandard_FailureData()` binding
 
 The `oc-exceptions.ts` module handles exception extraction from multiple Emscripten formats:
+
 - `OcExceptionError` (proxy wrapper — preserves JS stack)
 - Bare number (legacy Emscripten throw)
 - `CppException` (Emscripten 5.x `Error` subclass with `excPtr` property)
@@ -308,10 +309,12 @@ When `withExceptions: false` (default), there is no `OCJS` binding to decode the
 ### `--strip-debug` and `--strip-producers` Impact
 
 These wasm-opt flags strip **metadata sections only**:
+
 - **Name section**: Human-readable C++ function names for browser devtools
 - **Producer section**: Build tool version information
 
 They have **zero effect** on:
+
 - Runtime behavior or speed
 - Exception throwing/catching mechanics
 - The kernel's `oc-exceptions.ts` stack tracing (which uses JS stack frames)
@@ -323,12 +326,12 @@ The `--emit-symbol-map` flag generates a side file (`.symbols`) for devtools nam
 
 ### Emscripten Exception Modes (3.x → 5.x)
 
-| Mode | Throw | Catch | Size Impact | Perf Impact | OCCT Compat |
-|------|-------|-------|-------------|-------------|-------------|
-| **`-fno-exceptions`** | `std::terminate()` | None | Smallest | Fastest | **BREAKS** — OCCT uses try/catch internally |
-| **`-fexceptions -sDISABLE_EXCEPTION_CATCHING=1`** (current) | `__cxa_throw` → propagate | None | Medium (throw code present) | Fast | Partial — internal catch blocks non-functional |
-| **`-fexceptions -sDISABLE_EXCEPTION_CATCHING=0`** (old with_exceptions) | `__cxa_throw` → JS | JS invoke wrappers | **+80%** | **Slow** (every call bounces JS) | Full |
-| **`-fwasm-exceptions`** (recommended) | Native WASM `throw` | Native WASM `try/catch` | **Small** (no invoke wrappers) | **Near-native** (zero-cost happy path) | **Full** |
+| Mode                                                                    | Throw                     | Catch                   | Size Impact                    | Perf Impact                            | OCCT Compat                                    |
+| ----------------------------------------------------------------------- | ------------------------- | ----------------------- | ------------------------------ | -------------------------------------- | ---------------------------------------------- |
+| **`-fno-exceptions`**                                                   | `std::terminate()`        | None                    | Smallest                       | Fastest                                | **BREAKS** — OCCT uses try/catch internally    |
+| **`-fexceptions -sDISABLE_EXCEPTION_CATCHING=1`** (current)             | `__cxa_throw` → propagate | None                    | Medium (throw code present)    | Fast                                   | Partial — internal catch blocks non-functional |
+| **`-fexceptions -sDISABLE_EXCEPTION_CATCHING=0`** (old with_exceptions) | `__cxa_throw` → JS        | JS invoke wrappers      | **+80%**                       | **Slow** (every call bounces JS)       | Full                                           |
+| **`-fwasm-exceptions`** (recommended)                                   | Native WASM `throw`       | Native WASM `try/catch` | **Small** (no invoke wrappers) | **Near-native** (zero-cost happy path) | **Full**                                       |
 
 The fundamental change from Emscripten 3→5 is that **native WASM exception handling** (`-fwasm-exceptions`) is production-ready with **94.55% global browser support** (Chrome 95+, Firefox 100+, Safari 15.2+, Edge 95+, as of Nov 2024).
 
@@ -349,6 +352,7 @@ With native WASM exceptions:
 OCCT uses exceptions in two patterns:
 
 **Pattern A: Internal catch-and-convert** — high-level algorithms catch and set error flags:
+
 ```cpp
 // BOPAlgo_Builder
 try {
@@ -359,6 +363,7 @@ try {
 ```
 
 **Pattern B: Defensive catch** — prevent abort on recoverable errors:
+
 ```cpp
 // BRepFill_OffsetWire
 try {
@@ -370,6 +375,7 @@ try {
 ```
 
 The `Standard_Failure` exception hierarchy:
+
 ```
 Standard_Failure (base, inherits std::exception)
 ├── Standard_DomainError
@@ -432,12 +438,12 @@ The kernel initializes the multi-threaded WASM in `init-open-cascade.ts` but nev
 
 Since no parallelism is utilized, the multi-threaded build pays pure overhead:
 
-| Overhead Source | Impact | Mechanism |
-|----------------|--------|-----------|
-| `malloc`/`free` global mutex | ~3-8% | `dlmalloc` uses `pthread_mutex_lock`/`unlock` for every allocation |
-| Atomic memory fences | ~2-5% | `-pthread` flag inserts barriers at every shared state access |
-| `ALLOW_MEMORY_GROWTH` + pthreads | ~1-3% | HEAP typed array views require frequent revalidation |
-| Pre-spawned worker pool | ~50-200 MB RAM | `PTHREAD_POOL_SIZE=navigator.hardwareConcurrency` loads WASM in N workers |
+| Overhead Source                  | Impact         | Mechanism                                                                 |
+| -------------------------------- | -------------- | ------------------------------------------------------------------------- |
+| `malloc`/`free` global mutex     | ~3-8%          | `dlmalloc` uses `pthread_mutex_lock`/`unlock` for every allocation        |
+| Atomic memory fences             | ~2-5%          | `-pthread` flag inserts barriers at every shared state access             |
+| `ALLOW_MEMORY_GROWTH` + pthreads | ~1-3%          | HEAP typed array views require frequent revalidation                      |
+| Pre-spawned worker pool          | ~50-200 MB RAM | `PTHREAD_POOL_SIZE=navigator.hardwareConcurrency` loads WASM in N workers |
 
 This perfectly explains why multi-threaded is 5-15% slower on every benchmark.
 
@@ -454,12 +460,14 @@ This pre-spawns `navigator.hardwareConcurrency` workers (typically 4-16) at WASM
 ### OCCT Parallel Architecture
 
 OCCT V8 uses `OSD_Parallel` as its parallelization API with two backends:
+
 - **TBB** (Intel Threading Building Blocks) — used when `HAVE_TBB` is defined
 - **OSD_ThreadPool** (pthreads-based) — fallback when TBB is unavailable
 
 Since `HAVE_TBB` is not defined for the Emscripten build, OCCT falls back to `OSD_ThreadPool` which uses pthreads directly. This is compatible with Emscripten's pthread implementation.
 
 Operations that support parallelism (when enabled):
+
 - **BRepMesh**: Face healing, seam edges, edge/face discretization (via `OSD_Parallel::For()`)
 - **BOPAlgo**: Builder, WireSplitter, CellsBuilder (via `BOPTools_Parallel::Perform()`)
 - **BRepExtrema**: Distance calculations
@@ -510,6 +518,7 @@ wasmOptFlags = [wasmOptPath, "-O3", "--strip-debug", "--strip-producers",
 ### `--emit-symbol-map`
 
 The `--emit-symbol-map` link flag generates a `.symbols` side file mapping minified function IDs to original C++ names. This is:
+
 - **Zero runtime cost** — the map file is never loaded unless devtools requests it
 - **Useful for debugging** — browser devtools can load it to show meaningful stack traces
 - **Does not affect** the `oc-exceptions.ts` error tracing, which uses JavaScript stack frames
@@ -525,6 +534,7 @@ The `--emit-symbol-map` link flag generates a `.symbols` side file mapping minif
 **Changes required**:
 
 1. **`compileSources.py` / `compileBindings.py` / `Common.py`** — change exception flags:
+
    ```python
    # From: ["-fexceptions", "-sDISABLE_EXCEPTION_CATCHING=..."]
    # To:   ["-fwasm-exceptions"]
@@ -532,6 +542,7 @@ The `--emit-symbol-map` link flag generates a `.symbols` side file mapping minif
    ```
 
 2. **YAML `emccFlags`** — replace exception flags:
+
    ```yaml
    emccFlags:
      - -fwasm-exceptions
@@ -549,6 +560,7 @@ The `--emit-symbol-map` link flag generates a `.symbols` side file mapping minif
 7. **Full recompile required** — cannot mix `-fexceptions` `.o` files with `-fwasm-exceptions` linking.
 
 **Expected results**:
+
 - Size: likely smaller than current single build (no `__cxa_throw` JS glue, compact WASM instructions)
 - Speed: near-identical to current single build on happy path
 - Error handling: graceful failures with decoded exception messages by default
@@ -558,13 +570,13 @@ The `--emit-symbol-map` link flag generates a `.symbols` side file mapping minif
 
 Iterative optimization plan (see `.cursor/plans/wasm_size_optimization_288da51b.plan.md`):
 
-| Iteration | Change | Expected Size | Risk |
-|-----------|--------|---------------|------|
-| 1 | wasm-opt `-Oz` + strip flags | ~16.0-17.0 MB | Low |
-| 2 | Compile with `-Os` | ~15.0-16.0 MB | Low |
-| 3 | Source-patch STEP registry (remove FEA/Kinematics/Element/DimTol) | ~14.5-15.5 MB | Medium |
-| 4 | Source-patch TKBool PCH (decouple TopOpeBRep) | ~14.0-15.0 MB | High |
-| 5 | LTO with `-Os` and `-mllvm -inline-threshold=25` | ~13.0-15.0 MB | Medium |
+| Iteration | Change                                                            | Expected Size | Risk   |
+| --------- | ----------------------------------------------------------------- | ------------- | ------ |
+| 1         | wasm-opt `-Oz` + strip flags                                      | ~16.0-17.0 MB | Low    |
+| 2         | Compile with `-Os`                                                | ~15.0-16.0 MB | Low    |
+| 3         | Source-patch STEP registry (remove FEA/Kinematics/Element/DimTol) | ~14.5-15.5 MB | Medium |
+| 4         | Source-patch TKBool PCH (decouple TopOpeBRep)                     | ~14.0-15.0 MB | High   |
+| 5         | LTO with `-Os` and `-mllvm -inline-threshold=25`                  | ~13.0-15.0 MB | Medium |
 
 **Target**: 14-15 MB (conservative) or 13-14 MB (aggressive)
 
@@ -652,38 +664,38 @@ pnpm nx benchmark kernels
 
 ### File Sizes
 
-| File | V7.6.2 | V8 Single | V8 Multi |
-|------|--------|-----------|----------|
-| `.wasm` | 10.30 MB | 17.67 MB | 17.06 MB |
-| `.js` (glue) | 132 KB | 110 KB | 127 KB |
-| `.d.ts` | 407 KB (9,006 lines) | 365 KB (8,554 lines) | 365 KB |
-| Brotli compressed `.wasm` | ~3.5 MB | ~5-6 MB | ~5-6 MB |
+| File                      | V7.6.2               | V8 Single            | V8 Multi |
+| ------------------------- | -------------------- | -------------------- | -------- |
+| `.wasm`                   | 10.30 MB             | 17.67 MB             | 17.06 MB |
+| `.js` (glue)              | 132 KB               | 110 KB               | 127 KB   |
+| `.d.ts`                   | 407 KB (9,006 lines) | 365 KB (8,554 lines) | 365 KB   |
+| Brotli compressed `.wasm` | ~3.5 MB              | ~5-6 MB              | ~5-6 MB  |
 
 ---
 
 ## Appendix: Key File Locations
 
-| Purpose | Path |
-|---------|------|
-| Build orchestrator | `repos/opencascade.js/build-wasm.sh` |
-| WASM linker + wasm-opt | `repos/opencascade.js/src/buildFromYaml.py` |
-| Source compiler | `repos/opencascade.js/src/compileSources.py` |
-| Binding compiler | `repos/opencascade.js/src/compileBindings.py` |
-| Shared config | `repos/opencascade.js/src/Common.py` |
-| Package filter | `repos/opencascade.js/src/filter/filterPackages.py` |
-| Single build YAML | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_single_v8.yml` |
-| Multi build YAML | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_multi_v8.yml` |
-| Exceptions build YAML | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_with_exceptions_v8.yml` |
-| OCCT source | `repos/OCCT/src/` |
-| Kernel entry | `packages/kernels/src/kernels/replicad/replicad.kernel.ts` |
-| Exception handler | `packages/kernels/src/kernels/replicad/oc-exceptions.ts` |
-| WASM init | `packages/kernels/src/kernels/replicad/init-open-cascade.ts` |
-| Kernel tests | `packages/kernels/src/kernels/replicad/replicad.kernel.test.ts` |
-| Kernel options | `apps/ui/app/constants/kernel-worker.constants.ts` |
-| WASM inspect tool | `packages/kernels/scripts/wasm-inspect.mts` |
-| Size analysis | `docs/research/wasm-size-analysis-v762-vs-v8rc4.md` |
-| Optimization plan | `.cursor/plans/wasm_size_optimization_288da51b.plan.md` |
-| Stress test model | `libs/tau-examples/src/kernels/replicad/stress-test/main.ts` |
-| Replicad shapes (meshing) | `repos/replicad/packages/replicad/src/shapes.ts` |
-| BOPAlgo parallel config | `repos/OCCT/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.cxx` |
-| OSD_Parallel framework | `repos/OCCT/src/FoundationClasses/TKernel/OSD/OSD_Parallel.hxx` |
+| Purpose                   | Path                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| Build orchestrator        | `repos/opencascade.js/build-wasm.sh`                                                              |
+| WASM linker + wasm-opt    | `repos/opencascade.js/src/buildFromYaml.py`                                                       |
+| Source compiler           | `repos/opencascade.js/src/compileSources.py`                                                      |
+| Binding compiler          | `repos/opencascade.js/src/compileBindings.py`                                                     |
+| Shared config             | `repos/opencascade.js/src/Common.py`                                                              |
+| Package filter            | `repos/opencascade.js/src/filter/filterPackages.py`                                               |
+| Single build YAML         | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_single_v8.yml`          |
+| Multi build YAML          | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_multi_v8.yml`           |
+| Exceptions build YAML     | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_with_exceptions_v8.yml` |
+| OCCT source               | `repos/OCCT/src/`                                                                                 |
+| Kernel entry              | `packages/kernels/src/kernels/replicad/replicad.kernel.ts`                                        |
+| Exception handler         | `packages/kernels/src/kernels/replicad/oc-exceptions.ts`                                          |
+| WASM init                 | `packages/kernels/src/kernels/replicad/init-open-cascade.ts`                                      |
+| Kernel tests              | `packages/kernels/src/kernels/replicad/replicad.kernel.test.ts`                                   |
+| Kernel options            | `apps/ui/app/constants/kernel-worker.constants.ts`                                                |
+| WASM inspect tool         | `packages/kernels/scripts/wasm-inspect.mts`                                                       |
+| Size analysis             | `docs/research/wasm-size-analysis-v762-vs-v8rc4.md`                                               |
+| Optimization plan         | `.cursor/plans/wasm_size_optimization_288da51b.plan.md`                                           |
+| Stress test model         | `libs/tau-examples/src/kernels/replicad/stress-test/main.ts`                                      |
+| Replicad shapes (meshing) | `repos/replicad/packages/replicad/src/shapes.ts`                                                  |
+| BOPAlgo parallel config   | `repos/OCCT/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_Options.cxx`                              |
+| OSD_Parallel framework    | `repos/OCCT/src/FoundationClasses/TKernel/OSD/OSD_Parallel.hxx`                                   |

@@ -42,40 +42,40 @@ The kernel API follows a three-layer design. Each layer has a distinct audience 
 
 ## Entity Model
 
-| Entity | Purpose | Layer |
-|--------|---------|-------|
-| **KernelClient** | High-level facade. Lazy, Promise-based, event-subscribable. Supports inline code rendering (`CodeInput`) and filesystem rendering (`FileInput`). Emits `geometry` event on render completion. Auto-cancels superseded renders. Created by `createKernelClient()`. | Consumer |
-| **KernelTransport** | Event-driven message channel between realms. Default: `createWorkerTransport()`. | Framework |
-| **KernelWorkerClient** | Protocol client wrapping a Transport with request/response correlation and typed callbacks. | Framework |
-| **KernelRuntimeWorker** | Worker-side orchestrator. Manages kernel selection, middleware chain, bundler routing. | Worker |
-| **KernelFileSystem** | 10-method Node.js `fs.promises`-compatible interface. Bridged from main thread → worker via MessagePort. | Consumer |
-| **KernelDefinition** | Kernel plugin contract (author API, via `defineKernel`). Runs in worker. | Plugin Author |
-| **BundlerDefinition** | Bundler plugin contract (author API, via `defineBundler`). Declares supported `extensions`. | Plugin Author |
-| **KernelMiddleware** | Middleware plugin contract (author API, via `defineMiddleware`). Wraps kernel operations. | Plugin Author |
-| **KernelPlugin** | Registration object returned by consumer factory functions like `replicad()`. Runs on main thread. | Consumer |
-| **MiddlewarePlugin** | Registration object returned by consumer factory functions like `parameterCache()`. | Consumer |
-| **BundlerPlugin** | Registration object returned by consumer factory functions like `esbuild()`. | Consumer |
-| **KernelRuntime** | Services injected into kernel methods: filesystem, logger, bundler, tracer. | Plugin Author |
-| **Realm** | Execution environment: main thread, Web Worker, Node.js `worker_threads`, remote server. | Conceptual |
+| Entity                  | Purpose                                                                                                                                                                                                                                                           | Layer         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| **KernelClient**        | High-level facade. Lazy, Promise-based, event-subscribable. Supports inline code rendering (`CodeInput`) and filesystem rendering (`FileInput`). Emits `geometry` event on render completion. Auto-cancels superseded renders. Created by `createKernelClient()`. | Consumer      |
+| **KernelTransport**     | Event-driven message channel between realms. Default: `createWorkerTransport()`.                                                                                                                                                                                  | Framework     |
+| **KernelWorkerClient**  | Protocol client wrapping a Transport with request/response correlation and typed callbacks.                                                                                                                                                                       | Framework     |
+| **KernelRuntimeWorker** | Worker-side orchestrator. Manages kernel selection, middleware chain, bundler routing.                                                                                                                                                                            | Worker        |
+| **KernelFileSystem**    | 10-method Node.js `fs.promises`-compatible interface. Bridged from main thread → worker via MessagePort.                                                                                                                                                          | Consumer      |
+| **KernelDefinition**    | Kernel plugin contract (author API, via `defineKernel`). Runs in worker.                                                                                                                                                                                          | Plugin Author |
+| **BundlerDefinition**   | Bundler plugin contract (author API, via `defineBundler`). Declares supported `extensions`.                                                                                                                                                                       | Plugin Author |
+| **KernelMiddleware**    | Middleware plugin contract (author API, via `defineMiddleware`). Wraps kernel operations.                                                                                                                                                                         | Plugin Author |
+| **KernelPlugin**        | Registration object returned by consumer factory functions like `replicad()`. Runs on main thread.                                                                                                                                                                | Consumer      |
+| **MiddlewarePlugin**    | Registration object returned by consumer factory functions like `parameterCache()`.                                                                                                                                                                               | Consumer      |
+| **BundlerPlugin**       | Registration object returned by consumer factory functions like `esbuild()`.                                                                                                                                                                                      | Consumer      |
+| **KernelRuntime**       | Services injected into kernel methods: filesystem, logger, bundler, tracer.                                                                                                                                                                                       | Plugin Author |
+| **Realm**               | Execution environment: main thread, Web Worker, Node.js `worker_threads`, remote server.                                                                                                                                                                          | Conceptual    |
 
 ## API Audiences
 
 Two distinct "define" patterns serve different audiences:
 
-| Audience | Pattern | Example | Runs In |
-|----------|---------|---------|---------|
-| **Plugin author** | `defineKernel()`, `defineBundler()`, `defineMiddleware()` | Implement a new CAD kernel | Worker realm |
-| **Consumer** | `replicad()`, `esbuild()`, `parameterCache()` | Select and configure plugins | Main thread |
+| Audience          | Pattern                                                   | Example                      | Runs In      |
+| ----------------- | --------------------------------------------------------- | ---------------------------- | ------------ |
+| **Plugin author** | `defineKernel()`, `defineBundler()`, `defineMiddleware()` | Implement a new CAD kernel   | Worker realm |
+| **Consumer**      | `replicad()`, `esbuild()`, `parameterCache()`             | Select and configure plugins | Main thread  |
 
 ## Three-Pillar Plugin Model
 
 All non-generic capabilities are provided by injectable plugins, not hardcoded in the framework:
 
-| Plugin Type | Author API | Consumer API | Purpose | Example |
-|-------------|-----------|-------------|---------|---------|
-| Kernel | `defineKernel` → `KernelDefinition` | `replicad()` → `KernelPlugin` | Geometry computation, parameter extraction, export | replicad, manifold, jscad, openscad, zoo, tau |
-| Bundler | `defineBundler` → `BundlerDefinition` | `esbuild()` → `BundlerPlugin` | File bundling, code execution, module registry, import detection | esbuild bundler |
-| Middleware | `defineMiddleware` → `KernelMiddleware` | `parameterCache()` → `MiddlewarePlugin` | Operation wrapping (caching, transforms, edge detection) | geometry-cache, parameter-cache |
+| Plugin Type | Author API                              | Consumer API                            | Purpose                                                          | Example                                       |
+| ----------- | --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------- |
+| Kernel      | `defineKernel` → `KernelDefinition`     | `replicad()` → `KernelPlugin`           | Geometry computation, parameter extraction, export               | replicad, manifold, jscad, openscad, zoo, tau |
+| Bundler     | `defineBundler` → `BundlerDefinition`   | `esbuild()` → `BundlerPlugin`           | File bundling, code execution, module registry, import detection | esbuild bundler                               |
+| Middleware  | `defineMiddleware` → `KernelMiddleware` | `parameterCache()` → `MiddlewarePlugin` | Operation wrapping (caching, transforms, edge detection)         | geometry-cache, parameter-cache               |
 
 ### Multi-Bundler Support
 
@@ -88,15 +88,15 @@ Multiple bundlers can be registered simultaneously. Each bundler declares the fi
 
 ### Machine Multiplicity
 
-| Component | Per-build count | Per-viewer-panel count | Notes |
-|-----------|----------------|----------------------|-------|
-| BuildMachine | 1 | -- | Root state machine |
-| FileManagerMachine | 1 | -- | Shared across all units |
-| CadMachine | 1 per unique entry file | -- | Shared when multiple panels view the same file |
-| KernelMachine | 1 per CadMachine | -- | Always 1:1 with CadMachine |
-| KernelClient | 1 per KernelMachine | -- | Manages Worker lifecycle |
-| KernelRuntimeWorker | 1 per KernelClient | -- | Single worker, loads kernel on demand |
-| GraphicsMachine | -- | 1 | WebGL renderer per panel |
+| Component           | Per-build count         | Per-viewer-panel count | Notes                                          |
+| ------------------- | ----------------------- | ---------------------- | ---------------------------------------------- |
+| BuildMachine        | 1                       | --                     | Root state machine                             |
+| FileManagerMachine  | 1                       | --                     | Shared across all units                        |
+| CadMachine          | 1 per unique entry file | --                     | Shared when multiple panels view the same file |
+| KernelMachine       | 1 per CadMachine        | --                     | Always 1:1 with CadMachine                     |
+| KernelClient        | 1 per KernelMachine     | --                     | Manages Worker lifecycle                       |
+| KernelRuntimeWorker | 1 per KernelClient      | --                     | Single worker, loads kernel on demand          |
+| GraphicsMachine     | --                      | 1                      | WebGL renderer per panel                       |
 
 ### Memory Impact
 
@@ -142,20 +142,21 @@ When `render()` is called while a previous render is in-flight, the previous ren
 
 10 required methods matching Node.js `fs.promises.*`. All paths are absolute.
 
-| Method | Signature | Purpose |
-|--------|-----------|---------|
-| `readFile` | `(path, encoding?) → Promise<string \| Uint8Array>` | Read file as text or binary |
-| `writeFile` | `(path, data) → Promise<void>` | Write text or binary file |
-| `mkdir` | `(path, options?) → Promise<void>` | Create directory (optionally recursive) |
-| `readdir` | `(path) → Promise<string[]>` | List directory entries |
-| `unlink` | `(path) → Promise<void>` | Delete file |
-| `rmdir` | `(path) → Promise<void>` | Remove directory |
-| `rename` | `(oldPath, newPath) → Promise<void>` | Rename/move file or directory |
-| `stat` | `(path) → Promise<{ type, size, mtimeMs }>` | Get file/directory metadata |
-| `lstat` | `(path) → Promise<{ type, size, mtimeMs }>` | Like stat, but does not follow symlinks |
-| `exists` | `(path) → Promise<boolean>` | Check if path exists |
+| Method      | Signature                                           | Purpose                                 |
+| ----------- | --------------------------------------------------- | --------------------------------------- |
+| `readFile`  | `(path, encoding?) → Promise<string \| Uint8Array>` | Read file as text or binary             |
+| `writeFile` | `(path, data) → Promise<void>`                      | Write text or binary file               |
+| `mkdir`     | `(path, options?) → Promise<void>`                  | Create directory (optionally recursive) |
+| `readdir`   | `(path) → Promise<string[]>`                        | List directory entries                  |
+| `unlink`    | `(path) → Promise<void>`                            | Delete file                             |
+| `rmdir`     | `(path) → Promise<void>`                            | Remove directory                        |
+| `rename`    | `(oldPath, newPath) → Promise<void>`                | Rename/move file or directory           |
+| `stat`      | `(path) → Promise<{ type, size, mtimeMs }>`         | Get file/directory metadata             |
+| `lstat`     | `(path) → Promise<{ type, size, mtimeMs }>`         | Like stat, but does not follow symlinks |
+| `exists`    | `(path) → Promise<boolean>`                         | Check if path exists                    |
 
 The framework builds higher-level operations from these primitives internally:
+
 - `ensureDirectoryExists(path)` via `mkdir(path, { recursive: true })`
 - `readFiles(paths)` via `Promise.all(paths.map(readFile))`
 - `getDirectoryContents(dir)` via `readdir(dir)` + `Promise.all(names.map(readFile))`
@@ -210,11 +211,11 @@ type KernelTransport = {
 
 ### Debouncing
 
-| Trigger | Debounce | Rationale |
-|---------|----------|-----------|
-| File content change (same file) | 500ms | Avoids recompiling on every keystroke |
-| Parameter change | 50ms | Slider drags need responsive feedback |
-| File switch (different file) | 0ms | User intent is clear, render immediately |
+| Trigger                         | Debounce | Rationale                                |
+| ------------------------------- | -------- | ---------------------------------------- |
+| File content change (same file) | 500ms    | Avoids recompiling on every keystroke    |
+| Parameter change                | 50ms     | Slider drags need responsive feedback    |
+| File switch (different file)    | 0ms      | User intent is clear, render immediately |
 
 ## Worker Lifecycle
 
@@ -273,14 +274,14 @@ BuildMachine.stopStatefulActors()
 Priority: openscad → zoo → replicad → manifold → jscad → tau
 ```
 
-| Kernel | Detection Method | Scope |
-|--------|-----------------|-------|
-| OpenScad | Extension: `.scad` | Immediate |
-| Zoo | Extension: `.kcl` | Immediate |
+| Kernel   | Detection Method              | Scope                   |
+| -------- | ----------------------------- | ----------------------- |
+| OpenScad | Extension: `.scad`            | Immediate               |
+| Zoo      | Extension: `.kcl`             | Immediate               |
 | Replicad | Regex + bundler detectImports | Entry file + transitive |
 | Manifold | Regex + bundler detectImports | Entry file + transitive |
-| Jscad | Regex + bundler detectImports | Entry file + transitive |
-| Tau | Extension: `*` (catch-all) | Fallback |
+| Jscad    | Regex + bundler detectImports | Entry file + transitive |
+| Tau      | Extension: `*` (catch-all)    | Fallback                |
 
 ### Multi-Module Registration
 
@@ -311,6 +312,7 @@ export default defineBundler({
 ```
 
 Key methods:
+
 - `detectImports(input)` — lightweight pass that discovers bare-specifier imports transitively using esbuild externals mode. No modules need to be registered. Used for kernel selection.
 - `bundle(input)` — full production bundle with all registered modules resolved. Called after kernel selection and initialization.
 - `execute(code)` — run bundled code via dynamic import (Blob URL / data URL).
@@ -342,12 +344,12 @@ The kernel machine communicates with the worker via typed MessagePort events thr
 
 The bundler produces a metafile with all resolved module paths:
 
-| Namespace | Example Key | Description |
-|-----------|-------------|-------------|
-| `zenfs:` | `zenfs:main.ts` | Project-relative file |
-| `zenfs:` | `zenfs:/node_modules/lodash/index.js` | CDN-cached module |
-| `builtin:` | `builtin:replicad` | Runtime-registered kernel module |
-| `http-url:` | `http-url:https://esm.sh/...` | HTTP-fetched module |
+| Namespace   | Example Key                           | Description                      |
+| ----------- | ------------------------------------- | -------------------------------- |
+| `zenfs:`    | `zenfs:main.ts`                       | Project-relative file            |
+| `zenfs:`    | `zenfs:/node_modules/lodash/index.js` | CDN-cached module                |
+| `builtin:`  | `builtin:replicad`                    | Runtime-registered kernel module |
+| `http-url:` | `http-url:https://esm.sh/...`         | HTTP-fetched module              |
 
 During detection, bare specifiers appear as external imports in `metafile.outputs[chunk].imports` rather than in `metafile.inputs`, since they are not resolved.
 
@@ -372,8 +374,8 @@ Tessellation controls the quality of geometry meshing across the render and expo
 
 ```typescript
 type Tessellation = {
-  linearTolerance: number;   // Maximum chord deviation (mm)
-  angularTolerance: number;  // Maximum angle between face normals (degrees)
+  linearTolerance: number; // Maximum chord deviation (mm)
+  angularTolerance: number; // Maximum angle between face normals (degrees)
 };
 ```
 
@@ -386,8 +388,8 @@ Tessellation can be configured at two levels, with per-call overrides taking pre
 ```typescript
 createKernelClient({
   tessellation: {
-    preview: { linearTolerance: 0.1, angularTolerance: 30 },   // Faster, lower quality
-    export:  { linearTolerance: 0.01, angularTolerance: 30 },  // Slower, higher quality
+    preview: { linearTolerance: 0.1, angularTolerance: 30 }, // Faster, lower quality
+    export: { linearTolerance: 0.01, angularTolerance: 30 }, // Slower, higher quality
   },
   // ...
 });
@@ -398,8 +400,14 @@ Two explicit slots (`preview` and `export`) make the quality distinction visible
 2. **Per-call overrides** — passed as `callOptions` to individual methods:
 
 ```typescript
-client.render({ file, parameters, tessellation: { linearTolerance: 0.05, angularTolerance: 15 } });
-client.export('stl', { tessellation: { linearTolerance: 0.005, angularTolerance: 10 } });
+client.render({
+  file,
+  parameters,
+  tessellation: { linearTolerance: 0.05, angularTolerance: 15 },
+});
+client.export('stl', {
+  tessellation: { linearTolerance: 0.005, angularTolerance: 10 },
+});
 ```
 
 ### Resolution Order
@@ -410,13 +418,13 @@ If no tessellation is specified at any level, each kernel applies its own intern
 
 ### Per-Kernel Interpretation
 
-| Kernel | Preview Default | Export Default | Mechanism |
-|--------|----------------|----------------|-----------|
-| **Replicad** | `0.1 / 30°` | `0.01 / 30°` | Passed to `.mesh()` and `.meshEdges()` |
-| **Manifold** | ignored | ignored | Uses Manifold's own tessellation; fixed by model/API output |
-| **OpenSCAD** | none | n/a | Injected as `$fs` (linear) and `$fa` (angular) CLI arguments at render time. Export reuses baked geometry — override logged as warning |
-| **Zoo/KCL** | ignored | ignored | Tessellation is server-side; future integration point |
-| **JSCAD** | ignored | ignored | Uses fixed internal tessellation |
+| Kernel       | Preview Default | Export Default | Mechanism                                                                                                                              |
+| ------------ | --------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Replicad** | `0.1 / 30°`     | `0.01 / 30°`   | Passed to `.mesh()` and `.meshEdges()`                                                                                                 |
+| **Manifold** | ignored         | ignored        | Uses Manifold's own tessellation; fixed by model/API output                                                                            |
+| **OpenSCAD** | none            | n/a            | Injected as `$fs` (linear) and `$fa` (angular) CLI arguments at render time. Export reuses baked geometry — override logged as warning |
+| **Zoo/KCL**  | ignored         | ignored        | Tessellation is server-side; future integration point                                                                                  |
+| **JSCAD**    | ignored         | ignored        | Uses fixed internal tessellation                                                                                                       |
 
 ### Threading Path
 
@@ -437,11 +445,11 @@ Export follows the same pattern via `exportGeometry` → `ExportGeometryInput { 
 
 All plugins use Zod schemas for option validation via a common `optionsSchema` pattern:
 
-| Plugin Type | Schema Property | Validated At |
-|-------------|----------------|-------------|
-| Kernel | `KernelDefinition.optionsSchema` | `ensureKernelInitialized()` before `initialize()` |
-| Bundler | `BundlerDefinition.optionsSchema` | `ensureBundlerForExtension()` before `initialize()` |
-| Middleware | `KernelMiddleware.optionsSchema` | `loadMiddleware()` during middleware resolution |
+| Plugin Type | Schema Property                   | Validated At                                        |
+| ----------- | --------------------------------- | --------------------------------------------------- |
+| Kernel      | `KernelDefinition.optionsSchema`  | `ensureKernelInitialized()` before `initialize()`   |
+| Bundler     | `BundlerDefinition.optionsSchema` | `ensureBundlerForExtension()` before `initialize()` |
+| Middleware  | `KernelMiddleware.optionsSchema`  | `loadMiddleware()` during middleware resolution     |
 
 Consumer-facing input uses `options` naming; validated output uses `config` internally within `defineX` implementations. The `Options` generic type is inferred from the Zod schema, giving plugin authors type-safe access in their callbacks without manual casting.
 
@@ -449,19 +457,19 @@ Consumer-facing input uses `options` naming; validated output uses `config` inte
 
 ### File-Level Caches (persist across render cycles)
 
-| Cache | Invalidation | Purpose |
-|-------|-------------|---------|
-| `fileHashCache` | Per-path via `changedPaths` in render input (or `notifyFileChanged`) | Avoid re-hashing unchanged files |
-| `fileContentCache` | Per-path via `changedPaths` in render input (or `notifyFileChanged`) | Avoid re-reading unchanged files |
-| `bundleResultCache` | Dependency-aware: only entries whose deps overlap with changed files | Avoid re-bundling when deps haven't changed |
-| `selectionCache` | Cleared entirely on any file change | Ensure kernel detection re-runs when imports change |
+| Cache               | Invalidation                                                         | Purpose                                             |
+| ------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
+| `fileHashCache`     | Per-path via `changedPaths` in render input (or `notifyFileChanged`) | Avoid re-hashing unchanged files                    |
+| `fileContentCache`  | Per-path via `changedPaths` in render input (or `notifyFileChanged`) | Avoid re-reading unchanged files                    |
+| `bundleResultCache` | Dependency-aware: only entries whose deps overlap with changed files | Avoid re-bundling when deps haven't changed         |
+| `selectionCache`    | Cleared entirely on any file change                                  | Ensure kernel detection re-runs when imports change |
 
 ### Per-Render Caches (cleared each render cycle)
 
-| Cache | Purpose |
-|-------|---------|
+| Cache                   | Purpose                                                           |
+| ----------------------- | ----------------------------------------------------------------- |
 | `renderDependencyCache` | Reuse dependency computation between getParams and createGeometry |
-| `cachedDetectionDeps` | Reuse deps from detectImports for getDependencies (zero cost) |
+| `cachedDetectionDeps`   | Reuse deps from detectImports for getDependencies (zero cost)     |
 
 ## Future Work -- Render Pipeline Cancellation
 

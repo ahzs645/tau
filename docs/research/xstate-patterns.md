@@ -27,33 +27,33 @@ However, several anti-patterns have been identified that contribute to resource 
 
 ## Machine Inventory
 
-| Machine | File | States | Exit Actions | Key Actors |
-|---|---|---|---|---|
-| `build` | `build.machine.ts` | 6+ (parallel) | `stopStatefulActors` | `spawn('git')`, `spawn('cad')`, `spawn('logs')`, `spawn('graphics')` |
-| `cad` | `cad.machine.ts` | 8 | **None** | `spawn(kernelMachine)` |
-| `kernel` | `kernel.machine.ts` | 5 | `destroyWorkers` | `invoke(initKernelActor)`, `invoke(renderActor)`, `invoke(exportGeometryActor)` |
-| `file-manager` | `file-manager.machine.ts` | 4 | `stopFileWatcher`, `destroyWorker` | `spawnChild('readDirectoryActor')`, `spawnChild('fileWatcherActor')` |
-| `build-manager` | `build-manager.machine.ts` | 4 | `destroyWorker` | `invoke(initializeWorkerActor)` |
-| `graphics` | `graphics.machine.ts` | 15+ (parallel) | **None** | — |
-| `editor` | `editor.machine.ts` | 5 | **None** | `invoke(loadEditorStateActor)`, `invoke(saveEditorStateActor)` |
-| `git` | `git.machine.ts` | 15+ | **None** | `invoke(initGitActor, cloneRepositoryActor, ...)`, `buildListenerActor` |
-| `cad-preview` | `cad-preview.machine.ts` | 4 | **None** | `invoke(prepareFilesActor)` |
-| `import-github` | `import-github.machine.ts` | 15+ | **None** | `invoke(getRepoMetadataActor, ...)` |
-| `import-disk` | `import-disk.machine.ts` | 8 | **None** | `invoke(readFilesActor, ...)` |
-| `export-geometry` | `export-geometry.machine.ts` | 2 | **None** | `invoke(cadListener)` |
-| `logs` | `logs.machine.ts` | 1 | **None** | — |
-| `parameter` | `parameter.machine.ts` | 6 | **None** | — |
-| `camera-capability` | `camera-capability.machine.ts` | 3 | **None** | `invoke(resetCamera)` |
-| `screenshot-capability` | `screenshot-capability.machine.ts` | 4 | **None** | `invoke(capture*)` |
-| `screenshot-request` | `screenshot-request.machine.ts` | 2 | **None** | `invoke(graphicsListener)` |
-| `controls-listener` | `controls-listener.machine.ts` | 1 | `stopControlsMonitoring` | `invoke(controlsMonitor)` |
-| `webgl-context` | `webgl-context.machine.ts` | flat | **None** | — |
-| `zip` | `zip.machine.ts` | 4 | **None** | `invoke(generateZipActor)` |
-| `unzip` | `unzip.machine.ts` | 3 | **None** | `invoke(extractZipActor)` |
-| `draft` | `draft.machine.ts` | 4 | **None** | `invoke(persistDraftActor, ...)` |
-| `chat-persistence` | `chat-persistence.machine.ts` | 4 | **None** | `invoke(loadChatActor, ...)` |
-| `chat-mode` | `chat-mode.machine.ts` | 3 | **None** | — |
-| `auth-splashback` | `auth-splashback.machine.ts` | 3 | **None** | — |
+| Machine                 | File                               | States         | Exit Actions                       | Key Actors                                                                      |
+| ----------------------- | ---------------------------------- | -------------- | ---------------------------------- | ------------------------------------------------------------------------------- |
+| `build`                 | `build.machine.ts`                 | 6+ (parallel)  | `stopStatefulActors`               | `spawn('git')`, `spawn('cad')`, `spawn('logs')`, `spawn('graphics')`            |
+| `cad`                   | `cad.machine.ts`                   | 8              | **None**                           | `spawn(kernelMachine)`                                                          |
+| `kernel`                | `kernel.machine.ts`                | 5              | `destroyWorkers`                   | `invoke(initKernelActor)`, `invoke(renderActor)`, `invoke(exportGeometryActor)` |
+| `file-manager`          | `file-manager.machine.ts`          | 4              | `stopFileWatcher`, `destroyWorker` | `spawnChild('readDirectoryActor')`, `spawnChild('fileWatcherActor')`            |
+| `build-manager`         | `build-manager.machine.ts`         | 4              | `destroyWorker`                    | `invoke(initializeWorkerActor)`                                                 |
+| `graphics`              | `graphics.machine.ts`              | 15+ (parallel) | **None**                           | —                                                                               |
+| `editor`                | `editor.machine.ts`                | 5              | **None**                           | `invoke(loadEditorStateActor)`, `invoke(saveEditorStateActor)`                  |
+| `git`                   | `git.machine.ts`                   | 15+            | **None**                           | `invoke(initGitActor, cloneRepositoryActor, ...)`, `buildListenerActor`         |
+| `cad-preview`           | `cad-preview.machine.ts`           | 4              | **None**                           | `invoke(prepareFilesActor)`                                                     |
+| `import-github`         | `import-github.machine.ts`         | 15+            | **None**                           | `invoke(getRepoMetadataActor, ...)`                                             |
+| `import-disk`           | `import-disk.machine.ts`           | 8              | **None**                           | `invoke(readFilesActor, ...)`                                                   |
+| `export-geometry`       | `export-geometry.machine.ts`       | 2              | **None**                           | `invoke(cadListener)`                                                           |
+| `logs`                  | `logs.machine.ts`                  | 1              | **None**                           | —                                                                               |
+| `parameter`             | `parameter.machine.ts`             | 6              | **None**                           | —                                                                               |
+| `camera-capability`     | `camera-capability.machine.ts`     | 3              | **None**                           | `invoke(resetCamera)`                                                           |
+| `screenshot-capability` | `screenshot-capability.machine.ts` | 4              | **None**                           | `invoke(capture*)`                                                              |
+| `screenshot-request`    | `screenshot-request.machine.ts`    | 2              | **None**                           | `invoke(graphicsListener)`                                                      |
+| `controls-listener`     | `controls-listener.machine.ts`     | 1              | `stopControlsMonitoring`           | `invoke(controlsMonitor)`                                                       |
+| `webgl-context`         | `webgl-context.machine.ts`         | flat           | **None**                           | —                                                                               |
+| `zip`                   | `zip.machine.ts`                   | 4              | **None**                           | `invoke(generateZipActor)`                                                      |
+| `unzip`                 | `unzip.machine.ts`                 | 3              | **None**                           | `invoke(extractZipActor)`                                                       |
+| `draft`                 | `draft.machine.ts`                 | 4              | **None**                           | `invoke(persistDraftActor, ...)`                                                |
+| `chat-persistence`      | `chat-persistence.machine.ts`      | 4              | **None**                           | `invoke(loadChatActor, ...)`                                                    |
+| `chat-mode`             | `chat-mode.machine.ts`             | 3              | **None**                           | —                                                                               |
+| `auth-splashback`       | `auth-splashback.machine.ts`       | 3              | **None**                           | —                                                                               |
 
 **Key observation**: Only **5 of 25 machines** have exit actions for cleanup (4 original + `buildMachine` added). The rest rely on XState's built-in `stopChildren` behavior. All cleanup chains are now error-isolated via `safeDispose()` from `@taucad/utils/dispose`.
 
@@ -73,8 +73,12 @@ export const kernelMachine = setup({
     input: {} as KernelInput,
   },
   actors: kernelActors,
-  actions: { /* ... */ },
-}).createMachine({ /* ... */ });
+  actions: {
+    /* ... */
+  },
+}).createMachine({
+  /* ... */
+});
 ```
 
 ### 2. `useActorRef` + `useSelector` for React integration
@@ -96,7 +100,9 @@ Build and preview providers correctly use `.provide()` to inject environment-spe
 const actorRef = useActorRef(
   buildMachine.provide({
     actors: {
-      loadBuildActor: fromPromise(async ({ input }) => { /* ... */ }),
+      loadBuildActor: fromPromise(async ({ input }) => {
+        /* ... */
+      }),
     },
   }),
   { input: { buildId } },
@@ -151,10 +157,14 @@ Long-running actors correctly return cleanup functions:
 // controls-listener.machine.ts
 fromCallback(({ sendBack, receive, input }) => {
   const controls = input.controls;
-  const handler = () => { sendBack({ type: 'controlsChanged' }); };
+  const handler = () => {
+    sendBack({ type: 'controlsChanged' });
+  };
   controls.addEventListener('change', handler);
-  return () => { controls.removeEventListener('change', handler); };
-})
+  return () => {
+    controls.removeEventListener('change', handler);
+  };
+});
 ```
 
 ---
@@ -200,6 +210,7 @@ rendering: {
 ### AP-2: ~~Direct Context Mutation~~ (RESOLVED)
 
 **Locations**:
+
 - `kernel.machine.ts:46` — `context.kernelClient = client` (inside `ensureKernelClient`)
 - `kernel.machine.ts:286-296` — `context.destroyed = true`, `context.eventCleanups = []`, `context.kernelClient = undefined`
 - `file-manager.machine.ts:92-94` — `context.worker`, `context.proxy`, `context.bridgeDispose` (inside `fromPromise` output)
@@ -239,6 +250,7 @@ invoke: {
 **Problem**: The `buildMachine` spawns `gitRef`, `compilationUnits` (cad machines), and `viewGraphics` (graphics machines) but has **no `exit` action**. Cleanup only happens via `stopStatefulActors` when a `loadBuild` event with `isBuildIdChanging` fires. If the machine stops for any other reason (component unmount), cleanup depends entirely on XState's internal `stopChildren` behavior.
 
 The XState v5 source contains a TODO comment:
+
 ```
 // TODO: atm children don't belong entirely to the actor so
 // in a way - it's not even super aware of them
@@ -274,7 +286,7 @@ enqueueActions(({ context, event, enqueue }) => {
   if (context.parentRef) {
     enqueue.sendTo(context.parentRef, event);
   }
-})
+});
 
 // Option B: Make parentRef required via state restructuring
 // parentRef is set in 'initializing' → 'ready' transition, so it's
@@ -346,10 +358,10 @@ XState v5 recommends `dot.case` event names for wildcard matching. The codebase 
 
 ```typescript
 // Current: camelCase
-'createGeometry' | 'geometryComputed' | 'kernelIssue' | 'kernelProgress'
+'createGeometry' | 'geometryComputed' | 'kernelIssue' | 'kernelProgress';
 
 // Recommended by XState: dot.case
-'geometry.create' | 'geometry.computed' | 'kernel.issue' | 'kernel.progress'
+'geometry.create' | 'geometry.computed' | 'kernel.issue' | 'kernel.progress';
 ```
 
 **Impact**: Low — `camelCase` works fine, but `dot.case` enables wildcard transitions (`'kernel.*'`).
@@ -365,6 +377,7 @@ XState v5 recommends `dot.case` event names for wildcard matching. The codebase 
 The codebase has **zero direct machine tests**. No files call `createActor()` or test machine transitions, guards, or actions in isolation.
 
 Machines are tested indirectly through:
+
 - Component integration tests (Vitest + Testing Library)
 - E2E tests (Playwright)
 - Manual testing
@@ -372,6 +385,7 @@ Machines are tested indirectly through:
 ### Risk
 
 Without machine tests:
+
 - Transition logic bugs are only caught at integration level
 - Guard logic changes can silently break flows
 - Actor communication patterns aren't validated
@@ -404,33 +418,33 @@ test('kernel machine terminates worker on stop', async () => {
 
 ### P0: Critical (Resource Leaks / Correctness) — ALL RESOLVED
 
-| ID | Issue | Location | Status |
-|---|---|---|---|
-| ~~AP-1~~ | ~~Fire-and-forget async in `fireRender`~~ | `kernel.machine.ts` | **Resolved** — converted to invoked `renderActor` with AbortSignal |
-| ~~AP-2~~ | ~~Direct context mutation in `destroyWorkers`~~ | `kernel.machine.ts` | **Resolved** — uses `assign()` + `safeDispose()` |
-| ~~AP-3~~ | ~~Missing exit actions on `buildMachine`~~ | `build.machine.ts` | **Resolved** — added `exit: ['stopStatefulActors']` |
+| ID       | Issue                                           | Location            | Status                                                             |
+| -------- | ----------------------------------------------- | ------------------- | ------------------------------------------------------------------ |
+| ~~AP-1~~ | ~~Fire-and-forget async in `fireRender`~~       | `kernel.machine.ts` | **Resolved** — converted to invoked `renderActor` with AbortSignal |
+| ~~AP-2~~ | ~~Direct context mutation in `destroyWorkers`~~ | `kernel.machine.ts` | **Resolved** — uses `assign()` + `safeDispose()`                   |
+| ~~AP-3~~ | ~~Missing exit actions on `buildMachine`~~      | `build.machine.ts`  | **Resolved** — added `exit: ['stopStatefulActors']`                |
 
 ### P1: High (Correctness / Robustness) — ALL RESOLVED
 
-| ID | Issue | Location | Status |
-|---|---|---|---|
-| ~~AP-2~~ | ~~Direct context mutation in `ensureKernelClient`~~ | `kernel.machine.ts` | **Resolved** — split into `initKernelActor` + `connectingKernel` state |
-| ~~AP-2~~ | ~~Direct context mutation in worker init~~ | `file-manager.machine.ts` | **Resolved** — actor returns resources, `onDone` assigns them |
-| ~~AP-5~~ | ~~Side effects in `assign` (log buffer)~~ | `logs.machine.ts` | **Documented** — intentional mutation for performance |
+| ID       | Issue                                               | Location                  | Status                                                                 |
+| -------- | --------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------- |
+| ~~AP-2~~ | ~~Direct context mutation in `ensureKernelClient`~~ | `kernel.machine.ts`       | **Resolved** — split into `initKernelActor` + `connectingKernel` state |
+| ~~AP-2~~ | ~~Direct context mutation in worker init~~          | `file-manager.machine.ts` | **Resolved** — actor returns resources, `onDone` assigns them          |
+| ~~AP-5~~ | ~~Side effects in `assign` (log buffer)~~           | `logs.machine.ts`         | **Documented** — intentional mutation for performance                  |
 
 ### P2: Medium (DX / Maintainability)
 
-| ID | Issue | Location | Status |
-|---|---|---|---|
-| ~~AP-4~~ | ~~Non-null assertions on `parentRef`~~ | `kernel.machine.ts` | **Resolved** — guarded with `enqueueActions` |
-| T-1 | No machine unit tests | All machines | **Open** — recommend adding for critical machines |
+| ID       | Issue                                  | Location            | Status                                            |
+| -------- | -------------------------------------- | ------------------- | ------------------------------------------------- |
+| ~~AP-4~~ | ~~Non-null assertions on `parentRef`~~ | `kernel.machine.ts` | **Resolved** — guarded with `enqueueActions`      |
+| T-1      | No machine unit tests                  | All machines        | **Open** — recommend adding for critical machines |
 
 ### P3: Low (Polish) — MOSTLY RESOLVED
 
-| ID | Issue | Location | Status |
-|---|---|---|---|
-| ~~AP-6~~ | ~~`useMachine` instead of `useActorRef`~~ | `auth-splashback.tsx` | **Resolved** — migrated to `useActorRef` |
-| AP-9 | `camelCase` event names (not `dot.case`) | All machines | **Open** — low priority, adopt for new machines only |
+| ID       | Issue                                     | Location              | Status                                               |
+| -------- | ----------------------------------------- | --------------------- | ---------------------------------------------------- |
+| ~~AP-6~~ | ~~`useMachine` instead of `useActorRef`~~ | `auth-splashback.tsx` | **Resolved** — migrated to `useActorRef`             |
+| AP-9     | `camelCase` event names (not `dot.case`)  | All machines          | **Open** — low priority, adopt for new machines only |
 
 ## Resolved Items
 

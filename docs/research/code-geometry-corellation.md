@@ -44,11 +44,11 @@ graph TD
     B -->|execute via WASM + Engine| C[Engine Commands]
     C -->|geometry + artifact metadata| D[ArtifactGraph]
     D -->|entity_id lookup| E[CodeRef: SourceRange + PathToNode]
-    
+
     F[3D Viewer Click] -->|select_with_point| G[Engine returns entity_id]
     G -->|getCodeRefsByArtifactId| E
     E -->|setHighlightRange| H[Editor Highlighting]
-    
+
     I[Code Selection] -->|findOverlappingArtifacts| J[Artifact IDs]
     J -->|select in viewer| K[3D Highlighting]
 ```
@@ -58,10 +58,11 @@ graph TD
 #### ArtifactGraph
 
 ```typescript
-type ArtifactGraph = Map<ArtifactId, Artifact>
+type ArtifactGraph = Map<ArtifactId, Artifact>;
 ```
 
 Each artifact has:
+
 - `id: ArtifactId` - unique identifier (matches engine entity IDs)
 - `type` - one of: `wall`, `cap`, `segment`, `sweepEdge`, `edgeCut`, `path`, `sweep`, `solid2d`, `plane`, `compositeSolid`, `sketchBlock`
 - `codeRef: CodeRef` - link to source code
@@ -70,12 +71,12 @@ Each artifact has:
 
 ```typescript
 interface CodeRef {
-  range: SourceRange      // [start, end, moduleId]
-  pathToNode: PathToNode  // AST navigation path
+  range: SourceRange; // [start, end, moduleId]
+  pathToNode: PathToNode; // AST navigation path
 }
 
-type SourceRange = [number, number, number]  // [charStart, charEnd, fileId]
-type PathToNode = [string | number, string][]  // AST path segments
+type SourceRange = [number, number, number]; // [charStart, charEnd, fileId]
+type PathToNode = [string | number, string][]; // AST path segments
 ```
 
 #### Artifact Hierarchy
@@ -103,11 +104,11 @@ path (sketch path)
 ```typescript
 // Key function - returns multiple code ranges per artifact
 function getCodeRefsByArtifactId(id: string, artifactGraph: ArtifactGraph): CodeRef[] | null {
-  const artifact = artifactGraph.get(id)
+  const artifact = artifactGraph.get(id);
   if (artifact?.type === 'wall') {
-    const extrusion = getSweepFromSuspectedSweepSurface(id, artifactGraph)
-    const codeRef = getWallCodeRef(artifact, artifactGraph) // → segment codeRef
-    return err(extrusion) ? [codeRef] : [codeRef, extrusion.codeRef]
+    const extrusion = getSweepFromSuspectedSweepSurface(id, artifactGraph);
+    const codeRef = getWallCodeRef(artifact, artifactGraph); // → segment codeRef
+    return err(extrusion) ? [codeRef] : [codeRef, extrusion.codeRef];
     //                       ↑ sketch line     ↑ extrude call
   }
   // ... similar for cap, sweepEdge, edgeCut
@@ -127,7 +128,7 @@ Zoo uses CodeMirror with a custom `StateField`:
 
 ```typescript
 // StateEffect for adding highlight ranges
-const addLineHighlight = StateEffect.define<Array<[number, number]>>()
+const addLineHighlight = StateEffect.define<Array<[number, number]>>();
 
 // StateField managing decorations
 const lineHighlightField = StateField.define({
@@ -135,16 +136,16 @@ const lineHighlightField = StateField.define({
     for (let e of tr.effects) {
       if (e.is(addLineHighlight)) {
         for (let index = 0; index < e.value.length; index++) {
-          const [from, to] = e.value[index]
+          const [from, to] = e.value[index];
           // First range = primary color, subsequent = secondary
-          const deco = index === 0 ? matchDeco : matchDeco2
-          lines = lines.update({ add: [deco.range(from, to)] })
+          const deco = index === 0 ? matchDeco : matchDeco2;
+          lines = lines.update({ add: [deco.range(from, to)] });
         }
       }
     }
-    return lines
-  }
-})
+    return lines;
+  },
+});
 ```
 
 ### 2.5 How Artifacts Are Populated
@@ -161,16 +162,16 @@ The artifact graph is built **during KCL execution in Rust/WASM**:
 
 ### 2.6 Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/lang/std/artifactGraph.ts` | Artifact types, graph traversal, codeRef resolution |
-| `src/lib/selections.ts` | Selection processing, code↔artifact bidirectional lookup |
-| `src/lib/artifactIndex.ts` | Binary search index for fast code→artifact |
-| `src/components/ConnectionStream.tsx` | Mouse click → engine `select_with_point` |
-| `src/hooks/useEngineConnectionSubscriptions.ts` | Engine hover events → code highlighting |
-| `src/editor/highlightextension.ts` | CodeMirror StateField for range decorations |
-| `src/lang/KclManager.ts` | Editor state, highlight ranges, artifact graph storage |
-| `src/lang/wasm.ts` | `artifactGraphFromRust()` - Rust→TS conversion |
+| File                                            | Purpose                                                  |
+| ----------------------------------------------- | -------------------------------------------------------- |
+| `src/lang/std/artifactGraph.ts`                 | Artifact types, graph traversal, codeRef resolution      |
+| `src/lib/selections.ts`                         | Selection processing, code↔artifact bidirectional lookup |
+| `src/lib/artifactIndex.ts`                      | Binary search index for fast code→artifact               |
+| `src/components/ConnectionStream.tsx`           | Mouse click → engine `select_with_point`                 |
+| `src/hooks/useEngineConnectionSubscriptions.ts` | Engine hover events → code highlighting                  |
+| `src/editor/highlightextension.ts`              | CodeMirror StateField for range decorations              |
+| `src/lang/KclManager.ts`                        | Editor state, highlight ranges, artifact graph storage   |
+| `src/lang/wasm.ts`                              | `artifactGraphFromRust()` - Rust→TS conversion           |
 
 ---
 
@@ -201,7 +202,7 @@ Replicad generates tessellated meshes from OpenCASCADE shapes with face/edge gro
 // From replicad/src/shapes.ts - mesh() method
 mesh(): ShapeMesh {
   const faceGroups: { start: number; count: number; faceId: number }[] = [];
-  
+
   for (const face of this.faces) {
     const tri = face.triangulation(vertices.length / 3);
     faceGroups.push({
@@ -211,7 +212,7 @@ mesh(): ShapeMesh {
     });
     // ... accumulate triangles, vertices, normals
   }
-  
+
   return { triangles, vertices, normals, faceGroups };
 }
 ```
@@ -223,8 +224,8 @@ The `faceId` uses `OCJS_ShapeHasher.HashCode()` - a stable identifier for each t
 ```typescript
 // React Three Fiber provides faceIndex (triangle index) in click event
 function getFaceIndex(triangleIndex: number, geometry: BufferGeometry): number {
-  return geometry.groups.findIndex(({ start, count }) =>
-    triangleIndex * 3 >= start && triangleIndex * 3 < start + count
+  return geometry.groups.findIndex(
+    ({ start, count }) => triangleIndex * 3 >= start && triangleIndex * 3 < start + count,
   );
 }
 ```
@@ -236,8 +237,8 @@ Two-material approach using Three.js material groups:
 ```jsx
 <mesh>
   <bufferGeometry groups={faceGroups} />
-  <meshStandardMaterial attach="material-0" color="default" />  {/* Normal */}
-  <meshStandardMaterial attach="material-1" color="selected" /> {/* Highlighted */}
+  <meshStandardMaterial attach='material-0' color='default' /> {/* Normal */}
+  <meshStandardMaterial attach='material-1' color='selected' /> {/* Highlighted */}
 </mesh>
 ```
 
@@ -261,7 +262,7 @@ Replicad has measurement functions using `BRepGProp` but doesn't display them in
 function measureArea(shape: Face | Shape3D): number {
   const properties = new oc.GProp_GProps_1();
   oc.BRepGProp.SurfaceProperties_1(shape.wrapped, properties, false, false);
-  return properties.Mass();  // GProp reports area as "mass" for surface props
+  return properties.Mass(); // GProp reports area as "mass" for surface props
 }
 
 function measureLength(shape: AnyShape): number {
@@ -274,6 +275,7 @@ function measureLength(shape: AnyShape): number {
 ### 3.5 Face/Edge Info Display
 
 The studio shows basic metadata (not measurements):
+
 - Face: type (PLANE, CYLINDER, etc.), center point, normal vector
 - Edge: type, start point, end point, tangent direction
 
@@ -301,7 +303,7 @@ graph TD
     subgraph Editor
         CE[chat-editor.tsx<br/>Monaco/CodeMirror Editor]
     end
-    
+
     subgraph State Machines
         FM[FileManager Machine<br/>file writes/reads]
         BM[BuildMachine<br/>compilation units + view graphics]
@@ -309,21 +311,21 @@ graph TD
         KM[KernelMachine<br/>spawns kernel worker]
         GM[GraphicsMachine<br/>per viewer panel]
     end
-    
+
     subgraph Kernel Layer
         KC[KernelClient<br/>MessagePort to Worker]
         KW[Kernel Worker<br/>bundles + executes code]
         RK[Replicad Kernel<br/>OpenCASCADE WASM]
         ZK[Zoo Kernel<br/>KCL WASM + Engine]
     end
-    
+
     subgraph Viewer
         CV[chat-viewer.tsx<br/>ViewerContent]
         CAD[cad-viewer.tsx<br/>Three.js Canvas]
         GM2[GltfMesh<br/>GLTF rendering]
         CIG[ChatInterfaceGraphics<br/>measure/section controls]
     end
-    
+
     CE -->|writeFile| FM
     FM -->|fileWritten| BM
     BM -->|setFile| CM
@@ -345,20 +347,20 @@ graph TD
 
 ### 4.2 Key Components
 
-| Component | Location | Role |
-|-----------|----------|------|
-| `chat-editor.tsx` | `apps/ui/app/routes/builds_.$id/` | Code editor with Monaco |
-| `chat-viewer.tsx` | `apps/ui/app/routes/builds_.$id/` | 3D viewer container |
-| `chat-interface-desktop.tsx` | `apps/ui/app/routes/builds_.$id/` | Panel layout (Allotment) |
-| `cad.machine.ts` | `apps/ui/app/machines/` | Per-file CAD state (debounce, render, geometry storage) |
-| `kernel.machine.ts` | `apps/ui/app/machines/` | Kernel worker lifecycle |
-| `graphics.machine.ts` | `apps/ui/app/machines/` | Per-viewer state (measure, section-view, camera) |
-| `cad-viewer.tsx` | `apps/ui/app/components/geometry/cad/` | Three.js Canvas + GltfMesh |
-| `gltf-mesh.tsx` | `apps/ui/app/components/geometry/graphics/three/react/` | GLTF loading and rendering |
-| `measure-tool.tsx` | `apps/ui/app/components/geometry/graphics/three/react/` | Point-to-point measurement (raycaster) |
-| `snap-detection.utils.ts` | `apps/ui/app/components/geometry/graphics/three/utils/` | Face detection, snap points |
-| `chat-context-actions.tsx` | `apps/ui/app/components/chat/` | Context injection into AI chat |
-| `use-chat.tsx` | `apps/ui/app/hooks/` | Chat state management |
+| Component                    | Location                                                | Role                                                    |
+| ---------------------------- | ------------------------------------------------------- | ------------------------------------------------------- |
+| `chat-editor.tsx`            | `apps/ui/app/routes/builds_.$id/`                       | Code editor with Monaco                                 |
+| `chat-viewer.tsx`            | `apps/ui/app/routes/builds_.$id/`                       | 3D viewer container                                     |
+| `chat-interface-desktop.tsx` | `apps/ui/app/routes/builds_.$id/`                       | Panel layout (Allotment)                                |
+| `cad.machine.ts`             | `apps/ui/app/machines/`                                 | Per-file CAD state (debounce, render, geometry storage) |
+| `kernel.machine.ts`          | `apps/ui/app/machines/`                                 | Kernel worker lifecycle                                 |
+| `graphics.machine.ts`        | `apps/ui/app/machines/`                                 | Per-viewer state (measure, section-view, camera)        |
+| `cad-viewer.tsx`             | `apps/ui/app/components/geometry/cad/`                  | Three.js Canvas + GltfMesh                              |
+| `gltf-mesh.tsx`              | `apps/ui/app/components/geometry/graphics/three/react/` | GLTF loading and rendering                              |
+| `measure-tool.tsx`           | `apps/ui/app/components/geometry/graphics/three/react/` | Point-to-point measurement (raycaster)                  |
+| `snap-detection.utils.ts`    | `apps/ui/app/components/geometry/graphics/three/utils/` | Face detection, snap points                             |
+| `chat-context-actions.tsx`   | `apps/ui/app/components/chat/`                          | Context injection into AI chat                          |
+| `use-chat.tsx`               | `apps/ui/app/hooks/`                                    | Chat state management                                   |
 
 ### 4.3 Where New Components Fit
 
@@ -380,32 +382,32 @@ chat-viewer.tsx (ViewerContent)
 
 ### 5.1 What Already Exists
 
-| Capability | Status | Location |
-|------------|--------|----------|
-| Three.js Raycaster | ✅ Implemented | `measure-tool.tsx` |
-| Face detection from triangle hit | ✅ Implemented | `snap-detection.utils.ts` |
-| `faceGroups`/`edgeGroups` in geometry | ✅ In types | `replicad.types.ts` |
-| GLTF loading and rendering | ✅ Implemented | `gltf-mesh.tsx` |
-| Graphics state machine | ✅ Implemented | `graphics.machine.ts` with measure/section-view states |
-| OC Proxy tracing | ✅ Implemented | `oc-tracing.ts` |
-| OC Exception proxy | ✅ Implemented | `oc-exceptions.ts` |
-| Source map support | ✅ In bundler | esbuild generates source maps for user code |
-| Zoo artifact graph (types) | ✅ Available | `@taucad/kcl-wasm-lib/bindings/Artifact` |
-| Chat context injection | ✅ Implemented | `chat-context-actions.tsx` |
+| Capability                            | Status         | Location                                               |
+| ------------------------------------- | -------------- | ------------------------------------------------------ |
+| Three.js Raycaster                    | ✅ Implemented | `measure-tool.tsx`                                     |
+| Face detection from triangle hit      | ✅ Implemented | `snap-detection.utils.ts`                              |
+| `faceGroups`/`edgeGroups` in geometry | ✅ In types    | `replicad.types.ts`                                    |
+| GLTF loading and rendering            | ✅ Implemented | `gltf-mesh.tsx`                                        |
+| Graphics state machine                | ✅ Implemented | `graphics.machine.ts` with measure/section-view states |
+| OC Proxy tracing                      | ✅ Implemented | `oc-tracing.ts`                                        |
+| OC Exception proxy                    | ✅ Implemented | `oc-exceptions.ts`                                     |
+| Source map support                    | ✅ In bundler  | esbuild generates source maps for user code            |
+| Zoo artifact graph (types)            | ✅ Available   | `@taucad/kcl-wasm-lib/bindings/Artifact`               |
+| Chat context injection                | ✅ Implemented | `chat-context-actions.tsx`                             |
 
 ### 5.2 What's Missing
 
-| Capability | Priority | Complexity |
-|------------|----------|------------|
-| Face/edge selection state in GraphicsMachine | High | Low |
-| Visual highlighting of selected faces/edges | High | Medium |
-| Geometry provenance metadata (which op made which face) | High | High |
-| Code range mapping for Replicad kernel | High | High |
-| Artifact graph exposure from Zoo kernel | Medium | Low |
-| Editor highlight decorations for selections | Medium | Low |
-| Measurement computation (area/length) | Medium | Low |
-| Selection info panel (`ChatModelInfo`) | Medium | Low |
-| AI chat context from selections | Medium | Low |
+| Capability                                              | Priority | Complexity |
+| ------------------------------------------------------- | -------- | ---------- |
+| Face/edge selection state in GraphicsMachine            | High     | Low        |
+| Visual highlighting of selected faces/edges             | High     | Medium     |
+| Geometry provenance metadata (which op made which face) | High     | High       |
+| Code range mapping for Replicad kernel                  | High     | High       |
+| Artifact graph exposure from Zoo kernel                 | Medium   | Low        |
+| Editor highlight decorations for selections             | Medium   | Low        |
+| Measurement computation (area/length)                   | Medium   | Low        |
+| Selection info panel (`ChatModelInfo`)                  | Medium   | Low        |
+| AI chat context from selections                         | Medium   | Low        |
 
 ### 5.3 OC Tracing Proxy (Current State)
 
@@ -417,7 +419,7 @@ const tracedInstance = new Proxy(oc, {
   get(target, property) {
     // Wraps functions with timing via Proxy construct/apply traps
     return wrapFunction(value, className);
-  }
+  },
 });
 ```
 
@@ -438,11 +440,11 @@ graph LR
         K2[Artifact Graph<br/>geometry → code ranges]
         K3[Measurement<br/>BRepGProp queries]
     end
-    
+
     subgraph "Types Layer (@taucad/types)"
         T1[GeometryProvenance type<br/>face/edge → source ranges]
     end
-    
+
     subgraph "UI Layer (apps/ui)"
         U1[Selection Tool<br/>raycaster + state]
         U2[Selection Highlighting<br/>material groups]
@@ -450,7 +452,7 @@ graph LR
         U4[Editor Highlighting<br/>code decorations]
         U5[Chat Context<br/>selection → AI context]
     end
-    
+
     K1 --> K2
     K2 --> T1
     K3 --> T1
@@ -468,11 +470,12 @@ type CreateGeometryOutput<NativeHandle = unknown> = {
   geometry: GeometryResponse[];
   nativeHandle: NativeHandle;
   issues?: KernelIssue[];
-  provenance?: GeometryProvenance;  // NEW: face/edge → code mapping
+  provenance?: GeometryProvenance; // NEW: face/edge → code mapping
 };
 ```
 
 Rationale:
+
 - The kernel is where code executes and geometry is produced - it's the only place with access to both
 - Different kernels (Replicad, Zoo, OpenSCAD) will have different provenance mechanisms
 - The UI layer consumes provenance data uniformly regardless of kernel
@@ -518,14 +521,14 @@ type SourceRange = {
 
 type FaceMeasurements = {
   area: number;
-  surfaceType: string;  // PLANE, CYLINDER, CONE, SPHERE, TORUS, BSPLINE, etc.
+  surfaceType: string; // PLANE, CYLINDER, CONE, SPHERE, TORUS, BSPLINE, etc.
   center: [number, number, number];
   normal: [number, number, number];
 };
 
 type EdgeMeasurements = {
   length: number;
-  curveType: string;  // LINE, CIRCLE, ELLIPSE, BSPLINE, etc.
+  curveType: string; // LINE, CIRCLE, ELLIPSE, BSPLINE, etc.
   startPoint: [number, number, number];
   endPoint: [number, number, number];
 };
@@ -550,6 +553,7 @@ return {
 ```
 
 The `artifactGraph` from KCL execution contains:
+
 - `operations: Operation[]` - ordered list of operations
 - `artifactGraph: ArtifactGraph` - map of entity IDs to artifacts with `codeRef`
 - Each artifact's `codeRef` has `range: [charStart, charEnd, fileId]`
@@ -568,9 +572,9 @@ graph TD
     B -->|execute| C[Replicad API Calls]
     C -->|Proxy intercept| D[Operation Log<br/>method, args, callsite, result shape]
     D -->|Source map resolve| E[Original Code Ranges]
-    
+
     F[Result Shape] -->|mesh()| G[faceGroups with faceIds]
-    
+
     D -->|Shape tracking| H[Shape → Operations Map]
     G -->|faceId → shape| I[Face → Operations Map]
     H --> I
@@ -588,7 +592,7 @@ Wrap Replicad's high-level API (not OC directly) to track shape transformations:
 // Conceptual: wrap replicad methods to track provenance
 function wrapReplicadForProvenance(replicad, sourceMap) {
   const operationLog = [];
-  
+
   return new Proxy(replicad, {
     get(target, prop) {
       if (prop === 'draw' || prop === 'drawRoundedRectangle' || ...) {
@@ -596,14 +600,14 @@ function wrapReplicadForProvenance(replicad, sourceMap) {
           const callsite = captureCallsite(); // from Error().stack
           const resolvedLocation = resolveSourceMap(callsite, sourceMap);
           const result = target[prop](...args);
-          
+
           operationLog.push({
             operation: prop,
             args,
             resultShapeHash: result.hashCode,
             sourceRange: resolvedLocation,
           });
-          
+
           return result; // could also wrap the result to track chained operations
         };
       }
@@ -634,11 +638,11 @@ User code is bundled by esbuild which produces source maps. We already use these
 ```typescript
 // Existing in oc-exceptions.ts:
 formatRuntimeErrorWithOc({
-  parseStackTrace,   // Error.stack → structured frames
-  applySourceMaps,   // frames → resolved source locations
-  deriveLocation,    // frames → ErrorLocation
-  sourceMap,         // esbuild source map JSON
-})
+  parseStackTrace, // Error.stack → structured frames
+  applySourceMaps, // frames → resolved source locations
+  deriveLocation, // frames → ErrorLocation
+  sourceMap, // esbuild source map JSON
+});
 ```
 
 For provenance tracking, we'd capture `new Error().stack` at each Replicad API call, then resolve through the source map to get original file/line/column.
@@ -651,7 +655,7 @@ For provenance tracking, we'd capture `new Error().stack` at each Replicad API c
 // New context fields for graphics.machine.ts
 type SelectionState = {
   selectedFaces: Array<{
-    geometryIndex: number;  // which geometry in the array
+    geometryIndex: number; // which geometry in the array
     faceGroupIndex: number; // which face group
     provenance?: FaceProvenance;
   }>;
@@ -684,7 +688,7 @@ Follow the existing `measure-tool.tsx` pattern:
 function SelectionTool({ geometries, provenance }) {
   const raycaster = useRef(new THREE.Raycaster());
   const meshes = useMemo(() => collectMeshes(scene), [scene]);
-  
+
   useEffect(() => {
     function onMouseMove(e) {
       const intersection = raycast(e, raycaster, meshes);
@@ -808,9 +812,9 @@ describe('Geometry Provenance Tracking', () => {
           .fillet(2, e => e.inDirection('Z'));  // line 10
       }
     `;
-    
+
     const result = await kernel.createGeometry({ code, provenance: true });
-    
+
     // Verify face provenance
     expect(result.provenance.faces).toBeDefined();
     for (const face of result.provenance.faces) {
@@ -820,7 +824,7 @@ describe('Geometry Provenance Tracking', () => {
       // Extruded side faces should map to both a sketch line AND line 9
     }
   });
-  
+
   it('should compute face measurements', async () => {
     const code = `
       import { drawRoundedRectangle } from 'replicad';
@@ -828,12 +832,11 @@ describe('Geometry Provenance Tracking', () => {
         return drawRoundedRectangle(10, 20).sketchOnPlane().extrude(5);
       }
     `;
-    
+
     const result = await kernel.createGeometry({ code, provenance: true });
-    
-    const topFace = result.provenance.faces.find(f => 
-      f.measurements?.surfaceType === 'PLANE' && 
-      Math.abs(f.measurements.normal[2]) > 0.9
+
+    const topFace = result.provenance.faces.find(
+      (f) => f.measurements?.surfaceType === 'PLANE' && Math.abs(f.measurements.normal[2]) > 0.9,
     );
     expect(topFace).toBeDefined();
     // Top face area should be approximately 10 * 20 = 200 (minus rounded corners)
@@ -878,13 +881,13 @@ describe('Geometry Provenance Tracking', () => {
 
 ### Technical Risks
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| **Face hash instability** - OpenCASCADE hash codes change when topology changes (e.g., adding a fillet changes all face hashes) | High - selection breaks on rebuild | Use face group indices (stable within one computation); for cross-rebuild correlation, compare geometric properties |
-| **Source map accuracy** - esbuild source maps may not perfectly align callsites to API calls, especially with chained methods | Medium - code ranges may be imprecise | Test extensively; consider AST parsing of user code alongside source maps |
-| **GLTF face group preservation** - face groups may not be preserved through GLTF export/import round-trip | High - need face IDs in viewer | Investigate GLTF extras/extensions; may need to pass provenance as sidecar data, not embedded in GLTF |
-| **Boolean operation provenance** - tracking faces through `union()`, `cut()`, `fuse()` requires OpenCASCADE shape history API (`Generated`, `Modified`, `IsDeleted`) | High for complex models - many faces will be "unknown origin" | Start with simple extrusion/revolution provenance; add CSG tracking incrementally |
-| **Performance** - provenance tracking adds overhead to every Replicad API call | Medium - may slow computation | Make provenance opt-in via `createGeometry` input flag; cache aggressively |
+| Risk                                                                                                                                                                 | Impact                                                        | Mitigation                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Face hash instability** - OpenCASCADE hash codes change when topology changes (e.g., adding a fillet changes all face hashes)                                      | High - selection breaks on rebuild                            | Use face group indices (stable within one computation); for cross-rebuild correlation, compare geometric properties |
+| **Source map accuracy** - esbuild source maps may not perfectly align callsites to API calls, especially with chained methods                                        | Medium - code ranges may be imprecise                         | Test extensively; consider AST parsing of user code alongside source maps                                           |
+| **GLTF face group preservation** - face groups may not be preserved through GLTF export/import round-trip                                                            | High - need face IDs in viewer                                | Investigate GLTF extras/extensions; may need to pass provenance as sidecar data, not embedded in GLTF               |
+| **Boolean operation provenance** - tracking faces through `union()`, `cut()`, `fuse()` requires OpenCASCADE shape history API (`Generated`, `Modified`, `IsDeleted`) | High for complex models - many faces will be "unknown origin" | Start with simple extrusion/revolution provenance; add CSG tracking incrementally                                   |
+| **Performance** - provenance tracking adds overhead to every Replicad API call                                                                                       | Medium - may slow computation                                 | Make provenance opt-in via `createGeometry` input flag; cache aggressively                                          |
 
 ### Architecture Questions
 

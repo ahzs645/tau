@@ -6,14 +6,14 @@ Internal reference for writing and maintaining Tau documentation. Applies to all
 
 We evaluated six documentation frameworks before settling on an approach:
 
-| Framework | Strengths | Why not (alone) |
-|---|---|---|
-| **Diataxis** | Systematic four-type model; proven at NX, Cloudflare, Django; single-purpose pages ideal for LLM context windows | Conflates quickstart with tutorial; rigid four-bucket navigation confuses contributors |
-| **Good Docs Project** | Practical templates for 14+ content types; reduces blank-page anxiety | Too many types for a single-package project; no cohesive information architecture |
-| **DITA** | Formal XML standard; strong content reuse | XML-based, incompatible with MDX/fumadocs; massive overhead |
-| **Information Mapping** | Chunking/labeling principles map well to LLM retrieval | Proprietary; no modern tooling |
-| **EPPO** | "Every Page Is Page One" self-containment; excellent for search and RAG | No content-type taxonomy; no structural templates |
-| **Stripe-style** | Gold-standard DX; progressive disclosure; code-first | No formal framework; hard to systematize for agent production |
+| Framework               | Strengths                                                                                                        | Why not (alone)                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Diataxis**            | Systematic four-type model; proven at NX, Cloudflare, Django; single-purpose pages ideal for LLM context windows | Conflates quickstart with tutorial; rigid four-bucket navigation confuses contributors |
+| **Good Docs Project**   | Practical templates for 14+ content types; reduces blank-page anxiety                                            | Too many types for a single-package project; no cohesive information architecture      |
+| **DITA**                | Formal XML standard; strong content reuse                                                                        | XML-based, incompatible with MDX/fumadocs; massive overhead                            |
+| **Information Mapping** | Chunking/labeling principles map well to LLM retrieval                                                           | Proprietary; no modern tooling                                                         |
+| **EPPO**                | "Every Page Is Page One" self-containment; excellent for search and RAG                                          | No content-type taxonomy; no structural templates                                      |
+| **Stripe-style**        | Gold-standard DX; progressive disclosure; code-first                                                             | No formal framework; hard to systematize for agent production                          |
 
 **Decision**: Pragmatic Diataxis -- use Diataxis as the structural backbone with two modifications that optimize for SDK documentation, AI agent consumption, and systematic agent-produced content.
 
@@ -32,12 +32,12 @@ Two modifications to standard Diataxis.
 
 Content is organized by **developer journey stage**, not by Diataxis content-type labels:
 
-| Directory | Diataxis type | Developer intent |
-|---|---|---|
-| `getting-started/` | Quickstart + Tutorial | "I want to start using this" |
-| `guides/` | How-to guide | "I need to accomplish a specific task" |
-| `concepts/` | Explanation | "I want to understand why this works" |
-| `api/` | Reference | "I need to look up a specific API" |
+| Directory          | Diataxis type         | Developer intent                       |
+| ------------------ | --------------------- | -------------------------------------- |
+| `getting-started/` | Quickstart + Tutorial | "I want to start using this"           |
+| `guides/`          | How-to guide          | "I need to accomplish a specific task" |
+| `concepts/`        | Explanation           | "I want to understand why this works"  |
+| `api/`             | Reference             | "I need to look up a specific API"     |
 
 Users find content by what they want to do, not by what kind of document it is. This follows the Stripe and NX pattern.
 
@@ -100,7 +100,7 @@ description: [What you'll achieve, max 160 chars]
 
 **Purpose**: Build skills through guided, hands-on practice.
 **Audience**: Developer who wants to learn the package properly.
-**Tone**: Instructional, encouraging. Explain *what* each step does and *why*.
+**Tone**: Instructional, encouraging. Explain _what_ each step does and _why_.
 **Location**: `getting-started/*.mdx`
 
 **Required sections**:
@@ -192,7 +192,7 @@ description: [What this guide helps you do, max 160 chars]
 
 ### 3.4 Explanation
 
-**Purpose**: Help the reader understand *why* things work the way they do.
+**Purpose**: Help the reader understand _why_ things work the way they do.
 **Audience**: Developer seeking deeper understanding of architecture or design decisions.
 **Tone**: Reflective, analytical. Connect concepts to each other.
 **Location**: `concepts/*.mdx`
@@ -348,7 +348,7 @@ Documentation pages must link to related content to support navigation across co
 
 - Every **quickstart/tutorial** links to the API reference pages for the functions it uses.
 - Every **API reference** page links to the how-to guide(s) that demonstrate practical usage.
-- Every **how-to guide** links to the concept page that explains *why* the approach works.
+- Every **how-to guide** links to the concept page that explains _why_ the approach works.
 - Every **concept** page links to related reference and how-to content.
 - Use **relative MDX links** (e.g., `../api/client`), never absolute URLs to docs pages.
 - Every page's "Related" or "Next Steps" section should contain at least one link to a different content type.

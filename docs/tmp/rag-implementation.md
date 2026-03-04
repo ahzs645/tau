@@ -5,6 +5,7 @@ This document outlines the complete implementation of a **Retrieval-Augmented Ge
 ## 🎯 Overview
 
 The RAG system:
+
 1. **Extracts** clean API chunks from Replicad TypeScript definitions
 2. **Stores** them in a pgvector database with embeddings
 3. **Retrieves** relevant documentation based on user queries
@@ -17,7 +18,7 @@ This results in **significantly better CAD model generation** because the LLM ha
 ```
 gen/api/replicad/
 ├── replicad-clean.d.ts              # Clean API (no JSDoc)
-├── replicad-clean-with-jsdoc.d.ts   # Clean API (with JSDoc) 
+├── replicad-clean-with-jsdoc.d.ts   # Clean API (with JSDoc)
 ├── replicad-chunks.json             # Extracted API chunks
 ├── replicad-api-docs.md             # Human-readable docs
 ├── replicad-ts-api-data.json        # Full API data
@@ -35,7 +36,7 @@ apps/api/app/
 
 scripts/
 ├── build-replicad-chunks.ts         # Extract API chunks
-├── import-replicad-chunks.ts        # Import to database  
+├── import-replicad-chunks.ts        # Import to database
 └── test-rag.ts                      # Test RAG functionality
 
 infra/
@@ -49,11 +50,13 @@ infra/
 ### 1. Database Setup
 
 Start pgvector database:
+
 ```bash
 docker compose -f infra/docker-compose.db.yml up -d
 ```
 
 Initialize schema:
+
 ```bash
 docker exec -it vector-postgres psql -U dev_user -d cad_rag -f /migrations/001_init_replicad_chunks.sql
 ```
@@ -61,11 +64,13 @@ docker exec -it vector-postgres psql -U dev_user -d cad_rag -f /migrations/001_i
 ### 2. API Extraction
 
 Build clean API chunks:
+
 ```bash
 node scripts/build-replicad-chunks.ts
 ```
 
 This extracts **168 API chunks** from the Replicad definitions, each containing:
+
 - **Unique ID** (function/class name)
 - **Clean signature** (TypeScript without OpenCascade noise)
 - **JSDoc documentation** (categories, parameters, descriptions)
@@ -74,6 +79,7 @@ This extracts **168 API chunks** from the Replicad definitions, each containing:
 ### 3. Database Import
 
 Import chunks to pgvector:
+
 ```bash
 node scripts/import-replicad-chunks.ts
 ```
@@ -81,6 +87,7 @@ node scripts/import-replicad-chunks.ts
 ### 4. RAG Integration
 
 The chat service automatically:
+
 1. **Analyzes** user messages for CAD modeling intent
 2. **Retrieves** 8 most relevant API chunks using vector similarity
 3. **Augments** the LLM prompt with contextual documentation
@@ -89,23 +96,26 @@ The chat service automatically:
 ## 📊 Key Metrics & Results
 
 ### API Extraction Results
+
 - **Total APIs**: 668 nodes processed
 - **Filtered APIs**: 168 clean chunks extracted (25% compression)
 - **Removed noise**: OpenCascade internal types (`TopoDS_`, `gp_`, `Handle_`)
 - **Preserved functionality**: All public Replicad APIs maintained
 
 ### Token Optimization
+
 - **Raw API size**: ~72KB (1,901 lines)
 - **Chunked size**: ~42KB average per retrieval
 - **Retrieval efficiency**: Only 8 most relevant chunks per query
 - **Context reduction**: ~85% reduction in irrelevant API noise
 
 ### Search Quality
+
 ```bash
 # Test query: "draw circle"
 ✅ Found 4 relevant chunks:
 - drawCircle          # Primary circle drawing function
-- drawSingleCircle    # Single curve circles  
+- drawSingleCircle    # Single curve circles
 - drawPolysides       # Polygons with circular arc sides
 - sketchCircle        # 3D sketched circles
 ```
@@ -113,29 +123,31 @@ The chat service automatically:
 ## 🎮 Usage Examples
 
 ### Basic Usage (Automatic)
+
 The RAG system works **automatically** in the chat interface:
 
 ```typescript
 // User: "Create a circular gear with 12 teeth"
 // System automatically retrieves:
 // - drawCircle()
-// - drawPolysides() 
+// - drawPolysides()
 // - makeCylinder()
 // - EdgeFinder for chamfering
 
 // Enhanced prompt includes relevant API docs
 const gear = drawCircle(20)
-  .cut(drawPolysides(15, 12, 2))  // 12 teeth with sagitta
+  .cut(drawPolysides(15, 12, 2)) // 12 teeth with sagitta
   .extrude(5)
-  .fillet(1, e => e.ofCurveType('CIRCLE'));
+  .fillet(1, (e) => e.ofCurveType('CIRCLE'));
 ```
 
 ### Manual Testing
+
 ```bash
 # Test RAG functionality
 node scripts/test-rag.ts
 
-# Generate fresh chunks  
+# Generate fresh chunks
 node scripts/build-replicad-chunks.ts
 
 # Import to database
@@ -145,6 +157,7 @@ node scripts/import-replicad-chunks.ts
 ## 🔍 Technical Details
 
 ### Vector Search Strategy
+
 1. **Query embedding**: User message → OpenAI text-embedding-3-small
 2. **Similarity search**: Cosine similarity in 1536-dimensional space
 3. **Filtering**: Minimum similarity threshold (0.5)
@@ -152,29 +165,31 @@ node scripts/import-replicad-chunks.ts
 5. **Fallback**: PostgreSQL full-text search if vector search fails
 
 ### API Chunk Structure
+
 ```typescript
 type ChunkData = {
-  id: string;           // Function/class name
-  signature: string;    // Clean TypeScript signature  
-  jsDoc: string;       // Documentation with categories
+  id: string; // Function/class name
+  signature: string; // Clean TypeScript signature
+  jsDoc: string; // Documentation with categories
   embedding?: number[]; // 1536-dimensional vector
 };
 ```
 
 ### Database Schema
+
 ```sql
 CREATE TABLE replicad_chunks (
   id         text PRIMARY KEY,
   signature  text NOT NULL,
-  jsdoc      text NOT NULL, 
+  jsdoc      text NOT NULL,
   embedding  vector(1536)
 );
 
 -- Vector similarity index
-CREATE INDEX replicad_chunks_embedding_idx 
+CREATE INDEX replicad_chunks_embedding_idx
 ON replicad_chunks USING ivfflat (embedding vector_cosine_ops);
 
--- Text search index  
+-- Text search index
 CREATE INDEX replicad_chunks_text_idx
 ON replicad_chunks USING gin (to_tsvector('english', signature || ' ' || jsdoc));
 ```
@@ -182,18 +197,21 @@ ON replicad_chunks USING gin (to_tsvector('english', signature || ' ' || jsdoc))
 ## 🚀 Performance Benefits
 
 ### Before RAG
+
 - **Token usage**: ~2,000+ tokens per prompt (full API definitions)
 - **Precision**: Low (LLM confused by irrelevant APIs)
 - **Errors**: Frequent API misuse and hallucinations
 - **Context**: Generic Replicad knowledge only
 
-### After RAG  
+### After RAG
+
 - **Token usage**: ~800-1,200 tokens per prompt (relevant chunks only)
 - **Precision**: High (contextual API documentation)
 - **Errors**: Significantly reduced API mistakes
 - **Context**: Query-specific function documentation
 
 ### Cost Reduction
+
 - **Prompt tokens**: ~40% reduction per conversation
 - **Error recovery**: ~60% fewer correction cycles
 - **Overall efficiency**: ~2.5x better token/quality ratio
@@ -201,6 +219,7 @@ ON replicad_chunks USING gin (to_tsvector('english', signature || ' ' || jsdoc))
 ## 🔄 Maintenance & Updates
 
 ### Regular Updates
+
 ```bash
 # When Replicad API changes, regenerate chunks:
 node scripts/build-replicad-chunks.ts
@@ -208,11 +227,13 @@ node scripts/import-replicad-chunks.ts
 ```
 
 ### Monitoring
+
 - **Chunk relevance**: Monitor retrieval quality via similarity scores
-- **Search performance**: Track vector search vs fallback usage  
+- **Search performance**: Track vector search vs fallback usage
 - **API coverage**: Ensure all critical APIs are captured
 
 ### Scaling
+
 - **Database**: pgvector handles millions of vectors efficiently
 - **Embeddings**: Batch generate for cost optimization
 - **Caching**: Add Redis for frequently accessed chunks
@@ -229,4 +250,4 @@ node scripts/import-replicad-chunks.ts
 
 **Status**: ✅ **Fully Implemented & Production Ready**
 
-The RAG system successfully provides intelligent, context-aware API documentation retrieval that dramatically improves CAD model generation quality while reducing token costs. 
+The RAG system successfully provides intelligent, context-aware API documentation retrieval that dramatically improves CAD model generation quality while reducing token costs.

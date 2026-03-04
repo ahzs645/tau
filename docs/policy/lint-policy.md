@@ -1,11 +1,66 @@
 # Lint Policy
 
-ESLint performance best practices for this monorepo.
-Validated against `@typescript-eslint/eslint-plugin` v8, `eslint` v9+ flat config, and `eslint-plugin-import-x`.
+Linting architecture and performance best practices for this monorepo.
+
+## Hybrid oxlint + ESLint architecture
+
+This project uses a **hybrid linting** setup where **oxlint** runs first as a fast native pass, followed by **ESLint** for rules that oxlint cannot handle natively. Formatting is handled by **oxfmt** (Oxc formatter), not ESLint.
+
+### How it works
+
+1. `pnpm nx lint <project>` runs `oxlint . && eslint .` (configured in `nx.json` `targetDefaults`).
+2. `eslint-plugin-oxlint` (last entry in `eslint.config.mjs`) reads `.oxlintrc.json` and disables every ESLint rule that oxlint handles natively, so ESLint only evaluates residual rules.
+3. In VS Code, the Oxc extension provides real-time oxlint diagnostics, formatting via oxfmt, and the ESLint extension handles residual rules. Both support fix-on-save.
+4. CI (`pnpm nx affected -t lint`) chains both tools transparently via the Nx lint target.
+
+### What each tool handles
+
+**Oxlint** (native Rust, fast):
+
+- ESLint core rules (curly, no-restricted-imports, etc.)
+- `unicorn/*` rules (native) + `unicorn-js/*` gap rules via jsPlugins (better-regex, prevent-abbreviations, etc.)
+- `@typescript-eslint/*` rules (including type-aware via tsgolint)
+- `react/*` rules
+- `import/*` rules where natively supported (no-duplicates, no-cycle, no-self-import, etc.)
+- `jsdoc/*` rules (native) + `jsdoc-js/*` gap rules via jsPlugins (require-jsdoc, require-description, etc.)
+- `promise/*` and `node/*` rules
+- `eslint-comments-js/*` rules via jsPlugins
+- `no-barrel-files` via jsPlugins
+- `@protontech/enforce-uint8array-arraybuffer` via jsPlugins
+- Custom `tau-lint` rules (no-abusive-eslint-disable, require-disable-description)
+
+**Oxfmt** (formatting):
+
+- Code formatting (replaces Prettier)
+- Tailwind CSS class sorting (built-in, replaces prettier-plugin-tailwindcss)
+- Configuration in `.oxfmtrc.json`
+
+**ESLint** (retained, slim):
+
+- `@typescript-eslint/naming-convention` (not yet in tsgolint)
+- `@nx/enforce-module-boundaries` (requires Nx project graph)
+- `import-x/no-extraneous-dependencies` (monorepo package.json resolution)
+- `import-x/extensions` (enforce `.js` extension)
+- `import-x/consistent-type-specifier-style`
+- `@typescript-eslint/explicit-member-accessibility`
+- `eslint-plugin-max-params-no-constructor`
+- `react/boolean-prop-naming` (custom regex not in oxlint)
+
+### jsPlugins (oxlint JavaScript plugin API)
+
+Oxlint's `jsPlugins` feature loads standard ESLint plugins in oxlint's JS runtime, extending coverage beyond native Rust rules. Plugins are registered in `.oxlintrc.json` under the `jsPlugins` array with aliases when needed to avoid name collisions with native plugins (e.g., `unicorn-js` for `eslint-plugin-unicorn`).
+
+### Adding new rules
+
+Prefer oxlint's native support when available. Check [oxlint rule reference](https://oxc.rs/docs/guide/usage/linter/rules.html). If oxlint doesn't support the rule natively, consider adding it via jsPlugins. Only add to ESLint if it cannot run in oxlint at all.
+
+### Future: drop ESLint entirely
+
+When tsgolint lands `naming-convention` (PR #664), the remaining ESLint-only rules shrink significantly. At that point, ESLint can be reduced to running only Nx/import-specific rules or replaced entirely.
 
 ## Performance principles
 
-1. **Formatting is not linting.** Run Prettier via `prettier --check` (CI) and format-on-save (editor). Never run Prettier as an ESLint rule (`prettier/prettier`) — it doubles the parse cost of every file.
+1. **Formatting is not linting.** Oxfmt handles formatting via `oxfmt --check` (CI) and format-on-save (editor). Formatting rules are disabled in ESLint.
 2. **Don't duplicate TypeScript.** Disable any ESLint rule whose check is already performed by `tsc`.
 3. **Expensive rules run at CI only.** Rules that resolve the dependency graph or do cross-file analysis belong in CI, not in the editor's real-time feedback loop.
 4. **No unused plugins.** Disable rule sets from frameworks not used by the project (e.g. Ava rules when using Vitest).
@@ -13,15 +68,9 @@ Validated against `@typescript-eslint/eslint-plugin` v8, `eslint` v9+ flat confi
 
 ## Specific rules
 
-### `prettier/prettier` — DISABLED
+### `prettier/prettier` — REMOVED
 
-| Metric   | Value |
-|----------|-------|
-| Measured | **59 % of total lint time** (994 ms on a single 1006-line file) |
-| Cause    | Runs Prettier on every file during linting — double-parses every file |
-| Fix      | Use `eslint-config-prettier` (disables conflicting formatting rules) without `eslint-plugin-prettier` (which runs Prettier as a lint rule). Run `prettier --check .` separately in CI. |
-
-Source: [typescript-eslint performance docs](https://typescript-eslint.io/troubleshooting/typed-linting/performance/#eslint-plugin-prettier)
+Prettier has been fully replaced by **oxfmt** (Oxc formatter). The `eslint-plugin-prettier` integration that ran Prettier as an ESLint rule has been removed. Formatting is now handled entirely by oxfmt via the Oxc VS Code extension (format-on-save) and `oxfmt --check` in CI.
 
 ### `import-x/namespace` — DISABLED (redundant with TypeScript)
 
