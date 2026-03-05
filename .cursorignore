@@ -1,0 +1,11 @@
+# Exclude repo-manifest cloned repositories from Cursor indexing.
+# These 47 repos (~72 GB, 434K files) cause state.vscdb bloat
+# and contribute to renderer crashes when indexed.
+repos/
+
+# Build artifacts and caches
+tarballs/
+experiments/
+**/dist/
+**/node_modules/
+**/.git/
