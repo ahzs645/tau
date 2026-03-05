@@ -307,7 +307,8 @@
     "patchedDependencies": {
       "@kittycad/lib": "patches/@kittycad__lib.patch",
       "@taucad/kcl-wasm-lib": "patches/@taucad__kcl-wasm-lib.patch",
-      "@zenfs/core": "patches/@zenfs__core.patch"
+      "@zenfs/core": "patches/@zenfs__core.patch",
+      "replicad": "patches/replicad.patch"
     },
     "overrides": {
       "@langchain/google-common": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz",
