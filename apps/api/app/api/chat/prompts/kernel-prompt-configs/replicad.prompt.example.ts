@@ -51,9 +51,9 @@ export default function main(p = defaultParams) {
 
   let wateringCan = body
     .fuse(filler)
-    .fillet(p.filletRadius, (e) => e.inPlane('XY', p.bodyHeight))
+    .fillet(p.filletRadius, (edgeFinder) => edgeFinder.inPlane('XY', p.bodyHeight))
     .fuse(spout)
-    .fillet(10, (e) => e.inBox([20, 20, p.bodyHeight], [-20, -20, 120]));
+    .fillet(10, (edgeFinder) => edgeFinder.inBox([20, 20, p.bodyHeight], [-20, -20, 120]));
 
   const spoutOpening = [
     Math.cos((p.spoutAngle * Math.PI) / 180) * p.spoutLength,
@@ -62,18 +62,20 @@ export default function main(p = defaultParams) {
   ] as [number, number, number];
 
   wateringCan = wateringCan.shell(-p.wallThickness, (face) =>
-    face.either([(f) => f.containsPoint(spoutOpening), (f) => f.inPlane(topPlane)]),
+    face.either([(f) => f.containsPoint(spoutOpening), (pointFinder) => pointFinder.inPlane(topPlane)]),
   );
 
   // Add fillet to the spout opening
-  wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (e) =>
-    e.withinDistance(p.spoutRadius + 1, spoutOpening).ofCurveType('CIRCLE'),
+  wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (edgeFinder) =>
+    edgeFinder.withinDistance(p.spoutRadius + 1, spoutOpening).ofCurveType('CIRCLE'),
   );
 
   // Add fillet to the filler opening
   const fillerOpeningCenter = [-35, 0, 135] as [number, number, number];
-  wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (e) =>
-    e.withinDistance(p.topFillerRadius + p.wallThickness + 1, fillerOpeningCenter).not((f) => f.ofCurveType('LINE')),
+  wateringCan = wateringCan.fillet(p.spoutOpeningFilletRadius, (edgeFinder) =>
+    edgeFinder
+      .withinDistance(p.topFillerRadius + p.wallThickness + 1, fillerOpeningCenter)
+      .not((f) => f.ofCurveType('LINE')),
   );
 
   return wateringCan;
