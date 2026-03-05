@@ -308,6 +308,7 @@ repos:
   oxc:
     upstream: oxc-project/oxc
     description: ⚓ A collection of high-performance JavaScript tools.
+    fork: taucad/oxc
   oxc-vscode:
     upstream: oxc-project/oxc-vscode
   tailwindcss-intellisense:
