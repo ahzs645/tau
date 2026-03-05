@@ -2,7 +2,7 @@
  * Parametric Watering Can
  * A simple watering can with adjustable dimensions.
  */
-import { makePlane, makeCylinder, draw, drawCircle } from 'replicad';
+import { makePlane, makeCylinder, draw, drawCircle, type Shape3D, type SketchInterface } from 'replicad';
 
 export const defaultParams = {
   // Body dimensions
@@ -24,7 +24,7 @@ export const defaultParams = {
   filletRadius: 30, // Fillet radius for smooth transitions in mm
 };
 
-export default function main(p = defaultParams) {
+export default function main(p = defaultParams): Shape3D {
   // Building the body
   const profile = draw().hLine(p.baseWidth).line(10, 5).vLine(3).lineTo([8, p.bodyHeight]).hLine(-8).close();
 
@@ -32,15 +32,14 @@ export default function main(p = defaultParams) {
 
   // Building the filler
   const topPlane = makePlane().pivot(-p.fillerAngle, 'Y').translate([-35, 0, 135]);
-  const topCircle = drawCircle(p.topFillerRadius).sketchOnPlane(topPlane);
+  const topCircle = drawCircle(p.topFillerRadius).sketchOnPlane(topPlane) as SketchInterface;
 
   const middleCircle = drawCircle(8).sketchOnPlane('XY', p.bodyHeight);
 
   const bottomPlane = makePlane().pivot(p.fillerAngle, 'Y').translateZ(80);
   const bottomCircle = drawCircle(9).sketchOnPlane(bottomPlane);
 
-  // @ts-expect-error - Replicad types are incorrect for loftWith.
-  const filler = topCircle.loftWith([middleCircle, bottomCircle], {
+  const filler = topCircle.loftWith([middleCircle, bottomCircle] as SketchInterface[], {
     ruled: false,
   });
 
