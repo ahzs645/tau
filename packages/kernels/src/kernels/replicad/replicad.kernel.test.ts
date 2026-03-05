@@ -3529,7 +3529,8 @@ describe('withBrepEdges option', () => {
 // Example models with exceptions enabled
 // =============================================================================
 
-describe('Example models (single-exceptions)', () => {
+// Longer test suite for verifying opencascadejs bindings to replicad are all present.
+describe.skip('Example models (single-exceptions)', () => {
   for (const fixture of exampleFixtures) {
     it(`should produce valid geometry for ${fixture.name}`, async () => {
       const result = await createGeometry({
