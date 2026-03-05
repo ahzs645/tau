@@ -181,10 +181,14 @@ export function ViewportGizmoCube({
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
 
-  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation)
+  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation).
+  // The gizmo uses a dedicated renderer, but three-viewport-gizmo's render() only clears
+  // the depth buffer (designed for shared-renderer overlays). We must clear the color buffer
+  // ourselves to prevent ghosting from previous frames.
   useFrame(() => {
     if (rendererRef.current && gizmoRef.current) {
       rendererRef.current.toneMapping = THREE.NoToneMapping;
+      rendererRef.current.clear();
       gizmoRef.current.render();
     }
   });

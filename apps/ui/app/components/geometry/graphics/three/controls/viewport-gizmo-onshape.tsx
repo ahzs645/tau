@@ -67,10 +67,14 @@ export function ViewportGizmoOnshape({
     invalidate();
   }, [invalidate]);
 
-  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation)
+  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation).
+  // The gizmo uses a dedicated renderer, but three-viewport-gizmo's render() only clears
+  // the depth buffer (designed for shared-renderer overlays). We must clear the color buffer
+  // ourselves to prevent ghosting from previous frames.
   useFrame(() => {
     if (rendererRef.current && gizmoRef.current) {
       rendererRef.current.toneMapping = THREE.NoToneMapping;
+      rendererRef.current.clear();
       gizmoRef.current.render();
     }
   });
