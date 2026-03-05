@@ -280,7 +280,7 @@ function EditorWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
   return (
     <DockviewWatermark
       icon={FileCode}
-      title='No files open'
+      title='No file selected'
       description='Pick a file from the file tree, or select one below'
       onClose={handleClose}
     >
