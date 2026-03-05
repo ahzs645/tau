@@ -312,6 +312,9 @@ patchedDependencies:
   '@kittycad/lib':
     hash: f8eba32a9a9fffe5f056ba8a043de4a9c865c57b7a8bb8eecfb706fa4865ffe8
     path: patches/@kittycad__lib.patch
+  '@taucad/kcl-wasm-lib':
+    hash: 94d107e9b51ff3dcaca86cf552a795d118641be3b5fac75c5710fdd92004d0ce
+    path: patches/@taucad__kcl-wasm-lib.patch
   '@zenfs/core':
     hash: d9d7cd937ff8ce80054e4317ec2f10a876f4cd7ccb5cb5e78c79b2400ab730f7
     path: patches/@zenfs__core.patch
@@ -517,7 +520,7 @@ importers:
         version: link:packages/json-schema
       '@taucad/kcl-wasm-lib':
         specifier: 'catalog:'
-        version: 0.1.111
+        version: 0.1.111(patch_hash=94d107e9b51ff3dcaca86cf552a795d118641be3b5fac75c5710fdd92004d0ce)
       '@types/js-yaml':
         specifier: 'catalog:'
         version: 4.0.9
@@ -1251,7 +1254,7 @@ importers:
         version: link:../json-schema
       '@taucad/kcl-wasm-lib':
         specifier: 'catalog:'
-        version: 0.1.111
+        version: 0.1.111(patch_hash=94d107e9b51ff3dcaca86cf552a795d118641be3b5fac75c5710fdd92004d0ce)
       '@taucad/types':
         specifier: workspace:*
         version: link:../../libs/types
@@ -1302,7 +1305,7 @@ importers:
         version: 0.20201231.0
       vitest:
         specifier: '>=2.0.0'
-        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/ui@4.0.9(vitest@4.0.9))(happy-dom@16.8.1)(jiti@2.6.1)(jsdom@26.0.0(canvas@3.2.1))(less@4.5.1)(lightningcss@1.31.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/ui@4.0.9)(happy-dom@16.8.1)(jiti@2.6.1)(jsdom@26.0.0(canvas@3.2.1))(less@4.5.1)(lightningcss@1.31.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
       ws:
         specifier: 'catalog:'
         version: 8.19.0
@@ -23844,7 +23847,7 @@ snapshots:
 
   '@tanstack/virtual-core@3.13.19': {}
 
-  '@taucad/kcl-wasm-lib@0.1.111': {}
+  '@taucad/kcl-wasm-lib@0.1.111(patch_hash=94d107e9b51ff3dcaca86cf552a795d118641be3b5fac75c5710fdd92004d0ce)': {}
 
   '@testing-library/dom@10.4.0':
     dependencies:
@@ -35433,7 +35436,7 @@ snapshots:
       typescript: 5.9.3
       vitest: 4.0.9(@types/debug@4.1.12)(@types/node@24.0.15)(@vitest/ui@4.0.9)(happy-dom@16.8.1)(jiti@2.6.1)(jsdom@26.0.0(canvas@3.2.1))(less@4.5.1)(lightningcss@1.31.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
 
-  vitest@4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/ui@4.0.9(vitest@4.0.9))(happy-dom@16.8.1)(jiti@2.6.1)(jsdom@26.0.0(canvas@3.2.1))(less@4.5.1)(lightningcss@1.31.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2):
+  vitest@4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/ui@4.0.9)(happy-dom@16.8.1)(jiti@2.6.1)(jsdom@26.0.0(canvas@3.2.1))(less@4.5.1)(lightningcss@1.31.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.18
       '@vitest/mocker': 4.0.18(vite@7.3.1(@types/node@25.3.0)(jiti@2.6.1)(less@4.5.1)(lightningcss@1.31.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))

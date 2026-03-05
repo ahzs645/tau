@@ -306,6 +306,7 @@
   "pnpm": {
     "patchedDependencies": {
       "@kittycad/lib": "patches/@kittycad__lib.patch",
+      "@taucad/kcl-wasm-lib": "patches/@taucad__kcl-wasm-lib.patch",
       "@zenfs/core": "patches/@zenfs__core.patch"
     },
     "overrides": {
