@@ -17,19 +17,15 @@ export const defaultParams = {
   baseFilletRadius: 40, // Radius for the base fillet
 };
 
-export default function main(
-  p = defaultParams,
-): { shape: Shape3D; color: string } {
+export default function main(p = defaultParams): {
+  shape: Shape3D;
+  color: string;
+} {
   // Validate parameters to prevent common issues
   if (p.topRadius <= 0) {
-    console.warn(
-      'topRadius should be greater than 0 for a valid opening.',
-    );
+    console.warn('topRadius should be greater than 0 for a valid opening.');
     // Fallback to a minimum radius if invalid to avoid errors
-    p.topRadius = Math.max(
-      p.topRadius,
-      p.wallThickness * 1.1,
-    );
+    p.topRadius = Math.max(p.topRadius, p.wallThickness * 1.1);
   }
 
   if (p.topRadius < p.wallThickness) {
@@ -39,32 +35,23 @@ export default function main(
   }
 
   if (p.baseRadius < 0) {
-    console.warn(
-      'baseRadius cannot be negative. Setting to 0.',
-    );
+    console.warn('baseRadius cannot be negative. Setting to 0.');
     p.baseRadius = 0;
   }
 
-  if (
-    p.baseRadius < p.wallThickness &&
-    p.baseRadius > 0
-  ) {
+  if (p.baseRadius < p.wallThickness && p.baseRadius > 0) {
     console.warn(
       'baseRadius is less than wallThickness, shelling may produce unexpected results for the base.',
     );
   }
 
   if (p.height <= 0) {
-    console.warn(
-      'Height must be positive.',
-    );
+    console.warn('Height must be positive.');
     p.height = 10; // Fallback height
   }
 
   if (p.wallThickness <= 0) {
-    console.warn(
-      'Wall thickness must be positive.',
-    );
+    console.warn('Wall thickness must be positive.');
     p.wallThickness = 0.5; // Fallback thickness
   }
 
@@ -78,16 +65,13 @@ export default function main(
     .close(); // Close the profile by connecting back to [0,0]
 
   // Revolve the profile to create a solid shape.
-  let glassSolid = profile
-    .sketchOnPlane('XZ')
-    .revolve();
+  let glassSolid = profile.sketchOnPlane('XZ').revolve();
 
   // Hollow out the glass using the shell operation.
   // We remove the top face to create the opening.
   try {
-    glassSolid = glassSolid.shell(
-      p.wallThickness,
-      (faceFinder) => faceFinder.inPlane('XY', p.height),
+    glassSolid = glassSolid.shell(p.wallThickness, (faceFinder) =>
+      faceFinder.inPlane('XY', p.height),
     );
   } catch (error) {
     console.error(
@@ -102,49 +86,31 @@ export default function main(
   }
 
   // Apply fillet to the rim if enabled
-  if (
-    p.filletRim &&
-    p.rimFilletRadius > 0
-  ) {
+  if (p.filletRim && p.rimFilletRadius > 0) {
     try {
       glassSolid = glassSolid.fillet(
         p.rimFilletRadius,
-        (edgeFinder) =>
-          edgeFinder.inPlane('XY', p.height), // Select edges on the top plane (inner and outer rim)
+        (edgeFinder) => edgeFinder.inPlane('XY', p.height), // Select edges on the top plane (inner and outer rim)
       );
     } catch (error) {
-      console.warn(
-        'Rim fillet operation failed.',
-        error,
-      );
+      console.warn('Rim fillet operation failed.', error);
     }
   }
 
   // Apply fillet to the base if enabled and baseRadius is positive
-  if (
-    p.baseRadius > 0 &&
-    p.filletBase &&
-    p.baseFilletRadius > 0
-  ) {
+  if (p.baseRadius > 0 && p.filletBase && p.baseFilletRadius > 0) {
     try {
       glassSolid = glassSolid
         .fillet(
           p.baseFilletRadius,
-          (edgeFinder) =>
-            edgeFinder.inPlane(
-              'XY',
-              p.wallThickness,
-            ), // Select edges on the bottom plane
+          (edgeFinder) => edgeFinder.inPlane('XY', p.wallThickness), // Select edges on the bottom plane
         )
         .fillet(
           p.baseFilletRadius,
           (edgeFinder) => edgeFinder.inPlane('XY', 0), // Select edges on the bottom plane
         );
     } catch (error) {
-      console.warn(
-        'Base fillet operation failed.',
-        error,
-      );
+      console.warn('Base fillet operation failed.', error);
     }
   }
 

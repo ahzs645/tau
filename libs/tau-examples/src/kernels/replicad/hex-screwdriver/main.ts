@@ -15,45 +15,27 @@ export const defaultParams = {
   filletRadius: 2, // Radius for filleting edges
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   // Create hexagonal handle
-  let handle = drawPolysides(
-    p.handleSize / 2,
-    6,
-  )
+  let handle = drawPolysides(p.handleSize / 2, 6)
     .sketchOnPlane()
     .extrude(p.handleLength);
 
   // Apply fillet to the edges of the handle
-  handle = handle.fillet(
-    p.filletRadius,
-  );
+  handle = handle.fillet(p.filletRadius);
 
   // Create shaft
-  const shaft = drawCircle(
-    p.shaftDiameter / 2,
-  )
+  const shaft = drawCircle(p.shaftDiameter / 2)
     .sketchOnPlane()
     .extrude(p.shaftLength)
     .translate([0, 0, p.handleLength]);
 
   // Create hexagonal tip
-  const hexTip = drawPolysides(
-    p.hexSize / 2,
-    6,
-  )
+  const hexTip = drawPolysides(p.hexSize / 2, 6)
     .sketchOnPlane()
     .extrude(p.hexLength)
-    .translate([
-      0,
-      0,
-      p.handleLength + p.shaftLength,
-    ]);
+    .translate([0, 0, p.handleLength + p.shaftLength]);
 
   // Combine handle, shaft, and hex tip
-  return handle
-    .fuse(shaft)
-    .fuse(hexTip);
+  return handle.fuse(shaft).fuse(hexTip);
 }

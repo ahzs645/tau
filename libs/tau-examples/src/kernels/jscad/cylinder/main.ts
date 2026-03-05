@@ -11,9 +11,7 @@ export const defaultParams = {
   segments: 48,
 };
 
-export default function main(
-  p = defaultParams,
-): Geom3 {
+export default function main(p = defaultParams): Geom3 {
   return cylinder({
     height: p.height,
     radius: p.radius,

@@ -2,11 +2,7 @@
  * Parametric Birdhouse
  * A customizable birdhouse with adjustable dimensions and features.
  */
-import {
-  drawCircle,
-  draw,
-  makePlane,
-} from 'replicad';
+import { drawCircle, draw, makePlane } from 'replicad';
 import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
@@ -18,80 +14,47 @@ export const defaultParams = {
   filletEdges: true, // Whether to add rounded edges
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   const length = p.width;
   const width = p.width * 0.9; // 90% of width for the triangular prism
 
   // Create triangular prism house shape
-  let tobleroneShape = draw([
-    -width / 2,
-    0,
-  ])
+  let tobleroneShape = draw([-width / 2, 0])
     .lineTo([0, p.height])
     .lineTo([width / 2, 0])
     .close()
     .sketchOnPlane('XZ', -length / 2)
     .extrude(length)
-    .shell(p.thickness, (faceFinder) =>
-      faceFinder.parallelTo('XZ'),
-    );
+    .shell(p.thickness, (faceFinder) => faceFinder.parallelTo('XZ'));
 
   // Add fillets to edges if requested
   if (p.filletEdges) {
-    tobleroneShape =
-      tobleroneShape.fillet(
-        p.thickness / 2,
-        (edgeFinder) =>
-          edgeFinder
-            .inDirection('Y')
-            .either([
-              (edgeFinder) => edgeFinder.inPlane('XY'),
-              (edgeFinder) =>
-                edgeFinder.inPlane(
-                  'XY',
-                  p.height,
-                ),
-            ]),
-      );
+    tobleroneShape = tobleroneShape.fillet(p.thickness / 2, (edgeFinder) =>
+      edgeFinder
+        .inDirection('Y')
+        .either([
+          (edgeFinder) => edgeFinder.inPlane('XY'),
+          (edgeFinder) => edgeFinder.inPlane('XY', p.height),
+        ]),
+    );
   }
 
   // Create entrance hole
-  const hole = drawCircle(
-    p.holeDiameter / 2,
-  )
-    .sketchOnPlane(
-      makePlane('YZ').translate([
-        -length / 2,
-        0,
-        p.height / 3,
-      ]),
-    )
+  const hole = drawCircle(p.holeDiameter / 2)
+    .sketchOnPlane(makePlane('YZ').translate([-length / 2, 0, p.height / 3]))
     .extrude(length);
 
   // Cut hole from house
   const base = tobleroneShape.cut(hole);
   // Create complete body by duplicating and rotating
-  const body = base
-    .clone()
-    .fuse(base.rotate(90));
+  const body = base.clone().fuse(base.rotate(90));
 
   // Create hook for hanging
   const hookWidth = length / 2;
-  const hook = draw([
-    0,
-    p.hookHeight / 2,
-  ])
-    .smoothSplineTo(
-      [p.hookHeight / 2, 0],
-      -45,
-    )
+  const hook = draw([0, p.hookHeight / 2])
+    .smoothSplineTo([p.hookHeight / 2, 0], -45)
     .lineTo([hookWidth / 2, 0])
-    .line(
-      -hookWidth / 4,
-      p.hookHeight / 2,
-    )
+    .line(-hookWidth / 4, p.hookHeight / 2)
     .smoothSplineTo([0, p.hookHeight], {
       endTangent: 180,
       endFactor: 0.6,
@@ -99,11 +62,7 @@ export default function main(
     .closeWithMirror()
     .sketchOnPlane('XZ')
     .extrude(p.thickness)
-    .translate([
-      0,
-      p.thickness / 2,
-      p.height - p.thickness / 2,
-    ]);
+    .translate([0, p.thickness / 2, p.height - p.thickness / 2]);
 
   return body.fuse(hook);
 }

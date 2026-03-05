@@ -78,16 +78,9 @@ function circularPattern(
   radius: number,
   zHeight: number,
 ): Array<[number, number, number]> {
-  const positions: Array<
-    [number, number, number]
-  > = [];
-  for (
-    let index = 0;
-    index < count;
-    index++
-  ) {
-    const angle =
-      (2 * Math.PI * index) / count;
+  const positions: Array<[number, number, number]> = [];
+  for (let index = 0; index < count; index++) {
+    const angle = (2 * Math.PI * index) / count;
     positions.push([
       radius * Math.cos(angle),
       radius * Math.sin(angle),
@@ -106,26 +99,12 @@ function gridPattern(options: {
   spacingY: number;
   zHeight: number;
 }): Array<[number, number, number]> {
-  const {
-    countX,
-    countY,
-    spacingX,
-    spacingY,
-    zHeight,
-  } = options;
-  const positions: Array<
-    [number, number, number]
-  > = [];
-  const offsetX =
-    ((countX - 1) * spacingX) / 2;
-  const offsetY =
-    ((countY - 1) * spacingY) / 2;
+  const { countX, countY, spacingX, spacingY, zHeight } = options;
+  const positions: Array<[number, number, number]> = [];
+  const offsetX = ((countX - 1) * spacingX) / 2;
+  const offsetY = ((countY - 1) * spacingY) / 2;
   for (let ix = 0; ix < countX; ix++) {
-    for (
-      let iy = 0;
-      iy < countY;
-      iy++
-    ) {
+    for (let iy = 0; iy < countY; iy++) {
       positions.push([
         ix * spacingX - offsetX,
         iy * spacingY - offsetY,
@@ -137,16 +116,8 @@ function gridPattern(options: {
   return positions;
 }
 
-export default function main(
-  p: Parameters_ = defaultParams,
-): Shape3D {
-  const complexity = Math.max(
-    1,
-    Math.min(
-      5,
-      Math.round(p.complexity),
-    ),
-  );
+export default function main(p: Parameters_ = defaultParams): Shape3D {
+  const complexity = Math.max(1, Math.min(5, Math.round(p.complexity)));
 
   // =========================================================================
   // 1. BASE BLOCK - Rounded rectangle extruded
@@ -173,45 +144,23 @@ export default function main(
   //    Number of ribs scales with complexity
   // =========================================================================
   const ribCount = complexity + 1; // 2 to 6 ribs per axis
-  for (
-    let index = 0;
-    index < ribCount;
-    index++
-  ) {
+  for (let index = 0; index < ribCount; index++) {
     const offset =
-      ((index - (ribCount - 1) / 2) *
-        (p.baseLength -
-          2 * p.baseCornerRadius)) /
+      ((index - (ribCount - 1) / 2) * (p.baseLength - 2 * p.baseCornerRadius)) /
       ribCount;
 
     // X-aligned rib
-    const ribX = sketchRectangle(
-      p.baseWidth * 0.7,
-      p.ribThickness,
-      {
-        plane: 'XY',
-        origin: [
-          offset,
-          0,
-          p.baseHeight,
-        ] as [number, number, number],
-      },
-    ).extrude(p.ribHeight);
+    const ribX = sketchRectangle(p.baseWidth * 0.7, p.ribThickness, {
+      plane: 'XY',
+      origin: [offset, 0, p.baseHeight] as [number, number, number],
+    }).extrude(p.ribHeight);
     block = block.fuse(ribX);
 
     // Y-aligned rib
-    const ribY = sketchRectangle(
-      p.ribThickness,
-      p.baseLength * 0.7,
-      {
-        plane: 'XY',
-        origin: [
-          -offset * 0.7,
-          0,
-          p.baseHeight,
-        ] as [number, number, number],
-      },
-    ).extrude(p.ribHeight);
+    const ribY = sketchRectangle(p.ribThickness, p.baseLength * 0.7, {
+      plane: 'XY',
+      origin: [-offset * 0.7, 0, p.baseHeight] as [number, number, number],
+    }).extrude(p.ribHeight);
     block = block.fuse(ribY);
   }
 
@@ -220,20 +169,14 @@ export default function main(
   //    Hole count scales with complexity: 6*complexity holes
   // =========================================================================
   const circHoleCount = 6 * complexity;
-  const circHolePositions =
-    circularPattern(
-      circHoleCount,
-      p.circularPatternRadius,
-      p.baseHeight - p.holeDepth,
-    );
+  const circHolePositions = circularPattern(
+    circHoleCount,
+    p.circularPatternRadius,
+    p.baseHeight - p.holeDepth,
+  );
 
   for (const pos of circHolePositions) {
-    const hole = makeCylinder(
-      p.holeRadius,
-      p.holeDepth + 1,
-      pos,
-      [0, 0, 1],
-    );
+    const hole = makeCylinder(p.holeRadius, p.holeDepth + 1, pos, [0, 0, 1]);
     block = block.cut(hole);
   }
 
@@ -253,15 +196,8 @@ export default function main(
 
   for (const pos of gridPositions) {
     // Skip holes that would intersect the circular pattern area
-    const distribution = Math.hypot(
-      pos[0],
-      pos[1],
-    );
-    if (
-      distribution <
-      p.circularPatternRadius -
-        p.holeRadius * 3
-    ) {
+    const distribution = Math.hypot(pos[0], pos[1]);
+    if (distribution < p.circularPatternRadius - p.holeRadius * 3) {
       const throughHole = makeCylinder(
         p.holeRadius * 0.7,
         p.baseHeight + 1,
@@ -276,45 +212,32 @@ export default function main(
   // 6. CORNER POCKETS - Rectangular cutouts at each corner
   //    More pocket features at higher complexity
   // =========================================================================
-  const pocketCorners: Array<
-    [number, number]
-  > = [
+  const pocketCorners: Array<[number, number]> = [
     [1, 1],
     [1, -1],
     [-1, 1],
     [-1, -1],
   ];
 
-  for (const [
-    sx,
-    sy,
-  ] of pocketCorners) {
+  for (const [sx, sy] of pocketCorners) {
     const cx =
-      sx *
-      (p.baseLength / 2 -
-        p.pocketSize / 2 -
-        p.baseCornerRadius / 2);
+      sx * (p.baseLength / 2 - p.pocketSize / 2 - p.baseCornerRadius / 2);
     const cy =
-      sy *
-      (p.baseWidth / 2 -
-        p.pocketSize / 2 -
-        p.baseCornerRadius / 2);
+      sy * (p.baseWidth / 2 - p.pocketSize / 2 - p.baseCornerRadius / 2);
 
-    const pocket =
-      sketchRoundedRectangle(
-        p.pocketSize,
-        p.pocketSize,
-        p.pocketCornerRadius,
-        {
-          plane: 'XY',
-          origin: [
-            cx,
-            cy,
-            p.baseHeight -
-              p.pocketDepth,
-          ] as [number, number, number],
-        },
-      ).extrude(p.pocketDepth + 1);
+    const pocket = sketchRoundedRectangle(
+      p.pocketSize,
+      p.pocketSize,
+      p.pocketCornerRadius,
+      {
+        plane: 'XY',
+        origin: [cx, cy, p.baseHeight - p.pocketDepth] as [
+          number,
+          number,
+          number,
+        ],
+      },
+    ).extrude(p.pocketDepth + 1);
     block = block.cut(pocket);
   }
 
@@ -322,82 +245,43 @@ export default function main(
   // 7. LOFTED FEATURES - Organic transitions on corners
   //    Creates complex surface geometry
   // =========================================================================
-  const loftPositions: Array<
-    [number, number]
-  > =
+  const loftPositions: Array<[number, number]> =
     complexity >= 2
       ? [
-          [
-            p.baseLength / 2 - 15,
-            p.baseWidth / 2 - 15,
-          ],
-          [
-            -(p.baseLength / 2 - 15),
-            p.baseWidth / 2 - 15,
-          ],
+          [p.baseLength / 2 - 15, p.baseWidth / 2 - 15],
+          [-(p.baseLength / 2 - 15), p.baseWidth / 2 - 15],
         ]
-      : [
-          [
-            p.baseLength / 2 - 15,
-            p.baseWidth / 2 - 15,
-          ],
-        ];
+      : [[p.baseLength / 2 - 15, p.baseWidth / 2 - 15]];
 
   if (complexity >= 4) {
     loftPositions.push(
-      [
-        -(p.baseLength / 2 - 15),
-        -(p.baseWidth / 2 - 15),
-      ],
-      [
-        p.baseLength / 2 - 15,
-        -(p.baseWidth / 2 - 15),
-      ],
+      [-(p.baseLength / 2 - 15), -(p.baseWidth / 2 - 15)],
+      [p.baseLength / 2 - 15, -(p.baseWidth / 2 - 15)],
     );
   }
 
-  for (const [
-    lx,
-    ly,
-  ] of loftPositions) {
-    const basePlane = makePlane(
-      'XY',
-      p.baseHeight,
-    );
+  for (const [lx, ly] of loftPositions) {
+    const basePlane = makePlane('XY', p.baseHeight);
     basePlane.setOrigin2d(lx, ly);
-    const baseSketch = drawCircle(
-      p.loftBaseRadius,
-    ).sketchOnPlane(basePlane);
+    const baseSketch = drawCircle(p.loftBaseRadius).sketchOnPlane(basePlane);
 
-    const midPlane = makePlane(
-      'XY',
-      p.baseHeight + p.loftHeight / 2,
-    );
+    const midPlane = makePlane('XY', p.baseHeight + p.loftHeight / 2);
     midPlane.setOrigin2d(lx, ly);
-    const midSketch =
-      drawRoundedRectangle(
-        p.loftBaseRadius * 1.6,
-        p.loftBaseRadius * 1.6,
-        3,
-      ).sketchOnPlane(midPlane);
+    const midSketch = drawRoundedRectangle(
+      p.loftBaseRadius * 1.6,
+      p.loftBaseRadius * 1.6,
+      3,
+    ).sketchOnPlane(midPlane);
 
-    const topPlane = makePlane(
-      'XY',
-      p.baseHeight + p.loftHeight,
-    );
+    const topPlane = makePlane('XY', p.baseHeight + p.loftHeight);
     topPlane.setOrigin2d(lx, ly);
-    const topSketch = drawCircle(
-      p.loftTopRadius,
-    ).sketchOnPlane(topPlane);
+    const topSketch = drawCircle(p.loftTopRadius).sketchOnPlane(topPlane);
 
     const loftFeature =
       // @ts-expect-error - loftWith types
-      baseSketch.loftWith(
-        [midSketch, topSketch],
-        {
-          ruled: false,
-        },
-      ) as Shape3D;
+      baseSketch.loftWith([midSketch, topSketch], {
+        ruled: false,
+      }) as Shape3D;
     block = block.fuse(loftFeature);
   }
 
@@ -406,39 +290,19 @@ export default function main(
   //    Tests sphere-box intersection which is numerically challenging
   // =========================================================================
   if (complexity >= 2) {
-    const spherePositions: Array<
-      [number, number, number]
-    > = [
-      [
-        p.baseLength / 4,
-        0,
-        p.baseHeight,
-      ],
-      [
-        -p.baseLength / 4,
-        0,
-        p.baseHeight,
-      ],
+    const spherePositions: Array<[number, number, number]> = [
+      [p.baseLength / 4, 0, p.baseHeight],
+      [-p.baseLength / 4, 0, p.baseHeight],
     ];
     if (complexity >= 4) {
       spherePositions.push(
-        [
-          0,
-          p.baseWidth / 4,
-          p.baseHeight,
-        ],
-        [
-          0,
-          -p.baseWidth / 4,
-          p.baseHeight,
-        ],
+        [0, p.baseWidth / 4, p.baseHeight],
+        [0, -p.baseWidth / 4, p.baseHeight],
       );
     }
 
     for (const spos of spherePositions) {
-      const sphere = makeSphere(
-        p.holeRadius * 2,
-      ).translate(spos);
+      const sphere = makeSphere(p.holeRadius * 2).translate(spos);
       block = block.cut(sphere);
     }
   }
@@ -452,34 +316,23 @@ export default function main(
       // Create a circular cross-section at the start of the helix
       const sweepPlane = makePlane();
       sweepPlane.pivot(90, 'Y');
-      sweepPlane.translateTo([
-        p.helixRadius,
-        0,
-        5,
-      ]);
-      const channelProfile =
-        sketchCircle(p.channelRadius, {
-          plane: sweepPlane,
-        });
+      sweepPlane.translateTo([p.helixRadius, 0, 5]);
+      const channelProfile = sketchCircle(p.channelRadius, {
+        plane: sweepPlane,
+      });
 
-      const channel =
-        channelProfile.sweepSketch(
-          (plane) => {
-            return sketchCircle(
-              p.channelRadius,
-              { plane },
-            );
-          },
-          { frenet: true },
-        );
+      const channel = channelProfile.sweepSketch(
+        (plane) => {
+          return sketchCircle(p.channelRadius, { plane });
+        },
+        { frenet: true },
+      );
 
       // Use genericSweep instead if sweepSketch doesn't work
       block = block.cut(channel);
     } catch {
       // Sweep can fail on some configurations; skip gracefully
-      console.warn(
-        'Helical sweep skipped due to geometry error',
-      );
+      console.warn('Helical sweep skipped due to geometry error');
     }
   }
 
@@ -488,23 +341,13 @@ export default function main(
   //     Expensive edge-finding + fillet computation
   // =========================================================================
   try {
-    block = block.fillet(
-      p.largeFilletRadius,
-      (edgeFinder) =>
-        edgeFinder
-          .inBox(
-            [
-              -p.bossRadius - 2,
-              -p.bossRadius - 2,
-              p.baseHeight - 1,
-            ],
-            [
-              p.bossRadius + 2,
-              p.bossRadius + 2,
-              p.baseHeight + 1,
-            ],
-          )
-          .ofCurveType('CIRCLE'),
+    block = block.fillet(p.largeFilletRadius, (edgeFinder) =>
+      edgeFinder
+        .inBox(
+          [-p.bossRadius - 2, -p.bossRadius - 2, p.baseHeight - 1],
+          [p.bossRadius + 2, p.bossRadius + 2, p.baseHeight + 1],
+        )
+        .ofCurveType('CIRCLE'),
     );
   } catch {
     // Fillet can fail on complex intersections
@@ -515,23 +358,13 @@ export default function main(
   //     The solver must evaluate many edges; great multi-thread target
   // =========================================================================
   try {
-    block = block.fillet(
-      p.filletRadius,
-      (edgeFinder) =>
-        edgeFinder
-          .inBox(
-            [
-              -p.baseLength / 2 - 1,
-              -p.baseWidth / 2 - 1,
-              -1,
-            ],
-            [
-              p.baseLength / 2 + 1,
-              p.baseWidth / 2 + 1,
-              p.baseHeight + 1,
-            ],
-          )
-          .ofCurveType('LINE'),
+    block = block.fillet(p.filletRadius, (edgeFinder) =>
+      edgeFinder
+        .inBox(
+          [-p.baseLength / 2 - 1, -p.baseWidth / 2 - 1, -1],
+          [p.baseLength / 2 + 1, p.baseWidth / 2 + 1, p.baseHeight + 1],
+        )
+        .ofCurveType('LINE'),
     );
   } catch {
     // Some fillets may fail on complex geometry
@@ -541,23 +374,12 @@ export default function main(
   // 12. CHAMFERS on top edges of ribs
   // =========================================================================
   try {
-    const ribTopZ =
-      p.baseHeight + p.ribHeight;
-    block = block.chamfer(
-      0.8,
-      (edgeFinder) =>
-        edgeFinder.inBox(
-          [
-            -p.baseLength / 2,
-            -p.baseWidth / 2,
-            ribTopZ - 0.5,
-          ],
-          [
-            p.baseLength / 2,
-            p.baseWidth / 2,
-            ribTopZ + 0.5,
-          ],
-        ),
+    const ribTopZ = p.baseHeight + p.ribHeight;
+    block = block.chamfer(0.8, (edgeFinder) =>
+      edgeFinder.inBox(
+        [-p.baseLength / 2, -p.baseWidth / 2, ribTopZ - 0.5],
+        [p.baseLength / 2, p.baseWidth / 2, ribTopZ + 0.5],
+      ),
     );
   } catch {
     // Chamfer can fail on thin features

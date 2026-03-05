@@ -2,10 +2,7 @@
  * Parametric Cycloidal Gear
  * A customizable gear using hypocycloid and epicycloid curves.
  */
-import {
-  drawCircle,
-  drawParametricFunction,
-} from 'replicad';
+import { drawCircle, drawParametricFunction } from 'replicad';
 import type { Point2D, Shape3D } from 'replicad';
 
 export const defaultParams = {
@@ -23,17 +20,10 @@ export const defaultParams = {
  * @param r2 - Radius of rolling circle
  * @returns Coordinates [x, y] of point on curve
  */
-function hypocycloid(
-  t: number,
-  r1: number,
-  r2: number,
-): Point2D {
+function hypocycloid(t: number, r1: number, r2: number): Point2D {
   return [
-    (r1 - r2) * Math.cos(t) +
-      r2 * Math.cos((r1 / r2) * t - t),
-    (r1 - r2) * Math.sin(t) +
-      r2 *
-        Math.sin(-((r1 / r2) * t - t)),
+    (r1 - r2) * Math.cos(t) + r2 * Math.cos((r1 / r2) * t - t),
+    (r1 - r2) * Math.sin(t) + r2 * Math.sin(-((r1 / r2) * t - t)),
   ];
 }
 
@@ -44,16 +34,10 @@ function hypocycloid(
  * @param r2 - Radius of rolling circle
  * @returns Coordinates [x, y] of point on curve
  */
-function epicycloid(
-  t: number,
-  r1: number,
-  r2: number,
-): Point2D {
+function epicycloid(t: number, r1: number, r2: number): Point2D {
   return [
-    (r1 + r2) * Math.cos(t) -
-      r2 * Math.cos((r1 / r2) * t + t),
-    (r1 + r2) * Math.sin(t) -
-      r2 * Math.sin((r1 / r2) * t + t),
+    (r1 + r2) * Math.cos(t) - r2 * Math.cos((r1 / r2) * t + t),
+    (r1 + r2) * Math.sin(t) - r2 * Math.sin((r1 / r2) * t + t),
   ];
 }
 
@@ -69,39 +53,23 @@ function gear(
   r1 = defaultParams.r1,
   r2 = defaultParams.r2,
 ): Point2D {
-  if (
-    (-1) **
-      (1 +
-        Math.floor(
-          (t / 2 / Math.PI) * (r1 / r2),
-        )) <
-    0
-  ) {
+  if ((-1) ** (1 + Math.floor((t / 2 / Math.PI) * (r1 / r2))) < 0) {
     return epicycloid(t, r1, r2);
   }
 
   return hypocycloid(t, r1, r2);
 }
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   // Create gear using parametric function
-  const base = drawParametricFunction(
-    (t) =>
-      gear(2 * Math.PI * t, p.r1, p.r2),
-  )
+  const base = drawParametricFunction((t) => gear(2 * Math.PI * t, p.r1, p.r2))
     .sketchOnPlane()
     .extrude(p.height, {
       twistAngle: p.twistAngle,
     });
 
   // Create center hole
-  const hole = drawCircle(
-    p.circleDiameter,
-  )
-    .sketchOnPlane()
-    .extrude(p.height);
+  const hole = drawCircle(p.circleDiameter).sketchOnPlane().extrude(p.height);
 
   // Cut hole from gear
   return base.cut(hole);

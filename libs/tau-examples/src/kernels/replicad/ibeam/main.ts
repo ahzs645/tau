@@ -14,9 +14,7 @@ export const defaultParams = {
   rootFilletRadius: 10,
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   const hw = p.beamWidth / 2; // Half width
   const hh = p.beamHeight / 2; // Half height
   const wt = p.webThickness;
@@ -24,10 +22,8 @@ export default function main(
   const rf = p.rootFilletRadius;
 
   // Calculate dimensions accounting for fillet radius
-  const flangeInset =
-    (p.beamWidth - wt) / 2 - rf;
-  const webHeight =
-    p.beamHeight - 2 * ft - 2 * rf;
+  const flangeInset = (p.beamWidth - wt) / 2 - rf;
+  const webHeight = p.beamHeight - 2 * ft - 2 * rf;
 
   // Start at flange midpoint and trace to center of web
   const pen = draw([0, -hh])
@@ -40,14 +36,10 @@ export default function main(
     .closeWithMirror(); // Mirror on Y axis
 
   // Mirror on X axis
-  const ibeamProfile = pen.fuse(
-    pen.mirror([0, 0]),
-  );
+  const ibeamProfile = pen.fuse(pen.mirror([0, 0]));
 
   // Extrude
-  const ibeam = ibeamProfile
-    .sketchOnPlane()
-    .extrude(p.length);
+  const ibeam = ibeamProfile.sketchOnPlane().extrude(p.length);
 
   return ibeam;
 }

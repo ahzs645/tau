@@ -14,9 +14,7 @@ export const defaultParams = {
   holeRadius: 0.4,
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   // Convert to normalized units (rail height = 1.0 in normalized space)
   const ir = p.interiorRadius;
   const sd = p.scoreDepth;
@@ -37,42 +35,16 @@ export default function main(
     .hSagittaArc(-sd * 2, sd) // Add the scores
     .hLine(-(0.775 - ir - sd * 4)) // Move across, subtracting the scores
     .hSagittaArc(-sd * 2, sd)
-    .hLine(
-      -(
-        0.35 -
-        cr *
-          (1 +
-            Math.tan(
-              (22.5 * Math.PI) / 180,
-            ))
-      ),
-    ) // Subtract the curve radius plus the half-curve distance
-    .tangentArc(
-      -cr,
-      -cr *
-        Math.tan(
-          (22.5 * Math.PI) / 180,
-        ),
-    ) // Create a half-curve to mirror on
+    .hLine(-(0.35 - cr * (1 + Math.tan((22.5 * Math.PI) / 180)))) // Subtract the curve radius plus the half-curve distance
+    .tangentArc(-cr, -cr * Math.tan((22.5 * Math.PI) / 180)) // Create a half-curve to mirror on
     .closeWithMirror();
 
-  const mirroredProfile =
-    quarterProfile.mirror(
-      [-1, 0],
-      [0, 0],
-      'plane',
-    );
-  const halfProfile =
-    quarterProfile.fuse(
-      mirroredProfile,
-    );
-  const fullProfile = halfProfile.fuse(
-    halfProfile.mirror([0, 0]),
-  );
+  const mirroredProfile = quarterProfile.mirror([-1, 0], [0, 0], 'plane');
+  const halfProfile = quarterProfile.fuse(mirroredProfile);
+  const fullProfile = halfProfile.fuse(halfProfile.mirror([0, 0]));
 
   const hole = drawCircle(p.holeRadius);
-  const finishedProfile =
-    fullProfile.cut(hole);
+  const finishedProfile = fullProfile.cut(hole);
 
   // // Extrude the profile
   const tSlotRail = finishedProfile

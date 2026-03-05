@@ -2,12 +2,7 @@
  * Decorated Box Model
  * A customizable box with decorative patterns.
  */
-import {
-  sketchRectangle,
-  EdgeFinder,
-  FaceFinder,
-  makePlane,
-} from 'replicad';
+import { sketchRectangle, EdgeFinder, FaceFinder, makePlane } from 'replicad';
 import type { Shape3D } from 'replicad';
 import {
   addVoronoi,
@@ -29,28 +24,16 @@ export const defaultParams = {
   decorationSeed: 5,
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
-  let shape = sketchRectangle(
-    p.depth,
-    p.width,
-    makePlane('XY'),
-  )
+export default function main(p = defaultParams): Shape3D {
+  let shape = sketchRectangle(p.depth, p.width, makePlane('XY'))
     .extrude(p.height)
     .fillet({
       radius: p.filletRadius,
-      filter:
-        new EdgeFinder().inDirection(
-          'Z',
-        ),
+      filter: new EdgeFinder().inDirection('Z'),
     })
     .shell({
       thickness: p.shellThickness,
-      filter: new FaceFinder().inPlane(
-        'XY',
-        p.height,
-      ),
+      filter: new FaceFinder().inPlane('XY', p.height),
     });
 
   const decorateParameters = {
@@ -65,37 +48,25 @@ export default function main(
 
   switch (p.decorationStyle) {
     case 'voronoi': {
-      shape = addVoronoi(
-        shape,
-        decorateParameters,
-      );
+      shape = addVoronoi(shape, decorateParameters);
 
       break;
     }
 
     case 'grid': {
-      shape = addGrid(
-        shape,
-        decorateParameters,
-      );
+      shape = addGrid(shape, decorateParameters);
 
       break;
     }
 
     case 'honeycomb': {
-      shape = addHoneycomb(
-        shape,
-        decorateParameters,
-      );
+      shape = addHoneycomb(shape, decorateParameters);
 
       break;
     }
 
     default: {
-      shape = addHoneycomb(
-        shape,
-        decorateParameters,
-      );
+      shape = addHoneycomb(shape, decorateParameters);
     }
   }
 

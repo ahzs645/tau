@@ -56,7 +56,11 @@ function createPotHolder(p = defaultParams): Shape3D {
 }
 
 function addDrainageHoles(potHolderShape: Shape3D, p = defaultParams): Shape3D {
-  if (!p.addDrainageHoles || p.drainageHoleCount <= 0 || p.drainageHoleDiameter <= 0) {
+  if (
+    !p.addDrainageHoles ||
+    p.drainageHoleCount <= 0 ||
+    p.drainageHoleDiameter <= 0
+  ) {
     return potHolderShape;
   }
 
@@ -65,7 +69,9 @@ function addDrainageHoles(potHolderShape: Shape3D, p = defaultParams): Shape3D {
 
   if (p.drainageHoleCount === 1 && p.drainageHoleOffset === 0) {
     if (holeRadius < p.potInnerDiameter / 2) {
-      const holeCylinder = drawCircle(holeRadius).sketchOnPlane('XY').extrude(p.baseThickness);
+      const holeCylinder = drawCircle(holeRadius)
+        .sketchOnPlane('XY')
+        .extrude(p.baseThickness);
       shape = shape.cut(holeCylinder);
     }
     return shape;
@@ -127,7 +133,9 @@ function createSaucer(
   const completeSaucer = saucerBasePlate.fuse(saucerLip);
 
   const potHolderZOffset = p.saucerBaseThickness;
-  const translatedPotHolder = potHolderShape.clone().translateZ(potHolderZOffset);
+  const translatedPotHolder = potHolderShape
+    .clone()
+    .translateZ(potHolderZOffset);
   const shape = completeSaucer.fuse(translatedPotHolder);
 
   return { shape, potHolderZOffset };
@@ -152,7 +160,9 @@ function applyFillets(
       shape = shape.fillet(p.filletRadius, (edgeFinder) =>
         edgeFinder
           .inPlane('XY', potTopZ)
-          .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+          .when(({ element }) =>
+            isCloseToRadiusInXYPlane(element, expectedR, filletTolerance),
+          ),
       );
     }
 
@@ -162,7 +172,9 @@ function applyFillets(
       shape = shape.fillet(p.filletRadius, (edgeFinder) =>
         edgeFinder
           .inPlane('XY', potTopZ)
-          .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+          .when(({ element }) =>
+            isCloseToRadiusInXYPlane(element, expectedR, filletTolerance),
+          ),
       );
     }
 
@@ -179,7 +191,11 @@ function applyFillets(
           edgeFinder
             .inPlane('XY', saucerLipTopZ)
             .when(({ element }) =>
-              isCloseToRadiusInXYPlane(element, expectedOuterR, filletTolerance),
+              isCloseToRadiusInXYPlane(
+                element,
+                expectedOuterR,
+                filletTolerance,
+              ),
             ),
         );
 
@@ -189,7 +205,11 @@ function applyFillets(
           edgeFinder
             .inPlane('XY', saucerLipTopZ)
             .when(({ element }) =>
-              isCloseToRadiusInXYPlane(element, expectedInnerR, filletTolerance),
+              isCloseToRadiusInXYPlane(
+                element,
+                expectedInnerR,
+                filletTolerance,
+              ),
             ),
         );
       }
@@ -204,7 +224,9 @@ function applyFillets(
         shape = shape.fillet(p.filletRadius, (edgeFinder) =>
           edgeFinder
             .inPlane('XY', 0)
-            .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+            .when(({ element }) =>
+              isCloseToRadiusInXYPlane(element, expectedR, filletTolerance),
+            ),
         );
       }
     } else if (p.filletOuterBase) {
@@ -212,7 +234,9 @@ function applyFillets(
       shape = shape.fillet(p.filletRadius, (edgeFinder) =>
         edgeFinder
           .inPlane('XY', 0)
-          .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+          .when(({ element }) =>
+            isCloseToRadiusInXYPlane(element, expectedR, filletTolerance),
+          ),
       );
     }
   } catch (error: unknown) {

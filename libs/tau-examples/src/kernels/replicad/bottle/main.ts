@@ -2,16 +2,8 @@
  * Parametric Bottle
  * A simple bottle with adjustable dimensions and rounded edges.
  */
-import type {
-  Shape3D,
-  Sketch,
-} from 'replicad';
-import {
-  draw,
-  makeCylinder,
-  makeOffset,
-  FaceFinder,
-} from 'replicad';
+import type { Shape3D, Sketch } from 'replicad';
+import { draw, makeCylinder, makeOffset, FaceFinder } from 'replicad';
 
 export const defaultParams = {
   width: 50,
@@ -19,17 +11,10 @@ export const defaultParams = {
   thickness: 30,
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   let shape = draw([-p.width / 2, 0])
     .vLine(-p.thickness / 4)
-    .threePointsArc(
-      p.width,
-      0,
-      p.width / 2,
-      -p.thickness / 4,
-    )
+    .threePointsArc(p.width, 0, p.width / 2, -p.thickness / 4)
     .vLine(p.thickness / 4)
     .closeWithMirror()
     .sketchOnPlane()
@@ -47,60 +32,31 @@ export default function main(
 
   shape = shape.fuse(neck);
 
-  shape = shape.shell(
-    p.thickness / 50,
-    (f) =>
-      f.inPlane('XY', [
-        0,
-        0,
-        p.height + myNeckHeight,
-      ]),
+  shape = shape.shell(p.thickness / 50, (f) =>
+    f.inPlane('XY', [0, 0, p.height + myNeckHeight]),
   );
 
   const neckFace = new FaceFinder()
-    .containsPoint([
-      0,
-      myNeckRadius,
-      p.height,
-    ])
+    .containsPoint([0, myNeckRadius, p.height])
     .ofSurfaceType('CYLINDRE')
     // oxlint-disable-next-line unicorn/no-array-method-this-argument -- FaceFinder.find(shape, options) is not Array#find
     .find(shape.clone() as Shape3D, {
       unique: true,
     });
 
-  const bottomThreadFace = makeOffset(
-    neckFace,
-    -0.01 * myNeckRadius,
-  ).faces[0]!;
-  const baseThreadSketch = draw([
-    0.75, 0.25,
-  ])
+  const bottomThreadFace = makeOffset(neckFace, -0.01 * myNeckRadius).faces[0]!;
+  const baseThreadSketch = draw([0.75, 0.25])
     .halfEllipse(2, 0.5, 0.1)
     .close()
-    .sketchOnFace(
-      bottomThreadFace,
-      'bounds',
-    ) as Sketch;
+    .sketchOnFace(bottomThreadFace, 'bounds') as Sketch;
 
-  const topThreadFace = makeOffset(
-    neckFace,
-    0.05 * myNeckRadius,
-  ).faces[0]!;
-  const topThreadSketch = draw([
-    0.75, 0.25,
-  ])
+  const topThreadFace = makeOffset(neckFace, 0.05 * myNeckRadius).faces[0]!;
+  const topThreadSketch = draw([0.75, 0.25])
     .halfEllipse(2, 0.5, 0.05)
     .close()
-    .sketchOnFace(
-      topThreadFace,
-      'bounds',
-    ) as Sketch;
+    .sketchOnFace(topThreadFace, 'bounds') as Sketch;
 
-  const thread =
-    baseThreadSketch.loftWith(
-      topThreadSketch,
-    );
+  const thread = baseThreadSketch.loftWith(topThreadSketch);
 
   return shape.fuse(thread);
 }

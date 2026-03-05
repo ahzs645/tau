@@ -9,8 +9,6 @@ export const defaultParams = {
   size: 20,
 };
 
-export default function main(
-  p = defaultParams,
-): Geom3 {
+export default function main(p = defaultParams): Geom3 {
   return cube({ size: p.size });
 }

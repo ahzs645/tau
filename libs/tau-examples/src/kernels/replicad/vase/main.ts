@@ -18,9 +18,7 @@ export const defaultParams = {
   bottomHeavy: true,
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   const splinesConfig = [
     {
       position: p.lowerCirclePosition,
@@ -29,28 +27,20 @@ export default function main(
     {
       position: p.higherCirclePosition,
       radius: p.higherCircleRadius,
-      startFactor: p.bottomHeavy
-        ? 3
-        : 1,
+      startFactor: p.bottomHeavy ? 3 : 1,
     },
     {
       position: 1,
       radius: p.topRadius,
-      startFactor: p.bottomHeavy
-        ? 3
-        : 1,
+      startFactor: p.bottomHeavy ? 3 : 1,
     },
   ];
 
-  const sketchVaseProfile =
-    draw().hLine(p.baseWidth);
+  const sketchVaseProfile = draw().hLine(p.baseWidth);
 
   for (const config of splinesConfig) {
     sketchVaseProfile.smoothSplineTo(
-      [
-        p.baseWidth * config.radius,
-        p.height * config.position,
-      ],
+      [p.baseWidth * config.radius, p.height * config.position],
       {
         endTangent: [0, 1],
         startFactor: config.startFactor,
@@ -67,21 +57,14 @@ export default function main(
     .revolve();
 
   if (p.wallThickness) {
-    vase = vase.shell(
-      p.wallThickness,
-      (faceFinder) =>
-        faceFinder.containsPoint([
-          0,
-          0,
-          p.height,
-        ]),
+    vase = vase.shell(p.wallThickness, (faceFinder) =>
+      faceFinder.containsPoint([0, 0, p.height]),
     );
   }
 
   if (p.topFillet) {
-    vase = vase.fillet(
-      p.wallThickness / 3,
-      (edgeFinder) => edgeFinder.inPlane('XY', p.height),
+    vase = vase.fillet(p.wallThickness / 3, (edgeFinder) =>
+      edgeFinder.inPlane('XY', p.height),
     );
   }
 

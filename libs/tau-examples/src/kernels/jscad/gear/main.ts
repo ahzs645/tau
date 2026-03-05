@@ -12,8 +12,7 @@ type Geom3 = geometries.geom3.Geom3;
 type Vec2 = maths.vec2.Vec2;
 type Vec3 = maths.vec3.Vec3;
 
-const { cylinder, polygon } =
-  primitives;
+const { cylinder, polygon } = primitives;
 const { rotateZ } = transforms;
 const { extrudeLinear } = extrusions;
 const { union, subtract } = booleans;
@@ -29,9 +28,7 @@ export const defaultParams = {
   centerHoleRadius: 2,
 };
 
-export default function main(
-  p = defaultParams,
-): Geom3 {
+export default function main(p = defaultParams): Geom3 {
   let gear = involuteGear({
     numberTeeth: p.numTeeth,
     circularPitch: p.circularPitch,
@@ -43,11 +40,7 @@ export default function main(
     const centerHole = cylinder({
       height: p.thickness,
       radius: p.centerHoleRadius,
-      center: [
-        0,
-        0,
-        p.thickness / 2,
-      ] as Vec3,
+      center: [0, 0, p.thickness / 2] as Vec3,
       segments: 16,
     });
     gear = subtract(gear, centerHole);
@@ -63,172 +56,90 @@ const involuteGear = (options: {
   clearance: number;
   thickness: number;
 }): Geom3 => {
-  const {
-    numberTeeth,
-    circularPitch,
-    pressureAngle,
-    clearance,
-    thickness,
-  } = options;
-  const addendum =
-    circularPitch / Math.PI;
+  const { numberTeeth, circularPitch, pressureAngle, clearance, thickness } =
+    options;
+  const addendum = circularPitch / Math.PI;
   const dedendum = addendum + clearance;
 
-  const pitchRadius =
-    (numberTeeth * circularPitch) /
-    (2 * Math.PI);
-  const baseRadius =
-    pitchRadius *
-    Math.cos(pressureAngle);
-  const outerRadius =
-    pitchRadius + addendum;
-  const rootRadius =
-    pitchRadius - dedendum;
+  const pitchRadius = (numberTeeth * circularPitch) / (2 * Math.PI);
+  const baseRadius = pitchRadius * Math.cos(pressureAngle);
+  const outerRadius = pitchRadius + addendum;
+  const rootRadius = pitchRadius - dedendum;
 
   const maxTanLength = Math.sqrt(
-    outerRadius * outerRadius -
-      baseRadius * baseRadius,
+    outerRadius * outerRadius - baseRadius * baseRadius,
   );
-  const maxAngle =
-    maxTanLength / baseRadius;
+  const maxAngle = maxTanLength / baseRadius;
 
   const tlAtPitchCircle = Math.sqrt(
-    pitchRadius * pitchRadius -
-      baseRadius * baseRadius,
+    pitchRadius * pitchRadius - baseRadius * baseRadius,
   );
-  const angleAtPitchCircle =
-    tlAtPitchCircle / baseRadius;
-  const diffAngle =
-    angleAtPitchCircle -
-    Math.atan(angleAtPitchCircle);
-  const angularToothWidthAtBase =
-    Math.PI / numberTeeth +
-    2 * diffAngle;
+  const angleAtPitchCircle = tlAtPitchCircle / baseRadius;
+  const diffAngle = angleAtPitchCircle - Math.atan(angleAtPitchCircle);
+  const angularToothWidthAtBase = Math.PI / numberTeeth + 2 * diffAngle;
 
   const toothCurveResolution = 5;
-  const points: Array<
-    [number, number]
-  > = [[0, 0]];
-  for (
-    let i = 0;
-    i <= toothCurveResolution;
-    i++
-  ) {
-    const angle =
-      maxAngle *
-      (i / toothCurveResolution) **
-        (2 / 3);
-    const tanLength =
-      angle * baseRadius;
-    let radiantVector =
-      vec2.fromAngleRadians(
-        vec2.create(),
-        angle,
-      );
+  const points: Array<[number, number]> = [[0, 0]];
+  for (let i = 0; i <= toothCurveResolution; i++) {
+    const angle = maxAngle * (i / toothCurveResolution) ** (2 / 3);
+    const tanLength = angle * baseRadius;
+    let radiantVector = vec2.fromAngleRadians(vec2.create(), angle);
     let tangentVector = vec2.scale(
       vec2.create(),
-      vec2.normal(
-        vec2.create(),
-        radiantVector,
-      ),
+      vec2.normal(vec2.create(), radiantVector),
       -tanLength,
     );
-    radiantVector = vec2.scale(
-      vec2.create(),
-      radiantVector,
-      baseRadius,
-    );
+    radiantVector = vec2.scale(vec2.create(), radiantVector, baseRadius);
     points[i + 1] = [
-      radiantVector[0] +
-        tangentVector[0],
-      radiantVector[1] +
-        tangentVector[1],
+      radiantVector[0] + tangentVector[0],
+      radiantVector[1] + tangentVector[1],
     ];
 
-    radiantVector =
-      vec2.fromAngleRadians(
-        vec2.create(),
-        angularToothWidthAtBase - angle,
-      );
+    radiantVector = vec2.fromAngleRadians(
+      vec2.create(),
+      angularToothWidthAtBase - angle,
+    );
     tangentVector = vec2.scale(
       vec2.create(),
-      vec2.normal(
-        vec2.create(),
-        radiantVector,
-      ),
+      vec2.normal(vec2.create(), radiantVector),
       tanLength,
     );
-    radiantVector = vec2.scale(
-      vec2.create(),
-      radiantVector,
-      baseRadius,
-    );
-    points[
-      2 * toothCurveResolution + 2 - i
-    ] = [
-      radiantVector[0] +
-        tangentVector[0],
-      radiantVector[1] +
-        tangentVector[1],
+    radiantVector = vec2.scale(vec2.create(), radiantVector, baseRadius);
+    points[2 * toothCurveResolution + 2 - i] = [
+      radiantVector[0] + tangentVector[0],
+      radiantVector[1] + tangentVector[1],
     ];
   }
 
   const singleTooth2D = polygon({
     points,
   });
-  const singleTooth3D = extrudeLinear(
-    { height: thickness },
-    singleTooth2D,
-  );
+  const singleTooth3D = extrudeLinear({ height: thickness }, singleTooth2D);
 
   const allTeeth: Geom3[] = [];
-  for (
-    let j = 0;
-    j < numberTeeth;
-    j++
-  ) {
-    const currentToothAngle =
-      (j * 2 * Math.PI) / numberTeeth;
-    const rotatedTooth = rotateZ(
-      currentToothAngle,
-      singleTooth3D,
-    );
+  for (let j = 0; j < numberTeeth; j++) {
+    const currentToothAngle = (j * 2 * Math.PI) / numberTeeth;
+    const rotatedTooth = rotateZ(currentToothAngle, singleTooth3D);
     allTeeth.push(rotatedTooth);
   }
 
   const rootPoints: Vec2[] = [];
-  const toothAngle =
-    (2 * Math.PI) / numberTeeth;
-  const toothCenterAngle =
-    0.5 * angularToothWidthAtBase;
-  for (
-    let k = 0;
-    k < numberTeeth;
-    k++
-  ) {
-    const currentAngle =
-      toothCenterAngle + k * toothAngle;
+  const toothAngle = (2 * Math.PI) / numberTeeth;
+  const toothCenterAngle = 0.5 * angularToothWidthAtBase;
+  for (let k = 0; k < numberTeeth; k++) {
+    const currentAngle = toothCenterAngle + k * toothAngle;
     const p1 = vec2.scale(
       vec2.create(),
-      vec2.fromAngleRadians(
-        vec2.create(),
-        currentAngle,
-      ),
+      vec2.fromAngleRadians(vec2.create(), currentAngle),
       rootRadius,
     );
-    rootPoints.push([
-      p1[0],
-      p1[1],
-    ] as Vec2);
+    rootPoints.push([p1[0], p1[1]] as Vec2);
   }
 
   const rootCircle2D = polygon({
     points: rootPoints,
   });
-  const rootcircle = extrudeLinear(
-    { height: thickness },
-    rootCircle2D,
-  );
+  const rootcircle = extrudeLinear({ height: thickness }, rootCircle2D);
 
   return union(rootcircle, allTeeth);
 };

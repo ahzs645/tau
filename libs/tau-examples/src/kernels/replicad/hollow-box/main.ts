@@ -13,23 +13,14 @@ export const defaultParams = {
   cornerRadius: 5, // Radius for rounded corners
 };
 
-export default function main(
-  p = defaultParams,
-): Shape3D {
+export default function main(p = defaultParams): Shape3D {
   // Create outer shape
-  const outer = drawRoundedRectangle(
-    p.width,
-    p.length,
-    p.cornerRadius,
-  )
+  const outer = drawRoundedRectangle(p.width, p.length, p.cornerRadius)
     .sketchOnPlane()
     .extrude(p.height);
 
   // Hollow out the box using the shell function
-  const hollowBox = outer.shell(
-    p.thickness,
-    (f) => f.inPlane('XY', p.height),
-  );
+  const hollowBox = outer.shell(p.thickness, (f) => f.inPlane('XY', p.height));
 
   return hollowBox;
 }

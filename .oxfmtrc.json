@@ -24,5 +24,14 @@
     "**/assets/**",
     "**/public/*.js",
     "**/*.typeface.json"
+  ],
+  "overrides": [
+    {
+      "files": ["libs/tau-examples/src/kernels/**"],
+      "options": {
+        // Better readability for examples that can be imported into the Editor.
+        "printWidth": 80
+      }
+    }
   ]
 }

@@ -74,10 +74,16 @@ function createHandrailSegment(
 
   const angleX = 90 - Math.atan2(dz, Math.hypot(dx, dy)) * (180 / Math.PI);
 
-  return segment.rotate(angleX, [0, 1, 0], [0, 1, 0]).translate([start.x, start.y, start.z]);
+  return segment
+    .rotate(angleX, [0, 1, 0], [0, 1, 0])
+    .translate([start.x, start.y, start.z]);
 }
 
-function createSteps(stepRun: number, stepRise: number, p = defaultParams): Shape3D | null {
+function createSteps(
+  stepRun: number,
+  stepRise: number,
+  p = defaultParams,
+): Shape3D | null {
   let staircase: Shape3D | null = null;
 
   for (let index = 0; index < p.stepCount; index++) {
@@ -86,7 +92,11 @@ function createSteps(stepRun: number, stepRise: number, p = defaultParams): Shap
 
     let step;
     if (p.roundedStep) {
-      step = drawRoundedRectangle(stepRun + p.stepNosing, p.staircaseWidth, p.stepCornerRadius)
+      step = drawRoundedRectangle(
+        stepRun + p.stepNosing,
+        p.staircaseWidth,
+        p.stepCornerRadius,
+      )
         .sketchOnPlane('XY')
         .extrude(p.stepThickness)
         .translate([x - p.stepNosing, 0, z]);
@@ -107,7 +117,11 @@ function createSteps(stepRun: number, stepRise: number, p = defaultParams): Shap
   return staircase;
 }
 
-function createStringers(stepRun: number, stepRise: number, p = defaultParams): Shape3D {
+function createStringers(
+  stepRun: number,
+  stepRise: number,
+  p = defaultParams,
+): Shape3D {
   const leftStringerProfile: Point2D[] = [];
 
   leftStringerProfile.push(
@@ -134,7 +148,9 @@ function createStringers(stepRun: number, stepRise: number, p = defaultParams): 
     .extrude(p.stringerWidth)
     .translate([0, -p.staircaseWidth / 2 + p.stringerWidth, 0]);
 
-  const rightStringer = leftStringer.clone().translate([0, p.staircaseWidth - p.stringerWidth, 0]);
+  const rightStringer = leftStringer
+    .clone()
+    .translate([0, p.staircaseWidth - p.stringerWidth, 0]);
 
   return leftStringer.fuse(rightStringer);
 }
@@ -225,8 +241,10 @@ function createHandrails(staircase: Shape3D, p = defaultParams): Shape3D {
       p,
     );
 
-    leftHandrail = leftHandrail === null ? leftSegment : leftHandrail.fuse(leftSegment);
-    rightHandrail = rightHandrail === null ? rightSegment : rightHandrail.fuse(rightSegment);
+    leftHandrail =
+      leftHandrail === null ? leftSegment : leftHandrail.fuse(leftSegment);
+    rightHandrail =
+      rightHandrail === null ? rightSegment : rightHandrail.fuse(rightSegment);
 
     if (p.includeBaluster) {
       const leftBaluster = createBaluster({ x: x1, y: leftY, z: z1 }, p);
@@ -282,11 +300,15 @@ export default function main(p = defaultParams): Shape3D | null {
   const stepRun = p.staircaseRun / p.stepCount;
 
   if (stepRise < 150 || stepRise > 220) {
-    console.warn(`Warning: Step rise (${stepRise.toFixed(1)}mm) outside recommended range (150-220mm)`);
+    console.warn(
+      `Warning: Step rise (${stepRise.toFixed(1)}mm) outside recommended range (150-220mm)`,
+    );
   }
 
   if (stepRun < 240) {
-    console.warn(`Warning: Step run (${stepRun.toFixed(1)}mm) below recommended minimum (240mm)`);
+    console.warn(
+      `Warning: Step run (${stepRun.toFixed(1)}mm) below recommended minimum (240mm)`,
+    );
   }
 
   const walkingFormula = 2 * stepRise + stepRun;
