@@ -7,6 +7,7 @@ import {
   drawPolysides,
   polysideInnerRadius,
 } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   height: 150,
@@ -23,7 +24,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   const extrusionProfile = p.endFactor
     ? Object.freeze({
         profile: 's-curve',
@@ -47,7 +48,7 @@ export default function main(
   if (p.bottomFillet) {
     shape = shape.fillet(
       p.bottomFillet,
-      (e) => e.inPlane('XY'),
+      (edgeFinder) => edgeFinder.inPlane('XY'),
     );
   }
 
@@ -81,7 +82,7 @@ export default function main(
               p.bottomFillet -
                 p.wallThickness,
             ),
-            (e) => e.inPlane('XY'),
+            (edgeFinder) => edgeFinder.inPlane('XY'),
           )
           .translate([
             0,
@@ -92,8 +93,8 @@ export default function main(
     } else {
       shape = shape.shell(
         p.wallThickness,
-        (f) =>
-          f.inPlane('XY', p.height),
+        (faceFinder) =>
+          faceFinder.inPlane('XY', p.height),
       );
     }
   }
@@ -101,7 +102,7 @@ export default function main(
   if (p.topFillet) {
     shape = shape.fillet(
       p.topFillet,
-      (e) => e.inPlane('XY', p.height),
+      (edgeFinder) => edgeFinder.inPlane('XY', p.height),
     );
   }
 

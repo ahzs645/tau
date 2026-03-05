@@ -7,6 +7,7 @@ import {
   drawCircle,
   draw,
 } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   // Table dimensions
@@ -318,7 +319,7 @@ function createShelf(
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Create table components
   const tabletop = createTabletop(p);
   const legs = createLegs(p);

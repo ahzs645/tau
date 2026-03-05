@@ -118,14 +118,14 @@ function buildSocket({
       assembleWire(
         new EdgeFinder()
           .inPlane('XY', -SOCKET_HEIGHT)
-          .find(slotSide),
+          .find((edge) => slotSide(edge)),
       ),
     ),
     makeFace(
       assembleWire(
         new EdgeFinder()
           .inPlane('XY', 0)
-          .find(slotSide),
+          .find((edge) => slotSide(edge)),
       ),
     ),
   ]);
@@ -144,9 +144,9 @@ function buildSocket({
 
     const rawCutout: Shape3D | null =
       magnetCutout && screwCutout
-        ? (magnetCutout.fuse(
+        ? magnetCutout.fuse(
             screwCutout,
-          ) as Shape3D)
+          )
         : (magnetCutout ?? screwCutout);
 
     if (!rawCutout) {
@@ -359,8 +359,8 @@ function buildTopShape({
     })
     .fillet(
       TOP_FILLET,
-      (e: EdgeFinder) =>
-        e.inBox(
+      (edgeFinder: EdgeFinder) =>
+        edgeFinder.inBox(
           [
             -xSize * SIZE,
             -ySize * SIZE,
@@ -377,7 +377,7 @@ function buildTopShape({
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   const stdHeight = p.height * SIZE;
 
   let box = drawRoundedRectangle(

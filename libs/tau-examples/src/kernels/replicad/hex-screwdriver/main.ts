@@ -2,10 +2,8 @@
  * Parametric M5 Allen Key Screwdriver
  * A customizable M5 Allen key screwdriver with adjustable hexagonal handle and shaft dimensions.
  */
-import {
-  drawCircle,
-  drawPolysides,
-} from 'replicad';
+import { drawCircle, drawPolysides } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   handleLength: 100, // Length of the handle in mm
@@ -19,7 +17,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Create hexagonal handle
   let handle = drawPolysides(
     p.handleSize / 2,

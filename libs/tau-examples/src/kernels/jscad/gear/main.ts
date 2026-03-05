@@ -32,13 +32,13 @@ export const defaultParams = {
 export default function main(
   p = defaultParams,
 ): Geom3 {
-  let gear = involuteGear(
-    p.numTeeth,
-    p.circularPitch,
-    degToRad(p.pressureAngle),
-    p.clearance,
-    p.thickness,
-  );
+  let gear = involuteGear({
+    numberTeeth: p.numTeeth,
+    circularPitch: p.circularPitch,
+    pressureAngle: degToRad(p.pressureAngle),
+    clearance: p.clearance,
+    thickness: p.thickness,
+  });
   if (p.centerHoleRadius > 0) {
     const centerHole = cylinder({
       height: p.thickness,
@@ -56,13 +56,20 @@ export default function main(
   return gear;
 }
 
-const involuteGear = (
-  numberTeeth: number,
-  circularPitch: number,
-  pressureAngle: number,
-  clearance: number,
-  thickness: number,
-): Geom3 => {
+const involuteGear = (options: {
+  numberTeeth: number;
+  circularPitch: number;
+  pressureAngle: number;
+  clearance: number;
+  thickness: number;
+}): Geom3 => {
+  const {
+    numberTeeth,
+    circularPitch,
+    pressureAngle,
+    clearance,
+    thickness,
+  } = options;
   const addendum =
     circularPitch / Math.PI;
   const dedendum = addendum + clearance;

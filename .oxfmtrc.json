@@ -24,11 +24,5 @@
     "**/assets/**",
     "**/public/*.js",
     "**/*.typeface.json"
-  ],
-  "overrides": [
-    {
-      "files": ["libs/tau-examples/src/kernels/**"],
-      "options": { "printWidth": 40 }
-    }
   ]
 }

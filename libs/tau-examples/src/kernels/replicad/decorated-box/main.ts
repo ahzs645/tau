@@ -8,6 +8,7 @@ import {
   FaceFinder,
   makePlane,
 } from 'replicad';
+import type { Shape3D } from 'replicad';
 import {
   addVoronoi,
   addGrid,
@@ -30,7 +31,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   let shape = sketchRectangle(
     p.depth,
     p.width,

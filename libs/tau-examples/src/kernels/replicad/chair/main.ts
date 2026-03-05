@@ -3,6 +3,7 @@
  * A customizable chair with adjustable dimensions.
  */
 import { drawRectangle } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   // Overall dimensions
@@ -23,7 +24,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Create Seat
   const seat = drawRectangle(
     p.seatWidth,
@@ -149,21 +150,21 @@ export default function main(
     try {
       chair = chair.fillet(
         p.filletRadius,
-        (e) =>
-          e.either([
-            (f) =>
-              f.inPlane(
+        (edgeFinder) =>
+          edgeFinder.either([
+            (edgeFinder) =>
+              edgeFinder.inPlane(
                 'XY',
                 p.seatHeight,
-              ), // Top surface edges of seat
-            (f) =>
-              f.containsPoint([
+              ),
+            (edgeFinder) =>
+              edgeFinder.containsPoint([
                 0,
                 -p.seatDepth / 2,
                 p.seatHeight +
                   p.backrestHeight *
                     0.9,
-              ]), // Edges near top of backrest
+              ]),
           ]),
       );
     } catch (error) {

@@ -21,7 +21,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   let shape = draw([-p.width / 2, 0])
     .vLine(-p.thickness / 4)
     .threePointsArc(

@@ -2,10 +2,8 @@
  * Parametric T-Slot Rail
  * A T-slotted framing rail, or T-slot extrusion, is a rectangular or square aluminum profile with a "T" shaped slot along one or more sides. These slots allow for easy attachment of various hardware components like brackets, connectors, and fasteners, making it a versatile and customizable framing system.
  */
-import {
-  draw,
-  drawCircle,
-} from 'replicad';
+import { draw, drawCircle } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   railHeight: 20,
@@ -18,7 +16,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Convert to normalized units (rail height = 1.0 in normalized space)
   const ir = p.interiorRadius;
   const sd = p.scoreDepth;

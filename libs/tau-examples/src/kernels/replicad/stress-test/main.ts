@@ -99,13 +99,20 @@ function circularPattern(
 }
 
 /** Generate positions for a rectangular grid pattern */
-function gridPattern(
-  countX: number,
-  countY: number,
-  spacingX: number,
-  spacingY: number,
-  zHeight: number,
-): Array<[number, number, number]> {
+function gridPattern(options: {
+  countX: number;
+  countY: number;
+  spacingX: number;
+  spacingY: number;
+  zHeight: number;
+}): Array<[number, number, number]> {
+  const {
+    countX,
+    countY,
+    spacingX,
+    spacingY,
+    zHeight,
+  } = options;
   const positions: Array<
     [number, number, number]
   > = [];
@@ -132,7 +139,7 @@ function gridPattern(
 
 export default function main(
   p: Parameters_ = defaultParams,
-) {
+): Shape3D {
   const complexity = Math.max(
     1,
     Math.min(
@@ -236,13 +243,13 @@ export default function main(
   // =========================================================================
   const gridSize = complexity + 1; // 2x2 to 6x6
   const gridSpacing = 15;
-  const gridPositions = gridPattern(
-    gridSize,
-    gridSize,
-    gridSpacing,
-    gridSpacing,
-    -0.5, // Start slightly below bottom for clean cut
-  );
+  const gridPositions = gridPattern({
+    countX: gridSize,
+    countY: gridSize,
+    spacingX: gridSpacing,
+    spacingY: gridSpacing,
+    zHeight: -0.5,
+  });
 
   for (const pos of gridPositions) {
     // Skip holes that would intersect the circular pattern area
@@ -483,8 +490,8 @@ export default function main(
   try {
     block = block.fillet(
       p.largeFilletRadius,
-      (e) =>
-        e
+      (edgeFinder) =>
+        edgeFinder
           .inBox(
             [
               -p.bossRadius - 2,
@@ -510,8 +517,8 @@ export default function main(
   try {
     block = block.fillet(
       p.filletRadius,
-      (e) =>
-        e
+      (edgeFinder) =>
+        edgeFinder
           .inBox(
             [
               -p.baseLength / 2 - 1,
@@ -536,19 +543,21 @@ export default function main(
   try {
     const ribTopZ =
       p.baseHeight + p.ribHeight;
-    block = block.chamfer(0.8, (e) =>
-      e.inBox(
-        [
-          -p.baseLength / 2,
-          -p.baseWidth / 2,
-          ribTopZ - 0.5,
-        ],
-        [
-          p.baseLength / 2,
-          p.baseWidth / 2,
-          ribTopZ + 0.5,
-        ],
-      ),
+    block = block.chamfer(
+      0.8,
+      (edgeFinder) =>
+        edgeFinder.inBox(
+          [
+            -p.baseLength / 2,
+            -p.baseWidth / 2,
+            ribTopZ - 0.5,
+          ],
+          [
+            p.baseLength / 2,
+            p.baseWidth / 2,
+            ribTopZ + 0.5,
+          ],
+        ),
     );
   } catch {
     // Chamfer can fail on thin features

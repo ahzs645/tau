@@ -4,10 +4,7 @@
  * HLRAlgo_Projector, HLRBRep_HLRToShape, and Handle_HLRBRep_Algo
  * are properly bound in the WASM module.
  */
-import type {
-  AnyShape,
-  Shape3D,
-} from 'replicad';
+import type { AnyShape } from 'replicad';
 import {
   drawProjection,
   draw,
@@ -60,7 +57,7 @@ const descriptiveGeom = (
 
 export const defaultParams = {};
 
-export default function main() {
+export default function main(): ReturnType<typeof descriptiveGeom> {
   // This shape looks different from every angle
   const shape = (
     draw()
@@ -72,7 +69,7 @@ export default function main() {
       .vLine(-5)
       .close()
       .sketchOnPlane()
-      .extrude(10) as Shape3D
+      .extrude(10)
   ).chamfer(5, (edgeFinder) =>
     edgeFinder
       .inPlane('XY', 10)

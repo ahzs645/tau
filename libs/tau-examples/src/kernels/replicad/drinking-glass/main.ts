@@ -3,6 +3,7 @@
  * A customizable glass with adjustable dimensions for height, radii, and thickness.
  */
 import { draw } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   height: 140, // Overall height of the glass in mm
@@ -18,7 +19,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): { shape: Shape3D; color: string } {
   // Validate parameters to prevent common issues
   if (p.topRadius <= 0) {
     console.warn(
@@ -86,7 +87,7 @@ export default function main(
   try {
     glassSolid = glassSolid.shell(
       p.wallThickness,
-      (f) => f.inPlane('XY', p.height), // Find faces in the XY plane at the specified height
+      (faceFinder) => faceFinder.inPlane('XY', p.height),
     );
   } catch (error) {
     console.error(
@@ -94,7 +95,10 @@ export default function main(
       error,
     );
     // Return the solid un-shelled shape if shelling fails
-    return glassSolid;
+    return {
+      shape: glassSolid,
+      color: '#7598a321',
+    };
   }
 
   // Apply fillet to the rim if enabled
@@ -105,8 +109,8 @@ export default function main(
     try {
       glassSolid = glassSolid.fillet(
         p.rimFilletRadius,
-        (e) =>
-          e.inPlane('XY', p.height), // Select edges on the top plane (inner and outer rim)
+        (edgeFinder) =>
+          edgeFinder.inPlane('XY', p.height), // Select edges on the top plane (inner and outer rim)
       );
     } catch (error) {
       console.warn(
@@ -126,15 +130,15 @@ export default function main(
       glassSolid = glassSolid
         .fillet(
           p.baseFilletRadius,
-          (e) =>
-            e.inPlane(
+          (edgeFinder) =>
+            edgeFinder.inPlane(
               'XY',
               p.wallThickness,
             ), // Select edges on the bottom plane
         )
         .fillet(
           p.baseFilletRadius,
-          (e) => e.inPlane('XY', 0), // Select edges on the bottom plane
+          (edgeFinder) => edgeFinder.inPlane('XY', 0), // Select edges on the bottom plane
         );
     } catch (error) {
       console.warn(

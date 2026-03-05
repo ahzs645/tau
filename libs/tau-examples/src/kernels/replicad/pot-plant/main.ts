@@ -2,7 +2,7 @@
  * Parametric Pot Plant Holder
  * A customizable pot plant holder with an optional attached saucer and drainage holes.
  */
-import type { Edge } from 'replicad';
+import type { Edge, Shape3D } from 'replicad';
 import { drawCircle } from 'replicad';
 
 export const defaultParams = {
@@ -29,15 +29,206 @@ export const defaultParams = {
   filletRadius: 1.5, // Mm - General radius for fillets (should be less than wallThickness)
 };
 
-export default function main(
+const isCloseToRadiusInXYPlane = (
+  edge: Edge,
+  expectedRadius: number,
+  tolerance: number,
+): boolean => {
+  const midPoint = edge.pointAt(0.5);
+  const R = Math.hypot(midPoint.x, midPoint.y);
+  return Math.abs(R - expectedRadius) < tolerance;
+};
+
+function createPotHolder(p = defaultParams): Shape3D {
+  const potOuterRadius = p.potInnerDiameter / 2 + p.wallThickness;
+  const potPartTotalHeight = p.potInnerHeight + p.baseThickness;
+
+  const outerShape = drawCircle(potOuterRadius)
+    .sketchOnPlane('XY')
+    .extrude(potPartTotalHeight);
+
+  const potCavity = drawCircle(p.potInnerDiameter / 2)
+    .sketchOnPlane('XY')
+    .extrude(p.potInnerHeight)
+    .translateZ(p.baseThickness);
+
+  return outerShape.cut(potCavity);
+}
+
+function addDrainageHoles(potHolderShape: Shape3D, p = defaultParams): Shape3D {
+  if (!p.addDrainageHoles || p.drainageHoleCount <= 0 || p.drainageHoleDiameter <= 0) {
+    return potHolderShape;
+  }
+
+  let shape = potHolderShape;
+  const holeRadius = p.drainageHoleDiameter / 2;
+
+  if (p.drainageHoleCount === 1 && p.drainageHoleOffset === 0) {
+    if (holeRadius < p.potInnerDiameter / 2) {
+      const holeCylinder = drawCircle(holeRadius).sketchOnPlane('XY').extrude(p.baseThickness);
+      shape = shape.cut(holeCylinder);
+    }
+    return shape;
+  }
+
+  for (let index = 0; index < p.drainageHoleCount; index++) {
+    const angle = ((2 * Math.PI) / p.drainageHoleCount) * index;
+    if (
+      p.drainageHoleOffset + holeRadius < p.potInnerDiameter / 2 &&
+      p.drainageHoleOffset >= 0
+    ) {
+      const x = p.drainageHoleOffset * Math.cos(angle);
+      const y = p.drainageHoleOffset * Math.sin(angle);
+      const holeCylinder = drawCircle(holeRadius)
+        .sketchOnPlane('XY')
+        .extrude(p.baseThickness)
+        .translate([x, y, 0]);
+      shape = shape.cut(holeCylinder);
+    } else if (p.drainageHoleOffset > 0) {
+      console.warn(
+        'Drainage hole configuration invalid (offset too large or negative), skipping a peripheral hole.',
+      );
+    }
+  }
+
+  if (p.drainageHoleOffset > 0 && holeRadius < p.potInnerDiameter / 4) {
+    const centerHole = drawCircle(Math.min(holeRadius, p.potInnerDiameter / 4))
+      .sketchOnPlane('XY')
+      .extrude(p.baseThickness);
+    shape = shape.cut(centerHole);
+  }
+
+  return shape;
+}
+
+function createSaucer(
+  potHolderShape: Shape3D,
   p = defaultParams,
-) {
-  // Validate parameters
+): { shape: Shape3D; potHolderZOffset: number } {
+  const potHolderOuterDiameter = p.potInnerDiameter + 2 * p.wallThickness;
+  const saucerInnerDiameter = potHolderOuterDiameter + 2 * p.saucerGap;
+  const saucerOuterDiameter = saucerInnerDiameter + 2 * p.saucerWallThickness;
+  const saucerOuterRadius = saucerOuterDiameter / 2;
+
+  const saucerBasePlate = drawCircle(saucerOuterRadius)
+    .sketchOnPlane('XY')
+    .extrude(p.saucerBaseThickness);
+
+  const saucerLipOuterShape = drawCircle(saucerOuterRadius)
+    .sketchOnPlane('XY')
+    .extrude(p.saucerLipHeight)
+    .translateZ(p.saucerBaseThickness);
+  const saucerLipInnerCutShape = drawCircle(saucerInnerDiameter / 2)
+    .sketchOnPlane('XY')
+    .extrude(p.saucerLipHeight)
+    .translateZ(p.saucerBaseThickness);
+  const saucerLip = saucerLipOuterShape.cut(saucerLipInnerCutShape);
+
+  const completeSaucer = saucerBasePlate.fuse(saucerLip);
+
+  const potHolderZOffset = p.saucerBaseThickness;
+  const translatedPotHolder = potHolderShape.clone().translateZ(potHolderZOffset);
+  const shape = completeSaucer.fuse(translatedPotHolder);
+
+  return { shape, potHolderZOffset };
+}
+
+function applyFillets(
+  finalShape: Shape3D,
+  potHolderZOffset: number,
+  p = defaultParams,
+): Shape3D {
+  if (p.filletRadius <= 0) {
+    return finalShape;
+  }
+
+  const filletTolerance = p.wallThickness * 0.2;
+  let shape = finalShape;
+
+  try {
+    if (p.filletOuterRim) {
+      const potTopZ = potHolderZOffset + p.potInnerHeight + p.baseThickness;
+      const expectedR = p.potInnerDiameter / 2 + p.wallThickness;
+      shape = shape.fillet(p.filletRadius, (edgeFinder) =>
+        edgeFinder
+          .inPlane('XY', potTopZ)
+          .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+      );
+    }
+
+    if (p.filletInnerRim) {
+      const potTopZ = potHolderZOffset + p.potInnerHeight + p.baseThickness;
+      const expectedR = p.potInnerDiameter / 2;
+      shape = shape.fillet(p.filletRadius, (edgeFinder) =>
+        edgeFinder
+          .inPlane('XY', potTopZ)
+          .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+      );
+    }
+
+    if (p.includeSaucer) {
+      if (p.filletSaucerRim) {
+        const saucerLipTopZ = p.saucerBaseThickness + p.saucerLipHeight;
+        const expectedOuterR =
+          (p.potInnerDiameter +
+            2 * p.wallThickness +
+            2 * p.saucerGap +
+            2 * p.saucerWallThickness) /
+          2;
+        shape = shape.fillet(p.filletRadius, (edgeFinder) =>
+          edgeFinder
+            .inPlane('XY', saucerLipTopZ)
+            .when(({ element }) =>
+              isCloseToRadiusInXYPlane(element, expectedOuterR, filletTolerance),
+            ),
+        );
+
+        const expectedInnerR =
+          (p.potInnerDiameter + 2 * p.wallThickness + 2 * p.saucerGap) / 2;
+        shape = shape.fillet(p.filletRadius, (edgeFinder) =>
+          edgeFinder
+            .inPlane('XY', saucerLipTopZ)
+            .when(({ element }) =>
+              isCloseToRadiusInXYPlane(element, expectedInnerR, filletTolerance),
+            ),
+        );
+      }
+
+      if (p.filletOuterBase) {
+        const expectedR =
+          (p.potInnerDiameter +
+            2 * p.wallThickness +
+            2 * p.saucerGap +
+            2 * p.saucerWallThickness) /
+          2;
+        shape = shape.fillet(p.filletRadius, (edgeFinder) =>
+          edgeFinder
+            .inPlane('XY', 0)
+            .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+        );
+      }
+    } else if (p.filletOuterBase) {
+      const expectedR = p.potInnerDiameter / 2 + p.wallThickness;
+      shape = shape.fillet(p.filletRadius, (edgeFinder) =>
+        edgeFinder
+          .inPlane('XY', 0)
+          .when(({ element }) => isCloseToRadiusInXYPlane(element, expectedR, filletTolerance)),
+      );
+    }
+  } catch (error: unknown) {
+    console.warn(
+      'A fillet operation failed. The model might have sharp edges. Error: ' +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+
+  return shape;
+}
+
+export default function main(p = defaultParams): Shape3D {
   if (
     p.filletRadius >= p.wallThickness ||
-    (p.includeSaucer &&
-      p.filletRadius >=
-        p.saucerWallThickness)
+    (p.includeSaucer && p.filletRadius >= p.saucerWallThickness)
   ) {
     console.warn(
       'Fillet radius might be too large compared to wall thickness, potentially causing issues.',
@@ -50,9 +241,7 @@ export default function main(
     p.wallThickness <= 0 ||
     p.baseThickness <= 0
   ) {
-    throw new Error(
-      'Pot dimensions and thicknesses must be positive.',
-    );
+    throw new Error('Pot dimensions and thicknesses must be positive.');
   }
 
   if (
@@ -67,365 +256,18 @@ export default function main(
     );
   }
 
-  // Helper for fillet selection: checks if an edge in an XY plane is close to an expected radius from the Z-axis
-  const isCloseToRadiusInXYPlane = (
-    edge: Edge,
-    expectedRadius: number,
-    tolerance: number,
-  ): boolean => {
-    const midPoint = edge.pointAt(0.5);
-    const R = Math.hypot(
-      midPoint.x,
-      midPoint.y,
-    );
-    return (
-      Math.abs(R - expectedRadius) <
-      tolerance
-    );
-  };
+  const potHolder = addDrainageHoles(createPotHolder(p), p);
 
-  const filletTolerance =
-    p.wallThickness * 0.2; // Tolerance for matching edge radius
-
-  // Pot Holder
-  // (Base of the pot holder part is initially at Z=0)
-  const potOuterRadius =
-    p.potInnerDiameter / 2 +
-    p.wallThickness;
-  const potPartTotalHeight =
-    p.potInnerHeight + p.baseThickness;
-
-  let potHolderShape = drawCircle(
-    potOuterRadius,
-  )
-    .sketchOnPlane('XY')
-    .extrude(potPartTotalHeight);
-
-  const potCavity = drawCircle(
-    p.potInnerDiameter / 2,
-  )
-    .sketchOnPlane('XY')
-    .extrude(p.potInnerHeight)
-    .translateZ(p.baseThickness); // Cavity starts above the pot's base thickness
-
-  potHolderShape =
-    potHolderShape.cut(potCavity);
-
-  // Drainage Holes for Pot Holder
-  if (
-    p.addDrainageHoles &&
-    p.drainageHoleCount > 0 &&
-    p.drainageHoleDiameter > 0
-  ) {
-    const holeRadius =
-      p.drainageHoleDiameter / 2;
-    if (
-      p.drainageHoleCount === 1 &&
-      p.drainageHoleOffset === 0
-    ) {
-      // Single center hole
-      if (
-        holeRadius <
-        p.potInnerDiameter / 2
-      ) {
-        const holeCylinder = drawCircle(
-          holeRadius,
-        )
-          .sketchOnPlane('XY')
-          .extrude(p.baseThickness); // Extrude through pot base
-        potHolderShape =
-          potHolderShape.cut(
-            holeCylinder,
-          );
-      }
-    } else {
-      // Peripheral holes
-      for (
-        let i = 0;
-        i < p.drainageHoleCount;
-        i++
-      ) {
-        const angle =
-          ((2 * Math.PI) /
-            p.drainageHoleCount) *
-          i;
-        // Ensure holes are within the inner diameter of the pot base
-        if (
-          p.drainageHoleOffset +
-            holeRadius <
-            p.potInnerDiameter / 2 &&
-          p.drainageHoleOffset >= 0
-        ) {
-          const x =
-            p.drainageHoleOffset *
-            Math.cos(angle);
-          const y =
-            p.drainageHoleOffset *
-            Math.sin(angle);
-          const holeCylinder =
-            drawCircle(holeRadius)
-              .sketchOnPlane('XY')
-              .extrude(p.baseThickness)
-              .translate([x, y, 0]);
-          potHolderShape =
-            potHolderShape.cut(
-              holeCylinder,
-            );
-        } else if (
-          p.drainageHoleOffset > 0
-        ) {
-          console.warn(
-            'Drainage hole configuration invalid (offset too large or negative), skipping a peripheral hole.',
-          );
-        }
-      }
-
-      // Optional: Add a central hole if there are peripheral holes and offset is not zero
-      if (
-        p.drainageHoleOffset > 0 &&
-        holeRadius <
-          p.potInnerDiameter / 4
-      ) {
-        const centerHole = drawCircle(
-          Math.min(
-            holeRadius,
-            p.potInnerDiameter / 4,
-          ),
-        ) // Smaller center hole
-          .sketchOnPlane('XY')
-          .extrude(p.baseThickness);
-        potHolderShape =
-          potHolderShape.cut(
-            centerHole,
-          );
-      }
-    }
-  }
-
-  let finalShape = potHolderShape;
+  let finalShape: Shape3D;
   let potHolderZOffset = 0;
 
-  // Saucer (Optional)
   if (p.includeSaucer) {
-    const potHolderOuterDiameter =
-      p.potInnerDiameter +
-      2 * p.wallThickness;
-    const saucerInnerDiameter =
-      potHolderOuterDiameter +
-      2 * p.saucerGap;
-    const saucerOuterDiameter =
-      saucerInnerDiameter +
-      2 * p.saucerWallThickness;
-    const saucerOuterRadius =
-      saucerOuterDiameter / 2;
-
-    // Saucer Base Plate (at Z=0 initially)
-    const saucerBasePlate = drawCircle(
-      saucerOuterRadius,
-    )
-      .sketchOnPlane('XY')
-      .extrude(p.saucerBaseThickness);
-
-    // Saucer Lip (ring on top of base plate)
-    const saucerLipOuterShape =
-      drawCircle(saucerOuterRadius)
-        .sketchOnPlane('XY')
-        .extrude(p.saucerLipHeight)
-        .translateZ(
-          p.saucerBaseThickness,
-        );
-    const saucerLipInnerCutShape =
-      drawCircle(
-        saucerInnerDiameter / 2,
-      )
-        .sketchOnPlane('XY')
-        .extrude(p.saucerLipHeight)
-        .translateZ(
-          p.saucerBaseThickness,
-        );
-    const saucerLip =
-      saucerLipOuterShape.cut(
-        saucerLipInnerCutShape,
-      );
-
-    const completeSaucer =
-      saucerBasePlate.fuse(saucerLip);
-
-    // Pot holder sits on top of the saucer's base plate
-    potHolderZOffset =
-      p.saucerBaseThickness;
-    const translatedPotHolder =
-      potHolderShape
-        .clone()
-        .translateZ(potHolderZOffset);
-    finalShape = completeSaucer.fuse(
-      translatedPotHolder,
-    );
+    const result = createSaucer(potHolder, p);
+    finalShape = result.shape;
+    potHolderZOffset = result.potHolderZOffset;
+  } else {
+    finalShape = potHolder;
   }
 
-  // Fillets (Applied to the final assembled shape)
-  if (p.filletRadius > 0) {
-    try {
-      // Top outer rim of pot holder
-      if (p.filletOuterRim) {
-        const potTopZ =
-          potHolderZOffset +
-          p.potInnerHeight +
-          p.baseThickness;
-        const expectedR =
-          p.potInnerDiameter / 2 +
-          p.wallThickness;
-        finalShape = finalShape.fillet(
-          p.filletRadius,
-          (e) =>
-            e
-              .inPlane('XY', potTopZ)
-              .when(({ element }) =>
-                isCloseToRadiusInXYPlane(
-                  element as Edge,
-                  expectedR,
-                  filletTolerance,
-                ),
-              ),
-        );
-      }
-
-      // Top inner rim of pot holder
-      if (p.filletInnerRim) {
-        const potTopZ =
-          potHolderZOffset +
-          p.potInnerHeight +
-          p.baseThickness;
-        const expectedR =
-          p.potInnerDiameter / 2;
-        finalShape = finalShape.fillet(
-          p.filletRadius,
-          (e) =>
-            e
-              .inPlane('XY', potTopZ)
-              .when(({ element }) =>
-                isCloseToRadiusInXYPlane(
-                  element as Edge,
-                  expectedR,
-                  filletTolerance,
-                ),
-              ),
-        );
-      }
-
-      if (p.includeSaucer) {
-        // Saucer top outer rim
-        if (p.filletSaucerRim) {
-          const saucerLipTopZ =
-            p.saucerBaseThickness +
-            p.saucerLipHeight;
-          const expectedOuterR =
-            (p.potInnerDiameter +
-              2 * p.wallThickness +
-              2 * p.saucerGap +
-              2 *
-                p.saucerWallThickness) /
-            2;
-          finalShape =
-            finalShape.fillet(
-              p.filletRadius,
-              (e) =>
-                e
-                  .inPlane(
-                    'XY',
-                    saucerLipTopZ,
-                  )
-                  .when(({ element }) =>
-                    isCloseToRadiusInXYPlane(
-                      element as Edge,
-                      expectedOuterR,
-                      filletTolerance,
-                    ),
-                  ),
-            );
-        }
-
-        // Saucer top inner rim
-        if (p.filletSaucerRim) {
-          const saucerLipTopZ =
-            p.saucerBaseThickness +
-            p.saucerLipHeight;
-          const expectedInnerR =
-            (p.potInnerDiameter +
-              2 * p.wallThickness +
-              2 * p.saucerGap) /
-            2;
-          finalShape =
-            finalShape.fillet(
-              p.filletRadius,
-              (e) =>
-                e
-                  .inPlane(
-                    'XY',
-                    saucerLipTopZ,
-                  )
-                  .when(({ element }) =>
-                    isCloseToRadiusInXYPlane(
-                      element as Edge,
-                      expectedInnerR,
-                      filletTolerance,
-                    ),
-                  ),
-            );
-        }
-
-        // Outer base of saucer
-        if (p.filletOuterBase) {
-          const expectedR =
-            (p.potInnerDiameter +
-              2 * p.wallThickness +
-              2 * p.saucerGap +
-              2 *
-                p.saucerWallThickness) /
-            2;
-          finalShape =
-            finalShape.fillet(
-              p.filletRadius,
-              (e) =>
-                e
-                  .inPlane('XY', 0)
-                  .when(({ element }) =>
-                    isCloseToRadiusInXYPlane(
-                      element as Edge,
-                      expectedR,
-                      filletTolerance,
-                    ),
-                  ),
-            );
-        }
-      } else if (p.filletOuterBase) {
-        // Outer base of pot holder (if no saucer)
-        const expectedR =
-          p.potInnerDiameter / 2 +
-          p.wallThickness;
-        finalShape = finalShape.fillet(
-          p.filletRadius,
-          (e) =>
-            e
-              .inPlane('XY', 0)
-              .when(({ element }) =>
-                isCloseToRadiusInXYPlane(
-                  element as Edge,
-                  expectedR,
-                  filletTolerance,
-                ),
-              ),
-        );
-      }
-    } catch (error: unknown) {
-      console.warn(
-        'A fillet operation failed. The model might have sharp edges. Error: ' +
-          (error instanceof Error
-            ? error.message
-            : String(error)),
-      );
-    }
-  }
-
-  return finalShape;
+  return applyFillets(finalShape, potHolderZOffset, p);
 }

@@ -3,6 +3,7 @@
  * Customizable with beam dimensions and extrusion length.
  */
 import { draw } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   beamHeight: 200,
@@ -15,7 +16,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   const hw = p.beamWidth / 2; // Half width
   const hh = p.beamHeight / 2; // Half height
   const wt = p.webThickness;

@@ -6,7 +6,7 @@ import {
   drawCircle,
   drawParametricFunction,
 } from 'replicad';
-import type { Point2D } from 'replicad';
+import type { Point2D, Shape3D } from 'replicad';
 
 export const defaultParams = {
   height: 40, // Height of the gear
@@ -85,7 +85,7 @@ function gear(
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Create gear using parametric function
   const base = drawParametricFunction(
     (t) =>

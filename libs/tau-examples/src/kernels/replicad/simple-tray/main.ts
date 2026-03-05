@@ -4,6 +4,7 @@
  * Designed for reliable 3D printing with proper tolerances.
  */
 import { drawRoundedRectangle } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   // Overall dimensions
@@ -27,7 +28,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   try {
     // Validate parameters
     if (
@@ -177,8 +178,8 @@ export default function main(
         // Only fillet the top edges
         tray = tray.fillet(
           p.filletRadius,
-          (e) =>
-            e.inBox(
+          (edgeFinder) =>
+            edgeFinder.inBox(
               [
                 -p.width,
                 -p.length,

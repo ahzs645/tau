@@ -3,10 +3,8 @@
  * A simplified and more robust version with standard LEGO dimensions.
  * Features hollow bottom for connecting to other bricks.
  */
-import {
-  drawCircle,
-  drawRectangle,
-} from 'replicad';
+import { drawCircle, drawRectangle } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   // Basic brick dimensions in LEGO units
@@ -107,7 +105,7 @@ function calculateTubePositions(
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Calculate dimensions
   const totalWidth = p.width * p.unit;
   const totalLength = p.length * p.unit;

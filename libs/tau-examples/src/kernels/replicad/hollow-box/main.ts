@@ -3,6 +3,7 @@
  * A customizable box with adjustable dimensions and corner radii.
  */
 import { drawRoundedRectangle } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   width: 100, // Width of the box in mm
@@ -14,7 +15,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   // Create outer shape
   const outer = drawRoundedRectangle(
     p.width,

@@ -10,8 +10,12 @@ import {
   FaceFinder,
   makePlane,
 } from 'replicad';
+import type { Shape3D } from 'replicad';
 
-export default function main() {
+export default function main(): {
+  shape: Shape3D;
+  highlight: FaceFinder;
+} {
   const handleBase = new Sketcher('XY')
     .vLine(89)
     .hLine(20.5)
@@ -21,13 +25,13 @@ export default function main() {
     .hLine(-20.5)
     .close()
     .extrude(9)
-    .fillet(5, (e) =>
-      e
+    .fillet(5, (edgeFinder) =>
+      edgeFinder
         .inDirection('Z')
         .containsPoint([57, 3.5, 0]),
     )
-    .fillet(5, (e) =>
-      e
+    .fillet(5, (edgeFinder) =>
+      edgeFinder
         .inDirection('Z')
         .containsPoint([
           57,
@@ -35,8 +39,8 @@ export default function main() {
           0,
         ]),
     )
-    .fillet(1, (e) =>
-      e.inBox([0, 0, 9], [20.5, 89, 0]),
+    .fillet(1, (edgeFinder) =>
+      edgeFinder.inBox([0, 0, 9], [20.5, 89, 0]),
     );
 
   const border = 3;
@@ -48,8 +52,8 @@ export default function main() {
       .line(-57 + 20.5 + border, -3.5)
       .close()
       .extrude(30) // =RD= increased this to 30 mm as example
-      .fillet(5, (edgeFilter) =>
-        edgeFilter.inDirection('Z'),
+      .fillet(5, (edgeFinder) =>
+        edgeFinder.inDirection('Z'),
       )
       .fillet(1.5); // =RD= added a fillet here
 

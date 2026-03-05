@@ -154,6 +154,6 @@ export function generateRaoNozzle(
 
 export default function main(
   parameters = defaultParams,
-) {
+): Shape3D {
   return generateRaoNozzle(parameters);
 }

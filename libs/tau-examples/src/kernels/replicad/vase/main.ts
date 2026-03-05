@@ -3,6 +3,7 @@
  * A vase with adjustable dimensions and rounded edges.
  */
 import { draw } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   height: 100,
@@ -19,7 +20,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   const splinesConfig = [
     {
       position: p.lowerCirclePosition,
@@ -68,8 +69,8 @@ export default function main(
   if (p.wallThickness) {
     vase = vase.shell(
       p.wallThickness,
-      (f) =>
-        f.containsPoint([
+      (faceFinder) =>
+        faceFinder.containsPoint([
           0,
           0,
           p.height,
@@ -80,7 +81,7 @@ export default function main(
   if (p.topFillet) {
     vase = vase.fillet(
       p.wallThickness / 3,
-      (e) => e.inPlane('XY', p.height),
+      (edgeFinder) => edgeFinder.inPlane('XY', p.height),
     );
   }
 

@@ -7,6 +7,7 @@ import {
   draw,
   makePlane,
 } from 'replicad';
+import type { Shape3D } from 'replicad';
 
 export const defaultParams = {
   height: 85, // Overall height of the birdhouse
@@ -19,7 +20,7 @@ export const defaultParams = {
 
 export default function main(
   p = defaultParams,
-) {
+): Shape3D {
   const length = p.width;
   const width = p.width * 0.9; // 90% of width for the triangular prism
 
@@ -33,22 +34,22 @@ export default function main(
     .close()
     .sketchOnPlane('XZ', -length / 2)
     .extrude(length)
-    .shell(p.thickness, (f) =>
-      f.parallelTo('XZ'),
-    ); // Shell to create hollow interior
+    .shell(p.thickness, (faceFinder) =>
+      faceFinder.parallelTo('XZ'),
+    );
 
   // Add fillets to edges if requested
   if (p.filletEdges) {
     tobleroneShape =
       tobleroneShape.fillet(
         p.thickness / 2,
-        (e) =>
-          e
+        (edgeFinder) =>
+          edgeFinder
             .inDirection('Y')
             .either([
-              (f) => f.inPlane('XY'),
-              (f) =>
-                f.inPlane(
+              (edgeFinder) => edgeFinder.inPlane('XY'),
+              (edgeFinder) =>
+                edgeFinder.inPlane(
                   'XY',
                   p.height,
                 ),
