@@ -124,3 +124,20 @@ export async function getAllImports(model: Monaco.editor.ITextModel): Promise<Im
     statementEnd: imp.se,
   }));
 }
+
+/**
+ * Parse export names from raw JavaScript source code.
+ *
+ * Used by ATA to generate stub type declarations for pure-JS packages
+ * that don't ship their own `.d.ts` files. Works on minified code.
+ *
+ * @param code - Raw JavaScript module source
+ * @returns Array of exported names (e.g., ['addGrid', 'addHoneycomb', 'default'])
+ */
+export async function parseExportNames(code: string): Promise<string[]> {
+  await ensureInitialized();
+
+  const [, exports] = parse(code);
+
+  return exports.map((exp) => code.slice(exp.s, exp.e));
+}

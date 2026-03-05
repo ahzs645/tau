@@ -23,7 +23,7 @@
  */
 
 import type * as Monaco from 'monaco-editor';
-import { getAllImports } from '#lib/javascript-import-parser.js';
+import { getAllImports, parseExportNames } from '#lib/javascript-import-parser.js';
 import { isBareSpecifier, extractPackageFromCdnUrl } from '#utils/import.utils.js';
 
 // =============================================================================
@@ -427,8 +427,8 @@ export class TypeAcquisitionService {
 
       const typesUrl = moduleResponse.headers.get('X-TypeScript-Types');
       if (!typesUrl) {
-        // No types available -- mark as acquired to prevent re-scanning
-        this.acquiredTypes.add(packageName);
+        // No .d.ts types available -- try generating stub types from JS exports
+        await this.generateStubTypes(packageName, moduleResponse, epoch, signal);
         return;
       }
 
@@ -470,6 +470,61 @@ export class TypeAcquisitionService {
       // Add to acquiredTypes to prevent immediate re-scan spam
       this.acquiredTypes.add(packageName);
     }
+  }
+
+  /**
+   * Fallback for packages without `.d.ts` types: fetch the JS module source,
+   * extract export names via es-module-lexer, and generate stub declarations
+   * so that imports resolve (typed as `any`) instead of erroring.
+   */
+  private async generateStubTypes(
+    packageName: string,
+    moduleResponse: Response,
+    epoch: number,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    // The X-ESM-Path header points to the actual bundled module (bypasses the
+    // thin entry re-export wrapper where `export *` yields no named exports).
+    const esmPath = moduleResponse.headers.get('X-ESM-Path');
+
+    let jsSource: string;
+
+    if (esmPath) {
+      const sourceResponse = await fetch(`${esmShBase}${esmPath}`, { signal });
+
+      if (this.sessionEpoch !== epoch) {
+        return;
+      }
+
+      if (!sourceResponse.ok) {
+        this.acquiredTypes.add(packageName);
+        return;
+      }
+
+      jsSource = await sourceResponse.text();
+    } else {
+      // No X-ESM-Path -- try parsing the entry module body directly
+      jsSource = await moduleResponse.text();
+    }
+
+    if (this.sessionEpoch !== epoch) {
+      return;
+    }
+
+    const exportNames = await parseExportNames(jsSource);
+
+    if (exportNames.length === 0) {
+      this.acquiredTypes.add(packageName);
+      return;
+    }
+
+    const stubContent = generateStubDeclarations(exportNames);
+
+    this.fetchCache.set(packageName, stubContent);
+    this.injectDynamicTypes(packageName, stubContent);
+    this.failedPackages.delete(packageName);
+
+    ataLog('stub types:', packageName, `(${exportNames.length} exports)`);
   }
 
   /** Track a CDN URL as an alias for a package name. */
@@ -561,4 +616,32 @@ function extractPackageName(specifier: string): string | undefined {
   // Unscoped package: name or name/subpath
   const slashIndex = specifier.indexOf('/');
   return slashIndex === -1 ? specifier : specifier.slice(0, slashIndex);
+}
+
+/**
+ * Generate stub `.d.ts` content from a list of export names.
+ *
+ * All exports are typed as `any` -- this suppresses "Cannot find module" errors
+ * and provides autocomplete for export names without pretending to know the types.
+ *
+ * @param exportNames - Array of export names (e.g., ['addGrid', 'default'])
+ * @returns `.d.ts` content suitable for wrapping in `declare module`
+ */
+const stubJsdoc = '  /** This package does not provide type declarations. Exported as `any`. */';
+
+export function generateStubDeclarations(exportNames: string[]): string {
+  const lines: string[] = [];
+
+  for (const name of exportNames) {
+    if (name === 'default') {
+      lines.push(stubJsdoc);
+      lines.push('  const _default: any;');
+      lines.push('  export default _default;');
+    } else {
+      lines.push(stubJsdoc);
+      lines.push(`  export const ${name}: any;`);
+    }
+  }
+
+  return lines.join('\n');
 }
