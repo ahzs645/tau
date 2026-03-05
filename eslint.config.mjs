@@ -234,6 +234,9 @@ const config = [
       '@typescript-eslint/naming-convention': namingConventionBase,
       '@typescript-eslint/member-ordering': memberOrdering,
       '@typescript-eslint/explicit-member-accessibility': 'error',
+      // Enforce ES6 shorthand for object properties and methods (e.g. `{ args }` instead of `{ args: args }`).
+      // TODO: Move to .oxlintrc.json once oxlint ships native `object-shorthand` (oxc-project/oxc#17688).
+      'object-shorthand': ['error', 'always'],
       'id-denylist': ['error', 'temp', 'tmp', 'val', 'vals', 'obj', 'cb'],
       'import-x/no-extraneous-dependencies': [
         'error',
