@@ -184,7 +184,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
     const rpcCall = {
       toolCallId,
       rpcName: currentRpcName,
-      args: args,
+      args,
     } as RpcCallInput;
 
     try {

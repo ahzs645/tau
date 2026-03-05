@@ -27,7 +27,7 @@ export const globSearchTool: ChatTool<
   GlobSearchInput,
   GlobSearchOutput,
   typeof toolName.globSearch
-> = tool(async (, runtime: ToolRuntime) => {
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
@@ -35,7 +35,7 @@ export const globSearchTool: ChatTool<
     chatId,
     toolCallId,
     rpcName: rpcName.globSearch,
-    args: ,
+    args,
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error

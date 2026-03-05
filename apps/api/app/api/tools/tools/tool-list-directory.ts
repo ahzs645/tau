@@ -24,7 +24,7 @@ export const listDirectoryTool: ChatTool<
   ListDirectoryInput,
   ListDirectoryOutput,
   typeof toolName.listDirectory
-> = tool(async (, runtime: ToolRuntime) => {
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
@@ -32,14 +32,14 @@ export const listDirectoryTool: ChatTool<
     chatId,
     toolCallId,
     rpcName: rpcName.listDirectory,
-    args: ,
+    args,
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
   assertRpcSuccess(result, {
     toolName: toolName.listDirectory,
     toolCallId,
-    clientErrorMessage: `Cannot list directory "${.path}"`,
+    clientErrorMessage: `Cannot list directory "${args.path}"`,
   });
 
   // Return success output

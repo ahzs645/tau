@@ -34,7 +34,7 @@ export const createFileTool: ChatTool<
     chatId,
     toolCallId,
     rpcName: rpcName.createFile,
-    args: args,
+    args,
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error

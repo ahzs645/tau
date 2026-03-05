@@ -28,7 +28,7 @@ export const getKernelResultTool: ChatTool<
   GetKernelResultInput,
   GetKernelResultOutput,
   typeof toolName.getKernelResult
-> = tool(async (, runtime: ToolRuntime) => {
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
@@ -36,14 +36,14 @@ export const getKernelResultTool: ChatTool<
     chatId,
     toolCallId,
     rpcName: rpcName.getKernelResult,
-    args: ,
+    args,
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
   assertRpcSuccess(result, {
     toolName: toolName.getKernelResult,
     toolCallId,
-    clientErrorMessage: `Cannot get kernel result for "${.targetFile}"`,
+    clientErrorMessage: `Cannot get kernel result for "${args.targetFile}"`,
   });
 
   // Return success output

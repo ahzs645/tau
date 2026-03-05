@@ -428,7 +428,7 @@ export class TypeAcquisitionService {
       const typesUrl = moduleResponse.headers.get('X-TypeScript-Types');
       if (!typesUrl) {
         // No .d.ts types available -- try generating stub types from JS exports
-        await this.generateStubTypes(packageName, moduleResponse, epoch, signal);
+        await this.generateStubTypes(packageName, moduleResponse, { epoch, signal });
         return;
       }
 
@@ -480,8 +480,7 @@ export class TypeAcquisitionService {
   private async generateStubTypes(
     packageName: string,
     moduleResponse: Response,
-    epoch: number,
-    signal: AbortSignal | undefined,
+    { epoch, signal }: { epoch: number; signal: AbortSignal | undefined },
   ): Promise<void> {
     // The X-ESM-Path header points to the actual bundled module (bypasses the
     // thin entry re-export wrapper where `export *` yields no named exports).

@@ -26,11 +26,11 @@ Use this tool when you need to:
 } as const;
 
 export const grepTool: ChatTool<typeof grepInputSchema, GrepInput, GrepOutput, typeof toolName.grep> = tool(
-  async (, runtime: ToolRuntime) => {
+  async (args, runtime: ToolRuntime) => {
     const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
     const { toolCallId } = runtime;
 
-    const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.grep, args:  });
+    const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.grep, args });
 
     // Assert RPC success - throws ToolError for any infrastructure or client error
     assertRpcSuccess(result, {
