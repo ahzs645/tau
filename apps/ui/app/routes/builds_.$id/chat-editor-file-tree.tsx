@@ -1,3 +1,4 @@
+// oxlint-disable max-lines -- TODO: refactor this component to be more manageable
 import { useCallback, useState, useRef, useMemo, useEffect, memo } from 'react';
 import { flushSync } from 'react-dom';
 import type { ItemInstance } from '@headless-tree/core';
