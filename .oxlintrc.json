@@ -871,6 +871,7 @@
           "utils": false,
           "lib": false,
           "docs": false,
+          "args": false,
           "dir": { "directory": true, "direction": false },
           "dirs": { "directories": true, "directions": false }
         },
