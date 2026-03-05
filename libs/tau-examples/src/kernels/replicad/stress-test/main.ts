@@ -23,7 +23,6 @@ import {
   sketchCircle,
   sketchRectangle,
   sketchRoundedRectangle,
-  makeHelix,
 } from 'replicad';
 import type { Shape3D } from 'replicad';
 
@@ -82,9 +81,13 @@ function circularPattern(
   const positions: Array<
     [number, number, number]
   > = [];
-  for (let i = 0; i < count; i++) {
+  for (
+    let index = 0;
+    index < count;
+    index++
+  ) {
     const angle =
-      (2 * Math.PI * i) / count;
+      (2 * Math.PI * index) / count;
     positions.push([
       radius * Math.cos(angle),
       radius * Math.sin(angle),
@@ -163,9 +166,13 @@ export default function main(
   //    Number of ribs scales with complexity
   // =========================================================================
   const ribCount = complexity + 1; // 2 to 6 ribs per axis
-  for (let i = 0; i < ribCount; i++) {
+  for (
+    let index = 0;
+    index < ribCount;
+    index++
+  ) {
     const offset =
-      ((i - (ribCount - 1) / 2) *
+      ((index - (ribCount - 1) / 2) *
         (p.baseLength -
           2 * p.baseCornerRadius)) /
       ribCount;
@@ -239,12 +246,12 @@ export default function main(
 
   for (const pos of gridPositions) {
     // Skip holes that would intersect the circular pattern area
-    const dist = Math.hypot(
+    const distribution = Math.hypot(
       pos[0],
       pos[1],
     );
     if (
-      dist <
+      distribution <
       p.circularPatternRadius -
         p.holeRadius * 3
     ) {
@@ -435,16 +442,6 @@ export default function main(
   // =========================================================================
   if (complexity >= 3) {
     try {
-      const helixHeight =
-        p.baseHeight * 0.6;
-      const helixPath = makeHelix(
-        p.helixPitch,
-        helixHeight,
-        p.helixRadius,
-        [0, 0, 5],
-        [0, 0, 1],
-      );
-
       // Create a circular cross-section at the start of the helix
       const sweepPlane = makePlane();
       sweepPlane.pivot(90, 'Y');
