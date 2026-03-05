@@ -505,8 +505,8 @@ export function createKernelClient(options: KernelClientOptions): KernelClient {
       workerClient?.notifyFileChanged(paths);
     },
 
-    on(event: string, handler: (...arguments_: never[]) => void): () => void {
-      const set = handlers[event as keyof EventHandlers] as Set<(...arguments_: never[]) => void> | undefined;
+    on(event: string, handler: (...args: never[]) => void): () => void {
+      const set = handlers[event as keyof EventHandlers] as Set<(...args: never[]) => void> | undefined;
       if (!set) {
         throw new Error(`Unknown event: ${event}`);
       }

@@ -19,7 +19,7 @@ import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 
 describe('kernel-worker wrapExportGeometry middleware', () => {
   type ExportGeometrySpyTarget = {
-    onExportGeometry: (...arguments_: unknown[]) => Promise<ExportGeometryResult>;
+    onExportGeometry: (...args: unknown[]) => Promise<ExportGeometryResult>;
   };
 
   function spyOnExportGeometry(worker: MockKernelWorker) {

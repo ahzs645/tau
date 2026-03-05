@@ -24,8 +24,8 @@ import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#f
 // =============================================================================
 
 type RuntimeModuleExports = {
-  default?: (...arguments_: unknown[]) => unknown;
-  main?: (...arguments_: unknown[]) => unknown;
+  default?: (...args: unknown[]) => unknown;
+  main?: (...args: unknown[]) => unknown;
   defaultParams?: Record<string, unknown>;
   defaultParameters?: Record<string, unknown>;
 };
@@ -191,7 +191,7 @@ async function cleanupManifoldRuntime(): Promise<void> {
   cleanupLevelOfDetail();
 }
 
-function getRequiredFunction<CallableFunction extends (...arguments_: never[]) => unknown>(
+function getRequiredFunction<CallableFunction extends (...args: never[]) => unknown>(
   maybeFunction: unknown,
   name: string,
 ): CallableFunction {

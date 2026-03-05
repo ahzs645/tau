@@ -161,14 +161,14 @@ const customReceivedMessage = (request: IncomingMessage) => {
   ].join(' ');
 };
 
-const customErrorMessage = (...arguments_: Parameters<NonNullable<Options['customErrorMessage']>>) => {
+const customErrorMessage = (...args: Parameters<NonNullable<Options['customErrorMessage']>>) => {
   const [
     request,
     response,
     error,
     // @ts-expect-error -- Pino is missing the responseTime type
     responseTime,
-  ] = arguments_;
+  ] = args;
   const isDevelopmentMode = import.meta.env.DEV;
 
   if (!isDevelopmentMode) {

@@ -18,11 +18,11 @@ Use after tests pass to verify the model looks correct visually.`,
   schema: screenshotInputSchema,
 } as const;
 
-export const screenshotTool = tool(async (arguments_, runtime: ToolRuntime): Promise<ScreenshotOutput> => {
+export const screenshotTool = tool(async (, runtime: ToolRuntime): Promise<ScreenshotOutput> => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  if (arguments_.mode === 'multi_angle') {
+  if (.mode === 'multi_angle') {
     const result = await chatRpcService.sendRpcRequest({
       chatId,
       toolCallId,

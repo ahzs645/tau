@@ -36,10 +36,10 @@ export const editFileTool: ChatTool<
   EditFileInput,
   EditFileOutput,
   typeof toolName.editFile
-> = tool(async (arguments_, runtime: ToolRuntime) => {
+> = tool(async (, runtime: ToolRuntime) => {
   const { chatRpcService, fileEditService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
-  const { targetFile, codeEdit } = arguments_;
+  const { targetFile, codeEdit } = ;
 
   // Step 1: Read the original file content via RPC
   // The frontend returns raw content without line numbers

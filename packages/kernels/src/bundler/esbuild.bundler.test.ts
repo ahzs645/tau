@@ -67,8 +67,8 @@ type OnResolveArguments = HandlerArguments & {
   kind: string;
 };
 
-type CapturedHandler = (arguments_: OnLoadArguments) => Promise<unknown>;
-type CapturedResolveHandler = (arguments_: OnResolveArguments) => Promise<unknown>;
+type CapturedHandler = (args: OnLoadArguments) => Promise<unknown>;
+type CapturedResolveHandler = (args: OnResolveArguments) => Promise<unknown>;
 
 type CapturedHandlers = {
   httpUrlOnLoad: CapturedHandler;

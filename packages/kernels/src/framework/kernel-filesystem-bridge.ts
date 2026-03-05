@@ -227,7 +227,7 @@ function reconstructError(bridgeError: BridgeError): Error & {
  * ```
  */
 export function createBridgeCall(port: MessagePort): {
-  call: (method: string, arguments_: unknown[]) => Promise<unknown>;
+  call: (method: string, args: unknown[]) => Promise<unknown>;
   dispose: () => void;
 } {
   type PendingEntry = {
@@ -261,7 +261,7 @@ export function createBridgeCall(port: MessagePort): {
   }
 
   return {
-    async call(method: string, arguments_: unknown[]): Promise<unknown> {
+    async call(method: string, args: unknown[]): Promise<unknown> {
       return new Promise((resolve, reject) => {
         const id = nextId++;
         const timer = setTimeout(() => {
@@ -273,9 +273,9 @@ export function createBridgeCall(port: MessagePort): {
         const request = {
           id,
           method,
-          args: arguments_,
+          args: args,
         } satisfies BridgeRequest;
-        const transferables = extractTransferables(arguments_);
+        const transferables = extractTransferables(args);
         port.postMessage(request, transferables);
       });
     },
@@ -317,7 +317,7 @@ export function createBridgeCall(port: MessagePort): {
  * ```
  */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
-export function createBridgeProxy<T extends Record<string, (...arguments_: any[]) => any>>(
+export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
   port: MessagePort,
 ): T & { dispose(): void } {
   const { call, dispose: rawDispose } = createBridgeCall(port);
@@ -347,7 +347,7 @@ export function createBridgeProxy<T extends Record<string, (...arguments_: any[]
         throw new Error(`Bridge proxy has been disposed — cannot call '${method}'`);
       }
 
-      return async (...arguments_: unknown[]) => call(method, arguments_);
+      return async (...args: unknown[]) => call(method, args);
     },
   });
 }

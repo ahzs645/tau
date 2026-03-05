@@ -532,21 +532,21 @@ export default defineKernel({
 
       instance.FS.writeFile(relativeFilePath, code);
 
-      const arguments_ = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
+      const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
 
       if (tessellation) {
-        arguments_.push(`-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
+        args.push(`-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
       }
 
       const flattenedParameters = flattenParametersForInjection(parameters);
       for (const [key, value] of Object.entries(flattenedParameters)) {
-        arguments_.push(`-D${key}=${formatValue(value)}`);
+        args.push(`-D${key}=${formatValue(value)}`);
       }
 
       const callMainSpan = tracer.startSpan('openscad.call-main', {
         phase: 'computingGeometry',
       });
-      const result = instance.callMain(arguments_);
+      const result = instance.callMain(args);
       callMainSpan.end();
 
       if (result !== 0) {

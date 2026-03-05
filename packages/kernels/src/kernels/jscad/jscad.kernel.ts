@@ -30,8 +30,8 @@ import {
 type JscadModuleExports = {
   getParameterDefinitions?: () => JscadParameterDefinition[];
   defaultParams?: Record<string, unknown>;
-  default?: (...arguments_: unknown[]) => unknown;
-  main?: (...arguments_: unknown[]) => unknown;
+  default?: (...args: unknown[]) => unknown;
+  main?: (...args: unknown[]) => unknown;
 };
 
 const kernelModulesKey = '__KERNEL_MODULES__';

@@ -52,7 +52,7 @@ export type OcTracingResult = {
 // Shared type guards
 // =============================================================================
 
-type GenericFunction = (...arguments_: unknown[]) => unknown;
+type GenericFunction = (...args: unknown[]) => unknown;
 type ExceptionDecoder = (ex: WebAssembly.Exception) => [string, string];
 
 function isCallable(value: unknown): value is GenericFunction {
@@ -190,9 +190,9 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
 
       if (isCallable(value)) {
         const wrapped = new Proxy(value, {
-          construct(constructTarget, arguments_, newTarget) {
+          construct(constructTarget, args, newTarget) {
             try {
-              return wrapEmscriptenResult(Reflect.construct(constructTarget, arguments_, newTarget)) as Record<
+              return wrapEmscriptenResult(Reflect.construct(constructTarget, args, newTarget)) as Record<
                 string,
                 unknown
               >;
@@ -201,9 +201,9 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
             }
           },
           // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- spec-mandated Proxy/Reflect parameter name
-          apply(applyTarget, thisArg, arguments_) {
+          apply(applyTarget, thisArg, args) {
             try {
-              return wrapEmscriptenResult(Reflect.apply(applyTarget, thisArg, arguments_));
+              return wrapEmscriptenResult(Reflect.apply(applyTarget, thisArg, args));
             } catch (error: unknown) {
               return rethrowIfWasmException(error);
             }
@@ -257,10 +257,10 @@ export function wrapOcWithTracing(
 
   function wrapFunctionForSummary(function_: GenericFunction, className: string): GenericFunction {
     return new Proxy(function_, {
-      construct(target, arguments_, newTarget) {
+      construct(target, args, newTarget) {
         const start = performance.now();
         try {
-          const result: unknown = Reflect.construct(target, arguments_, newTarget);
+          const result: unknown = Reflect.construct(target, args, newTarget);
           recordSummaryCall(className, performance.now() - start);
           return wrapEmscriptenResult(result) as Record<string, unknown>;
         } catch (error: unknown) {
@@ -268,10 +268,10 @@ export function wrapOcWithTracing(
           return rethrowIfWasmException(error);
         }
       },
-      apply(target, thisArgument, arguments_) {
+      apply(target, thisArgument, args) {
         const start = performance.now();
         try {
-          const result: unknown = Reflect.apply(target, thisArgument, arguments_);
+          const result: unknown = Reflect.apply(target, thisArgument, args);
           recordSummaryCall(className, performance.now() - start);
           return wrapEmscriptenResult(result);
         } catch (error: unknown) {
@@ -284,22 +284,22 @@ export function wrapOcWithTracing(
 
   function wrapFunctionForPerCall(function_: GenericFunction, className: string): GenericFunction {
     return new Proxy(function_, {
-      construct(target, arguments_, newTarget) {
+      construct(target, args, newTarget) {
         const span = tracer.startSpan(`oc.${className}`, {
           method: 'constructor',
         });
         try {
-          return wrapEmscriptenResult(Reflect.construct(target, arguments_, newTarget)) as Record<string, unknown>;
+          return wrapEmscriptenResult(Reflect.construct(target, args, newTarget)) as Record<string, unknown>;
         } catch (error: unknown) {
           return rethrowIfWasmException(error);
         } finally {
           span.end();
         }
       },
-      apply(target, thisArgument, arguments_) {
+      apply(target, thisArgument, args) {
         const span = tracer.startSpan(`oc.${className}`, { method: 'apply' });
         try {
-          return wrapEmscriptenResult(Reflect.apply(target, thisArgument, arguments_));
+          return wrapEmscriptenResult(Reflect.apply(target, thisArgument, args));
         } catch (error: unknown) {
           return rethrowIfWasmException(error);
         } finally {

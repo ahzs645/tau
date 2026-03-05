@@ -121,8 +121,8 @@ type ReplicadContext = {
 };
 
 type RuntimeModuleExports = {
-  default?: (...arguments_: unknown[]) => unknown;
-  main?: (...arguments_: unknown[]) => unknown;
+  default?: (...args: unknown[]) => unknown;
+  main?: (...args: unknown[]) => unknown;
   defaultParams?: Record<string, unknown>;
   defaultParameters?: Record<string, unknown>;
   defaultName?: string;

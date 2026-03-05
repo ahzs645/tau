@@ -99,8 +99,8 @@ export function getBetterAuthConfig(options: BetterAuthConfigOptions): BetterAut
 
     logger: {
       // Configured to use NestJS logger
-      log(level, message, ...arguments_: unknown[]) {
-        logger[loggerFromLogLevel[level]](message, ...arguments_);
+      log(level, message, ...args: unknown[]) {
+        logger[loggerFromLogLevel[level]](message, ...args);
       },
     },
 

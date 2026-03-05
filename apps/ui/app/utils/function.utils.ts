@@ -20,15 +20,15 @@ type DebounceOptions = {
  * @returns A new debounced function.
  */
 export const debounce = <ArgumentsType extends unknown[], U>(
-  function_: (...arguments_: ArgumentsType) => PromiseLike<U> | U,
+  function_: (...args: ArgumentsType) => PromiseLike<U> | U,
   waitFor: number,
   options: DebounceOptions = {},
-): ((...arguments_: ArgumentsType) => Promise<U>) => {
+): ((...args: ArgumentsType) => Promise<U>) => {
   let leadingValue: U | PromiseLike<U>;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let resolveList: Array<(value: U | PromiseLike<U>) => void> = [];
 
-  return async function (this: unknown, ...arguments_: ArgumentsType): Promise<U> {
+  return async function (this: unknown, ...args: ArgumentsType): Promise<U> {
     return new Promise((resolve) => {
       const shouldCallNow = options.before && !timeout;
 
@@ -37,7 +37,7 @@ export const debounce = <ArgumentsType extends unknown[], U>(
       timeout = setTimeout(() => {
         timeout = undefined;
 
-        const result = options.before ? leadingValue : function_.apply(this, arguments_);
+        const result = options.before ? leadingValue : function_.apply(this, args);
 
         for (const resolver of resolveList) {
           resolver(result);
@@ -47,7 +47,7 @@ export const debounce = <ArgumentsType extends unknown[], U>(
       }, waitFor);
 
       if (shouldCallNow) {
-        leadingValue = function_.apply(this, arguments_);
+        leadingValue = function_.apply(this, args);
         resolve(leadingValue);
       } else {
         resolveList.push(resolve);
@@ -67,6 +67,6 @@ export const debounce = <ArgumentsType extends unknown[], U>(
  */
 
 // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types, @typescript-eslint/no-explicit-any -- allowable for a type guard
-export function isFunction(functionToCheck: any): functionToCheck is (...arguments_: any[]) => any {
+export function isFunction(functionToCheck: any): functionToCheck is (...args: any[]) => any {
   return Boolean(functionToCheck?.constructor && functionToCheck.call && functionToCheck.apply);
 }

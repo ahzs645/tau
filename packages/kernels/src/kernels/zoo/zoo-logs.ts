@@ -26,57 +26,57 @@ const consoleColors = {
  * @returns A logging object with various log level methods
  */
 export function createZooLogger(component: string): {
-  info: (message: string, ...arguments_: unknown[]) => void;
-  error: (message: string, ...arguments_: unknown[]) => void;
-  warn: (message: string, ...arguments_: unknown[]) => void;
-  debug: (message: string, ...arguments_: unknown[]) => void;
-  trace: (message: string, ...arguments_: unknown[]) => void;
-  req: (message: string, ...arguments_: unknown[]) => void;
-  res: (message: string, ...arguments_: unknown[]) => void;
+  info: (message: string, ...args: unknown[]) => void;
+  error: (message: string, ...args: unknown[]) => void;
+  warn: (message: string, ...args: unknown[]) => void;
+  debug: (message: string, ...args: unknown[]) => void;
+  trace: (message: string, ...args: unknown[]) => void;
+  req: (message: string, ...args: unknown[]) => void;
+  res: (message: string, ...args: unknown[]) => void;
 } {
   const prefix = `[Zoo ${component}]`;
 
   return {
-    info(message: string, ...arguments_: unknown[]): void {
+    info(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset} ${message}`, ...arguments_);
+        console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset} ${message}`, ...args);
       }
     },
-    error(message: string, ...arguments_: unknown[]): void {
+    error(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset} ${message}`, ...arguments_);
+        console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset} ${message}`, ...args);
       }
     },
-    warn(message: string, ...arguments_: unknown[]): void {
+    warn(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset} ${message}`, ...arguments_);
+        console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset} ${message}`, ...args);
       }
     },
-    debug(message: string, ...arguments_: unknown[]): void {
+    debug(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset} ${message}`, ...arguments_);
+        console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset} ${message}`, ...args);
       }
     },
-    trace(message: string, ...arguments_: unknown[]): void {
+    trace(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.trace}${prefix}[TRACE]${consoleColors.reset} ${message}`, ...arguments_);
+        console.log(`${consoleColors.trace}${prefix}[TRACE]${consoleColors.reset} ${message}`, ...args);
       }
     },
-    req(message: string, ...arguments_: unknown[]): void {
+    req(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.req}${prefix}[REQ]${consoleColors.reset} ${message}`, ...arguments_);
+        console.log(`${consoleColors.req}${prefix}[REQ]${consoleColors.reset} ${message}`, ...args);
       }
     },
-    res(message: string, ...arguments_: unknown[]): void {
+    res(message: string, ...args: unknown[]): void {
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.res}${prefix}[RES]${consoleColors.reset} ${message}`, ...arguments_);
+        console.log(`${consoleColors.res}${prefix}[RES]${consoleColors.reset} ${message}`, ...args);
       }
     },
   };

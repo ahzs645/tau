@@ -18,7 +18,7 @@ import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 
 describe('kernel-worker middleware onion chain', () => {
   type CreateGeometrySpyTarget = {
-    onCreateGeometry: (...arguments_: unknown[]) => Promise<CreateGeometryResult>;
+    onCreateGeometry: (...args: unknown[]) => Promise<CreateGeometryResult>;
   };
 
   function spyOnCreateGeometry(worker: MockKernelWorker) {
