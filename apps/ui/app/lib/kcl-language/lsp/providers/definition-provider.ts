@@ -310,7 +310,7 @@ async function ensureModelForUri(
   monaco: typeof Monaco,
   targetUri: string,
   fileManager: LspFileManager | undefined,
-  getOrEnsureModelFn?: GetOrEnsureModel,
+  getOrEnsureModelFunction?: GetOrEnsureModel,
 ): Promise<void> {
   // Fast path: model already exists
   const monacoUri = monaco.Uri.parse(targetUri);
@@ -319,9 +319,9 @@ async function ensureModelForUri(
   }
 
   // Use centralized model service if available
-  if (getOrEnsureModelFn) {
+  if (getOrEnsureModelFunction) {
     const filePath = extractFilePathFromUri(targetUri);
-    await getOrEnsureModelFn(filePath);
+    await getOrEnsureModelFunction(filePath);
     return;
   }
 

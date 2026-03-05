@@ -131,9 +131,9 @@ function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => nev
           return member;
         }
 
-        const wrapper = function (this: unknown, ...methodArgs: unknown[]): unknown {
+        const wrapper = function (this: unknown, ...methodArguments: unknown[]): unknown {
           try {
-            return wrapEmscriptenResult(Reflect.apply(member, target, methodArgs));
+            return wrapEmscriptenResult(Reflect.apply(member, target, methodArguments));
           } catch (error: unknown) {
             return rethrowIfWasmException(error);
           }
@@ -190,9 +190,9 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
 
       if (isCallable(value)) {
         const wrapped = new Proxy(value, {
-          construct(constructTarget, args, newTarget) {
+          construct(constructTarget, arguments_, newTarget) {
             try {
-              return wrapEmscriptenResult(Reflect.construct(constructTarget, args, newTarget)) as Record<
+              return wrapEmscriptenResult(Reflect.construct(constructTarget, arguments_, newTarget)) as Record<
                 string,
                 unknown
               >;
@@ -200,9 +200,10 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
               return rethrowIfWasmException(error);
             }
           },
-          apply(applyTarget, thisArg, args) {
+          // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- spec-mandated Proxy/Reflect parameter name
+          apply(applyTarget, thisArg, arguments_) {
             try {
-              return wrapEmscriptenResult(Reflect.apply(applyTarget, thisArg, args));
+              return wrapEmscriptenResult(Reflect.apply(applyTarget, thisArg, arguments_));
             } catch (error: unknown) {
               return rethrowIfWasmException(error);
             }
@@ -267,10 +268,10 @@ export function wrapOcWithTracing(
           return rethrowIfWasmException(error);
         }
       },
-      apply(target, thisArgument, args) {
+      apply(target, thisArgument, arguments_) {
         const start = performance.now();
         try {
-          const result: unknown = Reflect.apply(target, thisArgument, args);
+          const result: unknown = Reflect.apply(target, thisArgument, arguments_);
           recordSummaryCall(className, performance.now() - start);
           return wrapEmscriptenResult(result);
         } catch (error: unknown) {
@@ -295,10 +296,10 @@ export function wrapOcWithTracing(
           span.end();
         }
       },
-      apply(target, thisArgument, args) {
+      apply(target, thisArgument, arguments_) {
         const span = tracer.startSpan(`oc.${className}`, { method: 'apply' });
         try {
-          return wrapEmscriptenResult(Reflect.apply(target, thisArgument, args));
+          return wrapEmscriptenResult(Reflect.apply(target, thisArgument, arguments_));
         } catch (error: unknown) {
           return rethrowIfWasmException(error);
         } finally {

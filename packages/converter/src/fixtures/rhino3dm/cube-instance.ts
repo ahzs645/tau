@@ -18,7 +18,7 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
   const existingDocument = rhino.File3dm.fromByteArray(new Uint8Array(existingFileData));
 
   // Create a new document for our instance-based version
-  const doc = new rhino.File3dm();
+  const rhinoFile = new rhino.File3dm();
 
   // Get the first mesh from the existing document
   const existingObjects = existingDocument.objects();
@@ -42,10 +42,10 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
   cubeAttributes.name = 'TestCube';
 
   // Add the cube to the document as an instance definition object
-  doc.objects().add(cubeMesh, cubeAttributes);
+  rhinoFile.objects().add(cubeMesh, cubeAttributes);
 
   // Create an instance definition from this geometry
-  const instanceDefinitionIndex = doc.instanceDefinitions().add(
+  const instanceDefinitionIndex = rhinoFile.instanceDefinitions().add(
     'CubeBlock',
     'A 2x2x2mm test cube',
     '',
@@ -60,7 +60,7 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
   }
 
   // Get the instance definition we just created
-  const instanceDefinition = doc.instanceDefinitions().get(instanceDefinitionIndex);
+  const instanceDefinition = rhinoFile.instanceDefinitions().get(instanceDefinitionIndex);
 
   // Create multiple instance references
   const instancePositions = [
@@ -82,11 +82,11 @@ export async function createCubeInstanceFixture(): Promise<Uint8Array<ArrayBuffe
     const refAttributes = new rhino.ObjectAttributes();
 
     // Add instance reference to document
-    doc.objects().add(instanceRef, refAttributes);
+    rhinoFile.objects().add(instanceRef, refAttributes);
   }
 
   // Convert to byte array
-  const bytes = doc.toByteArray() as Uint8Array<ArrayBuffer>;
+  const bytes = rhinoFile.toByteArray() as Uint8Array<ArrayBuffer>;
 
   return bytes;
 }

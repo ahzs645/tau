@@ -41,7 +41,7 @@ type RhinoGeometryJson = {
 };
 
 type RhinoConversionContext = {
-  doc: File3dm;
+  rhinoFile: File3dm;
   document: Document;
   buffer: GltfBuffer;
 };
@@ -60,19 +60,19 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     const { bytes: data } = this.findPrimaryFile(files);
 
     // Parse the 3dm file using rhino3dm
-    const doc = this.rhino.File3dm.fromByteArray(data);
+    const rhinoFile = this.rhino.File3dm.fromByteArray(data);
 
     // Create gltf-transform document
     const document = new Document();
     const scene = document.createScene();
     const buffer = document.createBuffer();
-    const context: RhinoConversionContext = { doc, document, buffer };
+    const context: RhinoConversionContext = { rhinoFile, document, buffer };
 
     // Initialize instance maps
-    this.initInstanceMaps(doc);
+    this.initInstanceMaps(rhinoFile);
 
     // Process all objects
-    const objects = doc.objects();
+    const objects = rhinoFile.objects();
     for (let i = 0; i < objects.count; i++) {
       const rhinoObject = objects.get(i);
       this.processRhinoObject(rhinoObject, { transformationStack: [], parentNode: scene }, context);
@@ -109,13 +109,13 @@ export class ThreeDmLoader extends BaseLoader<Document> {
   /**
    * Initialize instance maps by cataloging all instance definition objects and definitions
    */
-  private initInstanceMaps(doc: File3dm): void {
+  private initInstanceMaps(rhinoFile: File3dm): void {
     // Clear previous maps
     this.instanceIdToDefinition.clear();
     this.instanceIdToObject.clear();
 
     // Map all instance definition objects
-    const objects = doc.objects();
+    const objects = rhinoFile.objects();
     for (let i = 0; i < objects.count; i++) {
       const rhinoObject = objects.get(i);
       const attributes = rhinoObject.attributes();
@@ -125,7 +125,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     }
 
     // Map all instance definitions
-    const instanceDefinitions = doc.instanceDefinitions();
+    const instanceDefinitions = rhinoFile.instanceDefinitions();
     for (let i = 0; i < instanceDefinitions.count; i++) {
       const instanceDefinition = instanceDefinitions.get(i);
       this.instanceIdToDefinition.set(instanceDefinition.id, instanceDefinition);
@@ -141,7 +141,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     context: RhinoConversionContext,
   ): void {
     const { transformationStack, parentNode } = options;
-    const { doc } = context;
+    const { rhinoFile } = context;
     const geometry = rhinoObject.geometry();
     const attributes = rhinoObject.attributes();
     const { objectType } = geometry;
@@ -194,7 +194,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
         // Set layer visibility (only for objects not in transformation stack)
         if (transformationStack.length === 0) {
-          const layers = doc.layers();
+          const layers = rhinoFile.layers();
           if (attributes.layerIndex >= 0 && attributes.layerIndex < layers.count) {
             const layer = layers.get(attributes.layerIndex);
             // Store visibility in extras since gltf-transform nodes don't have direct visibility
@@ -277,7 +277,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     attributes: ObjectAttributes,
     context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    const { doc, document, buffer } = context;
+    const { rhinoFile, document, buffer } = context;
     const threeGeometry = geometry.toThreejsJSON() as RhinoGeometryJson;
 
     // Extract vertex data
@@ -314,7 +314,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     }
 
     // Create material
-    const material = this.createGltfMaterial(attributes, doc, document);
+    const material = this.createGltfMaterial(attributes, rhinoFile, document);
     primitive.setMaterial(material);
 
     // Create mesh and node
@@ -322,7 +322,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     const node = document.createNode().setMesh(mesh);
 
     // Set metadata
-    const metadata = this.extractObjectMetadata('Mesh', attributes, doc);
+    const metadata = this.extractObjectMetadata('Mesh', attributes, rhinoFile);
     node.setExtras(metadata);
 
     if (attributes.name) {
@@ -412,17 +412,17 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     attributes: ObjectAttributes,
     context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    const { doc, document, buffer } = context;
+    const { rhinoFile, document, buffer } = context;
     const point = geometry.location;
     const positions = new Float32Array([point[0]!, point[1]!, point[2]!]);
 
     const drawColor = (
-      attributes.drawColor as (doc: File3dm) => {
+      attributes.drawColor as (rhinoFile: File3dm) => {
         r: number;
         g: number;
         b: number;
       }
-    )(doc);
+    )(rhinoFile);
     const colors = new Float32Array([drawColor.r / 255, drawColor.g / 255, drawColor.b / 255]);
 
     // Create accessors
@@ -445,7 +445,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     const node = document.createNode().setMesh(mesh);
 
     // Set metadata
-    const metadata = this.extractObjectMetadata('Point', attributes, doc);
+    const metadata = this.extractObjectMetadata('Point', attributes, rhinoFile);
     node.setExtras(metadata);
 
     if (attributes.name) {
@@ -464,7 +464,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     attributes: ObjectAttributes,
     context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    const { doc, document, buffer } = context;
+    const { rhinoFile, document, buffer } = context;
     const threeGeometry = geometry.toThreejsJSON() as RhinoGeometryJson;
 
     const positions = new Float32Array(threeGeometry.data.attributes.position.array);
@@ -487,7 +487,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
       material = document.createMaterial().setBaseColorFactor([1, 1, 1, 1]).setDoubleSided(true);
     } else {
-      const color = this.extractColor(attributes, doc);
+      const color = this.extractColor(attributes, rhinoFile);
       material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     }
 
@@ -517,7 +517,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     attributes: ObjectAttributes,
     context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    const { doc, document, buffer } = context;
+    const { rhinoFile, document, buffer } = context;
     const pts = this.curveToPoints(geometry, 100);
     const positions = new Float32Array(pts.length * 3);
 
@@ -537,7 +537,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
       .setAttribute('POSITION', positionAccessor);
 
     // Create material with color
-    const color = this.extractColor(attributes, doc);
+    const color = this.extractColor(attributes, rhinoFile);
     const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
@@ -565,7 +565,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     attributes: ObjectAttributes,
     context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    const { doc, document, buffer } = context;
+    const { rhinoFile, document, buffer } = context;
     const { point } = geometry;
     const positions = new Float32Array([point[0]!, point[1]!, point[2]!]);
 
@@ -578,7 +578,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
       .setAttribute('POSITION', positionAccessor);
 
     // Create material with color
-    const color = this.extractColor(attributes, doc);
+    const color = this.extractColor(attributes, rhinoFile);
     const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
@@ -758,9 +758,9 @@ export class ThreeDmLoader extends BaseLoader<Document> {
   /**
    * Create gltf-transform material from Rhino attributes and document
    */
-  private createGltfMaterial(attributes: ObjectAttributes, doc: File3dm, document: Document): Material {
+  private createGltfMaterial(attributes: ObjectAttributes, rhinoFile: File3dm, document: Document): Material {
     // Try to get material from document
-    const materials = doc.materials();
+    const materials = rhinoFile.materials();
     let rhinoMaterial: RhinoMaterial | undefined;
 
     if (attributes.materialIndex >= 0 && attributes.materialIndex < materials.count) {
@@ -772,7 +772,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     }
 
     // Fallback to object draw color
-    const color = this.extractColor(attributes, doc);
+    const color = this.extractColor(attributes, rhinoFile);
     return document
       .createMaterial()
       .setBaseColorFactor([color.r, color.g, color.b, 1])
@@ -862,9 +862,9 @@ export class ThreeDmLoader extends BaseLoader<Document> {
   /**
    * Extract color from attributes
    */
-  private extractColor(attributes: ObjectAttributes, doc: File3dm): { r: number; g: number; b: number } {
+  private extractColor(attributes: ObjectAttributes, rhinoFile: File3dm): { r: number; g: number; b: number } {
     // @ts-expect-error -- rhino3dm types are not correct.
-    const drawColor = attributes.drawColor(doc) as {
+    const drawColor = attributes.drawColor(rhinoFile) as {
       r: number;
       g: number;
       b: number;
@@ -882,7 +882,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
   private extractObjectMetadata(
     objectType: string,
     attributes: ObjectAttributes,
-    doc?: File3dm,
+    rhinoFile?: File3dm,
   ): Record<string, unknown> {
     const metadata: Record<string, unknown> = {
       objectType,
@@ -920,8 +920,8 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     }
 
     // Add layer information if document is available
-    if (doc && attributes.layerIndex >= 0) {
-      const layers = doc.layers();
+    if (rhinoFile && attributes.layerIndex >= 0) {
+      const layers = rhinoFile.layers();
       if (attributes.layerIndex < layers.count) {
         const layer = layers.get(attributes.layerIndex);
         metadata['layer'] = this.extractLayerInfo(layer);

@@ -385,8 +385,8 @@ function computeFaceCenter(parameters: FaceCenterParameters): THREE.Vector3 {
 
     const to2D = (index: number): { x: number; y: number } => {
       const p = worldPositions[index]!;
-      const rel = new THREE.Vector3().subVectors(p, refPoint);
-      return { x: rel.dot(planeU), y: rel.dot(planeV) };
+      const relative = new THREE.Vector3().subVectors(p, refPoint);
+      return { x: relative.dot(planeU), y: relative.dot(planeV) };
     };
 
     for (let i = 0; i < ordered.length; i++) {
@@ -621,8 +621,8 @@ function detectCircleOnFace(
   const { u, v } = constructPlaneAxes(faceNormal.clone().normalize());
 
   const pts2D = boundaryVerticesWorld.map((p) => {
-    const rel = new THREE.Vector3().subVectors(p, planePoint);
-    return { x: rel.dot(u), y: rel.dot(v) };
+    const relative = new THREE.Vector3().subVectors(p, planePoint);
+    return { x: relative.dot(u), y: relative.dot(v) };
   });
 
   const fit = fitCircle2D(pts2D);

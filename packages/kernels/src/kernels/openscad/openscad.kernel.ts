@@ -27,7 +27,7 @@ import { convertOffToGltf } from '#utils/off-to-gltf.js';
 import { convertOffToStl } from '#utils/off-to-stl.js';
 import { convertOffTo3mf } from '#utils/off-to-3mf.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
-import type { AddErrorFn, GetFileContentsFn } from '#kernels/openscad/parse-output.js';
+import type { AddErrorFunction, GetFileContentsFunction } from '#kernels/openscad/parse-output.js';
 import { OpenScadStderrParser } from '#kernels/openscad/parse-output.js';
 
 const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href;
@@ -175,8 +175,8 @@ function parseLogLevel(message: string): LogLevel {
 
 async function createInstance(options: {
   logger: KernelLogger;
-  addError?: AddErrorFn;
-  getFileContents?: GetFileContentsFn;
+  addError?: AddErrorFunction;
+  getFileContents?: GetFileContentsFunction;
   mainFilePath?: string;
 }): Promise<OpenSCAD> {
   const { logger, addError, getFileContents, mainFilePath } = options;
@@ -248,7 +248,7 @@ async function mountFileSystem(
   logger.debug(`Mounting ${referencedFiles.length} referenced files`);
 
   const uncachedAbsolutePaths = referencedFiles
-    .map((rel) => resolveFromRoot(rel, basePath))
+    .map((relativePath) => resolveFromRoot(relativePath, basePath))
     .filter((abs) => !fileContentCache.has(abs));
 
   if (uncachedAbsolutePaths.length > 0) {
@@ -495,10 +495,10 @@ export default defineKernel({
   ) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const fileContentsCache = new Map<string, string>();
-    const getFileContents: GetFileContentsFn = (fileName: string) => fileContentsCache.get(fileName);
+    const getFileContents: GetFileContentsFunction = (fileName: string) => fileContentsCache.get(fileName);
 
     const collectedIssues: KernelIssue[] = [];
-    const addError: AddErrorFn = (issue: KernelIssue) => {
+    const addError: AddErrorFunction = (issue: KernelIssue) => {
       collectedIssues.push(issue);
     };
 

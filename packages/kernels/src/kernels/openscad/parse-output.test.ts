@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { KernelIssue } from '#types/kernel.types.js';
-import type { GetFileContentsFn } from '#kernels/openscad/parse-output.js';
+import type { GetFileContentsFunction } from '#kernels/openscad/parse-output.js';
 import { parseStderrLine, OpenScadStderrParser } from '#kernels/openscad/parse-output.js';
 
 /**
- * Helper to create a GetFileContentsFn from a map of file contents.
+ * Helper to create a GetFileContentsFunction from a map of file contents.
  */
-function createGetFileContents(files: Record<string, string>): GetFileContentsFn {
+function createGetFileContents(files: Record<string, string>): GetFileContentsFunction {
   return (fileName: string) => files[fileName];
 }
 

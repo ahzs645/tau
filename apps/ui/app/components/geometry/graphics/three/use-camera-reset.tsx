@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import type { RefObject } from 'react';
 import type * as THREE from 'three';
-import { resetCamera as resetCameraFn } from '#components/geometry/graphics/three/utils/camera.utils.js';
+import { resetCamera as resetCameraFunction } from '#components/geometry/graphics/three/utils/camera.utils.js';
 import { useCameraCapability } from '#hooks/use-graphics.js';
 
 // Define the specific types needed for camera reset
@@ -70,7 +70,7 @@ export function useCameraReset(parameters: ResetCameraParameters): (options?: {
         originalDistanceReference.current = undefined;
       }
 
-      resetCameraFn({
+      resetCameraFunction({
         camera,
         geometryRadius,
         geometryCenter,

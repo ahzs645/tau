@@ -35,11 +35,11 @@ export const readFileTool: ChatTool<
   ReadFileInput,
   ReadFileOutput,
   typeof toolName.readFile
-> = tool(async (args, runtime: ToolRuntime) => {
+> = tool(async (arguments_, runtime: ToolRuntime) => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.readFile, args });
+  const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.readFile, args: arguments_ });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
   assertRpcSuccess(result, {

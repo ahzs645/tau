@@ -26,14 +26,14 @@ type ContentShapeDetector = (content: unknown) => boolean;
  * of the structure to be partially returned, including array elements.
  *
  * @param _toolName - The tool name (used only for type inference)
- * @param fn - The trimmer function with typed input, returns a trimmed structure
+ * @param trimmerFunction - The trimmer function with typed input, returns a trimmed structure
  * @returns A function that accepts unknown and returns unknown
  */
 function createTrimmer<T extends keyof ToolOutputRegistry>(
   _toolName: T,
-  fn: (result: ToolOutputRegistry[T]) => PartialDeep<ToolOutputRegistry[T], { recurseIntoArrays: true }>,
+  trimmerFunction: (result: ToolOutputRegistry[T]) => PartialDeep<ToolOutputRegistry[T], { recurseIntoArrays: true }>,
 ): (result: unknown) => unknown {
-  return fn as (result: unknown) => unknown;
+  return trimmerFunction as (result: unknown) => unknown;
 }
 
 // =============================================================================

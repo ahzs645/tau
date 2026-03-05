@@ -3,13 +3,13 @@ import type { ErrorLocation, KernelIssue, KernelStackFrame } from '#types/kernel
 /**
  * Callback function type for adding parsed errors.
  */
-export type AddErrorFn = (error: KernelIssue) => void;
+export type AddErrorFunction = (error: KernelIssue) => void;
 
 /**
  * Function type for lazily fetching file contents on demand.
  * Takes a normalized filename and returns the file content, or undefined if not found.
  */
-export type GetFileContentsFn = (fileName: string) => string | undefined;
+export type GetFileContentsFunction = (fileName: string) => string | undefined;
 
 /**
  * Extract the basename (filename without directory path) from a full path.
@@ -59,7 +59,7 @@ function normalizeFileName(fileName: string, mainFilePath?: string): string {
  * @returns The line content, or undefined if not found.
  */
 function getLine(
-  getFileContents: GetFileContentsFn | undefined,
+  getFileContents: GetFileContentsFunction | undefined,
   fileName: string,
   lineNumber: number,
 ): string | undefined {
@@ -106,7 +106,7 @@ function getFirstNonWhitespaceIndex(line: string): number {
 function createErrorLocation(
   fileName: string,
   lineNumber: number,
-  getFileContents: GetFileContentsFn | undefined,
+  getFileContents: GetFileContentsFunction | undefined,
 ): ErrorLocation {
   const lineContent = getLine(getFileContents, fileName, lineNumber);
 
@@ -206,15 +206,15 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
  */
 export class OpenScadStderrParser {
   /* oxlint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
-  private readonly addError: AddErrorFn;
-  private readonly getFileContents?: GetFileContentsFn;
+  private readonly addError: AddErrorFunction;
+  private readonly getFileContents?: GetFileContentsFunction;
   private readonly mainFilePath?: string;
   /* oxlint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
 
   /** Reference to the last error added, so TRACE lines can append stack frames to it. */
   private lastError: KernelIssue | undefined;
 
-  public constructor(addError: AddErrorFn, getFileContents?: GetFileContentsFn, mainFilePath?: string) {
+  public constructor(addError: AddErrorFunction, getFileContents?: GetFileContentsFunction, mainFilePath?: string) {
     this.addError = addError;
     this.getFileContents = getFileContents;
     this.mainFilePath = mainFilePath;
@@ -624,8 +624,8 @@ export class OpenScadStderrParser {
  */
 export function parseStderrLine(options: {
   message: string;
-  addError: AddErrorFn;
-  getFileContents?: GetFileContentsFn;
+  addError: AddErrorFunction;
+  getFileContents?: GetFileContentsFunction;
   mainFilePath?: string;
 }): void {
   const { message, addError, getFileContents, mainFilePath } = options;

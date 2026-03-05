@@ -43,10 +43,10 @@ export const editTestsTool: ChatTool<
   EditTestsInput,
   EditTestsOutput,
   typeof toolName.editTests
-> = tool(async (args, runtime: ToolRuntime) => {
+> = tool(async (arguments_, runtime: ToolRuntime) => {
   const { chatRpcService, fileEditService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
-  const { codeEdit } = args;
+  const { codeEdit } = arguments_;
 
   // Step 1: Read the current test.json content via RPC
   const readResult = await chatRpcService.sendRpcRequest({

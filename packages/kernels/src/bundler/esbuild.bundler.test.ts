@@ -59,16 +59,16 @@ type HandlerArguments = {
   with: Record<string, string>;
 };
 
-type OnLoadArgs = HandlerArguments;
+type OnLoadArguments = HandlerArguments;
 
-type OnResolveArgs = HandlerArguments & {
+type OnResolveArguments = HandlerArguments & {
   importer: string;
   resolveDir: string;
   kind: string;
 };
 
-type CapturedHandler = (arguments_: OnLoadArgs) => Promise<unknown>;
-type CapturedResolveHandler = (arguments_: OnResolveArgs) => Promise<unknown>;
+type CapturedHandler = (arguments_: OnLoadArguments) => Promise<unknown>;
+type CapturedResolveHandler = (arguments_: OnResolveArguments) => Promise<unknown>;
 
 type CapturedHandlers = {
   httpUrlOnLoad: CapturedHandler;

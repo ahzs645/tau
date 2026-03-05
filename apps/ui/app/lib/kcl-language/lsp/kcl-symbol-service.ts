@@ -125,15 +125,15 @@ export class KclSymbolService {
   /**
    * Set the parse function (from KclUtils)
    */
-  public setParseFunction(parseFn: ParseFunction): void {
-    this.parseFunction = parseFn;
+  public setParseFunction(parseFunction: ParseFunction): void {
+    this.parseFunction = parseFunction;
   }
 
   /**
    * Set the mock execution function (from KclUtils)
    */
-  public setMockExecuteFunction(executeFn: MockExecuteFunction): void {
-    this.mockExecuteFunction = executeFn;
+  public setMockExecuteFunction(executeFunction: MockExecuteFunction): void {
+    this.mockExecuteFunction = executeFunction;
   }
 
   /**
@@ -168,8 +168,8 @@ export class KclSymbolService {
 
     const allSymbols: KclSymbol[] = [];
 
-    // Capture parseFunction to satisfy TypeScript in async callback
-    const parseFn = this.parseFunction;
+    // Capture to satisfy TypeScript in async callback
+    const { parseFunction } = this;
 
     // Parse all stdlib modules in parallel
     const parseResults = await Promise.all(
@@ -178,7 +178,7 @@ export class KclSymbolService {
         const uri = `std://${moduleName}`;
 
         try {
-          const parseResult = await parseFn(entry.source);
+          const parseResult = await parseFunction(entry.source);
           const lineOffsets = computeLineOffsets(entry.source);
           const symbols = extractSymbolsFromProgram({
             program: parseResult.program,
@@ -255,9 +255,9 @@ export class KclSymbolService {
 
     // Reparse all documents in parallel
     await Promise.all(
-      documentsToReparse.map(async (doc) => {
-        log.debug('Reparsing document:', doc.uri);
-        await this.updateDocument(doc.uri, doc.content, doc.version + 1);
+      documentsToReparse.map(async (document_) => {
+        log.debug('Reparsing document:', document_.uri);
+        await this.updateDocument(document_.uri, document_.content, document_.version + 1);
       }),
     );
   }

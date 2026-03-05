@@ -182,8 +182,8 @@ export class TypeAcquisitionService {
 
     // Reset tracking (keep builtinTypePackages)
     this.acquiredTypes.clear();
-    for (const pkg of this.builtinTypePackages) {
-      this.acquiredTypes.add(pkg);
+    for (const packageName of this.builtinTypePackages) {
+      this.acquiredTypes.add(packageName);
     }
 
     this.pendingFetches.clear();

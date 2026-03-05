@@ -26,17 +26,17 @@ export const createFileTool: ChatTool<
   CreateFileInput,
   CreateFileOutput,
   typeof toolName.createFile
-> = tool(async (args, runtime: ToolRuntime) => {
+> = tool(async (arguments_, runtime: ToolRuntime) => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.createFile, args });
+  const result = await chatRpcService.sendRpcRequest({ chatId, toolCallId, rpcName: rpcName.createFile, args: arguments_ });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
   assertRpcSuccess(result, {
     toolName: toolName.createFile,
     toolCallId,
-    clientErrorMessage: `Cannot create file "${args.targetFile}"`,
+    clientErrorMessage: `Cannot create file "${arguments_.targetFile}"`,
   });
 
   // Return success output

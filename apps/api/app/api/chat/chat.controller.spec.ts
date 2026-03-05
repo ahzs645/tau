@@ -222,12 +222,12 @@ describe('ChatController', () => {
       expect(mockAgent.graph.stream).toHaveBeenCalledTimes(1);
 
       // Verify stream was called with messages and correct config
-      const [streamArgs, streamConfig] = mockAgent.graph.stream.mock.calls[0] as [
+      const [streamArguments, streamConfig] = mockAgent.graph.stream.mock.calls[0] as [
         { messages: unknown[] },
         { configurable: { thread_id: string } },
       ];
-      expect(streamArgs).toHaveProperty('messages');
-      expect(Array.isArray(streamArgs.messages)).toBe(true);
+      expect(streamArguments).toHaveProperty('messages');
+      expect(Array.isArray(streamArguments.messages)).toBe(true);
       expect(streamConfig.configurable.thread_id).toBe('chat_123');
 
       expect(mockResponse.send).toHaveBeenCalled();
@@ -417,14 +417,14 @@ describe('ChatController', () => {
 
       // Assert - Verify toBaseMessages was called with messages containing injected context
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
       // The message should have 2 parts: injected context + original text
-      expect(messagesArg).toHaveLength(1);
-      expect(messagesArg[0]?.parts).toHaveLength(2);
+      expect(messagesArgument).toHaveLength(1);
+      expect(messagesArgument[0]?.parts).toHaveLength(2);
 
       // First part should be the injected editor context
-      const contextPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(contextPart.type).toBe('text');
       expect(contextPart.text).toContain('<editor_context>');
       expect(contextPart.text).toContain('<active_file>');
@@ -434,7 +434,7 @@ describe('ChatController', () => {
       expect(contextPart.text).toContain('</editor_context>');
 
       // Second part should be the original user message
-      const originalPart = messagesArg[0]?.parts[1] as { type: 'text'; text: string };
+      const originalPart = messagesArgument[0]?.parts[1] as { type: 'text'; text: string };
       expect(originalPart.type).toBe('text');
       expect(originalPart.text).toBe('Create a cube');
     });
@@ -460,13 +460,13 @@ describe('ChatController', () => {
 
       // Assert - Verify toBaseMessages was called with original messages (no context injection)
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
       // The message should have only 1 part (the original text, no injected context)
-      expect(messagesArg).toHaveLength(1);
-      expect(messagesArg[0]?.parts).toHaveLength(1);
+      expect(messagesArgument).toHaveLength(1);
+      expect(messagesArgument[0]?.parts).toHaveLength(1);
 
-      const originalPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      const originalPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(originalPart.type).toBe('text');
       expect(originalPart.text).toBe('Create a sphere');
       // Should NOT contain editor_context
@@ -498,10 +498,10 @@ describe('ChatController', () => {
 
       // Assert - Verify context contains only activeFile (no fileTree, no openFiles)
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
-      expect(messagesArg[0]?.parts).toHaveLength(2);
-      const contextPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      expect(messagesArgument[0]?.parts).toHaveLength(2);
+      const contextPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
 
       expect(contextPart.text).toContain('<editor_context>');
       expect(contextPart.text).toContain('<active_file>');
@@ -537,11 +537,11 @@ describe('ChatController', () => {
 
       // Assert - Empty arrays mean no context to inject, so messages should be unchanged
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
       // With empty arrays and no activeFile, there's nothing to inject
-      expect(messagesArg[0]?.parts).toHaveLength(1);
-      const originalPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      expect(messagesArgument[0]?.parts).toHaveLength(1);
+      const originalPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(originalPart.text).toBe('Test');
       expect(originalPart.text).not.toContain('<editor_context>');
     });

@@ -191,12 +191,15 @@ async function cleanupManifoldRuntime(): Promise<void> {
   cleanupLevelOfDetail();
 }
 
-function getRequiredFunction<Fn extends (...arguments_: never[]) => unknown>(maybeFunction: unknown, name: string): Fn {
+function getRequiredFunction<CallableFunction extends (...arguments_: never[]) => unknown>(
+  maybeFunction: unknown,
+  name: string,
+): CallableFunction {
   if (typeof maybeFunction !== 'function') {
     throw new TypeError(`Expected '${name}' to be a function.`);
   }
 
-  return maybeFunction as Fn;
+  return maybeFunction as CallableFunction;
 }
 
 async function createGlbFromManifoldOutput(output: unknown): Promise<Uint8Array<ArrayBuffer>> {

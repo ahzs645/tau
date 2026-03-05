@@ -163,7 +163,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
       };
     }
 
-    const { requestId, toolCallId, rpcName: currentRpcName, args } = request;
+    const { requestId, toolCallId, rpcName: currentRpcName, args: arguments_ } = request;
 
     // Verify this is a valid RPC operation
     const isValidRpc = rpcNames.includes(currentRpcName);
@@ -184,7 +184,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
     const rpcCall = {
       toolCallId,
       rpcName: currentRpcName,
-      args,
+      args: arguments_,
     } as RpcCallInput;
 
     try {

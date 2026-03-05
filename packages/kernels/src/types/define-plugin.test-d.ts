@@ -552,9 +552,9 @@ describe('createMiddlewarePlugin type inference', () => {
   it('should return an optional-arg factory for all-optional options', () => {
     const factory = createMiddlewarePlugin<{ ttl?: number }>(staticConfig);
     const noArguments = factory();
-    const withArgs = factory({ ttl: 60 });
+    const withArguments = factory({ ttl: 60 });
     expectTypeOf(noArguments).toEqualTypeOf<MiddlewarePlugin>();
-    expectTypeOf(withArgs).toEqualTypeOf<MiddlewarePlugin>();
+    expectTypeOf(withArguments).toEqualTypeOf<MiddlewarePlugin>();
   });
 
   it('should return a required-arg factory for required options', () => {
@@ -589,9 +589,9 @@ describe('createBundlerPlugin type inference', () => {
   it('should return an optional-arg factory for all-optional options', () => {
     const factory = createBundlerPlugin<{ minify?: boolean }>(staticConfig);
     const noArguments = factory();
-    const withArgs = factory({ minify: true });
+    const withArguments = factory({ minify: true });
     expectTypeOf(noArguments).toEqualTypeOf<BundlerPlugin>();
-    expectTypeOf(withArgs).toEqualTypeOf<BundlerPlugin>();
+    expectTypeOf(withArguments).toEqualTypeOf<BundlerPlugin>();
   });
 
   it('should return a required-arg factory for required options', () => {
@@ -609,9 +609,9 @@ describe('createBundlerPlugin type inference', () => {
       extensions: options?.extensions ?? ['ts', 'js'],
     }));
     const noArguments = factory();
-    const withArgs = factory({ extensions: ['tsx'] });
+    const withArguments = factory({ extensions: ['tsx'] });
     expectTypeOf(noArguments).toEqualTypeOf<BundlerPlugin>();
-    expectTypeOf(withArgs).toEqualTypeOf<BundlerPlugin>();
+    expectTypeOf(withArguments).toEqualTypeOf<BundlerPlugin>();
   });
 
   it('should reject arguments to a zero-arg factory', () => {

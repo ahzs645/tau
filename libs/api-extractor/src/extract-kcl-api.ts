@@ -111,21 +111,21 @@ function transformRustSchema(data: RustExportSchema): KclDocumentEntry[] {
   const entries: KclDocumentEntry[] = [];
 
   // Transform functions
-  for (const fn of data.functions) {
+  for (const functionDefinition of data.functions) {
     entries.push({
-      name: fn.name,
+      name: functionDefinition.name,
       category: 'functions',
-      module: fn.module,
-      excerpt: fn.summary ?? '',
-      signature: fn.fn_signature,
-      description: fn.description ?? '',
-      arguments: fn.args.map((arg) => ({
-        name: arg.name,
-        type: arg.type_ ?? '',
-        description: arg.description,
-        required: arg.required,
+      module: functionDefinition.module,
+      excerpt: functionDefinition.summary ?? '',
+      signature: functionDefinition.fn_signature,
+      description: functionDefinition.description ?? '',
+      arguments: functionDefinition.args.map((argument) => ({
+        name: argument.name,
+        type: argument.type_ ?? '',
+        description: argument.description,
+        required: argument.required,
       })),
-      returns: fn.return_value?.type_ ?? '',
+      returns: functionDefinition.return_value?.type_ ?? '',
       examples: [], // Examples are not included in JSON export (used for website only)
     });
   }
@@ -248,34 +248,34 @@ export function buildApiData(entries: KclDocumentEntry[], kclVersion: string): A
 /**
  * Format a single function entry as markdown
  */
-function formatFunctionEntry(fn: KclDocumentEntry): string {
-  let markdown = `#### ${fn.name}\n\n`;
+function formatFunctionEntry(entry: KclDocumentEntry): string {
+  let markdown = `#### ${entry.name}\n\n`;
 
-  if (fn.excerpt) {
-    markdown += `${fn.excerpt}\n\n`;
+  if (entry.excerpt) {
+    markdown += `${entry.excerpt}\n\n`;
   }
 
-  if (fn.signature) {
-    markdown += '```kcl\n' + fn.signature + '\n```\n\n';
+  if (entry.signature) {
+    markdown += '```kcl\n' + entry.signature + '\n```\n\n';
   }
 
-  if (fn.arguments.length > 0) {
+  if (entry.arguments.length > 0) {
     markdown += '**Arguments:**\n';
-    for (const arg of fn.arguments) {
-      const requiredText = arg.required ? '(required)' : '(optional)';
-      markdown += `- \`${arg.name}\`: ${arg.type} ${requiredText} - ${arg.description}\n`;
+    for (const argument of entry.arguments) {
+      const requiredText = argument.required ? '(required)' : '(optional)';
+      markdown += `- \`${argument.name}\`: ${argument.type} ${requiredText} - ${argument.description}\n`;
     }
 
     markdown += '\n';
   }
 
-  if (fn.returns) {
-    markdown += `**Returns:** ${fn.returns}\n\n`;
+  if (entry.returns) {
+    markdown += `**Returns:** ${entry.returns}\n\n`;
   }
 
   // Include first example if available (limit to save tokens)
-  if (fn.examples.length > 0) {
-    markdown += '**Example:**\n```kcl\n' + fn.examples[0] + '\n```\n\n';
+  if (entry.examples.length > 0) {
+    markdown += '**Example:**\n```kcl\n' + entry.examples[0] + '\n```\n\n';
   }
 
   markdown += '---\n\n';
@@ -319,16 +319,16 @@ function generateMarkdown(entries: KclDocumentEntry[]): string {
 
     // Group functions by module
     const functionsByModule: Record<string, KclDocumentEntry[]> = {};
-    for (const fn of categories.functions) {
-      functionsByModule[fn.module] ??= [];
-      functionsByModule[fn.module]!.push(fn);
+    for (const functionEntry of categories.functions) {
+      functionsByModule[functionEntry.module] ??= [];
+      functionsByModule[functionEntry.module]!.push(functionEntry);
     }
 
     for (const [moduleName, functions] of Object.entries(functionsByModule).sort((a, b) => a[0].localeCompare(b[0]))) {
       markdown += `### ${moduleName}\n\n`;
 
-      for (const fn of functions) {
-        markdown += formatFunctionEntry(fn);
+      for (const functionEntry of functions) {
+        markdown += formatFunctionEntry(functionEntry);
       }
     }
   }
@@ -407,14 +407,14 @@ function generateCompactMarkdown(entries: KclDocumentEntry[]): string {
   if (categories.functions.length > 0) {
     markdown += '## Functions\n\n';
 
-    for (const fn of categories.functions) {
-      if (fn.signature) {
+    for (const functionEntry of categories.functions) {
+      if (functionEntry.signature) {
         // Add brief description as comment
-        if (fn.excerpt) {
-          markdown += `// ${fn.excerpt}\n`;
+        if (functionEntry.excerpt) {
+          markdown += `// ${functionEntry.excerpt}\n`;
         }
 
-        markdown += fn.signature + '\n\n';
+        markdown += functionEntry.signature + '\n\n';
       }
     }
   }

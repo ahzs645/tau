@@ -6,9 +6,9 @@ const inspectEnabled = false;
 // Default to console inspector for easy debugging
 const isConsoleInspectorEnabled = true;
 
-export function consoleInspector(args: InspectionEvent): void {
-  if (args.type === '@xstate.event') {
-    console.info('XState Event:', args.event);
+export function consoleInspector(arguments_: InspectionEvent): void {
+  if (arguments_.type === '@xstate.event') {
+    console.info('XState Event:', arguments_.event);
   }
 }
 

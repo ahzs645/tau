@@ -233,7 +233,7 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
     return options?.existsResult ?? false;
   });
 
-  const readFileFn = vi.fn().mockImplementation(async (path: string) => {
+  const readFileFunction = vi.fn().mockImplementation(async (path: string) => {
     if (typeof options?.readFileResult === 'function') {
       return options.readFileResult(path);
     }
@@ -241,67 +241,67 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
     return options?.readFileResult ?? new Uint8Array();
   });
 
-  const writeFileFn = vi
+  const writeFileFunction = vi
     .fn<(path: string, data: Uint8Array<ArrayBuffer> | string) => Promise<void>>()
     .mockResolvedValue(undefined);
-  const mkdirFn = vi
+  const mkdirFunction = vi
     .fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>()
     .mockResolvedValue(undefined);
-  const unlinkFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
-  const readdirFn = vi.fn<(path: string) => Promise<string[]>>().mockResolvedValue([]);
-  const rmdirFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
-  const renameFn = vi.fn<(oldPath: string, newPath: string) => Promise<void>>().mockResolvedValue(undefined);
-  const statFn = vi.fn<(path: string) => Promise<FileStat>>().mockRejectedValue(new Error('Not found'));
-  const lstatFn = vi.fn<(path: string) => Promise<FileStat>>().mockRejectedValue(new Error('Not found'));
-  const readFilesFn = vi
+  const unlinkFunction = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
+  const readdirFunction = vi.fn<(path: string) => Promise<string[]>>().mockResolvedValue([]);
+  const rmdirFunction = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
+  const renameFunction = vi.fn<(oldPath: string, newPath: string) => Promise<void>>().mockResolvedValue(undefined);
+  const statFunction = vi.fn<(path: string) => Promise<FileStat>>().mockRejectedValue(new Error('Not found'));
+  const lstatFunction = vi.fn<(path: string) => Promise<FileStat>>().mockRejectedValue(new Error('Not found'));
+  const readFilesFunction = vi
     .fn<(paths: string[]) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
     .mockResolvedValue({});
-  const readdirContentsFn = vi
+  const readdirContentsFunction = vi
     .fn<(directoryPath: string) => Promise<Record<string, Uint8Array<ArrayBuffer>>>>()
     .mockResolvedValue({});
-  const readdirStatFn = vi.fn<(directoryPath: string) => Promise<FileStatEntry[]>>().mockResolvedValue([]);
-  const ensureDirFn = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
+  const readdirStatFunction = vi.fn<(directoryPath: string) => Promise<FileStatEntry[]>>().mockResolvedValue([]);
+  const ensureDirectoryFunction = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined);
 
   function readFile(path: string, encoding: 'utf8'): Promise<string>;
   function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
-    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- mock delegate; readFileFn is untyped to support both string and Uint8Array overloads
-    return readFileFn(path, encoding);
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- mock delegate; readFileFunction is untyped to support both string and Uint8Array overloads
+    return readFileFunction(path, encoding);
   }
 
   // Mocks object for test assertions
   const mocks: MockFileSystemMocks = {
-    readFile: readFileFn,
+    readFile: readFileFunction,
     exists: existsFunction,
-    readdir: readdirFn,
-    writeFile: writeFileFn,
-    mkdir: mkdirFn,
-    unlink: unlinkFn,
-    rmdir: rmdirFn,
-    rename: renameFn,
-    stat: statFn,
-    lstat: lstatFn,
-    readFiles: readFilesFn,
-    readdirContents: readdirContentsFn,
-    readdirStat: readdirStatFn,
-    ensureDir: ensureDirFn,
+    readdir: readdirFunction,
+    writeFile: writeFileFunction,
+    mkdir: mkdirFunction,
+    unlink: unlinkFunction,
+    rmdir: rmdirFunction,
+    rename: renameFunction,
+    stat: statFunction,
+    lstat: lstatFunction,
+    readFiles: readFilesFunction,
+    readdirContents: readdirContentsFunction,
+    readdirStat: readdirStatFunction,
+    ensureDir: ensureDirectoryFunction,
   };
 
   return {
     readFile,
     exists: async (path: string): Promise<boolean> => existsFunction(path) as boolean,
-    readdir: async (path: string) => readdirFn(path),
-    writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFn(path, data),
-    mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFn(path, options_),
-    unlink: async (path: string) => unlinkFn(path),
-    rmdir: async (path: string) => rmdirFn(path),
-    rename: async (oldPath: string, newPath: string) => renameFn(oldPath, newPath),
-    stat: async (path: string) => statFn(path),
-    lstat: async (path: string) => lstatFn(path),
-    readFiles: async (paths: string[]) => readFilesFn(paths),
-    readdirContents: async (directoryPath: string) => readdirContentsFn(directoryPath),
-    readdirStat: async (directoryPath: string) => readdirStatFn(directoryPath),
-    ensureDir: async (path: string) => ensureDirFn(path),
+    readdir: async (path: string) => readdirFunction(path),
+    writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => writeFileFunction(path, data),
+    mkdir: async (path: string, options_?: { recursive?: boolean }) => mkdirFunction(path, options_),
+    unlink: async (path: string) => unlinkFunction(path),
+    rmdir: async (path: string) => rmdirFunction(path),
+    rename: async (oldPath: string, newPath: string) => renameFunction(oldPath, newPath),
+    stat: async (path: string) => statFunction(path),
+    lstat: async (path: string) => lstatFunction(path),
+    readFiles: async (paths: string[]) => readFilesFunction(paths),
+    readdirContents: async (directoryPath: string) => readdirContentsFunction(directoryPath),
+    readdirStat: async (directoryPath: string) => readdirStatFunction(directoryPath),
+    ensureDir: async (path: string) => ensureDirectoryFunction(path),
     mocks,
   };
 }

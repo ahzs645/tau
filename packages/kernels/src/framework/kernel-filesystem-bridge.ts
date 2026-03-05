@@ -90,7 +90,7 @@ export function createBridgeServer<T extends Record<string, unknown>>(handlers: 
   port.onmessage = async (event: MessageEvent<BridgeRequest>): Promise<void> => {
     const { id, method, args } = event.data;
 
-    const function_ = handlers[method] as ((...fnArgs: unknown[]) => Promise<unknown>) | undefined;
+    const function_ = handlers[method] as ((...functionArguments: unknown[]) => Promise<unknown>) | undefined;
     if (!function_) {
       port.postMessage({
         id,

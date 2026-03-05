@@ -5,7 +5,7 @@
  * Use in teardown paths where multiple resources must be released
  * and one failure must not prevent the rest from being cleaned up.
  *
- * @param fn - Cleanup function to execute (no-ops if undefined)
+ * @param cleanupFunction - Cleanup function to execute (no-ops if undefined)
  *
  * @example
  * ```typescript
@@ -14,9 +14,9 @@
  * safeDispose(() => port.close());
  * ```
  */
-export function safeDispose(fn: (() => void) | undefined): void {
+export function safeDispose(cleanupFunction: (() => void) | undefined): void {
   try {
-    fn?.();
+    cleanupFunction?.();
   } catch (error) {
     console.error('Failed to dispose:', error);
     // Intentionally swallowed — disposal errors must not break the cleanup chain.

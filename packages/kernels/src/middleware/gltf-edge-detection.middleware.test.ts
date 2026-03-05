@@ -649,6 +649,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
                 const material = primitive.getMaterial();
                 expect(material).not.toBeNull();
 
+                // oxlint-disable-next-line max-depth -- .not.toBeNull should narrow, but it doesn't.
                 if (material) {
                   // Should be named tau-edge-material
                   expect(material.getName()).toBe('tau-edge-material');
