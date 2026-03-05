@@ -1,3 +1,4 @@
+// oxlint-disable max-lines -- test file
 /* eslint-disable @typescript-eslint/naming-convention -- Monaco API */
 /**
  * TypeAcquisitionService Tests
@@ -1790,9 +1791,7 @@ describe('generateStubDeclarations', () => {
 
   it('should generate export const declarations with JSDoc for named exports', () => {
     const result = generateStubDeclarations(['addGrid', 'addHoneycomb']);
-    expect(result).toBe(
-      [jsdoc, '  export const addGrid: any;', jsdoc, '  export const addHoneycomb: any;'].join('\n'),
-    );
+    expect(result).toBe([jsdoc, '  export const addGrid: any;', jsdoc, '  export const addHoneycomb: any;'].join('\n'));
   });
 
   it('should generate export default with JSDoc for default export', () => {
