@@ -51,6 +51,8 @@
     },
     { "name": "react-js", "specifier": "eslint-plugin-react" }
   ],
+  // Disable all category defaults so only explicitly listed rules in "rules" are active.
+  // This ensures full control over which rules run, matching the migrated ESLint config exactly.
   "categories": {
     "correctness": "off"
   },
@@ -59,20 +61,28 @@
   },
   "rules": {
     "no-negated-condition": "error",
+    // Superseded by `unicorn/no-nested-ternary` which provides the same check with better messaging.
     "no-nested-ternary": "off",
     "unicorn/catch-error-name": "error",
     "unicorn/consistent-assert": "error",
     "unicorn/consistent-date-clone": "error",
     "unicorn/consistent-empty-array-spread": "error",
     "unicorn/consistent-existence-index-check": "error",
+    // Disabled: too restrictive for React codebases where helper functions inside components are idiomatic.
     "unicorn/consistent-function-scoping": "off",
     "unicorn/error-message": "error",
     "unicorn/escape-case": "error",
     "unicorn/explicit-length-check": "error",
     "unicorn/filename-case": "error",
     "unicorn/new-for-builtins": "error",
+    /*
+     * Disabled: oxlint doesn't recognize external plugin prefixes (e.g. `n/`, `import-x/`) in eslint-disable
+     * comments, so it incorrectly flags valid disable comments like `eslint-disable n/prefer-global/process`
+     * as "abusive". Replaced by `tau-lint/no-abusive-eslint-disable` which handles this correctly.
+     */
     "unicorn/no-abusive-eslint-disable": "off",
     "tau-lint/no-abusive-eslint-disable": "error",
+    // Require a description for each eslint-disable/oxlint-ignore comment. This informs co-authors about the rule and why it is being suppressed.
     "tau-lint/require-disable-description": "error",
     "tau-lint/require-ignore-description": "error",
     "unicorn/no-accessor-recursion": "error",
@@ -97,6 +107,8 @@
     "unicorn/no-negation-in-equality-check": "error",
     "unicorn/no-new-array": "error",
     "unicorn/no-new-buffer": "error",
+    // Disabled: DOM APIs, JSON, and many third-party libraries use `null` extensively. Banning it causes
+    // excessive friction without meaningful safety gains in a codebase that interacts with browser/DOM APIs.
     "unicorn/no-null": "off",
     "unicorn/no-object-as-default-parameter": "error",
     "unicorn/no-process-exit": "error",
@@ -113,6 +125,8 @@
     "unicorn/no-useless-promise-resolve-reject": "error",
     "unicorn/no-useless-spread": "error",
     "unicorn/no-useless-switch-case": "error",
+    // Disabled: conflicts with `consistent-return` and explicit `return undefined` patterns.
+    // Explicit `undefined` improves readability in functions with multiple return paths.
     "unicorn/no-useless-undefined": "off",
     "unicorn/no-zero-fractions": "error",
     "unicorn/numeric-separators-style": "error",
@@ -166,6 +180,8 @@
     "unicorn/relative-url-style": "error",
     "unicorn/require-array-join-separator": "error",
     "unicorn/require-number-to-fixed-digits-argument": "error",
+    // Disabled: XO default. The `targetOrigin` parameter is often intentionally omitted when posting
+    // messages within same-origin contexts (e.g. web workers), where specifying it adds no security value.
     "unicorn/require-post-message-target-origin": "off",
     "unicorn/switch-case-braces": "error",
     "unicorn/text-encoding-identifier-case": "error",
@@ -181,7 +197,10 @@
     "promise/prefer-await-to-then": ["error", { "strict": false }],
     "promise/prefer-catch": "error",
     "promise/valid-params": "error",
+    // Disabled: TypeScript's own module resolution handles default import validation.
+    // This rule produces false positives with TypeScript's `esModuleInterop` and `allowSyntheticDefaultImports`.
     "import/default": "off",
+    // Ensure imports with `type` modifier are also checked to include an extension.
     "import/extensions": [
       "error",
       "always",
@@ -190,8 +209,11 @@
         "checkTypeImports": true
       }
     ],
+    // Ensure that import type side effects are prevented when using `verbatimModuleSyntax: true`.
     "import/consistent-type-specifier-style": ["error", "prefer-top-level"],
     "import/first": "error",
+    // Disabled: TypeScript's own module resolution validates namespace access.
+    // This rule is slow and produces false positives with TypeScript namespaces and re-exports.
     "import/namespace": "off",
     "import/no-absolute-path": "error",
     "import/no-anonymous-default-export": "error",
@@ -205,6 +227,7 @@
       }
     ],
     "import/no-amd": "error",
+    // Ensure that duplicate imports have separate lines for `type` and non-modifier imports.
     "import/no-duplicates": [
       "error",
       {
@@ -301,8 +324,20 @@
     ],
     "block-scoped-var": "error",
     "complexity": "warn",
+    // Disabled: superseded by `@typescript-eslint/switch-exhaustiveness-check` which provides
+    // type-aware exhaustiveness checking instead of requiring a meaningless `default` clause.
     "default-case": "off",
     "default-case-last": "error",
+    /*
+     * Enforce that curly braces are used in all control flow statements. This improves readability.
+     * For example:
+     *   if (condition) {
+     *     // ...
+     *   }
+     * instead of:
+     *   if (condition)
+     *     // ...
+     */
     "curly": ["error", "all"],
     "eqeqeq": "error",
     "grouped-accessor-pairs": ["error", "getBeforeSet"],
@@ -347,6 +382,8 @@
     ],
     "no-self-compare": "error",
     "no-sequences": "error",
+    // Disabled: superseded by `@typescript-eslint/only-throw-error` which is the type-aware
+    // version of this rule and handles TypeScript-specific patterns correctly.
     "no-throw-literal": "off",
     "no-unmodified-loop-condition": "error",
     "no-unused-expressions": "error",
@@ -364,6 +401,8 @@
     ],
     "no-warning-comments": "warn",
     "no-with": "error",
+    // Disabled: superseded by `@typescript-eslint/prefer-promise-reject-errors` which is the
+    // type-aware version of this rule that works correctly with TypeScript's Promise types.
     "prefer-promise-reject-errors": "off",
     "radix": "error",
     "yoda": "error",
@@ -382,7 +421,14 @@
       }
     ],
     "no-shadow-restricted-names": "error",
+    // Disabled: TypeScript's own `noUnusedLocals`/`noUnusedParameters` compiler options handle this.
+    // The ESLint rule produces false positives with type-only imports and ambient declarations.
     "no-unused-vars": "off",
+    /*
+     * Use absolute imports instead of relative imports.
+     * Exception: relative imports of React-Router route types are allowed,
+     * e.g. `import type { Route } from './+types/route.js';`
+     */
     "no-restricted-imports": [
       "error",
       {
@@ -405,6 +451,9 @@
         "ignoreConsecutiveComments": true
       }
     ],
+    // Disabled: oxlint's implementation has a bug where it incorrectly flags function *declarations*
+    // (including overload signatures). The rule should only target unnamed function *expressions*.
+    // ESLint continues to enforce this rule correctly. Re-enable when oxlint fixes the bug.
     "func-names": "off",
     "max-depth": "warn",
     "max-lines": [
@@ -414,6 +463,7 @@
         "skipComments": true
       }
     ],
+    // Allow up to 5 nested callbacks. This is useful for test files with nested describe/it blocks.
     "max-nested-callbacks": [
       "error",
       {
@@ -540,6 +590,11 @@
       }
     ],
     "@typescript-eslint/consistent-type-definitions": ["error", "type"],
+    /*
+     * Enforce that the `type` keyword is used when importing types, e.g. `import type { Foo } from './foo'`.
+     * This ensures the compiler receives a hint to discard type values when they are present in import statements,
+     * alongside explicit, uniform import styles.
+     */
     "@typescript-eslint/consistent-type-imports": [
       "error",
       {
@@ -547,6 +602,7 @@
         "fixStyle": "separate-type-imports"
       }
     ],
+    // Enforce that `any` is not used.
     "@typescript-eslint/no-explicit-any": [
       "error",
       {
@@ -554,6 +610,13 @@
         "ignoreRestArgs": true
       }
     ],
+    /*
+     * Require explicit return and argument types on exported functions' and classes' public class methods.
+     * Note: This may feel cumbersome at first, especially for React components, but it is a good practice to enforce
+     * type safety and readability, especially when dealing with downstream consumers who are sensitive to type changes.
+     * Furthermore this rule does not expose an ignore option.
+     * @see https://github.com/typescript-eslint/typescript-eslint/issues/4208
+     */
     "@typescript-eslint/explicit-module-boundary-types": [
       "error",
       {
@@ -681,6 +744,14 @@
         "ignoreStringArrays": true
       }
     ],
+    /*
+     * Require exhaustive switch statements. This is an extra barrier against bad type unions.
+     * The following is an example of how to perform an exhaustive check:
+     *   default: {
+     *     const exhaustiveCheck: never = part;
+     *     throw new Error(`Unknown part type: ${String(exhaustiveCheck)}`);
+     *   }
+     */
     "@typescript-eslint/switch-exhaustiveness-check": "off",
     "@typescript-eslint/triple-slash-reference": [
       "error",
@@ -698,6 +769,8 @@
       }
     ],
     "@typescript-eslint/use-unknown-in-catch-callback-variable": "error",
+    // Disabled: superseded by `import/no-duplicates` which handles type imports correctly
+    // and supports the `prefer-inline` option for controlling type-only import merging.
     "no-duplicate-imports": "off",
     "react/button-has-type": "error",
     "react/checked-requires-onchange-or-readonly": "error",
@@ -721,6 +794,7 @@
     ],
     "react/no-this-in-sfc": "error",
     "react/no-unescaped-entities": "error",
+    // Disabled as TypeScript will check unknown properties. It can cause false positives for custom-elements.
     "react/no-unknown-property": "off",
     "react/no-unsafe": "error",
     "react/react-in-jsx-scope": "error",
@@ -774,6 +848,8 @@
     "promise/no-return-in-finally": "error",
 
     "unicorn-js/better-regex": "error",
+    // Disabled: not implemented in oxlint natively and adds friction without strong value.
+    // TODO comments are tracked via `no-warning-comments` (as warnings) instead.
     "unicorn-js/expiring-todo-comments": "off",
     "unicorn-js/no-array-push-push": "error",
     "unicorn-js/no-for-loop": "error",
@@ -787,6 +863,7 @@
         "checkFilenames": true,
         "replacements": {
           "props": false,
+          "params": false,
           "env": false,
           "ref": false,
           "db": false,
@@ -797,23 +874,11 @@
           "dir": { "directory": true, "direction": false },
           "dirs": { "directories": true, "directions": false }
         },
-        "ignore": [
-          "^i$",
-          "^i\\d+$",
-          "Fn$",
-          "^fn$",
-          "^args?$",
-          "Args?$",
-          "^thisArg$",
-          "^utils$",
-          "Utils$",
-          "^rel$",
-          "^def$",
-          "^doc$",
-          "^pkg$"
-        ]
+        "ignore": ["^[ij]$", "^i\\d+$"]
       }
     ],
+    // Disabled: XO default. Enforcing specific import styles (default vs named vs namespace)
+    // is too opinionated — the choice depends on the module's API design, not a blanket rule.
     "unicorn-js/import-style": "off",
 
     "node-js/no-unpublished-bin": "error",
@@ -822,6 +887,10 @@
     "node-js/no-deprecated-api": "error",
     "node-js/prefer-global/buffer": "error",
     "node-js/prefer-global/console": "error",
+    // Ideally ["error", "never"] to require explicit `import process from 'node:process'`,
+    // but the "never" option relies on ESLint scope analysis to detect bare `process` global
+    // references, which doesn't work through oxlint's jsPlugin adapter. Only "always" mode
+    // (flag `require("process")`) works via jsPlugins. Revisit when oxlint supports this natively.
     "node-js/prefer-global/process": "off",
     "node-js/prefer-global/text-decoder": "error",
     "node-js/prefer-global/text-encoder": "error",
@@ -837,6 +906,7 @@
     "eslint-comments-js/no-duplicate-disable": "error",
     "eslint-comments-js/no-unused-disable": "error",
     "eslint-comments-js/no-unused-enable": "error",
+    // Require a description for each ESLint rule comment. This informs co-authors about the rule and why it is being applied.
     "eslint-comments-js/require-description": ["error", { "ignore": [] }],
 
     "jsdoc-js/check-param-names": "error",
@@ -850,6 +920,9 @@
     "import/named": "error",
     "getter-return": "error",
     "no-unreachable": "error",
+    // Disabled: TypeScript's compiler handles undefined variable detection far more accurately.
+    // This rule produces false positives on type-level declarations, namespaces, global augmentation,
+    // and ambient modules. Standard @typescript-eslint recommendation for TS projects.
     "no-undef": "off",
     "@typescript-eslint/dot-notation": "error",
     "@typescript-eslint/consistent-type-exports": "error",
@@ -859,10 +932,24 @@
     "@typescript-eslint/prefer-readonly": "error",
     "@typescript-eslint/prefer-string-starts-ends-with": "error",
     "@typescript-eslint/prefer-regexp-exec": "error",
+    /*
+     * Enforce that unnecessary conditions are not used. This improves readability and reduces perceived cyclomatic complexity.
+     * For example:
+     *   function bar<T>(arg: string) {
+     *     // Arg can never be nullish
+     *     return arg?.length; // Therefore `?.` is unnecessary
+     *   }
+     */
     "@typescript-eslint/no-unnecessary-condition": "error"
   },
   "overrides": [
     {
+      /*
+       * NestJS overrides:
+       * - consistent-type-imports: off — DI requires runtime imports, type-only imports would break injection.
+       * - max-params: off — Constructor dependency injection requires many parameters.
+       * - new-cap exceptions — Decorators like @Injectable(), @Controller() etc. are called without `new`.
+       */
       "files": [
         "apps/api/**/*.service.ts",
         "apps/api/**/*.controller.ts",
@@ -873,54 +960,13 @@
         "apps/api/**/*.filter.ts",
         "apps/api/**/*.pipe.ts",
         "apps/api/**/*.provider.ts",
-        "apps/api/**/*.resolver.ts"
+        "apps/api/**/*.resolver.ts",
+        "apps/api/**/*.middleware.ts",
+        "apps/api/**/testing/*.ts"
       ],
       "rules": {
-        "@typescript-eslint/consistent-type-imports": "off"
-      }
-    },
-    {
-      "files": ["**/*.d.ts"],
-      "rules": {
-        "no-unused-vars": "off"
-      },
-      "plugins": ["typescript"]
-    },
-    {
-      "files": ["**/*.test-d.ts"],
-      "rules": {
-        "@typescript-eslint/no-unsafe-call": "off",
-        "@typescript-eslint/no-confusing-void-expression": "off"
-      },
-      "plugins": ["typescript"]
-    },
-    {
-      "files": ["xo.config.{js,ts}"],
-      "rules": {
-        "import/no-anonymous-default-export": "off"
-      },
-      "plugins": ["import"]
-    },
-    {
-      "files": [
-        "**/*.controller.ts",
-        "**/*.service.ts",
-        "**/*.module.ts",
-        "**/*.guard.ts",
-        "**/*.gateway.ts",
-        "**/*.interceptor.ts",
-        "**/*.filter.ts",
-        "**/*.pipe.ts",
-        "**/*.provider.ts",
-        "**/*.resolver.ts"
-      ],
-      "rules": {
-        "max-params": "off"
-      }
-    },
-    {
-      "files": ["apps/api/**/*.ts", "apps/api/**/*.tsx"],
-      "rules": {
+        "@typescript-eslint/consistent-type-imports": "off",
+        "max-params": "off",
         "new-cap": [
           "error",
           {
@@ -957,9 +1003,50 @@
       }
     },
     {
-      "files": ["apps/ui/**/*.ts", "apps/ui/**/*.tsx"],
+      // Declaration files declare types/interfaces for consumers — variables are "used" by importers, not locally.
+      "files": ["**/*.d.ts"],
+      "rules": {
+        "no-unused-vars": "off"
+      },
+      "plugins": ["typescript"]
+    },
+    {
+      // Type test files use `expectTypeOf()` patterns that involve unsafe calls and void expressions by design.
+      "files": ["**/*.test-d.ts"],
+      "rules": {
+        "@typescript-eslint/no-unsafe-call": "off",
+        "@typescript-eslint/no-confusing-void-expression": "off"
+      },
+      "plugins": ["typescript"]
+    },
+    {
+      // JSX component rules — React is a global variable and boolean props must use positive prefixes.
+      "files": ["**/*.tsx"],
       "rules": {
         "react/react-in-jsx-scope": "off",
+        /*
+         * Boolean property prefixes.
+         *
+         * Rules:
+         * - Names MUST always use the positive form of the word, never the antonym.
+         *
+         * Good vs Bad Examples:
+         * - isEnabled, not isDisabled
+         * - isVisible, not isHidden
+         * - shouldShow, not shouldHide
+         * - enableButton, not disableButton
+         * - makeDefault, not destroyDefault
+         * - withLabel, not withoutLabel
+         *
+         * More Usage Examples:
+         * `is`: isEnabled, isActive, isSelected
+         * `has`: hasValue, hasSelection, hasContent
+         * `as`: asChild
+         * `should`: shouldRender, shouldUpdate, shouldAnimate
+         * `enable`: enableEditing, enableDragging, enableZoom
+         * `make`: makeDefault, makeHandler, makeValidator
+         * `with`: withTheme, withContext, withRouter, withLabel
+         */
         "react-js/boolean-prop-naming": [
           "error",
           {
@@ -971,6 +1058,11 @@
       "plugins": ["react"]
     },
     {
+      /*
+       * Packages MUST declare all their dependencies in the package.json, as they are
+       * published and consumers will not have access to the monorepo.
+       * Additionally, packages require JSDoc documentation for public API surfaces.
+       */
       "files": ["packages/**/*.{ts,tsx}"],
       "rules": {
         "jsdoc/require-param-description": "warn",
@@ -1010,6 +1102,7 @@
       "plugins": ["jsdoc"]
     },
     {
+      // Package entry points need barrel file imports.
       "files": ["{packages,libs}/**/index.ts"],
       "rules": {
         "no-barrel-files/no-barrel-files": "off"
@@ -1030,6 +1123,12 @@
       "plugins": ["typescript"]
     },
     {
+      /*
+       * CJS compatibility shims deliberately check globals like `globalThis.__dirname === undefined`
+       * where TypeScript types say the value is always `string`. The types are wrong — at runtime
+       * these globals ARE undefined in worker/ESM contexts. Type-aware rules produce guaranteed
+       * false positives here.
+       */
       "files": ["**/*.cjs"],
       "rules": {
         "@typescript-eslint/no-unnecessary-condition": "off",
@@ -1038,6 +1137,7 @@
       }
     },
     {
+      // CLI scripts legitimately need `process.exit()` for signaling exit codes.
       "files": ["**/scripts/**/*.mts", "**/scripts/**/*.ts"],
       "rules": {
         "unicorn/no-process-exit": "off"
