@@ -162,6 +162,112 @@ These extras may be intentional (superset for generic use) or may include symbol
 | wasm-opt            | ~5s at -O0                              |
 | **Total**           | **~15 min** (first build, no cache)     |
 
+### 12. `wasm-experiment.sh` passes wrong variant name to benchmark
+
+**Severity:** Medium (benchmark fails for exceptions variant)
+**Status:** Fixed
+
+The experiment script passed `--wasm-variant with-exceptions` to the benchmark runner, but the benchmark script's Zod schema only accepts `single` or `single-exceptions`. The benchmark would fail with a validation error for any exceptions experiment.
+
+**Fix:** Changed `with-exceptions` to `single-exceptions` in both the single-experiment and benchmark-all code paths.
+
+### 13. Unimplemented optimization env vars in `build-wasm.sh`
+
+**Severity:** Low (silently ignored)
+**Status:** Not fixed (known gap)
+
+The experiment config supports `optimizations.closure`, `optimizations.evalCtors`, `optimizations.converge`, and `optimizations.patchDump`, and `wasm-experiment.sh` parses and passes them as `OCJS_CLOSURE`, `OCJS_EVAL_CTORS`, `OCJS_CONVERGE`, and `OCJS_PATCH_DUMP` env vars. However, `build-wasm.sh` does not read or act on any of these. They are silently ignored during the build.
+
+The `OCCT_NO_DUMP` define (passed via `OCJS_DEFINES`) handles the DumpJson stubbing that `patchDump` was intended to accomplish.
+
+---
+
+## Max-Perf Exceptions Build (end-to-end)
+
+### Experiment Config
+
+Experiment: `O3-noLTO-maxperf-wasmExc.yml`
+- Compile: `-O3`, no LTO, native WASM exceptions
+- Link: wasm-opt `-O3`
+- Defines: `OCCT_NO_DUMP`
+- Undefines: `OCC_CONVERT_SIGNALS`
+
+### Build Results
+
+| Metric | Single | Exceptions |
+|--------|--------|------------|
+| WASM (raw) | 18.90 MB | 22.47 MB |
+| WASM (gzip) | 6.07 MB | 6.83 MB |
+| JS glue | 52.8 KB | 52.9 KB |
+| TypeScript defs | 353.0 KB | 354.2 KB |
+| Build duration | — (from cache) | 1001s (~16.7 min) |
+| Cache key | `O3-noLTO-wasmExc-single-ab418f1a-48ebca-em5.0.1-9ce403` | same |
+
+### Kernels Tests
+
+**All tests pass (39 test files, 801 tests passed, 4 skipped)**
+
+Example models with `single-exceptions` WASM (all 8 pass):
+
+| Fixture | Duration |
+|---------|----------|
+| tray | 692ms |
+| birdhouse | 511ms |
+| bottle | 437ms |
+| gridfinity-box | 421ms |
+| vase | 286ms |
+| wavy-vase | 2468ms |
+| cycloidal-gear | 645ms |
+| projection-test | 144ms |
+
+### Benchmarks (single variant, 10 iterations)
+
+| Operation | Mean | Median | P95 |
+|-----------|------|--------|-----|
+| box | 39.66ms | 35.09ms | 77.13ms |
+| cylinder | 19.79ms | 18.70ms | 24.00ms |
+| sphere | 31.56ms | 31.52ms | 35.08ms |
+| fuse-two-boxes | 35.60ms | 33.12ms | 46.29ms |
+| cut-cylinder-from-box | 23.07ms | 23.64ms | 25.51ms |
+| n-body-fuse | 67.28ms | 57.30ms | 112.62ms |
+| box-fillet-all | 43.78ms | 43.29ms | 46.42ms |
+| box-chamfer-all | 38.46ms | 38.66ms | 40.25ms |
+| sketch-extrude | 17.41ms | 18.56ms | 20.10ms |
+| sketch-revolve | 18.34ms | 17.82ms | 21.26ms |
+| multi-hole-plate | 201.93ms | 201.67ms | 208.27ms |
+| tray | 44.78ms | 43.91ms | 49.64ms |
+| birdhouse | 221.26ms | 221.37ms | 225.04ms |
+| bottle | 299.28ms | 293.78ms | 327.85ms |
+| gridfinity-box | 230.56ms | 230.72ms | 234.78ms |
+| vase | 174.11ms | 173.70ms | 178.15ms |
+| cycloidal-gear | 625.29ms | 614.29ms | 677.28ms |
+| deep-boolean-chain | 101.37ms | 101.20ms | 106.87ms |
+
+### Benchmarks (exceptions variant, 5 iterations)
+
+| Operation | Mean | Median | P95 |
+|-----------|------|--------|-----|
+| box | 42.21ms | 32.38ms | 71.58ms |
+| cylinder | 19.86ms | 20.81ms | 21.50ms |
+| sphere | 52.22ms | 47.72ms | 85.56ms |
+| fuse-two-boxes | 33.36ms | 33.68ms | 36.56ms |
+| cut-cylinder-from-box | 24.01ms | 25.08ms | 25.60ms |
+| n-body-fuse | 59.16ms | 58.54ms | 63.11ms |
+| box-fillet-all | 43.50ms | 45.03ms | 45.48ms |
+| box-chamfer-all | 38.07ms | 35.97ms | 42.74ms |
+| sketch-extrude | 18.29ms | 18.15ms | 19.76ms |
+| sketch-revolve | 42.98ms | 22.76ms | 107.71ms |
+| multi-hole-plate | 214.19ms | 214.40ms | 221.32ms |
+| tray | 46.66ms | 45.64ms | 50.46ms |
+| birdhouse | 226.70ms | 225.68ms | 229.55ms |
+| bottle | 280.05ms | 279.68ms | 282.38ms |
+| gridfinity-box | 238.23ms | 236.84ms | 241.39ms |
+| vase | 176.43ms | 176.27ms | 178.74ms |
+| cycloidal-gear | 558.29ms | 546.43ms | 595.86ms |
+| deep-boolean-chain | 103.66ms | 105.15ms | 105.95ms |
+
+---
+
 ## Verified Working
 
 - `clone-deps.sh` correctly clones and checks out pinned commits (after fix)
@@ -175,3 +281,9 @@ These extras may be intentional (superset for generic use) or may include symbol
 - Provenance JSON generation with pinned deps
 - `build-wasm.sh --help` output
 - `link` command for fast re-link after config changes
+- `wasm-experiment.sh` full pipeline: build → pack → install → deploy
+- replicad v8 YAML configs (single vs exceptions) are correctly synced
+- Kernels tests: 39 test files, 801 tests passed
+- Example models: all 8 pass with exceptions variant
+- Benchmarks: 18 benchmarks pass for both single and exceptions variants
+- No regressions observed vs previous builds
