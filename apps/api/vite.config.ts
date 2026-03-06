@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { VitePluginNode as vitePluginNode } from 'vite-plugin-node';
+import { tsModuleUrlServePlugin } from '@taucad/vite/ts-module-url';
 import { corsBaseConfiguration } from '#constants/cors.constant.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +28,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
+      tsModuleUrlServePlugin(),
       nxViteTsPaths(),
       viteStaticCopy({
         targets: [

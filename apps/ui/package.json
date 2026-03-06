@@ -16,6 +16,9 @@
     "@taucad/kernels": "workspace:*",
     "isbot": "catalog:"
   },
+  "devDependencies": {
+    "@taucad/vite": "workspace:*"
+  },
   "imports": {
     "#*": "./app/*"
   },

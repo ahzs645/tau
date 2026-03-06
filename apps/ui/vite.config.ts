@@ -12,12 +12,9 @@ import svgSpriteWrapper from 'vite-svg-sprite-wrapper';
 import { defineConfig } from 'vite';
 // oxlint-disable-next-line no-restricted-imports, import/extensions -- allowed for Fumadocs; .js for ESM
 import * as MdxConfig from './app/lib/fumadocs/source.config.js';
-// oxlint-disable-next-line no-restricted-imports, import/extensions -- Vite plugins; .js for ESM
-import { crossOriginIsolation } from './vite-plugins/cross-origin-isolation.js';
-// oxlint-disable-next-line no-restricted-imports, import/extensions -- Vite plugins; .js for ESM
-import { tsModuleUrlPlugin } from './vite-plugins/ts-module-url.js';
-// oxlint-disable-next-line no-restricted-imports, import/extensions -- Vite plugins; .js for ESM
-import { base64Loader } from './vite-plugins/base64-loader.js';
+import { crossOriginIsolation } from '@taucad/vite/cross-origin-isolation';
+import { tsModuleUrlPlugin } from '@taucad/vite/ts-module-url';
+import { base64Loader } from '@taucad/vite/base64-loader';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,8 +33,8 @@ export default defineConfig(({ mode }) => {
       // Cross-origin isolation headers for SharedArrayBuffer (multi-threaded WASM)
       crossOriginIsolation(),
 
-      // Emit .ts files referenced via new URL() as bundled chunks (production only)
-      tsModuleUrlPlugin(),
+      // Resolve .ts files referenced via new URL() in both build and serve modes
+      ...tsModuleUrlPlugin(),
 
       // Base64 Loader
       base64Loader,

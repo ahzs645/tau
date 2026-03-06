@@ -11,6 +11,9 @@
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*"
   },
+  "devDependencies": {
+    "@taucad/vite": "workspace:*"
+  },
   "imports": {
     "#*": "./app/*"
   },

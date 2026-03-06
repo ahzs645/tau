@@ -259,10 +259,10 @@ catalogs:
       specifier: 7.12.0
       version: 7.12.0
     replicad:
-      specifier: /Users/rifont/git/tau/tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-0.21.0-v8.7.tgz
+      specifier: /Users/rifont/git/tau/tarballs/replicad-0.21.0-v8.7.tgz
       version: 0.21.0-v8.7
     replicad-opencascadejs:
-      specifier: /Users/rifont/git/tau/tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-opencascadejs-0.21.0-v8.25.tgz
+      specifier: /Users/rifont/git/tau/tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz
       version: 0.21.0-v8.25
     source-map-js:
       specifier: ^1.2.1
@@ -779,10 +779,10 @@ importers:
         version: 2.0.4(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))
       replicad:
         specifier: 'catalog:'
-        version: file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-0.21.0-v8.7.tgz(patch_hash=83c51cf5db7014b104df4408837733ecb92cf034437415c095e9ab327dcca320)
+        version: file:tarballs/replicad-0.21.0-v8.7.tgz(patch_hash=83c51cf5db7014b104df4408837733ecb92cf034437415c095e9ab327dcca320)
       replicad-opencascadejs:
         specifier: 'catalog:'
-        version: file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-opencascadejs-0.21.0-v8.25.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz
       rxjs:
         specifier: ^7.8.2
         version: 7.8.2
@@ -1105,6 +1105,10 @@ importers:
       '@taucad/utils':
         specifier: workspace:*
         version: link:../../libs/utils
+    devDependencies:
+      '@taucad/vite':
+        specifier: workspace:*
+        version: link:../../libs/vite
 
   apps/ui:
     dependencies:
@@ -1141,6 +1145,10 @@ importers:
       isbot:
         specifier: 'catalog:'
         version: 5.1.35
+    devDependencies:
+      '@taucad/vite':
+        specifier: workspace:*
+        version: link:../../libs/vite
 
   libs/api-extractor: {}
 
@@ -1178,6 +1186,12 @@ importers:
       '@types/json-schema':
         specifier: 'catalog:'
         version: 7.0.15
+
+  libs/vite:
+    dependencies:
+      vite:
+        specifier: npm:rolldown-vite@latest
+        version: rolldown-vite@7.3.1(@types/node@25.3.0)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
 
   packages/converter:
     dependencies:
@@ -1279,10 +1293,10 @@ importers:
         version: 1.2.0
       replicad:
         specifier: 'catalog:'
-        version: file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-0.21.0-v8.7.tgz(patch_hash=83c51cf5db7014b104df4408837733ecb92cf034437415c095e9ab327dcca320)
+        version: file:tarballs/replicad-0.21.0-v8.7.tgz(patch_hash=83c51cf5db7014b104df4408837733ecb92cf034437415c095e9ab327dcca320)
       replicad-opencascadejs:
         specifier: 'catalog:'
-        version: file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-opencascadejs-0.21.0-v8.25.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz
       source-map-js:
         specifier: 'catalog:'
         version: 1.2.1
@@ -15138,12 +15152,12 @@ packages:
     resolution: {integrity: sha512-yD5BHCe7quCgBph4rMQ+0KkIRKwWCrHDOX1p1Gp6HwjPM5kVoCdKGNhN7ydqqsX6lJEnQDKZ/tFMiEdQ1dvPEw==}
     engines: {node: '>= 0.10'}
 
-  replicad-opencascadejs@file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-opencascadejs-0.21.0-v8.25.tgz:
-    resolution: {integrity: sha512-mATrfD3IAjn/NhBskTj8r2qQtLW/IZBV7qhK2gLg2cN5GNkDGSb5gRCBm4tYWxZdUuCtPOFkEktqjhuO2hj/yA==, tarball: file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-opencascadejs-0.21.0-v8.25.tgz}
+  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz:
+    resolution: {integrity: sha512-NxxbKmK4WorPLL9/7pe5dWDGB+N6VsZPIApDhcZHwr07zCbfn6fKhZ4Gl+9Dv6hJTbH/jXxd1gMzSvSp2AFB/g==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz}
     version: 0.21.0-v8.25
 
-  replicad@file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-0.21.0-v8.7.tgz:
-    resolution: {integrity: sha512-ZlTT6I84NlEnPYiAIvn2nvUqSPFhrohSoTnUr4iPwpHK2NJq24RQTe8eRvk6rOqG3BT5GizViY8H98nYvTIrRQ==, tarball: file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-0.21.0-v8.7.tgz}
+  replicad@file:tarballs/replicad-0.21.0-v8.7.tgz:
+    resolution: {integrity: sha512-ZlTT6I84NlEnPYiAIvn2nvUqSPFhrohSoTnUr4iPwpHK2NJq24RQTe8eRvk6rOqG3BT5GizViY8H98nYvTIrRQ==, tarball: file:tarballs/replicad-0.21.0-v8.7.tgz}
     version: 0.21.0-v8.7
 
   require-directory@2.1.1:
@@ -33127,9 +33141,9 @@ snapshots:
 
   replace-ext@1.0.1: {}
 
-  replicad-opencascadejs@file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-opencascadejs-0.21.0-v8.25.tgz: {}
+  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz: {}
 
-  replicad@file:tarballs/experiments/v8-O3-noLTO-wasmOptO3-maxperf/replicad-0.21.0-v8.7.tgz(patch_hash=83c51cf5db7014b104df4408837733ecb92cf034437415c095e9ab327dcca320):
+  replicad@file:tarballs/replicad-0.21.0-v8.7.tgz(patch_hash=83c51cf5db7014b104df4408837733ecb92cf034437415c095e9ab327dcca320):
     dependencies:
       '@types/opentype.js': 1.3.4
       flatbush: 4.5.0

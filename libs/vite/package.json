@@ -1,0 +1,30 @@
+{
+  "name": "@taucad/vite",
+  "version": "0.1.0",
+  "description": "Shared Vite plugins for the Tau monorepo",
+  "type": "module",
+  "private": true,
+  "imports": {
+    "#*": "./src/*"
+  },
+  "exports": {
+    "./cross-origin-isolation": {
+      "types": "./src/cross-origin-isolation.vite-plugin.ts",
+      "import": "./src/cross-origin-isolation.vite-plugin.ts",
+      "default": "./src/cross-origin-isolation.vite-plugin.ts"
+    },
+    "./ts-module-url": {
+      "types": "./src/ts-module-url.vite-plugin.ts",
+      "import": "./src/ts-module-url.vite-plugin.ts",
+      "default": "./src/ts-module-url.vite-plugin.ts"
+    },
+    "./base64-loader": {
+      "types": "./src/base64-loader.vite-plugin.ts",
+      "import": "./src/base64-loader.vite-plugin.ts",
+      "default": "./src/base64-loader.vite-plugin.ts"
+    }
+  },
+  "dependencies": {
+    "vite": "catalog:"
+  }
+}
