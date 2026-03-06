@@ -18,6 +18,6 @@ export const base64Loader: Plugin = {
     const data = fs.readFileSync(path);
     const base64 = data.toString('base64');
 
-    return `export default '${base64}';`;
+    return { code: `export default '${base64}';`, moduleType: 'js' };
   },
 };

@@ -99,7 +99,6 @@
     "@shikijs/transformers": "^3.22.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "@statelyai/inspect": "^0.4.0",
-    "@swc/helpers": "~0.5.19",
     "@tanstack/react-query": "^4.43.0",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.19",
@@ -235,9 +234,6 @@
     "@protontech/eslint-plugin-enforce-uint8array-arraybuffer": "^2.0.0",
     "@react-router/dev": "catalog:",
     "@react-router/fs-routes": "catalog:",
-    "@swc-node/register": "1.11.1",
-    "@swc/core": "1.15.8",
-    "@swc/helpers": "0.5.19",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.2.1",
     "@testing-library/jest-dom": "catalog:",
@@ -287,7 +283,6 @@
     "tw-animate-css": "^1.4.0",
     "type-fest": "catalog:",
     "typescript": "catalog:",
-    "unplugin-swc": "^1.5.9",
     "vite": "catalog:",
     "vite-plugin-devtools-json": "^0.2.1",
     "vite-plugin-dts": "~4.5.4",
@@ -308,16 +303,17 @@
       "@kittycad/lib": "patches/@kittycad__lib.patch",
       "@taucad/kcl-wasm-lib": "patches/@taucad__kcl-wasm-lib.patch",
       "@zenfs/core": "patches/@zenfs__core.patch",
-      "replicad": "patches/replicad.patch"
+      "replicad": "patches/replicad.patch",
+      "@oxc-project/runtime@0.101.0": "patches/@oxc-project__runtime@0.101.0.patch"
     },
     "overrides": {
+      "vite": "npm:rolldown-vite@latest",
       "@langchain/google-common": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz",
       "@langchain/google-vertexai": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz"
     },
     "onlyBuiltDependencies": [
       "@nestjs/core",
       "@parcel/watcher",
-      "@swc/core",
       "canvas",
       "core-js",
       "esbuild",
