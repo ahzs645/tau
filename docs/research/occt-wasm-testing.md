@@ -15,19 +15,19 @@ Full native dev flow from scratch:
 
 ## Build Results (after fixes)
 
-| Metric | Value |
-|--------|-------|
-| Build command | `OCJS_OPT="-O0" OCJS_LTO=0 OCJS_WASM_OPT_LEVEL="-O0" ./build-wasm.sh link build-configs/full.yml` |
-| Link duration | 59s |
-| WASM size (raw) | 17.41 MB |
-| WASM size (gzip) | 6.09 MB |
-| JS glue | 109.5 KB |
-| TypeScript defs | 377.3 KB |
-| Binding files compiled | 3,779 |
-| Source files compiled | 4,238 |
-| Bound symbols | 257 |
-| PCH size | 75 MB |
-| wasm-opt effect at -O0 | 17.2 MB → 17.4 MB (+1.4%, size increase) |
+| Metric                 | Value                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| Build command          | `OCJS_OPT="-O0" OCJS_LTO=0 OCJS_WASM_OPT_LEVEL="-O0" ./build-wasm.sh link build-configs/full.yml` |
+| Link duration          | 59s                                                                                               |
+| WASM size (raw)        | 17.41 MB                                                                                          |
+| WASM size (gzip)       | 6.09 MB                                                                                           |
+| JS glue                | 109.5 KB                                                                                          |
+| TypeScript defs        | 377.3 KB                                                                                          |
+| Binding files compiled | 3,779                                                                                             |
+| Source files compiled  | 4,238                                                                                             |
+| Bound symbols          | 257                                                                                               |
+| PCH size               | 75 MB                                                                                             |
+| wasm-opt effect at -O0 | 17.2 MB → 17.4 MB (+1.4%, size increase)                                                          |
 
 ## Issues Found
 
@@ -52,6 +52,7 @@ The `full.yml` and `full-exceptions.yml` configs included `StdPrs_ToolTriangulat
 The generic configs used `name: opencascade_full` instead of `name: opencascade_full.js`. Emscripten uses the `name` field as the output filename, so the JS glue code was written to a file without a `.js` extension (just `opencascade_full`), making it unimportable.
 
 **Fix:** Updated both configs to include `.js` extension:
+
 - `full.yml`: `name: opencascade_full.js`
 - `full-exceptions.yml`: `name: opencascade_full_exceptions.js`
 
@@ -63,6 +64,7 @@ The generic configs used `name: opencascade_full` instead of `name: opencascade_
 The `local name="$1" repo="$2" commit="$3" target="$PARENT_DIR/$name"` declaration in `clone_at_commit()` fails under `set -u` because `$name` is not yet defined when `target` is evaluated on the same `local` line.
 
 **Fix:** Split into separate `local` declarations:
+
 ```bash
 local name="$1"
 local repo="$2"
@@ -117,6 +119,7 @@ Running `wasm-opt -O0` increases the WASM from 17.2 MB to 17.4 MB (+1.4%). This 
 **Status:** Not fixed (known limitation)
 
 The TypeScript definition generator produces 1,216 unique `could not generate proper types for type name '...', using 'any' instead.` warnings. These are for:
+
 - Template types (e.g., `NCollection_Array1<double>`)
 - Nested types (e.g., `Geom2d_Curve::ResD1`)
 - Handle types not in the bindings list (e.g., `occ::handle<Geom2d_Vector>`)
@@ -136,6 +139,7 @@ These result in `any` types in the `.d.ts` file but don't affect runtime behavio
 **Status:** Not fixed (needs audit)
 
 The generic `full.yml` has ~35 symbols NOT present in the tested replicad v8 config (`custom_build_single_v8.yml`), and is missing 1 symbol (`GeomAdaptor_TransformedSurface`) that IS in the v8 config. Key extras in `full.yml`:
+
 - `BRepCheck_Analyzer`, `BRepMesh_DiscretRoot`, `BRepOffsetAPI_MakePipe`
 - `BRepPrimAPI_MakeRevolution`, `BRepPrimAPI_MakeTorus`, `BinTools`
 - `Bnd_OBB`, `GC_MakeArcOfEllipse`, `Geom2dConvert_ApproxCurve`
@@ -148,15 +152,15 @@ These extras may be intentional (superset for generic use) or may include symbol
 
 ## Build Timeline (full build from scratch, -O0)
 
-| Phase | Notes |
-|-------|-------|
-| PCH generation | ~10s, 4,132 headers → 75 MB PCH |
-| Binding generation | ~30s, parses OCCT headers with libclang |
-| Binding compilation | ~8 min, 3,779 files with 8 workers |
-| Source compilation | ~5 min, 4,238 files with 8 workers |
-| Link step | ~60s, 257 bindings + 4,238 sources |
-| wasm-opt | ~5s at -O0 |
-| **Total** | **~15 min** (first build, no cache) |
+| Phase               | Notes                                   |
+| ------------------- | --------------------------------------- |
+| PCH generation      | ~10s, 4,132 headers → 75 MB PCH         |
+| Binding generation  | ~30s, parses OCCT headers with libclang |
+| Binding compilation | ~8 min, 3,779 files with 8 workers      |
+| Source compilation  | ~5 min, 4,238 files with 8 workers      |
+| Link step           | ~60s, 257 bindings + 4,238 sources      |
+| wasm-opt            | ~5s at -O0                              |
+| **Total**           | **~15 min** (first build, no cache)     |
 
 ## Verified Working
 
