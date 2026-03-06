@@ -1,0 +1,24 @@
+name: 'v8-O3-noLTO-wasmOptO3-maxperf-wasmExc'
+description: 'Max-performance exceptions build: -O3/-O3, wasm-native exceptions, all Emscripten optimizations, DumpJson stubbed'
+
+compilation:
+  optimization: '-O3'
+  lto: false
+  exceptions: 'wasm-native'
+  threading: 'single-threaded'
+  defines: ['OCCT_NO_DUMP']
+  undefines: ['OCC_CONVERT_SIGNALS']
+
+linking:
+  yaml: 'custom_build_with_exceptions_v8.yml'
+  wasmOptLevel: '-O3'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  converge: true
+  patchDump: true
+
+benchmark:
+  iterations: 10
+  filter: ['primitives', 'booleans', 'fillets', 'extrusions', 'complex', 'examples', 'stress']
