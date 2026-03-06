@@ -10,8 +10,8 @@ import type { SupportedExportFormat } from '#export.js';
  * Convert files from one format to another.
  *
  * @param inputFiles - The input files to convert.
- * @param inputFormat - The input format.
- * @param outputFormat - The output format.
+ * @param inputFormat - source file format (e.g. 'step', 'stl', 'glb')
+ * @param outputFormat - target file format to convert into
  * @returns A promise that resolves to an array of output files.
  */
 export const convertFile = async (
@@ -34,11 +34,13 @@ export const convertFile = async (
 };
 
 /**
- * Import files to GLB format only.
+ * Imports files to GLB format only.
  *
- * @param inputFiles - The input files to import.
- * @param inputFormat - The input format.
+ * @param inputFiles - named file buffers to feed into the import pipeline
+ * @param inputFormat - source file format (e.g. 'step', 'stl', '3dm')
+ * @param resolver - optional file resolver for on-demand sidecar asset loading
  * @returns A promise that resolves to GLB data.
+ * @throws Error if no GLB file is found when the input format is `glb`
  */
 export const importToGlb = async (
   inputFiles: FileInput[],
@@ -64,7 +66,7 @@ export const importToGlb = async (
  * Export GLB data to the specified format.
  *
  * @param glbData - The GLB data to export.
- * @param outputFormat - The output format.
+ * @param outputFormat - target file format to export into
  * @returns A promise that resolves to an array of output files.
  */
 export const exportFromGlb = async (

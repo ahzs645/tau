@@ -22,7 +22,7 @@ const consoleColors = {
 /**
  * Create a scoped logger for a specific component.
  *
- * @param component The component name (e.g., 'EngineConnection', 'KclUtils')
+ * @param component - the component name (e.g., 'EngineConnection', 'KclUtils')
  * @returns A logging object with various log level methods
  */
 export function createZooLogger(component: string): {

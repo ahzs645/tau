@@ -6,6 +6,9 @@ import { transformNormalArray, transformVertexArray } from '#framework/common.js
 
 /**
  * Type guard to check if a shape has a color property
+ *
+ * @param shape - the value to check for a color property
+ * @returns whether the shape has a numeric color array
  */
 function hasColor(shape: unknown): shape is { color: number[] } {
   return (
@@ -57,13 +60,15 @@ function extractColorFromShape(shape: unknown): [number, number, number, number]
  * Polygons with fewer than 3 vertices are skipped as they cannot form triangles.
  * All three vertices of each triangle share the same normal (flat shading).
  *
+ * @internal
+ *
  * @param shapes - Array of JSCAD geometry objects (typically geom3 type)
  * @returns Object containing flattened mesh data:
  *          - vertices: Flat array of x,y,z coordinates [x1,y1,z1,x2,y2,z2,...]
  *          - normals: Flat array of normal vectors (one per vertex) [nx1,ny1,nz1,...]
  *          - indices: Triangle indices pointing into vertex array [v0,v1,v2,v3,v4,v5,...]
  *
- * @internal This is a helper function. For public API, see jscadToGltf().
+ * @see {@link jscadToGltf} — the public API that orchestrates these helpers
  *
  * @example
  * ```typescript
@@ -184,6 +189,8 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
  *
  * Primitive mode 4 specifies TRIANGLES (each 3 indices = 1 triangle).
  *
+ * @internal
+ *
  * @param document - glTF Document to create mesh components within
  * @param meshData - Object containing mesh data and optional color
  * @param meshData.vertices - Vertex position data
@@ -192,7 +199,7 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
  * @param meshData.color - Optional RGBA color tuple
  * @returns Configured glTF Primitive ready to be added to a Mesh
  *
- * @internal This is a helper function. For public API, see jscadToGltf().
+ * @see {@link jscadToGltf} — the public API that orchestrates these helpers
  */
 function createPrimitiveFromJscadMesh(
   document: Document,
@@ -269,10 +276,12 @@ function createPrimitiveFromJscadMesh(
  * If no valid geometry is extracted (empty vertices or indices), the scene contains no mesh
  * but the document is still valid (which jscadToGltf handles by checking for empty geometry).
  *
+ * @internal
+ *
  * @param shapes - Array of JSCAD geometry objects to convert
  * @returns Complete glTF Document ready for serialization to GLB format
  *
- * @internal This is a helper function. For public API, see jscadToGltf().
+ * @see {@link jscadToGltf} — the public API that orchestrates these helpers
  */
 function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
   const document = new Document();

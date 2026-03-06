@@ -19,18 +19,19 @@ import { KclError, KclExportError, KclWasmError, extractWasmKclError } from '#ke
 import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 import { compileWasmStreaming } from '#framework/wasm-loader.js';
 
-// WASM URL using universal pattern for browsers and bundlers
-// WASM file is copied from node_modules via copy-files-from-to
-// @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
+/**
+ * URL to the KCL WASM binary, resolved relative to this module for bundler compatibility.
+ *
+ * @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
+ */
 export const kclWasmUrl = new URL('wasm/kcl_wasm_lib_bg.wasm', import.meta.url).href;
 
 const log = createZooLogger('KclUtils');
 
 type OutputFormat3d = Models['OutputFormat3d_type'];
 
-// KCL and WASM types
 /**
- *
+ * Outcome of parsing a KCL source file into an AST. Errors and warnings are separated for diagnostic display.
  */
 export type KclParseResult = {
   program: Node<Program>;
@@ -39,7 +40,7 @@ export type KclParseResult = {
 };
 
 /**
- *
+ * Outcome of executing a KCL program against the Zoo engine, containing the full modeling state.
  */
 export type KclExecutionResult = {
   variables: Partial<Record<string, KclValue>>;
@@ -51,14 +52,14 @@ export type KclExecutionResult = {
 };
 
 /**
- *
+ * Configuration for exporting a KCL model to a 3D file format. The `type` field selects the output format (e.g., `step`, `stl`).
  */
 export type ExportOptions = SetRequired<Partial<OutputFormat3d>, 'type'> & {
   deterministic?: boolean;
 };
 
 /**
- *
+ * File produced by a KCL export operation, ready to be downloaded or written to disk.
  */
 export type ExportedFile = {
   name: string;
@@ -66,7 +67,7 @@ export type ExportedFile = {
 };
 
 /**
- *
+ * Outcome of exporting a KCL model to a file format. On failure, `error` contains the human-readable reason.
  */
 export type KclExportResult = {
   success: boolean;
@@ -122,7 +123,7 @@ async function loadWasmModule(tracer?: KernelSpanTracer): Promise<WasmModule> {
 }
 
 /**
- *
+ * Utilities for parsing, executing, and exporting KCL code via WASM and Zoo engine.
  */
 export class KclUtilities {
   /**
@@ -181,7 +182,7 @@ export class KclUtilities {
    * Convert KCL variables to JSON schema format for parameter extraction.
    * Only processes literal values (String, Number, Bool) and skips complex types.
    *
-   * @param variables - The KCL variables to convert
+   * @param variables - name-to-value map produced by the KCL executor (only literal types are extracted)
    * @returns Object containing default parameters and JSON schema
    */
   public static convertKclVariablesToJsonSchema(variables: Partial<Record<string, KclValue>>): {
@@ -255,22 +256,28 @@ export class KclUtilities {
   }
 
   /**
-   * Check if WASM has been initialized
+   * Whether the WASM module has been initialized and is ready for parsing.
+   *
+   * @returns whether the WASM module is initialized
    */
   public get isWasmReady(): boolean {
     return this.isWasmInitialized;
   }
 
   /**
-   * Check if the engine has been initialized
+   * Whether the full engine connection (WASM + WebSocket) has been initialized.
+   *
+   * @returns whether both WASM and WebSocket are initialized
    */
   public get isEngineReady(): boolean {
     return this.isEngineInitialized;
   }
 
   /**
-   * Initialize only the WASM module for parsing and mock execution.
-   * This allows parseKcl and executeMockKcl to work without websocket.
+   * Initializes only the WASM module for parsing and mock execution.
+   * This allows parseKcl and executeMockKcl to work without a WebSocket connection.
+   *
+   * @param tracer - optional span tracer for performance instrumentation
    */
   public async initializeWasm(tracer?: KernelSpanTracer): Promise<void> {
     if (this.isWasmInitialized) {
@@ -289,8 +296,9 @@ export class KclUtilities {
   }
 
   /**
-   * Initialize the full engine connection for operations that need websocket.
-   * This is required for executeKcl and exportKcl operations.
+   * Initializes the full engine connection (WASM + WebSocket) for execution and export.
+   *
+   * @throws When the WebSocket connection or authentication fails
    */
   public async initializeEngine(): Promise<void> {
     if (this.isEngineInitialized) {
@@ -308,8 +316,11 @@ export class KclUtilities {
   }
 
   /**
-   * Parse KCL code and return the AST.
-   * Only requires WASM initialization.
+   * Parses KCL source code into an AST. Only requires WASM initialization.
+   *
+   * @param kclCode - the KCL source code to parse
+   * @returns the parsed program, errors, and warnings
+   * @throws When the WASM module fails to load or parsing encounters a fatal error
    */
   public async parseKcl(kclCode: string): Promise<KclParseResult> {
     if (!this.isWasmInitialized) {
@@ -341,8 +352,13 @@ export class KclUtilities {
   }
 
   /**
-   * Execute KCL code using mock context (no websocket required).
-   * Only requires WASM initialization.
+   * Executes a KCL program using a mock context without a WebSocket connection.
+   *
+   * @param program - the parsed KCL program AST to execute
+   * @param path - the file path of the entry module
+   * @param settings - optional KCL configuration overrides
+   * @returns the execution result with variables, operations, and artifacts
+   * @throws When execution fails or the WASM module is not loaded
    */
   public async executeMockKcl(
     program: Program,
@@ -394,8 +410,13 @@ export class KclUtilities {
   }
 
   /**
-   * Execute KCL code using the full engine (requires websocket).
-   * Requires full engine initialization.
+   * Executes a KCL program against the Zoo engine via WebSocket.
+   *
+   * @param program - the parsed KCL program AST to execute
+   * @param path - the file path of the entry module
+   * @param settings - optional KCL configuration overrides
+   * @returns the execution result with variables, operations, and artifacts
+   * @throws When execution fails, the engine is not initialized, or a WASM error occurs
    */
   public async executeProgram(
     program: Program,
@@ -447,8 +468,13 @@ export class KclUtilities {
   }
 
   /**
-   * Export from operations already in memory without re-execution.
-   * This should be used after executeKcl has been called.
+   * Exports the model from operations already in memory, without re-execution.
+   * Must be called after {@link executeProgram}.
+   *
+   * @param options - export format configuration (e.g., `{ type: 'step' }`)
+   * @param settings - optional KCL configuration overrides
+   * @returns the exported files, or an empty array if nothing to export
+   * @throws When no program has been executed or the export fails
    */
   public async exportFromMemory(
     options: ExportOptions,
@@ -512,7 +538,7 @@ export class KclUtilities {
   }
 
   /**
-   * Clean up resources
+   * Releases all resources including the WebSocket connection and WASM contexts.
    */
   public async cleanup(): Promise<void> {
     await this.clearProgram();
@@ -528,8 +554,9 @@ export class KclUtilities {
   }
 
   /**
-   * Clear the memory/operations cache in WASM contexts.
-   * This should be called before starting a new build to ensure clean state.
+   * Clears the operations cache in WASM contexts for a clean build state.
+   *
+   * @param settings - optional KCL configuration overrides for the scene reset
    */
   public async clearProgram(settings?: PartialDeep<Configuration>): Promise<void> {
     try {
@@ -548,7 +575,9 @@ export class KclUtilities {
   }
 
   /**
-   * Create an engine manager that connects to the modeling API
+   * Creates an EngineConnection that connects to the modeling API.
+   *
+   * @returns a configured but not yet initialized EngineConnection
    */
   private async createEngineManager(): Promise<EngineConnection> {
     if (!this.wasmModule) {
@@ -568,7 +597,10 @@ export class KclUtilities {
   }
 
   /**
-   * Create export format configuration based on options
+   * Creates an OutputFormat3d configuration from export options with sensible defaults.
+   *
+   * @param options - the export options specifying format type and overrides
+   * @returns a fully-populated OutputFormat3d for the WASM export call
    */
   // oxlint-disable-next-line complexity -- supporting many defaults for exports in readable way
   private createExportFormat(options: ExportOptions): OutputFormat3d {

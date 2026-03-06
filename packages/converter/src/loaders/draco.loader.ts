@@ -5,7 +5,7 @@ import { GltfDracoDecoder } from '#loaders/draco/gltf-draco-decoder.js';
 import { createNodeIo } from '#gltf.utils.js';
 
 /**
- *
+ * Loader for Draco-compressed mesh files (.drc).
  */
 export class DracoLoader extends BaseLoader<Document> {
   private readonly decoder = new GltfDracoDecoder();

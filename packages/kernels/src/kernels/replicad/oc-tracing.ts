@@ -82,6 +82,9 @@ function getExceptionDecoder(oc: OpenCascadeInstance): ExceptionDecoder | undefi
  * Create a `rethrowIfWasmException` function bound to the given OC instance.
  * Converts `WebAssembly.Exception` to `OcKernelError` at the call site so the
  * JS stack trace includes user code frames.
+ *
+ * @param decoder - optional Emscripten exception decoder function
+ * @returns a function that rethrows WASM exceptions as OcKernelError
  */
 function createRethrowFunction(decoder: ExceptionDecoder | undefined): (error: unknown) => never {
   return function rethrowIfWasmException(error: unknown): never {
@@ -110,6 +113,9 @@ function createRethrowFunction(decoder: ExceptionDecoder | undefined): (error: u
 /**
  * Create a wrapper that recursively proxies Emscripten objects so their method
  * calls are intercepted for exception conversion.
+ *
+ * @param value - the value to check
+ * @returns whether the value is an Emscripten-managed WASM object with a delete method
  */
 function isEmscriptenRecord(value: unknown): value is Record<string, unknown> & { delete(): void } {
   return typeof value === 'object' && value !== null && 'delete' in value && typeof value.delete === 'function';
@@ -156,14 +162,11 @@ function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => nev
 // =============================================================================
 
 /**
- * Wrap an OpenCASCADE instance with exception handling only.
- *
- * Intercepts `WebAssembly.Exception` from both top-level OC function calls and
- * methods on returned Emscripten objects, converting them to `OcKernelError`
- * with a JS stack trace that includes user code frames.
- *
+ * Wraps an OpenCASCADE instance with exception-only interception (no tracing overhead).
  * Use when OC tracing is disabled but the WASM build has exceptions enabled.
- * Negligible runtime overhead — only adds Proxy get-traps and a WeakSet lookup.
+ *
+ * @param oc - The raw OpenCascade instance to wrap
+ * @returns A proxied instance that converts `WebAssembly.Exception` to `OcKernelError`
  */
 export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstance {
   const decoder = getExceptionDecoder(oc);

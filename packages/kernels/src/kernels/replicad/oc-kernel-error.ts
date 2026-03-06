@@ -37,7 +37,11 @@ const ocExceptionDescriptions: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * Format an OpenCASCADE exception into a human-readable KernelError message.
+ * Formats an OpenCASCADE exception type and message into a human-readable `KernelError:` string.
+ *
+ * @param typeName - The C++ exception type name (e.g. `Standard_ConstructionError`)
+ * @param rawMessage - The raw message from the exception's `GetMessageString()`
+ * @returns A formatted error message with a descriptive prefix when the type is recognized
  */
 export function formatOcExceptionMessage(typeName: string, rawMessage: string): string {
   const candidates = [rawMessage, typeName].filter(Boolean);
@@ -71,6 +75,12 @@ export class OcKernelError extends Error {
   public readonly typeName: string;
   public readonly rawMessage: string;
 
+  /**
+   * Wraps an OpenCASCADE exception into a kernel-compatible error.
+   *
+   * @param typeName - The C++ exception type name
+   * @param rawMessage - The raw message from the OC exception
+   */
   public constructor(typeName: string, rawMessage: string) {
     const formatted = formatOcExceptionMessage(typeName, rawMessage);
     super(formatted);

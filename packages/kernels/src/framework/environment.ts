@@ -21,6 +21,8 @@ export type RuntimeEnvironment = 'node' | 'browser' | 'worker';
  * Detection order matters — a Node.js `worker_threads` worker still has
  * `process.versions.node`, so it is classified as `node` (not `worker`).
  * The `worker` variant only covers browser-side Web Workers.
+ *
+ * @returns the detected {@link RuntimeEnvironment}
  */
 export function getEnvironment(): RuntimeEnvironment {
   // Node.js — check first because worker_threads also have `process`
@@ -38,17 +40,29 @@ export function getEnvironment(): RuntimeEnvironment {
   return 'browser';
 }
 
-/** Convenience: `true` when running in Node.js (main thread or worker_threads). */
+/**
+ * Convenience: `true` when running in Node.js (main thread or worker_threads).
+ *
+ * @returns `true` in a Node.js environment
+ */
 export function isNode(): boolean {
   return getEnvironment() === 'node';
 }
 
-/** Convenience: `true` when running in a browser main thread. */
+/**
+ * Convenience: `true` when running in a browser main thread.
+ *
+ * @returns `true` in a browser window/tab
+ */
 export function isBrowser(): boolean {
   return getEnvironment() === 'browser';
 }
 
-/** Convenience: `true` when running inside a browser Web Worker. */
+/**
+ * Convenience: `true` when running inside a browser Web Worker.
+ *
+ * @returns `true` in a dedicated, shared, or service worker
+ */
 export function isWebWorker(): boolean {
   return getEnvironment() === 'worker';
 }
@@ -89,6 +103,9 @@ export function assertCrossOriginIsolated(): void {
  *
  * This is the isomorphic replacement for `import { fileURLToPath } from 'node:url'`
  * which crashes in browsers ("Module 'node:url' has been externalized").
+ *
+ * @param url - the URL to resolve (string or URL object)
+ * @returns filesystem path in Node.js, or the original URL string in browsers
  */
 export async function resolveFileUrl(url: string | URL): Promise<string> {
   const urlString = typeof url === 'string' ? url : url.href;

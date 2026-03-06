@@ -18,7 +18,7 @@ import { defineMiddleware } from '#middleware/kernel-middleware.js';
  * Get the cache file path for a given cache key.
  *
  * @param basePath - The base path for the build
- * @param cacheKey - The cache key
+ * @param cacheKey - identifier used to locate and deduplicate cached parameter files
  * @returns The full path to the cache file
  */
 function getCachePath(basePath: string, cacheKey: string): string {

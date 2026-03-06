@@ -1,10 +1,5 @@
 /**
- * Replicad geometry type.
- *
- * This is a type that is used to represent a geometry in Replicad.
- * It is used to represent a 3D geometry, which is a collection of faces and edges.
- *
- * @see https://replicad.dev/docs/api/classes/Shape3D.html
+ * Tessellated 3D geometry produced by the Replicad kernel, containing indexed triangle meshes and optional BRep edge lines.
  */
 export type GeometryReplicad = {
   format: 'replicad';

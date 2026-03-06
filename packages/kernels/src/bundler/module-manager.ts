@@ -29,7 +29,7 @@ import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 // =============================================================================
 
 /**
- *
+ * Pre-bundled module served from memory (replicad, jscad, zod) via the builtin namespace.
  */
 export type BuiltinModule = {
   /** Pre-bundled ESM code */
@@ -102,8 +102,8 @@ export class ModuleManager {
    * - Fetches with timeout + size limit + domain allowlist
    * - Writes code file first, package.json last (atomic commit marker)
    *
-   * @param name - Package name (e.g., 'lodash')
-   * @param subpath - Optional subpath (e.g., 'debounce')
+   * @param name - package name (e.g., 'lodash')
+   * @param subpath - optional subpath (e.g., 'debounce')
    */
   public async ensureCdnModule(name: string, subpath?: string): Promise<void> {
     const cacheKey = subpath ? `${name}/${subpath}` : name;
@@ -162,6 +162,9 @@ export class ModuleManager {
 
   /**
    * Fetch a module from CDN and write it to the cache directory.
+   *
+   * @param name - package name
+   * @param subpath - optional subpath within the package
    */
   private async fetchAndCache(name: string, subpath?: string): Promise<void> {
     const specifier = subpath ? `${name}/${subpath}` : name;
@@ -171,6 +174,9 @@ export class ModuleManager {
 
   /**
    * Fetch a module from CDN with esm.sh primary, jsdelivr fallback.
+   *
+   * @param specifier - full module specifier (e.g., 'lodash/debounce')
+   * @returns fetched module code and version
    */
   private async fetchFromCdn(specifier: string): Promise<FetchedModule> {
     // Try esm.sh first
@@ -185,6 +191,9 @@ export class ModuleManager {
   /**
    * Fetch module from esm.sh CDN.
    * Uses `?bundle` to get a self-contained ESM bundle with no external imports.
+   *
+   * @param specifier - full module specifier
+   * @returns fetched module code and version
    */
   private async fetchFromEsmSh(specifier: string): Promise<FetchedModule> {
     const url = `${esmShBase}/${specifier}?bundle`;
@@ -196,6 +205,9 @@ export class ModuleManager {
 
   /**
    * Fetch module from jsdelivr CDN.
+   *
+   * @param specifier - full module specifier
+   * @returns fetched module code and version
    */
   private async fetchFromJsdelivr(specifier: string): Promise<FetchedModule> {
     const url = `${jsdelivrBase}/${specifier}/+esm`;
@@ -207,6 +219,9 @@ export class ModuleManager {
 
   /**
    * Safe fetch with timeout, size limit, and domain allowlist.
+   *
+   * @param url - URL to fetch from
+   * @returns fetch response
    */
   private async safeFetch(url: string): Promise<Response> {
     // Validate URL domain against allowlist
@@ -243,6 +258,9 @@ export class ModuleManager {
   /**
    * Extract version from module code (look for version comments).
    * e.g., esm.sh - lodash@4.17.21
+   *
+   * @param code - module source code to scan
+   * @returns extracted semver version string, or undefined if not found
    */
   private extractVersionFromCode(code: string): string | undefined {
     const match = /@(\d+\.\d+\.\d+(?:-[\d.a-z]+)?)/.exec(code);
@@ -256,6 +274,10 @@ export class ModuleManager {
    * 1. Ensure `/node_modules/{name}/` directory exists
    * 2. Write code file first (`index.js` or `{subpath}.js`)
    * 3. Write `package.json` LAST (commit marker -- its presence = valid cache)
+   *
+   * @param name - package name
+   * @param subpath - optional subpath within the package
+   * @param module - fetched module code and version to write
    */
   private async writeToCacheDir(name: string, subpath: string | undefined, module: FetchedModule): Promise<void> {
     const packageDirectory = getNodeModulesPath(name);

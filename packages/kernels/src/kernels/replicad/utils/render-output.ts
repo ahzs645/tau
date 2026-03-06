@@ -159,7 +159,14 @@ function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellati
   return geometry;
 }
 
-/** Render an array of input shapes into geometry representations using the given tessellation quality. */
+/**
+ * Renders an array of input shapes into geometry representations.
+ *
+ * @param shapes - The shapes to render with optional color/name metadata
+ * @param tessellation - Tessellation quality settings (defaults to preview quality)
+ * @param withBrepEdges - Whether to include BRep edge lines in the output
+ * @returns An array of SVG or Replicad geometry objects
+ */
 export function render(
   shapes: InputShape[],
   tessellation: Tessellation = defaultPreviewTessellation,
@@ -180,7 +187,11 @@ export function render(
   });
 }
 
-/** Normalize, optionally transform, and render shapes from a model's output. */
+/**
+ * Normalizes, optionally transforms, and renders shapes from a model's main function output.
+ *
+ * @returns An array of SVG or Replicad geometry objects
+ */
 export function renderOutput({
   shapes,
   beforeRender,

@@ -110,6 +110,9 @@ export async function discoverKclDependencies(
    * Normalize and canonicalize a file path.
    * Removes leading slashes and resolves `.` and `..` segments to ensure
    * consistent path representation for deduplication and cache key stability.
+   *
+   * @param path - the raw file path to normalize
+   * @returns the canonicalized path without leading slashes or `.`/`..` segments
    */
   const normalizePath = (path: string): string => {
     // Remove leading slashes

@@ -18,7 +18,13 @@ export class KernelTracer implements KernelSpanTracer {
   private epoch = 0;
   private activeSpanId: string | undefined;
 
-  /** Starts a new tracing span, optionally nested under the currently active span. */
+  /**
+   * Starts a new tracing span, optionally nested under the currently active span.
+   *
+   * @param name - the span name used for the performance mark
+   * @param attributes - optional key-value attributes attached to the span
+   * @returns a handle with an `end()` method to close the span
+   */
   public startSpan(name: string, attributes?: SpanAttributes): SpanHandle {
     const id = String(this.nextId++);
     const parentId = this.activeSpanId;

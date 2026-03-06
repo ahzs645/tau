@@ -5,8 +5,10 @@
  */
 
 /**
- * Hash a byte array directly, avoiding UTF-8 decode overhead.
- * Returns an 8-character lowercase hex string.
+ * Hashes a byte array directly, avoiding UTF-8 decode overhead.
+ *
+ * @param data - the bytes to hash
+ * @returns an 8-character lowercase hex string
  */
 export function hashBytes(data: Uint8Array<ArrayBuffer>): string {
   let hash = 5381;
@@ -19,8 +21,10 @@ export function hashBytes(data: Uint8Array<ArrayBuffer>): string {
 }
 
 /**
- * Hash a string without intermediate Uint8Array allocation.
- * Returns an 8-character lowercase hex string.
+ * Hashes a string without intermediate Uint8Array allocation.
+ *
+ * @param input - the string to hash
+ * @returns an 8-character lowercase hex string
  */
 export function hashString(input: string): string {
   let hash = 5381;

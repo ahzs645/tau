@@ -35,6 +35,8 @@ export type JscadParameterDefinition = {
  * @param definitions - Array of JSCAD parameter definitions from getParameterDefinitions()
  * @returns Object mapping parameter names to their default values
  *
+ * @see https://openjscad.xyz/docs/tutorial-10_parameters.html
+ *
  * @example
  * ```typescript
  * const definitions = [
@@ -51,8 +53,6 @@ export type JscadParameterDefinition = {
  * //   color: 'red'
  * // }
  * ```
- *
- * @see https://openjscad.xyz/docs/tutorial-10_parameters.html
  */
 export function convertParameterDefinitionsToDefaults(
   definitions: JscadParameterDefinition[],
@@ -83,11 +83,15 @@ export function convertParameterDefinitionsToDefaults(
  * The `captions` field (for choice labels) is not included as it's not part of
  * standard JSON Schema, but would be handled by schema-aware UI libraries.
  *
+ * @internal
+ *
  * @param definition - Single JSCAD parameter definition
  * @returns JSON Schema7 property object for the parameter
  *
- * @internal This is a helper function used by convertParameterDefinitionsToJsonSchema.
- *           Type inference is used as a fallback when no explicit type is specified.
+ * @remarks Type inference from the `initial`/`default` value is used as a fallback
+ * when no explicit `type` field is specified in the definition.
+ *
+ * @see {@link convertParameterDefinitionsToJsonSchema} — the public wrapper that calls this for each definition
  */
 // oxlint-disable-next-line complexity -- JSCAD has many parameter types to handle
 function convertParameterDefinitionToJsonSchemaProperty(definition: JscadParameterDefinition): JSONSchema7 {

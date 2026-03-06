@@ -46,6 +46,10 @@ function resolveToRelative(absolutePath: string, basePath: string): string {
  * Pre-load directory contents into a synchronous FileResolver.
  * The resolver is backed by a Map for instant lookups, satisfying
  * assimpjs's synchronous callback requirement.
+ *
+ * @param filesystem - the kernel filesystem to read directory contents from
+ * @param directory - the directory path to pre-load
+ * @returns a synchronous file resolver backed by the cached directory contents
  */
 async function createDirectoryResolver(filesystem: KernelFileSystem, directory: string): Promise<FileResolver> {
   const fileCache = new Map<string, Uint8Array<ArrayBuffer>>();

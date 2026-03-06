@@ -45,6 +45,8 @@ export type GeometryExpectation = {
 
 /**
  * Create a NodeIO instance for gltf-transform operations.
+ *
+ * @returns a new NodeIO instance
  */
 const createNodeIo = (): NodeIO => {
   return new NodeIO();
@@ -52,6 +54,9 @@ const createNodeIo = (): NodeIO => {
 
 /**
  * Convert GLB/GLTF data to gltf-transform Document.
+ *
+ * @param glbData - the GLB binary content to parse
+ * @returns the parsed glTF document
  */
 const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<Document> => {
   const io = createNodeIo();
@@ -59,7 +64,10 @@ const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<Document
 };
 
 /**
- * Get inspect report from GLB/GLTF data.
+ * Generates a gltf-transform inspect report from GLB binary data.
+ *
+ * @param glbData - The GLB binary content to inspect
+ * @returns The inspection report with mesh, scene, and material details
  */
 export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promise<InspectReport> => {
   const document = await glbToDocument(glbData);
@@ -67,7 +75,10 @@ export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promis
 };
 
 /**
- * Validate that GLB data is properly formatted.
+ * Validates that GLB data has proper format (non-empty with correct header).
+ *
+ * @param glb - The GLB binary content to validate
+ * @throws Error if the data is empty or has an invalid header
  */
 export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
   if (glb.length === 0) {
@@ -88,7 +99,10 @@ export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
 // =============================================================================
 
 /**
- * Extract geometry statistics from an InspectReport.
+ * Extracts vertex, face, and mesh counts from an InspectReport.
+ *
+ * @param report - The gltf-transform inspection report
+ * @returns Aggregated geometry statistics across all meshes
  */
 export const getGeometryStatsFromInspect = (
   report: InspectReport,
@@ -105,7 +119,10 @@ export const getGeometryStatsFromInspect = (
 };
 
 /**
- * Extract bounding box information from an InspectReport.
+ * Extracts bounding box size and center from an InspectReport.
+ *
+ * @param report - The gltf-transform inspection report
+ * @returns The bounding box dimensions and center, or `undefined` if no scenes exist
  */
 export const getBoundingBoxFromInspect = (
   report: InspectReport,
@@ -146,14 +163,19 @@ export const getBoundingBoxFromInspect = (
 
 /**
  * Type guard to check if a geometry response is GLTF format.
+ *
+ * @param response - the geometry response to check
+ * @returns whether the response contains GLTF format data
  */
 function isGltfResponse(response: GeometryResponse): response is { format: 'gltf'; content: Uint8Array<ArrayBuffer> } {
   return response.format === 'gltf';
 }
 
 /**
- * Extract GLTF content from a CreateGeometryResult.
- * Returns the first GLTF geometry found, or undefined if none.
+ * Extracts the first GLTF content from a CreateGeometryResult.
+ *
+ * @param result - The geometry result to extract from
+ * @returns The GLB binary content, or `undefined` if no GLTF geometry exists
  */
 export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<ArrayBuffer> | undefined {
   if (!result.success) {
@@ -169,8 +191,11 @@ export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<
 // =============================================================================
 
 /**
- * Create a geometry expectation variant with overrides.
- * Useful for creating test case variations from a base expectation.
+ * Creates a geometry expectation variant by deep-merging overrides onto a base.
+ *
+ * @param base - The base expectation to clone
+ * @param overrides - Partial overrides for vertex/face counts or bounding box
+ * @returns A new expectation with the overrides applied
  */
 export const createGeometryVariant = (
   base: GeometryExpectation,
@@ -220,6 +245,8 @@ const expectVector3ToBeCloseTo = ({
 
 /**
  * Create geometry test helpers for asserting on CreateGeometryResult.
+ *
+ * @returns An object of assertion helpers for validating geometry results
  *
  * @example
  * ```typescript

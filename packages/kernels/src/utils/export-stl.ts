@@ -2,6 +2,11 @@ import type { IndexedPolyhedron } from '#framework/common.js';
 
 /**
  * Calculate the normal vector for a triangle
+ *
+ * @param v1 - first vertex of the triangle
+ * @param v2 - second vertex of the triangle
+ * @param v3 - third vertex of the triangle
+ * @returns the normalized normal vector, or [0, 0, 1] for degenerate triangles
  */
 function calculateNormal(v1: number[], v2: number[], v3: number[]): number[] {
   // Validate vertices have at least 3 components
@@ -31,7 +36,10 @@ function calculateNormal(v1: number[], v2: number[], v3: number[]): number[] {
 }
 
 /**
- * Create an ASCII STL string from mesh data
+ * Creates an ASCII-format STL file from mesh data using fan triangulation.
+ *
+ * @param meshData - the polyhedron geometry (vertices and faces) to export
+ * @returns the STL content as a UTF-8-encoded byte array
  */
 export function createStlAscii(meshData: IndexedPolyhedron): Uint8Array<ArrayBuffer> {
   const { vertices, faces } = meshData;
@@ -81,7 +89,10 @@ export function createStlAscii(meshData: IndexedPolyhedron): Uint8Array<ArrayBuf
 }
 
 /**
- * Create a binary STL from mesh data
+ * Creates a binary-format STL file from mesh data using fan triangulation.
+ *
+ * @param meshData - the polyhedron geometry (vertices and faces) to export
+ * @returns the STL binary as a byte array
  */
 export function createStlBinary(meshData: IndexedPolyhedron): Uint8Array<ArrayBuffer> {
   const { vertices, faces } = meshData;

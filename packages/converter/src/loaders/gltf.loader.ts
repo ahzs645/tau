@@ -72,6 +72,9 @@ export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOp
   /**
    * Extract all URIs referenced in a GLTF JSON file
    * Looks for URIs in buffers and images
+   *
+   * @param json - the parsed GLTF JSON object
+   * @returns the list of external URI references
    */
   private extractReferencedUris(json: unknown): string[] {
     const uris: string[] = [];
@@ -114,6 +117,11 @@ export class GltfLoader extends BaseLoader<Uint8Array<ArrayBuffer>, GltfLoaderOp
   /**
    * Find a file that matches the given URI
    * Tries exact match first, then basename match
+   *
+   * @param uri - the URI to resolve
+   * @param files - the available input files to search
+   * @param primaryFileName - the primary GLTF file name to skip
+   * @returns the matching file input, or undefined if not found
    */
   private findFileByUri(uri: string, files: FileInput[], primaryFileName: string): FileInput | undefined {
     // Normalize URI by removing leading ./

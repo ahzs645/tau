@@ -910,7 +910,18 @@
     // Require a description for each ESLint rule comment. This informs co-authors about the rule and why it is being applied.
     "eslint-comments-js/require-description": ["error", { "ignore": [] }],
 
-    "jsdoc-js/check-param-names": "error",
+    // --- JSDoc correctness (global) ---
+    // Validates @access values are one of public|private|protected|package — catches typos like @access internal.
+    "jsdoc/check-access": "error",
+    // Void tags (@internal, @override, @abstract, @readonly, etc.) must have no body text.
+    "jsdoc/empty-tags": "error",
+    // Every @param tag must include a name — catches bare "@param - description" with no identifier.
+    "jsdoc/require-param-name": "error",
+    // @param names must match the function signature. checkDestructured:false skips sub-properties
+    // (e.g. @param options.key) since TypeScript types document the shape.
+    "jsdoc-js/check-param-names": ["error", { "checkDestructured": false }],
+    // Prohibits {Type} annotations in JSDoc — TypeScript already provides types; duplicating them
+    // in comments drifts out of sync and clutters IDE tooltips.
     "jsdoc-js/no-types": "error",
 
     "no-barrel-files/no-barrel-files": "error",
@@ -1066,14 +1077,39 @@
        */
       "files": ["packages/**/*.{ts,tsx}"],
       "rules": {
+        // --- JSDoc completeness (packages only) ---
+        // See docs/policy/library-api-policy.md §13 for the full JSDoc standards.
+
+        // Every function parameter must have a @param tag. Destructured params are skipped —
+        // TypeScript types document the shape, so @param { a, b }: Options adds nothing.
+        "jsdoc/require-param": [
+          "warn",
+          {
+            "checkDestructured": false,
+            "checkDestructuredRoots": false,
+            "checkConstructors": false
+          }
+        ],
+        // Bare @param tags with no description are useless in IDE tooltips.
         "jsdoc/require-param-description": "warn",
+        // Non-void functions must have @returns so the consumer knows what they get back.
+        "jsdoc/require-returns": [
+          "warn",
+          {
+            "checkConstructors": false
+          }
+        ],
+        // Bare @returns with no description is as unhelpful as omitting the tag entirely.
         "jsdoc/require-returns-description": "warn",
+        // Validates tag names. Custom tags used by vitest and the kernels filesystem marker are allowlisted.
         "jsdoc/check-tag-names": [
           "error",
           {
-            "definedTags": ["vitest-environment", "taucad/kernels/filesystem"]
+            "definedTags": ["vitest-environment", "taucad/kernels/filesystem", "remarks"]
           }
         ],
+        // Every exported function, class, method, type alias, and interface must have a JSDoc block.
+        // This is the primary coverage gate — the remaining rules ensure that block is useful.
         "jsdoc-js/require-jsdoc": [
           "warn",
           {
@@ -1087,6 +1123,7 @@
             "checkConstructors": false
           }
         ],
+        // A JSDoc block with only tags and no description wastes the most visible tooltip real estate.
         "jsdoc-js/require-description": [
           "warn",
           {
@@ -1098,7 +1135,40 @@
               "TSInterfaceDeclaration"
             ]
           }
+        ],
+        // Enforces the TSDoc dash separator: @param name - description. Auto-fixable.
+        "jsdoc-js/require-hyphen-before-param-description": ["warn", "always"],
+        // Flags descriptions that merely restate the symbol name (e.g. "The user id" on `userId`).
+        // Policy §13 "Don't echo the name" — the IDE already shows the name, the description must add value.
+        "jsdoc-js/informative-docs": "warn",
+        // Catches empty JSDoc blocks (/** */) that satisfy require-jsdoc but carry zero information.
+        "jsdoc-js/no-blank-blocks": "warn",
+        // Enforces consistent tag ordering: @template → @param → @returns → @throws → @example → @see.
+        // Only checks order, not spacing between groups (formatting is handled by oxfmt).
+        "jsdoc-js/sort-tags": [
+          "warn",
+          {
+            "reportTagGroupSpacing": false,
+            "reportIntraTagGroupSpacing": false
+          }
         ]
+      },
+      "plugins": ["jsdoc"]
+    },
+    {
+      // Test files are not part of the published API — JSDoc enforcement is unnecessary.
+      "files": ["packages/**/*.test.{ts,tsx}", "packages/**/*.test-d.{ts,tsx}"],
+      "rules": {
+        "jsdoc/require-param": "off",
+        "jsdoc/require-returns": "off",
+        "jsdoc/require-param-description": "off",
+        "jsdoc/require-returns-description": "off",
+        "jsdoc-js/require-jsdoc": "off",
+        "jsdoc-js/require-description": "off",
+        "jsdoc-js/require-hyphen-before-param-description": "off",
+        "jsdoc-js/informative-docs": "off",
+        "jsdoc-js/no-blank-blocks": "off",
+        "jsdoc-js/sort-tags": "off"
       },
       "plugins": ["jsdoc"]
     },
@@ -1110,6 +1180,8 @@
       }
     },
     {
+      // CAD examples may not always follow typical conventions. For example, it's
+      // easier to read d_x rather than dX, so we relax the rules here.
       "files": ["libs/tau-examples/src/kernels/**/*.ts"],
       "rules": {
         "unicorn-js/prevent-abbreviations": "warn",
@@ -1147,7 +1219,7 @@
   ],
   "settings": {
     "jsdoc": {
-      "definedTags": ["vitest-environment"]
+      "definedTags": ["vitest-environment", "remarks"]
     }
   }
 }

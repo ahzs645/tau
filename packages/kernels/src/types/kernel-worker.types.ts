@@ -154,7 +154,7 @@ export type Tessellation = {
 // =============================================================================
 
 /**
- * Input for kernel getParameters method.
+ * File and project path identifying the active document for parameter extraction.
  */
 export type GetParametersInput = {
   /** Absolute path to the active file */
@@ -164,7 +164,7 @@ export type GetParametersInput = {
 };
 
 /**
- * Input for kernel createGeometry method.
+ * File path, parameters, and tessellation settings for geometry evaluation.
  */
 export type CreateGeometryInput = {
   /** Absolute path to the active file */
@@ -178,7 +178,7 @@ export type CreateGeometryInput = {
 };
 
 /**
- * Input for kernel getDependencies method.
+ * File and project path identifying the active document for dependency resolution.
  */
 export type GetDependenciesInput = {
   /** Absolute path to the active file */
@@ -188,7 +188,7 @@ export type GetDependenciesInput = {
 };
 
 /**
- * Input for kernel canHandle method.
+ * File path and extension used to determine whether a kernel supports a given file.
  */
 export type CanHandleInput = {
   /** Absolute path to the active file */
@@ -200,7 +200,7 @@ export type CanHandleInput = {
 };
 
 /**
- * Input for kernel initialize method.
+ * Validated options passed to a kernel during worker initialization.
  */
 export type InitializeInput<Options = Record<string, unknown>> = {
   /** Worker options */
@@ -208,7 +208,7 @@ export type InitializeInput<Options = Record<string, unknown>> = {
 };
 
 /**
- * Input for kernel exportGeometry method.
+ * Export format, tessellation, and native geometry handle for file export operations.
  *
  * @template NativeHandle - Kernel-specific native geometry representation, injected by the framework
  */
@@ -226,9 +226,9 @@ export type ExportGeometryInput<NativeHandle = unknown> = {
 // =============================================================================
 
 /**
- * Output from a kernel's createGeometry method.
- * Includes both the display geometry (transferred to main thread) and an opaque
- * native handle that the framework stores for export operations.
+ * Tessellated geometry and opaque native handle produced by a kernel evaluation.
+ * The geometry array is transferred to the main thread for rendering, while the
+ * native handle is retained in the worker for subsequent export operations.
  *
  * @template NativeHandle - Kernel-specific type for the native geometry representation
  */

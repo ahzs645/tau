@@ -80,12 +80,21 @@ const loaderFromInputFormat = {
 } as const satisfies Partial<Record<FileExtension, BaseLoader>>;
 
 /**
- *
+ * File extension recognized by the converter's import pipeline. Use with `importFiles()` to load CAD models.
  */
 export type SupportedImportFormat = keyof typeof loaderFromInputFormat;
 
+/** All file extensions supported by the import pipeline, derived from the loader registry. */
 export const supportedImportFormats = Object.keys(loaderFromInputFormat) as SupportedImportFormat[];
 
+/**
+ * Imports files in the given format and produces a single GLB buffer.
+ *
+ * @param files - the input files to import
+ * @param format - the source format to use when selecting a loader
+ * @param resolver - optional file resolver for on-demand sidecar asset loading
+ * @returns A promise that resolves to GLB data as Uint8Array.
+ */
 export const importFiles = async (
   files: FileInput[],
   format: SupportedImportFormat,

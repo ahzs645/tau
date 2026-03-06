@@ -134,8 +134,8 @@ Within a contract interface (`KernelDefinition`, `BundlerDefinition`, middleware
 
 The `context` and `runtime` parameters represent different ownership boundaries:
 
-- **`runtime`** is "theirs" -- framework-provided services (filesystem, logger, tracer, bundler). The kernel author consumes these but doesn't own or create them.
-- **`context`** is "mine" -- the kernel's own state, created during `initialize` and threaded through every subsequent call. The kernel author owns and mutates this.
+- `**runtime`** is "theirs" -- framework-provided services (filesystem, logger, tracer, bundler). The kernel author consumes these but doesn't own or create them.
+- `**context**` is "mine" -- the kernel's own state, created during `initialize` and threaded through every subsequent call. The kernel author owns and mutates this.
 
 Merging them into a single object would conflate ownership, require making `KernelRuntime` generic over every kernel's context type, and remove the visual signal at the call site that distinguishes framework services from kernel state. The 3-param pattern is also consistent with the middleware `(input, handler, runtime)` pattern -- a standard composition model used by Express, Koa, and gRPC interceptors.
 
@@ -159,7 +159,7 @@ worker.renderEntry(input);
 worker.initializeEntry(input);
 ```
 
-**Describe the concept, not the container.** Type names should say what the object _is_, not where it lives in an array.
+**Describe the concept, not the container.** Type names should say what the object *is*, not where it lives in an array.
 
 ```typescript
 // Good: says what the object represents
@@ -193,13 +193,15 @@ type KernelWorkerEntry = {
 
 Each naming prefix signals a specific role:
 
+
 | Prefix    | Role                            | Examples                                            |
 | --------- | ------------------------------- | --------------------------------------------------- |
-| `create*` | Factory function                | `createKernelClient`, `createBridgePort`            |
+| `create`* | Factory function                | `createKernelClient`, `createBridgePort`            |
 | `define*` | Plugin definition               | `defineKernel`, `defineMiddleware`, `defineBundler` |
 | `is*`     | Type guard                      | `isGeometryFile`, `isKernelPlugin`                  |
 | `from*`   | Conversion constructor          | `fromNodeFS`, `fromMemoryFS`, `fromFsLike`          |
 | `on*`     | Framework hook / event callback | `onInitialize`, `onLog`, `onProgress`               |
+
 
 ### Callback and hook naming
 
@@ -219,7 +221,7 @@ protected abstract onCreateGeometry(input, runtime): Promise<Result>;
 { logCallback: (entry) => console.log(entry) }
 ```
 
-**Why**: Consistent naming prefixes let developers predict API shape without reading docs. When every factory starts with `create*`, every type guard starts with `is*`, and every hook starts with `on*`, the API becomes self-documenting.
+**Why**: Consistent naming prefixes let developers predict API shape without reading docs. When every factory starts with `create`*, every type guard starts with `is*`, and every hook starts with `on*`, the API becomes self-documenting.
 
 ## 6. Subpath Exports by Consumer Role
 
@@ -315,14 +317,169 @@ type KernelFileSystem = {
 
 ## 13. JSDoc Standards
 
-Every public export must include:
+JSDoc is the primary documentation surface for `@taucad/*` packages. Developers encounter these descriptions in IDE hover tooltips, autocomplete panels, and generated API reference pages — not by reading source files. Every public export in `packages/` must have a JSDoc block, enforced by oxlint's `jsdoc-js/require-jsdoc` and `jsdoc-js/require-description` rules.
 
-- A description (1-2 sentences explaining purpose)
-- `@param` with description for each parameter
-- `@returns` with description
-- `@example` for factory functions and key utilities
-- `@internal` for framework-only APIs
-- `@deprecated` with migration path when deprecating
+### Description quality
+
+The description is the most important part of a JSDoc block. It appears first in IDE tooltips and sets the developer's mental model for the symbol.
+
+**Explain the "what" and "when", not the "how".** Tell the developer what this symbol does and when they would reach for it. Implementation details belong in code comments, not JSDoc.
+
+**Don't echo the name.** If the description can be guessed from the symbol name alone, it adds zero value. The IDE already shows the name — the description must provide information the name cannot.
+
+```typescript
+// Bad: echoes the name
+/**
+ * Boolean customizer parameter.
+ */
+export type BooleanParameter = ...
+
+// Good: explains what it represents and when the developer encounters it
+/**
+ * Customizer parameter that renders as a checkbox in the OpenSCAD parameter editor.
+ */
+export type BooleanParameter = ...
+
+// Bad: restates the type structure
+/**
+ * Result of a KCL export operation: success flag, exported files, and optional error.
+ */
+export type KclExportResult = ...
+
+// Good: explains semantics the type signature alone can't convey
+/**
+ * Outcome of exporting a KCL model to a file format (STEP, glTF, STL).
+ * On failure, `error` contains the human-readable reason.
+ */
+export type KclExportResult = ...
+```
+
+**One to two sentences.** The first sentence is the most important — many tools truncate after it. Keep it under ~100 characters when possible. A second sentence adds context (when, why, constraints). More than two is usually too much for a description; use `@remarks` for longer explanations.
+
+**Lead with a verb for functions, a noun phrase for types.** Functions describe an action ("Converts", "Creates", "Extracts"). Types describe what the value *is* ("Configuration for...", "Outcome of...", "Mapping from...").
+
+### Required tags by symbol type
+
+| Symbol | Description | `@param` | `@returns` | `@example` | `@throws` | `@template` |
+| --------------------- | ----------- | -------- | ---------- | ---------- | ---------- | ----------- |
+| Exported function | required | required | required\* | factory/utility | when throws | when generic |
+| Exported class | required | — | — | public classes | — | when generic |
+| Class method (public) | required | required | required\* | — | when throws | — |
+| Type alias / interface | required | — | — | — | — | when generic |
+| Exported constant | required | — | — | — | — | — |
+
+\* `@returns` is not required for `void` / `Promise<void>` return types.
+
+### Tag syntax
+
+Follow TSDoc conventions for consistency with TypeDoc, VS Code, and oxlint:
+
+```typescript
+/**
+ * Converts a JavaScript value to a JSON Schema (draft-07) describing its shape.
+ *
+ * @param value - The value to convert (object, array, primitive, or null)
+ * @param options - Conversion options (string format detection, required fields)
+ * @returns A JSON Schema that would validate the input value
+ *
+ * @example
+ * ```typescript
+ * import { toJsonSchema } from '@taucad/json-schema';
+ *
+ * const schema = toJsonSchema({ name: 'Tau', version: 1 });
+ * // { type: 'object', properties: { name: { type: 'string' }, version: { type: 'integer' } } }
+ * ```
+ */
+export function toJsonSchema(value: unknown, options?: Options): JSONSchema7 {
+```
+
+**Rules:**
+
+- **`@param name - Description`** — use the TSDoc dash separator. Description starts with a lowercase letter (it continues the parameter name). No `{Type}` annotations — TypeScript handles types; enforced by `jsdoc-js/no-types`.
+- **`@returns Description`** — describe what the return value represents, not its type. Omit for `void` returns.
+- **`@example`** — include a fenced code block with `typescript` language tag. Show complete, runnable snippets with imports. Required for `createX()` factory functions and key public utilities.
+- **`@throws`** — document when and what the function throws. Use when the throw is part of the contract, not just an implementation accident.
+- **`@template T - Description`** — describe what the type parameter represents.
+- **`@see`** — link to related documentation, external specs, or other symbols with `{@link SymbolName}`.
+- **`@internal`** — mark framework-only APIs that are exported for technical reasons but not intended for consumers.
+- **`@deprecated`** — always include a migration path: `@deprecated Use {@link newFunction} instead.`
+- **`@remarks`** — extended discussion, caveats, or implementation notes that don't belong in the short description. Appears after a blank line following the description.
+
+### Anti-patterns
+
+```typescript
+// Bad: type annotation in JSDoc (TypeScript handles this)
+/** @param {string} name - The name */
+
+// Bad: missing dash separator
+/** @param name The name */
+
+// Bad: description restates the return type
+/** @returns {boolean} Returns a boolean */
+
+// Bad: description just says what the code does literally
+/**
+ * Sets the verbosity level for decoder logging output.
+ */
+public setVerbosity(level: number): this {
+
+// Good: explains the contract
+/**
+ * Controls how much diagnostic output the decoder emits during decoding.
+ *
+ * @param level - Verbosity level (0 = silent, higher = more output)
+ * @returns This decoder instance for chaining
+ */
+public setVerbosity(level: number): this {
+
+// Bad: line comment duplicates the JSDoc
+// Mock engine connection for local operations
+/**
+ * Mock engine connection for local operations that don't need websocket.
+ */
+export class MockEngineConnection {
+
+// Good: JSDoc is the single source of truth, no redundant comment
+/**
+ * Stub connection for local-only KCL operations (parse, lint) that bypass the Zoo API.
+ */
+export class MockEngineConnection {
+```
+
+### Where JSDoc is required
+
+JSDoc is enforced only in `packages/**/*.{ts,tsx}` (published `@taucad/*` packages), excluding test files (`*.test.{ts,tsx}`). The oxlint override in `.oxlintrc.json` configures two layers of rules:
+
+**Global rules** (apply to all files):
+
+- `jsdoc/check-access` (native) — validates `@access` tag values (`public`, `private`, `protected`, `package`).
+- `jsdoc/empty-tags` (native) — ensures void tags (`@internal`, `@override`, `@abstract`, `@readonly`, etc.) have no body text.
+- `jsdoc/require-param-name` (native) — catches `@param` tags missing a parameter name.
+- `jsdoc-js/check-param-names` (jsPlugin) — ensures `@param` names match the function signature. Configured with `checkDestructured: false` so destructured sub-properties are not required.
+- `jsdoc-js/no-types` (jsPlugin) — prohibits `{Type}` annotations (TypeScript provides types).
+
+**Package-scoped rules** (`packages/**/*.{ts,tsx}`, excluding test files):
+
+*Native oxlint rules* (`jsdoc/` prefix — implemented in Rust, fast):
+
+- `jsdoc/require-param` — requires `@param` tags for all function parameters. Configured with `checkDestructured: false` and `checkDestructuredRoots: false` so destructured parameters are skipped (TypeScript types are sufficient).
+- `jsdoc/require-param-description` — requires a description on every `@param` tag.
+- `jsdoc/require-returns` — requires `@returns` on functions with a non-void return type.
+- `jsdoc/require-returns-description` — requires a description on every `@returns` tag.
+- `jsdoc/check-tag-names` — validates tag names against JSDoc standard plus `@remarks`, `@vitest-environment`, and `@taucad/kernels/filesystem`.
+
+*jsPlugin rules* (`jsdoc-js/` prefix — runs `eslint-plugin-jsdoc` through the oxlint adapter):
+
+- `jsdoc-js/require-jsdoc` — requires a JSDoc block on exported functions, classes, methods, type aliases, and interfaces.
+- `jsdoc-js/require-description` — requires a non-empty description in every JSDoc block.
+- `jsdoc-js/require-hyphen-before-param-description` — enforces the TSDoc dash separator (`@param name - description`). Auto-fixable.
+- `jsdoc-js/informative-docs` — flags descriptions that only restate the symbol name without adding meaningful information.
+- `jsdoc-js/no-blank-blocks` — catches completely empty JSDoc blocks (`/** */`). Auto-fixable.
+- `jsdoc-js/sort-tags` — enforces consistent tag ordering (`@template` → `@param` → `@returns` → `@throws` → `@example` → `@see` → `@deprecated`). Auto-fixable. Only enforces ordering, not spacing between tag groups.
+
+**Destructured parameters:** When a function uses destructuring like `({ a, b }: Options)`, omit `@param` entirely — the TypeScript type already documents the shape. If the function uses a named parameter like `(options: Options)`, document it with `@param options - description`. Do not document sub-properties (`@param options.a`); the type definition handles that.
+
+Application code (`apps/`), libraries (`libs/`), and test files follow the same conventions as a best practice but are not lint-enforced.
 
 ## 14. Environment-Aware Conditional Exports
 
@@ -391,6 +548,7 @@ Every object that needs cleanup implements `Disposable`. This is the single requ
 
 Semantic names provide discoverability and describe **what** the cleanup does. They are the primary API consumers call directly. The `dispose()` method delegates to the semantic method (or vice versa when `dispose` is itself the natural term).
 
+
 | Term                | Scope                                                         | Web/TC39 alignment                                    |
 | ------------------- | ------------------------------------------------------------- | ----------------------------------------------------- |
 | `dispose()`         | General resource release (the default and universal protocol) | TC39 `Symbol.dispose`, Monaco `IDisposable`, Three.js |
@@ -399,7 +557,8 @@ Semantic names provide discoverability and describe **what** the cleanup does. T
 | `stop()`            | Running computations, actors                                  | XState `actor.stop()`, AI SDK `chat.stop()`           |
 | Return `() => void` | Subscriptions and one-time registrations                      | React `useEffect`, RxJS                               |
 
-**`dispose` is the default.** When none of the specific terms (`close`, `terminate`, `stop`) apply, `dispose` is both the semantic name and the protocol method.
+
+`**dispose` is the default.** When none of the specific terms (`close`, `terminate`, `stop`) apply, `dispose` is both the semantic name and the protocol method.
 
 ### How semantic names and `Disposable` coexist
 
@@ -757,6 +916,7 @@ type Transport = {
 
 ### Summary table
 
+
 | Situation                       | Semantic name                                  | `Disposable`                             | Returns                   |
 | ------------------------------- | ---------------------------------------------- | ---------------------------------------- | ------------------------- |
 | General resource release        | `dispose()` (is the semantic name)             | yes                                      | `void` or `Promise<void>` |
@@ -768,3 +928,5 @@ type Transport = {
 | Framework lifecycle hook        | `onDispose()`                                  | n/a (called by framework)                | `Promise<void>`           |
 | Bulk management                 | `DisposableStore.dispose()`                    | yes (is itself `Disposable`)             | `void`                    |
 | Domain housekeeping             | descriptive verb, e.g. `cleanupStaleEntries()` | no (not lifecycle)                       | varies                    |
+
+

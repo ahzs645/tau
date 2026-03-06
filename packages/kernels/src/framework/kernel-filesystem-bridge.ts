@@ -18,6 +18,9 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  * that backs a typed array, plus standalone `ArrayBuffer` instances.
  * The returned list is de-duplicated so the same buffer is never
  * transferred twice (which would throw a `DataCloneError`).
+ *
+ * @param value - the value to scan for transferable buffers
+ * @returns de-duplicated array of ArrayBuffer instances found in the value
  */
 export function extractTransferables(value: unknown): Transferable[] {
   const seen = new Set<ArrayBuffer>();
@@ -184,6 +187,9 @@ export type FileSystemProxy = KernelFileSystemBase & {
 /**
  * Reconstruct an Error from a {@link BridgeError} received over the bridge.
  * Preserves the original error name, stack trace, errno code, and metadata.
+ *
+ * @param bridgeError - the serialized error received over the message port
+ * @returns a native Error instance with restored name, stack, code, and metadata
  */
 function reconstructError(bridgeError: BridgeError): Error & {
   code?: string;

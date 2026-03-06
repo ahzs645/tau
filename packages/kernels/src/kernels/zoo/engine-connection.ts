@@ -7,17 +7,17 @@ import type { FileSystemManager } from '#kernels/zoo/filesystem-manager.js';
 import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 
 /**
- *
+ * The KCL WASM module, loaded via dynamic import, providing parse and execute entry points.
  */
 // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() required for module type
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
 
 /**
- *
+ * Request model for Zoo modeling API WebSocket messages.
  */
 export type WebSocketRequest = Models['WebSocketRequest_type'];
 /**
- *
+ * Response model for Zoo modeling API WebSocket messages.
  */
 export type WebSocketResponse = Models['WebSocketResponse_type'];
 
@@ -55,13 +55,12 @@ const getWebSocket = async (): Promise<typeof WebSocket> => {
   }
 };
 
-// Mock engine connection for local operations that don't need websocket
 /**
- *
+ * Stub connection for local-only KCL operations (parse, lint) that bypass the Zoo modeling API.
  */
 export class MockEngineConnection {
   /**
-   *
+   * Throws when called; mock execution should not require websocket commands.
    */
   public async sendModelingCommandFromWasm(): Promise<Uint8Array<ArrayBuffer>> {
     throw KclError.simple({
@@ -71,23 +70,24 @@ export class MockEngineConnection {
   }
 
   /**
-   *
+   * No-op for mock; session management is not required for local execution.
    */
   public async startNewSession(): Promise<void> {
     // NO-OP for mock
   }
 
   /**
+   * Returns true for mock; always reports as ready for local execution.
    *
+   * @returns always `true`
    */
   public async startFromWasm(): Promise<boolean> {
     return true;
   }
 }
 
-// Standalone WebSocket engine connection
 /**
- *
+ * WebSocket connection to the Zoo modeling API for full KCL execution and export.
  */
 export class EngineConnection {
   public context: Context | undefined;
@@ -114,7 +114,7 @@ export class EngineConnection {
   }
 
   /**
-   *
+   * Establishes WebSocket connection and authenticates with the Zoo API.
    */
   public async initialize(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -170,13 +170,14 @@ export class EngineConnection {
     });
   }
 
-  // Send a modeling command from WASM. This method is called by the WASM context.
   /**
+   * Sends a modeling command from WASM to the Zoo API and returns the msgpack-encoded response.
    *
-   */
-
-  /**
-   *
+   * @param _commandString - unused command string (WASM binding contract)
+   * @param _id - unused ID (WASM binding contract)
+   * @param cmd - the JSON-serialized WebSocket request to send
+   * @param _pathString - unused path string (WASM binding contract)
+   * @returns the msgpack-encoded WebSocket response
    */
   // oxlint-disable-next-line max-params -- Emscripten WASM API contract: signature matches C++ binding
   public async sendModelingCommandFromWasm(
@@ -206,7 +207,7 @@ export class EngineConnection {
   }
 
   /**
-   *
+   * No-op; required by WASM context interface for session management.
    */
   public async startNewSession(): Promise<void> {
     // This is called by the WASM context to start a new session.
@@ -215,7 +216,10 @@ export class EngineConnection {
   }
 
   /**
+   * Returns whether the WebSocket is connected; called by WASM context to check readiness.
    *
+   * @param _token - unused token (WASM binding contract)
+   * @returns `true` if the WebSocket connection is active
    */
   public async startFromWasm(_token: string): Promise<boolean> {
     // This is called by the WASM context to start the engine connection
@@ -223,7 +227,7 @@ export class EngineConnection {
   }
 
   /**
-   *
+   * Closes WebSocket, clears pending commands, and releases resources.
    */
   public async cleanup(): Promise<void> {
     // Clear ping interval
@@ -307,7 +311,11 @@ export class EngineConnection {
   };
 
   /**
-   * Create an appropriate error based on WebSocket close code
+   * Creates an appropriate KclError subclass based on the WebSocket close code.
+   *
+   * @param code - the WebSocket close code
+   * @param reason - the close reason string from the server
+   * @returns a KclAuthError or KclConnectionError matching the failure mode
    */
   private createConnectionError(code: number, reason: string): KclError {
     // Service unavailable or network issues (1006 = abnormal closure, often network issues)

@@ -21,7 +21,7 @@ import type { GltfSceneStructure } from '#gltf.utils.js';
 // ============================================================================
 
 /**
- *
+ * Expected geometry metrics used to verify that a loader produced correct mesh output.
  */
 export type GeometryExpectation = {
   vertexCount: number;
@@ -42,7 +42,7 @@ export type GeometryExpectation = {
 };
 
 /**
- *
+ * Declarative test case for a format loader, pairing a fixture file with expected geometry metrics.
  */
 export type LoaderTestCase = {
   format: SupportedImportFormat;

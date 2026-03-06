@@ -36,6 +36,7 @@ const noop = (): void => {};
  * @param wasmUrl - Absolute URL to the `.wasm` binary.
  * @param bindingsFactory - The Emscripten module factory function (default export of JS glue).
  * @param options - Optional callbacks for stdout/stderr and tracing.
+ * @returns The initialized OpenCascade instance
  */
 export async function initOpenCascade(
   wasmUrl: string,

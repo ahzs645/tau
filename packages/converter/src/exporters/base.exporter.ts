@@ -17,6 +17,7 @@ export abstract class BaseExporter<Options = Record<string, never>> {
    * Initialize the exporter with options.
    *
    * @param options - The options passed to the exporter. These are specific to each exporter implementation.
+   * @returns This exporter instance for chaining.
    */
   public initialize(options: Options): this {
     this.options = options;

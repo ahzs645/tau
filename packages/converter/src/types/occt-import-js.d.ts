@@ -194,8 +194,10 @@ declare module 'occt-import-js' {
   type EmscriptenModuleConfig = import('#types/emscripten.d.ts').EmscriptenModuleConfig;
 
   /**
-   * Factory function that returns a Promise resolving to the OCCT Import JS interface
-   * @param config - Optional Emscripten module configuration
+   * Factory function that returns a Promise resolving to the OCCT Import JS interface.
+   *
+   * @param config - optional Emscripten module configuration
+   * @returns A promise that resolves to the initialized OCCT import interface.
    */
   export default function occtimportjs(config?: EmscriptenModuleConfig): Promise<OcctImportJs>;
 }

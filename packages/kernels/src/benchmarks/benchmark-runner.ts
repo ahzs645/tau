@@ -150,8 +150,11 @@ function extractOcSummary(
 const basePath = '/builds/test';
 
 /**
- * Run a set of benchmark cases, capturing telemetry and computing statistics.
- * Creates a fresh KernelClient per benchmark case (reused across iterations).
+ * Runs a set of benchmark cases against the Replicad kernel, capturing telemetry and computing statistics.
+ *
+ * @param cases - The benchmark cases to run
+ * @param options - Runner configuration (iterations, WASM variant, tracing mode)
+ * @returns Aggregated results with per-case statistics and optional OC tracing summaries
  */
 export async function runBenchmarks(
   cases: BenchmarkCase[],

@@ -108,6 +108,8 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Initialize instance maps by cataloging all instance definition objects and definitions
+   *
+   * @param rhinoFile - the parsed 3dm file to extract instance definitions from
    */
   private initInstanceMaps(rhinoFile: File3dm): void {
     // Clear previous maps
@@ -134,6 +136,10 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Process a Rhino object recursively, handling instances with transformation stack
+   *
+   * @param rhinoObject - the rhino file object to process
+   * @param options - the transformation stack and parent node for placement
+   * @param context - the shared conversion context
    */
   private processRhinoObject(
     rhinoObject: File3dmObject,
@@ -211,6 +217,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform objects from Rhino geometry
+   *
+   * @param geometry - the rhino geometry to convert
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node, or undefined for unsupported types
    */
   private createObject(
     geometry: GeometryBase,
@@ -271,6 +282,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform mesh from Rhino Mesh
+   *
+   * @param geometry - Rhino Mesh instance to convert (vertex positions, normals, faces)
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the configured glTF mesh and scene node with material and layer metadata applied
    */
   private createMeshFromRhino(
     geometry: RhinoMesh,
@@ -335,6 +351,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform mesh from Rhino BREP by converting faces to mesh
+   *
+   * @param geometry - the rhino BREP geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createBrepAsMesh(
     geometry: Brep,
@@ -366,6 +387,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform mesh from Rhino Extrusion
+   *
+   * @param geometry - the rhino extrusion geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createExtrusionAsMesh(
     geometry: Extrusion,
@@ -385,6 +411,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform mesh from Rhino SubD
+   *
+   * @param geometry - the rhino SubD geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createSubdAsMesh(
     geometry: SubD,
@@ -406,6 +437,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform points from Rhino Point
+   *
+   * @param geometry - the rhino point geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createPointAsPoints(
     geometry: Point,
@@ -458,6 +494,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform points from Rhino PointSet
+   *
+   * @param geometry - the rhino point cloud geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createPointSetAsPoints(
     geometry: PointCloud,
@@ -511,6 +552,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform line from Rhino Curve
+   *
+   * @param geometry - the rhino curve geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createCurveAsLine(
     geometry: Curve,
@@ -559,6 +605,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform points from Rhino TextDot (store text in metadata)
+   *
+   * @param geometry - the rhino text dot geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createTextDotAsPoints(
     geometry: TextDot,
@@ -603,6 +654,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform points from Rhino Light (lights represented as colored points with metadata)
+   *
+   * @param geometry - the rhino light geometry
+   * @param attributes - the object attributes for metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createLightAsPoints(
     geometry: Light,
@@ -666,6 +722,9 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Compose transformation stack by multiplying matrices in order
+   *
+   * @param transformationStack - the ordered stack of 4x4 transformation matrices
+   * @returns the composed 4x4 matrix as a 16-element tuple
    */
   private composeTransformationStack(
     transformationStack: number[][],
@@ -718,6 +777,10 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Multiply two 4x4 matrices (column-major order)
+   *
+   * @param a - the left-hand matrix
+   * @param b - the right-hand matrix
+   * @returns the product matrix
    */
   private multiplyMatrices(a: number[], b: number[]): number[] {
     const result = Array.from({ length: 16 }).fill(0) as number[];
@@ -735,6 +798,10 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Convert curve to points array (simplified)
+   *
+   * @param curve - the rhino curve to sample
+   * @param pointLimit - the maximum number of sample points
+   * @returns the array of sampled 3D points
    */
   private curveToPoints(curve: Curve, pointLimit: number): number[][] {
     const pointCount = Math.min(pointLimit, 100);
@@ -757,6 +824,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform material from Rhino attributes and document
+   *
+   * @param attributes - the object attributes containing material index
+   * @param rhinoFile - the parsed 3dm file to look up materials
+   * @param document - the glTF document to create the material in
+   * @returns the created glTF material
    */
   private createGltfMaterial(attributes: ObjectAttributes, rhinoFile: File3dm, document: Document): Material {
     // Try to get material from document
@@ -783,6 +855,10 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform material from Rhino Material
+   *
+   * @param rhinoMaterial - the rhino material to convert
+   * @param document - the glTF document to create the material in
+   * @returns the created glTF material
    */
   private createMaterialFromRhinoMaterial(rhinoMaterial: RhinoMaterial, document: Document): Material {
     // Check if it's a PBR material
@@ -826,6 +902,10 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Create gltf-transform PBR material from Rhino PBR material
+   *
+   * @param pbrMaterial - the rhino PBR material to convert
+   * @param document - the glTF document to create the material in
+   * @returns the created glTF PBR material
    */
   private createPbrMaterial(pbrMaterial: PhysicallyBasedMaterial, document: Document): Material {
     const baseColor = pbrMaterial.baseColor as unknown as {
@@ -861,6 +941,10 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Extract color from attributes
+   *
+   * @param attributes - the object attributes to extract the draw color from
+   * @param rhinoFile - the parsed 3dm file used to resolve the draw color
+   * @returns the normalized RGB color values (0–1 range)
    */
   private extractColor(attributes: ObjectAttributes, rhinoFile: File3dm): { r: number; g: number; b: number } {
     // @ts-expect-error -- rhino3dm types are not correct.
@@ -878,6 +962,11 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Extract comprehensive metadata from Rhino object attributes
+   *
+   * @param objectType - the geometry type name
+   * @param attributes - the object attributes to extract metadata from
+   * @param rhinoFile - the optional parsed 3dm file for layer info
+   * @returns the metadata record for node extras
    */
   private extractObjectMetadata(
     objectType: string,
@@ -933,6 +1022,9 @@ export class ThreeDmLoader extends BaseLoader<Document> {
 
   /**
    * Extract layer information
+   *
+   * @param layer - the rhino layer to extract info from
+   * @returns the layer properties record
    */
   private extractLayerInfo(layer: Layer): Record<string, unknown> {
     return {

@@ -214,6 +214,13 @@ export class OpenScadStderrParser {
   /** Reference to the last error added, so TRACE lines can append stack frames to it. */
   private lastError: KernelIssue | undefined;
 
+  /**
+   * Creates a parser that converts OpenSCAD stderr output into structured kernel issues.
+   *
+   * @param addError - Callback invoked for each parsed error or warning
+   * @param getFileContents - Optional function to lazily fetch file content for column calculation
+   * @param mainFilePath - Optional relative path of the main file for basename-to-path mapping
+   */
   public constructor(addError: AddErrorFunction, getFileContents?: GetFileContentsFunction, mainFilePath?: string) {
     this.addError = addError;
     this.getFileContents = getFileContents;
@@ -223,7 +230,8 @@ export class OpenScadStderrParser {
   /**
    * Parse a single stderr line. If it's an error/warning, create an issue.
    * If it's a TRACE line, append a stack frame to the last error.
-   * If it's a "Can't parse file" line, create an include-chain stack frame.
+   *
+   * @param message - The stderr line to parse
    */
   public parseLine(message: string): void {
     // First, check if this is a TRACE line (must come before error patterns to avoid mismatching)
@@ -272,7 +280,12 @@ export class OpenScadStderrParser {
   // Error patterns
   // ---------------------------------------------------------------------------
 
-  /** Pattern 1: ERROR: Parser error in file "foo.scad", line 10: syntax error */
+  /**
+   * Pattern 1: ERROR: Parser error in file "foo.scad", line 10: syntax error
+   *
+   * @param message - the stderr line to match
+   * @returns whether the line matched this pattern
+   */
   private tryParserErrorWithFile(message: string): boolean {
     const match = /^ERROR: Parser error in file "([^"]+)", line (\d+): (.*)$/.exec(message);
     if (!match) {
@@ -291,7 +304,12 @@ export class OpenScadStderrParser {
     return true;
   }
 
-  /** Pattern 2: ERROR: Parser error: syntax error in file foo.scad, line 10 */
+  /**
+   * Pattern 2: ERROR: Parser error: syntax error in file foo.scad, line 10
+   *
+   * @param message - the stderr line to match
+   * @returns whether the line matched this pattern
+   */
   private tryParserErrorInline(message: string): boolean {
     const match = /^ERROR: Parser error: (.*?) in file ([^,]+), line (\d+)$/.exec(message);
     if (!match) {
@@ -310,7 +328,12 @@ export class OpenScadStderrParser {
     return true;
   }
 
-  /** Pattern 3: WARNING messages */
+  /**
+   * Pattern 3: WARNING messages
+   *
+   * @param message - the stderr line to match
+   * @returns whether the line matched this pattern
+   */
   private tryWarning(message: string): boolean {
     const match = /^WARNING: (.*?),? in file ([^,]+), line (\d+)\.?/.exec(message);
     if (!match) {
@@ -329,7 +352,12 @@ export class OpenScadStderrParser {
     return true;
   }
 
-  /** Pattern 4: Assertion failures - ERROR: Assertion 'condition' failed in file "foo.scad", line 10 */
+  /**
+   * Pattern 4: Assertion failures - ERROR: Assertion 'condition' failed in file "foo.scad", line 10
+   *
+   * @param message - the stderr line to match
+   * @returns whether the line matched this pattern
+   */
   private tryAssertionFailure(message: string): boolean {
     const match = /^ERROR: (Assertion .*?) in file "?([^",]+)"?, line (\d+)/.exec(message);
     if (!match) {
@@ -348,7 +376,12 @@ export class OpenScadStderrParser {
     return true;
   }
 
-  /** Pattern 5: Generic ERROR messages with file/line info */
+  /**
+   * Pattern 5: Generic ERROR messages with file/line info
+   *
+   * @param message - the stderr line to match
+   * @returns whether the line matched this pattern
+   */
   private tryGenericError(message: string): boolean {
     const match = /^ERROR: (.*?) in file "?([^",]+)"?, line (\d+)/.exec(message);
     if (!match) {
@@ -379,6 +412,9 @@ export class OpenScadStderrParser {
    * OpenSCAD only emits the top-level file that failed to parse, not the
    * intermediate files. We reconstruct the full include chain by walking
    * the include/use directives in the file contents.
+   *
+   * @param message - the stderr line to match
+   * @returns whether the line matched this pattern
    */
   private tryCantParseFile(message: string): boolean {
     if (!this.lastError) {
@@ -416,7 +452,11 @@ export class OpenScadStderrParser {
     return true;
   }
 
-  /** Pattern 6: Empty top level object (no geometry to render) */
+  /**
+   * Pattern 6: Empty top level object (no geometry to render)
+   *
+   * @param message - the stderr line to match
+   */
   private tryEmptyObject(message: string): void {
     if (message.includes('Current top level object is empty')) {
       this.emitError({
@@ -436,6 +476,8 @@ export class OpenScadStderrParser {
   /**
    * Append a stack frame to the last error's stackFrames array.
    * Creates the array if it doesn't exist.
+   *
+   * @param frame - the stack frame to append
    */
   private appendFrameToLastError(frame: KernelStackFrame): void {
     if (!this.lastError) {
@@ -495,6 +537,10 @@ export class OpenScadStderrParser {
   /**
    * BFS through include/use directives to find the path from startFile to targetFile.
    * Returns stack frames ordered from deepest (closest to error) to shallowest (entry point).
+   *
+   * @param startFile - the top-level file to start searching from
+   * @param targetFile - the file containing the error to trace to
+   * @returns stack frames from deepest to shallowest include
    */
   private findIncludePathBfs(startFile: string, targetFile: string): KernelStackFrame[] {
     if (!this.getFileContents) {
@@ -544,6 +590,9 @@ export class OpenScadStderrParser {
   /**
    * Extract all include/use directives from a file's contents.
    * Returns an array of { includedFile, lineNumber } entries.
+   *
+   * @param fileName - the file to scan for include/use directives
+   * @returns array of included file paths and their line numbers
    */
   private getIncludesFromFile(fileName: string): Array<{ includedFile: string; lineNumber: number }> {
     if (!this.getFileContents) {
@@ -595,6 +644,8 @@ export class OpenScadStderrParser {
   /**
    * Emit an error and store its reference so subsequent TRACE lines
    * can append stack frames to it.
+   *
+   * @param error - the kernel issue to emit and track
    */
   private emitError(error: KernelIssue): void {
     this.lastError = error;

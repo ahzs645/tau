@@ -123,6 +123,7 @@ export type GetParametersHandler = (input: GetParametersInput) => Promise<GetPar
  * - runtime: services like logger/filesystem (only destructure if needed)
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
+ * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
  *
  * @example
  * ```typescript
@@ -155,6 +156,7 @@ export type WrapCreateGeometryHook<
  * Provides full control over execution with onion model semantics.
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
+ * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
  */
 export type WrapExportGeometryHook<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
@@ -172,6 +174,7 @@ export type WrapExportGeometryHook<
  * Provides full control over execution with onion model semantics.
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
+ * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
  */
 export type WrapGetParametersHook<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>

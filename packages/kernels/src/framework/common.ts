@@ -151,6 +151,9 @@ export type IndexedPolyhedron = {
  *
  * This is used when creating glTF format, which uses y-up coordinates
  * and meter units, from source geometry that uses z-up coordinates and millimeter units.
+ *
+ * @param vertex - xyz position in z-up millimeter space
+ * @returns xyz position in y-up meter space
  */
 export function transformVerticesGltf(vertex: readonly [number, number, number]): [number, number, number] {
   const x = vertex[0] / 1000;

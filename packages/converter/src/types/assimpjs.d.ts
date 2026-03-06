@@ -7,7 +7,7 @@ declare module 'assimpjs' {
   type EmscriptenModuleConfig = import('#types/emscripten.d.ts').EmscriptenModuleConfig;
 
   /**
-   *
+   * Result object from Assimp conversion with file access and success status.
    */
   export type AssimpResult = {
     IsSuccess(): boolean;
@@ -17,7 +17,7 @@ declare module 'assimpjs' {
   };
 
   /**
-   *
+   * Represents a single exported file from Assimp conversion.
    */
   export type AssimpFile = {
     GetContent(): Uint8Array<ArrayBuffer>;
@@ -25,14 +25,14 @@ declare module 'assimpjs' {
   };
 
   /**
-   *
+   * Container for input files passed to Assimp conversion.
    */
   export type FileList = {
     AddFile(name: string, content: Uint8Array<ArrayBuffer>): void;
   };
 
   /**
-   *
+   * Main Assimp.wasm module interface for format conversion.
    */
   export type AssimpJS = {
     FileList: new () => FileList;

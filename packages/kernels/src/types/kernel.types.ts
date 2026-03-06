@@ -25,7 +25,7 @@ import type { ExportFile, Geometry, GeometryResponse } from '@taucad/types';
 export type FrameContext = 'user' | 'library' | 'framework' | 'runtime';
 
 /**
- *
+ * Stack frame captured during a kernel error, enriched with source mapping and visibility context for error reporting UI.
  */
 export type KernelStackFrame = {
   fileName?: string;
@@ -38,7 +38,7 @@ export type KernelStackFrame = {
 };
 
 /**
- *
+ * Source location for an error (file, line, column range) used for editor markers and navigation.
  */
 export type ErrorLocation = {
   fileName: string;
@@ -49,17 +49,17 @@ export type ErrorLocation = {
 };
 
 /**
- *
+ * Classification of the origin or cause of a kernel issue for filtering and display.
  */
 export type KernelIssueType = 'compilation' | 'runtime' | 'kernel' | 'connection' | 'unknown';
 
 /**
- *
+ * Severity level for kernel issues, used for prioritization and UI presentation.
  */
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
 /**
- *
+ * Diagnostic produced by a kernel operation — displayed in the editor's problem panel and used for error markers.
  */
 export type KernelIssue = {
   message: string;
@@ -75,7 +75,7 @@ export type KernelIssue = {
 // =============================================================================
 
 /**
- *
+ * Successful kernel operation outcome. Non-fatal warnings are preserved in `issues` alongside the operation data.
  */
 export type KernelSuccessResult<T> = {
   success: true;
@@ -84,7 +84,7 @@ export type KernelSuccessResult<T> = {
 };
 
 /**
- *
+ * Failed kernel operation outcome. Inspect `issues` for error messages, source locations, and stack traces.
  */
 export type KernelErrorResult = {
   success: false;
@@ -92,7 +92,7 @@ export type KernelErrorResult = {
 };
 
 /**
- *
+ * Discriminated union returned by all kernel operations. Branch on `success` to access data or error diagnostics.
  */
 export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 
@@ -101,11 +101,11 @@ export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 // =============================================================================
 
 /**
- *
+ * Identifier for a first-party CAD kernel shipped with `@taucad/kernels` (replicad, jscad, manifold, openscad, zoo).
  */
 export type KernelProvider = (typeof kernelProviders)[number];
 /**
- *
+ * Backend provider identifier for geometry export and processing pipelines.
  */
 export type BackendProvider = (typeof backendProviders)[number];
 
@@ -261,7 +261,7 @@ export type CreateGeometryResult = KernelResult<GeometryResponse[]>;
 export type HashedGeometryResult = KernelResult<Geometry[]>;
 
 /**
- *
+ * Outcome of extracting customizer parameters from a CAD script, used to render the parameter editor UI.
  */
 export type GetParametersResult = KernelResult<{
   defaultParameters: Record<string, unknown>;
@@ -269,11 +269,11 @@ export type GetParametersResult = KernelResult<{
 }>;
 
 /**
- *
+ * Outcome of inferring a human-readable name from a CAD script, used as the default project title.
  */
 export type ExtractNameResult = KernelResult<string | undefined>;
 
 /**
- *
+ * Outcome of exporting CAD geometry to a downloadable file format (STL, STEP, glTF, etc.).
  */
 export type ExportGeometryResult = KernelResult<ExportFile[]>;

@@ -30,8 +30,10 @@ function getNodeParentPort(): import('node:worker_threads').MessagePort | undefi
 }
 
 /**
- * Checks if we're running in a worker context (browser or Node.js).
+ * Check whether the current thread is a worker context (browser or Node.js).
  * Use this to guard dispatcher setup in worker files.
+ *
+ * @returns `true` when running inside a Web Worker or Node.js worker_threads
  */
 export function isWorkerContext(): boolean {
   return isWebWorker() || getNodeParentPort() !== undefined;

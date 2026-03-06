@@ -249,7 +249,7 @@ function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): K
 // =============================================================================
 
 /**
- * Manifold kernel options.
+ * Configuration for the Manifold kernel, allowing custom WASM builds for benchmarking or CI.
  */
 export type ManifoldOptions = {
   /** Override the default Manifold WASM URL for custom builds or benchmarking. */

@@ -75,7 +75,7 @@ export type KernelBundler = {
 // =============================================================================
 
 /**
- * Options provided to a bundler's initialize() method.
+ * Filesystem and project path context for bundler initialization.
  */
 export type BundlerInitOptions = {
   /** Filesystem interface for reading project files */
@@ -85,7 +85,7 @@ export type BundlerInitOptions = {
 };
 
 /**
- * Input for bundler operations (detectImports, bundle, resolveDependencies).
+ * Entry file path for bundler operations (detectImports, bundle, resolveDependencies).
  */
 export type BundleInput = {
   /** Absolute path to the entry file */
@@ -125,7 +125,9 @@ export type DetectImportsResult = {
  * @template Options - Validated options type, inferred from optionsSchema when provided
  */
 export type BundlerDefinition<Context = unknown, Options extends Record<string, unknown> = Record<string, unknown>> = {
+  /** Human-readable bundler name, used in logs and error messages */
   name: string;
+  /** Semantic version string for cache-key computation and diagnostics */
   version: string;
   /** File extensions this bundler handles (e.g., ['ts', 'js', 'tsx', 'jsx']). */
   extensions: string[];
@@ -169,6 +171,9 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
 /**
  * Define a bundler module with full type inference.
  * Context is inferred from initialize() return type; Options from optionsSchema.
+ *
+ * @param definition - The bundler definition object implementing all required lifecycle methods
+ * @returns The same definition, typed as {@link BundlerDefinition}
  *
  * @example
  * ```typescript

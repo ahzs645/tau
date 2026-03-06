@@ -172,6 +172,9 @@ function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): K
  * the exports are wrapped under `default` as an object. This unwraps them
  * so that named properties like `main` and `getParameterDefinitions` are
  * directly accessible.
+ *
+ * @param module - the raw module object returned by the bundler
+ * @returns the unwrapped module exports with directly accessible named properties
  */
 function resolveModule(module: unknown): JscadModuleExports {
   const module_ = module as JscadModuleExports;

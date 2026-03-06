@@ -15,6 +15,11 @@ import type { FileResolver } from '#file-resolver.js';
 export class FileResolverIO extends PlatformIO {
   private readonly resolver: FileResolver;
 
+  /**
+   * Creates an IO instance that fetches external GLTF resources via the given resolver.
+   *
+   * @param resolver - the file resolver used to fetch external GLTF resources on demand
+   */
   public constructor(resolver: FileResolver) {
     super();
     this.resolver = resolver;
@@ -46,7 +51,10 @@ export class FileResolverIO extends PlatformIO {
 }
 
 /**
- * Create a FileResolverIO with all extensions and Draco dependencies registered.
+ * Creates a FileResolverIO pre-configured with all glTF extensions and Draco codecs.
+ *
+ * @param resolver - the file resolver for on-demand external resource loading
+ * @returns A ready-to-use FileResolverIO instance.
  */
 export async function createFileResolverIo(resolver: FileResolver): Promise<FileResolverIO> {
   const io = new FileResolverIO(resolver);

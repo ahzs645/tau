@@ -1,8 +1,12 @@
 import type { Vertex, Face, Color, IndexedPolyhedron } from '#framework/common.js';
 
 /**
- * Parse OFF (Object File Format) data from string
- * OFF format supports vertices, faces, and colors
+ * Parses an OFF (Object File Format) string into indexed polyhedron geometry.
+ * Supports per-face RGBA colors and automatic fan triangulation of polygon faces.
+ *
+ * @param offContent - the OFF file content as a string
+ * @returns the parsed vertices, triangulated faces, and per-face colors
+ * @throws When the file is empty, missing the OFF header, or contains invalid data
  */
 // oxlint-disable-next-line complexity -- TODO: refactor this
 export function parseOff(offContent: string): IndexedPolyhedron {

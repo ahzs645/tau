@@ -7,6 +7,10 @@ const toRgb = converter('rgb');
 
 /**
  * Calculate color distance using simple Euclidean distance in RGB space
+ *
+ * @param color1 - first RGB color with values 0-1
+ * @param color2 - second RGB color with values 0-1
+ * @returns the Euclidean distance between the two colors
  */
 function calculateColorDistance(color1: [number, number, number], color2: [number, number, number]): number {
   const [r1, g1, b1] = color1;
@@ -16,6 +20,10 @@ function calculateColorDistance(color1: [number, number, number], color2: [numbe
 
 /**
  * Get color mapping from model colors to extruder colors
+ *
+ * @param colors - the model colors to map
+ * @param extruderColors - the available extruder colors to match against
+ * @returns array of extruder indices corresponding to each model color
  */
 function getColorMapping(
   colors: Array<[number, number, number]>,
@@ -42,6 +50,9 @@ const paintColorMap = ['', '8', '0C', '1C', '2C', '3C', '4C', '5C', '6C', '7C', 
 
 /**
  * Convert RGB values (0-1) to hex color string
+ *
+ * @param rgb - RGB color with values 0-1
+ * @returns the hex color string (e.g. "#ff0000")
  */
 function rgbToHex(rgb: [number, number, number]): string {
   const [r, g, b] = rgb;
@@ -51,6 +62,10 @@ function rgbToHex(rgb: [number, number, number]): string {
 
 /**
  * Triangulate a face using fan triangulation
+ *
+ * @param face - array of vertex indices forming the face polygon
+ * @param colorIndex - the color index to assign to each resulting triangle
+ * @returns array of triangles with vertex index triples and color indices
  */
 function triangulateFace(
   face: number[],
@@ -90,7 +105,12 @@ function triangulateFace(
 }
 
 /**
- * Export IndexedPolyhedron to 3MF format
+ * Converts an IndexedPolyhedron to a 3MF ZIP archive with optional multi-material support.
+ *
+ * @param data - the polyhedron geometry (vertices, faces, colors) to export
+ * @param extruderColors - optional extruder RGB colors for multi-material printing color mapping
+ * @returns the 3MF file as a ZIP-compressed byte array
+ * @throws When the geometry has no vertices or faces
  */
 export function export3mf(
   data: IndexedPolyhedron,

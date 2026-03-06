@@ -58,7 +58,7 @@ type DecodedDracoData = {
 };
 
 /**
- *
+ * Decodes Draco-compressed mesh buffers and produces standard glTF Documents for downstream processing.
  */
 export class GltfDracoDecoder {
   public verbosity = 0;
@@ -79,7 +79,7 @@ export class GltfDracoDecoder {
   };
 
   /**
-   *
+   * Loads the Draco WASM decoder module. Must be called once before any `decodeDracoFile` call.
    */
   public async initialize(): Promise<void> {
     this.decoderModule = await draco3d.createDecoderModule({
@@ -88,7 +88,10 @@ export class GltfDracoDecoder {
   }
 
   /**
+   * Controls diagnostic output volume during decoding (0 = silent, higher = more verbose).
    *
+   * @param level - verbosity level (0 = silent, higher = more output)
+   * @returns This decoder instance for chaining.
    */
   public setVerbosity(level: number): this {
     this.verbosity = level;
@@ -96,7 +99,11 @@ export class GltfDracoDecoder {
   }
 
   /**
+   * Assembles a complete glTF Document from decoded geometry, including mesh, material, and scene hierarchy.
    *
+   * @param decodedData - the decoded Draco geometry attributes and optional indices
+   * @returns A glTF Document containing the assembled scene.
+   * @throws Error if the position attribute is missing
    */
   public async createGltfDocument(decodedData: DecodedDracoData): Promise<Document> {
     const document = new Document();
@@ -205,7 +212,13 @@ export class GltfDracoDecoder {
   }
 
   /**
+   * Decodes a Draco-encoded buffer into raw geometry attributes (positions, normals, UVs) and optional indices.
    *
+   * @param rawBuffer - the raw Draco-compressed ArrayBuffer
+   * @param attributeUniqueIdMap - optional mapping of attribute names to Draco unique IDs
+   * @param attributeTypeMap - optional mapping of attribute names to typed-array constructors
+   * @returns The decoded geometry data with attribute arrays and optional index buffer.
+   * @throws Error if the geometry type is unknown, decoding fails, or no position attribute exists
    */
   public async decodeDracoFile(
     rawBuffer: ArrayBuffer,

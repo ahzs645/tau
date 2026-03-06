@@ -27,7 +27,7 @@ import { isNode } from '#framework/environment.js';
 // =============================================================================
 
 /**
- *
+ * Outcome of bundling a CAD script entry point. Contains the executable code and any compilation diagnostics.
  */
 export type BundleResult = {
   /** The bundled code as a string */
@@ -43,7 +43,7 @@ export type BundleResult = {
 };
 
 /**
- *
+ * Configuration options for the in-browser esbuild bundler.
  */
 export type BundlerOptions = {
   /** Filesystem interface for reading/writing files */
@@ -139,6 +139,10 @@ const defaultAutoExportNames = ['main', 'defaultParams'];
 /**
  * Resolve file extension for imports without extension.
  * Needs filesystem access, so it lives inside the plugin scope.
+ *
+ * @param filesystem - kernel filesystem to check file existence
+ * @param path - import path to resolve
+ * @returns resolved path with file extension appended
  */
 async function resolveFileExtension(filesystem: KernelFileSystem, path: string): Promise<string> {
   // If already has extension, return as-is
@@ -163,6 +167,9 @@ async function resolveFileExtension(filesystem: KernelFileSystem, path: string):
 
 /**
  * Determine the esbuild loader based on file extension.
+ *
+ * @param filePath - file path to extract extension from
+ * @returns esbuild loader type for the file
  */
 function getLoader(filePath: string): 'ts' | 'tsx' | 'js' | 'jsx' | 'json' | 'text' {
   const extension = filePath.split('.').pop()?.toLowerCase() ?? '';
@@ -276,6 +283,9 @@ function extractInlineSourceMap(code: string): string | undefined {
  * esbuild prefixes file paths with `namespace:` for custom namespaces.
  * Since the plugin uses project-relative paths in the zenfs namespace,
  * stripping the prefix yields a clean filename (e.g., `main.ts`).
+ *
+ * @param filePath - esbuild file path, possibly prefixed with namespace
+ * @returns clean project-relative path
  */
 function resolveEsbuildFilePath(filePath: string): string {
   return filePath.startsWith(zenfsPrefix) ? filePath.slice(zenfsPrefix.length) : filePath;
@@ -286,7 +296,7 @@ function resolveEsbuildFilePath(filePath: string): string {
 // =============================================================================
 
 /**
- *
+ * Configuration for the ZenFS esbuild plugin that resolves project files, builtins, and CDN modules.
  */
 export type ZenFsPluginOptions = {
   filesystem: KernelFileSystem;
@@ -313,6 +323,9 @@ export type ZenFsPluginOptions = {
  * 1. Builtins (replicad, jscad, zod) -> `builtin` namespace (memory)
  * 2. CDN modules -> ensure cached at `/node_modules/`, then `zenfs` namespace
  * 3. Relative/absolute imports -> resolved via filesystem with extension probing
+ *
+ * @param options - plugin configuration with filesystem, modules, and paths
+ * @returns esbuild plugin for zenfs-based module resolution
  */
 export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
   const { filesystem, moduleManager, builtinModules, projectPath, entryPath, autoExportNames } = options;
@@ -321,12 +334,22 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
   // but all filesystem I/O uses absolute ZenFS paths.
   const projectPrefix = projectPath.endsWith('/') ? projectPath : projectPath + '/';
 
-  /** Convert absolute ZenFS path to project-relative path for esbuild identity. */
+  /**
+   * Convert absolute ZenFS path to project-relative path for esbuild identity.
+   *
+   * @param absolutePath - absolute ZenFS path
+   * @returns project-relative path
+   */
   function toRelative(absolutePath: string): string {
     return absolutePath.startsWith(projectPrefix) ? absolutePath.slice(projectPrefix.length) : absolutePath;
   }
 
-  /** Reconstruct absolute ZenFS path from esbuild's project-relative path for filesystem I/O. */
+  /**
+   * Reconstruct absolute ZenFS path from esbuild's project-relative path for filesystem I/O.
+   *
+   * @param relativePath - project-relative path from esbuild
+   * @returns absolute ZenFS path
+   */
   function toAbsolute(relativePath: string): string {
     return relativePath.startsWith('/') ? relativePath : `${projectPrefix}${relativePath}`;
   }
@@ -579,7 +602,7 @@ export function createZenFsPlugin(options: ZenFsPluginOptions): Plugin {
 // =============================================================================
 
 /**
- *
+ * In-browser esbuild bundler for CAD scripts with ZenFS and CDN module support.
  */
 export class EsbuildBundler {
   private readonly filesystem: KernelFileSystem;
@@ -601,6 +624,8 @@ export class EsbuildBundler {
 
   /**
    * Get the project path this bundler was configured for.
+   *
+   * @returns absolute project path
    */
   public getProjectPath(): string {
     return this.projectPath;
@@ -616,6 +641,9 @@ export class EsbuildBundler {
   /**
    * Register or update a builtin module on the live bundler instance.
    * Used to replace detection stubs with real module code after kernel init.
+   *
+   * @param name - module name (e.g., 'replicad')
+   * @param builtinModule - module definition to register
    */
   public registerModule(name: string, builtinModule: BuiltinModule): void {
     this.builtinModules.set(name, builtinModule);
@@ -796,6 +824,10 @@ const module = { exports };
    * File paths in esbuild messages use the format `namespace:path`. Since the plugin
    * stores project-relative paths in the `zenfs` namespace, we strip the `zenfs:` prefix
    * to produce clean filenames (e.g., `main.ts`) for UI display and FileLink navigation.
+   *
+   * @param message - esbuild error or warning message
+   * @param severity - issue severity level
+   * @returns converted kernel issue
    */
   private convertEsbuildMessage(message: Message, severity: 'error' | 'warning'): KernelIssue {
     const issue: KernelIssue = {
@@ -821,7 +853,7 @@ const module = { exports };
 // =============================================================================
 
 /**
- *
+ * Options for the detection-only esbuild plugin used for kernel import detection.
  */
 export type DetectionPluginOptions = {
   filesystem: KernelFileSystem;
@@ -838,6 +870,8 @@ export type DetectionPluginOptions = {
  *
  * Relative imports are still resolved normally via zenfs so the full import tree
  * is walked correctly (TypeScript, barrel files, re-exports all handled).
+ *
+ * @returns esbuild plugin for import detection
  */
 export function createDetectionPlugin({ filesystem, projectPath }: DetectionPluginOptions): Plugin {
   const projectPrefix = projectPath.endsWith('/') ? projectPath : projectPath + '/';
@@ -910,6 +944,10 @@ export function createDetectionPlugin({ filesystem, projectPath }: DetectionPlug
 
 /**
  * Extract project file dependencies from an esbuild metafile.
+ *
+ * @param metafile - esbuild metafile output, or undefined if unavailable
+ * @param projectPath - absolute project path for prefix matching
+ * @returns array of absolute file paths for project dependencies
  */
 export function extractProjectDependencies(metafile: Metafile | undefined, projectPath: string): string[] {
   if (!metafile) {
@@ -938,6 +976,9 @@ export function extractProjectDependencies(metafile: Metafile | undefined, proje
 
 /**
  * Extract external module specifiers from esbuild metafile output imports.
+ *
+ * @param metafile - esbuild metafile output, or undefined if unavailable
+ * @returns array of external module specifiers
  */
 export function extractExternalImports(metafile: Metafile | undefined): string[] {
   if (!metafile) {
@@ -963,6 +1004,9 @@ export function extractExternalImports(metafile: Metafile | undefined): string[]
 /**
  * Execute bundled JS/TS code via dynamic import.
  * Browser uses Blob URL, Node.js uses data URL.
+ *
+ * @param code - bundled JavaScript code to execute
+ * @returns execution result with exported module and cleanup function
  */
 export async function executeCode(code: string): Promise<ExecuteResult> {
   const isNodejsRuntime = isNode();
@@ -1009,7 +1053,7 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
 // =============================================================================
 
 /**
- *
+ * Shared state passed through the bundler lifecycle, holding the bundler instance and its dependencies.
  */
 export type EsbuildBundlerContext = {
   bundler: EsbuildBundler;

@@ -87,7 +87,7 @@ function deserializeResult(data: Uint8Array<ArrayBuffer>): KernelSuccessResult<G
  * Uses .bin extension for MessagePack binary storage.
  *
  * @param basePath - The base path for the build
- * @param cacheKey - The cache key
+ * @param cacheKey - identifier used to locate and deduplicate cached geometry files
  * @returns The full path to the cache file
  */
 function getCachePath(basePath: string, cacheKey: string): string {

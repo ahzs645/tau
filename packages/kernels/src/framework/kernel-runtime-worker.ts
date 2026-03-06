@@ -301,6 +301,8 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
    * since it already traced transitive imports).
    *
    * @param filePath - Full path to the file (used as cache key for collision safety)
+   * @param runtime - the kernel runtime context for initialization
+   * @returns the selected kernel and selection method, or undefined if no kernel matches
    */
   private async selectKernel(filePath: string, runtime: KernelRuntime): Promise<KernelSelection | undefined> {
     const cached = this.selectionCache.get(filePath);
@@ -422,7 +424,12 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return undefined;
   }
 
-  /** Attempt catch-all kernel selection, rejecting if the kernel's canHandle returns false. */
+  /**
+   * Attempt catch-all kernel selection, rejecting if the kernel's canHandle returns false.
+   *
+   * @param entry - the catch-all kernel module entry to try
+   * @returns the selected kernel if accepted, or undefined if rejected
+   */
   private async tryCatchAllKernel(
     entry: KernelModuleEntry,
     { filePath, extension, runtime }: { filePath: string; extension: string; runtime: KernelRuntime },

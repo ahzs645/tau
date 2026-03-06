@@ -19,6 +19,10 @@ type LibraryPattern = { pattern: string; moduleName: string };
 
 /**
  * Parse an error's stack trace into structured stack frames.
+ *
+ * @param error - the thrown value (only Error instances with `.stack` are processed)
+ * @param options - optional configuration for frame classification, source mapping, and path resolution
+ * @returns array of parsed stack frames, source-mapped when a source map is provided
  */
 export function parseStackTrace(
   error: unknown,
@@ -77,6 +81,9 @@ export function parseStackTrace(
  * - node:, <, wasm: → runtime
  * - node_modules/, data:, /kernel/ → framework
  * - Everything else → user
+ *
+ * @param fileName - the source file URL or path to classify
+ * @returns the frame context category for the given file
  */
 function defaultClassifyFrame(fileName: string): FrameContext {
   if (fileName.startsWith('blob:')) {
@@ -101,6 +108,9 @@ function defaultClassifyFrame(fileName: string): FrameContext {
 
 /**
  * Create a frame classifier that recognises specific library patterns.
+ *
+ * @param libraryPatterns - patterns to match against file names for library detection
+ * @returns classifier function that assigns a {@link FrameContext} to a given file name
  */
 export function createFrameClassifier(libraryPatterns: LibraryPattern[]): (fileName: string) => FrameContext {
   return (fileName: string): FrameContext => {
@@ -135,8 +145,11 @@ export function createFrameClassifier(libraryPatterns: LibraryPattern[]): (fileN
 
 /**
  * Resolve a source map path to a project-relative path.
- *
  * esbuild source maps contain paths prefixed with the namespace (e.g., `zenfs:main.ts`).
+ *
+ * @param sourcePath - raw source path from the source map
+ * @param projectPath - optional project root to strip from the path
+ * @returns cleaned path relative to the project root
  */
 export function resolveSourcePath(sourcePath: string, projectPath?: string): string {
   const zenfsPrefix = 'zenfs:';
@@ -158,6 +171,9 @@ export function resolveSourcePath(sourcePath: string, projectPath?: string): str
  * Apply source map resolution to parsed stack frames.
  * Maps generated (post-bundle) positions in blob:/data: URLs back to
  * original source file paths and line/column numbers.
+ *
+ * @param options - source map resolution configuration with frames, source map JSON, and path resolver
+ * @returns stack frames with resolved original source positions
  */
 function applySourceMapToFrames(options: {
   frames: KernelStackFrame[];
@@ -218,6 +234,10 @@ function applySourceMapToFrames(options: {
 /**
  * Resolve a library source map path to a clean display path.
  * E.g., '../src/sketches/Sketch.ts' → 'replicad/src/sketches/Sketch.ts'
+ *
+ * @param moduleName - npm package name used as the display prefix
+ * @param rawSource - raw source path from the library's source map
+ * @returns cleaned display path prefixed with the module name
  */
 export function resolveLibrarySourcePath(moduleName: string, rawSource: string): string {
   let clean = rawSource;
@@ -247,6 +267,11 @@ export function resolveLibrarySourcePath(moduleName: string, rawSource: string):
 /**
  * Apply library source maps to resolve library frames to original TS positions.
  * Uses a cache map that is populated lazily.
+ *
+ * @param frames - parsed stack frames to resolve
+ * @param libraryPatterns - patterns identifying which frames belong to known libraries
+ * @param getSourceMapConsumer - factory that returns a cached SourceMapConsumer for a given module name
+ * @returns frames with library entries resolved to original source positions
  */
 export function applyLibrarySourceMaps(
   frames: KernelStackFrame[],
@@ -305,6 +330,11 @@ export function applyLibrarySourceMaps(
 /**
  * Derive an ErrorLocation from the first user-context stack frame.
  * Optionally uses source map data to compute expression extent.
+ *
+ * @param frames - parsed stack frames to search for user context
+ * @param sourceMapJson - optional raw source map JSON for expression extent computation
+ * @param resolveSourcePathFunction - optional path resolver override
+ * @returns location of the first user-authored frame, or `undefined` if none found
  */
 export function deriveLocationFromFrames(
   frames: KernelStackFrame[],
@@ -349,6 +379,9 @@ export function deriveLocationFromFrames(
 
 /**
  * Compute the expression extent (start/end columns) from source map mapping data.
+ *
+ * @param options - source map lookup configuration with file name, line, column, and path resolver
+ * @returns start and end column range, or undefined if the mapping cannot be resolved
  */
 function computeExpressionExtentFromSourceMap(options: {
   sourceMapJson: string;

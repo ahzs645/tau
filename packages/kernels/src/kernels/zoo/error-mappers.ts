@@ -11,7 +11,10 @@ import { createKernelError } from '#framework/kernel-helpers.js';
 import { sourceRangeToLineColumn } from '#kernels/zoo/source-range-utils.js';
 
 /**
- * Main error mapping function - converts any error to KclError
+ * Converts any error to a structured KclError, extracting WASM details when available.
+ *
+ * @param error - the error to convert (KclError, WASM error, or generic Error/string)
+ * @returns a KclError instance suitable for diagnostic display
  */
 export function mapErrorToKclError(error: unknown): KclError {
   // If it's already a KCL error, return it as-is
@@ -31,7 +34,12 @@ export function mapErrorToKclError(error: unknown): KclError {
 }
 
 /**
- * Convert KCL errors to KernelIssue format
+ * Converts a KclError into a KernelErrorResult with source location and stack frames.
+ *
+ * @param kclError - structured error emitted by the KCL compiler or runtime
+ * @param code - the source code for resolving character offsets to line/column positions
+ * @param fileName - the originating file path for error location
+ * @returns a KernelErrorResult containing one or more KernelIssues
  */
 export function convertKclErrorToKernelIssue(kclError: KclError, code?: string, fileName?: string): KernelErrorResult {
   // Extract source range information if available

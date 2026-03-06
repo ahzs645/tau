@@ -10,7 +10,9 @@ import { allExtensions } from '#gltf.extensions.js';
 // ============================================================================
 
 /**
- * Create a NodeIO instance for gltf-transform operations
+ * Creates a NodeIO instance pre-configured with all glTF extensions and Draco codecs.
+ *
+ * @returns A ready-to-use NodeIO for reading and writing glTF documents.
  */
 export const createNodeIo = async (): Promise<NodeIO> => {
   return new NodeIO().registerExtensions(allExtensions).registerDependencies({
@@ -26,7 +28,10 @@ export const createNodeIo = async (): Promise<NodeIO> => {
 };
 
 /**
- * Convert GLB data to gltf-transform Document
+ * Converts a GLB buffer into a gltf-transform Document for inspection or manipulation.
+ *
+ * @param glbData - the raw GLB buffer to parse
+ * @returns The parsed gltf-transform Document.
  */
 export const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<Document> => {
   const io = await createNodeIo();
@@ -34,7 +39,10 @@ export const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<D
 };
 
 /**
- * Get inspect report from GLB data
+ * Produces a gltf-transform InspectReport from raw GLB data.
+ *
+ * @param glbData - the raw GLB buffer to inspect
+ * @returns The inspection report containing mesh, material, and texture statistics.
  */
 export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promise<InspectReport> => {
   const document = await glbToDocument(glbData);
@@ -42,7 +50,10 @@ export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promis
 };
 
 /**
- * Validate that GLB data is properly formatted.
+ * Validates that a GLB buffer has a non-empty body and a correct magic header.
+ *
+ * @param glb - the raw GLB buffer to validate
+ * @throws Error if the buffer is empty or the header is not `glTF`
  */
 export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
   if (glb.length === 0) {
@@ -63,7 +74,10 @@ export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
 // ============================================================================
 
 /**
- * Extract geometry statistics from an InspectReport
+ * Extracts aggregate geometry statistics (vertex, face, and mesh counts) from an InspectReport.
+ *
+ * @param report - the gltf-transform inspection report to summarize
+ * @returns An object with `vertexCount`, `faceCount`, and `meshCount`.
  */
 export const getGeometryStatsFromInspect = (
   report: InspectReport,
@@ -80,7 +94,10 @@ export const getGeometryStatsFromInspect = (
 };
 
 /**
- * Extract bounding box information from an InspectReport
+ * Extracts bounding box size and center from the first scene in an InspectReport.
+ *
+ * @param report - the gltf-transform inspection report
+ * @returns The bounding box `size` and `center`, or `undefined` if no scene is present.
  */
 export const getBoundingBoxFromInspect = (
   report: InspectReport,
@@ -116,7 +133,10 @@ export const getBoundingBoxFromInspect = (
 };
 
 /**
- * Create a geometry signature from an InspectReport for comparison purposes
+ * Creates a geometry signature from an InspectReport for comparison purposes.
+ *
+ * @param report - the gltf-transform inspection report
+ * @returns A signature object with vertex, face, mesh counts and optional bounding box.
  */
 export const createInspectSignature = (
   report: InspectReport,
@@ -141,21 +161,31 @@ export const createInspectSignature = (
 };
 
 /**
- * Check if a mesh has a specific attribute type
+ * Checks whether a mesh entry in an InspectReport contains the given attribute type.
+ *
+ * @param mesh - a single mesh property entry from an InspectReport
+ * @param attributeType - the attribute name to search for (case-insensitive substring match)
+ * @returns `true` if the mesh has a matching attribute.
  */
 export const hasAttribute = (mesh: InspectReport['meshes']['properties'][0], attributeType: string): boolean => {
   return mesh.attributes.some((attribute) => attribute.toLowerCase().includes(attributeType.toLowerCase()));
 };
 
 /**
- * Get material count from InspectReport
+ * Returns the number of materials in an InspectReport.
+ *
+ * @param report - the gltf-transform inspection report
+ * @returns number of distinct materials referenced in the document
  */
 export const getMaterialCount = (report: InspectReport): number => {
   return report.materials.properties.length;
 };
 
 /**
- * Get texture count from InspectReport
+ * Returns the number of textures in an InspectReport.
+ *
+ * @param report - the gltf-transform inspection report
+ * @returns number of texture images referenced in the document
  */
 export const getTextureCount = (report: InspectReport): number => {
   return report.textures.properties.length;
@@ -166,14 +196,14 @@ export const getTextureCount = (report: InspectReport): number => {
 // ============================================================================
 
 /**
- * Represents GLTF scene structure for pure GLTF validation
+ * Top-level GLTF scene hierarchy used for structural validation of GLB documents.
  */
 export type GltfSceneStructure = {
   rootNodes: readonly GltfNodeInfo[];
 };
 
 /**
- * Represents individual GLTF node information with human-readable types
+ * Individual GLTF node with a human-readable type classification (MeshNode, SkinNode, ContainerNode).
  */
 export type GltfNodeInfo = {
   name?: string;
@@ -182,7 +212,11 @@ export type GltfNodeInfo = {
 };
 
 /**
- * Analyze GLTF Document structure and return scene hierarchy
+ * Analyzes GLB data and returns the scene node hierarchy for structural inspection.
+ *
+ * @param glbData - the raw GLB buffer to analyze
+ * @returns The scene structure with classified root nodes.
+ * @throws Error if no scene is found in the GLB document
  */
 export const getDocumentStructure = async (glbData: Uint8Array<ArrayBuffer>): Promise<GltfSceneStructure> => {
   const document = await glbToDocument(glbData);
@@ -203,6 +237,9 @@ export const getDocumentStructure = async (glbData: Uint8Array<ArrayBuffer>): Pr
 
 /**
  * Convert GLTF node to node info using human-readable types
+ *
+ * @param node - the glTF node to convert
+ * @returns the converted node info
  */
 function convertNodeToInfo(node: GltfNode): GltfNodeInfo {
   const mesh = node.getMesh();
@@ -244,6 +281,10 @@ type SimpleHierarchy = {
 /**
  * Convert GLTF node to simple hierarchy for comparison
  * Names are included for readable output but ignored in JSON comparison
+ *
+ * @param node - the glTF node info to convert
+ * @param includeNames - whether to include node names in the output
+ * @returns the simplified hierarchy representation
  */
 function nodeToSimpleHierarchy(node: GltfNodeInfo, includeNames = true): SimpleHierarchy {
   return {
@@ -255,6 +296,9 @@ function nodeToSimpleHierarchy(node: GltfNodeInfo, includeNames = true): SimpleH
 
 /**
  * Convert GLTF scene structure to simple hierarchy for comparison
+ *
+ * @param scene - the glTF scene structure to convert
+ * @returns the array of simplified hierarchy trees
  */
 function sceneToSimpleHierarchy(scene: GltfSceneStructure): SimpleHierarchy[] {
   return scene.rootNodes.map((node) => nodeToSimpleHierarchy(node));
@@ -262,6 +306,9 @@ function sceneToSimpleHierarchy(scene: GltfSceneStructure): SimpleHierarchy[] {
 
 /**
  * Convert SimpleHierarchy back to GltfNodeInfo for reprocessing
+ *
+ * @param simple - the simplified hierarchy node to convert back
+ * @returns the reconstructed glTF node info
  */
 function convertSimpleToGltf(simple: SimpleHierarchy): GltfNodeInfo {
   return {
@@ -275,6 +322,10 @@ function convertSimpleToGltf(simple: SimpleHierarchy): GltfNodeInfo {
 
 /**
  * Format hierarchy for readable error messages
+ *
+ * @param hierarchy - the hierarchy nodes to format
+ * @param indent - the current indentation level
+ * @returns the formatted string representation
  */
 function formatHierarchy(hierarchy: SimpleHierarchy[], indent = 0): string {
   return hierarchy
@@ -288,7 +339,11 @@ function formatHierarchy(hierarchy: SimpleHierarchy[], indent = 0): string {
 }
 
 /**
- * Validate GLTF scene structure matches expected structure using hierarchy comparison
+ * Asserts that two GLTF scene structures are structurally equivalent (ignoring node names).
+ *
+ * @param actual - the scene structure produced by the loader under test
+ * @param expected - the reference scene structure to compare against
+ * @throws Error with a formatted diff if the structures do not match
  */
 export const validateGltfScene = (actual: GltfSceneStructure, expected: GltfSceneStructure): void => {
   // Compare structures without names (names are optional and added by loaders)

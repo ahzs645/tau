@@ -5,7 +5,7 @@
 import type { JSONSchema7, JSONSchema7Definition } from 'json-schema';
 
 /**
- *
+ * Name/value pair for a dropdown or select option in an OpenSCAD customizer parameter.
  */
 export type ParameterOption = {
   name: string;
@@ -13,7 +13,7 @@ export type ParameterOption = {
 };
 
 /**
- *
+ * Base fields shared by all OpenSCAD customizer parameter types (caption, group, name).
  */
 export type BaseParameter = {
   caption?: string;
@@ -22,7 +22,7 @@ export type BaseParameter = {
 };
 
 /**
- *
+ * Number-type customizer parameter with optional min, max, step, and dropdown options.
  */
 export type NumberParameter = BaseParameter & {
   type: 'number';
@@ -34,7 +34,7 @@ export type NumberParameter = BaseParameter & {
 };
 
 /**
- *
+ * String-type customizer parameter with optional dropdown options.
  */
 export type StringParameter = BaseParameter & {
   type: 'string';
@@ -43,7 +43,7 @@ export type StringParameter = BaseParameter & {
 };
 
 /**
- *
+ * Customizer parameter that renders as a checkbox in the OpenSCAD parameter editor.
  */
 export type BooleanParameter = BaseParameter & {
   type: 'boolean';
@@ -51,7 +51,7 @@ export type BooleanParameter = BaseParameter & {
 };
 
 /**
- *
+ * Parameter type for numeric arrays (e.g. [x, y, z]) in the OpenSCAD customizer.
  */
 export type VectorParameter = BaseParameter & {
   type: 'number';
@@ -62,12 +62,12 @@ export type VectorParameter = BaseParameter & {
 };
 
 /**
- *
+ * Any OpenSCAD customizer parameter, used to build the JSON schema for the parameter editor.
  */
 export type Parameter = NumberParameter | StringParameter | BooleanParameter | VectorParameter;
 
 /**
- *
+ * Container for a set of parameters with a title, used for grouping in the customizer UI.
  */
 export type ParameterSet = {
   parameters: Parameter[];
@@ -75,7 +75,7 @@ export type ParameterSet = {
 };
 
 /**
- *
+ * Raw parameter shape from OpenSCAD's JSON customizer export format.
  */
 export type OpenScadParameter = {
   group: string;
@@ -90,7 +90,7 @@ export type OpenScadParameter = {
 };
 
 /**
- *
+ * Root object from OpenSCAD's JSON customizer export, containing parameters array and title.
  */
 export type OpenScadParameterExport = {
   parameters: OpenScadParameter[];
@@ -98,8 +98,12 @@ export type OpenScadParameterExport = {
 };
 
 /**
- * Convert OpenSCAD parameter export to JSON schema with proper grouping
- * Based on OpenSCAD Customizer specification: https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/Customizer
+ * Converts an OpenSCAD parameter export to a grouped JSON Schema for the customizer UI.
+ *
+ * @param exportData - The raw parameter export from OpenSCAD's `--export-format=param` output
+ * @returns A JSON Schema (draft-07) with parameters organized by group
+ *
+ * @see https://en.wikibooks.org/wiki/OpenSCAD_User_Manual/Customizer
  */
 export function processOpenScadParameters(exportData: OpenScadParameterExport): JSONSchema7 {
   const properties: Record<string, JSONSchema7Definition> = {};
@@ -157,6 +161,9 @@ export function processOpenScadParameters(exportData: OpenScadParameterExport): 
 
 /**
  * Create a JSON schema property from an OpenSCAD parameter
+ *
+ * @param parameter - the parsed OpenSCAD parameter definition
+ * @returns the corresponding JSON Schema property
  */
 function createSchemaProperty(parameter: OpenScadParameter): JSONSchema7 {
   const baseProperty: JSONSchema7 = {
@@ -234,8 +241,10 @@ function createSchemaProperty(parameter: OpenScadParameter): JSONSchema7 {
 }
 
 /**
- * Flatten grouped parameters for injection into OpenSCAD
- * Converts nested group objects back to flat parameter names
+ * Flattens grouped parameter objects back to flat key-value pairs for OpenSCAD `-D` injection.
+ *
+ * @param parameters - The parameter values, possibly nested under group keys
+ * @returns A flat record mapping parameter names to their values
  */
 export function flattenParametersForInjection(parameters: Record<string, unknown>): Record<string, unknown> {
   const flattened: Record<string, unknown> = {};

@@ -2,14 +2,11 @@ import { parseOff } from '#utils/import-off.js';
 import { createGlb, createGltf } from '#utils/export-glb.js';
 
 /**
- * Convert OFF format data to GLTF/GLB blob.
+ * Converts OFF format data to a spec-compliant glTF/GLB file (Y-up, meter units).
  *
- * Always produces spec-compliant GLTF with:
- * - Y-up coordinate system (per glTF specification)
- * - Meter units (per glTF specification)
- *
- * @param offContent - The OFF file content as string
- * @param format - The output format: 'glb' for binary GLTF, 'gltf' for JSON GLTF
+ * @param offContent - the OFF file content as a string
+ * @param format - output format: `'glb'` for binary glTF, `'gltf'` for JSON glTF
+ * @returns the encoded glTF/GLB as a byte array
  */
 export async function convertOffToGltf(
   offContent: string,

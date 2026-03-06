@@ -8,6 +8,10 @@ import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
 /**
  * Create a glTF primitive directly from replicad Shape3D data.
  * This preserves the original triangulation from replicad without re-triangulating.
+ *
+ * @param document - the glTF document to create the primitive in
+ * @param geometry - the replicad geometry with face and color data
+ * @returns the constructed glTF primitive
  */
 function createPrimitiveFromReplicadShape(document: Document, geometry: GeometryReplicad): Primitive {
   const { faces } = geometry;
@@ -76,6 +80,11 @@ function createPrimitiveFromReplicadShape(document: Document, geometry: Geometry
 
 /**
  * Create line primitive from replicad edge data.
+ *
+ * @param document - the glTF document to create the primitive in
+ * @param edges - the replicad edge line data
+ * @param name - the name used for the line material and primitive
+ * @returns the line primitive, or undefined if there are no edges
  */
 function createLinePrimitiveFromReplicadEdges(
   document: Document,
@@ -120,6 +129,9 @@ function createLinePrimitiveFromReplicadEdges(
  * This preserves the original triangulation without re-triangulating.
  *
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
+ *
+ * @param geometries - array of replicad geometry objects to convert
+ * @returns the constructed glTF document
  */
 function createGltfDocumentFromReplicadShapes(geometries: GeometryReplicad[]): Document {
   const document = new Document();
@@ -165,6 +177,9 @@ function createGltfDocumentFromReplicadShapes(geometries: GeometryReplicad[]): D
  * Convert replicad geometries to GLB blob format (preserving original triangulation).
  *
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
+ *
+ * @param geometries - array of replicad geometry objects to convert
+ * @returns the GLB binary data
  */
 async function createGlbFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocumentFromReplicadShapes(geometries);
@@ -176,6 +191,9 @@ async function createGlbFromReplicadShapes(geometries: GeometryReplicad[]): Prom
  * Convert replicad geometries to GLTF blob format (preserving original triangulation).
  *
  * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
+ *
+ * @param geometries - array of replicad geometry objects to convert
+ * @returns the GLTF JSON data as a UTF-8 encoded byte array
  */
 async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocumentFromReplicadShapes(geometries);

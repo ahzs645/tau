@@ -20,5 +20,6 @@ export type SpanHandle = {
  * Spans are collected by the framework and displayed in the Kernel Panel.
  */
 export type KernelSpanTracer = {
+  /** Begin a new named span, optionally attaching key-value attributes for filtering. */
   startSpan(name: string, attributes?: Record<string, string | number | boolean>): SpanHandle;
 };

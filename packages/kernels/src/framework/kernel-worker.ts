@@ -143,7 +143,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected loadedBundlers = new Map<string, { definition: BundlerDefinition; ctx: unknown }>();
 
   /**
-   * The name of the worker.
+   * Human-readable identifier for this worker, used in log output and error diagnostics.
    *
    * @example ReplicadWorker, TauWorker, ZooWorker.
    */
@@ -276,6 +276,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * - Relative to project root (for dependency resolution)
    * - Absolute paths (for cache/middleware operations)
    *
+   * @returns the kernel filesystem interface
    * @throws Error if accessed before initialize() completes with fileSystemPort
    */
   private get filesystem(): KernelFileSystem {
@@ -290,6 +291,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Logger interface for kernel workers.
    * Provides convenience methods that automatically inject the component name.
    *
+   * @returns the kernel logger interface
    * @throws Error if accessed before initialize() completes
    */
   protected get logger(): KernelLogger {
@@ -362,13 +364,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Entry point for cleaning up the worker. This is called when the worker is destroyed.
-   * Handles common cleanup logic and then calls the protected cleanup method.
-   *
-   */
-  /**
    * Set the telemetry send callback. Called by the dispatcher to wire up
    * telemetry before initialization. Creates the PerformanceObserver-based collector.
+   *
+   * @param send - callback that transmits collected performance entries to the main thread
    */
   public setTelemetrySend(send: (entries: PerformanceEntryData[]) => void): void {
     this.telemetryCollector?.dispose();
@@ -893,7 +892,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Whether a bundler is available for the given file extension.
    * Used by subclasses to decide whether bundler-assisted detection is available.
    *
-   * @param extension - File extension without dot (e.g. 'ts', 'js')
+   * @param extension - file extension without dot (e.g. 'ts', 'js')
+   * @returns `true` when a bundler is loaded or pending for the extension
    */
   protected hasBundlerForExtension(extension: string): boolean {
     return this.loadedBundlers.has(extension) || this.pendingBundlerInits.has(extension);
@@ -901,6 +901,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Whether any bundler has been registered (loaded or pending).
+   *
+   * @returns true if at least one bundler is loaded or pending initialization
    */
   protected get hasBundlerAvailable(): boolean {
     return this.loadedBundlers.size > 0 || this.pendingBundlerInits.size > 0;
@@ -973,6 +975,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Hook called after file change notification.
    * Subclasses can override to perform additional invalidation (e.g., selection cache).
+   *
+   * @param _changedPaths - absolute paths of files that changed
    */
   protected onFileChanged(_changedPaths: string[]): void {
     // Default: no-op. KernelRuntimeWorker overrides to clear selectionCache.
@@ -1002,6 +1006,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Get the absolute path of the active file.
    * Combines project root with activeFilePath.
+   *
+   * @returns the fully resolved absolute file path
    */
   private get activeFileAbsolutePath(): string {
     return KernelWorker.resolveFromRoot(this.activeFilePath, this.getProjectRootPath());
@@ -1025,7 +1031,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * For basePath '/builds/test/site' with activeFilePath 'site/main.scad',
    * returns '/builds/test'.
    *
-   * @returns The project root path
+   * @returns absolute path to the project root, derived by stripping the active file's subdirectory from basePath
    */
   protected getProjectRootPath(): string {
     if (this.cachedProjectRoot !== undefined) {
@@ -1099,6 +1105,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Perform the actual bundler context initialization.
    * Separated from ensureBundlerForExtension so concurrent callers coalesce on the same promise.
+   *
+   * @param pending - bundler registration with definition, supported extensions, and options
+   * @returns the loaded bundler definition and initialized context
    */
   private async doInitializeBundler(pending: {
     definition: BundlerDefinition;
@@ -1176,7 +1185,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Import a middleware module, using the cache to avoid redundant imports.
    *
-   * @param url - URL of the middleware module
+   * @param url - import specifier pointing to the middleware module's entry point
    * @returns The middleware instance
    */
   private async importMiddlewareModule(url: string): Promise<KernelMiddleware> {
@@ -1302,6 +1311,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Compute all non-parameter dependencies. Factored out so the result
    * can be cached for the duration of a render cycle (shared between
    * getParameters and createGeometry).
+   *
+   * @param resolvedMiddleware - optional resolved middleware entries to include as dependencies
+   * @returns array of file and asset dependencies with content hashes
    */
   private async computeBaseDependencies(resolvedMiddleware?: ResolvedMiddleware[]): Promise<Dependency[]> {
     // 1. Discover file dependencies from kernel module
@@ -1450,6 +1462,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Create a KernelBundler facade that routes operations to the correct bundler by extension.
+   *
+   * @returns a bundler interface that delegates to extension-specific bundler implementations
    */
   private createBundlerFacade(): KernelBundler {
     if (this.cachedBundlerFacade) {
@@ -1533,6 +1547,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Get or create a cached logger for a middleware by name.
+   *
+   * @param middlewareName - the middleware component name used as the log origin
+   * @returns a logger scoped to the given middleware
    */
   private getMiddlewareLogger(middlewareName: string): KernelLogger {
     let logger = this.middlewareLoggerCache.get(middlewareName);

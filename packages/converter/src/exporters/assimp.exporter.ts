@@ -4,7 +4,7 @@ import { lookupMimeType } from '@taucad/types/constants';
 import type { ExportFile } from '@taucad/types';
 import { BaseExporter } from '#exporters/base.exporter.js';
 
-// Supported assimp export formats based on the test file
+/** Tuple of all export format identifiers supported by the Assimp backend. */
 export const assimpExportFormats = [
   'obj',
   'ply',
@@ -20,7 +20,7 @@ export const assimpExportFormats = [
 ] as const;
 
 /**
- *
+ * Export format identifier supported by the Assimp backend (obj, stl, fbx, dae, etc.).
  */
 export type AssimpExportFormat = (typeof assimpExportFormats)[number];
 
@@ -40,7 +40,12 @@ type AssimpExporterOptions = {
  */
 export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
   /**
+   * Converts GLB data to the target format via Assimp.
    *
+   * @param glbData - the raw GLB buffer to convert
+   * @param options - optional overrides for format and target extension
+   * @returns An array of exported files in the target format.
+   * @throws Error if the GLB data is empty or Assimp conversion fails
    */
   public async parseAsync(
     glbData: Uint8Array<ArrayBuffer>,

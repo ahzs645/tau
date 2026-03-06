@@ -3,9 +3,11 @@ import { parseOff } from '#utils/import-off.js';
 import { createStlAscii, createStlBinary } from '#utils/export-stl.js';
 
 /**
- * Convert OFF format data to STL
- * @param offContent - The OFF file content as string
- * @param format - The output format: 'stl' for ASCII STL, 'stl-binary' for binary STL
+ * Converts OFF format data to an STL file (ASCII or binary).
+ *
+ * @param offContent - the OFF file content as a string
+ * @param format - output format: `'stl'` for ASCII, `'stl-binary'` for binary
+ * @returns the STL file as a byte array
  */
 export async function convertOffToStl(
   offContent: string,

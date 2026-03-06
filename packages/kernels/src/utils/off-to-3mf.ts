@@ -2,9 +2,11 @@ import { parseOff } from '#utils/import-off.js';
 import { export3mf } from '#utils/export-3mf.js';
 
 /**
- * Convert OFF format data to 3MF
- * @param offContent - The OFF file content as string
- * @param extruderColors - Optional array of extruder colors for multi-material printing
+ * Converts OFF format data to a 3MF ZIP archive.
+ *
+ * @param offContent - the OFF file content as a string
+ * @param extruderColors - optional extruder RGB colors for multi-material printing
+ * @returns the 3MF file as a byte array
  */
 export async function convertOffTo3mf(
   offContent: string,

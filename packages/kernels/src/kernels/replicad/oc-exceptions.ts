@@ -36,8 +36,10 @@ export type WasmExceptionInfo = {
 };
 
 /**
- * Type guard for Emscripten wrapper objects (any WASM-allocated C++ object).
- * These always expose a `delete()` method for freeing WASM memory.
+ * Checks whether a value is an Emscripten wrapper object with a `delete()` method for WASM memory cleanup.
+ *
+ * @param value - The value to check
+ * @returns `true` if the value is an Emscripten-allocated C++ object
  */
 export function isEmscriptenObject(value: unknown): value is EmscriptenObject {
   return (
@@ -49,7 +51,10 @@ export function isEmscriptenObject(value: unknown): value is EmscriptenObject {
 }
 
 /**
- * Type guard for Emscripten 5.x CppException.
+ * Checks whether an error is an Emscripten 5.x CppException with a WASM pointer.
+ *
+ * @param error - The error to check
+ * @returns `true` if the error is a CppException with an `excPtr` property
  */
 export function isCppException(error: unknown): error is CppException {
   return (
@@ -58,8 +63,13 @@ export function isCppException(error: unknown): error is CppException {
 }
 
 /**
- * Execute a callback with a WASM object, ensuring `delete()` is called
- * to free WASM memory even if the callback throws.
+ * Executes a callback with a WASM object and guarantees `delete()` is called afterward.
+ *
+ * @template T - The WASM object type
+ * @template R - The callback return type
+ * @param object - The WASM-allocated object to use and then free
+ * @param callback - The function to execute with the object
+ * @returns The callback's return value
  */
 export function withWasmObject<T extends { delete(): void }, R>(object: T, callback: (object: T) => R): R {
   try {
@@ -79,12 +89,10 @@ type EmscriptenExceptionHelpers = {
 };
 
 /**
- * Extract a WASM exception pointer from any Emscripten throw form:
- * - bare number (legacy Emscripten — JS stack is unwound)
- * - CppException (Emscripten 5.x Error with excPtr)
+ * Extracts a WASM exception pointer from any Emscripten throw form (bare number or CppException).
  *
- * Returns the pointer and the source Error for stack traces,
- * or undefined if the value is not a WASM exception.
+ * @param error - The thrown value to inspect
+ * @returns The exception pointer and source Error, or `undefined` if not a WASM exception
  */
 export function extractWasmException(error: unknown): WasmExceptionInfo | undefined {
   if (typeof error === 'number') {
@@ -100,6 +108,9 @@ export function extractWasmException(error: unknown): WasmExceptionInfo | undefi
 
 /**
  * Check if an error is a native WebAssembly.Exception (from -fwasm-exceptions).
+ *
+ * @param error - the value to check
+ * @returns whether the value is a WebAssembly.Exception instance
  */
 function isWebAssemblyException(error: unknown): error is WebAssembly.Exception {
   return (
@@ -112,6 +123,10 @@ function isWebAssemblyException(error: unknown): error is WebAssembly.Exception 
 /**
  * Decode a WebAssembly.Exception using the Emscripten helper `getExceptionMessage`.
  * Returns the formatted message, or undefined if decoding fails.
+ *
+ * @param error - the WebAssembly exception to decode
+ * @param ocInstance - the Emscripten instance with exception helper methods
+ * @returns the decoded message, or undefined if decoding fails
  */
 function decodeWebAssemblyException(
   error: WebAssembly.Exception,
@@ -135,6 +150,9 @@ function decodeWebAssemblyException(
 
 /**
  * Extract the exception type name from an OpenCASCADE Standard_Failure object.
+ *
+ * @param errorData - the Standard_Failure data from OpenCASCADE
+ * @returns the exception type name, or empty string on failure
  */
 function extractExceptionTypeName(
   errorData: ReturnType<OpenCascadeWithExceptions['OCJS']['getStandard_FailureData']>,
@@ -157,6 +175,10 @@ function extractExceptionTypeName(
 /**
  * Extract message, type name, and C++ stack from an OpenCASCADE Standard_Failure.
  * Frees WASM memory for the error data when done.
+ *
+ * @param ocInstance - the OpenCASCADE WASM instance
+ * @param errorPointer - the pointer to the Standard_Failure in WASM memory
+ * @returns the extracted message, type name, and C++ stack trace
  */
 function extractStandardFailureData(
   ocInstance: OpenCascadeInstance,
@@ -174,8 +196,11 @@ function extractStandardFailureData(
 }
 
 /**
- * Decode an OpenCASCADE exception pointer into a human-readable message.
- * Returns the enriched message and optional C++ stack, or falls back to a generic message.
+ * Decodes an OpenCASCADE exception pointer into a human-readable message.
+ *
+ * @param pointer - The WASM memory pointer to the Standard_Failure object
+ * @param ocInstance - The OpenCascade instance for accessing exception data
+ * @returns The decoded message and optional C++ stack trace
  */
 export function decodeOcException(
   pointer: number,
@@ -200,13 +225,9 @@ export function decodeOcException(
 // =============================================================================
 
 /**
- * Format a runtime error into a KernelIssue, with OC exception decoding.
+ * Formats a runtime error into a KernelIssue with OpenCASCADE exception decoding and stack enrichment.
  *
- * Handles (in priority order):
- * - WebAssembly.Exception: native wasm-exceptions via getExceptionMessage()
- * - bare number: legacy Emscripten throw (JS stack is unwound)
- * - CppException: Emscripten 5.x Error with excPtr
- * - Error instances: standard JS errors with stack traces
+ * @returns A structured KernelIssue with decoded message, location, and stack frames
  */
 export function formatRuntimeErrorWithOc({
   error,

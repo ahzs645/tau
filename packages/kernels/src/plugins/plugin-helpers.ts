@@ -21,7 +21,12 @@ import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plu
 
 type KernelPluginConfig = Omit<KernelPlugin, 'options'>;
 
-/** Create a type-safe kernel plugin factory. */
+/**
+ * Creates a type-safe kernel plugin factory from a static config or builder function.
+ *
+ * @param config - Static plugin configuration or a builder that receives options
+ * @returns A factory function that produces KernelPlugin registrations
+ */
 export function createKernelPlugin(config: KernelPluginConfig): () => KernelPlugin;
 export function createKernelPlugin<Options extends Record<string, unknown>>(
   config: KernelPluginConfig | ((options: Options | undefined) => KernelPluginConfig),
@@ -39,7 +44,12 @@ export function createKernelPlugin(
 
 type MiddlewarePluginConfig = Omit<MiddlewarePlugin, 'options'>;
 
-/** Create a type-safe middleware plugin factory. */
+/**
+ * Creates a type-safe middleware plugin factory from a static config or builder function.
+ *
+ * @param config - Static plugin configuration or a builder that receives options
+ * @returns A factory function that produces MiddlewarePlugin registrations
+ */
 export function createMiddlewarePlugin(config: MiddlewarePluginConfig): () => MiddlewarePlugin;
 export function createMiddlewarePlugin<Options extends Record<string, unknown>>(
   config: MiddlewarePluginConfig | ((options: Options | undefined) => MiddlewarePluginConfig),
@@ -57,7 +67,12 @@ export function createMiddlewarePlugin(
 
 type BundlerPluginConfig = Omit<BundlerPlugin, 'options'>;
 
-/** Create a type-safe bundler plugin factory. */
+/**
+ * Creates a type-safe bundler plugin factory from a static config or builder function.
+ *
+ * @param config - Static plugin configuration or a builder that receives options
+ * @returns A factory function that produces BundlerPlugin registrations
+ */
 export function createBundlerPlugin(config: BundlerPluginConfig): () => BundlerPlugin;
 export function createBundlerPlugin<Options extends Record<string, unknown>>(
   config: BundlerPluginConfig | ((options: Options | undefined) => BundlerPluginConfig),

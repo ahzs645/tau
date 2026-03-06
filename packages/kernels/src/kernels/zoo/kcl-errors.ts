@@ -4,7 +4,7 @@ import type { KernelStackFrame } from '#types/kernel.types.js';
 import { sourceRangeToLineColumn } from '#kernels/zoo/source-range-utils.js';
 
 /**
- *
+ * File metadata from WASM KclError, mapping module IDs to type and path.
  */
 export type WasmFileInfo = {
   type: string;
@@ -12,16 +12,14 @@ export type WasmFileInfo = {
 };
 
 /**
- * This addresses some shortcomings of the WASM KclError type.
- * - The `filenames` field is not included in the type.
+ * Extended WASM KclError that includes the `filenames` mapping omitted from the generated type.
  */
 export type ExtendedWasmKclError = WasmKclError & {
   filenames?: Record<string | number, WasmFileInfo>;
 };
 
-// Simplified error kinds that map to KernelIssue types
 /**
- *
+ * Simplified error kinds that map to KernelIssue types for KCL execution failures.
  */
 export type KclErrorKind =
   | 'lexical'
@@ -39,11 +37,14 @@ export type KclErrorKind =
   | 'unknown';
 
 /**
- *
+ * Base error class for KCL execution failures with kind, message, and source location.
  */
 export class KclError extends Error {
   /**
-   * Create a simple error with minimal information
+   * Creates a KclError from a kind and message without requiring a full source range.
+   *
+   * @param input - the error kind, message, and optional location
+   * @returns a new KclError instance
    */
   public static simple(input: { kind: KclErrorKind; message: string; lineNumber?: number; column?: number }): KclError {
     const sourceRange: SourceRange = [input.column ?? 0, input.column ?? 0, input.lineNumber ?? 0];
@@ -54,6 +55,13 @@ export class KclError extends Error {
   public readonly sourceRange: SourceRange;
   public readonly msg: string;
 
+  /**
+   * Creates a KCL error with a classification, message, and source location.
+   *
+   * @param kind - the error classification (e.g., 'syntax', 'runtime')
+   * @param message - human-readable error description
+   * @param sourceRange - character offsets and module ID locating the error
+   */
   public constructor(kind: KclErrorKind, message: string, sourceRange: SourceRange) {
     super(`${kind}: ${message}`);
     this.kind = kind;
@@ -62,13 +70,19 @@ export class KclError extends Error {
   }
 }
 
-// Special auth error with status code
 /**
- *
+ * KCL error for authentication failures, including optional HTTP status code.
  */
 export class KclAuthError extends KclError {
   public readonly statusCode?: number;
 
+  /**
+   * Creates an auth error with optional HTTP status and source location.
+   *
+   * @param message - human-readable auth failure description
+   * @param statusCode - optional HTTP status code from the API
+   * @param sourceRange - optional source location that triggered the auth call
+   */
   public constructor(message: string, statusCode?: number, sourceRange?: SourceRange) {
     const defaultSourceRange: SourceRange = [0, 0, 0];
     super('auth', message, sourceRange ?? defaultSourceRange);
@@ -76,13 +90,19 @@ export class KclAuthError extends KclError {
   }
 }
 
-// Special export error with export type
 /**
- *
+ * KCL error for export failures, including the export format type that failed.
  */
 export class KclExportError extends KclError {
   public readonly exportType?: string;
 
+  /**
+   * Creates an export error for a specific format failure.
+   *
+   * @param message - human-readable export failure description
+   * @param exportType - the format that failed (e.g., 'step', 'gltf')
+   * @param sourceRange - optional source location associated with the export
+   */
   public constructor(message: string, exportType?: string, sourceRange?: SourceRange) {
     const defaultSourceRange: SourceRange = [0, 0, 0];
     super('export', message, sourceRange ?? defaultSourceRange);
@@ -90,13 +110,15 @@ export class KclExportError extends KclError {
   }
 }
 
-// Connection error for WebSocket/API availability issues
 /**
- *
+ * KCL error for WebSocket/API connection failures and service unavailability.
  */
 export class KclConnectionError extends KclError {
   /**
-   * Create an error for when the Zoo API is unavailable
+   * Creates an error indicating the Zoo API is unreachable or temporarily down.
+   *
+   * @param details - optional additional context about the failure
+   * @returns a KclConnectionError with `isApiUnavailable` set to `true`
    */
   public static apiUnavailable(details?: string): KclConnectionError {
     const baseMessage =
@@ -109,7 +131,10 @@ export class KclConnectionError extends KclError {
   }
 
   /**
-   * Create an error for WebSocket connection failures
+   * Creates an error for WebSocket connection failures to the Zoo API.
+   *
+   * @param details - optional additional context about the failure
+   * @returns a KclConnectionError with `isApiUnavailable` set to `true`
    */
   public static webSocketFailed(details?: string): KclConnectionError {
     const baseMessage = 'Failed to establish a connection to the Zoo CAD API.';
@@ -120,6 +145,11 @@ export class KclConnectionError extends KclError {
   public readonly statusCode?: number;
   public readonly isApiUnavailable: boolean;
 
+  /**
+   * Creates a connection error with optional status code and availability flag.
+   *
+   * @param message - human-readable connection failure description
+   */
   public constructor(message: string, options?: { statusCode?: number; isApiUnavailable?: boolean }) {
     const defaultSourceRange: SourceRange = [0, 0, 0];
     super('connection', message, defaultSourceRange);
@@ -128,13 +158,17 @@ export class KclConnectionError extends KclError {
   }
 }
 
-// WASM KclError wrapper that preserves original error structure
 /**
- *
+ * KCL error that wraps the original WASM KclError and preserves its structure for stack traces.
  */
 export class KclWasmError extends KclError {
   public readonly wasmError: WasmKclError;
 
+  /**
+   * Wraps a WASM KclError, preserving its original structure for stack trace generation.
+   *
+   * @param wasmError - the original WASM KclError to wrap
+   */
   public constructor(wasmError: WasmKclError) {
     const { kind, details } = wasmError;
     const { msg, sourceRanges } = details;
@@ -147,7 +181,10 @@ export class KclWasmError extends KclError {
   }
 
   /**
-   * Create stack frames from the WASM error backtrace
+   * Creates stack frames from the WASM error backtrace for diagnostic display.
+   *
+   * @param code - the source code for resolving character offsets to line/column positions
+   * @returns an array of stack frames with resolved file names and positions
    */
   public createStackFrames(code: string): KernelStackFrame[] {
     const extendedError = this.wasmError as ExtendedWasmKclError;
@@ -185,11 +222,22 @@ export class KclWasmError extends KclError {
   }
 }
 
-// Type guards
+/**
+ * Checks whether the given value is a {@link KclError} instance.
+ *
+ * @param error - the value to check
+ * @returns whether the value is a KclError
+ */
 export const isKclError = (error: unknown): error is KclError => {
   return error instanceof KclError;
 };
 
+/**
+ * Checks whether the given value matches the WASM KclError shape (has `kind` and `details`).
+ *
+ * @param error - the value to check
+ * @returns whether the value has the WASM KclError shape
+ */
 export const isWasmKclError = (error: unknown): error is WasmKclError => {
   return (
     error !== null &&
@@ -201,7 +249,12 @@ export const isWasmKclError = (error: unknown): error is WasmKclError => {
   );
 };
 
-// Type guard for WASM execution result that contains an error
+/**
+ * Checks whether the given value is a WASM execution result containing a nested KclError.
+ *
+ * @param error - the value to check
+ * @returns whether the value is a WASM execution result with a nested error
+ */
 export const isWasmExecutionResultWithError = (
   error: unknown,
 ): error is {
@@ -216,7 +269,12 @@ export const isWasmExecutionResultWithError = (
   );
 };
 
-// Helper to extract KclError from various WASM error formats
+/**
+ * Extracts a WasmKclError from direct or nested WASM error formats, attaching filenames when present.
+ *
+ * @param error - the value to extract a WASM KCL error from
+ * @returns the extracted WasmKclError, or undefined if not a recognized format
+ */
 export const extractWasmKclError = (error: unknown): WasmKclError | undefined => {
   // Direct WASM KclError
   if (isWasmKclError(error)) {
@@ -234,9 +292,13 @@ export const extractWasmKclError = (error: unknown): WasmKclError | undefined =>
   return undefined;
 };
 
-// Helper function to extract error information from execution results
 /**
+ * Extracts an error message and source location from a KCL execution error array.
  *
+ * @param errors - the raw error array from WASM execution
+ * @param code - the source code for resolving character offsets to positions
+ * @param messagePrefix - prefix prepended to the extracted error message
+ * @returns the formatted message and 1-based line / 0-based column of the first error
  */
 export function extractExecutionError(
   errors: unknown[],

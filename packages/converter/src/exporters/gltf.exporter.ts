@@ -22,7 +22,12 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
   }
 
   /**
+   * Parses GLB data and exports it as glTF (JSON + .bin) or binary GLB, depending on configuration.
    *
+   * @param glbData - the raw GLB buffer to convert
+   * @param options - optional overrides for binary/text output mode
+   * @returns An array of exported files (single GLB or GLTF JSON + binary resources).
+   * @throws Error if the GLB data is empty or processing fails
    */
   public async parseAsync(
     glbData: Uint8Array<ArrayBuffer>,

@@ -33,10 +33,11 @@ function charOffsetToLineColumn(sourceCode: string, charOffset: number): LineCol
 }
 
 /**
- * Convert a SourceRange (character offsets) to line/column format using source code
- * @param sourceRange - The SourceRange array [startChar, endChar, moduleId]
- * @param sourceCode - The source code string
- * @returns Object with start position in line/column format
+ * Converts a SourceRange (character offsets) to a line/column position using source code.
+ *
+ * @param sourceRange - the SourceRange array [startChar, endChar, moduleId]
+ * @param sourceCode - the source code string to resolve offsets against
+ * @returns the start position as 1-based line and 0-based column
  */
 export function sourceRangeToLineColumn(sourceRange: SourceRange, sourceCode: string): LineColumnPosition {
   const startCharOffset = sourceRange[0];
@@ -44,11 +45,12 @@ export function sourceRangeToLineColumn(sourceRange: SourceRange, sourceCode: st
 }
 
 /**
- * Extract error position information from CompilationError with source code context
- * @param error - Object with sourceRange from KCL parser
- * @param error.sourceRange - Source range array from the compilation error
- * @param sourceCode - The source code string that was parsed
- * @returns Object with line/column position
+ * Extracts the line/column position from a compilation error's source range.
+ *
+ * @param error - object with a sourceRange from the KCL parser
+ * @param error.sourceRange - source range array from the compilation error
+ * @param sourceCode - the source code string that was parsed
+ * @returns the error position as 1-based line and 0-based column
  */
 export function getErrorPosition(error: { sourceRange: SourceRange }, sourceCode: string): LineColumnPosition {
   return sourceRangeToLineColumn(error.sourceRange, sourceCode);

@@ -1,9 +1,12 @@
 /**
- * Extract external URIs referenced by a GLTF JSON file (buffers and images).
+ * Extracts external URIs referenced by a GLTF JSON file (buffers and images).
  * Skips data URIs (base64-embedded resources).
  *
- * This is useful for discovering sidecar files (.bin, textures) that must
+ * Useful for discovering sidecar files (.bin, textures) that must
  * accompany a .gltf file during import.
+ *
+ * @param jsonText - the raw JSON text of a .gltf file
+ * @returns An array of external URI strings, or an empty array if parsing fails.
  */
 export function extractReferencedGltfUris(jsonText: string): string[] {
   let json: unknown;

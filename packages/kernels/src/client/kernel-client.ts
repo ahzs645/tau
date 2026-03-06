@@ -42,7 +42,7 @@ export type CodeInput<T extends Record<string, string>> = {
   parameters?: Record<string, unknown>;
   /** Tessellation quality override. */
   tessellation?: Tessellation;
-  /** @internal Not applicable in inline mode (client auto-manages). */
+  /** Not applicable in inline mode (client auto-manages). @internal */
   changedPaths?: never;
 } & (string extends keyof T
   ? {
@@ -63,7 +63,7 @@ export type CodeInput<T extends Record<string, string>> = {
  * (e.g., `'/src/main.ts'`) or a `GeometryFile` object.
  */
 export type FileInput = {
-  /** @internal Prevents mixing code with file-mode rendering. */
+  /** Prevents mixing code with file-mode rendering. @internal */
   code?: never;
   /** File to render from the connected filesystem. */
   file: string | GeometryFile;
@@ -90,6 +90,9 @@ export type ExportResult = KernelResult<ExportFile>;
  * - `'main.ts'` --> `{ path: '/', filename: 'main.ts' }`
  * - `'/src/model.ts'` --> `{ path: '/src', filename: 'model.ts' }`
  * - `'/builds/test/bench.ts'` --> `{ path: '/builds/test', filename: 'bench.ts' }`
+ *
+ * @param file - file path string to resolve
+ * @returns geometry file with separated path and filename
  */
 function resolveFileString(file: string): GeometryFile {
   const lastSlash = file.lastIndexOf('/');

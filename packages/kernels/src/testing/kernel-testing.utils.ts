@@ -153,8 +153,9 @@ type MockKernelLogger = {
 };
 
 /**
- * Create a mock logger for kernel and middleware testing.
- * Returns a logger with vitest mock functions.
+ * Creates a mock logger for kernel and middleware testing.
+ *
+ * @returns A logger with vitest mock functions for all log levels
  */
 export function createMockLogger(): KernelLogger & MockKernelLogger {
   const logger: MockKernelLogger = {
@@ -214,6 +215,9 @@ export type MockFileSystem = KernelFileSystem & {
 /**
  * Create a mock filesystem for middleware testing.
  * Returns a filesystem with vitest mock functions for assertion.
+ *
+ * @param options - Optional overrides for default mock behavior
+ * @returns A mock filesystem with vitest mock functions
  *
  * @example
  * ```typescript
@@ -307,7 +311,10 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
 }
 
 /**
- * Create a mock state for middleware testing.
+ * Creates a mock state for middleware testing with deep-merge update semantics.
+ *
+ * @template T - The state shape
+ * @returns A middleware state with a vitest mock `update` function
  */
 export function createMockState<T extends Record<string, unknown>>(): MiddlewareState<T> & {
   update: ReturnType<typeof vi.fn>;
@@ -342,7 +349,14 @@ export function createMockState<T extends Record<string, unknown>>(): Middleware
 /** Default mock dependency hash for testing */
 const defaultMockDependencyHash = 'a'.repeat(64);
 
-/** Create a mock KernelMiddlewareRuntime for unit testing middleware hooks. */
+/**
+ * Creates a mock KernelMiddlewareRuntime for unit testing middleware hooks.
+ *
+ * @template State - The state shape (defaults to empty object)
+ * @template Options - The options shape (defaults to empty object)
+ * @param mockOptions - optional overrides for filesystem, dependencies, and options
+ * @returns A fully mocked middleware runtime
+ */
 export function createMockRuntime<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
   State extends Record<string, unknown> = {},
@@ -370,8 +384,10 @@ export function createMockRuntime<
 }
 
 /**
- * Create a successful CreateGeometryResultInternal with geometries.
- * Used for testing middleware which works with internal types (without hash).
+ * Creates a successful CreateGeometryResult for testing middleware.
+ *
+ * @param geometries - The geometry responses to include
+ * @returns A successful result wrapping the provided geometries
  */
 export function createSuccessResult(geometries: GeometryResponse[]): CreateGeometryResult {
   return {
@@ -382,14 +398,21 @@ export function createSuccessResult(geometries: GeometryResponse[]): CreateGeome
 }
 
 /**
- * Create a successful CreateGeometryResultInternal with a single GLTF geometry.
+ * Creates a successful result containing a single GLTF geometry.
+ *
+ * @param content - The GLB binary content
+ * @returns A successful result with one GLTF geometry
  */
 export function createGltfSuccessResult(content: Uint8Array<ArrayBuffer>): CreateGeometryResult {
   return createSuccessResult([{ format: 'gltf', content }]);
 }
 
 /**
- * Create a successful CreateGeometryResultInternal with a single GLTF geometry and issues.
+ * Creates a successful result containing a single GLTF geometry and diagnostic issues.
+ *
+ * @param content - The GLB binary content
+ * @param issues - The diagnostic issues to attach
+ * @returns A successful result with one GLTF geometry and issues
  */
 export function createGltfSuccessResultWithIssues(
   content: Uint8Array<ArrayBuffer>,
@@ -403,7 +426,10 @@ export function createGltfSuccessResultWithIssues(
 }
 
 /**
- * Create a failed CreateGeometryResultInternal.
+ * Creates a failed CreateGeometryResult for testing error paths.
+ *
+ * @param issues - Optional issues (defaults to a single generic error)
+ * @returns A failed result with the provided issues
  */
 export function createErrorResult(issues?: KernelIssue[]): CreateGeometryResult {
   return {
@@ -419,7 +445,9 @@ export function createErrorResult(issues?: KernelIssue[]): CreateGeometryResult 
 }
 
 /**
- * Create an empty successful result.
+ * Creates an empty successful result with no geometries.
+ *
+ * @returns A successful result with an empty geometry array
  */
 export function createEmptySuccessResult(): CreateGeometryResult {
   return createSuccessResult([]);
@@ -430,9 +458,10 @@ export function createEmptySuccessResult(): CreateGeometryResult {
 // =============================================================================
 
 /**
- * Asserts that a kernel result is successful. Acts as a type guard narrowing
- * the result to KernelSuccessResult<T> for subsequent assertions.
- * Logs detailed error information when the assertion fails.
+ * Asserts that a kernel result is successful, narrowing to KernelSuccessResult<T>.
+ *
+ * @param result - The kernel result to assert on
+ * @param context - Optional label for error messages
  */
 export function assertSuccess<T>(result: KernelResult<T>, context?: string): asserts result is KernelSuccessResult<T> {
   if (!result.success) {
@@ -445,9 +474,10 @@ export function assertSuccess<T>(result: KernelResult<T>, context?: string): ass
 }
 
 /**
- * Asserts that a kernel result is a failure. Acts as a type guard narrowing
- * the result to KernelErrorResult for subsequent assertions.
- * Logs the unexpected success data when the assertion fails.
+ * Asserts that a kernel result is a failure, narrowing to KernelErrorResult.
+ *
+ * @param result - The kernel result to assert on
+ * @param context - Optional label for error messages
  */
 export function assertFailure<T>(result: KernelResult<T>, context?: string): asserts result is KernelErrorResult {
   if (result.success) {
@@ -460,6 +490,9 @@ export function assertFailure<T>(result: KernelResult<T>, context?: string): ass
 
 /**
  * Create a CreateGeometryInput for testing.
+ *
+ * @param overrides - optional partial input to override default values
+ * @returns a mock CreateGeometryInput with sensible defaults
  */
 export function createMockInput(overrides?: Partial<CreateGeometryInput>): CreateGeometryInput {
   return {
@@ -471,8 +504,11 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
 }
 
 /**
- * Create a GeometryFile for testing.
- * Used to create test inputs for worker methods like canHandle, getParameters, createGeometry.
+ * Creates a GeometryFile for use with worker methods (canHandle, getParameters, createGeometry).
+ *
+ * @param filename - The file name (e.g. `'test.ts'`)
+ * @param basePath - The project base path (defaults to `/builds/test`)
+ * @returns A GeometryFile pointing to the given filename and path
  */
 export function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
   return {
@@ -510,6 +546,9 @@ export type CreateTestWorkerOptions = {
 /**
  * Infer the file extensions a kernel handles from its definition.
  * Uses the kernel name as a heuristic when extensions aren't explicitly provided.
+ *
+ * @param definition - the kernel definition to infer extensions from
+ * @returns array of file extensions the kernel handles
  */
 function inferExtensions(definition: KernelDefinition): string[] {
   const name = definition.name.toLowerCase();
@@ -532,6 +571,9 @@ function inferExtensions(definition: KernelDefinition): string[] {
 /**
  * Infer an import-detection regex from the kernel name.
  * Returns undefined when the kernel has its own canHandle() that performs detection.
+ *
+ * @param definition - the kernel definition to infer import detection from
+ * @returns a regex string for import detection, or undefined if the kernel handles it
  */
 function inferDetectImport(definition: KernelDefinition): string | undefined {
   if (definition.canHandle) {
@@ -684,8 +726,10 @@ export async function createTestGeometry(input: {
 }
 
 /**
- * Create a mock KernelRuntime for kernel method testing.
- * Uses the same filesystem and logger patterns as middleware runtime.
+ * Creates a mock KernelRuntime for kernel method testing.
+ *
+ * @param options - optional filesystem overrides for the mock runtime
+ * @returns A mocked runtime with logger, filesystem, and no-op bundler/executor
  */
 export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFileSystemOptions }): KernelRuntime & {
   logger: ReturnType<typeof createMockLogger>;
@@ -803,6 +847,10 @@ export class MockKernelWorker extends KernelWorker {
 
   /**
    * Helper to run createGeometry with a mock file.
+   *
+   * @param filename - the filename to use for the mock geometry file
+   * @param parameters - the parameters to pass to createGeometry
+   * @returns the hashed geometry result
    */
   public async runCreateGeometry(
     filename = 'test.kcl',
@@ -814,6 +862,9 @@ export class MockKernelWorker extends KernelWorker {
 
   /**
    * Helper to run exportGeometry with a mock export format.
+   *
+   * @param fileType - the export format to use
+   * @returns the export geometry result
    */
   public async runExportGeometry(fileType = 'gltf'): Promise<ExportGeometryResult> {
     return this.exportGeometry(fileType as ExportFormat);
@@ -821,6 +872,8 @@ export class MockKernelWorker extends KernelWorker {
 
   /**
    * Override getMiddleware to return test middleware with resolved configs.
+   *
+   * @returns the test middleware entries configured on this stub
    */
   public override getMiddleware(): ResolvedMiddleware[] {
     return this.testResolvedMiddleware;

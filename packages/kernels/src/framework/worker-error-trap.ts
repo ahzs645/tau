@@ -59,6 +59,8 @@ export async function raceWithErrorTrap<T>(operation: Promise<T>): Promise<T> {
  * more complex control flows (e.g. streaming render progress callbacks).
  *
  * The caller MUST call `cleanup()` when the guarded operation completes.
+ *
+ * @returns trap with a `promise` that rejects on unhandled rejection and a `cleanup` function
  */
 export function createErrorTrap(): ErrorTrap {
   let rejectTrap: ((error: Error) => void) | undefined;

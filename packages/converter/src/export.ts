@@ -36,18 +36,20 @@ const exportConfigs = {
 } as const satisfies Partial<Record<FileExtension, ExportConfig>>;
 
 /**
- *
+ * File extension recognized by the converter's export pipeline. Use with `exportFiles()` to produce output files.
  */
 export type SupportedExportFormat = keyof typeof exportConfigs;
 
+/** All file extensions supported by the export pipeline, derived from the export configuration registry. */
 export const supportedExportFormats = Object.keys(exportConfigs) as SupportedExportFormat[];
 
 /**
- * Export GLB data to the specified format.
+ * Exports GLB data to the specified format.
  *
- * @param glbData - The GLB data as Uint8Array to export.
- * @param format - The target export format.
+ * @param glbData - the GLB data as Uint8Array to export
+ * @param format - the target export format
  * @returns A promise that resolves to an array of exported files.
+ * @throws Error if the underlying exporter fails
  */
 export const exportFiles = async (
   glbData: Uint8Array<ArrayBuffer>,

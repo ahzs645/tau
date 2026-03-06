@@ -35,6 +35,7 @@ const primitiveModeLines = 1;
  * dihedral-angle detection on the tessellated mesh.
  *
  * @param document - The glTF document to process
+ * @param thresholdDegrees - the dihedral angle threshold in degrees for edge detection
  * @returns Whether any edge primitives were added
  */
 function addEdgePrimitivesToDocument(document: Document, thresholdDegrees: number): boolean {
@@ -138,6 +139,7 @@ function addEdgePrimitivesToDocument(document: Document, thresholdDegrees: numbe
  * the original geometry is returned unchanged to avoid unnecessary re-serialization.
  *
  * @param geometry - The GLTF geometry to process
+ * @param thresholdDegrees - the dihedral angle threshold in degrees for edge detection
  * @returns The geometry with edge primitives added, or the original if no edges were needed
  */
 async function addEdgePrimitivesToGltf(geometry: GeometryGltf, thresholdDegrees: number): Promise<GeometryGltf> {

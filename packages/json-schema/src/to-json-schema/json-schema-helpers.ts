@@ -4,6 +4,7 @@ type TypeChecker = (instance: unknown) => boolean;
 
 type FormatChecker = RegExp | ((input: string) => boolean);
 
+/** Mapping of JSON Schema type keywords to runtime type-checking predicates. */
 export const types: Record<string, TypeChecker> = {
   string(instance: unknown): boolean {
     return typeof instance === 'string';
@@ -43,6 +44,7 @@ export const types: Record<string, TypeChecker> = {
   },
 };
 
+/** Mapping of JSON Schema string format names to RegExp or predicate validators. */
 export const formatRegexps: Record<string, FormatChecker> = {
   'date-time':
     /^\d{4}-(?:0\d|1[0-2])-(3[01]|0[1-9]|[12]\d)[ Tt](2[0-4]|[01]\d):([0-5]\d):(60|[0-5]\d)(\.\d+)?([Zz]|[+-]([0-5]\d):(60|[0-5]\d))$/,
@@ -94,7 +96,11 @@ formatRegexps['pattern'] = formatRegexps['regex']!;
 formatRegexps['ipv4'] = formatRegexps['ip-address']!;
 
 /**
+ * Tests whether a string value matches a recognized JSON Schema string format (date-time, email, uri, etc.).
  *
+ * @param input - the value to test (non-string values always pass)
+ * @param format - the JSON Schema format name to validate against
+ * @returns `true` if the value matches the format or is not a string.
  */
 export function isFormat(input: unknown, format: string): boolean {
   if (typeof input === 'string' && formatRegexps[format] !== undefined) {

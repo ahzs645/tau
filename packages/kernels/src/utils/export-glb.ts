@@ -24,6 +24,9 @@ type ColorGroupGeometry = {
 /**
  * Convert RGBA color to a unique string key for grouping.
  * Uses fixed precision to handle floating point variations.
+ *
+ * @param color - the RGBA color tuple
+ * @returns a comma-separated string key for the color
  */
 function colorToKey(color: Color): string {
   return `${color[0].toFixed(4)},${color[1].toFixed(4)},${color[2].toFixed(4)},${color[3].toFixed(4)}`;
@@ -72,6 +75,10 @@ function calculateTriangleNormal(
 /**
  * Create a primitive from color group geometry data.
  * Each color group gets its own material with the correct alphaMode.
+ *
+ * @param document - the glTF document to create the primitive in
+ * @param geometry - the color group geometry with positions, indices, normals, and color
+ * @returns the constructed glTF primitive
  */
 function createPrimitiveFromColorGroup(document: Document, geometry: ColorGroupGeometry): Primitive {
   const { color, positions, indices, normals } = geometry;
@@ -122,6 +129,9 @@ type TriangleData = {
  * - Opaque colors get OPAQUE materials
  * - Transparent colors get BLEND materials
  * - No vertex color issues with transparency
+ *
+ * @param meshData - the indexed polyhedron with vertices, faces, and colors
+ * @returns array of color group geometries ready for primitive creation
  */
 function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
   const { vertices, faces, colors } = meshData;
@@ -248,6 +258,9 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
  *
  * Uses the Replicad approach: each unique color gets its own primitive with its own material.
  * This ensures opaque geometry uses OPAQUE mode and transparent geometry uses BLEND mode.
+ *
+ * @param meshData - the indexed polyhedron to convert
+ * @returns the constructed glTF document
  */
 function createGltfDocument(meshData: IndexedPolyhedron): Document {
   const document = new Document();
@@ -337,9 +350,12 @@ function createGltfDocument(meshData: IndexedPolyhedron): Document {
 }
 
 /**
- * Create a GLB (binary GLTF) blob from mesh data with colors.
+ * Creates a GLB (binary glTF) byte array from mesh data with per-face colors.
  *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
+ * Always produces spec-compliant glTF with Y-up coordinates and meter units.
+ *
+ * @param meshData - the polyhedron geometry to encode
+ * @returns the GLB binary as a byte array
  */
 export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocument(meshData);
@@ -348,10 +364,12 @@ export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array
 }
 
 /**
- * Create a GLTF (JSON format) blob from mesh data with colors.
+ * Creates a self-contained glTF JSON file from mesh data with per-face colors.
  *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- * Note: This creates a self-contained GLTF with embedded binary data
+ * Binary data is base64-encoded inline so the result needs no separate `.bin` files.
+ *
+ * @param meshData - the polyhedron geometry to encode
+ * @returns the glTF JSON as a UTF-8-encoded byte array
  */
 export async function createGltf(meshData: IndexedPolyhedron): Promise<Uint8Array<ArrayBuffer>> {
   const document = createGltfDocument(meshData);

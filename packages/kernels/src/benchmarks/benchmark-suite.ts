@@ -19,7 +19,14 @@ export type BenchmarkCase = {
 
 const defaultMainFile = 'main.ts';
 
-/** Shorthand to create a single-file benchmark case from inline code. */
+/**
+ * Shorthand to create a single-file benchmark case from inline code.
+ *
+ * @param name - benchmark case name
+ * @param category - benchmark category for grouping
+ * @param code - inline TypeScript source code
+ * @returns benchmark case with a single main file
+ */
 function inlineCase(name: string, category: string, code: string): BenchmarkCase {
   return {
     name,
@@ -261,6 +268,7 @@ const stress: BenchmarkCase[] = [
   ),
 ];
 
+/** Complete suite of benchmark cases spanning primitives, booleans, fillets, extrusions, and stress tests. */
 export const benchmarkSuite: BenchmarkCase[] = [
   ...primitives,
   ...booleans,
@@ -275,8 +283,10 @@ export const benchmarkSuite: BenchmarkCase[] = [
 export const benchmarkCategories: string[] = [...new Set(benchmarkSuite.map((c) => c.category))];
 
 /**
- * Filter benchmark cases by category names.
- * Returns all cases if no filter provided.
+ * Filters benchmark cases by category names. Returns all cases if no filter provided.
+ *
+ * @param filter - Optional array of category names to include
+ * @returns The matching benchmark cases
  */
 export function filterBenchmarks(filter?: string[]): BenchmarkCase[] {
   if (!filter || filter.length === 0) {

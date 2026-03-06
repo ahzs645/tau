@@ -73,6 +73,10 @@ type WasmOption = string | { wasmUrl: string; wasmBindingsUrl: string };
  *
  * - **Custom config** (`{ wasmUrl, wasmBindingsUrl }`): Uses variable `import()` with
  *   `@vite-ignore` to bypass bundler analysis. Works in Node.js for any module format.
+ *
+ * @param wasm - the WASM variant preset name or custom config
+ * @param tracer - optional span tracer for performance instrumentation
+ * @returns the resolved WASM URL and bindings factory
  */
 async function resolveWasm(wasm: WasmOption, tracer?: KernelSpanTracer): Promise<ResolvedWasm> {
   const span = tracer?.startSpan('replicad.resolve-bindings', {
@@ -347,7 +351,7 @@ export type ReplicadWasmConfig = {
 };
 
 /**
- * Replicad kernel options.
+ * Configuration for the Replicad kernel, controlling WASM variant, OC tracing, and edge rendering.
  */
 export type ReplicadOptions = {
   /**

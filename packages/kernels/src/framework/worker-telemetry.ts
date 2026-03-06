@@ -36,6 +36,11 @@ export class WorkerTelemetryCollector {
   private readonly pending: PerformanceEntryData[] = [];
   private readonly observer: PerformanceObserver;
 
+  /**
+   * Create a new telemetry collector wired to the given send callback.
+   *
+   * @param send - callback that transmits batched entries to the main thread
+   */
   public constructor(send: (entries: PerformanceEntryData[]) => void) {
     this.send = send;
     this.observer = new PerformanceObserver((list) => {
@@ -72,6 +77,9 @@ export class WorkerTelemetryCollector {
 /**
  * Convert a worker-relative timestamp to an absolute timestamp
  * for cross-worker correlation.
+ *
+ * @param entry - performance entry with worker-relative timing
+ * @returns absolute timestamp (workerTimeOrigin + startTime)
  */
 export function toAbsoluteTime(entry: PerformanceEntryData): number {
   return entry.workerTimeOrigin + entry.startTime;

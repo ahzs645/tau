@@ -30,13 +30,25 @@ function invertUnitQuaternion(q: Quat): Quat {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 
-/** Rotate a 3-vector by a unit quaternion: v' = q·v·q⁻¹ */
+/**
+ * Rotate a 3-vector by a unit quaternion: v' = q·v·q⁻¹
+ *
+ * @param v - the 3-vector to rotate
+ * @param q - the unit quaternion representing the rotation
+ * @returns the rotated 3-vector
+ */
 function rotateVec3ByQuat(v: [number, number, number], q: Quat): [number, number, number] {
   const result = multiplyQuaternions(multiplyQuaternions(q, [v[0], v[1], v[2], 0]), invertUnitQuaternion(q));
   return [result[0], result[1], result[2]];
 }
 
-/** Similarity transform on a quaternion: R' = q·R·q⁻¹ */
+/**
+ * Similarity transform on a quaternion: R' = q·R·q⁻¹
+ *
+ * @param r - the quaternion to conjugate
+ * @param q - the quaternion to conjugate by
+ * @returns the conjugated quaternion
+ */
 function conjugateQuaternionBy(r: Quat, q: Quat): Quat {
   return multiplyQuaternions(multiplyQuaternions(q, r), invertUnitQuaternion(q));
 }
@@ -84,6 +96,10 @@ export const gltfReverseScalingMatrix: mat4 = [0.001, 0, 0, 0, 0, 0.001, 0, 0, 0
  *   vertex  → M · vertex        (via transformMesh)
  *   t_node  → q · t_node · q⁻¹  (rotate translation vector)
  *   R_node  → q · R_node · q⁻¹  (similarity transform on rotation)
+ *
+ * @param document - the glTF document to transform
+ * @param matrix - the rotation matrix to apply to mesh vertices
+ * @param quaternion - the rotation quaternion to apply to node TRS
  */
 function applyRotationToDocument(document: Document, matrix: mat4, quaternion: Quat): void {
   for (const mesh of document.getRoot().listMeshes()) {
@@ -103,6 +119,10 @@ function applyRotationToDocument(document: Document, matrix: mat4, quaternion: Q
  * Apply a uniform scale to the entire document: mesh vertices AND node translations.
  *
  * Node rotations are unaffected by uniform scaling.
+ *
+ * @param document - the glTF document to transform
+ * @param matrix - the scaling matrix to apply to mesh vertices
+ * @param factor - the uniform scale factor to apply to node translations
  */
 function applyUniformScaleToDocument(document: Document, matrix: mat4, factor: number): void {
   for (const mesh of document.getRoot().listMeshes()) {
@@ -120,7 +140,10 @@ function applyUniformScaleToDocument(document: Document, matrix: mat4, factor: n
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a custom transform for Y-up to Z-up coordinate system conversion
+ * Creates a gltf-transform document transform that rotates from Y-up to Z-up coordinates.
+ *
+ * @param shouldTransform - when `false` the returned function is a no-op (default `true`)
+ * @returns A document transform function suitable for `document.transform()`.
  */
 export function createCoordinateTransform(shouldTransform = true): (document: Document) => void {
   return (document: Document): void => {
@@ -133,7 +156,10 @@ export function createCoordinateTransform(shouldTransform = true): (document: Do
 }
 
 /**
- * Creates a custom transform for meters to millimeters scaling
+ * Creates a gltf-transform document transform that scales geometry from meters to millimeters.
+ *
+ * @param shouldTransform - when `false` the returned function is a no-op (default `true`)
+ * @returns A document transform function suitable for `document.transform()`.
  */
 export function createScalingTransform(shouldTransform = true): (document: Document) => void {
   return (document: Document): void => {
@@ -146,7 +172,10 @@ export function createScalingTransform(shouldTransform = true): (document: Docum
 }
 
 /**
- * Creates a custom transform for Z-up to Y-up coordinate system conversion (reverse transform)
+ * Creates a gltf-transform document transform that rotates from Z-up back to Y-up coordinates.
+ *
+ * @param shouldTransform - when `false` the returned function is a no-op (default `true`)
+ * @returns A document transform function suitable for `document.transform()`.
  */
 export function createReverseCoordinateTransform(shouldTransform = true): (document: Document) => void {
   return (document: Document): void => {
@@ -159,7 +188,10 @@ export function createReverseCoordinateTransform(shouldTransform = true): (docum
 }
 
 /**
- * Creates a custom transform for millimeters to meters scaling (reverse transform)
+ * Creates a gltf-transform document transform that scales geometry from millimeters back to meters.
+ *
+ * @param shouldTransform - when `false` the returned function is a no-op (default `true`)
+ * @returns A document transform function suitable for `document.transform()`.
  */
 export function createReverseScalingTransform(shouldTransform = true): (document: Document) => void {
   return (document: Document): void => {
@@ -174,6 +206,9 @@ export function createReverseScalingTransform(shouldTransform = true): (document
 /**
  * Normalizes GLB data from Z-up coordinate system to Y-up (glTF spec-compliant).
  * Used by format-specific loaders that import from Z-up source formats.
+ *
+ * @param glbData - the raw GLB buffer to re-orient
+ * @returns The re-oriented GLB buffer, or the original data if transformation fails.
  */
 export async function normalizeGlbToYup(glbData: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const io = new NodeIO().registerExtensions(allExtensions);

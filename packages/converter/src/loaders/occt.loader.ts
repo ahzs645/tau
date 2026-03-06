@@ -12,7 +12,7 @@ type OcctOptions = {
 };
 
 /**
- *
+ * Loader for OCCT-based CAD formats (STEP, IGES, BREP) using occt-import-js.
  */
 // oxlint-disable-next-line typescript/no-unnecessary-type-arguments -- ensuring future API changes are picked up automatically
 export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {

@@ -2,8 +2,10 @@ import type { JSONSchema7 } from 'json-schema';
 import { isEqual, keys, xor } from '#to-json-schema/to-json-schema.utils.js';
 import { formatRegexps, types } from '#to-json-schema/json-schema-helpers.js';
 
+/** All recognized JSON Schema string format names (date-time, email, uri, etc.). */
 export const stringFormats = Object.keys(formatRegexps);
 
+/** Ordered list of JSON Schema type keywords used for value type detection. */
 export const typeNames = [
   'integer',
   'number', // Make sure number is after integer (for proper type detection)
@@ -16,7 +18,10 @@ export const typeNames = [
 ] as const;
 
 /**
+ * Returns the JSON Schema type keyword (`string`, `number`, `integer`, `array`, etc.) that describes the given value.
  *
+ * @param value - the value to classify
+ * @returns The matching type keyword, or `undefined` if no type matches.
  */
 export function getType(value: unknown): string | undefined {
   return typeNames.find((typeName) => types[typeName]!(value));
@@ -47,7 +52,10 @@ function getCommonTypeFromArrayOfTypes(arrayOfTypes: string[]): string | undefin
 }
 
 /**
+ * Returns the shared JSON Schema type keyword for all array items, or `undefined` if item types are mixed.
  *
+ * @param array - the array whose items to classify
+ * @returns The common type keyword, or `undefined` if types are heterogeneous.
  */
 export function getCommonArrayItemsType(array: unknown[]): string | undefined {
   return getCommonTypeFromArrayOfTypes(array.map((item) => getType(item) ?? ''));

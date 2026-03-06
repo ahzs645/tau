@@ -239,7 +239,11 @@ function generateProvenanceSection(run: BenchmarkRunResult): string {
 }
 
 /**
- * Generate a self-contained HTML benchmark report.
+ * Generates a self-contained HTML benchmark report with summary tables, bar charts, and OC tracing data.
+ *
+ * @param run - The benchmark run results to report
+ * @param comparison - Optional baseline run for delta comparison
+ * @returns A complete HTML document string
  */
 export function generateHtmlReport(run: BenchmarkRunResult, comparison?: BenchmarkRunResult): string {
   const title = comparison ? 'Kernel Benchmark Comparison' : 'Kernel Benchmark Report';
@@ -304,7 +308,10 @@ export function generateHtmlReport(run: BenchmarkRunResult, comparison?: Benchma
 }
 
 /**
- * Serialize a BenchmarkRunResult to JSON for later comparison.
+ * Serializes a benchmark run result to pretty-printed JSON for later comparison.
+ *
+ * @param run - The benchmark run result to serialize
+ * @returns A JSON string with benchmark data stripped of non-essential fields
  */
 export function serializeRunResult(run: BenchmarkRunResult): string {
   const stripped = {

@@ -8,6 +8,10 @@
  *
  * This helper normalizes both cases by unwrapping one level of `default` nesting when the
  * imported value is not directly callable.
+ *
+ * @template T - The expected export type
+ * @param imported - The module default export to unwrap
+ * @returns The resolved callable export
  */
 export function resolveCjsDefault<T>(imported: T): T {
   if (typeof imported === 'function') {

@@ -1,7 +1,7 @@
 import type { FileExtension, FileInput } from '@taucad/types';
 
 /**
- *
+ * Options shared by all format loaders, carrying the file extension that identifies the input format.
  */
 export type BaseLoaderOptions = {
   format: FileExtension;
@@ -24,6 +24,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * Initialize the loader with options.
    *
    * @param options - The options passed to the loader. These are specific to each loader implementation.
+   * @returns This loader instance for chaining.
    */
   public initialize(options: Options): this {
     this.options = options;

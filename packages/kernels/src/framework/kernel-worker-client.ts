@@ -27,7 +27,12 @@ export class RenderSupersededError extends Error {
   }
 }
 
-/** Realm-safe type guard — checks `error.name` instead of prototype chain. */
+/**
+ * Realm-safe type guard — checks `error.name` instead of prototype chain.
+ *
+ * @param error - the value to test
+ * @returns `true` when the error is a {@link RenderSupersededError}
+ */
 export function isRenderSupersededError(error: unknown): error is RenderSupersededError {
   return error instanceof Error && error.name === 'RenderSupersededError';
 }
@@ -68,7 +73,13 @@ export class KernelWorkerClient {
     reject: (error: Error) => void;
   };
 
-  /** Create a new kernel worker client wrapping the given transport. */
+  /**
+   * Create a new kernel worker client wrapping the given transport.
+   *
+   * @param transport - transport layer used to send commands and receive responses
+   * @param onLog - callback invoked for every log event from the worker
+   * @param onTelemetry - optional callback for performance telemetry batches
+   */
   public constructor(transport: KernelTransport, onLog: OnLogCallback, onTelemetry?: OnTelemetryCallback) {
     this.transport = transport;
     this.onLog = onLog;
@@ -79,7 +90,11 @@ export class KernelWorkerClient {
     });
   }
 
-  /** Send an initialize command to the worker with options, file manager port, and plugin configs. */
+  /**
+   * Send an initialize command to the worker with options, file manager port, and plugin configs.
+   *
+   * @param input - initialization payload with options, filesystem port, and middleware/bundler registrations
+   */
   public async initialize(input: {
     options: Record<string, unknown>;
     fileSystemPort: MessagePort;
@@ -103,12 +118,7 @@ export class KernelWorkerClient {
   /**
    * Send a render command to the worker.
    *
-   * @param input - Render input containing file, parameters, callbacks, and tessellation
-   * @param input.file - The geometry file to render
-   * @param input.parameters - The parameters for rendering
-   * @param input.onParametersResolved - Optional callback when parameters are resolved
-   * @param input.onProgress - Optional progress callback
-   * @param input.tessellation - Optional tessellation quality override
+   * @param input - render payload with file, parameters, callbacks, and tessellation config
    * @returns Completed geometry result
    */
   public async render(input: {
@@ -152,13 +162,21 @@ export class KernelWorkerClient {
     }
   }
 
-  /** Notify the worker that files have changed for cache invalidation. */
+  /**
+   * Notify the worker that files have changed for cache invalidation.
+   *
+   * @param paths - absolute paths of the files that changed
+   */
   public notifyFileChanged(paths: string[]): void {
     const command: KernelCommand = { type: 'fileChanged', paths };
     this.transport.send(command);
   }
 
-  /** Send a middleware reconfiguration command to the worker. */
+  /**
+   * Send a middleware reconfiguration command to the worker.
+   *
+   * @param entries - new middleware configuration to apply
+   */
   public configureMiddleware(entries: MiddlewareRegistrations): void {
     const command: KernelCommand = { type: 'configureMiddleware', entries };
     this.transport.send(command);
