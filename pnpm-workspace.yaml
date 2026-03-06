@@ -73,11 +73,13 @@ catalog:
   eslint-plugin-react: ^7.37.5
   eslint-plugin-unicorn: ^63.0.0
   geist: ^1.7.0
+  husky: ^9.1.7
   ink: ^6.8.0
   isbot: ^5.1.35
   js-yaml: ^4.1.1
   json-schema-default: ^1.0.2
   langchain: ^1.2.27
+  lint-staged: ^16.3.2
   madge: ^8.0.0
   manifold-3d: 3.3.2
   mermaid: ^11.12.3
