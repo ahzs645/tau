@@ -1,11 +1,11 @@
 ---
 name: submit-pr
-description: Submits polished upstream pull requests from external dependency repos managed by repos.yaml. Use when asked to open a PR, submit changes upstream, push to a fork, or prepare maintainer-quality PR descriptions with testing evidence and AI disclosure.
+description: Submits draft upstream pull requests from external dependency repos managed by repos.yaml. Use when asked to open a PR, submit changes upstream, push to a fork, or prepare maintainer-quality PR descriptions with testing evidence and AI disclosure. PRs are always opened as drafts for human review before marking ready.
 ---
 
 # Submit PR
 
-Use this workflow to prepare and submit a maintainer-quality PR with one clean commit.
+Use this workflow to prepare and submit a maintainer-quality **draft** PR with one clean commit. The PR is always opened as a draft so a human can review it before marking it ready for submission.
 
 ## 1) Confirm fork via repo-manifest
 
@@ -59,9 +59,9 @@ Preferred flow:
 
 If work already has multiple local commits, squash to one commit using non-interactive workflow (no interactive prompts), then push.
 
-## 5) Open PR with high-quality description
+## 5) Open draft PR with high-quality description
 
-Use `gh pr create` and include:
+Use `gh pr create --draft` and include:
 
 - concise, upstream-style title
 - clear summary of behavior change
@@ -98,10 +98,22 @@ PR body template:
 
 ## 6) Final checks
 
-Before sharing PR link:
+Before sharing the draft PR link:
 
 1. `git status` is clean.
 2. Branch is pushed to fork.
 3. PR targets upstream base branch (not fork default by accident).
 4. PR body includes AI disclosure with model name.
-5. Return PR URL and a short checklist of what passed.
+5. Return draft PR URL and a short checklist of what passed.
+6. **Remind the human reviewer** to inspect the PR and mark it ready when satisfied:
+   - `gh pr ready <pr-number>` or use the GitHub UI.
+
+## 7) Human review and mark ready
+
+This step is performed by a human, not the agent.
+
+1. Review the draft PR on GitHub (diff, description, CI status).
+2. Request any changes from the agent if needed.
+3. When satisfied, mark the PR as ready for review:
+   - `gh pr ready <pr-number>`
+   - Or click "Ready for review" in the GitHub UI.
