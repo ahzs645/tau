@@ -15,6 +15,7 @@ import * as MdxConfig from './app/lib/fumadocs/source.config.js';
 import { crossOriginIsolation } from '@taucad/vite/cross-origin-isolation';
 import { tsModuleUrlPlugin } from '@taucad/vite/ts-module-url';
 import { base64Loader } from '@taucad/vite/base64-loader';
+import { largeDepRegexFix } from '@taucad/vite/large-dep-regex-fix';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +31,9 @@ export default defineConfig(({ mode }) => {
     root: __dirname,
     cacheDir: '../../node_modules/.vite/apps/ui',
     plugins: [
+      // Workaround: Vite 8 beta regex overflow on large pre-bundled deps (Monaco Editor)
+      largeDepRegexFix(),
+
       // Cross-origin isolation headers for SharedArrayBuffer (multi-threaded WASM)
       crossOriginIsolation(),
 

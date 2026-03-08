@@ -22,6 +22,11 @@
       "types": "./src/base64-loader.vite-plugin.ts",
       "import": "./src/base64-loader.vite-plugin.ts",
       "default": "./src/base64-loader.vite-plugin.ts"
+    },
+    "./large-dep-regex-fix": {
+      "types": "./src/large-dep-regex-fix.vite-plugin.ts",
+      "import": "./src/large-dep-regex-fix.vite-plugin.ts",
+      "default": "./src/large-dep-regex-fix.vite-plugin.ts"
     }
   },
   "dependencies": {
