@@ -20,11 +20,18 @@ vi.mock('#lib/monaco.constants.js', () => ({
     if (path.endsWith('.ts') || path.endsWith('.tsx')) {
       return 'typescript';
     }
-
     if (path.endsWith('.js') || path.endsWith('.jsx')) {
       return 'javascript';
     }
-
+    if (path.endsWith('.scad')) {
+      return 'openscad';
+    }
+    if (path.endsWith('.kcl')) {
+      return 'kcl';
+    }
+    if (path.endsWith('.json')) {
+      return 'json';
+    }
     return undefined;
   },
 }));
@@ -306,6 +313,105 @@ describe('MonacoModelService', () => {
       expect(() => {
         service.setBuildSession('new-session');
       }).not.toThrow();
+    });
+  });
+
+  describe('handleFileWritten', () => {
+    type FileWrittenEvent = {
+      type: 'fileWritten';
+      path: string;
+      data: Uint8Array<ArrayBuffer>;
+      source: string;
+    };
+
+    function getFileWrittenHandler(): (event: FileWrittenEvent) => void {
+      const onCall = fileManagerRef.on.mock.calls.find((call: unknown[]) => call[0] === 'fileWritten');
+      expect(onCall).toBeDefined();
+      return onCall![1] as (event: FileWrittenEvent) => void;
+    }
+
+    it('should create a model for machine-sourced .scad files', () => {
+      const handler = getFileWrittenHandler();
+      handler({
+        type: 'fileWritten',
+        path: 'main.scad',
+        data: new TextEncoder().encode('cube([10,10,10]);'),
+        source: 'machine',
+      });
+
+      expect(monaco.editor.createModel).toHaveBeenCalledWith(
+        'cube([10,10,10]);',
+        'openscad',
+        expect.objectContaining({ path: '/main.scad' }),
+      );
+    });
+
+    it('should create a model for machine-sourced .kcl files', () => {
+      const handler = getFileWrittenHandler();
+      handler({
+        type: 'fileWritten',
+        path: 'main.kcl',
+        data: new TextEncoder().encode('fn main() {}'),
+        source: 'machine',
+      });
+
+      expect(monaco.editor.createModel).toHaveBeenCalledWith(
+        'fn main() {}',
+        'kcl',
+        expect.objectContaining({ path: '/main.kcl' }),
+      );
+    });
+
+    it('should create a model for machine-sourced .json files', () => {
+      const handler = getFileWrittenHandler();
+      handler({
+        type: 'fileWritten',
+        path: 'test.json',
+        data: new TextEncoder().encode('{"key": "value"}'),
+        source: 'machine',
+      });
+
+      expect(monaco.editor.createModel).toHaveBeenCalledWith(
+        '{"key": "value"}',
+        'json',
+        expect.objectContaining({ path: '/test.json' }),
+      );
+    });
+
+    it('should NOT create a model for machine-sourced files with unknown extensions', () => {
+      const handler = getFileWrittenHandler();
+      handler({
+        type: 'fileWritten',
+        path: 'model.stl',
+        data: new TextEncoder().encode('binary data'),
+        source: 'machine',
+      });
+
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
+    });
+
+    it('should NOT create a model for editor-sourced files', () => {
+      const handler = getFileWrittenHandler();
+      handler({
+        type: 'fileWritten',
+        path: 'main.ts',
+        data: new TextEncoder().encode('const x = 1;'),
+        source: 'editor',
+      });
+
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
+    });
+
+    it('should NOT create a model for machine-sourced node_modules files', () => {
+      const handler = getFileWrittenHandler();
+      handler({
+        type: 'fileWritten',
+        path: 'node_modules/lodash/index.js',
+        data: new TextEncoder().encode('module.exports = {};'),
+        source: 'machine',
+      });
+
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
     });
   });
 });

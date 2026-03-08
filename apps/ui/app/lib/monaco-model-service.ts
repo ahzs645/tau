@@ -318,10 +318,10 @@ export class MonacoModelService {
           this.backgroundAccessTimes.set(path, Date.now());
         }
       }
-    } else if (this.shouldSyncFile(path)) {
-      // For machine sources on JS-like files, create background model
+    } else {
+      // For machine/external sources, create model for any recognized file type
       const language = this.detectLanguage(path);
-      if (language) {
+      if (language && !path.includes('node_modules')) {
         this.monaco.editor.createModel(newContent, language, uri);
         this.trackModelCreated();
         this.syncedPaths.add(path);
@@ -559,15 +559,6 @@ export class MonacoModelService {
    */
   private detectLanguage(path: string): string | undefined {
     return getMonacoLanguage(path);
-  }
-
-  /**
-   * Check if a file should be synced as a background model.
-   * Only user source files (JS/TS, not in node_modules) are synced.
-   * Type declarations for node_modules are handled by the TypeAcquisitionService.
-   */
-  private shouldSyncFile(path: string): boolean {
-    return isJsLikeFile(path) && !path.includes('node_modules');
   }
 
   /**
