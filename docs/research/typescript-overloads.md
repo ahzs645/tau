@@ -175,6 +175,95 @@ these produce `Mock<Constructable | Procedure>` which cannot satisfy overloads.
 
 ---
 
+### 4. Function Declaration in Object Literal (factory pattern)
+
+When a factory function returns an object literal that must satisfy an interface
+with overloaded methods, declare the overloaded function as a **function
+statement** inside the factory, then assign it as a property. Function
+statements receive _loose_ implementation checking (the implementation signature
+need only be compatible with the overloads), while arrow functions in object
+literals receive _strict_ checking.
+
+```typescript
+// ✓ GOOD — function declaration gets loose overload checking
+const createProvider = async (): Promise<FileSystemProvider> => {
+  const fs = await mountBackend();
+
+  function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  function readFile(path: string, encoding: 'utf8'): Promise<string>;
+  async function readFile(path: string, encoding?: 'utf8') {
+    const data = await fs.read(path);
+    return encoding === 'utf8' ? decode(data) : data;
+  }
+
+  return { readFile /* … */ }; // no assertion needed
+};
+```
+
+```typescript
+// ✗ BAD — arrow/method in object literal gets strict checking
+return {
+  async readFile(path: string, encoding?: 'utf8') { /* … */ },
+  // TS2322: implementation signature not assignable to overloads
+};
+
+// ✗ WORKAROUND — type assertion hides real errors
+return { readFile: async (…) => { … } } as FileSystemProvider;
+```
+
+| Aspect                    | Rating                                         |
+| ------------------------- | ---------------------------------------------- |
+| Call-site DX              | ★★★★★ — overloads visible, narrowing works     |
+| Implementation safety     | ★★★★ — loose checking catches gross mismatches |
+| No assertion needed       | ✓                                              |
+| Works in factory closures | ✓ — captures outer scope variables             |
+
+**Best for:** Factory functions returning object literals with overloaded
+methods (e.g., `createZenFsProvider`, `createMockFileSystem`).
+
+**Reference:** [SO #74881861](https://stackoverflow.com/questions/74881861/),
+[SO #34798989](https://stackoverflow.com/questions/34798989/)
+
+---
+
+### 5. Generic Backend Configuration (preserving inferred options)
+
+When wrapping a library type like `BackendConfiguration<T extends Backend>`,
+make both the options type and factory function generic over `T`. This lets
+TypeScript infer the concrete backend type from the caller's argument, preserving
+backend-specific options (e.g., `storeName` for IndexedDB, `handle` for
+WebAccess) without resorting to `any` or `Record<string, unknown>`.
+
+```typescript
+// ✓ GOOD — generic preserves backend-specific options
+type ProviderOptions<T extends Backend = Backend> = {
+  backendConfig: BackendConfiguration<T>;
+};
+
+const create = async <T extends Backend>(opts: ProviderOptions<T>) => resolveMountConfig(opts.backendConfig); // T inferred from caller
+
+// Caller: T inferred as typeof IndexedDB → storeName is valid
+create({ backendConfig: { backend: IndexedDB, storeName: 'myfs' } });
+```
+
+```typescript
+// ✗ BAD — erases backend-specific options
+type ProviderOptions = {
+  backendConfig: BackendConfiguration<Backend>;
+  // OptionsOf<Backend> = object → no storeName, no handle
+};
+
+// ✗ BAD — escapes type system entirely
+type ProviderOptions = {
+  backendConfig: { backend: any } & Record<string, unknown>;
+};
+```
+
+**Best for:** Wrapping library generic types where the concrete type parameter
+flows from the caller's input.
+
+---
+
 ## Anti-Patterns
 
 ### 1. Mapped mock types with `ReturnType<typeof vi.fn>`
@@ -234,6 +323,17 @@ expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/path', data);
 
 ---
 
+## Note on `satisfies` Operator
+
+The `satisfies` operator (TypeScript 4.9+) validates conformance without
+widening inferred types, but does **not** help with overloaded method
+implementations. `satisfies FileSystemProvider` on an object literal with an
+arrow-function `readFile` produces the same TS2322 error as a type annotation.
+The function-declaration pattern (§4 above) remains the correct solution for
+object literals with overloaded methods.
+
+---
+
 ## References
 
 - [TypeScript Handbook — Conditional Types (infer limitation)](https://www.typescriptlang.org/docs/handbook/2/conditional-types.html)
@@ -242,3 +342,6 @@ expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/path', data);
 - [vitest-dev/vitest#6085 — MockInstance with overloaded functions](https://github.com/vitest-dev/vitest/issues/6085)
 - [Conditional Return Types for Function Overloading](https://blog.devgenius.io/conditional-return-type-for-function-overloading-in-typescript-e3c53b9a1fcb)
 - [When to Use Conditional Types vs Function Overloads](https://www.craigmacintyre.co.uk/conditional-types-in-typescript/)
+- [SO #74881861 — Object literal overload implementation](https://stackoverflow.com/questions/74881861/) (function declaration pattern)
+- [SO #34798989 — Overload object function properties](https://stackoverflow.com/questions/34798989/) (separate declaration assignment)
+- [TypeScript 4.9 `satisfies` docs](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-9.html) (does not help with overloaded implementations)
