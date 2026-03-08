@@ -486,6 +486,27 @@ describe('kernel-filesystem-bridge', () => {
       expect(extractTransferables(undefined)).toHaveLength(0);
       expect(extractTransferables({ key: 'value' })).toHaveLength(0);
     });
+
+    it('should find the shared ArrayBuffer when using new Uint8Array(data.buffer)', () => {
+      const original = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
+      const viewOfSameBuffer = new Uint8Array(original.buffer);
+
+      const transferables = extractTransferables([viewOfSameBuffer]);
+      expect(transferables).toHaveLength(1);
+      expect(transferables[0]).toBe(original.buffer);
+    });
+
+    it('should NOT find the original ArrayBuffer when using new Uint8Array(data) (copy)', () => {
+      const original = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
+      const copy = new Uint8Array(original);
+
+      const transferables = extractTransferables([copy]);
+      expect(transferables).toHaveLength(1);
+      expect(transferables[0]).not.toBe(original.buffer);
+
+      expect(original.byteLength).toBe(4);
+      expect(original[0]).toBe(0x67);
+    });
   });
 
   describe('createBridgeProxy', () => {
