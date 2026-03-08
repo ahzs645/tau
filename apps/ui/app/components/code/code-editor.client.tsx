@@ -36,7 +36,7 @@ const maxForceTokenizeLines = 5000;
 function createOverflowWidgetsDomNode(): HTMLDivElement {
   const node = document.createElement('div');
   node.className = 'monaco-editor';
-  node.style.cssText = 'position:fixed;top:0;left:0;overflow:visible;z-index:50;pointer-events:none;';
+  node.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;overflow:visible;z-index:50;';
   document.body.append(node);
   return node;
 }
