@@ -25,6 +25,7 @@ import type { KernelRuntime } from '#types/kernel-worker.types.js';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
+import { named } from '#framework/named.js';
 import { isNode, resolveFileUrl } from '#framework/environment.js';
 import { initOpenCascade } from '#kernels/replicad/init-open-cascade.js';
 import type { OpenCascadeModuleFactory } from '#kernels/replicad/init-open-cascade.js';
@@ -38,6 +39,9 @@ import {
   deriveLocationFromFrames,
   applyLibrarySourceMaps,
   resolveSourcePath,
+  preserveExportNames,
+  demangleStackFrames,
+  classifyLibraryFrames,
 } from '#framework/error-enrichment.js';
 import { renderOutput } from '#kernels/replicad/utils/render-output.js';
 import { convertReplicadGeometriesToGltf } from '#kernels/replicad/utils/replicad-to-gltf.js';
@@ -121,6 +125,8 @@ type ReplicadContext = {
   withBrepEdges: boolean;
   replicadInitialised: boolean;
   librarySourceMapCache: Map<string, SourceMapConsumer | undefined>;
+  exportNameMap: Map<string, string>;
+  libraryExportNames: Set<string>;
   tracingSummary?: OcTracingSummary;
 };
 
@@ -137,7 +143,7 @@ const KERNEL_MODULES_KEY = '__KERNEL_MODULES__';
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- module-level constant
 const LIBRARY_PATTERNS = [{ pattern: 'node_modules/replicad/', moduleName: 'replicad' }];
-const frameClassifier = createFrameClassifier(LIBRARY_PATTERNS);
+const frameClassifier = createFrameClassifier();
 
 // =============================================================================
 // Path helpers
@@ -165,9 +171,11 @@ function parseError(error: unknown, sourceMapJson?: string, projectPath?: string
 }
 
 function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadContext): KernelStackFrame[] {
-  return applyLibrarySourceMaps(frames, LIBRARY_PATTERNS, (moduleName) => {
+  const mapped = applyLibrarySourceMaps(frames, LIBRARY_PATTERNS, (moduleName) => {
     return context.librarySourceMapCache.get(moduleName);
   });
+  const demangled = demangleStackFrames(mapped, context.exportNameMap);
+  return classifyLibraryFrames(demangled, context.libraryExportNames);
 }
 
 async function loadReplicadSourceMap(): Promise<SourceMapConsumer | undefined> {
@@ -280,28 +288,29 @@ function extractDefaultName(module: unknown): string | undefined {
 
 type RunMainResult<T> = { success: true; value: T } | { success: false; issues: KernelIssue[] };
 
-async function runMainRaw(module: RuntimeModuleExports, parameters: Record<string, unknown>): Promise<unknown> {
-  const mainFunction = module.default ?? module.main;
-  if (!mainFunction || typeof mainFunction !== 'function') {
-    return undefined;
-  }
+const runMainRaw = named(
+  'runMainRaw',
+  async function (module: RuntimeModuleExports, parameters: Record<string, unknown>): Promise<unknown> {
+    const mainFunction = module.default ?? module.main;
+    if (!mainFunction || typeof mainFunction !== 'function') {
+      return undefined;
+    }
 
-  if (mainFunction.length >= 2) {
-    const registry = getModuleRegistry();
-    const first = registry.values().next();
-    return mainFunction(first.done ? undefined : first.value, parameters);
-  }
+    if (mainFunction.length >= 2) {
+      const registry = getModuleRegistry();
+      const first = registry.values().next();
+      return mainFunction(first.done ? undefined : first.value, parameters);
+    }
 
-  return mainFunction(parameters);
-}
+    return mainFunction(parameters);
+  },
+);
 
-async function runMain<T>(input: {
-  module: RuntimeModuleExports;
-  parameters: Record<string, unknown>;
-  context: ReplicadContext;
-  sourceMapJson?: string;
-  projectPath?: string;
-}): Promise<RunMainResult<T>> {
+const runMain = named('runMain', async function <
+  T,
+>(input: { module: RuntimeModuleExports; parameters: Record<string, unknown>; context: ReplicadContext; sourceMapJson?: string; projectPath?: string }): Promise<
+  RunMainResult<T>
+> {
   try {
     const value = await runMainRaw(input.module, input.parameters);
     return { success: true, value: value as T };
@@ -316,7 +325,7 @@ async function runMain<T>(input: {
     });
     return { success: false, issues: [issue] };
   }
-}
+});
 
 function enrichIssueLocation(
   issues: Array<{ message: string; severity: string; location?: unknown }>,
@@ -397,6 +406,8 @@ export default defineKernel({
   optionsSchema: replicadOptionsSchema,
 
   async initialize(options, runtime) {
+    const { mangledToOriginal: exportNameMap, exportNames: libraryExportNames } = preserveExportNames(replicad);
+
     const { logger, tracer } = runtime;
     const { ocTracing, withBrepEdges, withSourceMapping, wasm } = options;
 
@@ -455,6 +466,8 @@ export default defineKernel({
       withBrepEdges,
       replicadInitialised: true,
       librarySourceMapCache,
+      exportNameMap,
+      libraryExportNames,
       tracingSummary,
     };
   },

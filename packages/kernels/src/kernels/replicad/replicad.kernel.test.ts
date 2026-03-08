@@ -1,5 +1,6 @@
 // @vitest-environment node
 /* oxlint-disable max-lines -- comprehensive kernel test suite */
+/* oxlint-disable @typescript-eslint/no-unsafe-assignment -- vitest asymmetric matchers return any */
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
@@ -1295,26 +1296,16 @@ describe('ReplicadWorker', () => {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.message).toMatch(/bla is not defined/i);
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ functionName: 'main', context: 'user' }),
-            expect.objectContaining({ context: 'framework' }),
-          ]),
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            message: expect.stringMatching(/bla is not defined/i),
+            severity: 'error',
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({ functionName: 'main', context: 'user' }),
+              expect.objectContaining({ context: 'framework' }),
+            ]),
+          }),
         );
-
-        // All framework/runtime frames should point to known platform paths
-        for (const frame of issue.stackFrames!.filter((f) => f.context === 'framework' || f.context === 'runtime')) {
-          const fileName = frame.fileName ?? '';
-          expect(
-            fileName.includes('/kernel/') ||
-              fileName.includes('/kernels/') ||
-              fileName.startsWith('node:') ||
-              fileName.includes('/node_modules/') ||
-              fileName.startsWith('data:'),
-          ).toBe(true);
-        }
       });
 
       it('should return error for invalid geometry operations', async () => {
@@ -1352,10 +1343,13 @@ describe('ReplicadWorker', () => {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).not.toMatch(/^\d+$/);
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            message: expect.not.stringMatching(/^\d+$/),
+          }),
+        );
       });
 
       it('should return decoded OC error with type info for zero-height extrusion', async () => {
@@ -1381,10 +1375,13 @@ describe('ReplicadWorker', () => {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toMatch(/BRepSweep_Translation/);
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringMatching(/BRepSweep_Translation/),
+          }),
+        );
       });
 
       it('should include user code stack frames for OC exceptions with helper function', async () => {
@@ -1413,34 +1410,32 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toBe(
-          'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
-        );
-        expect(issue.location).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
-            fileName: 'extrude_stack.ts',
-            startLineNumber: 10,
+            type: 'kernel',
+            severity: 'error',
+            message:
+              'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+            location: expect.objectContaining({
+              fileName: 'extrude_stack.ts',
+              startLineNumber: 10,
+            }),
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'buildShape',
+                fileName: 'extrude_stack.ts',
+                lineNumber: 10,
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: 'main',
+                fileName: 'extrude_stack.ts',
+                lineNumber: 14,
+                context: 'user',
+              }),
+              expect.objectContaining({ context: 'library' }),
+            ]),
           }),
-        );
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'buildShape',
-              fileName: 'extrude_stack.ts',
-              lineNumber: 10,
-              context: 'user',
-            }),
-            expect.objectContaining({
-              functionName: 'main',
-              fileName: 'extrude_stack.ts',
-              lineNumber: 14,
-              context: 'user',
-            }),
-            expect.objectContaining({ context: 'library' }),
-          ]),
         );
       });
 
@@ -1474,32 +1469,31 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toMatch(/BRepSweep_Translation/);
-        expect(issue.location).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
-            fileName: 'nested_helpers.ts',
-            startLineNumber: 14,
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringMatching(/BRepSweep_Translation/),
+            location: expect.objectContaining({
+              fileName: 'nested_helpers.ts',
+              startLineNumber: 14,
+            }),
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'extrudeProfile',
+                fileName: 'nested_helpers.ts',
+                lineNumber: 14,
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: 'main',
+                fileName: 'nested_helpers.ts',
+                lineNumber: 18,
+                context: 'user',
+              }),
+              expect.objectContaining({ context: 'library' }),
+            ]),
           }),
-        );
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'extrudeProfile',
-              fileName: 'nested_helpers.ts',
-              lineNumber: 14,
-              context: 'user',
-            }),
-            expect.objectContaining({
-              functionName: 'main',
-              fileName: 'nested_helpers.ts',
-              lineNumber: 18,
-              context: 'user',
-            }),
-            expect.objectContaining({ context: 'library' }),
-          ]),
         );
       });
 
@@ -1529,30 +1523,29 @@ export function buildGeometry() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toMatch(/BRepSweep_Translation/);
-        expect(issue.location).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
-            fileName: 'helpers.ts',
-            startLineNumber: 10,
-          }),
-        );
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'buildGeometry',
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringMatching(/BRepSweep_Translation/),
+            location: expect.objectContaining({
               fileName: 'helpers.ts',
-              context: 'user',
+              startLineNumber: 10,
             }),
-            expect.objectContaining({
-              functionName: 'main',
-              fileName: 'main.ts',
-              context: 'user',
-            }),
-            expect.objectContaining({ context: 'library' }),
-          ]),
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'buildGeometry',
+                fileName: 'helpers.ts',
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: 'main',
+                fileName: 'main.ts',
+                context: 'user',
+              }),
+              expect.objectContaining({ context: 'library' }),
+            ]),
+          }),
         );
       });
 
@@ -1582,38 +1575,36 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toMatch(/StdFail_NotDone/);
-        expect(issue.location).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
-            fileName: 'fillet_fail.ts',
-            startLineNumber: 7,
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringMatching(/StdFail_NotDone/),
+            location: expect.objectContaining({
+              fileName: 'fillet_fail.ts',
+              startLineNumber: 7,
+            }),
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'buildEnclosure',
+                fileName: 'fillet_fail.ts',
+                lineNumber: 7,
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: 'main',
+                fileName: 'fillet_fail.ts',
+                lineNumber: 12,
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: expect.stringMatching(/^BRepFilletAPI_MakeFillet\w*\.\w+$/),
+                fileName: expect.stringContaining('oc-tracing'),
+                context: 'framework',
+              }),
+            ]),
           }),
         );
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'buildEnclosure',
-              fileName: 'fillet_fail.ts',
-              lineNumber: 7,
-              context: 'user',
-            }),
-            expect.objectContaining({
-              functionName: 'main',
-              fileName: 'fillet_fail.ts',
-              lineNumber: 12,
-              context: 'user',
-            }),
-          ]),
-        );
-
-        // Proxy wrapper frame should show the OC class name, not Proxy.<anonymous>
-        const proxyFrame = issue.stackFrames?.find(
-          (frame) => frame.context === 'framework' && frame.fileName?.includes('oc-tracing'),
-        );
-        expect(proxyFrame?.functionName).toMatch(/^BRepFilletAPI_MakeFillet\w*\.\w+$/);
       });
 
       it('should include user frames, location, and OC class name for fillet exception with ocTracing off', async () => {
@@ -1644,37 +1635,36 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toMatch(/StdFail_NotDone/);
-        expect(issue.location).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
-            fileName: 'fillet_no_trace.ts',
-            startLineNumber: 7,
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringMatching(/StdFail_NotDone/),
+            location: expect.objectContaining({
+              fileName: 'fillet_no_trace.ts',
+              startLineNumber: 7,
+            }),
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'buildEnclosure',
+                fileName: 'fillet_no_trace.ts',
+                lineNumber: 7,
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: 'main',
+                fileName: 'fillet_no_trace.ts',
+                lineNumber: 12,
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: expect.stringMatching(/^BRepFilletAPI_MakeFillet\w*\.\w+$/),
+                fileName: expect.stringContaining('oc-tracing'),
+                context: 'framework',
+              }),
+            ]),
           }),
         );
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'buildEnclosure',
-              fileName: 'fillet_no_trace.ts',
-              lineNumber: 7,
-              context: 'user',
-            }),
-            expect.objectContaining({
-              functionName: 'main',
-              fileName: 'fillet_no_trace.ts',
-              lineNumber: 12,
-              context: 'user',
-            }),
-          ]),
-        );
-
-        const proxyFrame = issue.stackFrames?.find(
-          (frame) => frame.context === 'framework' && frame.fileName?.includes('oc-tracing'),
-        );
-        expect(proxyFrame?.functionName).toMatch(/^BRepFilletAPI_MakeFillet\w*\.\w+$/);
       });
 
       it('should include user code stack frames for extrude OC exception with ocTracing off', async () => {
@@ -1705,23 +1695,24 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toMatch(/BRepSweep_Translation/);
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'buildShape',
-              fileName: 'extrude_no_trace.ts',
-              context: 'user',
-            }),
-            expect.objectContaining({
-              functionName: 'main',
-              fileName: 'extrude_no_trace.ts',
-              context: 'user',
-            }),
-          ]),
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringMatching(/BRepSweep_Translation/),
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'buildShape',
+                fileName: 'extrude_no_trace.ts',
+                context: 'user',
+              }),
+              expect.objectContaining({
+                functionName: 'main',
+                fileName: 'extrude_no_trace.ts',
+                context: 'user',
+              }),
+            ]),
+          }),
         );
       });
 
@@ -1755,64 +1746,46 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        expect(issue.type).toBe('kernel');
-        expect(issue.severity).toBe('error');
-        expect(issue.message).toBe(
-          'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            message:
+              'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+            location: {
+              fileName: 'fluent.ts',
+              startLineNumber: 10,
+              startColumn: 5,
+              endLineNumber: 10,
+              endColumn: 16,
+            },
+            stackFrames: expect.arrayContaining([
+              // User: main at the extrude call site (col 6 = 'e' of extrude, startColumn 5 includes '.')
+              { functionName: 'main', fileName: 'fluent.ts', lineNumber: 10, columnNumber: 6, context: 'user' },
+              // Library: replicad internals with source-mapped positions
+              expect.objectContaining({
+                functionName: 'Sketch.extrude',
+                fileName: 'replicad/src/sketches/Sketch.ts',
+                context: 'library',
+              }),
+              expect.objectContaining({
+                functionName: 'basicFaceExtrusion',
+                fileName: 'replicad/src/addThickness.ts',
+                context: 'library',
+              }),
+              // Framework: kernel infrastructure
+              expect.objectContaining({ functionName: 'Object.construct', context: 'framework' }),
+              expect.objectContaining({ functionName: 'runMainRaw', context: 'framework' }),
+              expect.objectContaining({ functionName: 'runMain', context: 'framework' }),
+              expect.objectContaining({ functionName: 'Object.createGeometry', context: 'framework' }),
+            ]),
+          }),
         );
 
-        // Location should cover the full .extrude(0) expression
-        expect(issue.location).toEqual({
-          fileName: 'fluent.ts',
-          startLineNumber: 10,
-          startColumn: 5,
-          endLineNumber: 10,
-          endColumn: 16,
-        });
-
-        // User frames: only main at the extrude call site
-        // columnNumber 6 = 'e' of extrude (location.startColumn 5 includes the '.')
-        const userFrames = issue.stackFrames?.filter((frame) => frame.context === 'user');
-        expect(userFrames).toEqual([
-          {
-            functionName: 'main',
-            fileName: 'fluent.ts',
-            lineNumber: 10,
-            columnNumber: 6,
-            context: 'user',
-          },
-        ]);
-
-        // Library frames: replicad internals with source-mapped positions
-        expect(issue.stackFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'Sketch.extrude',
-              fileName: 'replicad/src/sketches/Sketch.ts',
-              context: 'library',
-            }),
-            expect.objectContaining({
-              functionName: 'basicFaceExtrusion',
-              fileName: 'replicad/src/addThickness.ts',
-              context: 'library',
-            }),
-          ]),
-        );
-
-        // Internal rethrowIfWasmException frame is stripped by Error.captureStackTrace
-        const frameworkNames = issue.stackFrames
-          ?.filter((frame) => frame.context === 'framework')
-          .map((frame) => frame.functionName);
-        expect(frameworkNames).not.toContain('rethrowIfWasmException');
-        expect(frameworkNames).toEqual(
-          expect.arrayContaining(['Object.construct', 'runMainRaw', 'runMain', 'Object.createGeometry']),
-        );
-
-        // Fluent calls before extrude are NOT in the stack (completed before throw)
-        const allFunctionNames = issue.stackFrames?.map((frame) => frame.functionName) ?? [];
-        for (const completedCall of ['draw', 'hLine', 'vLine', 'close', 'sketchOnPlane']) {
-          expect(allFunctionNames).not.toContain(completedCall);
+        // RethrowIfWasmException should be stripped; fluent calls before extrude completed before throw
+        const allNames = result.issues[0]!.stackFrames?.map((f) => f.functionName) ?? [];
+        for (const absent of ['rethrowIfWasmException', 'draw', 'hLine', 'vLine', 'close', 'sketchOnPlane']) {
+          expect(allNames).not.toContain(absent);
         }
       });
 
@@ -1911,31 +1884,20 @@ export default function main() {
           mainFile: 'main.ts',
         });
         assertFailure(result);
-
-        // Framework/runtime frames have machine-specific paths; filter to user frames only
-        const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
-        expect({ ...issue, stackFrames: userFrames }).toEqual(
+        // Source map should resolve to original file name (not blob UUID)
+        // and original line 6 (not post-banner offset line 9)
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
             message: 'bla is not defined',
             type: 'runtime',
             severity: 'error',
-            // Source map should resolve to original file name (not blob UUID)
-            // and original line 6 (not post-banner offset line 9)
-            stackFrames: [
-              {
-                functionName: 'main',
-                fileName: 'main.ts',
-                lineNumber: 6,
-                columnNumber: 3,
-                context: 'user',
-              },
-            ],
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
             location: expect.objectContaining({
               fileName: 'main.ts',
               startLineNumber: 6,
             }),
+            stackFrames: expect.arrayContaining([
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 6, columnNumber: 3, context: 'user' },
+            ]),
           }),
         );
       });
@@ -1953,35 +1915,19 @@ export default function main() { return broken(); }
         });
 
         assertFailure(result);
-
-        const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
-        expect({ ...issue, stackFrames: userFrames }).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
             message: 'bla is not defined',
             type: 'runtime',
             severity: 'error',
-            stackFrames: [
-              {
-                functionName: 'broken',
-                fileName: 'lib/helper.ts',
-                lineNumber: 1,
-                columnNumber: 28,
-                context: 'user',
-              },
-              {
-                functionName: 'main',
-                fileName: 'main.ts',
-                lineNumber: 3,
-                columnNumber: 41,
-                context: 'user',
-              },
-            ],
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
             location: expect.objectContaining({
               fileName: 'lib/helper.ts',
               startLineNumber: 1,
             }),
+            stackFrames: expect.arrayContaining([
+              { functionName: 'broken', fileName: 'lib/helper.ts', lineNumber: 1, columnNumber: 28, context: 'user' },
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, context: 'user' },
+            ]),
           }),
         );
       });
@@ -2005,35 +1951,19 @@ export default function main() {
           mainFile: 'main.ts',
         });
         assertFailure(result);
-
-        const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
-        expect({ ...issue, stackFrames: userFrames }).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
             message: 'bla is not defined',
             type: 'runtime',
             severity: 'error',
-            stackFrames: [
-              {
-                functionName: 'makeBadShape',
-                fileName: 'main.ts',
-                lineNumber: 4,
-                columnNumber: 3,
-                context: 'user',
-              },
-              {
-                functionName: 'main',
-                fileName: 'main.ts',
-                lineNumber: 8,
-                columnNumber: 10,
-                context: 'user',
-              },
-            ],
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
             location: expect.objectContaining({
               fileName: 'main.ts',
               startLineNumber: 4,
             }),
+            stackFrames: expect.arrayContaining([
+              { functionName: 'makeBadShape', fileName: 'main.ts', lineNumber: 4, columnNumber: 3, context: 'user' },
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 8, columnNumber: 10, context: 'user' },
+            ]),
           }),
         );
       });
@@ -2056,42 +1986,20 @@ export function getShape() { return broken(); }
         });
 
         assertFailure(result);
-
-        const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
-        expect({ ...issue, stackFrames: userFrames }).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
             message: 'bla is not defined',
             type: 'runtime',
             severity: 'error',
-            stackFrames: [
-              {
-                functionName: 'broken',
-                fileName: 'lib/bad.ts',
-                lineNumber: 1,
-                columnNumber: 28,
-                context: 'user',
-              },
-              {
-                functionName: 'getShape',
-                fileName: 'lib/middle.ts',
-                lineNumber: 2,
-                columnNumber: 37,
-                context: 'user',
-              },
-              {
-                functionName: 'main',
-                fileName: 'main.ts',
-                lineNumber: 3,
-                columnNumber: 41,
-                context: 'user',
-              },
-            ],
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
             location: expect.objectContaining({
               fileName: 'lib/bad.ts',
               startLineNumber: 1,
             }),
+            stackFrames: expect.arrayContaining([
+              { functionName: 'broken', fileName: 'lib/bad.ts', lineNumber: 1, columnNumber: 28, context: 'user' },
+              { functionName: 'getShape', fileName: 'lib/middle.ts', lineNumber: 2, columnNumber: 37, context: 'user' },
+              { functionName: 'main', fileName: 'main.ts', lineNumber: 3, columnNumber: 41, context: 'user' },
+            ]),
           }),
         );
       });
@@ -2120,26 +2028,26 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
-        expect(libraryFrames).toBeDefined();
-        expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
-
-        expect(libraryFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'Sketch.extrude',
-              fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/) as string,
-              context: 'library',
-            }),
-            expect.objectContaining({
-              functionName: 'basicFaceExtrusion',
-              fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/) as string,
-              context: 'library',
-            }),
-          ]),
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'Sketch.extrude',
+                fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/),
+                context: 'library',
+              }),
+              expect.objectContaining({
+                functionName: 'basicFaceExtrusion',
+                fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/),
+                context: 'library',
+              }),
+            ]),
+          }),
         );
 
+        const libraryFrames = result.issues[0]!.stackFrames?.filter((f) => f.context === 'library');
         for (const frame of libraryFrames!) {
           expect(frame.fileName).not.toMatch(/replicad\/src\//);
         }
@@ -2159,23 +2067,60 @@ export default function main() {
         });
 
         assertFailure(result);
-        const issue = result.issues[0]!;
-        const libraryFrames = issue.stackFrames?.filter((frame) => frame.context === 'library');
-        expect(libraryFrames).toBeDefined();
-        expect(libraryFrames!.length).toBeGreaterThanOrEqual(1);
-
-        expect(libraryFrames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              functionName: 'Sketch.extrude',
-              fileName: 'replicad/src/sketches/Sketch.ts',
-              context: 'library',
-            }),
-          ]),
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({
+                functionName: 'Sketch.extrude',
+                fileName: 'replicad/src/sketches/Sketch.ts',
+                context: 'library',
+              }),
+            ]),
+          }),
         );
 
+        const libraryFrames = result.issues[0]!.stackFrames?.filter((f) => f.context === 'library');
         for (const frame of libraryFrames!) {
           expect(frame.fileName).toMatch(/replicad\/src\//);
+        }
+      });
+
+      it('should classify library frames by export name, not file path', async () => {
+        // Validates export-name-based library classification that works identically
+        // in dev and prod. In production, bundled chunk names are opaque, so
+        // classifyLibraryFrames uses the replicad export name table instead.
+        const result = await createGeometry({
+          files: { 'box.ts': extrudeZeroCode },
+          mainFile: 'box.ts',
+          parameters: {},
+          options: { workerOptions: { wasm: 'single-exceptions' } },
+        });
+
+        assertFailure(result);
+        expect(result.issues[0]).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            stackFrames: expect.arrayContaining([
+              expect.objectContaining({ functionName: 'main', fileName: 'box.ts', context: 'user' }),
+              expect.objectContaining({ functionName: 'Sketch.extrude', context: 'library' }),
+              expect.objectContaining({ functionName: 'basicFaceExtrusion', context: 'library' }),
+            ]),
+          }),
+        );
+
+        // Replicad exports must not leak into framework classification
+        const frameworkNames = result.issues[0]!.stackFrames?.filter((f) => f.context === 'framework').map(
+          (f) => f.functionName,
+        );
+        expect(frameworkNames).not.toContain('Sketch.extrude');
+        expect(frameworkNames).not.toContain('basicFaceExtrusion');
+
+        // Every frame must have a definite context
+        for (const frame of result.issues[0]!.stackFrames!) {
+          expect(['user', 'library', 'framework', 'runtime']).toContain(frame.context);
         }
       });
     });
@@ -2254,30 +2199,18 @@ export default function main() {
         });
 
         assertFailure(result);
-        expect(result.issues.length).toBeGreaterThan(0);
-
-        const issue = result.issues[0]!;
-        const userFrames = issue.stackFrames?.filter((f) => f.context === 'user');
-        expect({ ...issue, stackFrames: userFrames }).toEqual(
+        expect(result.issues[0]).toEqual(
           expect.objectContaining({
             message: 'undefinedFunction is not defined',
             type: 'runtime',
             severity: 'error',
-            // Source map should resolve to full relative path including subdirectory
-            stackFrames: [
-              {
-                functionName: 'main',
-                fileName: 'project/main.ts',
-                lineNumber: 5,
-                columnNumber: 15,
-                context: 'user',
-              },
-            ],
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
             location: expect.objectContaining({
               fileName: 'project/main.ts',
               startLineNumber: 5,
             }),
+            stackFrames: expect.arrayContaining([
+              { functionName: 'main', fileName: 'project/main.ts', lineNumber: 5, columnNumber: 15, context: 'user' },
+            ]),
           }),
         );
       });

@@ -16,6 +16,7 @@
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { OcKernelError } from '#kernels/replicad/oc-kernel-error.js';
+import { named } from '#framework/named.js';
 
 /**
  * Configuration for OC API call tracing.
@@ -146,10 +147,7 @@ function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => nev
         };
 
         const className = (target as { constructor?: { name?: string } }).constructor?.name ?? 'OC';
-        Object.defineProperty(wrapper, 'name', {
-          value: `${className}.${String(property)}`,
-        });
-        return wrapper;
+        return named(`${className}.${String(property)}`, wrapper);
       },
     });
   }

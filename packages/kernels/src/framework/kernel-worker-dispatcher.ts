@@ -15,6 +15,7 @@ import type { KernelCommand, KernelResponse, PerformanceEntryData } from '#types
 import type { KernelWorker } from '#framework/kernel-worker.js';
 import type { KernelMessagePort } from '#framework/kernel-message-adapter.js';
 import { createErrorTrap } from '#framework/worker-error-trap.js';
+import { named } from '#framework/named.js';
 
 function extractGltfTransferables(result: HashedGeometryResult): Transferable[] {
   if (!result.success) {
@@ -74,7 +75,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
     respond({ type: 'telemetry', entries });
   });
 
-  port.onMessage(async (command: KernelCommand | KernelResponse) => {
+  const dispatchCommand = named('dispatchCommand', async (command: KernelCommand | KernelResponse): Promise<void> => {
     const message = command as KernelCommand;
     const requestId = 'requestId' in message ? message.requestId : '';
 
@@ -181,4 +182,5 @@ export function createWorkerDispatcher(worker: KernelWorker, port: KernelMessage
       cleanupTrap();
     }
   });
+  port.onMessage(dispatchCommand);
 }

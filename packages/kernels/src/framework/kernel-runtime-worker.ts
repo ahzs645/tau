@@ -33,6 +33,7 @@ import type {
 } from '#types/kernel-worker.types.js';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
+import { preserveMethodNames } from '#framework/named.js';
 import { isWorkerContext, getWorkerMessagePort } from '#framework/kernel-message-adapter.js';
 import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
 
@@ -466,6 +467,8 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return kernel;
   }
 }
+
+preserveMethodNames(KernelRuntimeWorker, ['onCreateGeometry', 'onGetParameters', 'onExportGeometry']);
 
 if (isWorkerContext()) {
   const worker = new KernelRuntimeWorker();

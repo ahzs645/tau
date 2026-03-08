@@ -1,6 +1,7 @@
 import deepmerge from 'deepmerge';
 import { logLevels } from '@taucad/types/constants';
 import { joinPath } from '@taucad/utils/path';
+import { named, preserveMethodNames } from '#framework/named.js';
 import type { ExportFormat, GeometryFile, OnWorkerLog } from '@taucad/types';
 import type {
   HashedGeometryResult,
@@ -461,14 +462,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     this.onProgress?.('extractingParams');
     const { tracer } = this;
-    let chain: GetParametersHandler = async (handlerInput: GetParametersInput) => {
+    let chain: GetParametersHandler = named('kernelHandler', async (handlerInput: GetParametersInput) => {
       const parametersSpan = tracer.startSpan('kernel.extract-params', {
         phase: 'extractingParams',
       });
       const result = await this.onGetParameters(handlerInput, this.createRuntime());
       parametersSpan.end();
       return result;
-    };
+    });
 
     for (let index = resolvedArray.length - 1; index >= 0; index--) {
       const { middleware, enabled } = resolvedArray[index]!;
@@ -478,7 +479,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const middlewareName = middleware.name;
         const wrapHook = middleware.wrapGetParameters;
 
-        chain = async (handlerInput: GetParametersInput) => {
+        chain = named(`middleware(${middlewareName})`, async (handlerInput: GetParametersInput) => {
           const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
             middleware: middlewareName,
           });
@@ -500,7 +501,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
               },
             ]);
           }
-        };
+        });
       }
     }
 
@@ -577,12 +578,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     this.onProgress?.('computingGeometry');
     const { tracer } = this;
-    let chain: CreateGeometryHandler = async (handlerInput: CreateGeometryInput) => {
+    let chain: CreateGeometryHandler = named('kernelHandler', async (handlerInput: CreateGeometryInput) => {
       const computeSpan = tracer.startSpan('kernel.compute');
       const result = await this.onCreateGeometry(handlerInput, this.createRuntime());
       computeSpan.end();
       return result;
-    };
+    });
 
     for (let index = resolvedArray.length - 1; index >= 0; index--) {
       const { middleware, enabled } = resolvedArray[index]!;
@@ -592,7 +593,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const middlewareName = middleware.name;
         const wrapHook = middleware.wrapCreateGeometry;
 
-        chain = async (handlerInput: CreateGeometryInput) => {
+        chain = named(`middleware(${middlewareName})`, async (handlerInput: CreateGeometryInput) => {
           const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
             middleware: middlewareName,
           });
@@ -614,7 +615,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
               },
             ]);
           }
-        };
+        });
       }
     }
 
@@ -703,12 +704,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }
 
       const { tracer } = this;
-      let chain: ExportGeometryHandler = async (handlerInput: ExportGeometryInput) => {
+      let chain: ExportGeometryHandler = named('kernelHandler', async (handlerInput: ExportGeometryInput) => {
         const computeSpan = tracer.startSpan('kernel.export-compute');
         const exportResult = await this.onExportGeometry(handlerInput, this.createRuntime());
         computeSpan.end();
         return exportResult;
-      };
+      });
 
       for (let index = activeMiddleware.length - 1; index >= 0; index--) {
         const { middleware } = activeMiddleware[index]!;
@@ -717,7 +718,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const middlewareName = middleware.name;
         const wrapHook = middleware.wrapExportGeometry!;
 
-        chain = async (handlerInput: ExportGeometryInput) => {
+        chain = named(`middleware(${middlewareName})`, async (handlerInput: ExportGeometryInput) => {
           const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
             middleware: middlewareName,
           });
@@ -739,7 +740,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
               },
             ]);
           }
-        };
+        });
       }
 
       result = await chain(input);
@@ -1657,3 +1658,5 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     return hex;
   }
 }
+
+preserveMethodNames(KernelWorker, ['render', 'createGeometry', 'exportGeometry', 'getParameters']);

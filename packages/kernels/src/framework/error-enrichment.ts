@@ -10,6 +10,7 @@
 
 import { SourceMapConsumer } from 'source-map-js';
 import type { KernelStackFrame, FrameContext, ErrorLocation } from '#types/kernel.types.js';
+import { named } from '#framework/named.js';
 
 // =============================================================================
 // Stack Trace Parsing
@@ -107,35 +108,33 @@ function defaultClassifyFrame(fileName: string): FrameContext {
 }
 
 /**
- * Create a frame classifier that recognises specific library patterns.
+ * Create a deterministic frame classifier for the defineKernel architecture.
  *
- * @param libraryPatterns - patterns to match against file names for library detection
+ * Uses URL scheme to classify frames without any path-based heuristics:
+ * - `blob:` / `data:` → `user` (esbuild-wasm always bundles user code into these URLs)
+ * - `node:` / `wasm:` / `<` → `runtime` (V8/WASM internals)
+ * - Everything else → `framework` (not user code, not runtime = platform code)
+ *
+ * The third rule is correct by construction: user code can ONLY enter the call
+ * stack via blob/data URLs (created by {@link executeCode}), so any frame from
+ * a different URL scheme is definitionally not user code.
+ *
+ * Library frames are identified in a second pass via {@link classifyLibraryFrames}
+ * using the ES module export name table, which works identically in dev and prod.
+ *
  * @returns classifier function that assigns a {@link FrameContext} to a given file name
  */
-export function createFrameClassifier(libraryPatterns: LibraryPattern[]): (fileName: string) => FrameContext {
+export function createFrameClassifier(): (fileName: string) => FrameContext {
   return (fileName: string): FrameContext => {
-    if (fileName.startsWith('blob:')) {
+    if (fileName.startsWith('blob:') || fileName.startsWith('data:')) {
       return 'user';
-    }
-
-    if (libraryPatterns.some((library) => fileName.includes(library.pattern))) {
-      return 'library';
     }
 
     if (fileName.startsWith('node:') || fileName.startsWith('<') || fileName.startsWith('wasm:')) {
       return 'runtime';
     }
 
-    if (
-      fileName.includes('/node_modules/') ||
-      fileName.startsWith('data:') ||
-      fileName.includes('/kernel/') ||
-      fileName.includes('/kernels/')
-    ) {
-      return 'framework';
-    }
-
-    return 'user';
+    return 'framework';
   };
 }
 
@@ -283,7 +282,7 @@ export function applyLibrarySourceMaps(
   }
 
   return frames.map((frame) => {
-    if (frame.context !== 'library' || !frame.fileName || !frame.lineNumber) {
+    if (frame.context === 'user' || frame.context === 'runtime' || !frame.fileName || !frame.lineNumber) {
       return frame;
     }
 
@@ -320,6 +319,139 @@ export function applyLibrarySourceMaps(
       ...frame,
       fileName: resolveLibrarySourcePath(library.moduleName, frame.fileName),
     };
+  });
+}
+
+// =============================================================================
+// Export Name Preservation
+// =============================================================================
+
+/**
+ * Information extracted from a module's export table for minification resilience.
+ */
+export type ExportNameInfo = {
+  /** Mapping of mangled function names to their original export names (for {@link demangleStackFrames}). */
+  mangledToOriginal: Map<string, string>;
+  /** Set of all function/class export names (for {@link classifyLibraryFrames}). */
+  exportNames: Set<string>;
+};
+
+/**
+ * Restore original function/class names from a module's export table.
+ *
+ * Minifiers rename internal identifiers, but ES module export keys are string
+ * literals that survive minification. This sets each exported function's `.name`
+ * to match its export key so standalone function calls show the original name
+ * in stack traces.
+ *
+ * Returns both a mangled → original mapping (for {@link demangleStackFrames} to
+ * fix class method type prefixes) and the full set of export names (for
+ * {@link classifyLibraryFrames} to identify library frames by function name).
+ *
+ * @param moduleExports - the module's exports (from `import * as mod from '...'`)
+ * @returns export name info for demangling and library classification
+ */
+export function preserveExportNames(moduleExports: Record<string, unknown>): ExportNameInfo {
+  const mangledToOriginal = new Map<string, string>();
+  const exportNames = new Set<string>();
+
+  for (const [exportName, exportValue] of Object.entries(moduleExports)) {
+    if (typeof exportValue === 'function') {
+      exportNames.add(exportName);
+      if (exportValue.name !== exportName) {
+        mangledToOriginal.set(exportValue.name, exportName);
+        named(exportName, exportValue as (...args: never[]) => unknown);
+      }
+    }
+  }
+
+  return { mangledToOriginal, exportNames };
+}
+
+/**
+ * Post-process parsed stack frames to replace mangled names with originals.
+ *
+ * V8 bakes class names at parse time for method calls (e.g., `e.extrude`),
+ * which `Object.defineProperty` on `.name` cannot fix. This function uses
+ * the mangled → original mapping from {@link preserveExportNames} to replace
+ * mangled type prefixes and standalone function names in parsed stack frames.
+ *
+ * @param frames - parsed stack frames to demangle
+ * @param mangledToOriginal - mapping from mangled names to original export names
+ * @returns frames with mangled names replaced by their original export names
+ */
+export function demangleStackFrames(
+  frames: KernelStackFrame[],
+  mangledToOriginal: Map<string, string>,
+): KernelStackFrame[] {
+  if (mangledToOriginal.size === 0) {
+    return frames;
+  }
+
+  return frames.map((frame) => {
+    const name = frame.functionName;
+    if (!name) {
+      return frame;
+    }
+
+    const dotIndex = name.indexOf('.');
+    if (dotIndex > 0) {
+      const typeName = name.slice(0, dotIndex);
+      const rest = name.slice(dotIndex);
+      const original = mangledToOriginal.get(typeName);
+      if (original) {
+        return { ...frame, functionName: original + rest };
+      }
+    }
+
+    const original = mangledToOriginal.get(name);
+    if (original) {
+      return { ...frame, functionName: original };
+    }
+
+    return frame;
+  });
+}
+
+// =============================================================================
+// Library Frame Classification
+// =============================================================================
+
+/**
+ * Reclassify framework frames as library frames using the ES module export name table.
+ *
+ * In production, library code (e.g., replicad) is bundled into the same chunks
+ * as framework code, making URL-based detection impossible. Instead, this function
+ * checks whether a frame's function name (or class name in `ClassName.method`)
+ * matches a known library export. This works identically in dev and prod because
+ * ES module export keys are string literals that survive minification, and
+ * {@link preserveExportNames} restores `.name` on all exported functions/classes.
+ *
+ * Should be called AFTER {@link demangleStackFrames} so that class type prefixes
+ * have been restored (e.g., `e.extrude` → `Sketch.extrude`).
+ *
+ * @param frames - parsed and demangled stack frames
+ * @param libraryExportNames - set of all function/class export names from the library
+ * @returns frames with matching entries reclassified from `framework` to `library`
+ */
+export function classifyLibraryFrames(frames: KernelStackFrame[], libraryExportNames: Set<string>): KernelStackFrame[] {
+  if (libraryExportNames.size === 0) {
+    return frames;
+  }
+
+  return frames.map((frame) => {
+    if (frame.context !== 'framework' || !frame.functionName) {
+      return frame;
+    }
+
+    const dotIndex = frame.functionName.indexOf('.');
+    const baseName = dotIndex > 0 ? frame.functionName.slice(0, dotIndex) : frame.functionName;
+
+    if (libraryExportNames.has(baseName)) {
+      return { ...frame, context: 'library' as FrameContext };
+    }
+
+    return frame;
   });
 }
 
