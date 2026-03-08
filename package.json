@@ -307,7 +307,7 @@
       "@taucad/kcl-wasm-lib": "patches/@taucad__kcl-wasm-lib.patch",
       "@zenfs/core": "patches/@zenfs__core.patch",
       "replicad": "patches/replicad.patch",
-      "@oxc-project/runtime@0.101.0": "patches/@oxc-project__runtime@0.101.0.patch"
+      "@oxc-project/runtime@0.115.0": "patches/@oxc-project__runtime@0.115.0.patch"
     },
     "overrides": {
       "@langchain/google-common": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz",

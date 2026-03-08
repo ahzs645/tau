@@ -93,6 +93,7 @@ catalog:
   react: ^19.2.4
   react-dom: ^19.2.4
   react-router: 7.12.0
+  opencascade.js: /Users/rifont/git/tau/tarballs/opencascade.js-2.0.0-beta.full.tgz
   replicad: /Users/rifont/git/tau/tarballs/replicad-0.21.0-v8.7.tgz
   replicad-opencascadejs: /Users/rifont/git/tau/tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz
   source-map-js: ^1.2.1
