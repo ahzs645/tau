@@ -452,7 +452,10 @@ export const buildMachine = setup({
 
         const newUnits = new Map(context.compilationUnits);
         newUnits.set(event.entryFile, cadUnit as ActorRefFrom<typeof cadMachine>);
-        return { compilationUnits: newUnits };
+        return {
+          compilationUnits: newUnits,
+          ...(context.mainEntryFile === '' ? { mainEntryFile: event.entryFile } : {}),
+        };
       });
     }),
     openInViewer: enqueueActions(({ enqueue, event }) => {
@@ -475,7 +478,10 @@ export const buildMachine = setup({
       enqueue.assign(({ context }) => {
         const newUnits = new Map(context.compilationUnits);
         newUnits.delete(event.entryFile);
-        return { compilationUnits: newUnits };
+        return {
+          compilationUnits: newUnits,
+          ...(context.mainEntryFile === event.entryFile ? { mainEntryFile: '' } : {}),
+        };
       });
     }),
     createViewGraphics: enqueueActions(({ enqueue, context, event }) => {
