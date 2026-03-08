@@ -10,6 +10,7 @@ const baseConfig: Options = {
     'src/kernels/jscad/jscad.kernel.ts',
     'src/kernels/manifold/manifold.kernel.ts',
     'src/kernels/openscad/openscad.kernel.ts',
+    'src/kernels/opencascade/opencascade.kernel.ts',
     'src/kernels/zoo/zoo.kernel.ts',
     'src/kernels/zoo/engine-connection.ts',
     'src/kernels/tau/tau.kernel.ts',
@@ -48,6 +49,10 @@ const baseConfig: Options = {
     {
       from: 'src/kernels/manifold/wasm',
       to: `${options.outDir}/kernels/manifold/wasm`,
+    },
+    {
+      from: 'src/kernels/opencascade/wasm',
+      to: `${options.outDir}/kernels/opencascade/wasm`,
     },
   ],
   tsconfig: 'tsconfig.build.json',

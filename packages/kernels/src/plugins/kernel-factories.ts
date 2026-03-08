@@ -7,6 +7,7 @@
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
 import type { ReplicadOptions } from '#kernels/replicad/replicad.kernel.js';
+import type { OpenCascadeOptions } from '#kernels/opencascade/opencascade.kernel.js';
 import type { ZooOptions } from '#kernels/zoo/zoo.kernel.js';
 import type { ManifoldOptions } from '#kernels/manifold/manifold.kernel.js';
 
@@ -27,6 +28,24 @@ export const replicad = createKernelPlugin<ReplicadOptions>({
   extensions: ['ts', 'js'],
   detectImport: /import.*from\s+["']replicad["']/s,
   builtinModuleNames: ['replicad'],
+});
+
+/**
+ * Create an OpenCascade kernel plugin registration.
+ * OpenCascade provides direct access to the OpenCASCADE API without the Replicad abstraction.
+ *
+ * @example
+ * ```typescript
+ * opencascade()                                          // single WASM
+ * opencascade({ wasm: { wasmUrl, wasmBindingsUrl } })    // custom build injection
+ * ```
+ */
+export const opencascade = createKernelPlugin<OpenCascadeOptions>({
+  id: 'opencascade',
+  moduleUrl: new URL('../kernels/opencascade/opencascade.kernel.js', import.meta.url).href,
+  extensions: ['ts', 'js'],
+  detectImport: /import.*from\s+["']opencascade(\.js)?["']/s,
+  builtinModuleNames: ['opencascade', 'opencascade.js'],
 });
 
 /**

@@ -125,6 +125,39 @@ export default function main(p = defaultParams) {
       'ES module architecture',
     ],
   },
+  {
+    id: 'opencascadejs',
+    name: 'OpenCascade',
+    dimensions: [2, 3],
+    language: 'typescript',
+    description: 'Direct OpenCASCADE API for advanced CAD',
+    mainFile: 'main.ts',
+    backendProvider: 'opencascade',
+    longDescription:
+      'Direct access to the OpenCASCADE Technology (OCCT) kernel via opencascade.js. Full control over BRep operations, precise geometry, and advanced CAD algorithms without abstraction layers.',
+    emptyCode: `import oc from 'opencascade.js';
+
+export const defaultParams = { width: 20, height: 20, depth: 20 };
+
+export default function main(p = defaultParams) {
+  const box = new oc.BRepPrimAPI_MakeBox_2(p.width, p.height, p.depth);
+  try {
+    return box.Shape();
+  } finally {
+    box.delete(); // free memory to avoid memory leaks
+  }
+}
+`,
+    recommended: 'Advanced CAD & Full OpenCascade Control',
+    tags: ['OpenCASCADE', 'BRep', 'TypeScript', 'WASM', 'Precision'],
+    features: [
+      'Full OpenCascade API access',
+      'BRep kernel',
+      'STEP/STL export',
+      'Advanced boolean operations',
+      'Precise tolerancing',
+    ],
+  },
 ] as const satisfies KernelConfiguration[];
 
 export type KernelId = (typeof kernelConfigurations)[number]['id'];

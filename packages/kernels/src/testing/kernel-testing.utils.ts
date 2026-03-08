@@ -553,7 +553,12 @@ export type CreateTestWorkerOptions = {
 function inferExtensions(definition: KernelDefinition): string[] {
   const name = definition.name.toLowerCase();
 
-  if (name.includes('replicad') || name.includes('manifold') || name.includes('jscad')) {
+  if (
+    name.includes('replicad') ||
+    name.includes('manifold') ||
+    name.includes('jscad') ||
+    name.includes('opencascade')
+  ) {
     return ['ts', 'js'];
   }
 
