@@ -4,91 +4,91 @@ overview: Complete rewrite of the Tau filesystem from a monolithic fileManager o
 todos:
   - id: types
     content: "Phase 1a: Define FileSystemProvider interface, FileStat, ChangeEvent, and shared types in apps/ui/app/filesystem/types.ts"
-    status: pending
+    status: completed
   - id: providers
     content: "Phase 1b: Implement IndexedDBProvider, WebAccessProvider, MemoryProvider wrapping ZenFS in apps/ui/app/filesystem/providers/"
-    status: pending
+    status: completed
   - id: registry
     content: "Phase 1c: Implement ProviderRegistry with instance caching and standalone provider support"
-    status: pending
+    status: completed
   - id: bounded-cache
     content: "Phase 1d: Implement BoundedFileCache with LRU eviction, max entries/bytes, skip-large-binary"
-    status: pending
+    status: completed
   - id: write-coordinator
     content: "Phase 2a: Extract WriteCoordinator class from global writeQueue in file-manager.ts"
-    status: pending
+    status: completed
   - id: tree-cache
     content: "Phase 2b: Implement DirectoryTreeCache with incremental invalidation"
-    status: pending
+    status: completed
   - id: event-bus
     content: "Phase 2c: Implement ChangeEventBus for push-based change notifications to connected ports"
-    status: pending
+    status: completed
   - id: file-service
     content: "Phase 2d: Implement FileService class orchestrating providers, write coordinator, tree cache, and event bus"
-    status: pending
+    status: completed
   - id: worker-entry
     content: "Phase 2e: Rewrite file-manager.worker.ts to instantiate FileService + rewrite file-manager.ts"
-    status: pending
+    status: completed
   - id: bridge-events
     content: "Phase 3: Extend kernel-filesystem-bridge with listen()/emit() event channel for push notifications"
-    status: pending
+    status: completed
   - id: machine-overhaul
     content: "Phase 4: Overhaul fileManagerMachine — BoundedFileCache in context, debounced refresh (300ms), incremental tree updates"
-    status: pending
+    status: completed
   - id: machine-tests
     content: "Phase 4 tests: Comprehensive unit tests for fileManagerMachine state transitions, debounce, eviction, error recovery"
-    status: pending
+    status: completed
   - id: hook-update
     content: "Phase 5a: Update useFileManager hook — add readShallowDirectory, remove readBackendFileTree, update openFiles accessor"
-    status: pending
+    status: completed
   - id: consumer-update
     content: "Phase 5b: Update all consumers — MonacoModelService tree subscription, openFiles selectors, rpc-handlers"
-    status: pending
+    status: completed
   - id: tree-onexpand
     content: "Phase 6a: Add onExpand callback to Tree component via useEffect diff pattern"
-    status: pending
+    status: completed
   - id: files-route
     content: "Phase 6b: Rewrite files/route.tsx with lazy loading — loadedDirs, inflightRef dedup, targeted invalidation"
-    status: pending
+    status: completed
   - id: port-lifecycle
     content: "Phase 7: Implement worker port tracking, disconnect protocol, and cleanup in bridge"
-    status: pending
+    status: completed
   - id: cleanup
     content: "Phase 8: Remove dead code, simplify zenfs-config, remove readBackendFileTree, clean up diagnostic logging"
-    status: pending
+    status: completed
   - id: unit-tests
     content: "Unit tests for all new components: providers, registry, WriteCoordinator, DirectoryTreeCache, ChangeEventBus, BoundedFileCache"
-    status: pending
+    status: completed
   - id: integration-tests
     content: "Integration tests: Bridge + FileService over MessageChannel, write → tree invalidation → event pipeline"
-    status: pending
+    status: completed
   - id: tree-hydration
     content: "Phase 4+: Add explicit hydrateTreeSnapshot(rootDirectory) on ready to populate fileTree before any writes; test startup-with-zero-writes path"
-    status: pending
+    status: completed
   - id: external-change-detection
     content: "Phase 4+: Preserve/replace webaccess polling actor for external filesystem changes (OS/Finder edits); test file-changed-outside-app scenario"
-    status: pending
+    status: completed
   - id: event-scoping
     content: "Phase 2c/4: Scope ChangeEventBus payloads with absolute path + backend; machine filters events by rootDirectory to prevent cross-build tree churn"
-    status: pending
+    status: completed
   - id: registry-handle-invalidation
     content: "Phase 1c: Invalidate standalone WebAccess providers on handle swap/permission change; cache key must include handle identity"
-    status: pending
+    status: completed
   - id: bridge-wire-schema
     content: "Phase 3: Define formal wire schema for request | response | event | control(disconnect) message types; test interleaving (events while calls pending, disconnect mid-call)"
-    status: pending
+    status: completed
   - id: invalidation-matrix
     content: "Phase 2b/2d: Document canonical cache invalidation table per operation (write, mkdir, rename, unlink, rmdir, reconfigure) covering tree cache + file cache + cross-directory renames"
-    status: pending
+    status: completed
   - id: consumer-audit
     content: "Phase 5b: Full consumer audit — enumerate ALL fileTree/openFiles selectors and RPC adapters across the app; verify each is migrated with signoff checklist"
-    status: pending
+    status: completed
   - id: handle-store-pooling
     content: "Phase 8: Optional connection pooling for handle-store IndexedDB (Known Issue #9) — ref-counted DB handle instead of open/close per operation"
-    status: pending
+    status: completed
   - id: stress-tests
     content: "Stress/chaos tests: large tree (1000+ files), large binary (50MB), rapid setRoot toggling, dispose/reconnect soak, concurrent read+write+event interleaving"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -482,11 +482,13 @@ type BridgeMessage = BridgeRequest | BridgeResponse | BridgeEvent | BridgeContro
 ```
 
 The `createBridgeServer` `onmessage` handler discriminates on `type`:
+
 - `undefined` (no `type` field) — existing request/response path
 - `'event'` — ignored server-side (events flow server→client only)
 - `'disconnect'` — clean up port from active set
 
 The `createBridgeCall` `onmessage` handler discriminates on `type`:
+
 - `undefined` — existing response resolution
 - `'event'` — dispatch to registered `listen()` handlers
 - `'disconnect'` — dispose the call instance
@@ -494,6 +496,7 @@ The `createBridgeCall` `onmessage` handler discriminates on `type`:
 The `ChangeEventBus` in `FileService` uses the server `emit()` to push `treeChanged` events.
 
 **Interleaving safety**: Events can arrive while RPC calls are pending. The client handler must process both without interference. Tests must cover:
+
 - Event received between request send and response receive
 - Multiple events during a single long-running RPC call
 - Disconnect message received while calls are pending (must reject all pending)
@@ -521,7 +524,6 @@ Key changes from current implementation (840 lines):
   - `use-chat-snapshot.ts` sends `fileTree` to the LLM for project context
   - `chat-editor-file-tree.tsx` builds the sidebar tree from `fileTree`
   - `chat-viewer.tsx`, `chat-viewer-dockview.tsx`, `dockview-open-file-action.tsx` all read `fileTree`
-
   **Resolution**: Replace full recursive `getDirectoryStat` with a single-level `readShallowDirectory` for the root (e.g., `/builds/{id}/`) at startup, then subscribe to `treeChanged` events for incremental updates. The machine should NOT skip initial tree loading entirely — it must hydrate at least the root level before entering `ready`. Add a `hydrateTreeSnapshot` action that performs one shallow read + sets `fileTree` context.
   - Test: "startup with zero writes" — machine enters `ready` with a populated `fileTree` containing at least root-level entries
   - Test: "startup with empty filesystem" — machine enters `ready` with empty `fileTree`, no errors
@@ -577,6 +579,7 @@ Every consumer that currently uses `readBackendFileTree` or accesses `openFiles`
 **Full consumer audit** (all files that read `fileTree` or `openFiles` from machine context):
 
 `fileTree` consumers (read via `useSelector(fileManagerRef, state => state.context.fileTree)`):
+
 - `apps/ui/app/routes/builds_.$id/chat-editor-dockview.tsx` (lines 127, 263) — builds inline file tree for dockview panels
 - `apps/ui/app/routes/builds_.$id/chat-editor-file-tree.tsx` (line 396+) — builds headless-tree sidebar from flat `fileTree`
 - `apps/ui/app/routes/builds_.$id/chat-viewer.tsx` (line 51) — reads file tree for viewer file list
@@ -590,6 +593,7 @@ Every consumer that currently uses `readBackendFileTree` or accesses `openFiles`
 - `apps/ui/app/routes/files/route.tsx` — NOT a `fileTree` consumer (uses `readBackendFileTree` separately)
 
 `openFiles` consumers (read from `file-manager.machine.ts` context):
+
 - `apps/ui/app/routes/builds_.$id/chat-editor.tsx` (line 63) — `useSelector(fileManagerRef, state => state.context.openFiles)` to get active file content
 - `apps/ui/app/routes/builds_.$id/chat-editor-dockview.tsx` (lines 572-601) — reads `openFiles` from editor machine (different — `editorRef` not `fileManagerRef`)
 - `apps/ui/app/routes/builds_.$id/chat-editor-file-tree.tsx` (line 344) — reads `openFiles` from editor machine
@@ -599,6 +603,7 @@ Every consumer that currently uses `readBackendFileTree` or accesses `openFiles`
 **Important distinction**: Most `openFiles` references are to the **editor machine** (`editor.machine.ts` context, type `OpenFile[]`), NOT the file manager machine. Only `chat-editor.tsx` line 63 reads `openFiles` from `fileManagerRef` (the `Map<string, Uint8Array>` being replaced by `BoundedFileCache`). The editor machine's `openFiles: OpenFile[]` is a separate concept (open tabs) and is NOT affected by this migration.
 
 Migration actions:
+
 - `apps/ui/app/routes/files/route.tsx` — Complete rewrite in Phase 6
 - `apps/ui/app/lib/monaco-model-service.ts` — Replace `getDirectoryStat('')` background sync with tree change event subscription
 - `apps/ui/app/hooks/use-monaco-model-service.tsx` — Wire up tree event subscription
@@ -683,31 +688,31 @@ Tests: Add port lifecycle tests to `kernel-filesystem-bridge.test.ts`.
 ### Unit tests (per component)
 
 
-| Component            | File                           | Key test cases                                                         |
-| -------------------- | ------------------------------ | ---------------------------------------------------------------------- |
-| `BoundedFileCache`   | `bounded-file-cache.test.ts`   | LRU eviction, max bytes, skip large files, rename, delete              |
-| `WriteCoordinator`   | `write-coordinator.test.ts`    | Serialization order, error recovery, concurrent ops                    |
-| `DirectoryTreeCache` | `directory-tree-cache.test.ts` | Set/get/invalidate, subtree invalidation, getFullTree                  |
-| `ChangeEventBus`     | `change-event-bus.test.ts`     | Subscribe/emit, multiple subscribers, dispose cleanup                  |
-| `MemoryProvider`     | `memory-provider.test.ts`      | All CRUD ops, exists, stat, readdir                                    |
-| `ProviderRegistry`   | `provider-registry.test.ts`    | Caching, standalone instances, switch active, dispose, handle swap invalidation |
-| `FileService`        | `file-service.test.ts`         | Read/write routing, serialization, tree invalidation, change events    |
-| `DirectoryTreeCache` (invalidation matrix) | `directory-tree-cache.test.ts` | Canonical invalidation per operation (write, mkdir, rename, unlink, rmdir, reconfigure, writeFiles, copyDirectory) |
-| `fileManagerMachine` | `file-manager.machine.test.ts` | State transitions, debounced refresh, BoundedFileCache, error recovery, startup hydration, event scoping, rapid setRoot |
+| Component                                  | File                           | Key test cases                                                                                                          |
+| ------------------------------------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `BoundedFileCache`                         | `bounded-file-cache.test.ts`   | LRU eviction, max bytes, skip large files, rename, delete                                                               |
+| `WriteCoordinator`                         | `write-coordinator.test.ts`    | Serialization order, error recovery, concurrent ops                                                                     |
+| `DirectoryTreeCache`                       | `directory-tree-cache.test.ts` | Set/get/invalidate, subtree invalidation, getFullTree                                                                   |
+| `ChangeEventBus`                           | `change-event-bus.test.ts`     | Subscribe/emit, multiple subscribers, dispose cleanup                                                                   |
+| `MemoryProvider`                           | `memory-provider.test.ts`      | All CRUD ops, exists, stat, readdir                                                                                     |
+| `ProviderRegistry`                         | `provider-registry.test.ts`    | Caching, standalone instances, switch active, dispose, handle swap invalidation                                         |
+| `FileService`                              | `file-service.test.ts`         | Read/write routing, serialization, tree invalidation, change events                                                     |
+| `DirectoryTreeCache` (invalidation matrix) | `directory-tree-cache.test.ts` | Canonical invalidation per operation (write, mkdir, rename, unlink, rmdir, reconfigure, writeFiles, copyDirectory)      |
+| `fileManagerMachine`                       | `file-manager.machine.test.ts` | State transitions, debounced refresh, BoundedFileCache, error recovery, startup hydration, event scoping, rapid setRoot |
 
 
 ### Integration tests
 
 
-| Test                                                   | Scope                                                  |
-| ------------------------------------------------------ | ------------------------------------------------------ |
-| Bridge + FileService                                   | End-to-end RPC over MessageChannel with MemoryProvider |
-| Bridge event channel                                   | Server emit → client listener over MessageChannel      |
-| Bridge interleaving                                    | Event received during pending RPC call; disconnect mid-call |
-| FileService write → tree invalidation → event emission | Full write pipeline                                    |
+| Test                                                   | Scope                                                                   |
+| ------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Bridge + FileService                                   | End-to-end RPC over MessageChannel with MemoryProvider                  |
+| Bridge event channel                                   | Server emit → client listener over MessageChannel                       |
+| Bridge interleaving                                    | Event received during pending RPC call; disconnect mid-call             |
+| FileService write → tree invalidation → event emission | Full write pipeline                                                     |
 | Event scoping                                          | Two machines with different rootDirectory; verify cross-build isolation |
-| Startup hydration                                      | Machine init → ready with populated fileTree (zero-write startup) |
-| WebAccess external change detection                    | External file mutation detected by poll → tree updated → event emitted |
+| Startup hydration                                      | Machine init → ready with populated fileTree (zero-write startup)       |
+| WebAccess external change detection                    | External file mutation detected by poll → tree updated → event emitted  |
 
 
 ### Stress / chaos tests
