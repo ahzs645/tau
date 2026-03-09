@@ -188,6 +188,53 @@ describe('FloatingPanelContentHeaderActions', () => {
       expect(handleHandleClick).not.toHaveBeenCalled();
     });
 
+    it('should allow portaled Radix dropdown content clicks to fire their handlers', async () => {
+      setMobileDrawerContext();
+      const handleItemClick = vi.fn();
+      const handleHandleClick = vi.fn();
+      const user = userEvent.setup();
+
+      function PortaledDropdownContent(): React.JSX.Element {
+        return createPortal(
+          // Simulates the real structure: Radix wraps portaled content in
+          // [data-radix-popper-content-wrapper]. DropdownMenuContent adds
+          // onClick stopPropagation to prevent bubbling to ancestor handles.
+          // oxlint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events -- test harness simulating portaled Radix dropdown content
+          <div
+            data-radix-popper-content-wrapper=''
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <button data-testid='dropdown-item' type='button' onClick={handleItemClick}>
+              Toggle Setting
+            </button>
+          </div>,
+          document.body,
+        );
+      }
+
+      render(
+        <FloatingPanel side='right' isOpen>
+          {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events -- test harness simulating DrawerHandle ancestor */}
+          <div data-testid='handle-ancestor' onClick={handleHandleClick}>
+            <FloatingPanelContentHeader>
+              <FloatingPanelContentTitle>Title</FloatingPanelContentTitle>
+              <FloatingPanelContentHeaderActions>
+                <FloatingPanelMenuButton aria-label='Settings'>Settings</FloatingPanelMenuButton>
+                <PortaledDropdownContent />
+              </FloatingPanelContentHeaderActions>
+            </FloatingPanelContentHeader>
+          </div>
+        </FloatingPanel>,
+      );
+
+      await user.click(screen.getByTestId('dropdown-item'));
+
+      expect(handleItemClick).toHaveBeenCalledOnce();
+      expect(handleHandleClick).not.toHaveBeenCalled();
+    });
+
     it('should allow clicks on the title area to propagate to the drawer handle', async () => {
       setMobileDrawerContext();
       const handleHandleClick = vi.fn();

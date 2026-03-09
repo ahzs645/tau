@@ -132,7 +132,7 @@ export function ComboBoxResponsive<T>({
           aria-describedby='drawer-description'
           {...properties}
           {...drawerProperties}
-          className={cn(className, drawerProperties?.className)}
+          className={cn('[&_[data-slot=command]]:bg-transparent', className, drawerProperties?.className)}
         >
           <DrawerTitle className='sr-only' id='drawer-title'>
             {title}

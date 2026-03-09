@@ -403,6 +403,14 @@ function FloatingPanelContentHeader({ children, className }: FloatingPanelConten
           // pointerdown events on the document, so stopping the React click
           // here does not interfere with it.
           if (handleRef.current && !handleRef.current.contains(event.target as Node)) {
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            // Allow clicks on Radix portaled content (dropdown menus, popovers)
+            // to reach their event handlers. Propagation from these clicks is
+            // instead stopped at the DropdownMenuContent level so they never
+            // reach vaul's handleStartCycle.
+            if (target?.closest('[data-radix-popper-content-wrapper]')) {
+              return;
+            }
             event.stopPropagation();
           }
         }}

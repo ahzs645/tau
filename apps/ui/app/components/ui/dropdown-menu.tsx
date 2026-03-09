@@ -41,6 +41,7 @@ function DropdownMenuContent({
   sideOffset = 4,
   side,
   alignOffset,
+  onClick,
   ...properties
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>): React.JSX.Element {
   const resolvedAlignOffset = alignOffset ?? (side === 'left' || side === 'right' ? menuSideAlignOffset : undefined);
@@ -58,6 +59,13 @@ function DropdownMenuContent({
           className,
         )}
         {...properties}
+        onClick={(event: React.MouseEvent<HTMLDivElement>) => {
+          // Prevent clicks inside portaled dropdown content from bubbling to
+          // ancestor DrawerHandle elements, which would cycle snap points via
+          // vaul's handleStartCycle.
+          event.stopPropagation();
+          onClick?.(event);
+        }}
       />
     </DropdownMenuPrimitive.Portal>
   );
