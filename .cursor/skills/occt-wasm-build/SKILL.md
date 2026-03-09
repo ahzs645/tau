@@ -50,6 +50,12 @@ OCJS_LTO=0 ./build-wasm.sh full ../replicad/packages/replicad-opencascadejs/buil
 
 # Rebuild PCH then link
 ./build-wasm.sh pch link ../replicad/packages/replicad-opencascadejs/build-config/custom_build_single_v8.yml
+
+# Regenerate .d.ts only (fastest — no compile/link, just reassemble from fragments)
+./build-wasm.sh dts build-configs/full.yml
+
+# Regenerate bindings then reassemble .d.ts (after editing bindings.py/generateBindings.py)
+./build-wasm.sh generate dts build-configs/full.yml
 ```
 
 ### Compare Experiments
