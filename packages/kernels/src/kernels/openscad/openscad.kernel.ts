@@ -535,7 +535,9 @@ export default defineKernel({
       const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
 
       if (tessellation) {
-        args.push(`-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
+        args.push(`-D$fn=48`, `-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
+      } else {
+        args.push(`-D$fn=48`, `-D$fa=48`, `-D$fs=2`);
       }
 
       const flattenedParameters = flattenParametersForInjection(parameters);
