@@ -171,6 +171,7 @@ const config = [
       '**/vitest.integration.config.ts',
       'tarballs/**',
       'experiments/**',
+      '**/wasm/**',
     ],
   },
 
