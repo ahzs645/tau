@@ -24,11 +24,12 @@ Simulation           ──┘
 
 Solve code-first mechanical CAD. Tau today is an AI-native, multi-kernel CAD platform:
 
-- **Multi-kernel runtime** (`@taucad/kernels`) — Replicad, JSCAD, Manifold, OpenSCAD, KCL behind a unified `defineKernel()` API. BRep and mesh geometry, parametric models as TypeScript/OpenSCAD/KCL functions.
+- **Multi-kernel runtime** (`@taucad/kernels`) — Replicad, JSCAD, Manifold, OpenSCAD, KCL, any CAD kernel behind a unified `defineKernel()` API. BRep and mesh geometry, parametric models as TypeScript/OpenSCAD/KCL functions.
 - **AI agent** — LangGraph agent with file editing, kernel execution, TDD via `test.json`, screenshot verification. The agent writes geometry code, runs it, measures the result, iterates.
-- **Converter** (`@taucad/converter`) — 41 input formats, 11 output formats. STEP, STL, glTF, USDZ, IFC, and more.
+- **Converter** (`@taucad/converter`) — 41 input formats, 11 output formats. STEP, STL, glTF, USDZ, IFC, and more. Convert any file format to another.
 - **Browser-native** — No install. Web Workers for computation, WebGL for rendering. Embeddable components for third-party apps.
 - **Open source** — Published `@taucad/*` packages on npm. MIT licensed.
+- **Files are the interface** — Everything is a file. Geometry, tests, metadata. Agent skills, subagents, scripts. A single data plane makes computational engineering precise, reproducible, with provenance by design. No vendor lock-in.
 
 This phase proves the thesis: geometry defined as code can be created, modified, tested, and iterated on by AI agents with human oversight.
 
