@@ -81,6 +81,7 @@ import { FileExtensionIcon, getIconIdFromExtension } from '#components/icons/fil
 import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
 import { downloadBlob, asBuffer } from '#utils/file.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
+import { parentDirectory } from '@taucad/utils/path';
 
 type TreeItemData = {
   path: string;
@@ -881,7 +882,7 @@ export const ChatEditorFileTree = memo(function ({
         }
 
         const fileName = originalPath.split('/').pop() ?? originalPath;
-        const directory = originalPath.includes('/') ? originalPath.slice(0, originalPath.lastIndexOf('/')) : '';
+        const directory = originalPath.includes('/') ? parentDirectory(originalPath) : '';
 
         // Generate "name copy.ext", "name copy 2.ext", etc.
         const lastDotIndex = fileName.lastIndexOf('.');

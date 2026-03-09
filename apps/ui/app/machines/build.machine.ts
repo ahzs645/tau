@@ -329,7 +329,6 @@ export const buildMachine = setup({
         // Compilation unit already exists, just set the main entry file and re-initialize
         enqueue.assign({ mainEntryFile: mainFile });
         const existingUnit = context.compilationUnits.get(mainFile)!;
-        enqueue.sendTo(existingUnit, { type: 'initializeKernel' });
         enqueue.sendTo(existingUnit, {
           type: 'initializeModel',
           file: {
@@ -352,8 +351,6 @@ export const buildMachine = setup({
             },
           });
 
-          // Initialize kernel and model directly on the spawned actor
-          cadUnit.send({ type: 'initializeKernel' });
           cadUnit.send({
             type: 'initializeModel',
             file: {
@@ -380,8 +377,6 @@ export const buildMachine = setup({
       // Find or create the compilation unit for the main file
       const mainUnit = context.compilationUnits.get(mainFile);
       if (mainUnit) {
-        // Initialize kernel and model on existing unit
-        enqueue.sendTo(mainUnit, { type: 'initializeKernel' });
         enqueue.sendTo(mainUnit, {
           type: 'initializeModel',
           file: {
@@ -403,8 +398,6 @@ export const buildMachine = setup({
             },
           });
 
-          // Initialize kernel and model directly on the spawned actor
-          cadUnit.send({ type: 'initializeKernel' });
           cadUnit.send({
             type: 'initializeModel',
             file: {

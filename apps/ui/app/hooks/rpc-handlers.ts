@@ -23,6 +23,7 @@ import type { RpcDependencies, RpcFileSystem, RpcKernelClient, RpcGraphicsClient
 import type { FileEntry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
+import { parentDirectory } from '@taucad/utils/path';
 import { screenshotRequestMachine, orthographicViews } from '#machines/screenshot-request.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { buildMachine } from '#machines/build.machine.js';
@@ -81,7 +82,7 @@ function createBrowserRpcFileSystem(
       }> = [];
 
       for (const [entryPath, entry] of fileTree.entries()) {
-        const parentPath = entryPath.includes('/') ? entryPath.slice(0, entryPath.lastIndexOf('/')) : '';
+        const parentPath = entryPath.includes('/') ? parentDirectory(entryPath) : '';
         if (parentPath === path) {
           entries.push({
             name: entry.name,
@@ -124,7 +125,7 @@ function createBrowserKernelClient(buildRef: ActorRefFrom<typeof buildMachine>):
           };
         }
 
-        const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'ready' || state.value === 'error');
+        const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'idle' || state.value === 'error');
 
         const kernelIssues = cadSnapshot.context.kernelIssues.get(targetFile);
         const hasErrors = kernelIssues?.some((issue) => issue.severity === 'error') ?? false;

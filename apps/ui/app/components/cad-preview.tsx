@@ -61,7 +61,11 @@ export const CadPreviewViewer = memo(function ({
 
   if (status === 'error') {
     return (
-      <div className={cn('flex size-full items-center justify-center', className)}>
+      <div
+        role='alert'
+        aria-label='Preview error'
+        className={cn('flex size-full items-center justify-center', className)}
+      >
         <div className='flex flex-col items-center gap-3 text-destructive'>
           <AlertTriangle className='size-10 opacity-60' strokeWidth={1.5} />
           <span className='max-w-sm text-center text-sm'>{error?.message ?? 'Failed to render preview'}</span>
@@ -72,14 +76,19 @@ export const CadPreviewViewer = memo(function ({
 
   if (geometries.length === 0) {
     return (
-      <div className={cn('flex size-full items-center justify-center', className)}>
+      <div
+        role='status'
+        aria-label='Loading preview'
+        aria-busy='true'
+        className={cn('flex size-full items-center justify-center', className)}
+      >
         <Loader className='size-12' />
       </div>
     );
   }
 
   return (
-    <div className={cn('size-full', className)}>
+    <div role='img' aria-label='3D model preview' className={cn('size-full', className)}>
       <GraphicsProvider graphicsRef={graphicsRef}>
         <CadViewer
           geometries={geometries}
@@ -118,6 +127,8 @@ export function CadPreviewStatus({ className }: CadPreviewStatusProps): React.Re
 
   return (
     <div
+      role='status'
+      aria-label='Rendering in progress'
       className={cn(
         'absolute top-4 right-4 z-10 flex items-center gap-2 rounded-md border bg-background/70 px-2 py-1 backdrop-blur-sm',
         className,

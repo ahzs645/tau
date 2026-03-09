@@ -12,7 +12,7 @@
 import type { ActorRefFrom } from 'xstate';
 import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
-import type { FileTreeNode, MkdirOptions } from '#machines/file-manager.js';
+import type { FileTreeNode, WatchRequest, WatchEvent, MkdirOptions } from '@taucad/filesystem';
 
 /**
  * The source of the file write operation.
@@ -82,10 +82,21 @@ export type FileManagerProtocol = {
   getZippedDirectory(path: string): Promise<Blob>;
   reconfigure(backend: FileSystemBackend): Promise<void>;
   setDirectoryHandle(handle: FileSystemDirectoryHandle): void;
-  readBackendFileTree(backend: FileSystemBackend, handle?: FileSystemDirectoryHandle): Promise<FileTreeNode[]>;
+  readShallowDirectory(
+    path: string,
+    backend: FileSystemBackend,
+    handle?: FileSystemDirectoryHandle,
+  ): Promise<FileTreeNode[]>;
+
+  readDirectory(path: string): Promise<FileTreeNode[]>;
+
+  watch(request: WatchRequest, handler: (event: WatchEvent) => void): () => void;
 };
 
 /**
  * FileManagerProtocol proxy with dispose method for cleanup.
  */
-export type FileManagerProxy = FileManagerProtocol & { dispose(): void };
+export type FileManagerProxy = FileManagerProtocol & {
+  listen?: (event: string, handler: (data: unknown) => void) => () => void;
+  dispose(): void;
+};

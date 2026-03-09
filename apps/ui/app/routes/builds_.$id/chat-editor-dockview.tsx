@@ -104,8 +104,8 @@ const FileEditor = memo(function ({
 
   // Read file content from file manager
   const activeFile = useSelector(fileManagerRef, (state) => {
-    const { openFiles } = state.context;
-    const fileContent = openFiles.get(filePath);
+    const { fileCache } = state.context;
+    const fileContent = fileCache.get(filePath);
     if (!fileContent) {
       return undefined;
     }

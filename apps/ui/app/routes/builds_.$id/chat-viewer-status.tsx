@@ -15,9 +15,7 @@ export function ChatViewerStatus({ className, ...props }: React.HTMLAttributes<H
   }
 
   const loadingState =
-    typeof cadState === 'string' && ['buffering', 'rendering', 'booting', 'initializing'].includes(cadState)
-      ? cadState
-      : undefined;
+    typeof cadState === 'string' && ['rendering', 'connecting'].includes(cadState) ? cadState : undefined;
   return loadingState ? (
     <div
       {...props}

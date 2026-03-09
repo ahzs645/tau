@@ -1,57 +1,60 @@
-import { assign, assertEvent, setup, sendTo, enqueueActions } from 'xstate';
-import type { ActorRefFrom } from 'xstate';
-import type { CodeIssue, Geometry, ExportFormat, GeometryFile } from '@taucad/types';
-import type { KernelClientOptions, KernelIssue, RenderPhase, PerformanceEntryData } from '@taucad/kernels';
+import { assign, assertEvent, setup, enqueueActions, fromPromise, waitFor } from 'xstate';
+import type { ActorRefFrom, AnyActorRef } from 'xstate';
+import type { CodeIssue, ExportFormat, Geometry, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
+import { createKernelClient } from '@taucad/kernels';
+import type {
+  ExportResult,
+  KernelClient,
+  KernelClientOptions,
+  KernelIssue,
+  RenderPhase,
+  PerformanceEntryData,
+  WorkerState,
+} from '@taucad/kernels';
+import { createFileSystemBridge } from '@taucad/kernels/filesystem';
+import { safeDispose } from '@taucad/utils/dispose';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
-import { kernelMachine } from '#machines/kernel.machine.js';
-import type { KernelEventExternal } from '#machines/kernel.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
 
-// Default render timeout in milliseconds (30 seconds)
-const defaultRenderTimeout = 30_000;
-
-// Context type for CAD machine
 export type CadContext = {
   file: GeometryFile | undefined;
   screenshot: string | undefined;
   parameters: Record<string, unknown>;
-  units: {
-    length: LengthSymbol;
-  };
+  units: { length: LengthSymbol };
   defaultParameters: Record<string, unknown>;
   geometries: Geometry[];
   kernelIssues: Map<string, KernelIssue[]>;
   codeIssues: CodeIssue[];
-  kernelRef: ActorRefFrom<typeof kernelMachine>;
   exportedBlob: Blob | undefined;
   shouldInitializeKernelOnStart: boolean;
-  isKernelInitializing: boolean;
-  isKernelInitialized: boolean;
   logActorRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
+  kernelOptions: KernelClientOptions;
   jsonSchema?: JSONSchema7;
-  renderTimeout: number;
-  changedPaths: string[];
   renderPhase: RenderPhase | undefined;
   telemetryEntries: PerformanceEntryData[];
+  kernelClient?: KernelClient;
+  eventCleanups: Array<() => void>;
 };
 
-// Define the types of events the machine can receive
 type CadEvent =
-  | { type: 'initializeKernel' }
-  | {
-      type: 'initializeModel';
-      file: GeometryFile;
-      parameters: Record<string, unknown>;
-    }
-  | { type: 'setFile'; file: GeometryFile; changedPath?: string }
+  | { type: 'initializeModel'; file: GeometryFile; parameters: Record<string, unknown> }
+  | { type: 'setFile'; file: GeometryFile }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
   | { type: 'setCodeIssues'; errors: CadContext['codeIssues'] }
   | { type: 'exportGeometry'; format: ExportFormat }
-  | { type: 'setRenderTimeout'; timeout: number }
-  | KernelEventExternal;
+  | { type: 'geometryComputed'; geometries: Geometry[]; issues: KernelIssue[] }
+  | { type: 'parametersParsed'; defaultParameters: Record<string, unknown>; jsonSchema: JSONSchema7 }
+  | { type: 'kernelIssue'; errors: KernelIssue[] }
+  | { type: 'kernelProgress'; phase: RenderPhase }
+  | { type: 'kernelTelemetry'; entries: PerformanceEntryData[] }
+  | { type: 'kernelLog'; level: LogLevel; message: string; origin?: LogOrigin; data?: unknown }
+  | { type: 'stateChanged'; state: WorkerState; detail?: string }
+  | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
+  | { type: 'geometryExportFailed'; errors: KernelIssue[] }
+  | { type: 'kernelFilesChanged'; paths: string[] };
 
 type CadEmitted =
   | { type: 'geometryEvaluated'; geometries: Geometry[] }
@@ -65,17 +68,123 @@ type CadInput = {
   kernelOptions: KernelClientOptions;
 };
 
+type ConnectResult = {
+  client: KernelClient;
+  cleanups: Array<() => void>;
+};
+
+const connectKernelActor = fromPromise<
+  ConnectResult,
+  {
+    kernelOptions: KernelClientOptions;
+    fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
+    machineRef: AnyActorRef;
+  }
+>(async ({ input, signal }) => {
+  const { kernelOptions, fileManagerRef, machineRef } = input;
+
+  console.log('[CadMachine] connectKernelActor: start', { hasFileManagerRef: Boolean(fileManagerRef) });
+
+  if (!fileManagerRef) {
+    throw new Error('File manager not initialized');
+  }
+
+  console.log('[CadMachine] connectKernelActor: waiting for fileManager ready...');
+  const snapshot = await Promise.race([
+    waitFor(fileManagerRef, (state) => state.matches('ready')),
+    new Promise<never>((_resolve, reject) => {
+      if (signal.aborted) {
+        reject(new Error('Kernel connection aborted'));
+        return;
+      }
+      signal.addEventListener(
+        'abort',
+        () => {
+          reject(new Error('Kernel connection aborted'));
+        },
+        { once: true },
+      );
+    }),
+  ]);
+  console.log('[CadMachine] connectKernelActor: fileManager ready', { hasWorker: Boolean(snapshot.context.worker) });
+
+  if (!snapshot.context.worker) {
+    throw new Error('File manager worker not available');
+  }
+
+  console.log('[CadMachine] connectKernelActor: creating kernel client...');
+  const client = createKernelClient(kernelOptions);
+  const cleanups: Array<() => void> = [];
+
+  cleanups.push(
+    client.on('geometry', (result: { success: boolean; data: Geometry[]; issues: KernelIssue[] }) => {
+      console.log('[CadMachine] geometry event received', { success: result.success, dataLength: result.data?.length });
+      if (result.success) {
+        machineRef.send({
+          type: 'geometryComputed',
+          geometries: result.data,
+          issues: result.issues,
+        });
+      } else {
+        machineRef.send({ type: 'kernelIssue', errors: result.issues });
+      }
+    }),
+    client.on('state', (state: WorkerState) => {
+      machineRef.send({ type: 'stateChanged', state });
+    }),
+    client.on('progress', (phase: RenderPhase) => {
+      machineRef.send({ type: 'kernelProgress', phase });
+    }),
+    client.on('parametersResolved', (parametersResult: { success: boolean; data: unknown }) => {
+      if (parametersResult.success) {
+        const data = parametersResult.data as {
+          defaultParameters: Record<string, unknown>;
+          jsonSchema: JSONSchema7;
+        };
+        machineRef.send({
+          type: 'parametersParsed',
+          defaultParameters: data.defaultParameters,
+          jsonSchema: data.jsonSchema,
+        });
+      }
+    }),
+    client.on('filesChanged', (paths: string[]) => {
+      machineRef.send({ type: 'kernelFilesChanged', paths });
+    }),
+    client.on('log', (entry: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => {
+      machineRef.send({
+        type: 'kernelLog',
+        level: entry.level as LogLevel,
+        message: entry.message,
+        origin: entry.origin,
+        data: entry.data,
+      });
+    }),
+    client.on('telemetry', (entries: PerformanceEntryData[]) => {
+      machineRef.send({ type: 'kernelTelemetry', entries });
+    }),
+  );
+
+  const { port, dispose } = createFileSystemBridge(snapshot.context.worker);
+  cleanups.push(dispose);
+  console.log('[CadMachine] connectKernelActor: connecting client...');
+  await client.connect({ port });
+  console.log('[CadMachine] connectKernelActor: connected successfully');
+
+  return { client, cleanups };
+});
+
 /**
- * CAD Machine
+ * CAD Machine -- Autonomous Kernel Topology
  *
- * This machine manages the state of the CAD editor:
- * - Handles code and parameter changes
- * - Debounces compilation requests (500ms for code, 50ms for parameters)
- * - Tracks compilation status
- * - Manages errors
+ * 4-state display machine: connecting | idle | rendering | error
+ *
+ * The worker self-schedules rendering internally. The main thread is a
+ * display-only consumer of geometry results and worker state changes.
+ * Debouncing is handled in the worker (500ms for files, 50ms for params).
+ * Render timeout is handled via AbortSignal.timeout() in the worker.
  */
 export const cadMachine = setup({
-  /** @xstate-layout N4IgpgJg5mDOIC5QGMCGEB0AnM6CeAxLGAC4DCA9hGANoAMAuoqAA4WwCWJHFAdsyAAeiAGwBWAIwY6ADjEBOGQCY6AdhmqAzDIkAaEHkRil8jABYTquvKVKJZ8TIC+T-Wkw58RUgAVUWVABbUjAsWHomJBA2Tm4+AWEEcSlZBWU1DW09A1FjDBlNBWSZMzoHeRc3dGxcCEJiEgBZPlRkCgBRLCwKMIiBGK4efijEszE6fLNNVRsx0rExfUMEMWmMCWtNeSm1OwLKkHcarwaAETAAM1QAVwAbEj8A4JJQ8MZ+9kH4kcQpzXzCvIxCVthsRJolr9ShhxCIlHCzBIJDYNpoDkdPHUCGBBGwsCQAMoAC1QLFo7yiAziw1AoxEIhhqmB9hEVnBhUhCE0ZjMGBUmgkmjoknpSmmaNch2qmPqJLJ7VxPReED6lM+1ISvzEDIsEhk8nkElUG3kmm5nKUZlUGFUZgNijhgvhU3R1QARtcLhdQhxeFBvOQqOTIqx1UNNQhDUppMixDNZLH7JzBXRoyUtJpbAtEQ5XZgPV6fX6A48giFehTQ7Fwz8EPro3Q6FsRE644azMmVAythZG5oRHQkVo8xgC96sL7-Q1mrxWh0uj03iHomHvrTEDJlIz5EzrGYdC2OzkEEjrBhQXQRCURPulCOx0Wp6Rzlc7g9-GWXhXl1Sa+u6+IjLIhIIiKMoEjwsmg7-PuMz9tqQK2M4kpHA+E7FjieKEnKwYfNWa5CBuigYJIRpaCBVpbPInKGtaTb7mUrIWEo2r3p646TkQOEKlhkCqlWXw0oRdabnycZyKo9KSAaqicukJEHqoSiqOoNglGxhbof6giwCQqAvBgqAXF+AAU4x0AAlAQqHsY+-ErvhQmJFevI3pem5bIOMjiJ2MjmPa8g3raPKmiOOC8NQWkEAA1qEvBgLcBLXMgyBwEueGCRG8KmCxjZisCDgCjInJwv84zwiY2gtvlYVgBFj4xXFCWdN0WD2b+BGJNlYl5YU15FcmFhiOexq6ipQoyKmtX1VFDSUNQ7Wrk5iDdblqZ9YVeqcuo-ypIF8jWJNqwiNNkWcQ0pbPK8i2OVloE9etBXgltx4HTqNhZpel7cidKHSnVZ3FtOLRtC1i43ZltYKNIGRmkCBqwSVMwKUU-bwuZZinQ1ZyXDc9yXeW6VqrdtYWJywL-E6BRGgK-J3n9HgAw1mFKsSpK4cTkP-raAKKNqRriMpL3LPuDKsvtiiAsKyFVIzM3ndxir4nxlYOVzwk3ij2yXpJihspynl8uj4ulAOcgjqErUBvNHMCRqtbJNIciKCo6haDoyZmlI+pyIOZvMaoFsLlgJYfld34Zfb-6O3t6Ru1kg0LBgQpWnGcYbE2v2yxgls9AGM5zmDEec1HwljBMJTTLMYjzIsx6ClsJHqHq9KgkyQdWzjr542HhMQ6XoxmgCCgFRe4KdlM6y5TXMybipgcMznwfYkr2Hs-3f5l-SjLMg4bJmnXyxIg4QEfQdfXCh3eewIrvEqqrHXLQgYw6nsBpGiaZpQeMfJ6jMGfKAKPTSUvAgzwCiO4SOm9EgAFoRCcjgTDRsgoFAqGFCBS+i8ZRQM6r8OE54SilEFFYfs4J4HHnBH5bULEKqpkkAsDSHE-Q4KfvqXk6RATeR5EpWS9cphSBYn1cCMwgRiCxlpFhEZjTrH3DyJQGg4QDmFNtHQ0hPKiLsDMFSV8sCSNJvgxQPJoIkPpBCPhiI1GCj1MCbYSlgFOCAA */
   types: {
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as CadContext,
@@ -86,41 +195,20 @@ export const cadMachine = setup({
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as CadEmitted,
   },
+  actors: {
+    connectKernelActor,
+  },
   actions: {
-    createGeometry: enqueueActions(({ enqueue, context }) => {
-      if (!context.file) {
-        throw new Error('Cannot compute geometry without a file');
-      }
-
-      enqueue.sendTo(context.kernelRef, {
-        type: 'createGeometry',
-        file: context.file,
-        parameters: context.parameters,
-        changedPaths: context.changedPaths,
-      });
-      enqueue.assign({ changedPaths: [] });
-    }),
-    exportGeometry: sendTo(
-      ({ context }) => context.kernelRef,
-      ({ event }) => {
-        assertEvent(event, 'exportGeometry');
-        return {
-          type: 'exportGeometry',
-          format: event.format,
-        };
-      },
-    ),
     sendKernelLogs: enqueueActions(({ enqueue, context, event }) => {
       assertEvent(event, 'kernelLog');
+      const logMethod = event.level === 'error' ? console.error : event.level === 'warn' ? console.warn : console.debug;
+      const origin = typeof event.origin === 'string' ? event.origin : 'worker';
+      logMethod(`[Kernel:${origin}]`, event.message, event.data ?? '');
       if (context.logActorRef) {
         enqueue.sendTo(context.logActorRef, {
           type: 'addLog',
           message: event.message,
-          options: {
-            level: event.level,
-            origin: event.origin,
-            data: event.data,
-          },
+          options: { level: event.level, origin: event.origin, data: event.data },
         });
       }
     }),
@@ -130,33 +218,16 @@ export const cadMachine = setup({
         return event.phase;
       },
     }),
-    clearProgress: assign({
-      renderPhase: undefined as RenderPhase | undefined,
-      telemetryEntries: () => [] as PerformanceEntryData[],
-    }),
-    finalizeProgress: assign({
-      renderPhase: undefined as RenderPhase | undefined,
-    }),
     storeTelemetry: assign({
       telemetryEntries({ context, event }) {
         assertEvent(event, 'kernelTelemetry');
-        const next = [...context.telemetryEntries];
-        next.push(...event.entries);
-        return next;
+        return [...context.telemetryEntries, ...event.entries];
       },
     }),
     setFile: assign({
       file({ event }) {
         assertEvent(event, 'setFile');
         return event.file;
-      },
-      changedPaths({ context, event }) {
-        assertEvent(event, 'setFile');
-        if (event.changedPath) {
-          return [...context.changedPaths, event.changedPath];
-        }
-
-        return context.changedPaths;
       },
       codeIssues: () => [],
       kernelIssues({ context, event }) {
@@ -174,59 +245,34 @@ export const cadMachine = setup({
     }),
     setGeometries: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryComputed');
-
+      console.log('[CadMachine] setGeometries', { count: event.geometries.length, file: context.file?.filename });
       const currentFileName = context.file?.filename;
-
       enqueue.assign({
         geometries: event.geometries,
-        defaultParameters({ context }) {
-          return 'defaultParameters' in event
-            ? (event.defaultParameters as Record<string, unknown>)
-            : context.defaultParameters;
-        },
-        jsonSchema({ context }) {
-          return 'jsonSchema' in event ? (event.jsonSchema as JSONSchema7) : context.jsonSchema;
-        },
         kernelIssues({ context }) {
           if (!currentFileName) {
             return context.kernelIssues;
           }
-
           const newIssues = new Map(context.kernelIssues);
-          // Set warnings if there are any, otherwise clear the entry for this file
           if (event.issues.length > 0) {
             newIssues.set(currentFileName, event.issues);
           } else {
             newIssues.delete(currentFileName);
           }
-
           return newIssues;
         },
       });
-      enqueue.emit({
-        type: 'geometryEvaluated' as const,
-        geometries: event.geometries,
-      });
+      enqueue.emit({ type: 'geometryEvaluated' as const, geometries: event.geometries });
     }),
     setKernelIssue: assign({
       kernelIssues({ context, event }) {
         assertEvent(event, 'kernelIssue');
-
-        const { errors } = event;
-
-        // Use the full file path from context.file as the key
-        // This ensures errors are stored with the same path format used by file explorer
-        // (e.g., "New Folder/garbage-3.kcl" not just "garbage-3.kcl")
         const currentFilePath = context.file?.filename;
         if (!currentFilePath) {
           return context.kernelIssues;
         }
-
-        // Replace all errors for the current file with the new errors
-        // This ensures old errors are cleared when new compilation happens
         const newErrorsMap = new Map(context.kernelIssues);
-        newErrorsMap.set(currentFilePath, errors);
-
+        newErrorsMap.set(currentFilePath, event.errors);
         return newErrorsMap;
       },
     }),
@@ -234,31 +280,6 @@ export const cadMachine = setup({
       codeIssues({ event }) {
         assertEvent(event, 'setCodeIssues');
         return event.errors;
-      },
-    }),
-    setRenderTimeout: assign({
-      renderTimeout({ event }) {
-        assertEvent(event, 'setRenderTimeout');
-        return event.timeout;
-      },
-    }),
-    setTimeoutError: assign({
-      kernelIssues({ context }) {
-        const currentFilePath = context.file?.filename;
-        if (!currentFilePath) {
-          return context.kernelIssues;
-        }
-
-        const newErrorsMap = new Map(context.kernelIssues);
-        newErrorsMap.set(currentFilePath, [
-          {
-            message: 'Render timed out. The model may be too complex or contain an infinite loop.',
-            location: undefined,
-            severity: 'error',
-          },
-        ]);
-
-        return newErrorsMap;
       },
     }),
     setDefaultParameters: assign({
@@ -273,53 +294,30 @@ export const cadMachine = setup({
     }),
     setExportedBlob: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryExported');
-
-      // Clear error for the current file when export is successful
       const currentFileName = context.file?.filename;
-
       enqueue.assign({
         exportedBlob: event.blob,
         kernelIssues({ context }) {
           if (currentFileName && context.kernelIssues.has(currentFileName)) {
             const newErrors = new Map(context.kernelIssues);
             newErrors.delete(currentFileName);
-
             return newErrors;
           }
-
           return context.kernelIssues;
         },
       });
-      enqueue.emit({
-        type: 'geometryExported' as const,
-        blob: event.blob,
-        format: event.format,
-      });
+      enqueue.emit({ type: 'geometryExported' as const, blob: event.blob, format: event.format });
     }),
     setExportError: enqueueActions(({ enqueue, event }) => {
       assertEvent(event, 'geometryExportFailed');
-      enqueue.assign({
-        exportedBlob: undefined,
-      });
-      enqueue.emit({
-        type: 'exportFailed' as const,
-        errors: event.errors,
-      });
-    }),
-    initializeKernel: enqueueActions(({ enqueue, context, self }) => {
-      enqueue.assign({ isKernelInitializing: true });
-      enqueue.sendTo(context.kernelRef, {
-        type: 'initializeKernel' as const,
-        parentRef: self,
-      });
+      enqueue.assign({ exportedBlob: undefined });
+      enqueue.emit({ type: 'exportFailed' as const, errors: event.errors });
     }),
     initializeModel: enqueueActions(({ enqueue, context, event }) => {
       assertEvent(event, 'initializeModel');
-
       if (context.logActorRef) {
         enqueue.sendTo(context.logActorRef, { type: 'clearLogs' });
       }
-
       enqueue.assign({
         file: event.file,
         parameters: event.parameters,
@@ -327,443 +325,240 @@ export const cadMachine = setup({
         geometries: [],
         exportedBlob: undefined,
         jsonSchema: undefined,
-        // Note: We don't clear kernelIssues here - they persist per-file
-        // so when switching back to a file with an error, it will still show
       });
+    }),
+    forwardSetFile: ({ context, event }) => {
+      assertEvent(event, 'setFile');
+      context.kernelClient?.setFile(event.file, context.parameters);
+    },
+    forwardSetParameters: ({ context, event }) => {
+      assertEvent(event, 'setParameters');
+      context.kernelClient?.setParameters(event.parameters);
+    },
+    forwardInitializeModel: ({ context, event }) => {
+      assertEvent(event, 'initializeModel');
+      console.log('[CadMachine] forwardInitializeModel', {
+        file: event.file,
+        hasKernelClient: Boolean(context.kernelClient),
+      });
+      context.kernelClient?.setFile(event.file, event.parameters);
+    },
+    dispatchExport: ({ context, event, self }) => {
+      assertEvent(event, 'exportGeometry');
+      if (!context.kernelClient) {
+        return;
+      }
+
+      const handleExport = async () => {
+        try {
+          const result: ExportResult = await context.kernelClient!.export(event.format);
+          if (result.success) {
+            const { data } = result;
+            const blob = new Blob([data.bytes], { type: data.mimeType });
+            self.send({ type: 'geometryExported', blob, format: event.format });
+          } else {
+            self.send({ type: 'geometryExportFailed', errors: result.issues });
+          }
+        } catch (error: unknown) {
+          self.send({
+            type: 'geometryExportFailed',
+            errors: [
+              {
+                message: error instanceof Error ? error.message : 'Export failed',
+                type: 'runtime' as const,
+                severity: 'error' as const,
+              },
+            ],
+          });
+        }
+      };
+
+      void handleExport();
+    },
+    destroyKernel: assign(({ context }) => {
+      for (const cleanup of context.eventCleanups) {
+        safeDispose(cleanup);
+      }
+      safeDispose(() => context.kernelClient?.terminate());
+      return {
+        eventCleanups: [],
+        kernelClient: undefined,
+      };
     }),
   },
   guards: {
-    isKernelInitialized: ({ context }) => context.isKernelInitialized,
-    isKernelNotInitialized: ({ context }) => !context.isKernelInitialized,
-    isKernelInitializing: ({ context }) => context.isKernelInitializing,
-    hasModel: ({ context }) => context.file !== undefined,
-    // Detects file switches vs content changes - file switches should render immediately
-    isDifferentFile({ context, event }) {
-      assertEvent(event, 'setFile');
-      return context.file?.filename !== event.file.filename;
-    },
-  },
-  delays: {
-    fileDebounce: 500,
-    parameterDebounce: 50,
-    // Dynamic render timeout based on context (0 = disabled)
-    renderTimeout: ({ context }) => (context.renderTimeout > 0 ? context.renderTimeout : Infinity),
+    hasKernelClient: ({ context }) => Boolean(context.kernelClient),
   },
 }).createMachine({
   id: 'cad',
-  entry: enqueueActions(({ enqueue, context, self }) => {
-    if (context.shouldInitializeKernelOnStart) {
-      enqueue.sendTo(self, { type: 'initializeKernel' });
-    }
-  }),
-  context: ({ input, spawn }) => ({
+  context: ({ input }) => ({
     file: undefined,
     screenshot: undefined,
-    units: {
-      length: 'mm',
-    },
+    units: { length: 'mm' },
     parameters: {},
     defaultParameters: {},
     geometries: [],
     kernelIssues: new Map(),
     codeIssues: [],
-    kernelRef: spawn(kernelMachine, {
-      input: {
-        fileManagerRef: input.fileManagerRef,
-        kernelOptions: input.kernelOptions,
-      },
-    }),
     exportedBlob: undefined,
-    changedPaths: [],
     shouldInitializeKernelOnStart: input.shouldInitializeKernelOnStart,
-    isKernelInitializing: false,
-    isKernelInitialized: false,
     logActorRef: input.logRef,
     fileManagerRef: input.fileManagerRef,
+    kernelOptions: input.kernelOptions,
     jsonSchema: undefined,
-    renderTimeout: defaultRenderTimeout,
     renderPhase: undefined,
     telemetryEntries: [],
+    kernelClient: undefined,
+    eventCleanups: [],
   }),
-  on: {},
-  initial: 'booting',
+  exit: ['destroyKernel'],
+  initial: 'connecting',
   states: {
-    // The booting state is used when booting the kernel.
-    booting: {
-      on: {
-        initializeKernel: {
-          actions: 'initializeKernel',
+    connecting: {
+      invoke: {
+        id: 'connectKernelActor',
+        src: 'connectKernelActor',
+        input({ context, self }) {
+          return {
+            kernelOptions: context.kernelOptions,
+            fileManagerRef: context.fileManagerRef,
+            machineRef: self,
+          };
         },
-        initializeModel: [
-          {
-            guard: 'isKernelInitializing',
-            // If the kernel is still initializing, only initialize the model.
-            actions: ['initializeModel'],
-          },
-          {
-            guard: 'isKernelNotInitialized',
-            // If the kernel isn't already initialized, initialize it.
-            actions: ['initializeModel', 'initializeKernel'],
-          },
-          {
-            // We're ready to initialize the model and transition to the initializing state.
-            target: 'initializing',
-            actions: 'initializeModel',
-          },
-        ],
-        kernelInitialized: [
-          {
-            // If we have a model, move to initialize the model.
-            guard: 'hasModel',
-            target: 'initializing',
-            actions: assign({
-              isKernelInitialized: true,
-              isKernelInitializing: false,
-            }),
-          },
-          {
-            // Otherwise transition to ready (kernel ready, waiting for code)
-            target: 'ready',
-            actions: assign({
-              isKernelInitialized: true,
-              isKernelInitializing: false,
-            }),
-          },
-        ],
-        kernelIssue: {
+        onDone: {
+          target: 'idle',
+          actions: enqueueActions(({ enqueue, context, event }) => {
+            console.log('[CadMachine] connecting → idle', { hasFile: Boolean(context.file) });
+            const { client } = event.output;
+            enqueue.assign({
+              kernelClient: client,
+              eventCleanups: event.output.cleanups,
+            });
+            if (context.file) {
+              console.log('[CadMachine] forwarding buffered file to kernel', context.file);
+              client.setFile(context.file, context.parameters);
+            }
+          }),
+        },
+        onError: {
           target: 'error',
-          actions: 'setKernelIssue',
+          actions: enqueueActions(({ enqueue, event }) => {
+            console.error('[CadMachine] connecting → error', event.error);
+            const errorMessage = event.error instanceof Error ? event.error.message : 'Failed to connect kernel';
+            enqueue.assign({
+              kernelIssues({ context }) {
+                const newMap = new Map(context.kernelIssues);
+                newMap.set('__connection__', [
+                  { message: errorMessage, type: 'runtime' as const, severity: 'error' as const },
+                ]);
+                return newMap;
+              },
+            });
+          }),
         },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        // Allow file edits during booting - store them for when kernel is ready
-        setFile: {
-          actions: 'setFile',
-        },
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
+      },
+      on: {
+        initializeModel: { actions: 'initializeModel' },
+        setFile: { actions: 'setFile' },
+        setParameters: { actions: 'setParameters' },
+        kernelLog: { actions: 'sendKernelLogs' },
+        kernelProgress: { actions: 'trackProgress' },
+        kernelTelemetry: { actions: 'storeTelemetry' },
       },
     },
 
-    // The initialization state is used when a new model is loaded.
-    initializing: {
-      entry: ['clearProgress', 'createGeometry'],
-      after: {
-        renderTimeout: {
-          target: 'error',
-          actions: 'setTimeoutError',
-        },
-      },
+    idle: {
       on: {
         initializeModel: {
-          target: 'initializing',
-          actions: 'initializeModel',
-          reenter: true, // When another model is loaded whilst another is being initialized, reenter the state to begin computing the new model
+          actions: ['initializeModel', 'forwardInitializeModel'],
         },
-        kernelIssue: {
-          target: 'error',
-          actions: 'setKernelIssue',
+        setFile: {
+          actions: ['setFile', 'forwardSetFile'],
         },
-        geometryComputed: {
-          target: 'ready',
-          actions: ['setGeometries', 'finalizeProgress'],
-        },
-        parametersParsed: {
-          actions: 'setDefaultParameters',
-        },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        // Allow file edits during initialization - cancels current computation
-        setFile: [
-          {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
-          },
-          {
-            // Same file content change - debounce
-            target: 'bufferingFile',
-            actions: 'setFile',
-          },
-        ],
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
-      },
-    },
-    ready: {
-      on: {
-        initializeModel: {
-          target: 'initializing',
-          actions: 'initializeModel',
-        },
-        setFile: [
-          {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
-          },
-          {
-            // Same file content change - debounce
-            target: 'bufferingFile',
-            actions: 'setFile',
-          },
-        ],
         setParameters: {
-          target: 'bufferingParameters',
-          actions: 'setParameters',
+          actions: ['setParameters', 'forwardSetParameters'],
         },
-        setCodeIssues: {
-          actions: 'setCodeIssues',
-        },
-        exportGeometry: {
-          actions: 'exportGeometry',
-        },
-        geometryExported: {
-          actions: 'setExportedBlob',
-        },
-        geometryExportFailed: {
-          actions: 'setExportError',
-        },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
-      },
-    },
-    // The bufferingFile state debounces rapid code file changes (500ms)
-    // When transitioning from initializing/rendering to buffering, XState automatically
-    // cancels any inflight kernel invocations, ensuring latest changes take precedence.
-    // Note: The worker may continue processing cancelled operations in the background,
-    // but their results will be ignored by the promise actors.
-    // Future improvements could include:
-    // - A more robust cancellation mechanism that ensures the worker job is properly terminated
-    // - A way to track the progress of the worker and display it to the user
-    // - A way to cancel the worker job if the user navigates away from the page
-    bufferingFile: {
-      after: {
-        fileDebounce: {
-          target: 'rendering',
-        },
-      },
-      on: {
-        initializeModel: {
-          target: 'initializing',
-          actions: 'initializeModel',
-        },
-        setFile: [
-          {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
-          },
-          {
-            // Same file content change - reset debounce timer
-            target: 'bufferingFile',
-            actions: 'setFile',
-            reenter: true,
-          },
+        setCodeIssues: { actions: 'setCodeIssues' },
+        exportGeometry: { actions: 'dispatchExport' },
+        geometryExported: { actions: 'setExportedBlob' },
+        geometryExportFailed: { actions: 'setExportError' },
+        geometryComputed: { actions: ['setGeometries'] },
+        parametersParsed: { actions: 'setDefaultParameters' },
+        kernelIssue: { actions: 'setKernelIssue' },
+        kernelLog: { actions: 'sendKernelLogs' },
+        kernelProgress: { actions: 'trackProgress' },
+        kernelTelemetry: { actions: 'storeTelemetry' },
+        kernelFilesChanged: {},
+        stateChanged: [
+          { guard: ({ event }) => event.state === 'rendering', target: 'rendering' },
+          { guard: ({ event }) => event.state === 'error', target: 'error' },
         ],
-        setParameters: {
-          target: 'bufferingParameters',
-          actions: 'setParameters',
-        },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
       },
     },
-    // The bufferingParameters state debounces rapid parameter changes (50ms)
-    bufferingParameters: {
-      after: {
-        parameterDebounce: {
-          target: 'rendering',
-        },
-      },
-      on: {
-        initializeModel: {
-          target: 'initializing',
-          actions: 'initializeModel',
-        },
-        setFile: [
-          {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
-          },
-          {
-            // Same file content change - go to file buffering
-            target: 'bufferingFile',
-            actions: 'setFile',
-          },
-        ],
-        setParameters: {
-          target: 'bufferingParameters',
-          actions: 'setParameters',
-          reenter: true, // Reset debounce timer when parameters change
-        },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
-      },
-    },
+
     rendering: {
-      entry: ['clearProgress', 'createGeometry'],
-      after: {
-        renderTimeout: {
-          target: 'error',
-          actions: 'setTimeoutError',
-        },
-      },
       on: {
         initializeModel: {
-          target: 'initializing',
-          actions: 'initializeModel',
+          actions: ['initializeModel', 'forwardInitializeModel'],
         },
+        setFile: {
+          actions: ['setFile', 'forwardSetFile'],
+        },
+        setParameters: {
+          actions: ['setParameters', 'forwardSetParameters'],
+        },
+        setCodeIssues: { actions: 'setCodeIssues' },
+        exportGeometry: { actions: 'dispatchExport' },
+        geometryExported: { actions: 'setExportedBlob' },
+        geometryExportFailed: { actions: 'setExportError' },
         geometryComputed: {
-          target: 'ready',
-          actions: ['setGeometries', 'finalizeProgress'],
+          target: 'idle',
+          actions: ['setGeometries'],
         },
-        parametersParsed: {
-          actions: 'setDefaultParameters',
-        },
+        parametersParsed: { actions: 'setDefaultParameters' },
         kernelIssue: {
           target: 'error',
           actions: 'setKernelIssue',
         },
-        setFile: [
-          {
-            // File switch - reenter rendering immediately
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
-            reenter: true,
-          },
-          {
-            // Same file content change - debounce
-            target: 'bufferingFile',
-            actions: 'setFile',
-          },
+        kernelLog: { actions: 'sendKernelLogs' },
+        kernelProgress: { actions: 'trackProgress' },
+        kernelTelemetry: { actions: 'storeTelemetry' },
+        kernelFilesChanged: {},
+        stateChanged: [
+          { guard: ({ event }) => event.state === 'idle', target: 'idle' },
+          { guard: ({ event }) => event.state === 'error', target: 'error' },
         ],
-        setParameters: {
-          actions: 'setParameters',
-          target: 'bufferingParameters',
-        },
-        setCodeIssues: {
-          actions: 'setCodeIssues',
-        },
-        exportGeometry: {
-          actions: 'exportGeometry',
-        },
-        geometryExported: {
-          actions: 'setExportedBlob',
-        },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
       },
     },
+
     error: {
       on: {
         initializeModel: {
-          target: 'initializing',
-          actions: 'initializeModel',
+          target: 'idle',
+          actions: ['initializeModel', 'forwardInitializeModel'],
         },
-        setFile: [
-          {
-            // File switch - render immediately without debounce
-            guard: 'isDifferentFile',
-            target: 'rendering',
-            actions: 'setFile',
-          },
-          {
-            // Same file content change - debounce
-            target: 'bufferingFile',
-            actions: 'setFile',
-          },
-        ],
+        setFile: {
+          target: 'idle',
+          actions: ['setFile', 'forwardSetFile'],
+        },
         setParameters: {
-          target: 'bufferingParameters',
-          actions: 'setParameters',
+          target: 'idle',
+          actions: ['setParameters', 'forwardSetParameters'],
         },
-        setCodeIssues: {
-          actions: 'setCodeIssues',
-        },
-        exportGeometry: {
-          actions: 'exportGeometry',
-        },
-        geometryExported: {
-          actions: 'setExportedBlob',
-        },
-        geometryExportFailed: {
-          actions: 'setExportError',
-        },
-        kernelLog: {
-          actions: 'sendKernelLogs',
-        },
-        kernelProgress: {
-          actions: 'trackProgress',
-        },
-        kernelTelemetry: {
-          actions: 'storeTelemetry',
-        },
-        setRenderTimeout: {
-          actions: 'setRenderTimeout',
-        },
+        setCodeIssues: { actions: 'setCodeIssues' },
+        exportGeometry: { actions: 'dispatchExport' },
+        geometryExported: { actions: 'setExportedBlob' },
+        geometryExportFailed: { actions: 'setExportError' },
+        geometryComputed: { actions: ['setGeometries'] },
+        parametersParsed: { actions: 'setDefaultParameters' },
+        kernelLog: { actions: 'sendKernelLogs' },
+        kernelProgress: { actions: 'trackProgress' },
+        kernelTelemetry: { actions: 'storeTelemetry' },
+        kernelFilesChanged: {},
+        stateChanged: [
+          { guard: ({ event }) => event.state === 'idle', target: 'idle' },
+          { guard: ({ event }) => event.state === 'rendering', target: 'rendering' },
+        ],
       },
     },
   },

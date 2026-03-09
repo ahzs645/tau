@@ -11,7 +11,7 @@ import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
 import type { PrepareFilesInput } from '#machines/cad-preview.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { joinPath } from '#utils/path.utils.js';
+import { joinPath } from '@taucad/utils/path';
 import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 
@@ -53,14 +53,12 @@ export type CadPreviewProviderProps = {
 
 function deriveStatus(cadState: string): CadPreviewStatus {
   switch (cadState) {
-    case 'ready': {
+    case 'idle': {
       return 'ready';
     }
 
     case 'rendering':
-    case 'initializing':
-    case 'bufferingFile':
-    case 'bufferingParameters': {
+    case 'connecting': {
       return 'loading';
     }
 

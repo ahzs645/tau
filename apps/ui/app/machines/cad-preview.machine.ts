@@ -50,7 +50,7 @@ const prepareFilesActor = fromPromise<void, PrepareFilesInput>(async () => {
  *                  error  -->  (retry) --> preparingFiles
  *
  * File preparation is injected via `.provide()` (same pattern as buildMachine's loadBuildActor).
- * On successful preparation, sends `initializeKernel` + `initializeModel` to the cadRef actor.
+ * On successful preparation, sends `initializeModel` to the cadRef actor.
  */
 export const cadPreviewMachine = setup({
   types: {
@@ -71,6 +71,10 @@ export const cadPreviewMachine = setup({
         filename: context.mainFile,
       };
 
+      console.log('[CadPreview] initializeCadModel → sending initializeModel', {
+        file,
+        parameters: context.parameters,
+      });
       enqueue.sendTo(context.cadRef, {
         type: 'initializeModel',
         file,

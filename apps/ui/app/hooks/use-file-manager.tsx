@@ -6,11 +6,11 @@ import type { SnapshotFrom } from 'xstate';
 import type { FileTreeEntry, FileSystemBackend, FileStatEntry } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource, FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { FileTreeNode } from '#machines/file-manager.js';
+import type { FileTreeNode } from '@taucad/filesystem';
 import { storeDirectoryHandle, getStoredDirectoryHandle, requestHandlePermission } from '#filesystem/handle-store.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import { joinPath } from '#utils/path.utils.js';
+import { joinPath } from '@taucad/utils/path';
 
 type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
 
@@ -77,11 +77,7 @@ type FileManagerContextType = {
   webAccessStatus: WebAccessStatus;
   /** Name of the connected directory (if webaccess is active). */
   connectedDirectoryName: string | undefined;
-  /**
-   * Read a file tree from a specific backend using a standalone FileSystem instance.
-   * Used by the /files grid view to show all backends in parallel without affecting the main mount.
-   */
-  readBackendFileTree: (backend: FileSystemBackend) => Promise<FileTreeNode[]>;
+  readShallowDirectory: (path: string, backend: FileSystemBackend) => Promise<FileTreeNode[]>;
 };
 
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
@@ -475,18 +471,11 @@ export function FileManagerProvider({
     return true;
   }, [fileManagerRef, getReadiedWorker]);
 
-  /**
-   * Read the file tree from a specific backend using a standalone FileSystem instance.
-   * For webaccess, retrieves the workspace handle from the main-thread handle store
-   * and passes it to the worker (postMessage handles structured cloning).
-   */
-  const readBackendFileTree = useCallback(
-    async (backend: FileSystemBackend): Promise<FileTreeNode[]> => {
+  const readShallowDirectory = useCallback(
+    async (path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> => {
       const worker = await getReadiedWorker();
-
-      // For webaccess, retrieve the workspace handle on the main thread and pass it
       const handle = backend === 'webaccess' ? await getStoredDirectoryHandle() : undefined;
-      return worker.readBackendFileTree(backend, handle);
+      return worker.readShallowDirectory(path, backend, handle);
     },
     [getReadiedWorker],
   );
@@ -530,7 +519,7 @@ export function FileManagerProvider({
       reconnectDirectory,
       webAccessStatus,
       connectedDirectoryName,
-      readBackendFileTree,
+      readShallowDirectory,
     }),
     [
       fileManagerRef,
@@ -550,7 +539,7 @@ export function FileManagerProvider({
       reconnectDirectory,
       webAccessStatus,
       connectedDirectoryName,
-      readBackendFileTree,
+      readShallowDirectory,
     ],
   );
 

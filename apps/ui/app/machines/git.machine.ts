@@ -5,7 +5,7 @@ import http from 'isomorphic-git/http/web';
 import type { FileStat } from '@taucad/types';
 import { assertActorDoneEvent } from '#lib/xstate.js';
 import { gitAttributesTemplate } from '#constants/gitattributes-template.js';
-import { joinPath } from '#utils/path.utils.js';
+import { joinPath } from '@taucad/utils/path';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 

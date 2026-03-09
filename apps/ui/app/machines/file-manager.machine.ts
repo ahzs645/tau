@@ -13,10 +13,11 @@ import type { OutputFrom, DoneActorEvent, AnyEventObject } from 'xstate';
 import type { FileEntry, FileSystemBackend } from '@taucad/types';
 import { createBridgeProxy, createFileSystemBridge } from '@taucad/kernels/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
+import { BoundedFileCache } from '@taucad/filesystem';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import { getStoredDirectoryHandle, getBuildFileSystemConfig, checkHandlePermission } from '#filesystem/handle-store.js';
 import { assertActorDoneEvent } from '#lib/xstate.js';
-import { normalizePath, joinPath } from '#utils/path.utils.js';
+import { normalizePath, joinPath } from '@taucad/utils/path';
 import type {
   FileWriteSource,
   FileManagerEmitted,
@@ -24,134 +25,131 @@ import type {
   FileManagerProtocol,
 } from '#machines/file-manager.machine.types.js';
 
-/**
- * Polling interval for file watching (in milliseconds).
- * Uses a shorter interval when the tab is focused for responsive updates,
- * and a longer interval when blurred to conserve resources.
- */
 const watchIntervalFocusedMs = 2000;
 const watchIntervalBlurredMs = 10_000;
 
-/**
- * Context for the file manager machine.
- * Simplified to focus on lifecycle and reactive state only.
- */
+const fileCacheMaxEntries = 200;
+const fileCacheMaxTotalBytes = 50 * 1024 * 1024;
+const fileCacheMaxSingleFileBytes = 1024 * 1024;
+
 type FileManagerContext = {
   worker: Worker | undefined;
-  proxy: FileManagerProxy | undefined;
-  /** Cleanup function for the bridge MessagePort. */
+  proxy: (FileManagerProxy & { listen?: (event: string, handler: (data: unknown) => void) => () => void }) | undefined;
   bridgeDispose?: () => void;
   fileTree: Map<string, FileEntry>;
-  openFiles: Map<string, Uint8Array<ArrayBuffer>>;
+  fileCache: BoundedFileCache;
   error: Error | undefined;
   rootDirectory: string;
   shouldInitializeOnStart: boolean;
-  /** Whether file watching (polling) is active for the webaccess backend */
   isWatching: boolean;
-  /** Current filesystem backend type */
   backendType: FileSystemBackend;
-  /** Whether the webaccess handle exists but needs a user gesture to re-grant permission */
   webAccessNeedsPermission: boolean;
-  /** Build ID for per-build backend config resolution */
   buildId: string | undefined;
-  /** Shared worker instance from parent provider (singleton pattern) */
   sharedWorker: Worker | undefined;
+  /** Unsubscribe function for bridge event listener */
+  eventUnsubscribe: (() => void) | undefined;
 };
 
-// ============ Lifecycle Actors (kept) ============
+// ============ Lifecycle Actors ============
 
 const initializeWorkerActor = fromPromise<
   | {
       type: 'workerInitialized';
       worker: Worker;
-      proxy: FileManagerProxy;
+      proxy: FileManagerProxy & { listen?: (event: string, handler: (data: unknown) => void) => () => void };
       bridgeDispose: () => void;
       configuredBackend: FileSystemBackend;
       webAccessNeedsPermission: boolean;
+      initialEntries: FileEntry[];
     }
   | { type: 'workerInitializationFailed'; error: Error },
   { context: FileManagerContext }
 >(async ({ input, signal }) => {
   const { context } = input;
-  console.debug('[FileManager] initializeWorkerActor: start');
+  const initT0 = performance.now();
+  console.debug(`[FileManager] initializeWorkerActor: start +${initT0.toFixed(0)}ms`);
 
-  // Clean up any existing bridge and proxy (error-isolated so failures don't prevent new worker creation)
   safeDispose(() => context.proxy?.dispose());
   safeDispose(context.bridgeDispose);
 
-  // Only terminate worker if we own it (not shared)
   if (context.worker && !context.sharedWorker) {
     safeDispose(() => context.worker?.terminate());
   }
 
   try {
-    // Reuse shared worker from parent provider, or create a new one (root case)
     const worker = context.sharedWorker ?? new FileManagerWorker({ name: `fm-root` });
+    console.debug(`[FileManager] worker created +${(performance.now() - initT0).toFixed(1)}ms`);
+    worker.addEventListener('message', (e) => {
+      if (e.data?.type === '__worker_ready__') {
+        console.debug(`[FileManager] worker heartbeat received +${(performance.now() - initT0).toFixed(1)}ms`);
+      }
+    });
+    worker.addEventListener('error', (e) => {
+      console.error(`[FileManager] WORKER ERROR:`, e.message, e.filename, e.lineno);
+    });
     const { port, dispose: bridgeDispose } = createFileSystemBridge(worker);
+    console.debug(`[FileManager] bridge created, port transferred +${(performance.now() - initT0).toFixed(1)}ms`);
     const proxy = createBridgeProxy<FileManagerProtocol>(port);
+    console.debug(`[FileManager] proxy created +${(performance.now() - initT0).toFixed(1)}ms`);
 
-    // Resolve the backend -- if buildId is provided, read per-build config
     let backend = context.backendType;
     if (context.buildId) {
       if (signal.aborted) {
-        return {
-          type: 'workerInitializationFailed',
-          error: new Error('Aborted'),
-        };
+        return { type: 'workerInitializationFailed', error: new Error('Aborted') };
       }
-
       const buildBackend = await getBuildFileSystemConfig(context.buildId);
-      // Legacy builds (created before per-build configs) have no entry;
-      // they historically used indexeddb, so default to that rather than
-      // falling through to the cookie-driven backendType.
       backend = buildBackend ?? 'indexeddb';
     }
 
-    // OPFS is disabled due to file corruption issues -- fall back to indexeddb
     if (backend === 'opfs') {
       backend = 'indexeddb';
     }
 
+    let webAccessNeedsPermission = false;
+
     if (backend === 'webaccess') {
-      // Retrieve the workspace handle
       const workspaceHandle = await getStoredDirectoryHandle();
       if (workspaceHandle) {
         const permission = await checkHandlePermission(workspaceHandle);
         if (permission === 'granted') {
-          // Use workspace root directly -- no per-build scoping.
-          // Path-level isolation via /builds/{buildId}/ prefix handles build separation,
-          // consistent with how indexeddb and opfs backends work.
           proxy.setDirectoryHandle(workspaceHandle);
           await proxy.reconfigure('webaccess');
-          console.debug('[FileManager] initializeWorkerActor: success (webaccess)');
-          return {
-            type: 'workerInitialized',
-            worker,
-            proxy,
-            bridgeDispose,
-            configuredBackend: 'webaccess',
-            webAccessNeedsPermission: false,
-          };
+        } else {
+          webAccessNeedsPermission = true;
+          backend = 'indexeddb';
         }
+      } else {
+        webAccessNeedsPermission = true;
+        backend = 'indexeddb';
       }
-
-      // Handle missing or needs permission -- fall back to indexeddb
-      console.debug(
-        '[FileManager] initializeWorkerActor: success (webaccess needs permission, falling back to indexeddb)',
-      );
-      return {
-        type: 'workerInitialized',
-        worker,
-        proxy,
-        bridgeDispose,
-        configuredBackend: 'indexeddb',
-        webAccessNeedsPermission: true,
-      };
+    } else if (backend !== 'indexeddb') {
+      await proxy.reconfigure(backend);
     }
 
-    // For non-default backends (opfs, memory), reconfigure
-    if (backend !== 'indexeddb') {
-      await proxy.reconfigure(backend);
+    // Hydrate tree: shallow read of root directory
+    let initialEntries: FileEntry[] = [];
+    try {
+      const rootPath = context.rootDirectory;
+      const absolutePath = normalizePath(rootPath);
+      console.debug(
+        `[FileManager] calling getDirectoryStat('${absolutePath}') +${(performance.now() - initT0).toFixed(1)}ms`,
+      );
+      const fileStats = await proxy.getDirectoryStat(absolutePath);
+      console.debug(
+        `[FileManager] getDirectoryStat returned ${fileStats.length} entries +${(performance.now() - initT0).toFixed(1)}ms`,
+      );
+      for (const fileStat of fileStats) {
+        initialEntries.push({
+          path: fileStat.path,
+          name: fileStat.name,
+          type: fileStat.type,
+          size: fileStat.size,
+          isLoaded: false,
+        });
+      }
+    } catch (error) {
+      console.warn('[FileManager] Initial tree hydration failed (empty filesystem?):', error);
+      initialEntries = [];
     }
 
     console.debug('[FileManager] initializeWorkerActor: success');
@@ -161,7 +159,8 @@ const initializeWorkerActor = fromPromise<
       proxy,
       bridgeDispose,
       configuredBackend: backend,
-      webAccessNeedsPermission: false,
+      webAccessNeedsPermission,
+      initialEntries,
     };
   } catch (error) {
     console.error('[FileManager] initializeWorkerActor: FAILED', error);
@@ -177,31 +176,22 @@ const readDirectoryActor = fromPromise<
   { context: FileManagerContext; path: string }
 >(async ({ input, signal }) => {
   const { context, path } = input;
-  console.debug('[FileManager] readDirectoryActor: start');
 
   if (signal.aborted) {
-    console.debug('[FileManager] readDirectoryActor: aborted');
     return { type: 'directoryReadFailed', error: new Error('Aborted') };
   }
 
   if (!context.proxy) {
-    console.error('[FileManager] readDirectoryActor: NO PROXY - worker not initialized');
-    return {
-      type: 'directoryReadFailed',
-      error: new Error('Worker not initialized'),
-    };
+    return { type: 'directoryReadFailed', error: new Error('Worker not initialized') };
   }
 
   try {
-    // Empty path means root directory
     const absolutePath = path === '' ? normalizePath(context.rootDirectory) : joinPath(context.rootDirectory, path);
     const fileStats = await context.proxy.getDirectoryStat(absolutePath);
     const entries: FileEntry[] = [];
 
     for (const fileStat of fileStats) {
-      // FileStat.path is relative to the directory we scanned
       const relativeFilePath = path === '' ? fileStat.path : joinPath(path, fileStat.path);
-
       entries.push({
         path: relativeFilePath,
         name: fileStat.name,
@@ -211,10 +201,8 @@ const readDirectoryActor = fromPromise<
       });
     }
 
-    console.debug('[FileManager] readDirectoryActor: success');
     return { type: 'directoryRead', entries };
   } catch (error) {
-    console.error('[FileManager] readDirectoryActor: FAILED', error);
     return {
       type: 'directoryReadFailed',
       error: error instanceof Error ? error : new Error('Failed to read directory'),
@@ -222,11 +210,6 @@ const readDirectoryActor = fromPromise<
   }
 });
 
-/**
- * Callback actor that periodically sends pollFileSystem events.
- * Adapts polling interval based on document visibility state.
- * Used to detect external file changes when using the webaccess backend.
- */
 const fileWatcherActor = fromCallback<AnyEventObject>(({ sendBack }) => {
   let intervalId: ReturnType<typeof setInterval> | undefined;
 
@@ -234,7 +217,6 @@ const fileWatcherActor = fromCallback<AnyEventObject>(({ sendBack }) => {
     if (intervalId !== undefined) {
       clearInterval(intervalId);
     }
-
     const interval = document.visibilityState === 'visible' ? watchIntervalFocusedMs : watchIntervalBlurredMs;
     intervalId = setInterval(() => {
       sendBack({ type: 'pollFileSystem' });
@@ -243,42 +225,32 @@ const fileWatcherActor = fromCallback<AnyEventObject>(({ sendBack }) => {
 
   const handleVisibilityChange = (): void => {
     startPolling();
-    // Immediately poll when tab becomes visible for responsive updates
     if (document.visibilityState === 'visible') {
       sendBack({ type: 'pollFileSystem' });
     }
   };
 
-  // Start polling and listen for visibility changes
   startPolling();
   document.addEventListener('visibilitychange', handleVisibilityChange);
 
-  // Cleanup on stop
   return () => {
     if (intervalId !== undefined) {
       clearInterval(intervalId);
     }
-
     document.removeEventListener('visibilitychange', handleVisibilityChange);
   };
 });
 
-// Only lifecycle actors - I/O actors removed (operations now call worker directly)
 const fileManagerActors = {
   initializeWorkerActor,
   readDirectoryActor,
   fileWatcherActor,
 } as const;
 
-/**
- * Promise-based actor names used for deriving done event types.
- * The fileWatcherActor is a callback actor (no output) and is excluded.
- */
 type PromiseActorNames = 'initializeWorkerActor' | 'readDirectoryActor';
 
 // ============ Events ============
 
-// Lifecycle events
 type FileManagerEventLifecycle =
   | { type: 'initialize' }
   | { type: 'setRoot'; path: string; buildId?: string }
@@ -287,9 +259,6 @@ type FileManagerEventLifecycle =
   | { type: 'stopWatching' }
   | { type: 'pollFileSystem' };
 
-// Consolidated mutation events - single event per operation
-// Hook calls worker directly, then sends ONE event to machine
-// Machine updates context, emits UI event, spawns background refresh
 type FileManagerEventMutation =
   | {
       type: 'fileWritten';
@@ -312,53 +281,24 @@ type FileManagerEvent = FileManagerEventExternalDone | FileManagerEventInternal;
 type FileManagerInput = {
   rootDirectory: string;
   shouldInitializeOnStart?: boolean;
-  /** Which filesystem backend to use on initialization. Defaults to 'indexeddb'. */
   initialBackend?: FileSystemBackend;
-  /** Build ID for per-build backend config resolution. */
   buildId?: string;
-  /** Shared worker from parent FileManagerProvider (singleton pattern). */
   sharedWorker?: Worker;
 };
 
-/**
- * File Manager Machine (Lifecycle-Only Pattern with Background Refresh)
- *
- * This machine manages the file-manager WebWorker lifecycle only:
- * - Initializes the worker
- * - Loads the initial file tree
- * - Stays in 'ready' state once initialized
- *
- * File I/O operations (read, write, delete, rename) are performed by calling
- * the worker directly via the hook, not through state transitions.
- * This allows concurrent operations without blocking.
- *
- * Consolidated mutation events (fileWritten, fileRenamed, etc.) are sent after
- * worker operations complete. The machine then:
- * 1. Updates context (openFiles) immediately
- * 2. Emits UI events for consumers (toasts, Monaco, etc.)
- * 3. Spawns a background actor to refresh the file tree (eventual consistency)
- *
- * This eliminates the race condition where events were dropped during
- * the loadingRootDirectory state transition.
- */
 export const fileManagerMachine = setup({
   types: {
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     context: {} as FileManagerContext,
-
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     events: {} as FileManagerEvent,
-
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     input: {} as FileManagerInput,
-
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- type assertion required
     emitted: {} as FileManagerEmitted,
   },
   actors: fileManagerActors,
   actions: {
-    // ============ Lifecycle Actions ============
-
     setError: assign({
       error({ event }) {
         assertActorDoneEvent(event);
@@ -366,20 +306,17 @@ export const fileManagerMachine = setup({
           console.error('[ZenFS] File manager error:', event.output.error);
           return event.output.error;
         }
-
         return undefined;
       },
     }),
 
-    clearError: assign({
-      error: undefined,
-    }),
+    clearError: assign({ error: undefined }),
 
     destroyWorker: assign(({ context }) => {
       safeDispose(() => context.proxy?.dispose());
       safeDispose(context.bridgeDispose);
+      safeDispose(context.eventUnsubscribe);
 
-      // Only terminate the worker if we own it (not shared from parent)
       if (!context.sharedWorker) {
         safeDispose(() => context.worker?.terminate());
       }
@@ -388,6 +325,7 @@ export const fileManagerMachine = setup({
         proxy: undefined,
         bridgeDispose: undefined,
         worker: context.sharedWorker ? context.worker : undefined,
+        eventUnsubscribe: undefined,
       };
     }),
 
@@ -401,12 +339,16 @@ export const fileManagerMachine = setup({
         return event.buildId;
       },
       fileTree: () => new Map(),
-      openFiles: () => new Map(),
+      fileCache: () =>
+        new BoundedFileCache({
+          maxEntries: fileCacheMaxEntries,
+          maxTotalBytes: fileCacheMaxTotalBytes,
+          maxSingleFileBytes: fileCacheMaxSingleFileBytes,
+        }),
       error: undefined,
       isWatching: false,
     }),
 
-    // Assign worker resources and backend config from init actor output
     updateBackendFromInit: assign({
       worker({ event }) {
         assertActorDoneEvent(event);
@@ -433,9 +375,17 @@ export const fileManagerMachine = setup({
         assertEvent(event.output, 'workerInitialized');
         return event.output.webAccessNeedsPermission;
       },
+      fileTree({ event }) {
+        assertActorDoneEvent(event);
+        assertEvent(event.output, 'workerInitialized');
+        const newTree = new Map<string, FileEntry>();
+        for (const entry of event.output.initialEntries) {
+          newTree.set(entry.path, entry);
+        }
+        return newTree;
+      },
     }),
 
-    // Set the backend type (used when reconfiguring from the hook)
     updateBackendType: assign({
       backendType({ event }) {
         assertEvent(event, 'setBackendType');
@@ -445,41 +395,18 @@ export const fileManagerMachine = setup({
 
     // ============ File Tree Actions ============
 
-    updateFileTreeFromActor: assign({
-      fileTree({ context, event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'directoryRead');
-
-        const newTree = new Map(context.fileTree);
-
-        for (const entry of event.output.entries) {
-          newTree.set(entry.path, entry);
-        }
-
-        return newTree;
-      },
-    }),
-
-    // Replaces tree with entries from background refresh (full re-read)
     replaceFileTreeFromBackgroundRefresh: assign({
       fileTree({ event }) {
         assertActorDoneEvent(event);
         assertEvent(event.output, 'directoryRead');
-
         const newTree = new Map<string, FileEntry>();
-
         for (const entry of event.output.entries) {
           newTree.set(entry.path, entry);
         }
-
         return newTree;
       },
     }),
 
-    // ============ Background Refresh Actions ============
-
-    // Stop any existing background refresh and spawn a new one
-    // Consolidated to ensure we always stop before spawning
     spawnBackgroundRefresh: enqueueActions(({ enqueue }) => {
       enqueue(stopChild('backgroundRefresh'));
       enqueue(
@@ -490,44 +417,36 @@ export const fileManagerMachine = setup({
       );
     }),
 
-    // ============ Consolidated Mutation Actions ============
+    // ============ File Cache Actions ============
 
-    // Update openFiles when a file is written
-    updateOpenFileFromWritten: assign({
-      openFiles({ context, event }) {
+    updateFileCacheFromWritten: assign({
+      fileCache({ context, event }) {
         assertEvent(event, 'fileWritten');
-        const newMap = new Map(context.openFiles);
-        newMap.set(event.path, event.data);
-        return newMap;
+        context.fileCache.set(event.path, event.data);
+        return context.fileCache;
       },
     }),
 
-    // Update openFiles when a file is read
-    updateOpenFileFromRead: assign({
-      openFiles({ context, event }) {
+    updateFileCacheFromRead: assign({
+      fileCache({ context, event }) {
         assertEvent(event, 'fileRead');
-        const newMap = new Map(context.openFiles);
-        newMap.set(event.path, event.data);
-        return newMap;
+        context.fileCache.set(event.path, event.data);
+        return context.fileCache;
       },
     }),
 
-    // Optimistically update paths in file tree and open files when renamed
     optimisticRenameInContext: assign({
       fileTree({ context, event }) {
         assertEvent(event, 'fileRenamed');
         const { oldPath, newPath } = event;
-
         const newTree = new Map<string, FileEntry>();
         const prefix = `${oldPath}/`;
 
         for (const [path, entry] of context.fileTree.entries()) {
           if (path === oldPath) {
-            // Exact match - file rename
             const newName = newPath.split('/').pop() ?? newPath;
             newTree.set(newPath, { ...entry, path: newPath, name: newName });
           } else if (path.startsWith(prefix)) {
-            // Nested paths - directory rename
             const relativePath = path.slice(oldPath.length);
             const newFilePath = `${newPath}${relativePath}`;
             newTree.set(newFilePath, { ...entry, path: newFilePath });
@@ -538,30 +457,13 @@ export const fileManagerMachine = setup({
 
         return newTree;
       },
-      openFiles({ context, event }) {
+      fileCache({ context, event }) {
         assertEvent(event, 'fileRenamed');
-        const { oldPath, newPath } = event;
-
-        const newMap = new Map<string, Uint8Array<ArrayBuffer>>();
-        const prefix = `${oldPath}/`;
-
-        for (const [path, content] of context.openFiles.entries()) {
-          if (path === oldPath) {
-            newMap.set(newPath, content);
-          } else if (path.startsWith(prefix)) {
-            const relativePath = path.slice(oldPath.length);
-            const newFilePath = `${newPath}${relativePath}`;
-            newMap.set(newFilePath, content);
-          } else {
-            newMap.set(path, content);
-          }
-        }
-
-        return newMap;
+        context.fileCache.rename(event.oldPath, event.newPath);
+        return context.fileCache;
       },
     }),
 
-    // Optimistically remove path from file tree and open files when deleted
     optimisticDeleteInContext: assign({
       fileTree({ context, event }) {
         assertEvent(event, 'fileDeleted');
@@ -569,15 +471,10 @@ export const fileManagerMachine = setup({
         newTree.delete(event.path);
         return newTree;
       },
-      openFiles({ context, event }) {
+      fileCache({ context, event }) {
         assertEvent(event, 'fileDeleted');
-        if (context.openFiles.has(event.path)) {
-          const newMap = new Map(context.openFiles);
-          newMap.delete(event.path);
-          return newMap;
-        }
-
-        return context.openFiles;
+        context.fileCache.delete(event.path);
+        return context.fileCache;
       },
     }),
 
@@ -648,11 +545,6 @@ export const fileManagerMachine = setup({
       return event.output.type === 'workerInitializationFailed';
     },
 
-    isDirectoryReadFailed({ event }) {
-      assertActorDoneEvent(event);
-      return event.output.type === 'directoryReadFailed';
-    },
-
     isDirectoryReadSucceeded({ event }) {
       assertActorDoneEvent(event);
       return event.output.type === 'directoryRead';
@@ -669,7 +561,11 @@ export const fileManagerMachine = setup({
     worker: undefined,
     proxy: undefined,
     fileTree: new Map(),
-    openFiles: new Map(),
+    fileCache: new BoundedFileCache({
+      maxEntries: fileCacheMaxEntries,
+      maxTotalBytes: fileCacheMaxTotalBytes,
+      maxSingleFileBytes: fileCacheMaxSingleFileBytes,
+    }),
     error: undefined,
     rootDirectory: input.rootDirectory,
     shouldInitializeOnStart: input.shouldInitializeOnStart ?? true,
@@ -678,31 +574,20 @@ export const fileManagerMachine = setup({
     webAccessNeedsPermission: false,
     buildId: input.buildId,
     sharedWorker: input.sharedWorker,
+    eventUnsubscribe: undefined,
   }),
   initial: 'initializing',
   exit: ['stopFileWatcher', 'destroyWorker'],
   states: {
     initializing: {
-      entry() {
-        console.debug('[FileManager] state → initializing');
-      },
       on: {
-        initialize: {
-          target: 'creatingWorker',
-        },
+        initialize: { target: 'creatingWorker' },
       },
     },
 
     creatingWorker: {
-      entry: [
-        'clearError',
-        () => {
-          console.debug('[FileManager] state → creatingWorker');
-        },
-      ],
+      entry: ['clearError'],
       on: {
-        // Handle rapid navigation: cancel in-progress init and restart with new context
-        // Guard prevents destructive self-transition when rootDirectory/buildId are unchanged
         setRoot: {
           target: 'creatingWorker',
           guard: 'isRootChanged',
@@ -722,75 +607,34 @@ export const fileManagerMachine = setup({
             actions: ['setError'],
           },
           {
-            target: 'loadingRootDirectory',
+            target: 'ready',
             actions: ['updateBackendFromInit'],
           },
         ],
       },
     },
 
-    loadingRootDirectory: {
-      entry() {
-        console.debug('[FileManager] state → loadingRootDirectory');
-      },
-      on: {
-        // Handle rapid navigation: cancel in-progress directory read and restart
-        // Guard prevents destructive self-transition when rootDirectory/buildId are unchanged
-        setRoot: {
-          target: 'creatingWorker',
-          guard: 'isRootChanged',
-          actions: ['stopFileWatcher', 'destroyWorker', 'updateRootAndReset'],
-        },
-      },
-      invoke: {
-        id: 'readDirectoryActor',
-        src: 'readDirectoryActor',
-        input({ context }) {
-          return { context, path: '' };
-        },
-        onDone: [
-          {
-            target: 'error',
-            guard: 'isDirectoryReadFailed',
-            actions: ['setError'],
-          },
-          {
-            target: 'ready',
-            actions: ['updateFileTreeFromActor'],
-          },
-        ],
-      },
-    },
-
     ready: {
-      // Auto-start file watcher when entering ready with webaccess backend
       entry: enqueueActions(({ enqueue, context }) => {
-        console.debug('[FileManager] state → ready');
         if (context.backendType === 'webaccess' && !context.isWatching) {
           enqueue('startFileWatcher');
         }
       }),
-      // Machine stays in 'ready' state - no I/O transitions
-      // Consolidated mutation events: update context + emit + spawn background refresh
       on: {
-        // Lifecycle events
         setRoot: {
           target: 'creatingWorker',
           actions: ['stopFileWatcher', 'destroyWorker', 'updateRootAndReset'],
         },
 
-        // Update backend type tracking (used by hook after reconfigure)
         setBackendType: {
           actions: ['updateBackendType'],
         },
 
-        // Consolidated mutation events (single event per operation)
-        // Each uses an array of actions: update context, emit UI event, spawn background refresh
         fileWritten: {
-          actions: ['updateOpenFileFromWritten', 'emitFileWritten', 'spawnBackgroundRefresh'],
+          actions: ['updateFileCacheFromWritten', 'emitFileWritten', 'spawnBackgroundRefresh'],
         },
         fileRead: {
-          actions: ['updateOpenFileFromRead', 'emitFileRead'],
+          actions: ['updateFileCacheFromRead', 'emitFileRead'],
         },
         fileRenamed: {
           actions: ['optimisticRenameInContext', 'emitFileRenamed', 'spawnBackgroundRefresh'],
@@ -802,26 +646,16 @@ export const fileManagerMachine = setup({
           actions: ['spawnBackgroundRefresh'],
         },
 
-        // ============ File Watching Events ============
-
-        // Start periodic file system polling (used by webaccess backend)
         startWatching: {
           actions: ['startFileWatcher'],
         },
-
-        // Stop periodic file system polling
         stopWatching: {
           actions: ['stopFileWatcher'],
         },
-
-        // Periodic poll triggered by the file watcher - triggers a background refresh
-        // to detect external file changes
         pollFileSystem: {
           actions: ['spawnBackgroundRefresh'],
         },
 
-        // Handle background refresh completion (spawned actor done)
-        // Only update file tree on success - silently ignore failures (eventual consistency)
         // eslint-disable-next-line @typescript-eslint/naming-convention -- xstate convention for spawned actor done events
         'xstate.done.actor.backgroundRefresh': {
           guard: 'isDirectoryReadSucceeded',

@@ -13,6 +13,7 @@
     "@taucad/units": "workspace:*",
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*",
+    "@taucad/filesystem": "workspace:*",
     "@taucad/kernels": "workspace:*",
     "isbot": "catalog:"
   },

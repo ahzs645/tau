@@ -3,7 +3,7 @@
  * from the browser File API and FileSystem API.
  */
 
-import { joinPath } from '#utils/path.utils.js';
+import { joinPath } from '@taucad/utils/path';
 
 export type FileData = {
   filename: string;

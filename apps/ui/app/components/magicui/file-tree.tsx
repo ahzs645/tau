@@ -1,6 +1,6 @@
 import { Accordion as AccordionPrimitive } from 'radix-ui';
 import { FolderIcon, FolderOpenIcon } from 'lucide-react';
-import React, { createContext, useCallback, useContext, useEffect, useState, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '#components/ui/button.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { cn } from '#utils/ui.utils.js';
@@ -47,6 +47,7 @@ type TreeViewProps = {
   readonly openIcon?: React.ReactNode;
   readonly closeIcon?: React.ReactNode;
   readonly dir?: 'rtl' | 'ltr';
+  readonly onExpand?: (id: string) => void;
 } & TreeViewComponentProps;
 
 function Tree({
@@ -59,10 +60,28 @@ function Tree({
   openIcon,
   closeIcon,
   dir,
+  onExpand,
   ...props
 }: React.PropsWithChildren<TreeViewProps> & React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSelectedId);
   const [expandedItems, setExpandedItems] = useState<string[] | undefined>(initialExpandedItems);
+  const prevExpandedRef = useRef<string[] | undefined>(undefined);
+
+  useEffect(() => {
+    const current = expandedItems ?? [];
+    const previous = prevExpandedRef.current ?? [];
+
+    if (prevExpandedRef.current === undefined) {
+      prevExpandedRef.current = current;
+      return;
+    }
+
+    const newlyExpanded = current.filter((id) => !previous.includes(id));
+    for (const id of newlyExpanded) {
+      onExpand?.(id);
+    }
+    prevExpandedRef.current = current;
+  }, [expandedItems, onExpand]);
 
   const selectItem = useCallback((id: string) => {
     setSelectedId(id);

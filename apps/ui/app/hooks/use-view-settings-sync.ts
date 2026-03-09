@@ -4,11 +4,9 @@ import type { ActorRefFrom } from 'xstate';
 import type { GraphicsViewSettings, PinnedMeasurement } from '#constants/editor.constants.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { editorMachine } from '#machines/editor.machine.js';
-import type { cadMachine } from '#machines/cad.machine.js';
-
 /**
  * Synchronises persistable graphics settings from the per-view GraphicsMachine
- * (and shared CadMachine) back to the EditorMachine's `viewSettings` store.
+ * back to the EditorMachine's `viewSettings` store.
  * Changes flow through the existing `updateViewSettings` event which debounces
  * writes to IndexedDB.
  *
@@ -24,12 +22,10 @@ export function useViewSettingsSync({
   viewId,
   graphicsRef,
   editorRef,
-  cadRef,
 }: {
   viewId: string;
   graphicsRef: ActorRefFrom<typeof graphicsMachine>;
   editorRef: ActorRefFrom<typeof editorMachine>;
-  cadRef?: ActorRefFrom<typeof cadMachine>;
 }): void {
   // Track whether we've emitted at least once (skip the first emission)
   const hasEmittedRef = useRef(false);
@@ -52,8 +48,7 @@ export function useViewSettingsSync({
   // Pinned measurements for persistence
   const measurements = useSelector(graphicsRef, (s) => s.context.measurements);
 
-  // Render timeout from the shared CadMachine (in ms, persisted in seconds)
-  const cadRenderTimeout = useSelector(cadRef, (s) => (s ? s.context.renderTimeout : undefined));
+  // Render timeout is now managed internally by the autonomous kernel worker
 
   useEffect(() => {
     // Extract pinned measurements for persistence
@@ -79,8 +74,6 @@ export function useViewSettingsSync({
       cameraFovAngle,
       environmentPreset,
       pinnedMeasurements,
-      // RenderTimeout from CadMachine is in ms, persist in seconds
-      ...(cadRenderTimeout === undefined ? {} : { renderTimeout: cadRenderTimeout / 1000 }),
     };
 
     // Skip the very first emission to avoid overwriting restored state
@@ -118,7 +111,6 @@ export function useViewSettingsSync({
     cameraFovAngle,
     environmentPreset,
     measurements,
-    cadRenderTimeout,
   ]);
 }
 

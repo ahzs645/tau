@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router';
 import { Database, Download, FolderArchive, FolderOpen, MoreHorizontal, RefreshCw, Star, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -23,7 +23,8 @@ import {
   checkHandlePermission,
   requestHandlePermission,
 } from '#filesystem/handle-store.js';
-import type { FileTreeNode } from '#machines/file-manager.js';
+import type { FileTreeNode } from '@taucad/filesystem';
+import { parentDirectory } from '@taucad/utils/path';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -329,18 +330,6 @@ function renderTree(elements: TreeViewElement[], handlers: TreeActionHandlers): 
 }
 
 /**
- * Convert FileTreeNode[] from the worker to TreeViewElement[] for the file tree component.
- * The types are structurally compatible, but this explicit mapping ensures type safety.
- */
-function toTreeViewElements(nodes: FileTreeNode[]): TreeViewElement[] {
-  return nodes.map((node) => ({
-    id: node.id,
-    name: node.name,
-    children: node.children ? toTreeViewElements(node.children) : undefined,
-  }));
-}
-
-/**
  * Recursively count entries whose name starts with `bld_` (build directories).
  */
 function countBuilds(elements: TreeViewElement[]): number {
@@ -402,6 +391,7 @@ function BackendColumn({
   onConnectDirectory,
   onGrantAccess,
   onChangeDirectory,
+  onExpand,
 }: {
   readonly meta: BackendColumnMeta;
   readonly isDefault: boolean;
@@ -414,6 +404,7 @@ function BackendColumn({
   readonly onConnectDirectory?: () => void;
   readonly onGrantAccess?: () => void;
   readonly onChangeDirectory?: () => void;
+  readonly onExpand?: (id: string) => void;
 }): React.JSX.Element {
   const Icon = meta.icon;
   const isDisabled = !meta.isSupported;
@@ -500,7 +491,7 @@ function BackendColumn({
           ) : fileTree.length === 0 ? (
             <div className='flex h-32 items-center justify-center text-sm text-muted-foreground'>No files found</div>
           ) : (
-            <Tree elements={fileTree} initialExpandedItems={findBuildsFolderIds(fileTree)}>
+            <Tree elements={fileTree} initialExpandedItems={findBuildsFolderIds(fileTree)} onExpand={onExpand}>
               {renderTree(fileTree, treeActionHandlers)}
             </Tree>
           )}
@@ -552,12 +543,13 @@ function WebAccessDirectoryPanel({
 
 export default function FilesRoute(): React.JSX.Element {
   const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
-  const { fileManagerRef, readFile, deleteFile, getZippedDirectory, readBackendFileTree } = useFileManager();
+  const { fileManagerRef, readFile, deleteFile, getZippedDirectory, readShallowDirectory } = useFileManager();
   const { builds } = useBuilds();
 
-  // Per-column state
-  const [columnTrees, setColumnTrees] = useState<Record<string, TreeViewElement[]>>({});
-  const [columnLoading, setColumnLoading] = useState<Record<string, boolean>>({});
+  // Loaded directories per backend: backend → (directoryPath → FileTreeNode[])
+  const [loadedDirectories, setLoadedDirectories] = useState<Record<string, Map<string, FileTreeNode[]>>>({});
+  const [rootLoading, setRootLoading] = useState<Record<string, boolean>>({});
+  const inflightRef = useRef<Set<string>>(new Set());
   // WebAccess directory state
   const [webAccessState, setWebAccessState] = useState<WebAccessDirectoryState>({
     directoryName: undefined,
@@ -589,32 +581,115 @@ export default function FilesRoute(): React.JSX.Element {
     void checkWebAccess();
   }, []);
 
-  // Load a single backend's file tree
-  const loadColumnTree = useCallback(
-    async (backend: FileSystemBackend): Promise<void> => {
-      setColumnLoading((previous) => ({ ...previous, [backend]: true }));
+  // Load a directory lazily
+  const loadDirectory = useCallback(
+    async (backend: FileSystemBackend, directoryPath: string): Promise<void> => {
+      const inflightKey = `${backend}:${directoryPath}`;
+      if (inflightRef.current.has(inflightKey)) {
+        return;
+      }
+      inflightRef.current.add(inflightKey);
+
       try {
-        const nodes = await readBackendFileTree(backend);
-        const elements = toTreeViewElements(nodes);
-        setColumnTrees((previous) => ({ ...previous, [backend]: elements }));
+        const nodes = await readShallowDirectory(directoryPath, backend);
+        setLoadedDirectories((previous) => {
+          const backendDirectories = new Map(previous[backend] ?? []);
+          backendDirectories.set(directoryPath, nodes);
+          return { ...previous, [backend]: backendDirectories };
+        });
       } catch {
-        setColumnTrees((previous) => ({ ...previous, [backend]: [] }));
+        setLoadedDirectories((previous) => {
+          const backendDirectories = new Map(previous[backend] ?? []);
+          backendDirectories.set(directoryPath, []);
+          return { ...previous, [backend]: backendDirectories };
+        });
       } finally {
-        setColumnLoading((previous) => ({ ...previous, [backend]: false }));
+        inflightRef.current.delete(inflightKey);
       }
     },
-    [readBackendFileTree],
+    [readShallowDirectory],
+  );
+
+  // Build a tree from loaded directories
+  const buildTreeFromDirectories = useCallback(
+    (backend: FileSystemBackend): TreeViewElement[] => {
+      const directories = loadedDirectories[backend];
+      if (!directories) {
+        return [];
+      }
+
+      const buildSubtree = (nodes: FileTreeNode[]): TreeViewElement[] =>
+        nodes.map((node) => {
+          if (node.children !== undefined) {
+            const childEntries = directories.get(node.id);
+            return {
+              id: node.id,
+              name: node.name,
+              children: childEntries ? buildSubtree(childEntries) : [],
+            };
+          }
+          return { id: node.id, name: node.name };
+        });
+
+      const rootEntries = directories.get('/');
+      if (!rootEntries) {
+        return [];
+      }
+      return buildSubtree(rootEntries);
+    },
+    [loadedDirectories],
+  );
+
+  // Handle folder expansion for lazy loading
+  const handleExpand = useCallback(
+    (id: string, backend: FileSystemBackend) => {
+      const directories = loadedDirectories[backend];
+      if (directories?.has(id)) {
+        return;
+      }
+      void loadDirectory(backend, id);
+    },
+    [loadedDirectories, loadDirectory],
+  );
+
+  // Load root trees on mount
+  const loadColumnTree = useCallback(
+    async (backend: FileSystemBackend): Promise<void> => {
+      setRootLoading((previous) => ({ ...previous, [backend]: true }));
+      await loadDirectory(backend, '/');
+      setRootLoading((previous) => ({ ...previous, [backend]: false }));
+    },
+    [loadDirectory],
+  );
+
+  // Handle refresh: clear inflight tracking and re-fetch all loaded paths
+  const handleRefresh = useCallback(
+    (backend: FileSystemBackend) => {
+      // Clear inflight keys for this backend so they can be re-fetched
+      for (const key of inflightRef.current) {
+        if (key.startsWith(`${backend}:`)) {
+          inflightRef.current.delete(key);
+        }
+      }
+      const directories = loadedDirectories[backend];
+      if (!directories || directories.size === 0) {
+        void loadColumnTree(backend);
+        return;
+      }
+      for (const directoryPath of directories.keys()) {
+        void loadDirectory(backend, directoryPath);
+      }
+    },
+    [loadedDirectories, loadDirectory, loadColumnTree],
   );
 
   // Load all column trees on mount
   useEffect(() => {
     for (const column of backendColumns) {
       if (column.isSupported) {
-        // Skip webaccess if not connected
         if (column.key === 'webaccess' && !webAccessState.isConnected) {
           continue;
         }
-
         void loadColumnTree(column.key);
       }
     }
@@ -644,7 +719,8 @@ export default function FilesRoute(): React.JSX.Element {
         isConnected: true,
         needsPermission: false,
       });
-      // Reload webaccess tree with the new directory
+      // Reload webaccess tree
+      setLoadedDirectories((previous) => ({ ...previous, webaccess: new Map() }));
       void loadColumnTree('webaccess');
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -669,6 +745,7 @@ export default function FilesRoute(): React.JSX.Element {
         isConnected: true,
         needsPermission: false,
       }));
+      setLoadedDirectories((previous) => ({ ...previous, webaccess: new Map() }));
       void loadColumnTree('webaccess');
     }
   }, [loadColumnTree]);
@@ -705,18 +782,18 @@ export default function FilesRoute(): React.JSX.Element {
     [fileManagerRef],
   );
 
-  // Handle file deletion (refreshes all trees since we don't know which backend)
+  // Handle file deletion — invalidate parent directory in all backends
   const handleDeleteFile = useCallback(
     async (path: string) => {
       await deleteFile(path, { source: 'user' });
-      // Refresh all supported trees
+      const parentPath = parentDirectory(path);
       for (const column of backendColumns) {
         if (column.isSupported) {
-          void loadColumnTree(column.key);
+          void loadDirectory(column.key, parentPath);
         }
       }
     },
-    [deleteFile, loadColumnTree],
+    [deleteFile, loadDirectory],
   );
 
   // Handle file download
@@ -730,17 +807,18 @@ export default function FilesRoute(): React.JSX.Element {
     [readFile],
   );
 
-  // Handle folder deletion
+  // Handle folder deletion — invalidate parent directory
   const handleDeleteFolder = useCallback(
     async (path: string) => {
       await deleteDirectory(path);
+      const parentPath = parentDirectory(path);
       for (const column of backendColumns) {
         if (column.isSupported) {
-          void loadColumnTree(column.key);
+          void loadDirectory(column.key, parentPath);
         }
       }
     },
-    [deleteDirectory, loadColumnTree],
+    [deleteDirectory, loadDirectory],
   );
 
   // Handle folder download as ZIP
@@ -777,11 +855,11 @@ export default function FilesRoute(): React.JSX.Element {
             meta={column}
             isDefault={backendCookie === column.key}
             treeActionHandlers={treeActionHandlers}
-            fileTree={columnTrees[column.key] ?? []}
-            isLoading={columnLoading[column.key] ?? false}
+            fileTree={buildTreeFromDirectories(column.key)}
+            isLoading={rootLoading[column.key] ?? false}
             webAccessState={column.key === 'webaccess' ? webAccessState : undefined}
             onRefresh={() => {
-              void loadColumnTree(column.key);
+              handleRefresh(column.key);
             }}
             onSetDefault={() => {
               handleSetDefault(column.key);
@@ -789,6 +867,9 @@ export default function FilesRoute(): React.JSX.Element {
             onConnectDirectory={column.key === 'webaccess' ? handleConnectDirectory : undefined}
             onGrantAccess={column.key === 'webaccess' ? handleGrantAccess : undefined}
             onChangeDirectory={column.key === 'webaccess' ? handleChangeDirectory : undefined}
+            onExpand={(id) => {
+              handleExpand(id, column.key);
+            }}
           />
         ))}
       </div>

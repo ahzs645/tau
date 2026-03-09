@@ -60,13 +60,13 @@ export const ChatEditor = memo(function ({ className }: { readonly className?: s
   });
 
   const activeFile = useSelector(fileManagerRef, (state) => {
-    const { openFiles } = state.context;
+    const { fileCache } = state.context;
 
     if (!activeFilePath) {
       return undefined;
     }
 
-    const fileContent = openFiles.get(activeFilePath);
+    const fileContent = fileCache.get(activeFilePath);
     if (!fileContent) {
       return undefined;
     }

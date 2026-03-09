@@ -39,13 +39,16 @@ export type BuildFileSystemConfig = {
   // Future: mounts?: Array<{ path: string; type: 'zip'; source: string }>;
 };
 
-// ============ Database ============
+// ============ Database (ref-counted singleton) ============
 
-/**
- * Open (or create) the IndexedDB database for handle and config storage.
- * Handles schema upgrades from v1 (handles only) to v2 (handles + configs).
- */
-async function openHandleDb(): Promise<IDBDatabase> {
+const idleCloseMs = 5000;
+
+let cachedDb: IDBDatabase | undefined;
+let refCount = 0;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+let openPromise: Promise<IDBDatabase> | undefined;
+
+async function openHandleDbRaw(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(dbName, dbVersion);
 
@@ -54,7 +57,6 @@ async function openHandleDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(handlesStoreName)) {
         db.createObjectStore(handlesStoreName);
       }
-
       if (!db.objectStoreNames.contains(configsStoreName)) {
         db.createObjectStore(configsStoreName, { keyPath: 'buildId' });
       }
@@ -70,6 +72,46 @@ async function openHandleDb(): Promise<IDBDatabase> {
   });
 }
 
+async function acquireDb(): Promise<IDBDatabase> {
+  if (idleTimer !== undefined) {
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+  }
+  refCount++;
+
+  if (cachedDb) {
+    return cachedDb;
+  }
+
+  openPromise ??= openHandleDbRaw();
+
+  cachedDb = await openPromise;
+  openPromise = undefined;
+  return cachedDb;
+}
+
+function releaseDb(): void {
+  refCount--;
+  if (refCount > 0) {
+    return;
+  }
+
+  idleTimer = setTimeout(() => {
+    cachedDb?.close();
+    cachedDb = undefined;
+    idleTimer = undefined;
+  }, idleCloseMs);
+}
+
+async function withDb<T>(operation: (db: IDBDatabase) => Promise<T>): Promise<T> {
+  const db = await acquireDb();
+  try {
+    return await operation(db);
+  } finally {
+    releaseDb();
+  }
+}
+
 // ============ Directory Handles ============
 
 /**
@@ -77,25 +119,20 @@ async function openHandleDb(): Promise<IDBDatabase> {
  * The workspace handle is stored with the default `'root'` key.
  */
 export async function storeDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<void> {
-  const db = await openHandleDb();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(handlesStoreName, 'readwrite');
-    const store = transaction.objectStore(handlesStoreName);
-    const request = store.put(handle, handleKey);
-
-    request.addEventListener('success', () => {
-      resolve();
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to store directory handle'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(handlesStoreName, 'readwrite');
+        const store = transaction.objectStore(handlesStoreName);
+        const request = store.put(handle, handleKey);
+        request.addEventListener('success', () => {
+          resolve();
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to store directory handle'));
+        });
+      }),
+  );
 }
 
 /**
@@ -106,51 +143,40 @@ export async function storeDirectoryHandle(handle: FileSystemDirectoryHandle): P
  * or requestHandlePermission() before using it.
  */
 export async function getStoredDirectoryHandle(): Promise<FileSystemDirectoryHandle | undefined> {
-  const db = await openHandleDb();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(handlesStoreName, 'readonly');
-    const store = transaction.objectStore(handlesStoreName);
-    const request = store.get(handleKey);
-
-    request.addEventListener('success', () => {
-      const handle = request.result as FileSystemDirectoryHandle | undefined;
-      resolve(handle);
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to retrieve directory handle'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(handlesStoreName, 'readonly');
+        const store = transaction.objectStore(handlesStoreName);
+        const request = store.get(handleKey);
+        request.addEventListener('success', () => {
+          resolve(request.result as FileSystemDirectoryHandle | undefined);
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to retrieve directory handle'));
+        });
+      }),
+  );
 }
 
 /**
  * Remove the stored FileSystemDirectoryHandle from IndexedDB.
  */
 export async function clearStoredDirectoryHandle(): Promise<void> {
-  const db = await openHandleDb();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(handlesStoreName, 'readwrite');
-    const store = transaction.objectStore(handlesStoreName);
-    const request = store.delete(handleKey);
-
-    request.addEventListener('success', () => {
-      resolve();
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to clear directory handle'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(handlesStoreName, 'readwrite');
+        const store = transaction.objectStore(handlesStoreName);
+        const request = store.delete(handleKey);
+        request.addEventListener('success', () => {
+          resolve();
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to clear directory handle'));
+        });
+      }),
+  );
 }
 
 /**
@@ -183,27 +209,21 @@ export async function requestHandlePermission(handle: FileSystemDirectoryHandle)
  * backend is used when loading the build in the future.
  */
 export async function setBuildFileSystemConfig(buildId: string, backend: FileSystemBackend): Promise<void> {
-  const db = await openHandleDb();
-
   const config: BuildFileSystemConfig = { buildId, backend };
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(configsStoreName, 'readwrite');
-    const store = transaction.objectStore(configsStoreName);
-    const request = store.put(config);
-
-    request.addEventListener('success', () => {
-      resolve();
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to store build filesystem config'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(configsStoreName, 'readwrite');
+        const store = transaction.objectStore(configsStoreName);
+        const request = store.put(config);
+        request.addEventListener('success', () => {
+          resolve();
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to store build filesystem config'));
+        });
+      }),
+  );
 }
 
 /**
@@ -211,26 +231,20 @@ export async function setBuildFileSystemConfig(buildId: string, backend: FileSys
  * Returns undefined if no config has been stored (legacy builds default to 'indexeddb').
  */
 export async function getBuildFileSystemConfig(buildId: string): Promise<FileSystemBackend | undefined> {
-  const db = await openHandleDb();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(configsStoreName, 'readonly');
-    const store = transaction.objectStore(configsStoreName);
-    const request = store.get(buildId);
-
-    request.addEventListener('success', () => {
-      const config = request.result as BuildFileSystemConfig | undefined;
-      resolve(config?.backend);
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to retrieve build filesystem config'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(configsStoreName, 'readonly');
+        const store = transaction.objectStore(configsStoreName);
+        const request = store.get(buildId);
+        request.addEventListener('success', () => {
+          resolve((request.result as BuildFileSystemConfig | undefined)?.backend);
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to retrieve build filesystem config'));
+        });
+      }),
+  );
 }
 
 /**
@@ -238,25 +252,20 @@ export async function getBuildFileSystemConfig(buildId: string): Promise<FileSys
  * Should be called when a build is deleted.
  */
 export async function deleteBuildFileSystemConfig(buildId: string): Promise<void> {
-  const db = await openHandleDb();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(configsStoreName, 'readwrite');
-    const store = transaction.objectStore(configsStoreName);
-    const request = store.delete(buildId);
-
-    request.addEventListener('success', () => {
-      resolve();
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to delete build filesystem config'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(configsStoreName, 'readwrite');
+        const store = transaction.objectStore(configsStoreName);
+        const request = store.delete(buildId);
+        request.addEventListener('success', () => {
+          resolve();
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to delete build filesystem config'));
+        });
+      }),
+  );
 }
 
 /**
@@ -264,24 +273,18 @@ export async function deleteBuildFileSystemConfig(buildId: string): Promise<void
  * Used by the /files route to enumerate builds across all backends.
  */
 export async function getAllBuildFileSystemConfigs(): Promise<BuildFileSystemConfig[]> {
-  const db = await openHandleDb();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(configsStoreName, 'readonly');
-    const store = transaction.objectStore(configsStoreName);
-    const request = store.getAll();
-
-    request.addEventListener('success', () => {
-      const configs = request.result as BuildFileSystemConfig[];
-      resolve(configs);
-    });
-
-    request.addEventListener('error', () => {
-      reject(request.error ?? new Error('Failed to retrieve all build filesystem configs'));
-    });
-
-    transaction.addEventListener('complete', () => {
-      db.close();
-    });
-  });
+  return withDb(
+    async (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(configsStoreName, 'readonly');
+        const store = transaction.objectStore(configsStoreName);
+        const request = store.getAll();
+        request.addEventListener('success', () => {
+          resolve(request.result as BuildFileSystemConfig[]);
+        });
+        request.addEventListener('error', () => {
+          reject(request.error ?? new Error('Failed to retrieve all build filesystem configs'));
+        });
+      }),
+  );
 }

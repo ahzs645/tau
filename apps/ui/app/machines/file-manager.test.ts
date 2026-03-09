@@ -1,40 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { configure, fs as zenfs, InMemory } from '@zenfs/core';
+import { WriteCoordinator } from '@taucad/filesystem';
 
 const fsp = zenfs.promises;
+let writeCoordinator = new WriteCoordinator();
 
-/**
- * Serialization queue identical to the one in file-manager.ts.
- * Duplicated here to test the pattern in isolation without importing
- * the full file-manager module (which has side effects and worker deps).
- */
-// oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
-let writeQueue: Promise<void> = Promise.resolve();
-
-async function serialized<T>(operation: () => Promise<T>): Promise<T> {
-  const result = writeQueue
-    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
-    .catch(() => {
-      // Swallow previous error so the queue continues
-    })
-    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
-    .then(async () => operation());
-
-  writeQueue = result
-    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
-    .catch(() => {
-      // No-op
-    })
-    // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
-    .then(() => {
-      // No-op
-    });
-  return result;
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  return writeCoordinator.serialized(operation);
 }
 
 function resetQueue(): void {
-  // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- chained promise pattern
-  writeQueue = Promise.resolve();
+  writeCoordinator = new WriteCoordinator();
 }
 
 /**

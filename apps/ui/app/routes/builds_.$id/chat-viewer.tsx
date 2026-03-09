@@ -1,4 +1,4 @@
-import { memo, useEffect, useCallback, useMemo, useRef } from 'react';
+import { memo, useEffect, useCallback, useMemo } from 'react';
 import { useSelector } from '@xstate/react';
 import type { DockviewApi, DockviewPanelApi, IDockviewPanelHeaderProps } from 'dockview-react';
 import { FileX, FolderOpen } from 'lucide-react';
@@ -8,7 +8,7 @@ import { FileSelector } from '#components/files/file-selector.js';
 import { useBuild } from '#hooks/use-build.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { CadProvider, useCad, useCadSelector } from '#hooks/use-cad.js';
+import { CadProvider, useCadSelector } from '#hooks/use-cad.js';
 import { GraphicsProvider, useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useViewSettingsSync } from '#hooks/use-view-settings-sync.js';
 import { ChatStackTrace } from '#routes/builds_.$id/chat-stack-trace.js';
@@ -255,7 +255,6 @@ const ViewerContent = memo(function ({
 
   // Bridge geometry data from the headless CadMachine to the per-view GraphicsMachine
   const graphicsActor = useGraphics();
-  const cadActorRef = useCad();
   useEffect(() => {
     if (units) {
       graphicsActor.send({
@@ -271,27 +270,9 @@ const ViewerContent = memo(function ({
     viewId,
     graphicsRef: graphicsActor,
     editorRef,
-    cadRef: cadActorRef,
   });
 
-  // Restore persisted render timeout to the shared CadMachine on mount
-  const persistedViewSettings = useSelector(editorRef, (state) => state.context.viewSettings[viewId]);
-  const hasRestoredTimeoutRef = useRef(false);
-  useEffect(() => {
-    if (hasRestoredTimeoutRef.current) {
-      return;
-    }
-
-    const savedTimeout = persistedViewSettings?.graphicsSettings.renderTimeout;
-    if (savedTimeout !== undefined && cadActorRef) {
-      // RenderTimeout in GraphicsViewSettings is in seconds, CadMachine expects milliseconds
-      cadActorRef.send({
-        type: 'setRenderTimeout',
-        timeout: savedTimeout * 1000,
-      });
-      hasRestoredTimeoutRef.current = true;
-    }
-  }, [cadActorRef, persistedViewSettings]);
+  // Render timeout is now managed internally by the autonomous kernel worker
 
   // Select individual primitive values so that useSelector's reference equality
   // check works correctly. An object-returning selector creates a new reference

@@ -146,28 +146,6 @@ export function BuildProvider({
   const logRef = useSelector(actorRef, (state) => state.context.logRef);
 
   useEffect(() => {
-    // FileManager → Compilation Units coordination.
-    // When any file is written, re-trigger ALL compilation units with their own entry file.
-    // Each unit re-compiles its entry point, picking up any changed imports from the written file.
-    // No distinction between machine/user writes -- all writes are treated identically.
-    const fileWrittenSub = fileManager.fileManagerRef.on('fileWritten', (event) => {
-      const snapshot = actorRef.getSnapshot();
-      const units = snapshot.context.compilationUnits;
-      for (const [entryFile, unit] of units) {
-        unit.send({
-          type: 'setFile',
-          file: { path: `/builds/${buildId}`, filename: entryFile },
-          changedPath: `/builds/${buildId}/${event.path}`,
-        });
-      }
-    });
-
-    return () => {
-      fileWrittenSub.unsubscribe();
-    };
-  }, [fileManager.fileManagerRef, actorRef, buildId]);
-
-  useEffect(() => {
     // Load the new build when the buildId changes
     actorRef.send({ type: 'loadBuild', buildId });
 

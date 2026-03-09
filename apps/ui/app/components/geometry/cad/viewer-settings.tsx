@@ -3,7 +3,6 @@ import type { ClassValue } from 'clsx';
 import { Axis3D, Box, Grid3X3, Layers, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
-import { useCad, useCadSelector } from '#hooks/use-cad.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,7 +63,6 @@ type ViewerSettingsProps = {
  */
 export function ViewerSettings({ className, overflowControls }: ViewerSettingsProps): React.ReactNode {
   const graphicsRef = useGraphics();
-  const cadActor = useCad();
 
   const [isOpen, setIsOpen] = useState(false);
 
@@ -81,9 +79,7 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
 
-  // Read render timeout from cadActor (in ms), convert to seconds for display
-  const renderTimeoutMs = useCadSelector((state) => state.context.renderTimeout, 30_000);
-  const renderTimeout = Math.round(renderTimeoutMs / 1000);
+  const renderTimeout = 30;
 
   const handleMeshToggle = useCallback(
     (checked: boolean) => {
@@ -141,15 +137,9 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
     [graphicsRef],
   );
 
-  const handleRenderTimeoutChange = useCallback(
-    (value: string) => {
-      const seconds = Number.parseInt(value, 10);
-      if (!Number.isNaN(seconds) && cadActor) {
-        cadActor.send({ type: 'setRenderTimeout', timeout: seconds * 1000 }); // Convert seconds to ms
-      }
-    },
-    [cadActor],
-  );
+  const handleRenderTimeoutChange = useCallback((_value: string) => {
+    // Render timeout is now managed internally by the autonomous kernel worker
+  }, []);
 
   // Get current timeout option for display (default to 30s if not found)
   const currentTimeoutOption = useMemo(
