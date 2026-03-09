@@ -3,6 +3,8 @@
 Internal reference for writing high-quality tests across the Tau monorepo.
 Distilled from patterns observed in `packages/kernels`, `apps/ui`, and `apps/api`.
 
+**See also:** [React Testing Policy](policy/react-testing-policy.md) for hook and component testing patterns specific to `apps/ui`.
+
 ## 1. Assert Observable Behavior, Not Implementation
 
 Every assertion must verify something a consumer or collaborator can observe.
