@@ -1,7 +1,8 @@
 import { Copy, Check } from 'lucide-react';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
+import { useTickAnimation } from '#hooks/use-tick-animation.js';
 
 export type CopyButtonProperties = {
   /**
@@ -26,33 +27,16 @@ export function CopyButton({
   tooltipContentProperties,
   ...properties
 }: CopyButtonProperties): React.JSX.Element {
-  const [copied, setCopied] = useState(false);
+  const { ticked: copied, trigger } = useTickAnimation();
 
   const handleCopy = useCallback(async () => {
-    setCopied(true);
+    trigger();
     if (globalThis.isSecureContext) {
       void navigator.clipboard.writeText(await getText());
     } else {
       console.warn('Clipboard operations are only allowed in secure contexts.');
     }
-  }, [getText]);
-
-  useEffect(() => {
-    let timer: NodeJS.Timeout | undefined;
-
-    if (copied) {
-      timer = setTimeout(() => {
-        setCopied(false);
-        timer = undefined;
-      }, 2000);
-    }
-
-    return () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    };
-  }, [copied]);
+  }, [getText, trigger]);
 
   return (
     <Tooltip>
