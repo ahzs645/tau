@@ -56,6 +56,8 @@ groups:
       - oxc
       - oxc-vscode
       - tailwindcss-intellisense
+      - react-router
+      - vaul
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -315,3 +317,9 @@ repos:
     upstream: tailwindlabs/tailwindcss-intellisense
     description: Intelligent Tailwind CSS tooling for Visual Studio Code
     fork: taucad/tailwindcss-intellisense
+  react-router:
+    upstream: remix-run/react-router
+    description: Declarative routing for React
+  vaul:
+    upstream: emilkowalski/vaul
+    description: A drawer component for React.
