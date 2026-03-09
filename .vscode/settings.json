@@ -3,9 +3,6 @@
   "files.watcherExclude": {
     "**/repos/**": true
   },
-  "search.exclude": {
-    "**/repos/**": true
-  },
   "javascript.preferences.importModuleSpecifierEnding": "js",
   "typescript.preferences.importModuleSpecifierEnding": "js",
   "typescript.preferences.importModuleSpecifier": "non-relative",
