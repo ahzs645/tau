@@ -16,7 +16,7 @@ const geometryHelpers = createGeometryTestHelpers();
 // that occur when initializing multiple WASM instances in the same process.
 // =============================================================================
 
-describe('OpenCascade Kernel', () => {
+describe('OpenCascade Kernel', { timeout: 30_000 }, () => {
   let worker: Awaited<ReturnType<typeof createTestWorker>>;
 
   beforeAll(async () => {

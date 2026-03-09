@@ -1,5 +1,4 @@
 /* oxlint-disable eslint(new-cap) -- OpenCascade API uses PascalCase method names */
-/* oxlint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- OpenCascade instance is untyped at runtime */
 /**
  * OpenCascade Kernel Module
  *
@@ -19,10 +18,10 @@ import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelRuntime } from '#types/kernel-worker.types.js';
 import type { KernelIssue } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
-import { initOpenCascade } from '#kernels/replicad/init-open-cascade.js';
-import type { OpenCascadeModuleFactory } from '#kernels/replicad/init-open-cascade.js';
-import { resolveCjsDefault } from '#kernels/replicad/utils/resolve-cjs-default.js';
+import { initOpenCascade, resolveCjsDefault } from '#kernels/opencascade/init-opencascade.js';
+import type { OpenCascadeModuleFactory } from '#kernels/opencascade/init-opencascade.js';
 import { meshShapesToGltf } from '#kernels/opencascade/opencascade-mesh.js';
+import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
 
 const fullWasmUrl = new URL('wasm/opencascade_full.wasm', import.meta.url).href;
 
@@ -41,11 +40,8 @@ type RuntimeModuleExports = {
   defaultName?: string;
 };
 
-// eslint-disable-next-line @typescript-eslint/naming-convention -- matches OpenCASCADE API method names
-type OpenCascadeShape = { IsNull: () => boolean; delete: () => void };
-
 type ShapeEntry = {
-  shape: OpenCascadeShape;
+  shape: TopoDS_Shape;
   name?: string;
   color?: string;
   opacity?: number;
@@ -113,7 +109,7 @@ function getModuleRegistry(): Map<string, Record<string, unknown>> {
   return registry;
 }
 
-function registerOcModule(oc: any, runtime: KernelRuntime): void {
+function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void {
   const exports = oc as unknown as Record<string, unknown>;
   const registry = getModuleRegistry();
   registry.set('opencascade', exports);
@@ -208,7 +204,7 @@ function normalizeShapes(value: unknown): ShapeEntry[] {
   return [];
 }
 
-function isOpenCascadeShape(value: unknown): value is OpenCascadeShape {
+function isOpenCascadeShape(value: unknown): value is TopoDS_Shape {
   return isRecordObject(value) && typeof value['IsNull'] === 'function' && typeof value['delete'] === 'function';
 }
 
@@ -355,7 +351,7 @@ export default defineKernel({
 
     const linearTolerance = tessellation?.linearTolerance ?? 0.1;
     const angularTolerance = tessellation?.angularTolerance ?? 30;
-    const gltfData = await meshShapesToGltf(context.oc, shapeEntries, {
+    const gltfData = meshShapesToGltf(context.oc, shapeEntries, {
       linearTolerance,
       angularTolerance: angularTolerance * (Math.PI / 180),
     });
@@ -371,7 +367,7 @@ export default defineKernel({
     }
 
     if (fileType === 'glb' || fileType === 'gltf') {
-      const gltfData = await meshShapesToGltf(context.oc, nativeHandle, {
+      const gltfData = meshShapesToGltf(context.oc, nativeHandle, {
         linearTolerance: 0.01,
         angularTolerance: 0.5,
       });
@@ -382,11 +378,11 @@ export default defineKernel({
     }
 
     if (fileType === 'step' || fileType === 'step-assembly') {
-      const oc = context.oc as any;
+      const { oc } = context;
       const results = nativeHandle.map((entry) => {
         const writer = new oc.STEPControl_Writer();
         const progress = new oc.Message_ProgressRange();
-        writer.Transfer(entry.shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true, progress);
+        writer.Transfer(entry.shape, oc.STEPControl_StepModelType.STEPControl_AsIs as never, true, progress);
         const filePath = `/tmp/export_${Date.now()}.step`;
         writer.Write(filePath);
         const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
@@ -401,16 +397,18 @@ export default defineKernel({
     }
 
     if (fileType === 'stl' || fileType === 'stl-binary') {
-      const oc = context.oc as any;
+      const { oc } = context;
       const results = nativeHandle.map((entry) => {
-        // oxlint-disable-next-line no-new -- meshing is a side-effect operation
-        new oc.BRepMesh_IncrementalMeshWrapper(entry.shape, 0.01, false, 0.5, false);
+        void new oc.BRepMesh_IncrementalMesh(entry.shape, 0.01, false, 0.5, false);
         const filePath = `/tmp/export_${Date.now()}.stl`;
-        const asciiMode = fileType !== 'stl-binary';
-        oc.StlAPI.Write(entry.shape, filePath, asciiMode);
+        const writer = new oc.StlAPI_Writer();
+        const progress = new oc.Message_ProgressRange();
+        writer.Write_1(entry.shape, filePath, progress);
         const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
         const data = new Uint8Array(rawData);
         oc.FS.unlink(filePath);
+        progress.delete();
+        writer.delete();
         return createExportFile(fileType, entry.name ?? 'Geometry', data);
       });
 
