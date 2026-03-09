@@ -1,6 +1,6 @@
 # Vision Policy
 
-Connect the five pillars of hardware engineering — systems design, analysis, CAD, software/firmware, and simulation — through code and AI agents.
+Tau's vision is to connect the five pillars of hardware engineering — systems design, analysis, CAD, software/firmware, and simulation — through code and AI agents.
 
 ## The Problem
 
