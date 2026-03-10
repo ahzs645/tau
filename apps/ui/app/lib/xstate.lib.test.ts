@@ -24,20 +24,22 @@ function stopRootWithRehydration(actorRef: AnyActorRef): void {
   forEachActor(actorRef, (ref) => {
     persistedSnapshots.push([ref, ref.getSnapshot()]);
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
-    (ref as Record<string, unknown>).observers = new Set();
+    (ref as unknown as Record<string, unknown>)['observers'] = new Set();
   });
 
   // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- mirror @xstate/react internals
-  const systemSnapshot = (actorRef.system as Record<string, unknown>).getSnapshot?.();
+  const systemSnapshot = (
+    (actorRef.system as unknown as Record<string, unknown>)['getSnapshot'] as (() => unknown) | undefined
+  )?.();
   actorRef.stop();
   // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
-  (actorRef.system as Record<string, unknown>)._snapshot = systemSnapshot;
+  (actorRef.system as unknown as Record<string, unknown>)['_snapshot'] = systemSnapshot;
 
   for (const [ref, snapshot] of persistedSnapshots) {
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
-    (ref as Record<string, unknown>)._processingStatus = 0;
+    (ref as unknown as Record<string, unknown>)['_processingStatus'] = 0;
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
-    (ref as Record<string, unknown>)._snapshot = snapshot;
+    (ref as unknown as Record<string, unknown>)['_snapshot'] = snapshot;
   }
 }
 
@@ -136,10 +138,10 @@ describe('fromSafeAsync', () => {
   });
 
   // =========================================================================
-  // Data delivery via emit
+  // Data delivery via return
   // =========================================================================
   describe('data delivery', () => {
-    it('should deliver data via emit to parent on: handler', async () => {
+    it('should deliver returned event to parent on: handler', async () => {
       type DataEvent = { type: 'dataReady'; value: number };
 
       const machine = setup({
@@ -150,8 +152,8 @@ describe('fromSafeAsync', () => {
           events: {} as DataEvent,
         },
         actors: {
-          work: fromSafeAsync<DataEvent, { multiplier: number }>(async ({ input, emit }) => {
-            emit({ type: 'dataReady', value: input.multiplier * 10 });
+          work: fromSafeAsync(async ({ input }: { input: { multiplier: number }; signal: AbortSignal }) => {
+            return { type: 'dataReady' as const, value: input.multiplier * 10 };
           }),
         },
       }).createMachine({
@@ -179,49 +181,6 @@ describe('fromSafeAsync', () => {
       await waitFor(actor, (s) => s.value === 'finished');
 
       expect(actor.getSnapshot().context.receivedValue).toBe(50);
-      actor.stop();
-    });
-
-    it('should deliver multiple emitted events before completing', async () => {
-      type ItemEvent = { type: 'item'; index: number };
-
-      const machine = setup({
-        types: {
-          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
-          context: {} as { items: number[] },
-          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
-          events: {} as ItemEvent,
-        },
-        actors: {
-          work: fromSafeAsync<ItemEvent>(async ({ emit }) => {
-            emit({ type: 'item', index: 0 });
-            emit({ type: 'item', index: 1 });
-            emit({ type: 'item', index: 2 });
-          }),
-        },
-      }).createMachine({
-        context: { items: [] },
-        initial: 'working',
-        states: {
-          working: {
-            invoke: { src: 'work', onDone: 'finished' },
-            on: {
-              item: {
-                actions: assign({
-                  items: ({ context, event }) => [...context.items, event.index],
-                }),
-              },
-            },
-          },
-          finished: { type: 'final' },
-        },
-      });
-
-      const actor = createActor(machine);
-      actor.start();
-      await waitFor(actor, (s) => s.value === 'finished');
-
-      expect(actor.getSnapshot().context.items).toEqual([0, 1, 2]);
       actor.stop();
     });
   });
@@ -295,12 +254,12 @@ describe('fromSafeAsync', () => {
           events: {} as DoneEvent,
         },
         actors: {
-          work: fromSafeAsync<DoneEvent>(async ({ emit }) => {
+          work: fromSafeAsync(async () => {
             await new Promise((resolve) => {
               setTimeout(resolve, 100);
             });
-            callLog.push('emit');
-            emit({ type: 'workDone', value: 'from-zombie' });
+            callLog.push('return');
+            return { type: 'workDone' as const, value: 'from-zombie' };
           }),
         },
       }).createMachine({
@@ -369,12 +328,12 @@ describe('fromSafeAsync', () => {
           events: {} as TagEvent,
         },
         actors: {
-          work: fromSafeAsync<TagEvent>(async ({ emit }) => {
+          work: fromSafeAsync(async () => {
             const myInvocation = ++invocationCount;
             await new Promise((resolve) => {
               setTimeout(resolve, 50);
             });
-            emit({ type: 'tagged', invocation: myInvocation });
+            return { type: 'tagged' as const, invocation: myInvocation };
           }),
         },
       }).createMachine({

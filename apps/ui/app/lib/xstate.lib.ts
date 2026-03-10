@@ -1,5 +1,5 @@
 import { fromEventObservable } from 'xstate';
-import type { EventObject, Subscribable } from 'xstate';
+import type { EventObject, NonReducibleUnknown, Subscribable } from 'xstate';
 
 // ---------------------------------------------------------------------------
 // fromSafeAsync — React Strict Mode safe alternative to fromPromise
@@ -65,6 +65,40 @@ function createSafeSubscribable<T>(
  * Drop-in replacement for `fromPromise` that is safe under React Strict Mode's
  * `stopRootWithRehydration` cycle (mount → stop → rehydrate → restart).
  *
+ * ## Generic parameters — `fromSafeAsync<TReturn, TInput>`
+ *
+ * Follows the same `<TOutput, TInput>` convention as `fromPromise`. Specify
+ * both generic parameters explicitly to type `input` and the return value:
+ *
+ * ```typescript
+ * type LoadedEvent = { type: 'loaded'; data: string };
+ * type LoadInput = { url: string };
+ *
+ * const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async ({ input, signal }) => {
+ *   const data = await fetchData(input.url, { signal }); // input: LoadInput
+ *   return { type: 'loaded' as const, data };             // return: LoadedEvent
+ * });
+ * ```
+ *
+ * **Fire-and-forget** (void return, with input):
+ * ```typescript
+ * const writeActor = fromSafeAsync<void, { data: string }>(async ({ input }) => {
+ *   await saveData(input.data);
+ * });
+ * ```
+ *
+ * **No input** (void return, no input):
+ * ```typescript
+ * const sideEffect = fromSafeAsync(async () => {
+ *   await doWork();
+ * });
+ * ```
+ *
+ * ## How it works
+ *
+ * The returned event object is automatically emitted to the parent machine's
+ * `on:` handlers. `onDone` fires as a pure lifecycle signal (no data).
+ *
  * ## Why this exists
  *
  * `fromPromise` is fundamentally incompatible with `stopRootWithRehydration`
@@ -86,13 +120,14 @@ function createSafeSubscribable<T>(
  * 3. **Observable unsubscribe contract** — XState calls `unsubscribe()` on the subscription
  *    when the invoking state is exited, preventing zombie event relay entirely
  *
- * ## Data delivery model
+ * ## TypeScript limitations
  *
- * Results are delivered via `emit()` which maps to the parent machine's `on:` handlers.
- * `onDone` is a pure lifecycle signal (no data). `onError` handles thrown errors.
+ * TypeScript does not support partial type argument inference (as of TS 6.0).
+ * You must specify both `TReturn` and `TInput` to type the input — same as
+ * `fromPromise<TOutput, TInput>`. For actors that don't need input, omit both
+ * generics entirely and let inference handle the return type.
  *
- * - **Fire-and-forget**: `fromSafeAsync<never, Input>(async ({ input, signal }) => { ... })`
- * - **Data-returning**: `fromSafeAsync<MyEvent, Input>(async ({ input, signal, emit }) => { emit({ type: 'done', data }); })`
+ * See `docs/policy/typescript-policy.md` for the full type safety policy.
  *
  * @see https://github.com/statelyai/xstate/issues/1237 — Duplicate machine execution with React.StrictMode
  * @see https://github.com/statelyai/xstate/pull/3278 — First workaround: prevent strict mode restart (closed)
@@ -113,16 +148,20 @@ function createSafeSubscribable<T>(
  */
 // oxlint-disable-next-line typescript/explicit-module-boundary-types -- allowing type inference for the function return type
 export function fromSafeAsync<
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- following Xstate convention for actor done events
-  TEmittedEvent extends EventObject = never,
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- following Xstate convention for actor done events
-  TInput = void,
->(work: (args: { input: TInput; signal: AbortSignal; emit: (event: TEmittedEvent) => void }) => Promise<void>) {
-  return fromEventObservable<TEmittedEvent, TInput>(({ input }) =>
-    createSafeSubscribable<TEmittedEvent>((subscriber, signal) => {
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- following XState convention for generic type parameters
+  TReturn extends EventObject | void = void,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- following XState convention for generic type parameters
+  TInput extends NonReducibleUnknown = NonReducibleUnknown,
+>(work: (args: { input: TInput; signal: AbortSignal }) => Promise<TReturn>) {
+  return fromEventObservable<TReturn & EventObject, TInput>(({ input }) =>
+    createSafeSubscribable<TReturn & EventObject>((subscriber, signal) => {
       // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then) -- Observable executor cannot be async; .then() is intentional
-      void work({ input, signal, emit: subscriber.next }).then(
-        () => {
+      void work({ input, signal }).then(
+        (result) => {
+          if (result !== undefined) {
+            // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- safe: void case excluded by undefined check above
+            subscriber.next(result as TReturn & EventObject);
+          }
           subscriber.complete();
         },
         (error: unknown) => {
