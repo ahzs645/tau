@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mock } from 'vitest-mock-extended';
 import type { Socket } from 'socket.io';
 import { ChatRpcService, rpcExecutionTimeoutMs, abortCleanupDelayMs } from '#api/chat/chat-rpc.service.js';
 
@@ -19,11 +20,7 @@ vi.mock('@taucad/chat', () => ({
 }));
 
 function createMockSocket(id: string, connected = true): Socket {
-  return {
-    id,
-    connected,
-    emit: vi.fn(),
-  } as unknown as Socket;
+  return mock<Socket>({ id, connected, emit: vi.fn() });
 }
 
 describe('ChatRpcService', () => {

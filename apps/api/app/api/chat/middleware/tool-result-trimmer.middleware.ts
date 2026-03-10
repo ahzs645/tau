@@ -315,20 +315,8 @@ function isToolMessage(message: BaseMessage): message is ToolMessage {
 
   // Check for deserialized plain objects with type: "tool"
   // These lose their prototype chain when stored/loaded from PostgresSaver
-  // Cast through unknown to access properties on potentially deserialized objects
-  const messageRecord = message as unknown as Record<string, unknown>;
-
-  // Check for type property (present on deserialized messages)
-  if (messageRecord['type'] === 'tool') {
-    return true;
-  }
-
-  // Check for getType method (deprecated but still used in some places)
-  if (typeof messageRecord['getType'] === 'function') {
-    return (messageRecord['getType'] as () => string)() === 'tool';
-  }
-
-  return false;
+  // but retain data properties like `type`
+  return message.type === 'tool';
 }
 
 /**
@@ -353,17 +341,7 @@ function parseToolContent(content: string): unknown | undefined {
  * @param message - The tool message to trim
  */
 function trimToolMessage(message: ToolMessage): BaseMessage {
-  // Access properties defensively to handle both ToolMessage and plain objects
-  const messageRecord = message as unknown as Record<string, unknown>;
-  const {
-    content,
-    name,
-    tool_call_id: toolCallId,
-  } = messageRecord as {
-    content: unknown;
-    name: string | undefined;
-    tool_call_id: string;
-  };
+  const { content, name, tool_call_id: toolCallId } = message;
 
   // Handle multi-modal content (arrays with image blocks from screenshot tool)
   if (Array.isArray(content)) {
@@ -429,16 +407,7 @@ function trimToolMessage(message: ToolMessage): BaseMessage {
  * so the LLM can visually process the captured images.
  */
 function injectScreenshotImages(message: ToolMessage): ToolMessage {
-  const messageRecord = message as unknown as Record<string, unknown>;
-  const {
-    content,
-    name,
-    tool_call_id: toolCallId,
-  } = messageRecord as {
-    content: unknown;
-    name: string | undefined;
-    tool_call_id: string;
-  };
+  const { content, name, tool_call_id: toolCallId } = message;
 
   if (typeof content !== 'string') {
     return message;
@@ -453,7 +422,7 @@ function injectScreenshotImages(message: ToolMessage): ToolMessage {
   const imageBlocks = images
     .filter((img) => typeof img['dataUrl'] === 'string')
     .map((img) => ({
-      type: 'image_url' as const,
+      type: 'image_url',
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain multimodal content block format
       image_url: { url: img['dataUrl'] as string },
     }));
@@ -480,15 +449,13 @@ function findLastScreenshotIndex(messages: BaseMessage[]): number {
       continue;
     }
 
-    const record = message as unknown as Record<string, unknown>;
-    const name = record['name'] as string | undefined;
-
-    if (name === toolName.screenshot) {
+    if (message.name === toolName.screenshot) {
       return index;
     }
 
-    if (typeof record['content'] === 'string') {
-      const parsed = parseToolContent(record['content']);
+    const { content } = message;
+    if (typeof content === 'string') {
+      const parsed = parseToolContent(content);
       if (isObject(parsed) && Array.isArray(parsed['images'])) {
         return index;
       }

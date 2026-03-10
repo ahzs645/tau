@@ -7,7 +7,7 @@ import { Reflector } from '@nestjs/core';
 import type { FastifyReply } from 'fastify';
 import type { StreamTextResult as StreamTextResultType, ToolSet, UIMessage, UIMessageChunk } from 'ai';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
-import type { ChatUsageTokens, MyUIMessage } from '@taucad/chat';
+import type { ChatUsageTokens, MyUIMessage, ChatSnapshot } from '@taucad/chat';
 import { ChatController } from '#api/chat/chat.controller.js';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -15,6 +15,7 @@ import { ModelService } from '#api/models/model.service.js';
 import { FileEditService } from '#api/file-edit/file-edit.service.js';
 import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
+import type { CreateChatDto } from '#api/chat/chat.dto.js';
 
 // Mock the @ai-sdk/langchain module
 vi.mock('@ai-sdk/langchain', () => ({
@@ -65,7 +66,7 @@ function createMockUserMessage(model: string): MyUIMessage {
     role: 'user',
     parts: [{ type: 'text', text: 'Hello' }],
     metadata: { model, kernel: 'openscad' },
-  } as const satisfies MyUIMessage;
+  };
 }
 
 // Helper to create mock agent with graph property
@@ -242,12 +243,12 @@ describe('ChatController', () => {
         messages: [
           {
             id: 'msg_1',
-            role: 'user' as const,
-            parts: [{ type: 'text' as const, text: 'Hello' }],
-            metadata: { model: 'test-model', kernel: 'openscad' as const, toolChoice: 'none' as const },
+            role: 'user',
+            parts: [{ type: 'text', text: 'Hello' }],
+            metadata: { model: 'test-model', kernel: 'openscad', toolChoice: 'none' },
           },
         ],
-      };
+      } as const satisfies CreateChatDto;
 
       // Act
       await controller.createChat(body, mockResponse);
@@ -332,7 +333,7 @@ describe('ChatController', () => {
       const userMessageWithoutModel: MyUIMessage = {
         id: 'msg_1',
         role: 'user',
-        parts: [{ type: 'text' as const, text: 'Hello' }],
+        parts: [{ type: 'text', text: 'Hello' }],
         metadata: {}, // No model specified
       };
       const body = {
@@ -393,19 +394,19 @@ describe('ChatController', () => {
 
       const snapshot = {
         fileTree: [
-          { path: 'src', name: 'src', type: 'dir' as const, size: 0 },
-          { path: 'src/main.scad', name: 'main.scad', type: 'file' as const, size: 1024 },
+          { path: 'src', name: 'src', type: 'dir', size: 0 },
+          { path: 'src/main.scad', name: 'main.scad', type: 'file', size: 1024 },
         ],
         activeFile: { path: 'src/main.scad', name: 'main.scad' },
         openFiles: [{ path: 'src/main.scad', name: 'main.scad' }],
-      };
+      } as const satisfies ChatSnapshot;
 
-      const messageWithSnapshot: MyUIMessage = {
+      const messageWithSnapshot = {
         id: 'msg_snapshot',
         role: 'user',
         parts: [{ type: 'text', text: 'Create a cube' }],
         metadata: { model: 'test-model', kernel: 'openscad', snapshot },
-      };
+      } as const satisfies MyUIMessage;
 
       const body = {
         id: 'chat_snapshot',

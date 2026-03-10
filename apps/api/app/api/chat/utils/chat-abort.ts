@@ -29,7 +29,9 @@ const chatAbortBrand: unique symbol = Symbol('ChatAbortBrand');
  * is accessible on `signal.reason` for precise identification in catch blocks.
  */
 export class ChatAbortError extends Error {
-  public readonly [chatAbortBrand] = true as const;
+  public get [chatAbortBrand](): true {
+    return true;
+  }
 
   public constructor(public readonly chatId: string) {
     super(`Chat ${chatId} was cancelled by client`);

@@ -191,7 +191,7 @@ ${contextParts.join('\n\n')}
 `;
 
   // Prepend a new text part with the editor context at the beginning
-  const contextPart = { type: 'text' as const, text: editorContext };
+  const contextPart = { type: 'text', text: editorContext };
   const updatedParts = [contextPart, ...lastUserMessage.parts];
 
   return [

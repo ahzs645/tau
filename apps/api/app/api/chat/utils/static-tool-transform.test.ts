@@ -59,7 +59,7 @@ describe('createStaticToolTransform', () => {
       const results = await processChunks([toolInputStartChunk as unknown as UIMessageChunk]);
 
       expect(results).toHaveLength(1);
-      const result = results[0] as unknown as ToolInputChunk;
+      const result = results[0] as ToolInputChunk;
       expect(result.type).toBe('tool-input-start');
       expect(result.toolName).toBe('read_file');
       expect(result.dynamic).toBeUndefined();
@@ -77,7 +77,7 @@ describe('createStaticToolTransform', () => {
       const results = await processChunks([toolInputAvailableChunk as unknown as UIMessageChunk]);
 
       expect(results).toHaveLength(1);
-      const result = results[0] as unknown as ToolInputChunk;
+      const result = results[0] as ToolInputChunk;
       expect(result.type).toBe('tool-input-available');
       expect(result.toolName).toBe('read_file');
       expect(result.input).toEqual({ path: '/src/main.scad' });
@@ -96,7 +96,7 @@ describe('createStaticToolTransform', () => {
       const results = await processChunks([toolInputChunk as unknown as UIMessageChunk]);
 
       expect(results).toHaveLength(1);
-      const result = results[0] as unknown as ToolInputChunk;
+      const result = results[0] as ToolInputChunk;
       expect(result.type).toBe('tool-input-available');
       expect(result.toolName).toBe('edit_file');
       expect(result.dynamic).toBeUndefined();
@@ -114,7 +114,7 @@ describe('createStaticToolTransform', () => {
       const results = await processChunks([toolInputChunk as unknown as UIMessageChunk]);
 
       expect(results).toHaveLength(1);
-      const result = results[0] as unknown as ToolInputChunk;
+      const result = results[0] as ToolInputChunk;
       expect(result.dynamic).toBeUndefined();
     });
   });
@@ -132,7 +132,7 @@ describe('createStaticToolTransform', () => {
       const results = await processChunks([unknownToolChunk as unknown as UIMessageChunk]);
 
       expect(results).toHaveLength(1);
-      const result = results[0] as unknown as ToolInputChunk;
+      const result = results[0] as ToolInputChunk;
       expect(result.type).toBe('tool-input-available');
       expect(result.toolName).toBe('unknown_custom_tool');
       expect(result.dynamic).toBe(true);
@@ -149,7 +149,7 @@ describe('createStaticToolTransform', () => {
       const results = await processChunks([unknownToolChunk as unknown as UIMessageChunk]);
 
       expect(results).toHaveLength(1);
-      const result = results[0] as unknown as ToolInputChunk;
+      const result = results[0] as ToolInputChunk;
       expect(result.dynamic).toBe(true);
     });
   });
@@ -224,12 +224,12 @@ describe('createStaticToolTransform', () => {
       expect(results[0]).toEqual(textChunk);
 
       // Read_file should have dynamic stripped
-      const readFileResult = results[1] as unknown as ToolInputChunk;
+      const readFileResult = results[1] as ToolInputChunk;
       expect(readFileResult.toolName).toBe('read_file');
       expect(readFileResult.dynamic).toBeUndefined();
 
       // Unknown_tool should keep dynamic
-      const unknownToolResult = results[2] as unknown as ToolInputChunk;
+      const unknownToolResult = results[2] as ToolInputChunk;
       expect(unknownToolResult.toolName).toBe('unknown_tool');
       expect(unknownToolResult.dynamic).toBe(true);
     });
@@ -263,8 +263,8 @@ describe('createStaticToolTransform', () => {
       expect(results).toHaveLength(3);
 
       // Both tool-input events should have dynamic stripped
-      expect((results[0] as unknown as ToolInputChunk).dynamic).toBeUndefined();
-      expect((results[1] as unknown as ToolInputChunk).dynamic).toBeUndefined();
+      expect((results[0] as ToolInputChunk).dynamic).toBeUndefined();
+      expect((results[1] as ToolInputChunk).dynamic).toBeUndefined();
 
       // Finish chunk passes through unchanged
       expect(results[2]).toEqual(finishChunk);

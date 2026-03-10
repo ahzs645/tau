@@ -17,9 +17,9 @@ import type { Environment } from '#config/environment.config.js';
 type AuthInstance = ReturnType<typeof betterAuth>;
 
 const hooks = [
-  { metadataKey: beforeHookKey, hookType: 'before' as const },
-  { metadataKey: afterHookKey, hookType: 'after' as const },
-];
+  { metadataKey: beforeHookKey, hookType: 'before' },
+  { metadataKey: afterHookKey, hookType: 'after' },
+] as const;
 
 @Global()
 @Module({

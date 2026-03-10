@@ -68,10 +68,7 @@ function addCacheControlToHumanMessage(message: HumanMessage): HumanMessage {
  */
 function addCacheControlToAiMessage(message: AIMessage): AIMessage {
   const { content } = message;
-  // Access additional_kwargs which may contain tool_calls
-  const additionalKwargs = (message as unknown as Record<string, unknown>)['additional_kwargs'] as
-    | Record<string, unknown>
-    | undefined;
+  const { additional_kwargs: additionalKwargs } = message;
 
   // Handle string content - convert to content block array
   if (typeof content === 'string' && content.length > 0) {

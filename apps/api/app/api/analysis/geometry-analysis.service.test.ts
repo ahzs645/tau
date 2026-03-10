@@ -431,10 +431,10 @@ describe('GeometryAnalysisService', () => {
       const requirement = {
         id: 'u1',
         description: 'unknown',
-        type: 'measurement' as const,
+        type: 'measurement',
         check: 'nonExistent' as 'meshCount',
         expected: {},
-      };
+      } as const;
 
       const result = await service.runMeasurementTests(boxGlb, [requirement]);
 

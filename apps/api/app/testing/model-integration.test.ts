@@ -415,8 +415,8 @@ describe.skip(`Model Integration: ${modelId}`, () => {
             .filter((p): p is typeof p & { type: 'text'; text: string } => p.type === 'text')
             .map((p) => ({
               id: 'msg_2',
-              role: 'assistant' as const,
-              parts: [{ type: 'text' as const, text: p.text }],
+              role: 'assistant',
+              parts: [{ type: 'text', text: p.text }],
               metadata: { model: modelId, kernel: 'replicad' },
             })),
           {
