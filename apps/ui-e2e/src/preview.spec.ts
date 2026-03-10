@@ -4,7 +4,7 @@ test.describe('Build Preview', () => {
   test('renders a 3D model for the Hollow Box build', async ({ page }) => {
     await page.goto('/builds/bld_hollow_box/preview');
 
-    const canvas = page.getByRole('img', { name: /3D model preview/i });
+    const canvas = page.getByRole('img', { name: /3d model preview/i });
     await expect(canvas).toBeVisible({ timeout: 45_000 });
 
     await expect(page.getByRole('alert')).not.toBeVisible();
@@ -18,7 +18,7 @@ test.describe('Build Preview', () => {
     await page.goto('/builds/bld_hollow_box/preview');
 
     const loading = page.getByRole('status', { name: /loading preview/i });
-    const canvas = page.getByRole('img', { name: /3D model preview/i });
+    const canvas = page.getByRole('img', { name: /3d model preview/i });
 
     // One of these must be visible immediately after navigation
     await expect(loading.or(canvas)).toBeVisible({ timeout: 10_000 });

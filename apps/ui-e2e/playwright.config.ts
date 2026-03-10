@@ -5,13 +5,13 @@ import { nxE2EPreset } from '@nx/playwright/preset';
 import { workspaceRoot } from '@nx/devkit';
 
 const baseURL = process.env['BASE_URL'] ?? 'http://localhost:3000';
-const isCI = Boolean(process.env['CI']);
+const isCi = Boolean(process.env['CI']);
 
 export default defineConfig({
   ...nxE2EPreset(fileURLToPath(import.meta.url), { testDir: './src' }),
 
   timeout: 60_000,
-  retries: isCI ? 2 : 0,
+  retries: isCi ? 2 : 0,
 
   expect: {
     toHaveScreenshot: {
@@ -29,7 +29,7 @@ export default defineConfig({
   webServer: {
     command: 'pnpm exec nx run ui:serve-static',
     url: 'http://localhost:3000',
-    reuseExistingServer: !isCI,
+    reuseExistingServer: !isCi,
     cwd: workspaceRoot,
     timeout: 120_000,
   },
