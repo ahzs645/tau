@@ -1,26 +1,6 @@
 import { fromEventObservable } from 'xstate';
 import type { EventObject, Subscribable } from 'xstate';
 
-const xstateActorDoneEventPrefix = 'xstate.done.actor.';
-type XstateActorDoneEvent = `${typeof xstateActorDoneEventPrefix}${string}`;
-
-/**
- * Asserts that the event is a done event from an actor.
- *
- * @param event - The event to check.
- * @returns The event if it is a done event from an actor.
- * @throws An error if the event is not a done event from an actor.
- */
-export function assertActorDoneEvent<Event extends { type: string }>(
-  event: Event,
-): asserts event is Extract<Event, { type: XstateActorDoneEvent }> {
-  if (event.type.startsWith(xstateActorDoneEventPrefix)) {
-    return;
-  }
-
-  throw new Error(`Expected actor done event, got ${event.type}`);
-}
-
 // ---------------------------------------------------------------------------
 // fromSafeAsync — React Strict Mode safe alternative to fromPromise
 // ---------------------------------------------------------------------------
@@ -140,6 +120,7 @@ export function fromSafeAsync<
 >(work: (args: { input: TInput; signal: AbortSignal; emit: (event: TEmittedEvent) => void }) => Promise<void>) {
   return fromEventObservable<TEmittedEvent, TInput>(({ input }) =>
     createSafeSubscribable<TEmittedEvent>((subscriber, signal) => {
+      // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then) -- Observable executor cannot be async; .then() is intentional
       void work({ input, signal, emit: subscriber.next }).then(
         () => {
           subscriber.complete();

@@ -9,11 +9,13 @@ import { fromSafeAsync } from '#lib/xstate.js';
 
 function forEachActor(actorRef: AnyActorRef, callback: (ref: AnyActorRef) => void): void {
   callback(actorRef);
-  const children = actorRef.getSnapshot().children;
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- mirror @xstate/react internals
+  const { children } = actorRef.getSnapshot();
   if (children) {
-    Object.values(children).forEach((child) => {
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- mirror @xstate/react internals
+    for (const child of Object.values(children)) {
       forEachActor(child as AnyActorRef, callback);
-    });
+    }
   }
 }
 
@@ -25,18 +27,18 @@ function stopRootWithRehydration(actorRef: AnyActorRef): void {
     (ref as Record<string, unknown>).observers = new Set();
   });
 
-  // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- mirror @xstate/react internals
   const systemSnapshot = (actorRef.system as Record<string, unknown>).getSnapshot?.();
   actorRef.stop();
   // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
   (actorRef.system as Record<string, unknown>)._snapshot = systemSnapshot;
 
-  persistedSnapshots.forEach(([ref, snapshot]) => {
+  for (const [ref, snapshot] of persistedSnapshots) {
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
     (ref as Record<string, unknown>)._processingStatus = 0;
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-member-access -- mirror @xstate/react internals
     (ref as Record<string, unknown>)._snapshot = snapshot;
-  });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +57,7 @@ describe('fromSafeAsync', () => {
     it('should transition via onDone when work completes', async () => {
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { done: boolean },
         },
         actors: {
@@ -93,6 +96,7 @@ describe('fromSafeAsync', () => {
     it('should transition via onError when work throws', async () => {
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { errorMessage: string | undefined },
         },
         actors: {
@@ -140,7 +144,9 @@ describe('fromSafeAsync', () => {
 
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { receivedValue: number | undefined },
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           events: {} as DataEvent,
         },
         actors: {
@@ -181,7 +187,9 @@ describe('fromSafeAsync', () => {
 
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { items: number[] },
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           events: {} as ItemEvent,
         },
         actors: {
@@ -227,6 +235,7 @@ describe('fromSafeAsync', () => {
 
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           events: {} as { type: 'cancel' },
         },
         actors: {
@@ -256,8 +265,8 @@ describe('fromSafeAsync', () => {
       const actor = createActor(machine);
       actor.start();
 
-      await new Promise((r) => {
-        setTimeout(r, 20);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
       });
       expect(capturedSignal).toBeDefined();
       expect(capturedSignal!.aborted).toBe(false);
@@ -280,13 +289,15 @@ describe('fromSafeAsync', () => {
 
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { result: string | undefined },
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           events: {} as DoneEvent,
         },
         actors: {
           work: fromSafeAsync<DoneEvent>(async ({ emit }) => {
-            await new Promise((r) => {
-              setTimeout(r, 100);
+            await new Promise((resolve) => {
+              setTimeout(resolve, 100);
             });
             callLog.push('emit');
             emit({ type: 'workDone', value: 'from-zombie' });
@@ -316,8 +327,8 @@ describe('fromSafeAsync', () => {
       const actor = createActor(machine);
       actor.start();
 
-      await new Promise((r) => {
-        setTimeout(r, 20);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
       });
 
       // Strict Mode cleanup
@@ -327,8 +338,8 @@ describe('fromSafeAsync', () => {
       actor.start();
 
       // Wait for the zombie's timer to fire (100ms) plus some margin
-      await new Promise((r) => {
-        setTimeout(r, 200);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 200);
       });
 
       // The zombie's emit should be silenced by the closed guard.
@@ -352,14 +363,16 @@ describe('fromSafeAsync', () => {
 
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { tags: number[] },
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           events: {} as TagEvent,
         },
         actors: {
           work: fromSafeAsync<TagEvent>(async ({ emit }) => {
             const myInvocation = ++invocationCount;
-            await new Promise((r) => {
-              setTimeout(r, 50);
+            await new Promise((resolve) => {
+              setTimeout(resolve, 50);
             });
             emit({ type: 'tagged', invocation: myInvocation });
           }),
@@ -386,8 +399,8 @@ describe('fromSafeAsync', () => {
       actor.start();
 
       // Let invocation 1 start
-      await new Promise((r) => {
-        setTimeout(r, 10);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
       });
 
       // Strict Mode: stop + rehydrate
@@ -445,12 +458,14 @@ describe('fromSafeAsync', () => {
     it('should not fire onError when work throws after signal is aborted', async () => {
       const machine = setup({
         types: {
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           context: {} as { error: boolean },
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
           events: {} as { type: 'cancel' },
         },
         actors: {
           work: fromSafeAsync(async ({ signal }) => {
-            await new Promise<void>((_, reject) => {
+            await new Promise<void>((_resolve, reject) => {
               signal.addEventListener('abort', () => {
                 reject(new DOMException('Aborted', 'AbortError'));
               });
@@ -481,13 +496,13 @@ describe('fromSafeAsync', () => {
       const actor = createActor(machine);
       actor.start();
 
-      await new Promise((r) => {
-        setTimeout(r, 10);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
       });
       actor.send({ type: 'cancel' });
 
-      await new Promise((r) => {
-        setTimeout(r, 50);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
       });
 
       // Should be in 'cancelled', NOT 'failed'
