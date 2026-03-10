@@ -18,18 +18,18 @@ type OperationalMode = 'ready' | 'section-view' | 'measure' | 'unknown';
 function useOperationalMode(): OperationalMode {
   return useGraphicsSelector((state) => {
     if (state.matches({ operational: 'ready' })) {
-      return 'ready' as const;
+      return 'ready';
     }
 
     if (state.matches({ operational: 'section-view' })) {
-      return 'section-view' as const;
+      return 'section-view';
     }
 
     if (state.matches({ operational: 'measure' })) {
-      return 'measure' as const;
+      return 'measure';
     }
 
-    return 'unknown' as const;
+    return 'unknown';
   });
 }
 

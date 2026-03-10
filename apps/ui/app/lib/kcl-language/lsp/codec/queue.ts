@@ -65,7 +65,7 @@ export class Queue<T> {
   public async return_(): Promise<IteratorResult<T, void>> {
     log.debug('return_() called');
     this.close();
-    return { done: true as const, value: undefined };
+    return { done: true, value: undefined };
   }
 
   public async throw_(error: Error): Promise<IteratorResult<T, void>> {
@@ -77,8 +77,8 @@ export class Queue<T> {
     log.debug('[Symbol.asyncIterator] called');
     return {
       next: async () => this.next(),
-      return: async () => ({ done: true as const, value: undefined }),
-      throw: async () => ({ done: true as const, value: undefined }),
+      return: async () => ({ done: true, value: undefined }),
+      throw: async () => ({ done: true, value: undefined }),
       [Symbol.asyncIterator]: () => this[Symbol.asyncIterator](),
       [Symbol.asyncDispose]: async () => {
         this.close();

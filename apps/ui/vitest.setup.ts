@@ -107,7 +107,7 @@ globalThis.performance.mark = (() => stubEntry) as typeof globalThis.performance
 globalThis.performance.measure = (() => stubEntry) as typeof globalThis.performance.measure;
 
 // PerformanceObserver is not available in jsdom -- stub it for telemetry code
-// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- jsdom doesn't provide PerformanceObserver despite type declarations
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition, @typescript-eslint/consistent-type-assertions -- jsdom doesn't provide PerformanceObserver despite type declarations; class assignment to globalThis requires cast
 globalThis.PerformanceObserver ??= class PerformanceObserver {
   public observe() {
     // No-op

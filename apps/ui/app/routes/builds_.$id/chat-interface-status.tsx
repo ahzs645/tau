@@ -27,26 +27,26 @@ type DetailedMode =
 function useDetailedOperationalMode(): DetailedMode {
   return useGraphicsSelector((state) => {
     if (state.matches({ operational: 'ready' })) {
-      return 'ready' as const;
+      return 'ready';
     }
 
     if (state.matches({ operational: { 'section-view': 'pending' } })) {
-      return 'section-view-pending' as const;
+      return 'section-view-pending';
     }
 
     if (state.matches({ operational: { 'section-view': 'active' } })) {
-      return 'section-view-active' as const;
+      return 'section-view-active';
     }
 
     if (state.matches({ operational: { measure: 'selecting' } })) {
-      return 'measure-selecting' as const;
+      return 'measure-selecting';
     }
 
     if (state.matches({ operational: { measure: 'selected' } })) {
-      return 'measure-selected' as const;
+      return 'measure-selected';
     }
 
-    return 'unknown' as const;
+    return 'unknown';
   });
 }
 

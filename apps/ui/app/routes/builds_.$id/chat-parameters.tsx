@@ -66,7 +66,7 @@ export const ChatParameters = memo(function (props: {
 
   // Build CadUnits object reactively from graphics state
   const units = useSelector(graphicsActor, (state) => state?.context.units) ?? {
-    length: { symbol: 'mm' as const, factor: 1 },
+    length: { symbol: 'mm', factor: 1 },
   };
 
   // State to toggle search visibility

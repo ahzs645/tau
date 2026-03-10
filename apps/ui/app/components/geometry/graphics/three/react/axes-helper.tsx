@@ -47,29 +47,30 @@ export function AxesHelper({
 
   // Static axis definitions - only recreated when size or colors change, NOT on hover
   const axes = React.useMemo(
-    () => [
-      {
-        id: 'x' as const,
-        origin: new THREE.Vector3(0, 0, 0),
-        negativeEnd: new THREE.Vector3(-size, 0, 0),
-        positiveEnd: new THREE.Vector3(size, 0, 0),
-        color: xAxisColor,
-      },
-      {
-        id: 'y' as const,
-        origin: new THREE.Vector3(0, 0, 0),
-        negativeEnd: new THREE.Vector3(0, -size, 0),
-        positiveEnd: new THREE.Vector3(0, size, 0),
-        color: yAxisColor,
-      },
-      {
-        id: 'z' as const,
-        origin: new THREE.Vector3(0, 0, 0),
-        negativeEnd: new THREE.Vector3(0, 0, -size),
-        positiveEnd: new THREE.Vector3(0, 0, size),
-        color: zAxisColor,
-      },
-    ],
+    () =>
+      [
+        {
+          id: 'x',
+          origin: new THREE.Vector3(0, 0, 0),
+          negativeEnd: new THREE.Vector3(-size, 0, 0),
+          positiveEnd: new THREE.Vector3(size, 0, 0),
+          color: xAxisColor,
+        },
+        {
+          id: 'y',
+          origin: new THREE.Vector3(0, 0, 0),
+          negativeEnd: new THREE.Vector3(0, -size, 0),
+          positiveEnd: new THREE.Vector3(0, size, 0),
+          color: yAxisColor,
+        },
+        {
+          id: 'z',
+          origin: new THREE.Vector3(0, 0, 0),
+          negativeEnd: new THREE.Vector3(0, 0, -size),
+          positiveEnd: new THREE.Vector3(0, 0, size),
+          color: zAxisColor,
+        },
+      ] as const,
     [size, xAxisColor, yAxisColor, zAxisColor],
   );
 

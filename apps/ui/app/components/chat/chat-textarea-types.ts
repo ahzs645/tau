@@ -150,9 +150,7 @@ export function useChatTextareaLogic({
   const selectedToolChoice = useChatSelector((state) =>
     mode === 'main' ? (state.draftToolChoice as ToolSelection) : 'auto',
   );
-  const selectedMode = useChatSelector((state) =>
-    mode === 'main' ? (state.draftMode as 'agent' | 'plan') : ('agent' as const),
-  );
+  const selectedMode = useChatSelector((state) => (mode === 'main' ? (state.draftMode as 'agent' | 'plan') : 'agent'));
 
   const {
     stop,

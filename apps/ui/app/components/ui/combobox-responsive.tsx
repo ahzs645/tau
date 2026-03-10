@@ -232,13 +232,16 @@ function ItemList<T>({
   // Flatten all items from all groups for virtualization, including group headers
   const flattenedItems = React.useMemo((): FlatItem[] => {
     return groupedItems.flatMap((group) => [
-      { type: 'header' as const, groupName: group.name },
-      ...group.items.map((item) => ({
-        type: 'item' as const,
-        item,
-        groupName: group.name,
-        value: getValue(item),
-      })),
+      { type: 'header', groupName: group.name } as const,
+      ...group.items.map(
+        (item) =>
+          ({
+            type: 'item',
+            item,
+            groupName: group.name,
+            value: getValue(item),
+          }) as const,
+      ),
     ]);
   }, [groupedItems, getValue]);
 

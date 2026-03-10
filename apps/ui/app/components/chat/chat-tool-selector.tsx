@@ -90,7 +90,7 @@ const modeItems: ToolSelectorItem[] = [
 ];
 
 const toolItems: ToolSelectorItem[] = Object.entries(toolMetadata).map(([key, metadata]) => ({
-  type: 'tool' as const,
+  type: 'tool',
   tool: key as ToolName,
   label: metadata.label,
   description: metadata.description,

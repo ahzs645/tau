@@ -20,19 +20,19 @@ type ChatModeSelectorProps = {
 
 const chatModes = [
   {
-    id: 'agent' as const,
+    id: 'agent',
     label: 'Agent',
     icon: Brain,
     description: 'Create and edit with AI',
   },
   {
-    id: 'editor' as const,
+    id: 'editor',
     label: 'Editor',
     icon: Box,
     description: 'Create and edit 3D models',
   },
   {
-    id: 'publish' as const,
+    id: 'publish',
     label: 'Publish',
     icon: Upload,
     description: 'Share and export models',

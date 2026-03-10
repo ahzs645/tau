@@ -30,7 +30,7 @@ export const Grid = React.memo(() => {
   // x: X-up (1,0,0) -> grid on YZ plane -> 'zyx'
   // y: Y-up (0,1,0) -> grid on XZ plane -> 'xzy'
   // z: Z-up (0,0,1) -> grid on XY plane -> 'xyz'
-  const axes = upDirection === 'x' ? ('zyx' as const) : upDirection === 'y' ? ('xzy' as const) : ('xyz' as const);
+  const axes = upDirection === 'x' ? 'zyx' : upDirection === 'y' ? 'xzy' : 'xyz';
 
   // Memoize materialProperties to prevent InfiniteGrid from recreating its
   // ShaderMaterial on every Grid re-render (the inline object would be a new reference each time).

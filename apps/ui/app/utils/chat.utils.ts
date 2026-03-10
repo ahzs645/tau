@@ -424,7 +424,7 @@ export function finalizeInterruptedToolParts(messages: MyUIMessage[]): MyUIMessa
       });
       const interruptedPart = {
         ...part,
-        state: 'output-error' as const,
+        state: 'output-error',
         errorText,
       };
       return interruptedPart as MyMessagePart;
@@ -457,18 +457,21 @@ export function createMessage({
     role,
     parts: [
       // Always add image parts first so they are rendered first in the UI
-      ...imageUrls.map((url) => ({
-        type: 'file' as const,
-        url,
-        mediaType: extractMimeTypeFromDataUrl(url),
-      })),
+      ...imageUrls.map(
+        (url) =>
+          ({
+            type: 'file',
+            url,
+            mediaType: extractMimeTypeFromDataUrl(url),
+          }) as const,
+      ),
       // Only add text part if there is text content
       ...(trimmedContent.length > 0
         ? [
             {
-              type: 'text' as const,
+              type: 'text',
               text: trimmedContent,
-            },
+            } as const,
           ]
         : []),
     ],
