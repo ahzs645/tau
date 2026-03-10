@@ -8,6 +8,7 @@
  */
 
 import { safeDispose } from '@taucad/utils/dispose';
+import type { StringKeyedObject } from '#types/bridge.types.js';
 import type { BridgeHandle, BridgeServerHandle } from '#framework/kernel-filesystem-bridge.js';
 import type { KernelWatchRequest, KernelWatchEvent } from '#types/kernel-worker.types.js';
 import { createBridgeServer, catchMessages } from '#framework/kernel-filesystem-bridge.js';
@@ -52,7 +53,7 @@ export type ExposeFileSystemHandle = {
  * @param options - Optional message type and watch handler
  * @returns Handle with cleanup, activePorts, and serverHandles
  */
-export function exposeFileSystem<T extends Record<string, unknown>>(
+export function exposeFileSystem<T extends StringKeyedObject>(
   handlers: T,
   options?: FileSystemBridgeOptions & { watchHandler?: BridgeWatchHandler },
 ): ExposeFileSystemHandle {
