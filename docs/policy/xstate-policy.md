@@ -3,9 +3,11 @@ title: 'XState Policy'
 description: 'State machine design, actor lifecycle, and React integration using XState v5. setup(), context rules, assign, invoke/spawn, useActorRef, cleanup patterns.'
 status: active
 created: '2026-03-04'
-updated: '2026-03-05'
+updated: '2026-03-09'
 related:
   - docs/research/xstate-patterns.md
+  - docs/policy/typescript-policy.md
+  - docs/research/typescript-overloads.md
 ---
 
 # XState Policy
@@ -259,7 +261,61 @@ The only exception is `fromCallback`, which does not emit `onDone`/`onError` eve
 
 ## Async Operations
 
-### Use `fromPromise` for one-shot async
+### Use `fromSafeAsync` Instead of `fromPromise`
+
+`fromSafeAsync` (from `#lib/xstate.lib.js`) is the standard async actor creator. It replaces `fromPromise` with React Strict Mode safety built in.
+
+#### Generic parameters — `fromSafeAsync<TReturn, TInput>`
+
+Follows the same `<TOutput, TInput>` convention as `fromPromise`. Specify both generics to type the input and return value:
+
+```typescript
+import { fromSafeAsync } from '#lib/xstate.lib.js';
+
+type LoadedEvent = { type: 'dataLoaded'; data: Data };
+type LoadInput = { id: string };
+
+// Data-returning actor — specify both TReturn and TInput
+const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async ({ input, signal }) => {
+  const data = await fetchData(input.id, { signal }); // input: LoadInput
+  return { type: 'dataLoaded' as const, data }; // return: LoadedEvent
+});
+
+// Fire-and-forget actor — void return with input
+const saveActor = fromSafeAsync<void, { data: Data }>(async ({ input }) => {
+  await saveData(input.data);
+});
+
+// No input, no return — omit generics entirely
+const sideEffect = fromSafeAsync(async () => {
+  await doWork();
+});
+```
+
+> **Why explicit generics?** TypeScript does not support partial type argument inference (as of TS 6.0). You must specify both `TReturn` and `TInput` when you need typed input — same limitation as `fromPromise<TOutput, TInput>`.
+
+**Key rules**:
+
+1. **Always use `as const`** on the `type` field of returned events to preserve literal types.
+2. **Use generic parameters** (`fromSafeAsync<TReturn, TInput>`) to type input — avoid verbose inline parameter annotations.
+3. **Never use `as never`** on `fromSafeAsync(...)` results in `provide()` calls. If the types don't match, fix the placeholder actor's return type annotation or the mock's input type. See `docs/policy/typescript-policy.md` for resolution patterns.
+4. **Placeholder actors must declare their return type** explicitly (e.g., `Promise<void>` or `Promise<LoadedEvent>`) since `throw` infers `Promise<never>`.
+
+```typescript
+// Placeholder: explicit return type prevents Promise<never> inference
+const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async (): Promise<LoadedEvent> => {
+  throw new Error('loadActor not provided');
+});
+```
+
+**Why `fromSafeAsync` over `fromPromise`**: React Strict Mode's `stopRootWithRehydration` cycle (mount → stop → rehydrate → restart) creates "zombie" Promise `.then()` handlers that fire after the actor is restarted. `fromSafeAsync` wraps the async work in an Observable with a `closed` guard and `AbortController` teardown, preventing stale emissions.
+
+- Related: `docs/policy/typescript-policy.md` — type assertion rules for `fromSafeAsync` patterns
+- Related: `docs/research/typescript-overloads.md` — mock compatibility with overloaded functions
+
+### Use `fromPromise` for one-shot async (legacy)
+
+> **Note**: Prefer `fromSafeAsync` for new code. `fromPromise` is retained for contexts where React Strict Mode is not a concern (e.g., server-side, non-React consumers).
 
 ```typescript
 const fetchDataActor = fromPromise(async ({ input, signal }) => {
@@ -603,3 +659,5 @@ Each spawned actor is a live object with subscriptions. For variable-count actor
 - [Migration to v5](https://stately.ai/blog/2024-02-02-migrating-machines-to-xstate-v5)
 - [Worker Policy](./worker-policy.md)
 - [XState Patterns Research](../research/xstate-patterns.md)
+- [TypeScript Policy](./typescript-policy.md) — type assertion rules, `as never` ban, mock typing patterns
+- [TypeScript Overloads Research](../research/typescript-overloads.md) — overloaded function patterns and mock compatibility
