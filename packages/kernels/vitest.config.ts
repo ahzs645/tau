@@ -18,7 +18,21 @@ export default defineConfig({
       provider: 'v8',
       reportsDirectory: '../../coverage/packages/kernels',
       include: ['src/**/*'],
-      exclude: ['src/**/*.{test,spec}.ts'],
+      exclude: [
+        'src/**/*.{test,spec,test-d}.ts',
+        // Exclude WASM and fonts
+        'src/**/{wasm,fonts,sourcemaps}/**/*',
+        // Exclude benchmarks
+        'src/benchmarks/**/*',
+        // Exclude all kernels, for now we are focussing on framework coverage.
+        'src/kernels/**/*',
+      ],
+      thresholds: {
+        statements: 80, // AGENTS: never lower this, only increase.
+        branches: 70, // AGENTS: never lower this, only increase.
+        functions: 80, // AGENTS: never lower this, only increase.
+        lines: 80, // AGENTS: never lower this, only increase.
+      },
     },
   },
 });
