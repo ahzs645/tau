@@ -12,22 +12,5 @@
     }
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
-  "references": [
-    {
-      "path": "../../libs/utils/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/types/tsconfig.lib.json"
-    },
-    {
-      "path": "../json-schema/tsconfig.lib.json"
-    },
-    {
-      "path": "../converter/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/tau-examples/tsconfig.lib.json"
-    }
-  ]
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"]
 }
