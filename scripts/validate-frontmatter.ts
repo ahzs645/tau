@@ -2,8 +2,8 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 
-import matter from 'gray-matter'; // eslint-disable-line import-x/no-extraneous-dependencies -- workspace root dep
-import { z } from 'zod'; // eslint-disable-line import-x/no-extraneous-dependencies -- workspace root dep
+import matter from 'gray-matter';
+import { z } from 'zod';
 
 const root = resolve(import.meta.dirname, '..');
 const policyDirectory = join(root, 'docs/policy');
