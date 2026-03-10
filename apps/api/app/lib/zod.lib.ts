@@ -21,7 +21,7 @@ export const jsonCodec = <T extends z.core.$ZodType>(schema: T) =>
   z.codec(z.string(), schema, {
     decode(jsonString, context) {
       try {
-        return JSON.parse(jsonString) as never;
+        return JSON.parse(jsonString) as z.input<T>;
       } catch (error: unknown) {
         context.issues.push({
           code: 'invalid_format',
