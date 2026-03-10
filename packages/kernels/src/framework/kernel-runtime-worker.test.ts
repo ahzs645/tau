@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ExportFile } from '@taucad/types';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelDefinition } from '#types/kernel-worker.types.js';
+import type { KernelIssue } from '#types/kernel.types.js';
 import { seedTestFileSystem, initializeWorkerForTesting, createGeometryFile } from '#testing/kernel-testing.utils.js';
 
 // ===================================================================
@@ -18,17 +20,17 @@ function createMockKernelDefinition(id: string, overrides?: Partial<KernelDefini
     getParameters: async () => ({
       success: true as const,
       data: { defaultParameters: {}, jsonSchema: {} },
-      issues: [],
+      issues: [] as KernelIssue[],
     }),
     createGeometry: async () => ({
-      geometry: [{ type: 'gltf' as const, data: new Uint8Array([1, 2, 3]) }],
-      issues: [],
+      geometry: [{ format: 'gltf' as const, content: new Uint8Array([1, 2, 3]) }],
+      issues: [] as KernelIssue[],
       nativeHandle: undefined,
     }),
     exportGeometry: async () => ({
       success: true as const,
-      data: new Uint8Array(),
-      issues: [],
+      data: [] as ExportFile[],
+      issues: [] as KernelIssue[],
     }),
     ...overrides,
   });
