@@ -1,6 +1,18 @@
+---
+title: 'Vision Policy'
+description: "Tau's long-term vision: connecting the five pillars of hardware engineering (systems, analysis, CAD, software/firmware, simulation) through code and AI agents. Phased progression from MCAD to automated robotic systems."
+status: active
+created: '2026-03-04'
+updated: '2026-03-10'
+---
+
 # Vision Policy
 
-Tau's vision is to connect the five pillars of hardware engineering — systems design, analysis, CAD, software/firmware, and simulation — through code and AI agents.
+Internal reference for Tau's strategic direction. Tau's vision is to connect the five pillars of hardware engineering — systems design, analysis, CAD, software/firmware, and simulation — through code and AI agents.
+
+## Rationale
+
+Hardware engineering is fragmented across disconnected tools. AI can automate execution within silos, but the silos remain. The medium that enables programmable, versionable, agent-accessible connection across disciplines is code. This policy articulates the phased path from geometry-first MCAD to end-to-end automated robotic systems.
 
 ## The Problem
 

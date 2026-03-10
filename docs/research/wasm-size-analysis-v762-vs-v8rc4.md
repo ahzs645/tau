@@ -1,3 +1,12 @@
+---
+title: 'WASM Size Analysis: OCCT V7.6.2 vs V8.0.0-RC4'
+description: 'Forensic analysis of the 2.08x WASM binary size increase between replicad-opencascadejs v0.20.2 (OCCT 7.6.2) and v8-RC4 build.'
+status: active
+created: '2026-02-28'
+updated: '2026-03-05'
+category: optimization
+---
+
 # WASM Size Analysis: OCCT V7.6.2 vs V8.0.0-RC4
 
 **Date**: 2026-02-26

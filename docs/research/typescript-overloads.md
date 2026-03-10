@@ -1,3 +1,14 @@
+---
+title: 'TypeScript Function Overloads: Patterns, Limitations, and Mock Compatibility'
+description: 'Root cause, official TypeScript stance, and recommended patterns for overloads in @taucad/kernels; mock compatibility and factory patterns.'
+status: active
+created: '2026-03-03'
+updated: '2026-03-09'
+category: investigation
+related:
+  - docs/policy/testing-policy.md
+---
+
 # TypeScript Function Overloads: Patterns, Limitations, and Mock Compatibility
 
 ## Problem Statement

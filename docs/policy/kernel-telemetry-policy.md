@@ -1,6 +1,18 @@
+---
+title: 'Kernel Telemetry Policy'
+description: 'Kernel worker telemetry: span naming, hierarchy rules, attribute conventions, and performance contracts. Covers KernelTracer, OC API tracing, and WorkerTelemetryCollector.'
+status: active
+created: '2026-02-20'
+updated: '2026-03-05'
+---
+
 # Kernel Telemetry Policy
 
 Internal reference for the kernel worker telemetry system: span naming, hierarchy rules, attribute conventions, and performance contracts.
+
+## Rationale
+
+Structured telemetry enables performance debugging and kernel panel visualization. A strict span hierarchy and attribute policy ensures consistent data for aggregation. Negligible overhead (monotonic IDs, single performance.mark per span) keeps instrumentation from affecting render latency.
 
 ## Design Principles
 

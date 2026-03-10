@@ -1,7 +1,21 @@
+---
+title: 'React Testing Policy'
+description: 'Patterns for testing React hooks and components in apps/ui: renderHook, harness components, fake timers, mocks, cleanup.'
+status: active
+created: '2026-03-09'
+updated: '2026-03-09'
+related:
+  - docs/policy/testing-policy.md
+---
+
 # React Testing Policy
 
 Patterns for testing React hooks and components in the Tau UI app (`apps/ui`).
-Extends the general [Testing Policy](../testing-policy.md) — all rules there still apply.
+Extends the general [Testing Policy](testing-policy.md) — all rules there still apply.
+
+## Rationale
+
+Hooks encapsulate stateful logic that is difficult to test via component rendering alone. The renderHook and harness patterns provide deterministic, isolated test environments. Fake timers and explicit cleanup verification prevent flaky tests and resource leaks. Consistent structure and naming make hook tests easy to maintain and review.
 
 ## Environment
 

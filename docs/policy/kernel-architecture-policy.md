@@ -1,6 +1,18 @@
+---
+title: 'Kernel Architecture Policy'
+description: 'CAD kernel worker architecture from editor to geometry computation. Covers BuildMachine, CadMachine, KernelClient, plugin model, transport, and lifecycle.'
+status: active
+created: '2026-02-18'
+updated: '2026-03-05'
+---
+
 # Kernel Architecture Policy
 
 Internal reference for the CAD kernel worker architecture: from editor to geometry computation.
+
+## Rationale
+
+A layered kernel API (Client, Transport, Protocol) separates consumer convenience from framework primitives. The plugin model (kernels, bundlers, middleware) keeps the framework generic while enabling CAD-specific capabilities. Single-worker-per-compilation-unit and lazy kernel loading minimize memory footprint.
 
 ## Architecture Overview
 

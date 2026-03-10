@@ -1,6 +1,6 @@
 ---
 name: langgraph
-description: for ANY question about LangGraph and agentic AI
+description: 'Answers questions about LangGraph and agentic AI using the langgraph-docs-mcp server. Use when the user asks about LangGraph, agentic AI, agent graphs, tool use, or graph-based workflows.'
 ---
 
 for ANY question about LangGraph, use the langgraph-docs-mcp server to help answer --

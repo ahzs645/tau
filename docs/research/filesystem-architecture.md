@@ -1,8 +1,16 @@
-# Filesystem Architecture Blueprint
+---
+title: 'Filesystem Architecture Blueprint'
+description: "Target architecture blueprint for Tau's web-based filesystem: worker topology, RPC bridge, provider abstraction, and performance optimizations."
+status: active
+created: '2026-03-05'
+updated: '2026-03-05'
+category: architecture
+related:
+  - docs/policy/filesystem-policy.md
+  - docs/research/fs-capabilities.md
+---
 
-> **Status**: Target architecture — north star for all FS work
-> **Last updated**: 2026-03-02
-> **Companion policy**: [filesystem-policy.md](../policy/filesystem-policy.md)
+# Filesystem Architecture Blueprint
 
 ## 1. Problem Domain
 

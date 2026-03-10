@@ -1,6 +1,18 @@
+---
+title: 'Documentation Policy'
+description: 'Standards for writing and maintaining Tau documentation: content types, templates, AI discoverability, API reference, and cross-linking. Applies to apps/ui/content/docs/ and docs/.'
+status: active
+created: '2026-02-23'
+updated: '2026-03-05'
+---
+
 # Documentation Policy
 
 Internal reference for writing and maintaining Tau documentation. Applies to all content under `apps/ui/content/docs/` and policy documents under `docs/`.
+
+## Rationale
+
+Consistent documentation structure improves both human navigation and AI agent consumption. A systematic framework (pragmatic Diataxis) reduces contributor drift, enables deterministic agent-produced content, and optimizes for RAG retrieval and context-window efficiency.
 
 ## 1. Framework Evaluation & Rationale
 

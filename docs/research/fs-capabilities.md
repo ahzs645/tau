@@ -1,7 +1,16 @@
-# Filesystem Capabilities & Performance Research
+---
+title: 'Filesystem Capabilities & Performance Research'
+description: "Investigation of ZenFS architecture, transfer performance, bridge efficiency, and optimization opportunities for Tau's filesystem."
+status: active
+created: '2026-03-03'
+updated: '2026-03-05'
+category: investigation
+related:
+  - docs/policy/filesystem-policy.md
+  - docs/research/filesystem-architecture.md
+---
 
-> **Last updated**: 2026-03-02
-> **Scope**: ZenFS library capabilities, MessagePort transfer performance, bridge architecture efficiency
+# Filesystem Capabilities & Performance Research
 
 ## Table of Contents
 

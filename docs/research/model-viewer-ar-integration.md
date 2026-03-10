@@ -1,9 +1,13 @@
-# Model-Viewer AR Integration: Complete Technical Reference
-
-> Reference document for integrating augmented reality experiences into the Tau UI,
-> derived from deep analysis of Google's `model-viewer` web component.
-
 ---
+title: 'Model-Viewer AR Integration: Complete Technical Reference'
+description: "Technical reference for integrating WebXR, Quick Look, and Scene Viewer AR into Tau using Google's model-viewer component."
+status: active
+created: '2026-02-20'
+updated: '2026-03-05'
+category: reference
+---
+
+# Model-Viewer AR Integration: Complete Technical Reference
 
 ## Table of Contents
 

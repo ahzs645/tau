@@ -1,6 +1,14 @@
+---
+title: 'Consumer-Agnostic Audit: opencascade.js Core Scripts'
+description: 'Audit confirming opencascade.js core scripts are consumer-agnostic; no replicad-specific logic in build pipeline.'
+status: active
+created: '2026-03-07'
+updated: '2026-03-07'
+category: audit
+---
+
 # Consumer-Agnostic Audit: opencascade.js Core Scripts
 
-**Date**: 2025-03-07
 **Scope**: `repos/opencascade.js/` — all Python, shell, and YAML files
 **Verdict**: **PASS** — no replicad-specific behaviour found in core scripts
 

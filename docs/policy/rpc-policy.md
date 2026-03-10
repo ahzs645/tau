@@ -1,6 +1,20 @@
+---
+title: 'RPC & Filesystem Bridge Policy'
+description: 'MessagePort bridge architecture for connecting filesystem implementations to kernel workers across thread boundaries. Covers KernelFileSystem, from* constructors, and Bridge RPC primitives.'
+status: active
+created: '2026-03-03'
+updated: '2026-03-05'
+related:
+  - docs/research/comlink-rpc-practices.md
+---
+
 # RPC & Filesystem Bridge Policy
 
 Internal reference for the MessagePort bridge architecture used to connect filesystem implementations to kernel workers across thread boundaries.
+
+## Rationale
+
+The kernel package needs two distinct communication systems: KernelTransport for typed protocol messages (render, export, cancel) and Bridge RPC for generic method calls across MessagePort. Merging them would either over-complicate the bridge or under-type the transport. The three-layer architecture (primitives → constructors → bridge) keeps the interface clean while enabling worker-to-worker filesystem access without main-thread relay.
 
 ## Architectural Overview
 

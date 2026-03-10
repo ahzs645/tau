@@ -1,6 +1,18 @@
+---
+title: 'Keyboard Service Policy'
+description: 'Unified keyboard service (use-keyboard.tsx): event.key vs event.code, mod abstraction, scope model, consume/priority rules, and IME policy.'
+status: active
+created: '2026-02-15'
+updated: '2026-03-05'
+---
+
 # Keyboard Service Policy
 
 Internal reference for the unified keyboard service (`apps/ui/app/hooks/use-keyboard.tsx`).
+
+## Rationale
+
+A single keyboard service centralizes shortcut registration and ensures consistent behavior across dialogs, editable targets, and IME composition. The mod abstraction (CtrlCmd/WinCtrl) provides cross-platform shortcut parity. Scope and consume rules prevent accidental firing in nested contexts.
 
 ## `event.key` vs `event.code`
 

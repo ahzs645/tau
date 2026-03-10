@@ -1,9 +1,13 @@
-# OCCT WASM Optimization Analysis
+---
+title: 'OCCT WASM Optimization Analysis'
+description: 'Audit of opencascade.js WASM build pipeline against Emscripten best practices: compile flags, closure, wasm-opt, and OCCT-specific optimizations.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+category: optimization
+---
 
-**Date**: 2026-03-03
-**Emscripten**: 5.0.1 (LLVM/Clang 23)
-**OCCT**: V8.0.0 (commit 48ebca0)
-**Reference**: [Emscripten Optimizing Code](https://emscripten.org/docs/optimizing/Optimizing-Code.html), [Settings Reference](https://emscripten.org/docs/tools_reference/settings_reference.html)
+# OCCT WASM Optimization Analysis
 
 ## Executive Summary
 

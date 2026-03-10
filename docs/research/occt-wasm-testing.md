@@ -1,3 +1,12 @@
+---
+title: 'OCCT V8 WASM Build — Native Dev Flow Testing'
+description: 'Audit of native dev flow testing for OCCT V8 WASM build: build procedure, results, issues found, and verified working components.'
+status: active
+created: '2026-03-06'
+updated: '2026-03-07'
+category: audit
+---
+
 # OCCT V8 WASM Build — Native Dev Flow Testing
 
 Testing date: 2026-03-06

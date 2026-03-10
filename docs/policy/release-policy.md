@@ -1,6 +1,20 @@
+---
+title: 'Release Policy'
+description: 'Versioning, building, and publishing strategy for @taucad/* npm packages: Nx Release, version plans, tsdown, OIDC.'
+status: active
+created: '2026-02-27'
+updated: '2026-03-05'
+related:
+  - docs/policy/version-policy.md
+---
+
 # Release Policy
 
 This document defines the versioning, building, and publishing strategy for the `@taucad/*` npm packages.
+
+## Rationale
+
+Nx Release with version plans provides native monorepo integration and decouples version intent from commit messages. Fixed versioning across packages simplifies compatibility for consumers. npm Trusted Publishing (OIDC) and build provenance eliminate stored secrets and provide supply-chain transparency. CI-only publishing prevents accidental or unauthorized releases.
 
 ## Packages in Scope
 

@@ -1,6 +1,18 @@
+---
+title: 'Rendering Pipeline Policy'
+description: 'Unified PBR defaults, material policy, tone mapping, AO, environment strategy, and performance patterns for the CAD viewer.'
+status: active
+created: '2026-02-15'
+updated: '2026-03-05'
+---
+
 # Rendering Pipeline Policy
 
 Internal reference for the CAD rendering pipeline across all conversion paths and the Three.js viewer.
+
+## Rationale
+
+Consistent PBR defaults and material handling across OCCT, Replicad, JSCAD, and OpenSCAD pipelines ensure predictable visual output. Unified tone mapping and environment strategy avoid per-pipeline drift. Performance patterns (geometry key threading, scratch objects, GLTF parse/material split) keep the viewer responsive on complex models.
 
 ## Unified PBR Defaults
 

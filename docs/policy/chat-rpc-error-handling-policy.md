@@ -1,6 +1,21 @@
+---
+title: 'Chat RPC Error Handling Policy'
+description: "Internal reference for the Socket.IO RPC layer connecting the API's LangGraph agent to browser-side tool execution. Covers error model, abort lifecycle, timer management, and connection handling."
+status: active
+created: '2026-02-18'
+updated: '2026-03-05'
+related:
+  - docs/policy/api-error-policy.md
+  - docs/policy/rpc-policy.md
+---
+
 # Chat RPC Error Handling Policy
 
 Internal reference for the Socket.IO RPC layer that connects the API's LangGraph agent to browser-side tool execution.
+
+## Rationale
+
+The RPC layer bridges server-side LangGraph tool calls with client-side execution. Structured errors (never thrown exceptions), predictable abort handling, and strict timer/connection cleanup ensure reliable tool execution and prevent resource leaks when users disconnect or cancel requests.
 
 ## Error Model
 

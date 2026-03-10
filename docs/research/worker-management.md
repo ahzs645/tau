@@ -1,10 +1,15 @@
-# Worker Management: Current State Analysis
-
-> **Last updated**: 2026-03-02
-> **Scope**: Comprehensive inventory of all Web Worker management across the Tau codebase, lifecycle analysis, and identified issues
-> **Status**: Issues 1 and 2 resolved. See updates below.
-
 ---
+title: 'Worker Management: Current State Analysis'
+description: 'Comprehensive inventory of Web Worker management across Tau, lifecycle analysis, and identified issues.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+category: audit
+related:
+  - docs/policy/worker-policy.md
+---
+
+# Worker Management: Current State Analysis
 
 ## Table of Contents
 

@@ -1,7 +1,15 @@
-# Dynamic ES Module Loading in Web Workers: Performance Research
+---
+title: 'Dynamic ES Module Loading in Web Workers: Performance Research'
+description: 'Root cause: assetsInlineLimit force-inlining WASM broke V8 bytecode cache; fix and verified telemetry; worker pooling validated.'
+status: active
+created: '2026-03-01'
+updated: '2026-03-05'
+category: investigation
+related:
+  - docs/policy/es-module-policy.md
+---
 
-> Investigation into why the kernel worker startup takes ~1.3s on every page reload
-> in production builds, despite using identical build assets across reloads.
+# Dynamic ES Module Loading in Web Workers: Performance Research
 
 ## Executive Summary
 

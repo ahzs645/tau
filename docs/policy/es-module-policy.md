@@ -1,13 +1,27 @@
+---
+title: 'ES Module Asset Injection Policy'
+description: 'Standards for loading heavy assets (WASM binaries, Emscripten JS glue, large modules) with code-splitting, tree-shaking, and runtime injection. Covers dynamic imports, WASM URL patterns, and assetsInlineLimit.'
+status: active
+created: '2025-08-06'
+updated: '2026-03-05'
+related:
+  - docs/research/dynamic-es-modules.md
+---
+
 # ES Module Asset Injection Policy
 
-Standard practice for loading heavy assets (WASM binaries, Emscripten JS glue, large modules) in a way that enables code-splitting, tree-shaking, and runtime injection.
+Internal reference for loading heavy assets (WASM binaries, Emscripten JS glue, large modules) in a way that enables code-splitting, tree-shaking, and runtime injection.
+
+## Rationale
+
+Static top-level imports of variant modules force all variants into the bundle regardless of runtime selection, bloating bundle size and preventing minimal deployments. Dynamic import patterns and correct bundler configuration are essential for WASM-heavy applications to avoid V8 bytecode cache overflow and streaming compilation failures.
 
 ## Problem
 
 Static top-level imports of variant modules force all variants into the bundle, regardless of which is actually used at runtime:
 
 ```typescript
-// BAD: both variants always bundled (~225KB total)
+// INCORRECT: both variants always bundled (~225KB total)
 import single from 'replicad-opencascadejs/src/replicad_single.js'; // ~112KB
 import exceptions from 'replicad-opencascadejs/src/replicad_with_exceptions.js'; // ~113KB
 ```
@@ -117,7 +131,7 @@ Vite's `assetsInlineLimit` callback has **unintuitive return semantics**:
 A common mistake is writing a callback that returns a boolean to exclude one file type, inadvertently force-inlining everything else:
 
 ```typescript
-// WRONG: returns true for all non-SVG files, including multi-MB WASM binaries
+// INCORRECT: returns true for all non-SVG files, including multi-MB WASM binaries
 assetsInlineLimit(file) {
   return !file.endsWith('.svg');
 }

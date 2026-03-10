@@ -1,6 +1,19 @@
+---
+title: 'Accessibility Policy'
+description: 'Guidelines for accessible UI and ARIA-driven E2E testing across the Tau codebase. Covers semantic HTML, ARIA conventions, Playwright selector strategy, and snapshot tests.'
+status: active
+created: '2026-03-09'
+updated: '2026-03-09'
+related: []
+---
+
 # Accessibility Policy
 
-Guidelines for accessible UI and ARIA-driven E2E testing across the Tau codebase.
+Internal reference for accessible UI and ARIA-driven E2E testing across the Tau codebase.
+
+## Rationale
+
+Accessible UI ensures all users, including those using assistive technology, can interact with Tau. Using ARIA as the primary interface for E2E tests enforces accessibility compliance as a side effect of testing and keeps selectors stable across refactors.
 
 ## Principles
 

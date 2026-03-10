@@ -1,6 +1,21 @@
+---
+title: 'Filesystem Policy'
+description: 'Standards for filesystem access, data transfer, caching, concurrency, and watcher architecture in the Tau application. Covers ZenFS, bridge RPC, and kernel/UI watch planes.'
+status: active
+created: '2026-03-05'
+updated: '2026-03-09'
+related:
+  - docs/research/filesystem-architecture.md
+  - docs/research/fs-capabilities.md
+---
+
 # Filesystem Policy
 
-Standard patterns for filesystem access, data transfer, caching, and concurrency in the Tau application. Applies to all code that reads or writes user project data, cache files, or metadata through ZenFS.
+Internal reference for filesystem access, data transfer, caching, and concurrency in the Tau application. Applies to all code that reads or writes user project data, cache files, or metadata through ZenFS.
+
+## Rationale
+
+A single-writer topology with zero-copy binary transfer and bounded caches prevents ZenFS directory corruption and memory bloat. Separate kernel and UI watch planes avoid coupling render invalidation to tree refresh, and explicit overflow handling ensures deterministic behavior under load.
 
 ## Core Principles
 
@@ -284,7 +299,7 @@ For render reactivity, use this path only:
 
 `FileService change event -> kernel worker watch handler -> worker cache invalidation -> worker emits filesChanged -> CadMachine debounce -> render`
 
-Forbidden:
+INCORRECT:
 
 - `use-build.tsx` relaying `fileWritten` to all compilation units
 - Sending `changedPaths` on each render command as the primary invalidation mechanism

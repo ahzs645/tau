@@ -1,9 +1,13 @@
-# OCCT V8 Migration Report
-
-**Date**: 2026-02-27
-**Subject**: Comprehensive report on migrating from OCCT V7.6.2 (Emscripten 3.1.14) to OCCT V8.0.0-RC4 (Emscripten 5.0.1) — current state, findings, and planned enhancements.
-
 ---
+title: 'OCCT V8 Migration Report'
+description: 'Migration report from OCCT V7.6.2 to V8.0.0-RC4: build pipeline, WASM size, performance, exception handling, and multi-threading.'
+status: active
+created: '2026-02-28'
+updated: '2026-03-05'
+category: migration
+---
+
+# OCCT V8 Migration Report
 
 ## Table of Contents
 

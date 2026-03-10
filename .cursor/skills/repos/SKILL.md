@@ -1,6 +1,6 @@
 ---
-name: repo-manifest
-description: Manages external dependency repos via repos.yaml manifest. Clone, sync, fork, add, remove, and explore upstream source code. Use when exploring dependency source, contributing to upstream forks, cloning external repos, or when the user mentions repos.yaml, repo manifest, or upstream repos.
+name: repos
+description: Investigate dependency source code and manage external repos via repos.yaml. Use when investigating how a library works internally, exploring dependency source, reading upstream code, debugging third-party behavior, adding a new dependency to track, contributing to upstream forks, or when the user mentions repos.yaml, repo manifest, or upstream repos. Preferred over searching node_modules.
 ---
 
 # Repo Manifest
@@ -111,3 +111,14 @@ Run `pnpm repos` with no arguments to launch the interactive terminal UI:
 - All commands support `--json` for machine-readable output
 - Clone is idempotent -- safe to re-run without checking state
 - Runs on `node` natively (no tsx needed for headless commands)
+
+## Dependency Investigation Workflow
+
+When you need to understand how a dependency works internally:
+
+1. **Check the manifest**: Read `repos.yaml` or run `pnpm repos list --json` to see if the dependency is tracked
+2. **If found**: `pnpm repos clone <name>` then explore `repos/<name>/`
+3. **If not found**: `pnpm repos add <owner/repo> -g <group> --clone` to add and clone in one step
+4. **Explore source**: Read files directly from `repos/<name>/`. Use Grep/SemanticSearch scoped to that directory.
+
+Never explore `node_modules` for dependency source investigation. The `repos/` directory has full git history, unminified source, and test suites that `node_modules` lacks.

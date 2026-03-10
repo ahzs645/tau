@@ -1,6 +1,20 @@
-# API Chat Abort Error Policy
+---
+title: 'API Error Policy'
+description: 'Internal reference for how the API handles chat request cancellation (user clicking stop) without crashing. Covers ChatAbortError, abort tracker registry, and unhandled rejection handling.'
+status: active
+created: '2026-02-25'
+updated: '2026-03-05'
+related:
+  - docs/policy/chat-rpc-error-handling-policy.md
+---
+
+# API Error Policy
 
 Internal reference for how the API handles chat request cancellation (user clicking the stop button) without crashing.
+
+## Rationale
+
+When users cancel chat requests, LangGraph's abort propagation creates fire-and-forget promise rejections that can crash the Node.js process. A branded error type and abort tracker registry ensure cancellations are handled gracefully without swallowing unrelated AbortErrors from other subsystems.
 
 ## Problem
 

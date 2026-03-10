@@ -1,6 +1,20 @@
+---
+title: 'XState Policy'
+description: 'State machine design, actor lifecycle, and React integration using XState v5. setup(), context rules, assign, invoke/spawn, useActorRef, cleanup patterns.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+related:
+  - docs/research/xstate-patterns.md
+---
+
 # XState Policy
 
-Standard patterns for state machine design, actor lifecycle, and React integration using XState v5 in the Tau application.
+Internal reference for state machine design in the Tau application. Standard patterns for state machine design, actor lifecycle, and React integration using XState v5.
+
+## Rationale
+
+XState v5 provides structured state management with automatic actor lifecycle and cleanup. Consistent patterns for context updates, async operations, and React integration prevent common pitfalls: direct mutation, fire-and-forget async, and orphaned actors. Machines that own lifecycle logic keep UI components simple and testable.
 
 ## Machine Definition
 
@@ -55,14 +69,14 @@ export const myMachine = setup({
 All context updates must go through `assign()`. Direct mutation (`context.foo = bar`) bypasses XState's immutability model and causes issues with devtools, state persistence, and `@xstate/react`'s snapshot rehydration.
 
 ```typescript
-// WRONG
+// INCORRECT:
 actions: {
   setWorker({ context, event }) {
     context.worker = event.worker;  // Direct mutation
   },
 }
 
-// CORRECT
+// CORRECT:
 actions: {
   setWorker: assign({
     worker: ({ event }) => event.worker,
@@ -79,10 +93,10 @@ Store only what the machine needs for decision-making and actor communication. L
 Model distinct operational modes as states rather than boolean context flags:
 
 ```typescript
-// WRONG — boolean flags in context
+// INCORRECT: boolean flags in context
 context: { isLoading: false, hasError: false, data: null }
 
-// CORRECT — discrete states
+// CORRECT: discrete states
 states: {
   idle: {},
   loading: {
@@ -120,7 +134,7 @@ assign(({ context, event }) => ({
 `assign` callbacks must be pure — compute and return new values only. No logging, API calls, mutations, or I/O:
 
 ```typescript
-// WRONG — mutation inside assign
+// INCORRECT: mutation inside assign
 assign({
   version({ context }) {
     context.buffer.push(newEntry); // Side effect!
@@ -128,7 +142,7 @@ assign({
   },
 });
 
-// CORRECT — return new value
+// CORRECT: return new value
 assign(({ context }) => ({
   buffer: context.buffer.withEntry(newEntry),
   version: context.version + 1,
@@ -160,7 +174,7 @@ Do not use `enqueueActions` when `assign` alone suffices.
 Actions are synchronous. Never wrap async operations in `void (async () => { ... })()`:
 
 ```typescript
-// FORBIDDEN — invisible to XState, not cancellable
+// INCORRECT: invisible to XState, not cancellable
 actions: {
   doWork({ context }) {
     void (async () => {
@@ -413,7 +427,7 @@ Pass actor references via React context or props, not by reaching into parent ma
   {children}
 </BuildContext.Provider>
 
-// WRONG: Reaching into parent machine internals
+// INCORRECT: Reaching into parent machine internals
 const kernelRef = parentActor.getSnapshot().context.kernelRef;
 ```
 

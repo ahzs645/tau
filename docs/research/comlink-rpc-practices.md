@@ -1,11 +1,15 @@
-# Comlink RPC Best Practices & Bridge Implementation Comparison
-
-> **Source**: Analysis of [Comlink](https://github.com/GoogleChromeLabs/comlink) v4.x (`repos/comlink/src/comlink.ts`)
-> compared against our hand-rolled bridge (`packages/kernels/src/framework/kernel-filesystem-bridge.ts`).
->
-> **Date**: March 2026
-
 ---
+title: 'Comlink RPC Best Practices & Bridge Implementation Comparison'
+description: 'Comparison of Comlink RPC patterns with our kernel-filesystem-bridge; thenable prevention, error serialization, cleanup gaps.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+category: comparison
+related:
+  - docs/policy/rpc-policy.md
+---
+
+# Comlink RPC Best Practices & Bridge Implementation Comparison
 
 ## 1. Thenable Prevention on Proxies
 

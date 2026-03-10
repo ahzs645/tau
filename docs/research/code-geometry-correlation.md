@@ -1,6 +1,13 @@
-# Code ↔ Geometry Correlation: Research & Architecture
+---
+title: 'Code ↔ Geometry Correlation: Research & Architecture'
+description: 'Architecture and research for bidirectional code↔geometry mapping in the Tau editor, enabling face/edge selection and AI context.'
+status: active
+created: '2026-02-28'
+updated: '2026-03-05'
+category: architecture
+---
 
-> **Goal**: Enable bidirectional mapping between source code and 3D geometry (faces/edges) in the Tau editor. Selecting a face/edge in the viewer highlights the responsible code; hovering code highlights the produced geometry. This feeds agentic AI loops with precise code locations for targeted edits.
+# Code ↔ Geometry Correlation: Research & Architecture
 
 ## Table of Contents
 

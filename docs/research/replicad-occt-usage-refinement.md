@@ -1,9 +1,16 @@
+---
+title: 'Replicad OCCT Symbol Usage Audit'
+description: 'Cross-reference of symbols in opencascade.js YAML build config against replicad runtime usage: missing symbols, unused symbols, and removal candidates.'
+status: active
+created: '2026-03-03'
+updated: '2026-03-05'
+category: audit
+---
+
 # Replicad OCCT Symbol Usage Audit
 
 **Date**: 2026-03-03
 **Purpose**: Cross-reference all symbols bound in the opencascade.js YAML build config against actual runtime usage in replicad source code to identify (1) missing symbols causing runtime failures and (2) unused symbols inflating WASM binary size.
-
----
 
 ## Methodology
 

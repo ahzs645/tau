@@ -1,5 +1,5 @@
 ---
-description: 
+description: "Package installation (pnpm) and NX workspace commands"
 globs: 
 alwaysApply: true
 ---

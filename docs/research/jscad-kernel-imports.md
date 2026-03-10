@@ -1,3 +1,14 @@
+---
+title: 'JSCAD Kernel Imports'
+description: 'How STL and AMF imports work in @jscadui: importData hooks, deserializers, worker integration, and implementation steps for Tau.'
+status: active
+created: '2025-11-14'
+updated: '2026-03-05'
+category: reference
+---
+
+# JSCAD Kernel Imports
+
 ### Kernel imports in @jscadui: STL and AMF deep dive
 
 This document explains how file imports work inside `@jscadui`, with a focus on STL and AMF, and outlines concrete steps to enable these imports in the app/kernel integration.

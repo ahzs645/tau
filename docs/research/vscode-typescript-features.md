@@ -1,3 +1,12 @@
+---
+title: 'VSCode TypeScript Language Features Research'
+description: "Analysis of how VSCode implements TypeScript language features for implementing similar capabilities in Tau's Monaco-based editor."
+status: active
+created: '2026-02-13'
+updated: '2026-03-05'
+category: reference
+---
+
 # VSCode TypeScript Language Features Research
 
 This document provides a comprehensive analysis of how VSCode implements TypeScript language features, with the goal of implementing similar capabilities in Tau's Monaco-based editor.

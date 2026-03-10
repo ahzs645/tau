@@ -1,9 +1,23 @@
+---
+title: 'Testing Policy'
+description: 'Writing high-quality tests across the Tau monorepo. Assert observable behavior, error assertions, resource cleanup, mock factories, and async patterns. Covers Vitest, kernel tests, and API tests.'
+status: active
+created: '2026-03-09'
+updated: '2026-03-09'
+related:
+  - docs/policy/react-testing-policy.md
+  - docs/research/typescript-overloads.md
+---
+
 # Testing Policy
 
-Internal reference for writing high-quality tests across the Tau monorepo.
-Distilled from patterns observed in `packages/kernels`, `apps/ui`, and `apps/api`.
+Internal reference for writing high-quality tests across the Tau monorepo. Distilled from patterns observed in `packages/kernels`, `apps/ui`, and `apps/api`.
 
-**See also:** [React Testing Policy](policy/react-testing-policy.md) for hook and component testing patterns specific to `apps/ui`.
+**See also:** [React Testing Policy](react-testing-policy.md) for hook and component testing patterns specific to `apps/ui`.
+
+## Rationale
+
+Tests that assert implementation details become brittle when refactoring and provide false confidence. Asserting observable behavior ensures tests verify what consumers and collaborators actually care about. Consistent patterns for error assertions, resource cleanup, and mock factories reduce bugs and improve maintainability across the monorepo.
 
 ## 1. Assert Observable Behavior, Not Implementation
 
@@ -12,13 +26,13 @@ A test that only checks "does not throw" without verifying the resulting state
 is incomplete.
 
 ```typescript
-// Bad: asserts nothing meaningful
+// INCORRECT: asserts nothing meaningful
 it('should close ports on dispose', () => {
   const handle = createBridgePort(fs);
   expect(() => handle.dispose()).not.toThrow(); // proves nothing
 });
 
-// Good: asserts the observable effect of closing ports
+// CORRECT: asserts the observable effect of closing ports
 it('should close both ports on dispose, preventing further communication', async () => {
   vi.useFakeTimers();
   try {
@@ -49,15 +63,15 @@ passes, the test is broken.
 Use `it('should <verb> <outcome> [when <condition>]')` for consistency.
 
 ```typescript
-// Good
+// CORRECT
 it('should reject pending calls when disposed');
 it('should skip fetch for recently failed packages');
 it('should preserve error name across the bridge');
 
-// Avoid: imperative without "should"
+// INCORRECT: imperative without "should"
 it('renders single-key code object'); // unclear what's being asserted
 
-// Avoid: vague
+// INCORRECT: vague
 it('works correctly');
 it('handles errors');
 ```
@@ -78,7 +92,7 @@ Always assert both the error message and the error type when testing error
 propagation. Use `rejects.toThrow` for async rejections.
 
 ```typescript
-// Good: asserts message and type
+// CORRECT: asserts message and type
 try {
   await call('fail', []);
   expect.fail('should have thrown');
@@ -87,10 +101,10 @@ try {
   expect((error as Error).name).toBe('TypeError');
 }
 
-// Good: async rejection
+// CORRECT: async rejection
 await expect(proxy.readFile('/missing.txt')).rejects.toThrow('ENOENT');
 
-// Bad: catches everything without inspecting
+// INCORRECT: catches everything without inspecting
 try {
   await riskyCall();
 } catch {
@@ -107,14 +121,14 @@ Always clean up resources (timers, workers, ports, mocks) in `afterEach` or
 `finally` blocks. Never rely on the happy path reaching a manual cleanup call.
 
 ```typescript
-// Bad: cleanup only runs if the test passes
+// INCORRECT: cleanup only runs if the test passes
 it('should timeout', async () => {
   vi.useFakeTimers();
   // ... if an assertion fails here, real timers are never restored
   vi.useRealTimers();
 });
 
-// Good: finally guarantees cleanup
+// CORRECT: finally guarantees cleanup
 it('should timeout', async () => {
   vi.useFakeTimers();
   try {
@@ -143,14 +157,14 @@ Use shared factory functions for complex mocks. Never define local
 `createMockFileSystem()` from `kernel-testing.utils.ts`.
 
 ```typescript
-// Good: shared factory, mock access via .mocks
+// CORRECT: shared factory, mock access via .mocks
 import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
 
 const filesystem = createMockFileSystem();
 filesystem.mocks.exists.mockResolvedValue(true);
 expect(filesystem.mocks.writeFile).toHaveBeenCalledWith(path, data);
 
-// Bad: local mapped type that breaks overload assignability
+// INCORRECT: local mapped type that breaks overload assignability
 type MockFS = { [K in keyof KernelFileSystem]: ReturnType<typeof vi.fn> };
 ```
 
@@ -163,7 +177,7 @@ Prefer `await expect(promise).rejects.toThrow()` over try/catch for simple
 rejection tests. Use try/catch only when inspecting multiple error properties.
 
 ```typescript
-// Preferred for simple cases
+// CORRECT: for simple cases
 await expect(proxy.readFile('/missing.txt')).rejects.toThrow('ENOENT');
 
 // Use try/catch when asserting multiple properties
@@ -212,10 +226,10 @@ Do not leave `console.log` or `console.error` in test files. If diagnostic
 output is needed during development, remove it before committing.
 
 ```typescript
-// Bad
+// INCORRECT
 console.log(`[debug] ${entries.length} files survived`);
 
-// Good: remove it, or use expect() to assert the value
+// CORRECT: remove it, or use expect() to assert the value
 expect(entries).toHaveLength(fileCount);
 ```
 
@@ -225,10 +239,10 @@ When testing structured data (objects, arrays, geometry), assert the shape
 and specific values, not just that the result exists or has length > 0.
 
 ```typescript
-// Bad: only checks existence
+// INCORRECT: only checks existence
 expect(result.data.length).toBeGreaterThan(0);
 
-// Good: checks structure
+// CORRECT: checks structure
 expect(result.data[0]).toEqual(
   expect.objectContaining({
     type: 'mesh',

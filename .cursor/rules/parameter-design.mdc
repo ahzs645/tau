@@ -7,7 +7,7 @@ alwaysApply: false
 
 Maximum **3 positional parameters**. Enforced by `max-params: 3` in ESLint.
 
-See `docs/library-api-best-practices.md` (section 4) for full rationale and examples.
+See `docs/policy/library-api-policy.md` (section 4) for full rationale and examples.
 
 ## When to use 1, 2, or 3 params
 
@@ -42,7 +42,7 @@ These conventions apply most strictly to **public API packages** (`packages/*`).
 App code (`apps/*`) and internal libraries (`libs/*`) should use descriptive names
 but may follow framework-specific conventions (React hooks, NestJS decorators).
 
-See `docs/library-api-best-practices.md` (section 5) for full rationale and examples.
+See `docs/policy/library-api-policy.md` (section 5) for full rationale and examples.
 
 ## Core principles
 

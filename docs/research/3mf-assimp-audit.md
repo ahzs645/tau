@@ -1,3 +1,12 @@
+---
+title: '3MF Assimp Audit: Best-in-Class Export Strategy'
+description: 'Audit of assimp 3MF exporter/importer gaps, slicer compatibility, and recommended lib3mf integration path for best-in-class 3MF export.'
+status: active
+created: '2026-02-24'
+updated: '2026-03-05'
+category: audit
+---
+
 # 3MF Assimp Audit: Best-in-Class Export Strategy
 
 ## Executive Summary

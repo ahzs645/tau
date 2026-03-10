@@ -1,10 +1,15 @@
-# XState Patterns: Current State Analysis
-
-> **Last updated**: 2026-03-02
-> **Scope**: Comprehensive audit of all XState v5 usage in the Tau codebase, identifying good patterns and areas for improvement
-> **Status**: AP-1 through AP-6 resolved. See [Resolved Items](#resolved-items) below.
-
 ---
+title: 'XState Patterns: Current State Analysis'
+description: 'Comprehensive audit of XState v5 usage in Tau, identifying good patterns and areas for improvement.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+category: audit
+related:
+  - docs/policy/xstate-policy.md
+---
+
+# XState Patterns: Current State Analysis
 
 ## Table of Contents
 

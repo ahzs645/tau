@@ -1,9 +1,16 @@
+---
+title: 'opencascade.js: Upstream v7.6.2 vs TauCAD V8 Fork — Binding Diff'
+description: 'Comparison of filter classes, packages, methods, and bindings between upstream opencascade.js v7.6.2 and TauCAD OCCT V8 fork.'
+status: active
+created: '2026-03-07'
+updated: '2026-03-07'
+category: comparison
+---
+
 # opencascade.js: Upstream v7.6.2 vs TauCAD V8 Fork — Binding Diff
 
 Comparison of the upstream opencascade.js (v7.6.2 era, `repos/opencascade.js-upstream`)
 and the TauCAD fork (OCCT V8, `repos/opencascade.js`).
-
----
 
 ## 1. filterClasses.py — Class Filter Taxonomy
 

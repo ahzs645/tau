@@ -1,3 +1,12 @@
+---
+title: 'Build Flag Audit: opencascade.js'
+description: 'Comprehensive audit of compile and link flags across opencascade.js WASM build stages, identifying critical exception and LTO mismatches.'
+status: active
+created: '2026-03-07'
+updated: '2026-03-07'
+category: audit
+---
+
 # Build Flag Audit: opencascade.js
 
 Comprehensive audit of all compile and link flags across the three build stages

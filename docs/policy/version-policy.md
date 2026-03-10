@@ -1,8 +1,23 @@
+---
+title: 'Version Policy'
+description: 'Versioning, stability tiers, breaking change management, and developer experience for @taucad/* packages. SemVer, experimental/future-flag/stable tiers, deprecation protocol, codemods.'
+status: active
+created: '2026-03-10'
+updated: '2026-03-10'
+related:
+  - docs/policy/release-policy.md
+  - docs/policy/library-api-policy.md
+---
+
 # Version Policy
 
 Internal reference for versioning, stability tiers, breaking change management, and developer experience across `@taucad/*` packages. Distilled from analysis of React Router, Vercel AI SDK, Stripe, Google Cloud, Prisma, Next.js, Terraform, AWS SDK v3, tRPC, and Effect-TS.
 
 For release mechanics (build pipeline, npm publishing, provenance), see [Release Policy](release-policy.md). For API design standards, see [Library API Policy](library-api-policy.md).
+
+## Rationale
+
+Consistent versioning and stability tiers reduce upgrade fatigue and build consumer trust. The three-tier model (experimental, future flag, stable) enables gradual migration instead of big-bang upgrades. Deprecation protocols and codemods lower the real cost of adopting breaking changes.
 
 ## Design Goals
 

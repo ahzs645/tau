@@ -1,6 +1,18 @@
+---
+title: 'Lint Policy'
+description: 'Hybrid oxlint + ESLint architecture, performance principles, rule-specific decisions, and caching for the Tau monorepo.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+---
+
 # Lint Policy
 
 Linting architecture and performance best practices for this monorepo.
+
+## Rationale
+
+A hybrid oxlint-first setup delivers fast feedback in the editor while ESLint handles rules that require Nx project graph or cross-file resolution. Separating formatting (oxfmt) from linting avoids duplicate work and keeps CI fast. Performance principles (no TypeScript duplication, CI-only expensive rules, aggressive caching) prevent lint from becoming a bottleneck.
 
 ## Hybrid oxlint + ESLint architecture
 

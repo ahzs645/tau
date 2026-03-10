@@ -1,12 +1,13 @@
-# OpenCASCADE Technology Changelog: V7.6.2 → V8.0.0-rc4
-
-> Comprehensive changelog covering 14 releases and 1,085 commits relevant to the
-> opencascade.js WASM binding upgrade from OCCT V7.6.2 to V8.0.0-rc4.
->
-> Generated on 2026-02-23 from
-> [Open-Cascade-SAS/OCCT](https://github.com/Open-Cascade-SAS/OCCT) release notes and local git history.
-
 ---
+title: 'OpenCASCADE Technology Changelog: V7.6.2 → V8.0.0-rc4'
+description: 'Comprehensive changelog covering 14 OCCT releases and 1,085 commits relevant to opencascade.js WASM binding upgrade from V7.6.2 to V8.0.0-rc4.'
+status: active
+created: '2026-02-23'
+updated: '2026-03-05'
+category: reference
+---
+
+# OpenCASCADE Technology Changelog: V7.6.2 → V8.0.0-rc4
 
 ## Release Summary
 

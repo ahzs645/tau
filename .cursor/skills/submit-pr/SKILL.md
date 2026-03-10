@@ -7,7 +7,7 @@ description: Submits draft upstream pull requests from external dependency repos
 
 Use this workflow to prepare and submit a maintainer-quality **draft** PR with one clean commit. The PR is always opened as a draft so a human can review it before marking it ready for submission.
 
-## 1) Confirm fork via repo-manifest
+## 1) Confirm fork via repos
 
 1. Read `repos.yaml` and verify the target repo entry exists.
 2. Ensure the repo has a writable fork:

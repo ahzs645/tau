@@ -1,6 +1,20 @@
+---
+title: 'Worker Lifecycle Policy'
+description: 'Standard patterns for creating, managing, and terminating Web Workers in Tau. Covers lazy creation, termination guarantees, resource cleanup, mobile budgets, XState/React integration.'
+status: active
+created: '2026-03-04'
+updated: '2026-03-05'
+related:
+  - docs/research/worker-management.md
+---
+
 # Worker Lifecycle Policy
 
-Standard patterns for creating, managing, and terminating Web Workers in the Tau application. Orchestration-agnostic — applies whether workers are managed by XState, React hooks, or raw JavaScript.
+Internal reference for Web Worker lifecycle in the Tau application. Standard patterns for creating, managing, and terminating Web Workers. Orchestration-agnostic — applies whether workers are managed by XState, React hooks, or raw JavaScript.
+
+## Rationale
+
+Workers consume significant memory (120+ MB each for WASM kernels). Unmanaged workers cause leaks, mobile tab crashes, and race conditions. Explicit ownership, error-isolated cleanup, and mobile-first budgets ensure predictable behavior across device classes.
 
 ## Core Principles
 

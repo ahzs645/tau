@@ -1,10 +1,6 @@
 ---
-description: Guide for adding new tools to the chat system
-globs:
-  - "**/tools/**/*.ts"
-  - "**/use-chat-tools.tsx"
-  - "**/chat-message-tool-*.tsx"
-alwaysApply: false
+name: adding-tools
+description: Add new tools to the AI chat system. Use when adding a chat tool, creating tool schemas, wiring backend tool handlers, or building tool UI components.
 ---
 
 # Adding New Tools to the Chat System
@@ -14,6 +10,7 @@ This guide documents the complete process for adding new tools that can be used 
 ## Architecture Overview
 
 Tools follow a client-server RPC pattern via Socket.IO:
+
 1. **Backend (API)**: Defines tool schema and uses `chatRpcService.sendRpcRequest()` to execute operations on the client via Socket.IO RPC
 2. **Frontend (UI)**: RPC handlers execute the actual logic (filesystem, kernel, graphics) and return results via Socket.IO
 3. **Schemas (libs/chat)**: Shared type definitions between frontend and backend
@@ -105,30 +102,28 @@ export const myToolDefinition = {
   schema: myToolInputSchema,
 } as const;
 
-export const myTool: ChatTool<
-  typeof myToolInputSchema,
-  MyToolInput,
-  MyToolOutput,
-  typeof toolName.myTool
-> = tool(async (args, runtime: ToolRuntime) => {
-  const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
-  const { toolCallId } = runtime;
+export const myTool: ChatTool<typeof myToolInputSchema, MyToolInput, MyToolOutput, typeof toolName.myTool> = tool(
+  async (args, runtime: ToolRuntime) => {
+    const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
+    const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest({
-    chatId,
-    toolCallId,
-    rpcName: rpcName.myRpc,
-    args,
-  });
+    const result = await chatRpcService.sendRpcRequest({
+      chatId,
+      toolCallId,
+      rpcName: rpcName.myRpc,
+      args,
+    });
 
-  assertRpcSuccess(result, {
-    toolName: toolName.myTool,
-    toolCallId,
-    clientErrorMessage: 'Failed to execute my tool',
-  });
+    assertRpcSuccess(result, {
+      toolName: toolName.myTool,
+      toolCallId,
+      clientErrorMessage: 'Failed to execute my tool',
+    });
 
-  return result;
-}, myToolDefinition);
+    return result;
+  },
+  myToolDefinition,
+);
 ```
 
 ### Step 7: Register Backend Tool
@@ -251,6 +246,7 @@ Update `apps/api/app/api/chat/prompts/chat-prompt-cad.ts` to document the new to
 ## Common Patterns
 
 ### Async Operations with State Machines
+
 For tools that need to wait for state machine transitions:
 
 ```typescript
@@ -258,6 +254,7 @@ await waitFor(machineRef, (state) => state.matches('ready') || state.matches('er
 ```
 
 ### Error Handling
+
 Always catch errors and return them in the output schema format:
 
 ```typescript
@@ -273,6 +270,7 @@ try {
 ```
 
 ### File Operations
+
 Use the file manager for file operations:
 
 ```typescript

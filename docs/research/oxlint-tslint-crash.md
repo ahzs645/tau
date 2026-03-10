@@ -1,3 +1,12 @@
+---
+title: 'oxlint / tsgolint crash investigation (PR draft)'
+description: 'Investigation of oxlint panic when output pipe is closed during CLI output; root cause in print_and_flush_stdout, proposed fixes, and upstream context.'
+status: active
+created: '2026-03-05'
+updated: '2026-03-06'
+category: investigation
+---
+
 # oxlint / tsgolint crash investigation (PR draft)
 
 ## Summary
