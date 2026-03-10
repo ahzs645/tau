@@ -14,7 +14,8 @@ import { buildNamespaceBundle, buildApiData } from '#extract-jscad-types.js';
 
 describe('module side effects', () => {
   it('does not execute main() when imported', () => {
-    const writeSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- process.exit returns never; mock must be cast to match
+    const writeSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as unknown as typeof process.exit);
     // If main() ran unconditionally, it would attempt file writes and console output.
     // The fact that we successfully imported the module above without errors or
     // side-effects proves the guard is working.
