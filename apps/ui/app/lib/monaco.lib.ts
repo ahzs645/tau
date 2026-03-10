@@ -7,7 +7,7 @@ import { registerCompletion } from 'monacopilot';
 import type { CompletionRegistration, CompletionCopilot } from 'monacopilot';
 import type * as Monaco from 'monaco-editor';
 import { ENV } from '#environment.config.js';
-import { highlighter } from '#lib/shiki.js';
+import { highlighter } from '#lib/shiki.lib.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { monacoLanguages } from '#lib/monaco.constants.js';
 import { kclContribution } from '#lib/kcl-language/kcl-register-language.js';

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createActor, setup, waitFor, assign } from 'xstate';
 import type { AnyActorRef } from 'xstate';
-import { fromSafeAsync } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 // ---------------------------------------------------------------------------
 // stopRootWithRehydration — exact copy from @xstate/react
