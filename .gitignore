@@ -10,6 +10,9 @@ node_modules
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
+# Cursor plugin state (continual-learning, hooks)
+.cursor/hooks/state/
+
 # Build
 build
 dist
