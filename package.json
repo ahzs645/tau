@@ -37,6 +37,7 @@
     "repos:clone": "node scripts/repos.ts clone --all",
     "repos:sync": "node scripts/repos.ts sync --all",
     "repos:status": "node scripts/repos.ts status --all",
+    "docs:validate": "nx run scripts:validate-frontmatter",
     "prepare": "husky"
   },
   "dependencies": {
@@ -267,6 +268,7 @@
     "eslint-plugin-no-barrel-files": "^1.2.2",
     "eslint-plugin-no-use-extend-native": "catalog:",
     "eslint-plugin-unicorn": "catalog:",
+    "gray-matter": "catalog:",
     "happy-dom": "^16.8.1",
     "husky": "catalog:",
     "jsdom": "~26.0.0",

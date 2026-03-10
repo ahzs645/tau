@@ -69,10 +69,10 @@ catalog:
   eslint-plugin-max-params-no-constructor: ^0.0.4
   eslint-plugin-n: ^17.24.0
   eslint-plugin-no-use-extend-native: ^0.7.2
-
   eslint-plugin-react: ^7.37.5
   eslint-plugin-unicorn: ^63.0.0
   geist: ^1.7.0
+  gray-matter: ^4.0.3
   husky: ^9.1.7
   ink: ^6.8.0
   isbot: ^5.1.35
@@ -84,16 +84,15 @@ catalog:
   manifold-3d: 3.3.2
   mermaid: ^11.12.3
   nx: 22.5.2
+  opencascade.js: /Users/rifont/git/tau/tarballs/opencascade.js-2.0.0-beta.full.tgz
   openscad-wasm-prebuilt: ^1.2.0
   oxfmt: ^0.36.0
   oxlint: ^1.51.0
   oxlint-tsgolint: ^0.16.0
-
   publint: ^0.3.17
   react: ^19.2.4
   react-dom: ^19.2.4
   react-router: 7.12.0
-  opencascade.js: /Users/rifont/git/tau/tarballs/opencascade.js-2.0.0-beta.full.tgz
   replicad: /Users/rifont/git/tau/tarballs/replicad-0.21.0-v8.7.tgz
   replicad-opencascadejs: /Users/rifont/git/tau/tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz
   source-map-js: ^1.2.1
