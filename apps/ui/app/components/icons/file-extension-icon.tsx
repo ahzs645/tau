@@ -1,5 +1,5 @@
 import { File as FileIcon } from 'lucide-react';
-import type { ExportFormat, FileExtension } from '@taucad/types';
+import type { FileExtension } from '@taucad/types';
 import { supportedImportFormats, supportedExportFormats } from '@taucad/converter';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Format3D } from '#components/icons/format-3d.js';
