@@ -186,7 +186,8 @@ describe('KernelWorkerClient', () => {
     it('should call onLog callback when log response received', () => {
       const transport = createMockTransport();
       const onLog = vi.fn();
-      const _client = new KernelWorkerClient(transport, onLog);
+      const client = new KernelWorkerClient(transport, onLog);
+      expect(client).toBeDefined();
 
       transport.simulateResponse({
         type: 'log',
@@ -207,7 +208,8 @@ describe('KernelWorkerClient', () => {
     it('should iterate logBatch entries and call onLog for each', () => {
       const transport = createMockTransport();
       const onLog = vi.fn();
-      const _client = new KernelWorkerClient(transport, onLog);
+      const client = new KernelWorkerClient(transport, onLog);
+      expect(client).toBeDefined();
 
       transport.simulateResponse({
         type: 'logBatch',
@@ -225,7 +227,8 @@ describe('KernelWorkerClient', () => {
     it('should call onTelemetry when telemetry response received', () => {
       const transport = createMockTransport();
       const onTelemetry = vi.fn();
-      const _client = new KernelWorkerClient(transport, vi.fn(), { onTelemetry });
+      const client = new KernelWorkerClient(transport, vi.fn(), { onTelemetry });
+      expect(client).toBeDefined();
 
       const entries = [{ name: 'kernel.render', startTime: 100, duration: 50, workerTimeOrigin: 1000 }];
       transport.simulateResponse({
@@ -307,7 +310,8 @@ describe('KernelWorkerClient', () => {
     it('should call onStateChanged when stateChanged response received', () => {
       const transport = createMockTransport();
       const onStateChanged = vi.fn();
-      const _client = new KernelWorkerClient(transport, vi.fn(), { onStateChanged });
+      const client = new KernelWorkerClient(transport, vi.fn(), { onStateChanged });
+      expect(client).toBeDefined();
 
       transport.simulateResponse({
         type: 'stateChanged',
@@ -321,7 +325,8 @@ describe('KernelWorkerClient', () => {
     it('should call onFilesChanged when filesChanged response received', () => {
       const transport = createMockTransport();
       const onFilesChanged = vi.fn();
-      const _client = new KernelWorkerClient(transport, vi.fn(), { onFilesChanged });
+      const client = new KernelWorkerClient(transport, vi.fn(), { onFilesChanged });
+      expect(client).toBeDefined();
 
       transport.simulateResponse({
         type: 'filesChanged',
@@ -334,7 +339,8 @@ describe('KernelWorkerClient', () => {
     it('should call onError callback when error received with no pending operations', () => {
       const transport = createMockTransport();
       const onError = vi.fn();
-      const _client = new KernelWorkerClient(transport, vi.fn(), { onError });
+      const client = new KernelWorkerClient(transport, vi.fn(), { onError });
+      expect(client).toBeDefined();
 
       transport.simulateResponse({
         type: 'error',
