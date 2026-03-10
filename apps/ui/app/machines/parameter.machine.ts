@@ -359,9 +359,9 @@ export const parameterMachine = setup({
     }),
 
     updateLocalValue: assign({
-      localValue({ event }) {
+      localValue({ context, event }) {
         if (event.type !== 'sliderChanged' && event.type !== 'inputChanged') {
-          return undefined as never;
+          return context.localValue;
         }
 
         return event.value;
