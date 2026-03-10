@@ -2,7 +2,7 @@ import process from 'node:process';
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { load as yamlLoad, dump as yamlDump } from 'js-yaml'; // eslint-disable-line import-x/no-extraneous-dependencies -- workspace root dep
+import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 
 // ── Types ───────────────────────────────────────────────────────
 

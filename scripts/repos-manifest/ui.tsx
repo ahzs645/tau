@@ -1,9 +1,9 @@
 /* oxlint-disable no-restricted-imports -- standalone scripts use relative imports */
 
 import process from 'node:process';
-import React, { useState, useMemo } from 'react'; // eslint-disable-line import-x/no-extraneous-dependencies -- workspace root dep
-import { render, Box, Text, useInput, useApp } from 'ink'; // eslint-disable-line import-x/no-extraneous-dependencies -- workspace root dep
-import { Spinner, ConfirmInput, TextInput } from '@inkjs/ui'; // eslint-disable-line import-x/no-extraneous-dependencies -- workspace root dep
+import React, { useState, useMemo } from 'react';
+import { render, Box, Text, useInput, useApp } from 'ink';
+import { Spinner, ConfirmInput, TextInput } from '@inkjs/ui';
 import type { Manifest, RepoConfig, RepoContext, RepoStatus } from './lib.ts';
 import { readManifest, getRepoStatus, getLastActivity, cloneRepo, syncRepo, forkRepo, unforkRepo } from './lib.ts';
 
