@@ -111,12 +111,15 @@ function generateSiMagnitudeVariants<BaseUnit extends string, BaseSymbol extends
   baseSymbol: BaseSymbol,
   baseConversionFactor = 1,
 ) {
-  return siMagnitudes.map((magnitude) => ({
-    unit: `${magnitude.name}${baseUnit}` as const,
-    symbol: `${magnitude.symbol}${baseSymbol}` as const,
-    factor: magnitude.factor * baseConversionFactor,
-    system: 'si' as const,
-  }));
+  return siMagnitudes.map(
+    (magnitude) =>
+      ({
+        unit: `${magnitude.name}${baseUnit}`,
+        symbol: `${magnitude.symbol}${baseSymbol}`,
+        factor: magnitude.factor * baseConversionFactor,
+        system: 'si',
+      }) as const,
+  );
 }
 
 export const standardInternationalBaseUnits = {
