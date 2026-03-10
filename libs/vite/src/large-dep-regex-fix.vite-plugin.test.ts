@@ -10,6 +10,7 @@ type PluginStub = {
 
 function callConfigResolved(plugins: PluginStub[]) {
   const plugin = largeDepRegexFix();
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Vite plugin hooks use object form; cast needed to call
   (plugin.configResolved as unknown as ConfigResolvedHook)({ plugins });
 }
 

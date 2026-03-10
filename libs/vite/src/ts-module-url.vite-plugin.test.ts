@@ -25,6 +25,7 @@ const noopContext: TransformContext = { emitFile: vi.fn() };
 
 function callTransform({ plugin, code, id, context = noopContext }: TransformInput) {
   type Hook = (this: TransformContext, code: string, id: string) => { code: string } | undefined;
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Vite plugin transform uses object form; cast needed to access handler
   const transform = plugin.transform as unknown as { handler: Hook };
   return transform.handler.call(context, code, id);
 }
@@ -50,6 +51,7 @@ describe('tsModuleUrlBuildPlugin', () => {
   });
 
   it('should have a hook filter for import.meta.url', () => {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Vite plugin transform uses object form; cast needed to access filter
     const transform = plugin.transform as unknown as { filter: unknown };
     expect(transform.filter).toEqual({ code: 'import.meta.url' });
   });
@@ -144,6 +146,7 @@ describe('tsModuleUrlServePlugin', () => {
   });
 
   it('should have a hook filter for import.meta.url', () => {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Vite plugin transform uses object form; cast needed to access filter
     const transform = plugin.transform as unknown as { filter: unknown };
     expect(transform.filter).toEqual({ code: 'import.meta.url' });
   });
