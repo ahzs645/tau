@@ -1,3 +1,4 @@
+/* oxlint-disable no-barrel-files/no-barrel-files -- public API re-export */
 // Client
 export { createKernelClient } from '#client/kernel-client.js';
 export {
