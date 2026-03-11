@@ -59,7 +59,7 @@ export const CadPreviewViewer = memo(function ({
 }: CadPreviewViewerProps): React.JSX.Element {
   const { geometries, graphicsRef, status, error } = useCadPreview();
 
-  if (status === 'error') {
+  if (status === 'error' || error) {
     return (
       <div
         role='alert'
