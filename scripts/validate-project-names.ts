@@ -3,7 +3,7 @@ import { join, resolve, basename } from 'node:path';
 import process from 'node:process';
 
 const root = resolve(import.meta.dirname, '..');
-const projectDirs = ['apps', 'packages', 'libs'];
+const projectDirectories = ['apps', 'packages', 'libs'];
 
 type Diagnostic = { level: 'ERROR' | 'WARN'; message: string };
 type ProjectResult = { path: string; diagnostics: Diagnostic[] };
@@ -15,15 +15,19 @@ const stripScope = (name: string): string => name.replace(/^@[^/]+\//, '');
 const discoverProjects = (): string[] => {
   const projects: string[] = [];
 
-  for (const dir of projectDirs) {
-    const absDir = join(root, dir);
-    if (!existsSync(absDir)) continue;
+  for (const directory of projectDirectories) {
+    const absDirectory = join(root, directory);
+    if (!existsSync(absDirectory)) {
+      continue;
+    }
 
-    for (const entry of readdirSync(absDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const projectDir = join(absDir, entry.name);
-      if (existsSync(join(projectDir, 'project.json'))) {
-        projects.push(projectDir);
+    for (const entry of readdirSync(absDirectory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const projectDirectory = join(absDirectory, entry.name);
+      if (existsSync(join(projectDirectory, 'project.json'))) {
+        projects.push(projectDirectory);
       }
     }
   }
@@ -31,40 +35,40 @@ const discoverProjects = (): string[] => {
   return projects;
 };
 
-const validateProject = (projectDir: string): ProjectResult => {
-  const relativePath = projectDir.replace(root + '/', '');
+const validateProject = (projectDirectory: string): ProjectResult => {
+  const relativePath = projectDirectory.replace(root + '/', '');
   const diagnostics: Diagnostic[] = [];
 
-  const nxPath = join(projectDir, 'project.json');
-  const pkgPath = join(projectDir, 'package.json');
+  const nxPath = join(projectDirectory, 'project.json');
+  const packagePath = join(projectDirectory, 'package.json');
 
   const nxConfig = readJson<{ name?: string }>(nxPath);
-  const dirName = basename(projectDir);
+  const directoryName = basename(projectDirectory);
 
   if (!nxConfig.name) {
     diagnostics.push({ level: 'ERROR', message: 'project.json missing "name" field' });
     return { path: relativePath, diagnostics };
   }
 
-  if (nxConfig.name !== dirName) {
+  if (nxConfig.name !== directoryName) {
     diagnostics.push({
       level: 'ERROR',
-      message: `project.json name "${nxConfig.name}" does not match directory name "${dirName}"`,
+      message: `project.json name "${nxConfig.name}" does not match directory name "${directoryName}"`,
     });
   }
 
-  if (existsSync(pkgPath)) {
-    const pkg = readJson<{ name?: string }>(pkgPath);
-    if (!pkg.name) {
-      diagnostics.push({ level: 'ERROR', message: 'package.json missing "name" field' });
-    } else {
-      const pkgShortName = stripScope(pkg.name);
-      if (nxConfig.name !== pkgShortName) {
+  if (existsSync(packagePath)) {
+    const package_ = readJson<{ name?: string }>(packagePath);
+    if (package_.name) {
+      const packageShortName = stripScope(package_.name);
+      if (nxConfig.name !== packageShortName) {
         diagnostics.push({
           level: 'ERROR',
-          message: `project.json name "${nxConfig.name}" does not match package.json name "${pkg.name}" (unscoped: "${pkgShortName}")`,
+          message: `project.json name "${nxConfig.name}" does not match package.json name "${package_.name}" (unscoped: "${packageShortName}")`,
         });
       }
+    } else {
+      diagnostics.push({ level: 'ERROR', message: 'package.json missing "name" field' });
     }
   }
 
@@ -72,17 +76,19 @@ const validateProject = (projectDir: string): ProjectResult => {
 };
 
 const projects = discoverProjects();
-const results = projects.map(validateProject);
+const results = projects.map((project) => validateProject(project));
 
 let errors = 0;
 let warnings = 0;
 
 for (const { path, diagnostics } of results) {
-  if (diagnostics.length === 0) continue;
+  if (diagnostics.length === 0) {
+    continue;
+  }
 
   console.log(`\n${path}`);
   for (const d of diagnostics) {
-    const prefix = d.level === 'ERROR' ? '  \x1B[31mERROR\x1B[0m' : '  \x1B[33mWARN\x1B[0m ';
+    const prefix = d.level === 'ERROR' ? '  \u001B[31mERROR\u001B[0m' : '  \u001B[33mWARN\u001B[0m ';
     console.log(`${prefix}  ${d.message}`);
     if (d.level === 'ERROR') {
       errors++;

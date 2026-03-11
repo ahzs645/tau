@@ -405,7 +405,7 @@ async function main(): Promise<void> {
     try {
       await access(outputFile);
     } catch {
-      console.error(`\n\x1B[31mERROR\x1B[0m  ${outputFile} does not exist. Run: pnpm update-license-deps\n`);
+      console.error(`\n\u001B[31mERROR\u001B[0m  ${outputFile} does not exist. Run: pnpm update-license-deps\n`);
       process.exit(1);
     }
 
@@ -416,7 +416,7 @@ async function main(): Promise<void> {
     if (normalizedExisting === normalizedGenerated) {
       console.log('\nlicense-deps is up to date.');
     } else {
-      console.error('\n\x1B[31mERROR\x1B[0m  license-deps is out of date. Run: pnpm update-license-deps\n');
+      console.error('\n\u001B[31mERROR\u001B[0m  license-deps is out of date. Run: pnpm update-license-deps\n');
       process.exit(1);
     }
     return;
