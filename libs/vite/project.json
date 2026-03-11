@@ -1,5 +1,5 @@
 {
-  "name": "vite-plugins",
+  "name": "vite",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/vite",
   "projectType": "library",
