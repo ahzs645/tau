@@ -1,4 +1,5 @@
 // Used by three.js
+// oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() cannot replace class assignment to globalThis
 globalThis.ProgressEvent = class MockProgressEvent extends Event {
   public lengthComputable: boolean;
   public loaded: number;
