@@ -69,7 +69,7 @@ function createBrowserRpcFileSystem(
       });
     },
     async writeBinaryFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void> {
-      await fileManager.writeFile(path, new Uint8Array(data.buffer), { source: 'machine' });
+      await fileManager.writeFile(path, new Uint8Array(data), { source: 'machine' });
     },
     async deleteFile(path: string): Promise<void> {
       await fileManager.deleteFile(path, { source: 'machine' });
