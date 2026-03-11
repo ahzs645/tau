@@ -6,6 +6,9 @@ import { BoundedFileCache } from '@taucad/filesystem';
 vi.mock('#machines/file-manager.worker.js?worker', () => ({
   default: class MockWorker {
     public terminate = vi.fn();
+    public addEventListener = vi.fn();
+    public removeEventListener = vi.fn();
+    public postMessage = vi.fn();
   },
 }));
 

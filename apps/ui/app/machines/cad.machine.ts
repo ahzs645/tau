@@ -1,9 +1,11 @@
-import { assign, assertEvent, setup, enqueueActions, fromPromise, waitFor } from 'xstate';
+import { assign, assertEvent, setup, enqueueActions, waitFor } from 'xstate';
 import type { ActorRefFrom, AnyActorRef } from 'xstate';
 import type { CodeIssue, ExportFormat, Geometry, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
 import { createKernelClient } from '@taucad/kernels';
 import type {
   ExportResult,
+  GetParametersResult,
+  HashedGeometryResult,
   KernelClient,
   KernelClientOptions,
   KernelIssue,
@@ -15,6 +17,7 @@ import { createFileSystemBridge } from '@taucad/kernels/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
 
@@ -39,6 +42,12 @@ export type CadContext = {
   eventCleanups: Array<() => void>;
 };
 
+type KernelConnectedEvent = {
+  type: 'kernelConnected';
+  client: KernelClient;
+  cleanups: Array<() => void>;
+};
+
 type CadEvent =
   | { type: 'initializeModel'; file: GeometryFile; parameters: Record<string, unknown> }
   | { type: 'setFile'; file: GeometryFile }
@@ -54,7 +63,8 @@ type CadEvent =
   | { type: 'stateChanged'; state: WorkerState; detail?: string }
   | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
   | { type: 'geometryExportFailed'; errors: KernelIssue[] }
-  | { type: 'kernelFilesChanged'; paths: string[] };
+  | { type: 'kernelFilesChanged'; paths: string[] }
+  | KernelConnectedEvent;
 
 type CadEmitted =
   | { type: 'geometryEvaluated'; geometries: Geometry[] }
@@ -68,19 +78,13 @@ type CadInput = {
   kernelOptions: KernelClientOptions;
 };
 
-type ConnectResult = {
-  client: KernelClient;
-  cleanups: Array<() => void>;
+type ConnectKernelInput = {
+  kernelOptions: KernelClientOptions;
+  fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
+  machineRef: AnyActorRef;
 };
 
-const connectKernelActor = fromPromise<
-  ConnectResult,
-  {
-    kernelOptions: KernelClientOptions;
-    fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
-    machineRef: AnyActorRef;
-  }
->(async ({ input, signal }) => {
+const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInput>(async ({ input, signal }) => {
   const { kernelOptions, fileManagerRef, machineRef } = input;
 
   console.log('[CadMachine] connectKernelActor: start', { hasFileManagerRef: Boolean(fileManagerRef) });
@@ -90,35 +94,25 @@ const connectKernelActor = fromPromise<
   }
 
   console.log('[CadMachine] connectKernelActor: waiting for fileManager ready...');
-  const snapshot = await Promise.race([
-    waitFor(fileManagerRef, (state) => state.matches('ready')),
-    new Promise<never>((_resolve, reject) => {
-      if (signal.aborted) {
-        reject(new Error('Kernel connection aborted'));
-        return;
-      }
-      signal.addEventListener(
-        'abort',
-        () => {
-          reject(new Error('Kernel connection aborted'));
-        },
-        { once: true },
-      );
-    }),
-  ]);
+  const snapshot = await waitFor(fileManagerRef, (state) => state.matches('ready'), { signal });
   console.log('[CadMachine] connectKernelActor: fileManager ready', { hasWorker: Boolean(snapshot.context.worker) });
 
   if (!snapshot.context.worker) {
     throw new Error('File manager worker not available');
   }
 
+  signal.throwIfAborted();
+
   console.log('[CadMachine] connectKernelActor: creating kernel client...');
   const client = createKernelClient(kernelOptions);
   const cleanups: Array<() => void> = [];
 
   cleanups.push(
-    client.on('geometry', (result: { success: boolean; data: Geometry[]; issues: KernelIssue[] }) => {
-      console.log('[CadMachine] geometry event received', { success: result.success, dataLength: result.data?.length });
+    client.on('geometry', (result: HashedGeometryResult) => {
+      console.log('[CadMachine] geometry event received', {
+        success: result.success,
+        dataLength: result.success ? result.data.length : 0,
+      });
       if (result.success) {
         machineRef.send({
           type: 'geometryComputed',
@@ -135,16 +129,12 @@ const connectKernelActor = fromPromise<
     client.on('progress', (phase: RenderPhase) => {
       machineRef.send({ type: 'kernelProgress', phase });
     }),
-    client.on('parametersResolved', (parametersResult: { success: boolean; data: unknown }) => {
+    client.on('parametersResolved', (parametersResult: GetParametersResult) => {
       if (parametersResult.success) {
-        const data = parametersResult.data as {
-          defaultParameters: Record<string, unknown>;
-          jsonSchema: JSONSchema7;
-        };
         machineRef.send({
           type: 'parametersParsed',
-          defaultParameters: data.defaultParameters,
-          jsonSchema: data.jsonSchema,
+          defaultParameters: parametersResult.data.defaultParameters,
+          jsonSchema: parametersResult.data.jsonSchema as JSONSchema7,
         });
       }
     }),
@@ -165,13 +155,15 @@ const connectKernelActor = fromPromise<
     }),
   );
 
+  signal.throwIfAborted();
+
   const { port, dispose } = createFileSystemBridge(snapshot.context.worker);
   cleanups.push(dispose);
   console.log('[CadMachine] connectKernelActor: connecting client...');
   await client.connect({ port });
   console.log('[CadMachine] connectKernelActor: connected successfully');
 
-  return { client, cleanups };
+  return { type: 'kernelConnected', client, cleanups };
 });
 
 /**
@@ -262,7 +254,7 @@ export const cadMachine = setup({
           return newIssues;
         },
       });
-      enqueue.emit({ type: 'geometryEvaluated' as const, geometries: event.geometries });
+      enqueue.emit({ type: 'geometryEvaluated', geometries: event.geometries });
     }),
     setKernelIssue: assign({
       kernelIssues({ context, event }) {
@@ -306,12 +298,12 @@ export const cadMachine = setup({
           return context.kernelIssues;
         },
       });
-      enqueue.emit({ type: 'geometryExported' as const, blob: event.blob, format: event.format });
+      enqueue.emit({ type: 'geometryExported', blob: event.blob, format: event.format });
     }),
     setExportError: enqueueActions(({ enqueue, event }) => {
       assertEvent(event, 'geometryExportFailed');
       enqueue.assign({ exportedBlob: undefined });
-      enqueue.emit({ type: 'exportFailed' as const, errors: event.errors });
+      enqueue.emit({ type: 'exportFailed', errors: event.errors });
     }),
     initializeModel: enqueueActions(({ enqueue, context, event }) => {
       assertEvent(event, 'initializeModel');
@@ -365,8 +357,8 @@ export const cadMachine = setup({
             errors: [
               {
                 message: error instanceof Error ? error.message : 'Export failed',
-                type: 'runtime' as const,
-                severity: 'error' as const,
+                type: 'runtime',
+                severity: 'error',
               },
             ],
           });
@@ -425,32 +417,19 @@ export const cadMachine = setup({
             machineRef: self,
           };
         },
-        onDone: {
-          target: 'idle',
-          actions: enqueueActions(({ enqueue, context, event }) => {
-            console.log('[CadMachine] connecting → idle', { hasFile: Boolean(context.file) });
-            const { client } = event.output;
-            enqueue.assign({
-              kernelClient: client,
-              eventCleanups: event.output.cleanups,
-            });
-            if (context.file) {
-              console.log('[CadMachine] forwarding buffered file to kernel', context.file);
-              client.setFile(context.file, context.parameters);
-            }
-          }),
-        },
+        onDone: 'idle',
         onError: {
           target: 'error',
           actions: enqueueActions(({ enqueue, event }) => {
             console.error('[CadMachine] connecting → error', event.error);
-            const errorMessage = event.error instanceof Error ? event.error.message : 'Failed to connect kernel';
+            const errorMessage =
+              event.error instanceof Error || event.error instanceof DOMException
+                ? event.error.message
+                : 'Failed to connect kernel';
             enqueue.assign({
               kernelIssues({ context }) {
                 const newMap = new Map(context.kernelIssues);
-                newMap.set('__connection__', [
-                  { message: errorMessage, type: 'runtime' as const, severity: 'error' as const },
-                ]);
+                newMap.set('__connection__', [{ message: errorMessage, type: 'runtime', severity: 'error' }]);
                 return newMap;
               },
             });
@@ -458,6 +437,19 @@ export const cadMachine = setup({
         },
       },
       on: {
+        kernelConnected: {
+          actions: enqueueActions(({ enqueue, context, event }) => {
+            console.log('[CadMachine] kernelConnected', { hasFile: Boolean(context.file) });
+            enqueue.assign({
+              kernelClient: event.client,
+              eventCleanups: event.cleanups,
+            });
+            if (context.file) {
+              console.log('[CadMachine] forwarding buffered file to kernel', context.file);
+              event.client.setFile(context.file, context.parameters);
+            }
+          }),
+        },
         initializeModel: { actions: 'initializeModel' },
         setFile: { actions: 'setFile' },
         setParameters: { actions: 'setParameters' },
@@ -534,16 +526,16 @@ export const cadMachine = setup({
     error: {
       on: {
         initializeModel: {
-          target: 'idle',
-          actions: ['initializeModel', 'forwardInitializeModel'],
+          target: 'connecting',
+          actions: ['destroyKernel', 'initializeModel'],
         },
         setFile: {
-          target: 'idle',
-          actions: ['setFile', 'forwardSetFile'],
+          target: 'connecting',
+          actions: ['destroyKernel', 'setFile'],
         },
         setParameters: {
-          target: 'idle',
-          actions: ['setParameters', 'forwardSetParameters'],
+          target: 'connecting',
+          actions: ['destroyKernel', 'setParameters'],
         },
         setCodeIssues: { actions: 'setCodeIssues' },
         exportGeometry: { actions: 'dispatchExport' },

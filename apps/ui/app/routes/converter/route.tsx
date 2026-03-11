@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { importToGlb, supportedImportFormats, supportedExportFormats, formatConfigurations } from '@taucad/converter';
 import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
 import { Download, Upload, RotateCcw, Package, Code2 } from 'lucide-react';
-import { fromPromise } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { Geometry, Build } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
@@ -477,7 +477,9 @@ export default function ConverterRoute(): React.JSX.Element {
       input={{ shouldLoadModelOnStart: false }}
       provide={{
         actors: {
-          loadBuildActor: fromPromise(async () => converterBuild),
+          loadBuildActor: fromSafeAsync(async () => {
+            return { type: 'buildRetrieved', build: converterBuild };
+          }),
         },
       }}
     >

@@ -1,12 +1,11 @@
-import { assign, assertEvent, setup, fromPromise } from 'xstate';
-import type { OutputFrom, DoneActorEvent } from 'xstate';
+import { assign, assertEvent, setup } from 'xstate';
 import { wrap } from 'comlink';
 import type { Remote } from 'comlink';
 import { safeDispose } from '@taucad/utils/dispose';
 // oxlint-disable-next-line eslint-plugin-import/no-named-as-default -- web worker default import
 import ObjectStoreWorker from '#hooks/object-store.worker.js?worker';
 import type { ObjectStoreWorker as ObjectStoreWorkerType } from '#hooks/object-store.worker.js';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 type BuildManagerContext = {
   worker: Worker | undefined;
@@ -14,55 +13,36 @@ type BuildManagerContext = {
   error: Error | undefined;
 };
 
-const initializeWorkerActor = fromPromise<
-  | {
-      type: 'workerInitialized';
-      worker: Worker;
-      wrappedWorker: Remote<ObjectStoreWorkerType>;
+type WorkerInitializedEvent = {
+  type: 'workerInitialized';
+  worker: Worker;
+  wrappedWorker: Remote<ObjectStoreWorkerType>;
+};
+
+const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: BuildManagerContext }>(
+  async ({ input, signal }) => {
+    const { context } = input;
+    console.debug('[BuildManager] initializeWorkerActor: start');
+
+    if (context.worker) {
+      safeDispose(() => context.worker?.terminate());
     }
-  | { type: 'workerInitializationFailed'; error: Error },
-  { context: BuildManagerContext }
->(async ({ input, signal }) => {
-  const { context } = input;
-  console.debug('[BuildManager] initializeWorkerActor: start');
 
-  // Clean up any existing worker (error-isolated so failures don't prevent new worker creation)
-  if (context.worker) {
-    safeDispose(() => context.worker?.terminate());
-  }
+    signal.throwIfAborted();
 
-  if (signal.aborted) {
-    console.debug('[BuildManager] initializeWorkerActor: aborted');
-    return { type: 'workerInitializationFailed', error: new Error('Aborted') };
-  }
-
-  try {
     const worker = new ObjectStoreWorker();
     const wrappedWorker = wrap<ObjectStoreWorkerType>(worker);
 
     console.debug('[BuildManager] initializeWorkerActor: success');
     return { type: 'workerInitialized', worker, wrappedWorker };
-  } catch (error) {
-    console.error('[BuildManager] initializeWorkerActor: FAILED', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to initialize worker';
-    return {
-      type: 'workerInitializationFailed',
-      error: new Error(errorMessage),
-    };
-  }
-});
+  },
+);
 
 const buildManagerActors = {
   initializeWorkerActor,
 } as const;
-type BuildManagerActorNames = keyof typeof buildManagerActors;
 
-type BuildManagerEventInternal = { type: 'initialize' };
-
-type BuildManagerEventExternal = OutputFrom<(typeof buildManagerActors)[BuildManagerActorNames]>;
-type BuildManagerEventExternalDone = DoneActorEvent<BuildManagerEventExternal, BuildManagerActorNames>;
-
-type BuildManagerEvent = BuildManagerEventExternalDone | BuildManagerEventInternal;
+type BuildManagerEvent = { type: 'initialize' } | WorkerInitializedEvent;
 
 /**
  * Build Manager Machine
@@ -82,9 +62,10 @@ export const buildManagerMachine = setup({
   actions: {
     setError: assign({
       error({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitializationFailed');
-        return event.output.error;
+        if ('error' in event && event.error instanceof Error) {
+          return event.error;
+        }
+        return undefined;
       },
     }),
 
@@ -102,22 +83,14 @@ export const buildManagerMachine = setup({
 
     assignWorkerResources: assign({
       worker({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.worker;
+        assertEvent(event, 'workerInitialized');
+        return event.worker;
       },
       wrappedWorker({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.wrappedWorker;
+        assertEvent(event, 'workerInitialized');
+        return event.wrappedWorker;
       },
     }),
-  },
-  guards: {
-    isWorkerInitializationFailed({ event }) {
-      assertActorDoneEvent(event);
-      return event.output.type === 'workerInitializationFailed';
-    },
   },
 }).createMachine({
   id: 'buildManager',
@@ -147,23 +120,22 @@ export const buildManagerMachine = setup({
           console.debug('[BuildManager] state → creatingWorker');
         },
       ],
+      on: {
+        workerInitialized: {
+          actions: ['assignWorkerResources'],
+        },
+      },
       invoke: {
         id: 'initializeWorkerActor',
         src: 'initializeWorkerActor',
         input({ context }) {
           return { context };
         },
-        onDone: [
-          {
-            target: 'error',
-            guard: 'isWorkerInitializationFailed',
-            actions: ['setError'],
-          },
-          {
-            target: 'ready',
-            actions: ['assignWorkerResources'],
-          },
-        ],
+        onDone: 'ready',
+        onError: {
+          target: 'error',
+          actions: ['setError'],
+        },
       },
     },
 

@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createActor, fromPromise, waitFor } from 'xstate';
+import { mock } from 'vitest-mock-extended';
+import { createActor, waitFor } from 'xstate';
 import type { Build } from '@taucad/types';
+import type { KernelClientOptions } from '@taucad/kernels';
 import { buildMachine } from '#machines/build.machine.js';
+import type { BuildContext } from '#machines/build.machine.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 vi.mock('#constants/browser.constants.js', () => ({
   isBrowser: true,
@@ -45,11 +49,21 @@ function createTestActor(options?: {
   buildId?: string;
 }) {
   const loadResult = options?.loadResult ?? stubBuild;
+  const loadFunction = typeof loadResult === 'function' ? loadResult : async () => loadResult;
 
   const machine = buildMachine.provide({
     actors: {
-      loadBuildActor: fromPromise(typeof loadResult === 'function' ? loadResult : async () => loadResult),
-      ...(options?.writeResult ? { writeBuildActor: fromPromise(options.writeResult) } : {}),
+      loadBuildActor: fromSafeAsync(async () => {
+        const build = await loadFunction();
+        return { type: 'buildRetrieved', build };
+      }),
+      ...(options?.writeResult
+        ? {
+            writeBuildActor: fromSafeAsync(async () => {
+              await options.writeResult!();
+            }),
+          }
+        : {}),
     },
     guards: {
       isNotBrowser: () => false,
@@ -57,10 +71,8 @@ function createTestActor(options?: {
     },
   });
 
-  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock stubs for unit test
-  const fileManagerRef = { send: vi.fn() } as never;
-  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock stubs for unit test
-  const kernelOptions = {} as never;
+  const fileManagerRef = mock<BuildContext['fileManagerRef']>({ send: vi.fn() });
+  const kernelOptions = mock<KernelClientOptions>();
 
   return createActor(machine, {
     input: {
@@ -110,17 +122,17 @@ describe('buildMachine', () => {
     it('should go to ssr when isNotBrowser is true', () => {
       const machine = buildMachine.provide({
         actors: {
-          loadBuildActor: fromPromise(async () => stubBuild),
+          loadBuildActor: fromSafeAsync(async () => {
+            return { type: 'buildRetrieved', build: stubBuild };
+          }),
         },
         guards: {
           isNotBrowser: () => true,
           shouldAutoLoad: () => false,
         },
       });
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock stubs for unit test
-      const fileManagerRef = { send: vi.fn() } as never;
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock stubs for unit test
-      const kernelOptions = {} as never;
+      const fileManagerRef = mock<BuildContext['fileManagerRef']>({ send: vi.fn() });
+      const kernelOptions = mock<KernelClientOptions>();
       const actor = createActor(machine, {
         input: { buildId: 'b', fileManagerRef, kernelOptions },
       });

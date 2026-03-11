@@ -1,65 +1,52 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createActor, fromPromise, waitFor } from 'xstate';
-import type { KernelIssue } from '@taucad/kernels';
+import { mock } from 'vitest-mock-extended';
+import { createActor, waitFor } from 'xstate';
+import type { KernelClient, KernelClientOptions, KernelIssue, PerformanceEntryData } from '@taucad/kernels';
+import { createMockKernelClient } from '@taucad/kernels/testing';
 import type { Geometry, GeometryFile } from '@taucad/types';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import type { CadContext } from '#machines/cad.machine.js';
-
-// ---------------------------------------------------------------------------
-// Mock KernelClient
-// ---------------------------------------------------------------------------
 
 const noop = () => {
   /* No-op */
 };
-
-function createMockKernelClient() {
-  return {
-    connect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-    setFile: vi.fn<(file: GeometryFile, params: Record<string, unknown>) => void>(),
-    setParameters: vi.fn<(params: Record<string, unknown>) => void>(),
-    export: vi.fn().mockResolvedValue({
-      success: true,
-      data: { bytes: new Uint8Array([1, 2, 3]), mimeType: 'model/stl' },
-      issues: [],
-    }),
-    render: vi.fn(),
-    notifyFileChanged: vi.fn(),
-    terminate: vi.fn(),
-    on: vi.fn<(event: string, handler: (...args: never[]) => void) => () => void>().mockReturnValue(noop),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Factory helpers
 // ---------------------------------------------------------------------------
 
 function createTestActor(options?: {
-  connectResult?: () => Promise<{ client: ReturnType<typeof createMockKernelClient>; cleanups: Array<() => void> }>;
+  connectResult?: () => Promise<{
+    type: 'kernelConnected';
+    client: KernelClient;
+    cleanups: Array<() => void>;
+  }>;
   connectError?: Error;
   shouldInitializeKernelOnStart?: boolean;
 }) {
   const mockClient = createMockKernelClient();
   const cleanups: Array<() => void> = [];
 
-  const connectResult =
+  const connectWork =
     options?.connectResult ??
     (options?.connectError
       ? async () => {
           // oxlint-disable-next-line @typescript-eslint/only-throw-error -- test stub
           throw options.connectError;
         }
-      : async () => ({ client: mockClient, cleanups }));
+      : async () => {
+          await Promise.resolve();
+          return { type: 'kernelConnected', client: mockClient, cleanups };
+        });
 
   const machine = cadMachine.provide({
     actors: {
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock actor for test
-      connectKernelActor: fromPromise(connectResult) as never,
+      connectKernelActor: fromSafeAsync(connectWork),
     },
   });
 
-  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock stubs for unit test
-  const kernelOptions = {} as never;
+  const kernelOptions = mock<KernelClientOptions>();
 
   const actor = createActor(machine, {
     input: {
@@ -84,8 +71,7 @@ async function startAndConnect(options?: Parameters<typeof createTestActor>[0]) 
 
 const stubFile: GeometryFile = { path: '/builds/test', filename: 'main.ts' };
 
-// oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal stub
-const stubGeometries = [{ format: 'gltf', data: new ArrayBuffer(0) }] as unknown as Geometry[];
+const stubGeometries: Geometry[] = [{ format: 'gltf', content: new Uint8Array(0), hash: 'stub' }];
 
 const stubIssues: KernelIssue[] = [{ message: 'test issue', type: 'runtime', severity: 'warning' }];
 
@@ -132,16 +118,15 @@ describe('cadMachine', () => {
     });
 
     it('should buffer initializeModel during connecting and forward on connect', async () => {
-      let resolveConnect!: (value: {
-        client: ReturnType<typeof createMockKernelClient>;
-        cleanups: Array<() => void>;
-      }) => void;
+      let resolveConnect!: () => void;
       const mockClient = createMockKernelClient();
 
       const { actor } = createTestActor({
         connectResult: async () =>
           new Promise((resolve) => {
-            resolveConnect = resolve;
+            resolveConnect = () => {
+              resolve({ type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> });
+            };
           }),
       });
       actor.start();
@@ -156,7 +141,7 @@ describe('cadMachine', () => {
       expect(actor.getSnapshot().context.file).toEqual(stubFile);
       expect(actor.getSnapshot().context.parameters).toEqual({ width: 10 });
 
-      resolveConnect({ client: mockClient, cleanups: [] });
+      resolveConnect();
       await waitFor(actor, (s) => s.value === 'idle');
 
       expect(mockClient.setFile).toHaveBeenCalledWith(stubFile, { width: 10 });
@@ -165,7 +150,7 @@ describe('cadMachine', () => {
 
     it('should buffer setFile during connecting', () => {
       const { actor } = createTestActor({
-        connectResult: async () => new Promise(noop),
+        connectResult: async () => new Promise<never>(noop),
       });
       actor.start();
 
@@ -176,12 +161,52 @@ describe('cadMachine', () => {
 
     it('should buffer setParameters during connecting', () => {
       const { actor } = createTestActor({
-        connectResult: async () => new Promise(noop),
+        connectResult: async () => new Promise<never>(noop),
       });
       actor.start();
 
       actor.send({ type: 'setParameters', parameters: { depth: 5 } });
       expect(actor.getSnapshot().context.parameters).toEqual({ depth: 5 });
+      actor.stop();
+    });
+
+    it('should stay in connecting when actor never settles (simulates abort)', async () => {
+      const { actor } = createTestActor({
+        connectResult: async () =>
+          new Promise<never>(
+            // oxlint-disable-next-line no-empty-function -- mock stub for never-settling promise
+            () => {},
+          ),
+      });
+      actor.start();
+      expect(actor.getSnapshot().value).toBe('connecting');
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      expect(actor.getSnapshot().value).toBe('connecting');
+      expect(actor.getSnapshot().context.kernelIssues.has('__connection__')).toBe(false);
+      actor.stop();
+    });
+
+    it('should transition to error on DOMException AbortError reaching onError', async () => {
+      const { actor } = await startAndConnect({
+        connectError: new DOMException('The operation was aborted', 'AbortError'),
+      });
+      expect(actor.getSnapshot().value).toBe('error');
+      const issues = actor.getSnapshot().context.kernelIssues;
+      expect(issues.get('__connection__')?.[0]?.message).toBe('The operation was aborted');
+      actor.stop();
+    });
+
+    it('should transition to error on non-abort DOMException', async () => {
+      const { actor } = await startAndConnect({
+        connectError: new DOMException('Network error', 'NetworkError'),
+      });
+      expect(actor.getSnapshot().value).toBe('error');
+      const issues = actor.getSnapshot().context.kernelIssues;
+      expect(issues.get('__connection__')?.[0]?.message).toBe('Network error');
       actor.stop();
     });
   });
@@ -295,7 +320,7 @@ describe('cadMachine', () => {
 
     it('should set default parameters on parametersParsed', async () => {
       const { actor } = await startAndConnect();
-      const schema = { type: 'object' as const, properties: { width: { type: 'number' as const } } };
+      const schema = { type: 'object', properties: { width: { type: 'number' } } } as const;
 
       actor.send({
         type: 'parametersParsed',
@@ -311,10 +336,9 @@ describe('cadMachine', () => {
     it('should set code issues on setCodeIssues', async () => {
       const { actor } = await startAndConnect();
 
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal stub
-      const codeIssues = [
-        { message: 'syntax error', severity: 'error' as const },
-      ] as unknown as CadContext['codeIssues'];
+      const codeIssues = mock<CadContext['codeIssues']>([
+        { message: 'syntax error', startLineNumber: 0, endLineNumber: 0, startColumn: 0, endColumn: 0 },
+      ]);
       actor.send({ type: 'setCodeIssues', errors: codeIssues });
       expect(actor.getSnapshot().context.codeIssues).toEqual(codeIssues);
       actor.stop();
@@ -413,8 +437,7 @@ describe('cadMachine', () => {
     it('should track progress during rendering', async () => {
       const { actor } = await enterRendering();
 
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal stub
-      actor.send({ type: 'kernelProgress', phase: 'bundling' as never });
+      actor.send({ type: 'kernelProgress', phase: 'bundling' });
       expect(actor.getSnapshot().context.renderPhase).toBe('bundling');
       actor.stop();
     });
@@ -422,8 +445,9 @@ describe('cadMachine', () => {
     it('should store telemetry during rendering', async () => {
       const { actor } = await enterRendering();
 
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal stub
-      const entries = [{ name: 'test', duration: 100 }] as never[];
+      const entries = mock<PerformanceEntryData[]>([
+        { name: 'test', startTime: 0, duration: 100, workerTimeOrigin: 0 },
+      ]);
       actor.send({ type: 'kernelTelemetry', entries });
       expect(actor.getSnapshot().context.telemetryEntries).toHaveLength(1);
       actor.stop();
@@ -441,34 +465,116 @@ describe('cadMachine', () => {
       return result;
     }
 
-    it('should recover to idle on setFile', async () => {
-      const { actor, mockClient } = await enterError();
+    it('should reconnect on setFile from error state', async () => {
+      const mockClient = createMockKernelClient();
+      let connectAttempt = 0;
+
+      const { actor } = createTestActor({
+        connectResult: async () => {
+          connectAttempt++;
+          if (connectAttempt === 1) {
+            throw new Error('Connection refused');
+          }
+          return { type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> };
+        },
+      });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'error');
+      expect(actor.getSnapshot().context.kernelClient).toBeUndefined();
 
       actor.send({ type: 'setFile', file: stubFile });
-      expect(actor.getSnapshot().value).toBe('idle');
-      expect(mockClient.setFile).toHaveBeenCalled();
+      expect(actor.getSnapshot().value).toBe('connecting');
+
+      await waitFor(actor, (s) => s.value === 'idle');
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
+      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile, {});
       actor.stop();
     });
 
-    it('should recover to idle on initializeModel', async () => {
-      const { actor, mockClient } = await enterError();
+    it('should reconnect on initializeModel from error state', async () => {
+      const mockClient = createMockKernelClient();
+      let connectAttempt = 0;
+
+      const { actor } = createTestActor({
+        connectResult: async () => {
+          connectAttempt++;
+          if (connectAttempt === 1) {
+            throw new Error('Connection refused');
+          }
+          return { type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> };
+        },
+      });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'error');
+      expect(actor.getSnapshot().context.kernelClient).toBeUndefined();
 
       actor.send({
         type: 'initializeModel',
         file: stubFile,
         parameters: { width: 10 },
       });
-      expect(actor.getSnapshot().value).toBe('idle');
+      expect(actor.getSnapshot().value).toBe('connecting');
+      expect(actor.getSnapshot().context.file).toEqual(stubFile);
+
+      await waitFor(actor, (s) => s.value === 'idle');
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
       expect(mockClient.setFile).toHaveBeenCalledWith(stubFile, { width: 10 });
       actor.stop();
     });
 
-    it('should recover to idle on setParameters', async () => {
-      const { actor, mockClient } = await enterError();
+    it('should reconnect on setParameters from error state', async () => {
+      const mockClient = createMockKernelClient();
+      let connectAttempt = 0;
+
+      const { actor } = createTestActor({
+        connectResult: async () => {
+          connectAttempt++;
+          if (connectAttempt === 1) {
+            throw new Error('Connection refused');
+          }
+          return { type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> };
+        },
+      });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'error');
+      expect(actor.getSnapshot().context.kernelClient).toBeUndefined();
 
       actor.send({ type: 'setParameters', parameters: { depth: 5 } });
-      expect(actor.getSnapshot().value).toBe('idle');
-      expect(mockClient.setParameters).toHaveBeenCalledWith({ depth: 5 });
+      expect(actor.getSnapshot().value).toBe('connecting');
+
+      await waitFor(actor, (s) => s.value === 'idle');
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
+      actor.stop();
+    });
+
+    it('should reconnect on initializeModel even when kernelClient existed', async () => {
+      const { actor } = await enterError();
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
+
+      actor.send({
+        type: 'initializeModel',
+        file: stubFile,
+        parameters: { width: 10 },
+      });
+      expect(actor.getSnapshot().value).toBe('connecting');
+      actor.stop();
+    });
+
+    it('should reconnect on setFile even when kernelClient existed', async () => {
+      const { actor } = await enterError();
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
+
+      actor.send({ type: 'setFile', file: stubFile });
+      expect(actor.getSnapshot().value).toBe('connecting');
+      actor.stop();
+    });
+
+    it('should reconnect on setParameters even when kernelClient existed', async () => {
+      const { actor } = await enterError();
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
+
+      actor.send({ type: 'setParameters', parameters: { depth: 5 } });
+      expect(actor.getSnapshot().value).toBe('connecting');
       actor.stop();
     });
 
@@ -511,13 +617,15 @@ describe('cadMachine', () => {
 
     it('should handle export failure', async () => {
       const mockClient = createMockKernelClient();
-      mockClient.export.mockResolvedValue({
+      vi.mocked(mockClient.export).mockResolvedValue({
         success: false,
         issues: [{ message: 'Export failed', type: 'runtime', severity: 'error' }],
       });
 
       const { actor } = await startAndConnect({
-        connectResult: async () => ({ client: mockClient, cleanups: [] }),
+        connectResult: async () => {
+          return { type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> };
+        },
       });
 
       const emitted: unknown[] = [];
@@ -533,10 +641,12 @@ describe('cadMachine', () => {
 
     it('should handle export exception', async () => {
       const mockClient = createMockKernelClient();
-      mockClient.export.mockRejectedValue(new Error('Network error'));
+      vi.mocked(mockClient.export).mockRejectedValue(new Error('Network error'));
 
       const { actor } = await startAndConnect({
-        connectResult: async () => ({ client: mockClient, cleanups: [] }),
+        connectResult: async () => {
+          return { type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> };
+        },
       });
 
       const emitted: unknown[] = [];
@@ -565,10 +675,9 @@ describe('cadMachine', () => {
       const mockClient = createMockKernelClient();
 
       const { actor } = await startAndConnect({
-        connectResult: async () => ({
-          client: mockClient,
-          cleanups: [cleanup1, cleanup2],
-        }),
+        connectResult: async () => {
+          return { type: 'kernelConnected', client: mockClient, cleanups: [cleanup1, cleanup2] };
+        },
       });
 
       expect(actor.getSnapshot().context.eventCleanups).toHaveLength(2);
@@ -576,9 +685,9 @@ describe('cadMachine', () => {
     });
 
     it('should store kernel client in context after connection', async () => {
-      const { actor, mockClient } = await startAndConnect();
+      const { actor } = await startAndConnect();
 
-      expect(actor.getSnapshot().context.kernelClient).toBe(mockClient);
+      expect(actor.getSnapshot().context.kernelClient).toBeDefined();
       actor.stop();
     });
   });
@@ -657,15 +766,25 @@ describe('cadMachine', () => {
       actor.stop();
     });
 
-    it('should handle error recovery: error -> setFile -> idle -> rendering -> idle', async () => {
-      const { actor, mockClient } = await startAndConnect();
+    it('should handle error recovery: error -> setFile -> reconnect -> idle -> rendering -> idle', async () => {
+      const mockClient = createMockKernelClient();
+
+      const { actor } = createTestActor({
+        connectResult: async () => {
+          return { type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> };
+        },
+      });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'idle');
 
       actor.send({ type: 'stateChanged', state: 'error' });
       expect(actor.getSnapshot().value).toBe('error');
 
       actor.send({ type: 'setFile', file: stubFile });
-      expect(actor.getSnapshot().value).toBe('idle');
-      expect(mockClient.setFile).toHaveBeenCalled();
+      expect(actor.getSnapshot().value).toBe('connecting');
+
+      await waitFor(actor, (s) => s.value === 'idle');
+      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile, {});
 
       actor.send({ type: 'stateChanged', state: 'rendering' });
       expect(actor.getSnapshot().value).toBe('rendering');

@@ -1,22 +1,12 @@
-import {
-  assign,
-  assertEvent,
-  setup,
-  fromPromise,
-  fromCallback,
-  enqueueActions,
-  emit,
-  spawnChild,
-  stopChild,
-} from 'xstate';
-import type { OutputFrom, DoneActorEvent, AnyEventObject } from 'xstate';
+import { assign, assertEvent, setup, fromCallback, enqueueActions, emit, spawnChild, stopChild } from 'xstate';
+import type { AnyEventObject } from 'xstate';
 import type { FileEntry, FileSystemBackend } from '@taucad/types';
 import { createBridgeProxy, createFileSystemBridge } from '@taucad/kernels/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import { BoundedFileCache } from '@taucad/filesystem';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import { getStoredDirectoryHandle, getBuildFileSystemConfig, checkHandlePermission } from '#filesystem/handle-store.js';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { normalizePath, joinPath } from '@taucad/utils/path';
 import type {
   FileWriteSource,
@@ -52,40 +42,38 @@ type FileManagerContext = {
 
 // ============ Lifecycle Actors ============
 
-const initializeWorkerActor = fromPromise<
-  | {
-      type: 'workerInitialized';
-      worker: Worker;
-      proxy: FileManagerProxy & { listen?: (event: string, handler: (data: unknown) => void) => () => void };
-      bridgeDispose: () => void;
-      configuredBackend: FileSystemBackend;
-      webAccessNeedsPermission: boolean;
-      initialEntries: FileEntry[];
+type WorkerInitializedEvent = {
+  type: 'workerInitialized';
+  worker: Worker;
+  proxy: FileManagerProxy & { listen?: (event: string, handler: (data: unknown) => void) => () => void };
+  bridgeDispose: () => void;
+  configuredBackend: FileSystemBackend;
+  webAccessNeedsPermission: boolean;
+  initialEntries: FileEntry[];
+};
+
+const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: FileManagerContext }>(
+  async ({ input, signal }) => {
+    const { context } = input;
+    const initT0 = performance.now();
+    console.debug(`[FileManager] initializeWorkerActor: start +${initT0.toFixed(0)}ms`);
+
+    safeDispose(() => context.proxy?.dispose());
+    safeDispose(context.bridgeDispose);
+
+    if (context.worker && !context.sharedWorker) {
+      safeDispose(() => context.worker?.terminate());
     }
-  | { type: 'workerInitializationFailed'; error: Error },
-  { context: FileManagerContext }
->(async ({ input, signal }) => {
-  const { context } = input;
-  const initT0 = performance.now();
-  console.debug(`[FileManager] initializeWorkerActor: start +${initT0.toFixed(0)}ms`);
 
-  safeDispose(() => context.proxy?.dispose());
-  safeDispose(context.bridgeDispose);
-
-  if (context.worker && !context.sharedWorker) {
-    safeDispose(() => context.worker?.terminate());
-  }
-
-  try {
     const worker = context.sharedWorker ?? new FileManagerWorker({ name: `fm-root` });
     console.debug(`[FileManager] worker created +${(performance.now() - initT0).toFixed(1)}ms`);
-    worker.addEventListener('message', (e) => {
-      if (e.data?.type === '__worker_ready__') {
+    worker.addEventListener('message', (event) => {
+      if (event.data?.type === '__worker_ready__') {
         console.debug(`[FileManager] worker heartbeat received +${(performance.now() - initT0).toFixed(1)}ms`);
       }
     });
-    worker.addEventListener('error', (e) => {
-      console.error(`[FileManager] WORKER ERROR:`, e.message, e.filename, e.lineno);
+    worker.addEventListener('error', (error) => {
+      console.error(`[FileManager] WORKER ERROR:`, error.message, error.filename, error.lineno);
     });
     const { port, dispose: bridgeDispose } = createFileSystemBridge(worker);
     console.debug(`[FileManager] bridge created, port transferred +${(performance.now() - initT0).toFixed(1)}ms`);
@@ -94,9 +82,7 @@ const initializeWorkerActor = fromPromise<
 
     let backend = context.backendType;
     if (context.buildId) {
-      if (signal.aborted) {
-        return { type: 'workerInitializationFailed', error: new Error('Aborted') };
-      }
+      signal.throwIfAborted();
       const buildBackend = await getBuildFileSystemConfig(context.buildId);
       backend = buildBackend ?? 'indexeddb';
     }
@@ -126,7 +112,6 @@ const initializeWorkerActor = fromPromise<
       await proxy.reconfigure(backend);
     }
 
-    // Hydrate tree: shallow read of root directory
     let initialEntries: FileEntry[] = [];
     try {
       const rootPath = context.rootDirectory;
@@ -148,7 +133,7 @@ const initializeWorkerActor = fromPromise<
         });
       }
     } catch (error) {
-      console.warn('[FileManager] Initial tree hydration failed (empty filesystem?):', error);
+      console.debug('[FileManager] Initial tree hydration failed (empty filesystem?):', error);
       initialEntries = [];
     }
 
@@ -162,30 +147,21 @@ const initializeWorkerActor = fromPromise<
       webAccessNeedsPermission,
       initialEntries,
     };
-  } catch (error) {
-    console.error('[FileManager] initializeWorkerActor: FAILED', error);
-    return {
-      type: 'workerInitializationFailed',
-      error: error instanceof Error ? error : new Error('Failed to initialize worker'),
-    };
-  }
-});
+  },
+);
 
-const readDirectoryActor = fromPromise<
-  { type: 'directoryRead'; entries: FileEntry[] } | { type: 'directoryReadFailed'; error: Error },
-  { context: FileManagerContext; path: string }
->(async ({ input, signal }) => {
-  const { context, path } = input;
+type DirectoryReadEvent = { type: 'directoryRead'; entries: FileEntry[] };
 
-  if (signal.aborted) {
-    return { type: 'directoryReadFailed', error: new Error('Aborted') };
-  }
+const readDirectoryActor = fromSafeAsync<DirectoryReadEvent, { context: FileManagerContext; path: string }>(
+  async ({ input, signal }) => {
+    const { context, path } = input;
 
-  if (!context.proxy) {
-    return { type: 'directoryReadFailed', error: new Error('Worker not initialized') };
-  }
+    signal.throwIfAborted();
 
-  try {
+    if (!context.proxy) {
+      throw new Error('Worker not initialized');
+    }
+
     const absolutePath = path === '' ? normalizePath(context.rootDirectory) : joinPath(context.rootDirectory, path);
     const fileStats = await context.proxy.getDirectoryStat(absolutePath);
     const entries: FileEntry[] = [];
@@ -202,13 +178,8 @@ const readDirectoryActor = fromPromise<
     }
 
     return { type: 'directoryRead', entries };
-  } catch (error) {
-    return {
-      type: 'directoryReadFailed',
-      error: error instanceof Error ? error : new Error('Failed to read directory'),
-    };
-  }
-});
+  },
+);
 
 const fileWatcherActor = fromCallback<AnyEventObject>(({ sendBack }) => {
   let intervalId: ReturnType<typeof setInterval> | undefined;
@@ -247,8 +218,6 @@ const fileManagerActors = {
   fileWatcherActor,
 } as const;
 
-type PromiseActorNames = 'initializeWorkerActor' | 'readDirectoryActor';
-
 // ============ Events ============
 
 type FileManagerEventLifecycle =
@@ -273,10 +242,7 @@ type FileManagerEventMutation =
 
 type FileManagerEventInternal = FileManagerEventLifecycle | FileManagerEventMutation;
 
-type FileManagerEventExternal = OutputFrom<(typeof fileManagerActors)[PromiseActorNames]>;
-type FileManagerEventExternalDone = DoneActorEvent<FileManagerEventExternal, PromiseActorNames>;
-
-type FileManagerEvent = FileManagerEventExternalDone | FileManagerEventInternal;
+type FileManagerEvent = FileManagerEventInternal | WorkerInitializedEvent | DirectoryReadEvent;
 
 type FileManagerInput = {
   rootDirectory: string;
@@ -301,10 +267,9 @@ export const fileManagerMachine = setup({
   actions: {
     setError: assign({
       error({ event }) {
-        assertActorDoneEvent(event);
-        if ('error' in event.output && event.output.error instanceof Error) {
-          console.error('[ZenFS] File manager error:', event.output.error);
-          return event.output.error;
+        if ('error' in event && event.error instanceof Error) {
+          console.error('[ZenFS] File manager error:', event.error);
+          return event.error;
         }
         return undefined;
       },
@@ -351,35 +316,29 @@ export const fileManagerMachine = setup({
 
     updateBackendFromInit: assign({
       worker({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.worker;
+        assertEvent(event, 'workerInitialized');
+        return event.worker;
       },
       proxy({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.proxy;
+        assertEvent(event, 'workerInitialized');
+        return event.proxy;
       },
       bridgeDispose({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.bridgeDispose;
+        assertEvent(event, 'workerInitialized');
+        return event.bridgeDispose;
       },
       backendType({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.configuredBackend;
+        assertEvent(event, 'workerInitialized');
+        return event.configuredBackend;
       },
       webAccessNeedsPermission({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
-        return event.output.webAccessNeedsPermission;
+        assertEvent(event, 'workerInitialized');
+        return event.webAccessNeedsPermission;
       },
       fileTree({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'workerInitialized');
+        assertEvent(event, 'workerInitialized');
         const newTree = new Map<string, FileEntry>();
-        for (const entry of event.output.initialEntries) {
+        for (const entry of event.initialEntries) {
           newTree.set(entry.path, entry);
         }
         return newTree;
@@ -397,10 +356,9 @@ export const fileManagerMachine = setup({
 
     replaceFileTreeFromBackgroundRefresh: assign({
       fileTree({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'directoryRead');
+        assertEvent(event, 'directoryRead');
         const newTree = new Map<string, FileEntry>();
-        for (const entry of event.output.entries) {
+        for (const entry of event.entries) {
           newTree.set(entry.path, entry);
         }
         return newTree;
@@ -483,7 +441,7 @@ export const fileManagerMachine = setup({
     emitFileWritten: emit(({ event }) => {
       assertEvent(event, 'fileWritten');
       return {
-        type: 'fileWritten' as const,
+        type: 'fileWritten',
         path: event.path,
         data: event.data,
         source: event.source,
@@ -493,7 +451,7 @@ export const fileManagerMachine = setup({
     emitFileRead: emit(({ event }) => {
       assertEvent(event, 'fileRead');
       return {
-        type: 'fileRead' as const,
+        type: 'fileRead',
         path: event.path,
         data: event.data,
       };
@@ -502,7 +460,7 @@ export const fileManagerMachine = setup({
     emitFileRenamed: emit(({ event }) => {
       assertEvent(event, 'fileRenamed');
       return {
-        type: 'fileRenamed' as const,
+        type: 'fileRenamed',
         oldPath: event.oldPath,
         newPath: event.newPath,
       };
@@ -511,7 +469,7 @@ export const fileManagerMachine = setup({
     emitFileDeleted: emit(({ event }) => {
       assertEvent(event, 'fileDeleted');
       return {
-        type: 'fileDeleted' as const,
+        type: 'fileDeleted',
         path: event.path,
         source: event.source,
       };
@@ -538,16 +496,6 @@ export const fileManagerMachine = setup({
     isRootChanged({ context, event }) {
       assertEvent(event, 'setRoot');
       return event.path !== context.rootDirectory || event.buildId !== context.buildId;
-    },
-
-    isWorkerInitializationFailed({ event }) {
-      assertActorDoneEvent(event);
-      return event.output.type === 'workerInitializationFailed';
-    },
-
-    isDirectoryReadSucceeded({ event }) {
-      assertActorDoneEvent(event);
-      return event.output.type === 'directoryRead';
     },
   },
 }).createMachine({
@@ -593,6 +541,9 @@ export const fileManagerMachine = setup({
           guard: 'isRootChanged',
           actions: ['stopFileWatcher', 'destroyWorker', 'updateRootAndReset'],
         },
+        workerInitialized: {
+          actions: ['updateBackendFromInit'],
+        },
       },
       invoke: {
         id: 'initializeWorkerActor',
@@ -600,17 +551,11 @@ export const fileManagerMachine = setup({
         input({ context }) {
           return { context };
         },
-        onDone: [
-          {
-            target: 'error',
-            guard: 'isWorkerInitializationFailed',
-            actions: ['setError'],
-          },
-          {
-            target: 'ready',
-            actions: ['updateBackendFromInit'],
-          },
-        ],
+        onDone: 'ready',
+        onError: {
+          target: 'error',
+          actions: ['setError'],
+        },
       },
     },
 
@@ -623,6 +568,7 @@ export const fileManagerMachine = setup({
       on: {
         setRoot: {
           target: 'creatingWorker',
+          guard: 'isRootChanged',
           actions: ['stopFileWatcher', 'destroyWorker', 'updateRootAndReset'],
         },
 
@@ -656,9 +602,7 @@ export const fileManagerMachine = setup({
           actions: ['spawnBackgroundRefresh'],
         },
 
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- xstate convention for spawned actor done events
-        'xstate.done.actor.backgroundRefresh': {
-          guard: 'isDirectoryReadSucceeded',
+        directoryRead: {
           actions: ['replaceFileTreeFromBackgroundRefresh'],
         },
       },

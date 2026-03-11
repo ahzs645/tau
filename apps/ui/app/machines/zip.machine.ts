@@ -1,6 +1,7 @@
-import { assign, assertEvent, setup, fromPromise } from 'xstate';
+import { assign, assertEvent, setup } from 'xstate';
 import type { AnyActorRef } from 'xstate';
 import JSZip from 'jszip';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 /**
  * Zip Machine Context
@@ -38,23 +39,22 @@ type ZipEventInternal =
   | { type: 'clear' }
   | { type: 'reset' };
 
-type ZipEvent = ZipEventInternal;
+type ZipEventEmitted = { type: 'zipGenerated'; blob: Blob };
 
-// Define the actors that the machine can invoke
-const generateZipActor = fromPromise<
-  Blob,
+type ZipEvent = ZipEventInternal | ZipEventEmitted;
+
+const generateZipActor = fromSafeAsync<
+  ZipEventEmitted,
   { files: Map<string, { content: Uint8Array<ArrayBuffer>; filename: string }> }
 >(async ({ input }) => {
   const zip = new JSZip();
 
-  // Add all files to the zip
   for (const [, file] of input.files) {
     zip.file(file.filename, file.content);
   }
 
-  // Generate the zip file
   const blob = await zip.generateAsync({ type: 'blob' });
-  return blob;
+  return { type: 'zipGenerated', blob };
 });
 
 const zipActors = {
@@ -127,11 +127,8 @@ export const zipMachine = setup({
     }),
     setZipBlob: assign({
       zipBlob({ event }) {
-        if ('output' in event && event.output instanceof Blob) {
-          return event.output;
-        }
-
-        return undefined;
+        assertEvent(event, 'zipGenerated');
+        return event.blob;
       },
     }),
     clearFiles: assign({
@@ -186,11 +183,15 @@ export const zipMachine = setup({
         }),
         onDone: {
           target: 'ready',
-          actions: 'setZipBlob',
         },
         onError: {
           target: 'error',
           actions: 'setError',
+        },
+      },
+      on: {
+        zipGenerated: {
+          actions: 'setZipBlob',
         },
       },
     },

@@ -10,8 +10,8 @@
 
 import { useChat } from '@ai-sdk/react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { fromPromise } from 'xstate';
 import { createContext, useContext, useEffect, useRef, useMemo, useCallback } from 'react';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { MyUIMessage } from '@taucad/chat';
 import { DefaultChatTransport } from 'ai';
 import { generatePrefixedId } from '@taucad/utils/id';
@@ -73,17 +73,17 @@ export function ChatProvider({
   const draftActorRef = useActorRef(
     draftMachine.provide({
       actors: {
-        persistDraftActor: fromPromise(async ({ input }) => {
+        persistDraftActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { draft: input.draft }, { ignoreKeys: ['draft'] });
         }),
-        persistEditDraftActor: fromPromise(async ({ input }) => {
+        persistEditDraftActor: fromSafeAsync(async ({ input }) => {
           await updateChat(
             input.chatId,
             { messageEdits: { [input.messageId]: input.draft } },
             { ignoreKeys: ['messageEdits'] },
           );
         }),
-        clearMessageEditActor: fromPromise(async ({ input }) => {
+        clearMessageEditActor: fromSafeAsync(async ({ input }) => {
           const loadedChat = await getChat(input.chatId);
           if (loadedChat?.messageEdits?.[input.messageId]) {
             const updatedEdits = { ...loadedChat.messageEdits };
@@ -108,41 +108,32 @@ export function ChatProvider({
   const persistenceActorRef = useActorRef(
     chatPersistenceMachine.provide({
       actors: {
-        loadChatActor: fromPromise(async ({ input }) => {
+        loadChatActor: fromSafeAsync(async ({ input }) => {
           const loadedChat = await getChat(input.chatId);
 
-          // Set messages directly in the actor (no React effect needed)
           if (loadedChat) {
             setMessagesRef.current?.(loadedChat.messages);
             initializeDraftRef.current?.(loadedChat);
 
-            // Check if last message needs AI response (pending user message).
-            // This happens when the user creates a message (i.e. on home page) and the
-            // AI response is not yet generated.
             const lastMessage = loadedChat.messages.at(-1);
             if (lastMessage?.role === 'user' && lastMessage.metadata?.status === 'pending') {
               void regenerateRef.current?.();
 
-              // Strip stale error — we're auto-regenerating so the previous error is
-              // outdated. A fresh error will be set if regeneration fails; cleared on
-              // success via onFinish. This prevents a UI flash of the old error.
-              return { ...loadedChat, error: undefined };
+              return { type: 'chatRetrieved', chat: { ...loadedChat, error: undefined } };
             }
           } else {
-            // New chat - clear messages
             setMessagesRef.current?.([]);
           }
 
-          // Return the chat - the machine's onDone action will extract persistedError
-          return loadedChat;
+          return { type: 'chatRetrieved', chat: loadedChat };
         }),
-        persistMessagesActor: fromPromise(async ({ input }) => {
+        persistMessagesActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { messages: input.messages }, { ignoreKeys: ['messages'] });
         }),
-        persistErrorActor: fromPromise(async ({ input }) => {
+        persistErrorActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { error: input.error }, { ignoreKeys: ['error'] });
         }),
-        clearErrorActor: fromPromise(async ({ input }) => {
+        clearErrorActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { error: undefined }, { ignoreKeys: ['error'] });
         }),
       },
@@ -516,11 +507,14 @@ export function useChatActions(): {
           role: 'user',
           parts: [
             { type: 'text', text: content },
-            ...(imageUrls?.map((url) => ({
-              type: 'file' as const,
-              url,
-              mediaType: 'image/png' as const,
-            })) ?? []),
+            ...(imageUrls?.map(
+              (url) =>
+                ({
+                  type: 'file',
+                  url,
+                  mediaType: 'image/png',
+                }) as const,
+            ) ?? []),
           ],
           metadata: {
             createdAt: Date.now(),

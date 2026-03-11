@@ -1,8 +1,8 @@
-import { assign, assertEvent, setup, fromPromise, enqueueActions } from 'xstate';
-import type { AnyActorRef, ActorRefFrom, OutputFrom, DoneActorEvent } from 'xstate';
+import { assign, assertEvent, setup, enqueueActions } from 'xstate';
+import type { AnyActorRef, ActorRefFrom } from 'xstate';
 import { unzipMachine } from '#machines/unzip.machine.js';
 import type { UnzipMachineActor } from '#machines/unzip.machine.js';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { getGitHubClient } from '#lib/github-api.js';
 
 /**
@@ -141,7 +141,13 @@ type ImportGitHubEmitted =
       url: string;
     };
 
-type ImportGitHubEvent = ImportGitHubEventExternalDone | ImportGitHubEventInternal;
+type ImportGitHubEvent =
+  | ImportGitHubEventInternal
+  | RepoMetadataResult
+  | BranchesResult
+  | FilesResult
+  | DownloadResult
+  | BuildCreatedResult;
 
 // Actor output types
 type DownloadResult = { type: 'downloaded'; blob: Blob };
@@ -150,13 +156,13 @@ type RepoMetadataResult = {
   metadata: {
     avatarUrl: string | undefined;
     description: string | undefined;
-    stars: number | undefined;
-    forks: number | undefined;
-    watchers: number | undefined;
+    stars: number;
+    forks: number;
+    watchers: number;
     license: string | undefined;
-    defaultBranch: string | undefined;
-    isPrivate: boolean | undefined;
-    lastUpdated: string | undefined;
+    defaultBranch: string;
+    isPrivate: boolean;
+    lastUpdated: string;
   };
 };
 type BranchesResult = {
@@ -204,8 +210,7 @@ function buildImportUrl({
   return `${path}${queryString}`;
 }
 
-// Get repository metadata actor
-const getRepoMetadataActor = fromPromise<RepoMetadataResult, { owner: string; repo: string }>(async ({ input }) => {
+const getRepoMetadataActor = fromSafeAsync<RepoMetadataResult, { owner: string; repo: string }>(async ({ input }) => {
   const client = getGitHubClient();
   const metadata = await client.getRepository(input.owner, input.repo);
 
@@ -215,9 +220,8 @@ const getRepoMetadataActor = fromPromise<RepoMetadataResult, { owner: string; re
   };
 });
 
-// Get branches actor
-const getBranchesActor = fromPromise<BranchesResult, { owner: string; repo: string; cursor?: string }>(
-  async ({ input }): Promise<BranchesResult> => {
+const getBranchesActor = fromSafeAsync<BranchesResult, { owner: string; repo: string; cursor?: string }>(
+  async ({ input }) => {
     const client = getGitHubClient();
     const result = await client.listBranches({
       owner: input.owner,
@@ -227,7 +231,7 @@ const getBranchesActor = fromPromise<BranchesResult, { owner: string; repo: stri
     });
 
     return {
-      type: 'branchesRetrieved' as const,
+      type: 'branchesRetrieved',
       branches: result.branches,
       hasMore: result.hasMore,
       endCursor: result.endCursor,
@@ -241,32 +245,22 @@ type FilesResult = {
   files: Array<{ path: string; size: number }>;
 };
 
-const getFilesActor = fromPromise<FilesResult, { owner: string; repo: string; ref: string }>(
-  async ({ input }): Promise<FilesResult> => {
-    const client = getGitHubClient();
-    const files = await client.listFiles(input.owner, input.repo, input.ref);
+const getFilesActor = fromSafeAsync<FilesResult, { owner: string; repo: string; ref: string }>(async ({ input }) => {
+  const client = getGitHubClient();
+  const files = await client.listFiles(input.owner, input.repo, input.ref);
 
-    return {
-      type: 'filesRetrieved' as const,
-      files,
-    };
-  },
-);
+  return {
+    type: 'filesRetrieved',
+    files,
+  };
+});
 
-// Download actor
-const downloadZipActor = fromPromise<
+const downloadZipActor = fromSafeAsync<
   DownloadResult,
-  {
-    owner: string;
-    repo: string;
-    ref: string;
-    onProgress: (loaded: number, total: number) => void;
-  }
+  { owner: string; repo: string; ref: string; onProgress: (loaded: number, total: number) => void }
 >(async ({ input, signal }) => {
   const client = getGitHubClient();
 
-  // Download the archive and get size from the GET response headers
-  // Pass the signal to abort the fetch request if canceled
   const { stream, size: contentLength } = await client.downloadArchiveWithSize({
     owner: input.owner,
     repo: input.repo,
@@ -274,10 +268,8 @@ const downloadZipActor = fromPromise<
     signal,
   });
 
-  // Use size from Content-Length header (available immediately when download starts)
   const totalBytes = contentLength ?? 0;
 
-  // Send initial progress with total size
   input.onProgress(0, totalBytes);
 
   const reader = stream.getReader();
@@ -285,13 +277,11 @@ const downloadZipActor = fromPromise<
   const chunks: Array<Uint8Array<ArrayBuffer>> = [];
   let receivedLength = 0;
   let lastProgressUpdate = 0;
-  const progressUpdateInterval = 100; // Update every 100ms
+  const progressUpdateInterval = 100;
 
   try {
-    // Read the stream in chunks
     // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- standard stream reading pattern
     while (true) {
-      // Check if aborted before reading next chunk
       if (signal.aborted) {
         // oxlint-disable-next-line no-await-in-loop -- need to cancel stream before throwing
         await reader.cancel();
@@ -308,7 +298,6 @@ const downloadZipActor = fromPromise<
       chunks.push(value);
       receivedLength += value.length;
 
-      // Throttle progress updates to avoid overwhelming the UI
       const now = Date.now();
       if (now - lastProgressUpdate >= progressUpdateInterval || lastProgressUpdate === 0) {
         input.onProgress(receivedLength, totalBytes);
@@ -316,10 +305,8 @@ const downloadZipActor = fromPromise<
       }
     }
 
-    // Always send final progress update with actual total
     input.onProgress(receivedLength, totalBytes);
 
-    // Combine chunks into a single Uint8Array
     const zipData = new Uint8Array(receivedLength);
     let position = 0;
     for (const chunk of chunks) {
@@ -332,14 +319,14 @@ const downloadZipActor = fromPromise<
       blob: new Blob([zipData], { type: 'application/zip' }),
     };
   } finally {
-    // Always release the reader lock
     reader.releaseLock();
   }
 });
 
-// This actor should be provided via the `provide` mechanism in the route
-const createBuildActor = fromPromise<
-  { type: 'buildCreated'; buildId: string },
+type BuildCreatedResult = { type: 'buildCreated'; buildId: string };
+
+const createBuildActor = fromSafeAsync<
+  BuildCreatedResult,
   {
     owner: string;
     repo: string;
@@ -358,12 +345,6 @@ const importGitHubActors = {
   downloadZipActor,
   createBuildActor,
 } as const;
-
-type ImportGitHubActorNames = keyof typeof importGitHubActors;
-
-// Define the events that actors can emit
-export type ImportGitHubEventExternal = OutputFrom<(typeof importGitHubActors)[ImportGitHubActorNames]>;
-type ImportGitHubEventExternalDone = DoneActorEvent<ImportGitHubEventExternal, ImportGitHubActorNames>;
 
 /**
  * Import GitHub Machine
@@ -507,24 +488,16 @@ export const importGitHubMachine = setup({
     }),
     setRepoMetadata: assign({
       repoMetadata({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'metadataRetrieved');
-        return event.output.metadata;
+        assertEvent(event, 'metadataRetrieved');
+        return event.metadata;
       },
-      selectedBranch({ event, context }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'metadataRetrieved');
-        // Use default branch from metadata, or keep current selection
-        return event.output.metadata.defaultBranch ?? context.selectedBranch;
+      selectedBranch({ event }) {
+        assertEvent(event, 'metadataRetrieved');
+        return event.metadata.defaultBranch;
       },
       ref({ event, context }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'metadataRetrieved');
-        // If ref is 'main' and metadata has a different default branch, use it
-        // This handles cases where repos use 'master' or other default branches
-        return context.ref === 'main' && event.output.metadata.defaultBranch
-          ? event.output.metadata.defaultBranch
-          : context.ref;
+        assertEvent(event, 'metadataRetrieved');
+        return context.ref === 'main' && event.metadata.defaultBranch ? event.metadata.defaultBranch : context.ref;
       },
       fetchErrors({ context }) {
         return {
@@ -536,39 +509,32 @@ export const importGitHubMachine = setup({
     }),
     setBranches: assign({
       branches({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'branchesRetrieved');
-        return event.output.branches;
+        assertEvent(event, 'branchesRetrieved');
+        return event.branches;
       },
       hasMoreBranches({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'branchesRetrieved');
-        return event.output.hasMore;
+        assertEvent(event, 'branchesRetrieved');
+        return event.hasMore;
       },
       branchesCursor({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'branchesRetrieved');
-        return event.output.endCursor;
+        assertEvent(event, 'branchesRetrieved');
+        return event.endCursor;
       },
     }),
     appendBranches: assign({
       branches({ event, context }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'branchesRetrieved');
-        // Filter out branches that already exist to prevent duplicates
+        assertEvent(event, 'branchesRetrieved');
         const existingNames = new Set(context.branches.map((b) => b.name));
-        const newBranches = event.output.branches.filter((b) => !existingNames.has(b.name));
+        const newBranches = event.branches.filter((b) => !existingNames.has(b.name));
         return [...context.branches, ...newBranches];
       },
       hasMoreBranches({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'branchesRetrieved');
-        return event.output.hasMore;
+        assertEvent(event, 'branchesRetrieved');
+        return event.hasMore;
       },
       branchesCursor({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'branchesRetrieved');
-        return event.output.endCursor;
+        assertEvent(event, 'branchesRetrieved');
+        return event.endCursor;
       },
       isLoadingMoreBranches: false,
     }),
@@ -597,20 +563,10 @@ export const importGitHubMachine = setup({
         return { processed: event.processed, total: event.total };
       },
     }),
-    setFiles: assign({
-      files({ event }) {
-        if ('output' in event && event.output instanceof Map) {
-          return event.output;
-        }
-
-        return new Map();
-      },
-    }),
     setBuildId: assign({
       buildId({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'buildCreated');
-        return event.output.buildId;
+        assertEvent(event, 'buildCreated');
+        return event.buildId;
       },
     }),
     initializeSelectedMainFile: assign({
@@ -636,12 +592,11 @@ export const importGitHubMachine = setup({
       },
     }),
     sendExtractToUnzip: enqueueActions(({ enqueue, context, event }) => {
-      assertActorDoneEvent(event);
-      assertEvent(event.output, 'downloaded');
+      assertEvent(event, 'downloaded');
       if (context.unzipRef) {
         enqueue.sendTo(context.unzipRef, {
           type: 'extract',
-          zipBlob: event.output.blob,
+          zipBlob: event.blob,
         });
       }
     }),
@@ -663,9 +618,8 @@ export const importGitHubMachine = setup({
     }),
     setRepoFiles: assign({
       repoFiles({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'filesRetrieved');
-        return event.output.files;
+        assertEvent(event, 'filesRetrieved');
+        return event.files;
       },
       isLoadingFiles: false,
     }),
@@ -726,7 +680,7 @@ export const importGitHubMachine = setup({
         selectedBranch: context.selectedBranch,
         selectedMainFile: context.selectedMainFile,
       });
-      enqueue.emit({ type: 'urlReplaced' as const, url });
+      enqueue.emit({ type: 'urlReplaced', url });
     }),
     // Emit URL push for meaningful navigation points (adds to history)
     emitUrlPushed: enqueueActions(({ enqueue, context }) => {
@@ -736,7 +690,7 @@ export const importGitHubMachine = setup({
         selectedBranch: context.selectedBranch,
         selectedMainFile: context.selectedMainFile,
       });
-      enqueue.emit({ type: 'urlPushed' as const, url });
+      enqueue.emit({ type: 'urlPushed', url });
     }),
     // Emit URL based on whether we're clearing or setting a full repo URL
     // Clearing (empty URL) → push to history
@@ -751,10 +705,10 @@ export const importGitHubMachine = setup({
       });
       // If owner/repo are empty, this is a clear action - push to history
       if (!context.owner || !context.repo) {
-        enqueue.emit({ type: 'urlPushed' as const, url });
+        enqueue.emit({ type: 'urlPushed', url });
       } else {
         // Valid repo - always replace during typing; we'll push on debounce completion
-        enqueue.emit({ type: 'urlReplaced' as const, url });
+        enqueue.emit({ type: 'urlReplaced', url });
       }
     }),
   },
@@ -823,7 +777,7 @@ export const importGitHubMachine = setup({
     // Initialize selectedMainFile from input if provided (for URL loading with ?main=)
     // Empty string means no file selected, so treat as undefined
     // oxlint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentionally treat '' as falsy
-    selectedMainFile: input.mainFile || undefined,
+    selectedMainFile: input.mainFile ?? undefined,
     repoMetadata: undefined,
     branches: [],
     selectedBranch: input.ref ?? 'main',
@@ -898,7 +852,6 @@ export const importGitHubMachine = setup({
         }),
         onDone: {
           target: 'enteringDetails',
-          actions: 'appendBranches',
         },
         onError: {
           target: 'enteringDetails',
@@ -908,13 +861,15 @@ export const importGitHubMachine = setup({
         },
       },
       on: {
+        branchesRetrieved: {
+          actions: 'appendBranches',
+        },
         updateRepoUrl: {
           actions: ['clearError', 'updateRepoUrl', 'parseRepoUrl', 'emitUrlChange'],
           target: 'checkingRepo',
           reenter: true,
         },
         selectBranch: {
-          // When branch changes, re-fetch files for the new branch
           actions: ['setSelectedBranch', 'emitUrlReplaced'],
           target: 'fetchingFiles',
         },
@@ -980,7 +935,6 @@ export const importGitHubMachine = setup({
                 }),
                 onDone: {
                   target: 'success',
-                  actions: 'setRepoMetadata',
                 },
                 onError: {
                   target: 'error',
@@ -991,6 +945,11 @@ export const importGitHubMachine = setup({
                       error: ({ event }) => toMetadataFetchError(event.error),
                     }),
                   ],
+                },
+              },
+              on: {
+                metadataRetrieved: {
+                  actions: 'setRepoMetadata',
                 },
               },
             },
@@ -1016,7 +975,6 @@ export const importGitHubMachine = setup({
                 }),
                 onDone: {
                   target: 'success',
-                  actions: 'setBranches',
                 },
                 onError: {
                   target: 'error',
@@ -1027,6 +985,11 @@ export const importGitHubMachine = setup({
                       hasMoreBranches: false,
                     }),
                   ],
+                },
+              },
+              on: {
+                branchesRetrieved: {
+                  actions: 'setBranches',
                 },
               },
             },
@@ -1053,7 +1016,6 @@ export const importGitHubMachine = setup({
                 }),
                 onDone: {
                   target: 'success',
-                  actions: 'setRepoFiles',
                 },
                 onError: {
                   target: 'error',
@@ -1063,6 +1025,11 @@ export const importGitHubMachine = setup({
                       repoFiles: [],
                     }),
                   ],
+                },
+              },
+              on: {
+                filesRetrieved: {
+                  actions: 'setRepoFiles',
                 },
               },
             },
@@ -1105,7 +1072,6 @@ export const importGitHubMachine = setup({
         }),
         onDone: {
           target: 'enteringDetails',
-          actions: 'setRepoFiles',
         },
         onError: {
           target: 'enteringDetails',
@@ -1118,13 +1084,15 @@ export const importGitHubMachine = setup({
         },
       },
       on: {
+        filesRetrieved: {
+          actions: 'setRepoFiles',
+        },
         updateRepoUrl: {
           actions: ['updateRepoUrl', 'parseRepoUrl', 'emitUrlChange'],
           target: 'checkingRepo',
           reenter: true,
         },
         selectBranch: {
-          // If branch changes while fetching files, restart with new branch
           actions: ['setSelectedBranch', 'emitUrlReplaced'],
           target: 'fetchingFiles',
           reenter: true,
@@ -1151,7 +1119,6 @@ export const importGitHubMachine = setup({
         }),
         onDone: {
           target: 'extracting',
-          actions: 'sendExtractToUnzip',
         },
         onError: {
           target: 'error',
@@ -1159,6 +1126,9 @@ export const importGitHubMachine = setup({
         },
       },
       on: {
+        downloaded: {
+          actions: 'sendExtractToUnzip',
+        },
         updateDownloadProgress: {
           actions: 'applyDownloadProgressImmediately',
         },
@@ -1272,11 +1242,15 @@ export const importGitHubMachine = setup({
         }),
         onDone: {
           target: 'success',
-          actions: 'setBuildId',
         },
         onError: {
           target: 'error',
           actions: 'setError',
+        },
+      },
+      on: {
+        buildCreated: {
+          actions: 'setBuildId',
         },
       },
     },

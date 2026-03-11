@@ -1,5 +1,6 @@
-import { assign, assertEvent, setup, fromPromise, enqueueActions, emit } from 'xstate';
+import { assign, assertEvent, setup, enqueueActions, emit } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { PartialDeep } from 'type-fest';
 import type { SerializedDockview } from 'dockview-react';
 import type {
@@ -85,7 +86,8 @@ type EditorStateEvent =
   | { type: 'updateViewSettings'; viewId: string; settings: Partial<GraphicsViewSettings> }
   | { type: 'removeViewSettings'; viewId: string }
   // Flush pending state immediately (bypasses debounce, used on tab close)
-  | { type: 'flushNow' };
+  | { type: 'flushNow' }
+  | { type: 'editorStateRetrieved'; state: EditorState | undefined };
 
 /**
  * Editor state Machine Emitted Events
@@ -96,11 +98,14 @@ type EditorStateEmitted =
   | { type: 'fileRevealRequested'; path: string };
 
 // Actors to be provided by the consumer
-const loadEditorStateActor = fromPromise<EditorState | undefined, { buildId: string }>(async () => {
+const loadEditorStateActor = fromSafeAsync<
+  { type: 'editorStateRetrieved'; state: EditorState | undefined },
+  { buildId: string }
+>(async () => {
   throw new Error('Not implemented. Please supply via provide.');
 });
 
-const saveEditorStateActor = fromPromise<void, { editorState: EditorStateInput }>(async () => {
+const saveEditorStateActor = fromSafeAsync<void, { editorState: EditorStateInput }>(async () => {
   throw new Error('Not implemented. Please supply via provide.');
 });
 
@@ -149,8 +154,8 @@ export const editorMachine = setup({
     clearError: assign({ error: undefined }),
 
     setLoadedState: enqueueActions(({ enqueue, event }) => {
-      // Extract loaded state from actor done event
-      const loadedState = (event as unknown as { output: EditorState | undefined }).output;
+      assertEvent(event, 'editorStateRetrieved');
+      const loadedState = event.state;
 
       // Merge loaded panelState with defaults to handle missing fields from old data
       const mergedPanelState = loadedState?.panelState
@@ -216,7 +221,7 @@ export const editorMachine = setup({
     }),
 
     emitEditorStateLoadedEmpty: emit(() => ({
-      type: 'editorStateLoaded' as const,
+      type: 'editorStateLoaded',
       editorState: undefined,
     })),
 
@@ -231,7 +236,7 @@ export const editorMachine = setup({
         // File already open and active - still emit to allow line navigation
         if (context.activeFilePath === event.path) {
           enqueue.emit({
-            type: 'fileOpened' as const,
+            type: 'fileOpened',
             path: event.path,
             lineNumber: event.lineNumber,
             column: event.column,
@@ -245,7 +250,7 @@ export const editorMachine = setup({
           activeFilePath: event.path,
         });
         enqueue.emit({
-          type: 'fileOpened' as const,
+          type: 'fileOpened',
           path: event.path,
           lineNumber: event.lineNumber,
           column: event.column,
@@ -266,7 +271,7 @@ export const editorMachine = setup({
       });
 
       enqueue.emit({
-        type: 'fileOpened' as const,
+        type: 'fileOpened',
         path: event.path,
         lineNumber: event.lineNumber,
         column: event.column,
@@ -287,7 +292,7 @@ export const editorMachine = setup({
         // Emit fileOpened for the new active file (if any)
         if (newActiveFilePath) {
           enqueue.emit({
-            type: 'fileOpened' as const,
+            type: 'fileOpened',
             path: newActiveFilePath,
           });
         }
@@ -313,7 +318,7 @@ export const editorMachine = setup({
 
       // Emit fileOpened for the new active file
       enqueue.emit({
-        type: 'fileOpened' as const,
+        type: 'fileOpened',
         path: event.path,
       });
     }),
@@ -322,7 +327,7 @@ export const editorMachine = setup({
       assertEvent(event, 'revealFileInTree');
 
       enqueue.emit({
-        type: 'fileRevealRequested' as const,
+        type: 'fileRevealRequested',
         path: event.path,
       });
     }),
@@ -383,7 +388,7 @@ export const editorMachine = setup({
         (context.activeFilePath === oldPath || context.activeFilePath?.startsWith(`${oldPath}/`))
       ) {
         enqueue.emit({
-          type: 'fileOpened' as const,
+          type: 'fileOpened',
           path: newActiveFilePath,
         });
       }
@@ -510,14 +515,16 @@ export const editorMachine = setup({
         input: ({ context }) => ({ buildId: context.buildId }),
         onDone: {
           target: 'ready',
-          actions: 'setLoadedState',
         },
         onError: {
-          target: 'ready', // Editor state missing is fine, just use defaults
+          target: 'ready',
           actions: ['clearLoading', 'emitEditorStateLoadedEmpty'],
         },
       },
       on: {
+        editorStateRetrieved: {
+          actions: 'setLoadedState',
+        },
         reload: {
           target: 'loading',
           actions: ['updateBuildId', 'setLoading'],

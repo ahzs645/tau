@@ -6,7 +6,8 @@
  * following the pattern from use-build.tsx.
  */
 
-import { setup, assign, fromPromise } from 'xstate';
+import { setup, assign } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 
@@ -99,15 +100,17 @@ type DraftMachineEvents =
   | { type: 'flushNow' };
 
 // Placeholder actors - actual implementations provided via machine.provide()
-const persistDraftActor = fromPromise<void, { chatId: string; draft: MyUIMessage }>(async () => {
+const persistDraftActor = fromSafeAsync<void, { chatId: string; draft: MyUIMessage }>(async () => {
   throw new Error('persistDraftActor not provided');
 });
 
-const persistEditDraftActor = fromPromise<void, { chatId: string; messageId: string; draft: MyUIMessage }>(async () => {
-  throw new Error('persistEditDraftActor not provided');
-});
+const persistEditDraftActor = fromSafeAsync<void, { chatId: string; messageId: string; draft: MyUIMessage }>(
+  async () => {
+    throw new Error('persistEditDraftActor not provided');
+  },
+);
 
-const clearMessageEditActor = fromPromise<void, { chatId: string; messageId: string }>(async () => {
+const clearMessageEditActor = fromSafeAsync<void, { chatId: string; messageId: string }>(async () => {
   throw new Error('clearMessageEditActor not provided');
 });
 

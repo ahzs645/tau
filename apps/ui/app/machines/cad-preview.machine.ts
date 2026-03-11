@@ -1,6 +1,7 @@
-import { assign, setup, fromPromise, enqueueActions } from 'xstate';
+import { assign, setup, enqueueActions } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { GeometryFile } from '@taucad/types';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 
 /**
@@ -37,7 +38,7 @@ type CadPreviewEvent =
  * Default prepareFiles actor -- throws to enforce injection via `.provide()`.
  * Follows the same pattern as buildMachine's `loadBuildActor`.
  */
-const prepareFilesActor = fromPromise<void, PrepareFilesInput>(async () => {
+const prepareFilesActor = fromSafeAsync<void, PrepareFilesInput>(async () => {
   throw new Error('Not implemented. Supply via cadPreviewMachine.provide({ actors: { prepareFiles } }).');
 });
 

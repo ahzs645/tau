@@ -3,7 +3,7 @@ import type { MetaDescriptor } from 'react-router';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { AlertCircle, X, XCircle } from 'lucide-react';
-import { fromPromise } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { Route } from './+types/route.js';
 import type { Handle } from '#types/matches.types.js';
 import { importGitHubMachine } from '#machines/import-github.machine.js';
@@ -95,7 +95,7 @@ export default function ImportRoute(): React.JSX.Element {
   const gitHubActorRef = useActorRef(
     importGitHubMachine.provide({
       actors: {
-        createBuildActor: fromPromise(async ({ input }) => {
+        createBuildActor: fromSafeAsync(async ({ input }) => {
           const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
           for (const [path, file] of input.files) {
             buildFiles[path] = { content: file.content };
@@ -140,7 +140,7 @@ export default function ImportRoute(): React.JSX.Element {
   const diskActorRef = useActorRef(
     importDiskMachine.provide({
       actors: {
-        createBuildActor: fromPromise(async ({ input }) => {
+        createBuildActor: fromSafeAsync(async ({ input }) => {
           const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
           for (const [path, file] of input.files) {
             buildFiles[path] = { content: file.content };

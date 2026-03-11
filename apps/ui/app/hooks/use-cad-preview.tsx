@@ -1,14 +1,13 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { fromPromise } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Geometry } from '@taucad/types';
 import type { KernelClientOptions } from '@taucad/kernels';
 import type { JSONSchema7 } from 'json-schema';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
-import type { PrepareFilesInput } from '#machines/cad-preview.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { joinPath } from '@taucad/utils/path';
@@ -135,7 +134,7 @@ export function CadPreviewProvider({
   const previewRef = useActorRef(
     cadPreviewMachine.provide({
       actors: {
-        prepareFiles: fromPromise<void, PrepareFilesInput>(async ({ input }) => {
+        prepareFiles: fromSafeAsync(async ({ input }) => {
           if (input.files) {
             const firstFilePath = Object.keys(input.files)[0];
             const alreadyExists = firstFilePath && (await exists(joinPath('/builds', input.buildId, firstFilePath)));
@@ -143,7 +142,9 @@ export function CadPreviewProvider({
             if (!alreadyExists) {
               const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
               for (const [path, file] of Object.entries(input.files)) {
-                buildFiles[joinPath('/builds', input.buildId, path)] = file;
+                buildFiles[joinPath('/builds', input.buildId, path)] = {
+                  content: new Uint8Array(file.content),
+                };
               }
 
               await writeFiles(buildFiles);
@@ -181,7 +182,7 @@ export function CadPreviewProvider({
   // Initialization error from the preview machine
   const initError = useSelector(previewRef, (s) => s.context.initError);
 
-  const status = deriveStatus(typeof cadStateValue === 'string' ? cadStateValue : 'idle');
+  const status = initError ? 'error' : deriveStatus(typeof cadStateValue === 'string' ? cadStateValue : 'idle');
 
   const error = useMemo(() => {
     if (initError) {

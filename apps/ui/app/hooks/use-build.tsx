@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useMemo, useCallback, useEffect } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { fromPromise, waitFor } from 'xstate';
+import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Remote } from 'comlink';
 import { useQueryClient } from '@tanstack/react-query';
 import type { KernelClientOptions } from '@taucad/kernels';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import type { ObjectStoreWorker } from '#hooks/object-store.worker.js';
 import { buildMachine } from '#machines/build.machine.js';
@@ -69,7 +70,7 @@ export function BuildProvider({
   const actorRef = useActorRef(
     buildMachine.provide({
       actors: {
-        loadBuildActor: fromPromise(async ({ input }) => {
+        loadBuildActor: fromSafeAsync(async ({ input }) => {
           const build = await buildManager.getBuild(input.buildId);
           if (!build) {
             throw new Error(`Build not found: ${input.buildId}`);
@@ -78,9 +79,9 @@ export function BuildProvider({
           // Ensure the file manager is ready before loading the build
           await waitFor(fileManager.fileManagerRef, (state) => state.matches('ready'));
 
-          return build;
+          return { type: 'buildRetrieved', build };
         }),
-        writeBuildActor: fromPromise(async ({ input }) => {
+        writeBuildActor: fromSafeAsync(async ({ input }) => {
           await buildManager.updateBuild(input.build.id, input.build);
         }),
       },
@@ -118,11 +119,12 @@ export function BuildProvider({
   const editorRef = useActorRef(
     editorMachine.provide({
       actors: {
-        loadEditorStateActor: fromPromise(async ({ input }) => {
+        loadEditorStateActor: fromSafeAsync(async ({ input }) => {
           const worker = await getReadiedWorker();
-          return worker.getEditorState(input.buildId);
+          const state = await worker.getEditorState(input.buildId);
+          return { type: 'editorStateRetrieved', state };
         }),
-        saveEditorStateActor: fromPromise(async ({ input }) => {
+        saveEditorStateActor: fromSafeAsync(async ({ input }) => {
           const worker = await getReadiedWorker();
           await worker.updateEditorState(input.editorState);
         }),

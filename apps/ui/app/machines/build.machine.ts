@@ -1,12 +1,12 @@
-import { assign, assertEvent, setup, fromPromise, emit, enqueueActions } from 'xstate';
-import type { ActorRefFrom, OutputFrom, DoneActorEvent, AnyStateMachine } from 'xstate';
+import { assign, assertEvent, setup, emit, enqueueActions } from 'xstate';
+import type { ActorRefFrom, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
 import type { Build } from '@taucad/types';
 import type { KernelClientOptions } from '@taucad/kernels';
 import { isBrowser } from '#constants/browser.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import { gitMachine } from '#machines/git.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
@@ -45,11 +45,11 @@ type BuildInput = {
 };
 
 // Define the actors that the machine can invoke
-const loadBuildActor = fromPromise<Build, { buildId: string }>(async () => {
+const loadBuildActor = fromSafeAsync<{ type: 'buildRetrieved'; build: Build }, { buildId: string }>(async () => {
   throw new Error('Not implemented. Please supply the `provide.actors.loadBuildActor` option to the build machine.');
 });
 
-const writeBuildActor = fromPromise<void, { build: Build }>(async () => {
+const writeBuildActor = fromSafeAsync<void, { build: Build }>(async () => {
   throw new Error('Not implemented. Please supply the `provide.actors.writeBuildActor` option to the build machine.');
 });
 
@@ -67,8 +67,6 @@ const buildActors = {
   cad: cadMachine as AnyStateMachine,
   logs: logMachine,
 } as const;
-
-type BuildActorNames = keyof typeof buildActors;
 
 /**
  * Build Machine Events
@@ -99,10 +97,7 @@ type BuildEventInternal =
   // Flush pending state immediately (bypasses debounce, used on tab close)
   | { type: 'flushNow' };
 
-export type BuildEventExternal = OutputFrom<(typeof buildActors)[BuildActorNames]>;
-type BuildEventExternalDone = DoneActorEvent<BuildEventExternal, BuildActorNames>;
-
-type BuildEvent = BuildEventExternalDone | BuildEventInternal;
+type BuildEvent = BuildEventInternal | { type: 'buildRetrieved'; build: Build };
 
 /**
  * Build Machine Emitted Events
@@ -167,10 +162,8 @@ export const buildMachine = setup({
     }),
     setBuild: assign({
       build({ event }) {
-        assertActorDoneEvent(event);
-        const build = event.output as Build;
-
-        return build;
+        assertEvent(event, 'buildRetrieved');
+        return event.build;
       },
       isLoading: false,
     }),
@@ -527,19 +520,16 @@ export const buildMachine = setup({
       });
     }),
     emitBuildLoaded: emit(({ event }) => {
-      assertActorDoneEvent(event);
+      assertEvent(event, 'buildRetrieved');
       return {
-        type: 'buildLoaded' as const,
-        build: event.output as Build,
+        type: 'buildLoaded',
+        build: event.build,
       };
     }),
-    emitBuildUpdated: emit(({ event }) => {
-      assertActorDoneEvent(event);
-      return {
-        type: 'buildUpdated' as const,
-        build: event.output as Build,
-      };
-    }),
+    emitBuildUpdated: emit(({ context }) => ({
+      type: 'buildUpdated',
+      build: context.build!,
+    })),
   },
   guards: {
     isNotBrowser() {
@@ -643,13 +633,16 @@ export const buildMachine = setup({
         destroyViewGraphics: {
           actions: 'destroyViewGraphics',
         },
+        buildRetrieved: {
+          actions: ['setBuild', 'clearLoading', 'emitBuildLoaded'],
+        },
       },
       invoke: {
         src: 'loadBuildActor',
         input: ({ context }) => ({ buildId: context.buildId }),
         onDone: {
           target: 'ready',
-          actions: ['setBuild', 'clearLoading', 'initializeKernelIfNeeded', 'emitBuildLoaded'],
+          actions: ['initializeKernelIfNeeded'],
         },
         onError: {
           target: 'error',

@@ -1,9 +1,9 @@
-import { assign, assertEvent, setup, fromPromise, emit, fromCallback, waitFor } from 'xstate';
-import type { OutputFrom, DoneActorEvent, AnyActorRef, ActorRefFrom } from 'xstate';
+import { assign, assertEvent, setup, emit, fromCallback, waitFor } from 'xstate';
+import type { AnyActorRef, ActorRefFrom } from 'xstate';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/web';
 import type { FileStat } from '@taucad/types';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { gitAttributesTemplate } from '#constants/gitattributes-template.js';
 import { joinPath } from '@taucad/utils/path';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
@@ -155,11 +155,11 @@ type GitInput = {
   fileManagerRef: ActorRefFrom<FileManagerMachine>;
 };
 
-type GitActorInput = {
+export type GitActorInput = {
   fileManagerRef: ActorRefFrom<FileManagerMachine>;
 };
 
-const initGitActor = fromPromise<{ buildId: string }, GitActorInput & { buildId: string; repository: GitRepository }>(
+const initGitActor = fromSafeAsync<void, GitActorInput & { buildId: string; repository: GitRepository }>(
   async ({ input }) => {
     const fs = await getGitFs(input.fileManagerRef);
     const directory = getBuildDirectory(input.buildId);
@@ -173,27 +173,23 @@ const initGitActor = fromPromise<{ buildId: string }, GitActorInput & { buildId:
       url: input.repository.url,
     });
 
-    // Create .gitattributes file for binary file handling
     const gitAttributesPath = joinPath(directory, '.gitattributes');
     try {
       await fs.promises.stat(gitAttributesPath);
     } catch {
       await fs.promises.writeFile(gitAttributesPath, gitAttributesTemplate, 'utf8');
     }
-
-    return { buildId: input.buildId };
   },
 );
 
-const cloneRepositoryActor = fromPromise<
-  { buildId: string },
-  GitActorInput & {
-    buildId: string;
-    repository: GitRepository;
-    accessToken: string;
-    username: string;
-  }
->(async ({ input }) => {
+type CloneRepositoryInput = GitActorInput & {
+  buildId: string;
+  repository: GitRepository;
+  accessToken: string;
+  username: string;
+};
+
+const cloneRepositoryActor = fromSafeAsync<void, CloneRepositoryInput>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
   const directory = getBuildDirectory(input.buildId);
 
@@ -210,11 +206,11 @@ const cloneRepositoryActor = fromPromise<
       password: input.accessToken,
     }),
   });
-
-  return { buildId: input.buildId };
 });
 
-const stageFileActor = fromPromise<string, GitActorInput & { buildId: string; path: string }>(async ({ input }) => {
+type StageInput = GitActorInput & { buildId: string; path: string };
+
+const stageFileActor = fromSafeAsync<{ type: 'fileStaged'; path: string }, StageInput>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
   const directory = getBuildDirectory(input.buildId);
 
@@ -224,10 +220,10 @@ const stageFileActor = fromPromise<string, GitActorInput & { buildId: string; pa
     filepath: input.path,
   });
 
-  return input.path;
+  return { type: 'fileStaged', path: input.path };
 });
 
-const unstageFileActor = fromPromise<string, GitActorInput & { buildId: string; path: string }>(async ({ input }) => {
+const unstageFileActor = fromSafeAsync<{ type: 'fileUnstaged'; path: string }, StageInput>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
   const directory = getBuildDirectory(input.buildId);
 
@@ -237,18 +233,17 @@ const unstageFileActor = fromPromise<string, GitActorInput & { buildId: string; 
     filepath: input.path,
   });
 
-  return input.path;
+  return { type: 'fileUnstaged', path: input.path };
 });
 
-const commitChangesActor = fromPromise<
-  string,
-  GitActorInput & {
-    buildId: string;
-    message: string;
-    username: string;
-    email: string;
-  }
->(async ({ input }) => {
+type CommitInput = GitActorInput & {
+  buildId: string;
+  message: string;
+  username: string;
+  email: string;
+};
+
+const commitChangesActor = fromSafeAsync<{ type: 'commitCreated'; sha: string }, CommitInput>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
   const directory = getBuildDirectory(input.buildId);
 
@@ -262,18 +257,10 @@ const commitChangesActor = fromPromise<
     },
   });
 
-  return sha;
+  return { type: 'commitCreated', sha };
 });
 
-const pushChangesActor = fromPromise<
-  boolean,
-  GitActorInput & {
-    buildId: string;
-    repository: GitRepository;
-    accessToken: string;
-    username: string;
-  }
->(async ({ input }) => {
+const pushChangesActor = fromSafeAsync<void, CloneRepositoryInput>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
   const directory = getBuildDirectory(input.buildId);
 
@@ -288,19 +275,9 @@ const pushChangesActor = fromPromise<
       password: input.accessToken,
     }),
   });
-
-  return true;
 });
 
-const pullChangesActor = fromPromise<
-  boolean,
-  GitActorInput & {
-    buildId: string;
-    repository: GitRepository;
-    accessToken: string;
-    username: string;
-  }
->(async ({ input }) => {
+const pullChangesActor = fromSafeAsync<void, CloneRepositoryInput>(async ({ input }) => {
   const fs = await getGitFs(input.fileManagerRef);
   const directory = getBuildDirectory(input.buildId);
 
@@ -318,59 +295,55 @@ const pullChangesActor = fromPromise<
       password: input.accessToken,
     }),
   });
-
-  return true;
 });
 
 // oxlint-disable-next-line complexity -- TODO: address
-const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, GitActorInput & { buildId: string }>(
-  async ({ input }) => {
-    const fs = await getGitFs(input.fileManagerRef);
-    const directory = getBuildDirectory(input.buildId);
+const refreshGitStatusActor = fromSafeAsync<
+  { type: 'statusRefreshed'; fileStatuses: Map<string, GitFileStatus> },
+  GitActorInput & { buildId: string }
+>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getBuildDirectory(input.buildId);
 
-    try {
-      // Get list of all files in the working directory
-      const statusMatrix = await git.statusMatrix({ fs, dir: directory });
-      const fileStatuses = new Map<string, GitFileStatus>();
+  try {
+    const statusMatrix = await git.statusMatrix({ fs, dir: directory });
+    const fileStatuses = new Map<string, GitFileStatus>();
 
-      for (const [filepath, headStatus, workdirStatus, stageStatus] of statusMatrix) {
-        let status: 'clean' | 'modified' | 'added' | 'deleted' | 'untracked' = 'clean';
-        let staged = false;
+    for (const [filepath, headStatus, workdirStatus, stageStatus] of statusMatrix) {
+      let status: 'clean' | 'modified' | 'added' | 'deleted' | 'untracked' = 'clean';
+      let staged = false;
 
-        // Determine file status based on statusMatrix values
-        if (headStatus === 0 && workdirStatus === 2 && stageStatus === 0) {
-          status = 'untracked';
-        } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
-          status = 'clean';
-        } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 1) {
+      if (headStatus === 0 && workdirStatus === 2 && stageStatus === 0) {
+        status = 'untracked';
+      } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
+        status = 'clean';
+      } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 1) {
+        status = 'modified';
+        staged = false;
+      } else if (headStatus === 0 && workdirStatus === 2 && stageStatus === 2) {
+        status = 'added';
+        staged = true;
+      } else if (headStatus === 1 && workdirStatus === 0) {
+        status = 'deleted';
+      } else if (stageStatus === 2) {
+        staged = true;
+        if (headStatus === 1 && workdirStatus === 2) {
           status = 'modified';
-          staged = false;
-        } else if (headStatus === 0 && workdirStatus === 2 && stageStatus === 2) {
-          status = 'added';
-          staged = true;
-        } else if (headStatus === 1 && workdirStatus === 0) {
-          status = 'deleted';
-        } else if (stageStatus === 2) {
-          staged = true;
-          if (headStatus === 1 && workdirStatus === 2) {
-            status = 'modified';
-          }
         }
-
-        fileStatuses.set(filepath, {
-          path: filepath,
-          status,
-          staged,
-        });
       }
 
-      return fileStatuses;
-    } catch {
-      // Git not initialized or other error
-      return new Map<string, GitFileStatus>();
+      fileStatuses.set(filepath, {
+        path: filepath,
+        status,
+        staged,
+      });
     }
-  },
-);
+
+    return { type: 'statusRefreshed', fileStatuses };
+  } catch {
+    return { type: 'statusRefreshed', fileStatuses: new Map<string, GitFileStatus>() };
+  }
+});
 
 const buildListenerActor = fromCallback<{ type: 'refreshStatus' }, { parentRef: AnyActorRef | undefined }>(
   ({ input, sendBack }) => {
@@ -414,12 +387,10 @@ const gitActors = {
   buildListener: buildListenerActor,
 } as const;
 
-type GitActorNames = keyof typeof gitActors;
-
 /**
  * Git Machine Events
  */
-type GitEventInternal =
+type GitEvent =
   | { type: 'connect'; buildId: string }
   | {
       type: 'authenticate';
@@ -437,12 +408,11 @@ type GitEventInternal =
   | { type: 'pull' }
   | { type: 'refreshStatus' }
   | { type: 'disconnect' }
-  | { type: 'retry' };
-
-export type GitEventExternal = OutputFrom<(typeof gitActors)[GitActorNames]>;
-type GitEventExternalDone = DoneActorEvent<GitEventExternal, GitActorNames>;
-
-type GitEvent = GitEventExternalDone | GitEventInternal;
+  | { type: 'retry' }
+  | { type: 'fileStaged'; path: string }
+  | { type: 'fileUnstaged'; path: string }
+  | { type: 'commitCreated'; sha: string }
+  | { type: 'statusRefreshed'; fileStatuses: Map<string, GitFileStatus> };
 
 /**
  * Git Machine Emitted Events
@@ -543,14 +513,13 @@ export const gitMachine = setup({
     }),
     updateFileStatuses: assign({
       fileStatuses({ event }) {
-        assertActorDoneEvent(event);
-        return event.output as Map<string, GitFileStatus>;
+        assertEvent(event, 'statusRefreshed');
+        return event.fileStatuses;
       },
       stagedFiles({ event }) {
-        assertActorDoneEvent(event);
-        const statuses = event.output as Map<string, GitFileStatus>;
+        assertEvent(event, 'statusRefreshed');
         const staged = new Set<string>();
-        for (const [path, status] of statuses) {
+        for (const [path, status] of event.fileStatuses) {
           if (status.staged) {
             staged.add(path);
           }
@@ -561,19 +530,17 @@ export const gitMachine = setup({
     }),
     addToStagedFiles: assign({
       stagedFiles({ context, event }) {
-        assertActorDoneEvent(event);
-        const path = event.output as string;
+        assertEvent(event, 'fileStaged');
         const updated = new Set(context.stagedFiles);
-        updated.add(path);
+        updated.add(event.path);
         return updated;
       },
     }),
     removeFromStagedFiles: assign({
       stagedFiles({ context, event }) {
-        assertActorDoneEvent(event);
-        const path = event.output as string;
+        assertEvent(event, 'fileUnstaged');
         const updated = new Set(context.stagedFiles);
-        updated.delete(path);
+        updated.delete(event.path);
         return updated;
       },
     }),
@@ -632,7 +599,7 @@ export const gitMachine = setup({
         },
         {
           target: 'authenticating',
-          actions: emit({ type: 'authenticationRequired' as const }),
+          actions: emit({ type: 'authenticationRequired' }),
         },
       ],
     },
@@ -643,7 +610,7 @@ export const gitMachine = setup({
           actions: [
             'setAuthentication',
             emit(({ event }) => ({
-              type: 'authenticated' as const,
+              type: 'authenticated',
               username: event.username,
             })),
           ],
@@ -660,7 +627,7 @@ export const gitMachine = setup({
           actions: [
             'setRepository',
             emit(({ event }) => ({
-              type: 'repositorySelected' as const,
+              type: 'repositorySelected',
               repository: event.repository,
             })),
           ],
@@ -669,7 +636,7 @@ export const gitMachine = setup({
           // Repository creation would be handled externally via GitHub API
           // then the created repo would be selected
           actions: emit(({ event }) => ({
-            type: 'repositoryCreated' as const,
+            type: 'repositoryCreated',
             repository: {
               owner: '',
               name: event.name,
@@ -697,14 +664,14 @@ export const gitMachine = setup({
         }),
         onDone: {
           target: 'refreshingStatus',
-          actions: ['markInitialized', emit({ type: 'cloneComplete' as const })],
+          actions: ['markInitialized', emit({ type: 'cloneComplete' })],
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
@@ -742,26 +709,25 @@ export const gitMachine = setup({
             path: event.path,
           };
         },
-        onDone: {
-          target: 'refreshingStatus',
-          actions: [
-            'addToStagedFiles',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'fileStaged' as const,
-                path: event.output,
-              };
-            }),
-          ],
-        },
+        onDone: 'refreshingStatus',
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
+            })),
+          ],
+        },
+      },
+      on: {
+        fileStaged: {
+          actions: [
+            'addToStagedFiles',
+            emit(({ event }) => ({
+              type: 'fileStaged',
+              path: event.path,
             })),
           ],
         },
@@ -779,26 +745,25 @@ export const gitMachine = setup({
             path: event.path,
           };
         },
-        onDone: {
-          target: 'refreshingStatus',
-          actions: [
-            'removeFromStagedFiles',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'fileUnstaged' as const,
-                path: event.output,
-              };
-            }),
-          ],
-        },
+        onDone: 'refreshingStatus',
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
+            })),
+          ],
+        },
+      },
+      on: {
+        fileUnstaged: {
+          actions: [
+            'removeFromStagedFiles',
+            emit(({ event }) => ({
+              type: 'fileUnstaged',
+              path: event.path,
             })),
           ],
         },
@@ -817,26 +782,25 @@ export const gitMachine = setup({
         }),
         onDone: {
           target: 'refreshingStatus',
-          actions: [
-            'clearCommitMessage',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'commitCreated' as const,
-                sha: event.output,
-              };
-            }),
-          ],
+          actions: 'clearCommitMessage',
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
+        },
+      },
+      on: {
+        commitCreated: {
+          actions: emit(({ event }) => ({
+            type: 'commitCreated',
+            sha: event.sha,
+          })),
         },
       },
     },
@@ -853,14 +817,14 @@ export const gitMachine = setup({
         }),
         onDone: {
           target: 'ready',
-          actions: emit({ type: 'pushComplete' as const }),
+          actions: emit({ type: 'pushComplete' }),
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
@@ -880,14 +844,14 @@ export const gitMachine = setup({
         }),
         onDone: {
           target: 'refreshingStatus',
-          actions: emit({ type: 'pullComplete' as const }),
+          actions: emit({ type: 'pullComplete' }),
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
@@ -901,22 +865,20 @@ export const gitMachine = setup({
           fileManagerRef: context.fileManagerRef,
           buildId: context.buildId!,
         }),
-        onDone: {
+        onDone: 'ready',
+        onError: {
           target: 'ready',
+        },
+      },
+      on: {
+        statusRefreshed: {
           actions: [
             'updateFileStatuses',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'statusUpdated' as const,
-                fileStatuses: event.output,
-              };
-            }),
+            emit(({ event }) => ({
+              type: 'statusUpdated',
+              fileStatuses: event.fileStatuses,
+            })),
           ],
-        },
-        onError: {
-          // If status refresh fails, just go back to ready
-          target: 'ready',
         },
       },
     },
