@@ -113,6 +113,7 @@
     "@types/pg": "^8.16.0",
     "@types/pluralize": "^0.0.33",
     "@types/safe-regex": "^1.1.6",
+    "@typescript/vfs": "catalog:",
     "@xstate/react": "^5.0.5",
     "@zenfs/core": "catalog:",
     "@zenfs/dom": "catalog:",
@@ -218,6 +219,10 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "catalog:",
+    "@taucad/chat": "workspace:*",
+    "@taucad/kernels": "workspace:*",
+    "@taucad/filesystem": "workspace:*",
+    "@taucad/utils": "workspace:*",
     "@eslint-community/eslint-plugin-eslint-comments": "catalog:",
     "@nestjs/schematics": "^11.0.9",
     "@nestjs/testing": "^11.1.14",

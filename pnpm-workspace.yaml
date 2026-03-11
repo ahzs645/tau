@@ -52,6 +52,7 @@ catalog:
   '@types/react': 19.0.12
   '@types/react-dom': 19.0.4
   '@typescript/native-preview': 7.0.0-dev.20260223.1
+  '@typescript/vfs': ^1.6.4
   '@vitest/coverage-v8': 4.1.0-beta.6
   '@vitest/ui': 4.1.0-beta.6
   '@zenfs/core': ^2.5.0
