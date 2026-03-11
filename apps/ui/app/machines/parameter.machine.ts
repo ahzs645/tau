@@ -411,7 +411,7 @@ export const parameterMachine = setup({
       });
 
       enqueue.emit({
-        type: 'valueCommit' as const,
+        type: 'valueCommit',
         value: baselineValue,
       });
     }),
@@ -613,7 +613,7 @@ export const parameterMachine = setup({
       });
 
       enqueue.emit({
-        type: 'valueCommit' as const,
+        type: 'valueCommit',
         value: baselineValue,
       });
     }),
@@ -689,7 +689,7 @@ export const parameterMachine = setup({
       });
 
       enqueue.emit({
-        type: 'valueCommit' as const,
+        type: 'valueCommit',
         value: baselineValue,
       });
     }),

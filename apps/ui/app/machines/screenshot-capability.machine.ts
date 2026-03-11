@@ -338,7 +338,7 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
   const defaultOptions = {
     aspectRatio: 16 / 9,
     output: {
-      format: 'image/png' as const,
+      format: 'image/png',
       quality: 0.92,
       isPreview: true,
     },
@@ -492,7 +492,7 @@ async function captureScreenshots({
     zoomLevel: 1.25,
     cameraAngles: [{ phi: undefined, theta: undefined }] as CameraAngle[],
     output: {
-      format: 'image/png' as const,
+      format: 'image/png',
       quality: 0.92,
       isPreview: true,
     },
@@ -905,7 +905,7 @@ export const screenshotCapabilityMachine = setup({
         gl: event.gl,
         scene: event.scene,
         camera: event.camera,
-        captureMode: 'threejs' as const,
+        captureMode: 'threejs',
         isRegistered: true,
       });
       enqueue.sendTo(context.graphicsRef, {
@@ -917,7 +917,7 @@ export const screenshotCapabilityMachine = setup({
       assertEvent(event, 'registerSvgCapture');
       enqueue.assign({
         svgElement: event.svgElement,
-        captureMode: 'svg' as const,
+        captureMode: 'svg',
         isRegistered: true,
       });
       enqueue.sendTo(context.graphicsRef, {

@@ -477,7 +477,7 @@ export const graphicsMachine = setup({
           gridSizesComputed: event.payload,
         });
         enqueue.emit({
-          type: 'gridUpdated' as const,
+          type: 'gridUpdated',
           sizes: event.payload,
         });
       }
@@ -616,7 +616,7 @@ export const graphicsMachine = setup({
       assertEvent(event, 'sceneRadiusUpdated');
       enqueue.assign({ geometryRadius: event.radius });
       enqueue.emit({
-        type: 'geometryRadiusCalculated' as const,
+        type: 'geometryRadiusCalculated',
         radius: event.radius,
       });
     }),
@@ -707,7 +707,7 @@ export const graphicsMachine = setup({
       });
 
       enqueue.emit({
-        type: 'screenshotCompleted' as const,
+        type: 'screenshotCompleted',
         dataUrls: event.dataUrls,
         requestId: event.requestId,
       });
@@ -721,7 +721,7 @@ export const graphicsMachine = setup({
       });
 
       enqueue.emit({
-        type: 'screenshotFailed' as const,
+        type: 'screenshotFailed',
         error: event.error,
         requestId: event.requestId,
       });
@@ -738,7 +738,7 @@ export const graphicsMachine = setup({
     }),
 
     completeCameraReset: emit({
-      type: 'cameraResetCompleted' as const,
+      type: 'cameraResetCompleted',
     }),
 
     setSurfaceVisibility: assign({
@@ -1088,14 +1088,14 @@ export const graphicsMachine = setup({
     isGridSizeLocked: false,
     graphicsUnits: {
       length: {
-        symbol: 'mm' as const,
+        symbol: 'mm',
         factor: 1e-3,
         system: 'si',
       },
     },
     cadUnits: {
       length: {
-        symbol: 'mm' as const, // Default to mm
+        symbol: 'mm', // Default to mm
         factor: 1e-3,
       },
     },
@@ -1103,7 +1103,7 @@ export const graphicsMachine = setup({
     // When both are mm: 1 / 1 = 1
     units: {
       length: {
-        symbol: 'mm' as const,
+        symbol: 'mm',
         factor: 1, // 1 / 1 = 1
         system: 'si',
       },
