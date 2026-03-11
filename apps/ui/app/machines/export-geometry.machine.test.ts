@@ -17,7 +17,7 @@ function createMockCadRef() {
     send: vi.fn(),
     on: vi.fn((eventType: string, handler: (event: Record<string, unknown>) => void) => {
       subscriptions.set(eventType, handler);
-      return { unsubscribe: vi.fn() } as unknown as Subscription;
+      return mock<Subscription>();
     }),
   });
   return { cadRef, subscriptions };
