@@ -32,12 +32,14 @@
     "db:push": "nx run api:db-push",
     "db:drop": "nx run api:db-drop",
     "update-license-deps": "node --import tsx scripts/update-license-deps.mts",
+    "license-deps:validate": "node --import tsx scripts/update-license-deps.mts --check",
     "pkgcheck": "nx run-many -t pkgcheck",
     "repos": "node scripts/repos.ts",
     "repos:clone": "node scripts/repos.ts clone --all",
     "repos:sync": "node scripts/repos.ts sync --all",
     "repos:status": "node scripts/repos.ts status --all",
     "docs:validate": "nx run scripts:validate-frontmatter",
+    "projects:validate": "nx run scripts:validate-project-names",
     "prepare": "husky"
   },
   "dependencies": {
