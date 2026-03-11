@@ -297,15 +297,68 @@ const sideEffect = fromSafeAsync(async () => {
 **Key rules**:
 
 1. **Do not use `as const`** on individual literal values — contextual typing from generic parameters or `.provide()` already preserves literal types (see `docs/policy/typescript-policy.md` Rule 6).
-2. **Use generic parameters** (`fromSafeAsync<TReturn, TInput>`) to type input — avoid verbose inline parameter annotations.
-3. **Never use `as never`** on `fromSafeAsync(...)` results in `provide()` calls. If the types don't match, fix the placeholder actor's return type annotation or the mock's input type. See `docs/policy/typescript-policy.md` for resolution patterns.
-4. **Placeholder actors must declare their return type** explicitly (e.g., `Promise<void>` or `Promise<LoadedEvent>`) since `throw` infers `Promise<never>`.
+2. **Always use generic parameters** (`fromSafeAsync<TReturn, TInput>`) — never declare types inline in the function signature. Inline `_: { input: ...; signal: ... }` parameter annotations or `: Promise<T>` return annotations duplicate what the generics already express.
+3. **Never use `as never`** on `fromSafeAsync(...)` results in `provide()` calls. If the types don't match, fix the placeholder actor's generic parameters. See `docs/policy/typescript-policy.md` for resolution patterns.
+4. **Placeholder actors must use generics for their return type** since throw-only bodies infer `Promise<never>`.
 
 ```typescript
-// Placeholder: explicit return type prevents Promise<never> inference
-const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async (): Promise<LoadedEvent> => {
+// CORRECT: generics declare both return type and input type
+const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async () => {
   throw new Error('loadActor not provided');
 });
+
+// INCORRECT: inline parameter and return annotations
+const loadActor = fromSafeAsync(async (_: { input: LoadInput; signal: AbortSignal }): Promise<LoadedEvent> => {
+  throw new Error('loadActor not provided');
+});
+```
+
+In test `provide()` overrides, TypeScript infers types from the machine definition. Omit generics when the function body has a valid return path:
+
+```typescript
+const testMachine = myMachine.provide({
+  actors: {
+    // Inference works — return value provides the type
+    loadActor: fromSafeAsync(async () => {
+      return { type: 'dataLoaded', data: mockData };
+    }),
+    // Void actors — inference works for empty bodies
+    saveActor: fromSafeAsync(async () => {
+      await saveMockData();
+    }),
+  },
+});
+```
+
+For throw-only test overrides, avoid `never` inference by consolidating into a single factory with an option flag:
+
+```typescript
+// CORRECT: single factory with option — avoids never inference
+function createTestActor(options?: { throwOnLoad?: boolean }) {
+  return createActor(
+    myMachine.provide({
+      actors: {
+        loadActor: fromSafeAsync(async () => {
+          if (options?.throwOnLoad) throw new Error('load failed');
+          return { type: 'dataLoaded', data: mockData };
+        }),
+      },
+    }),
+  );
+}
+
+// INCORRECT: separate factory with inline return annotation
+function createFailingActor() {
+  return createActor(
+    myMachine.provide({
+      actors: {
+        loadActor: fromSafeAsync(async (): Promise<LoadedEvent> => {
+          throw new Error('load failed');
+        }),
+      },
+    }),
+  );
+}
 ```
 
 **Why `fromSafeAsync` over `fromPromise`**: React Strict Mode's `stopRootWithRehydration` cycle (mount → stop → rehydrate → restart) creates "zombie" Promise `.then()` handlers that fire after the actor is restarted. `fromSafeAsync` wraps the async work in an Observable with a `closed` guard and `AbortController` teardown, preventing stale emissions.
@@ -562,7 +615,9 @@ test('transitions to ready on successful load', async () => {
   const actor = createActor(
     myMachine.provide({
       actors: {
-        loadData: fromPromise(async () => ({ items: [1, 2, 3] })),
+        loadData: fromSafeAsync(async () => {
+          return { type: 'dataLoaded', items: [1, 2, 3] };
+        }),
       },
     }),
     { input: { id: 'test-123' } },
@@ -585,7 +640,9 @@ Override actors, actions, and guards for testing:
 ```typescript
 const testMachine = machine.provide({
   actors: {
-    fetchData: fromPromise(async () => mockData),
+    fetchData: fromSafeAsync(async () => {
+      return { type: 'dataFetched', data: mockData };
+    }),
   },
   actions: {
     logAnalytics: () => {
