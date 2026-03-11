@@ -10,11 +10,12 @@ Add a new first-party CAD kernel to Tau following the `@taucad/kernels` plugin a
 ## Definition of Done
 
 1. Kernel implementation at `packages/kernels/src/kernels/<id>/<id>.kernel.ts`
-2. Tests pass at `packages/kernels/src/kernels/<id>/<id>.kernel.test.ts`
+2. Comprehensive tests pass at `packages/kernels/src/kernels/<id>/<id>.kernel.test.ts`
 3. Wired into plugin factories, presets, exports, build entries
 4. UI default/debug options include kernel where applicable
 5. Type/catalog metadata in `libs/types/src/constants/kernel.constants.ts`
-6. Nx lint/typecheck/test pass
+6. Prompt configuration supports the kernel
+7. Nx lint/typecheck/test pass
 
 ## 1) Implement Kernel
 
@@ -35,19 +36,22 @@ export default defineKernel({
     /* load WASM/SDK, register modules */
   },
   async canHandle({ filePath, extension }, runtime) {
-    /* detect file type */
+    /* detect file type — must be fast */
   },
   async getDependencies({ filePath }, runtime) {
-    /* resolve deps */
+    /* resolve deps — usually runtime.bundler.resolveDependencies(filePath) for JS/TS */
   },
   async getParameters({ filePath, basePath }, runtime, context) {
-    /* extract defaultParams */
+    /* extract defaultParams and return JSON schema */
   },
   async createGeometry({ filePath, basePath, parameters }, runtime, context) {
-    /* build geometry */
+    /* bundle + execute user code; return { geometry, nativeHandle } */
   },
   async exportGeometry({ fileType, nativeHandle }, runtime, context) {
-    /* export STEP/STL/GLTF */
+    /* export from nativeHandle */
+  },
+  async cleanup(context) {
+    /* release WASM/manual resources (optional but recommended) */
   },
 });
 ```
@@ -56,8 +60,9 @@ Key patterns:
 
 - `runtime.bundler.registerModule(name, { code, version })` for built-in module registration
 - `runtime.bundler.bundle(filePath)` + `runtime.execute(code)` for user code
-- `createKernelSuccess(data)` / `createKernelError(issues)` for structured results
-- Throw `Error` with `.issues` array for fatal geometry failures
+- `createKernelSuccess(data)` / `createKernelError(issues)` for structured results in non-throw paths
+- Throw `Error` with `.issues` array (custom `*BuildError`) for fatal geometry failures so framework returns structured issues
+- Prefer stack enrichment utilities in `#framework/error-enrichment.js` for JS/TS kernels
 
 Reference: `packages/kernels/src/kernels/replicad/replicad.kernel.ts`
 
@@ -65,14 +70,65 @@ Reference: `packages/kernels/src/kernels/replicad/replicad.kernel.ts`
 
 **File:** `packages/kernels/src/kernels/<id>/<id>.kernel.test.ts`
 
-Use helpers from `#testing/kernel-testing.utils.js` and `#testing/kernel-geometry-testing.utils.js`.
+### Mandatory shared utils
 
-Minimum coverage:
+All kernel tests MUST use helpers from `#testing/kernel-testing.utils.js`. Do NOT define local mock helpers for filesystem, logger, or runtime — use the shared utilities.
+
+| Helper                                            | Purpose                                                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `createMockKernelRuntime(options?)`               | Unit tests calling kernel methods directly (`canHandle`, `createGeometry`, etc.)  |
+| `createTestWorker(definition, files, options?)`   | Integration tests via `KernelRuntimeWorker` with seeded filesystem                |
+| `createGeometryFile(filename, basePath?)`         | Build `GeometryFile` for worker methods                                           |
+| `createGeometryTestHelpers()`                     | GLTF validation (`expectValidGltf`, `expectVertexCount`, `expectBoundingBoxSize`) |
+| `createMockLogger()`                              | Mock `KernelLogger` with vitest mocks for all log levels                          |
+| `createMockFileSystem(options?)`                  | Mock `KernelFileSystem` with vitest mocks and `.mocks` property                   |
+| `assertSuccess(result)` / `assertFailure(result)` | Type-narrowing assertions on `KernelResult`                                       |
+
+### Test structure example
+
+```typescript
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mock } from 'vitest-mock-extended';
+import type { KernelRuntime, CanHandleInput, CreateGeometryInput } from '#types/kernel-worker.types.js';
+import { createMockKernelRuntime } from '#testing/kernel-testing.utils.js';
+import myKernel from '#kernels/my-kernel/my-kernel.kernel.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('MyKernel', () => {
+  describe('canHandle', () => {
+    it('should return true for supported extension', async () => {
+      const result = await myKernel.canHandle!(mock<CanHandleInput>({ extension: 'ext' }), mock<KernelRuntime>(), {});
+      expect(result).toBe(true);
+    });
+  });
+
+  describe('createGeometry', () => {
+    it('should return geometry on success', async () => {
+      const runtime = createMockKernelRuntime({
+        filesystemOverrides: { readFileResult: new Uint8Array([1, 2, 3]) },
+      });
+
+      const result = await myKernel.createGeometry(
+        mock<CreateGeometryInput>({ filePath: '/test/model.ext', basePath: '/test' }),
+        runtime,
+        {},
+      );
+
+      expect(result.geometry).toHaveLength(1);
+    });
+  });
+});
+```
+
+### Minimum coverage
 
 - `canHandle` — positive and negative cases
 - `getParameters` — defaults extraction + empty fallback
 - `createGeometry` — happy path + parameterized + error cases
-- `exportGeometry` — supported and unsupported formats
+- `exportGeometry` — supported and unsupported formats + no-geometry failure
 
 Reference quality bar: `jscad.kernel.test.ts`, `replicad.kernel.test.ts`
 
@@ -150,7 +206,27 @@ Import and add `<id>()` to `defaultKernelOptions.kernels`.
 
 Add entry to `kernelConfigurations` with `id`, `name`, `language`, `dimensions`, `description`, `mainFile`, `backendProvider`, `longDescription`, `emptyCode`, `recommended`, `tags`, `features`.
 
-## 4) Verify
+## 4) Prompt System Integration
+
+Add kernel prompt config files under `apps/api/app/api/chat/prompts/kernel-prompt-configs/`:
+
+- `<id>.prompt.config.ts`
+- `<id>.prompt.example.<ext>`
+- Register in `kernel.prompt.config.ts` map
+
+Use existing configs (replicad/jscad/zoo/openscad) as templates.
+
+## 5) Documentation Updates
+
+At minimum update:
+
+- `docs/policy/kernel-architecture-policy.md`
+- Kernel docs site pages under `apps/ui/content/docs/(kernels)/...`:
+  - index, choosing-a-kernel, installation, api/kernels, concepts/plugin-system, guides/bundler-configuration
+
+Update all kernel lists/comparison tables, examples, and selection priority references.
+
+## 6) Verify
 
 ```bash
 pnpm nx typecheck kernels
@@ -159,6 +235,27 @@ pnpm nx lint kernels
 pnpm nx typecheck ui
 pnpm nx lint ui
 ```
+
+If `apps/api` files changed:
+
+```bash
+pnpm nx typecheck api
+pnpm nx lint api
+pnpm nx test api --watch=false
+```
+
+## 7) Agent Execution Protocol
+
+Recommended order:
+
+1. Implement kernel + tests first
+2. Wire factories/exports/build/smoke
+3. Wire UI + type catalog + prompts
+4. Update docs
+5. Run Nx checks and fix all regressions
+6. Commit with descriptive message
+
+Keep commits logically grouped (implementation, wiring, docs) if practical.
 
 ## File Checklist
 
@@ -172,13 +269,16 @@ pnpm nx lint ui
 - [ ] `packages/kernels/src/testing/smoke-esm.test.ts`
 - [ ] `apps/ui/app/constants/kernel-worker.constants.ts`
 - [ ] `libs/types/src/constants/kernel.constants.ts`
+- [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.config.ts`
+- [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.example.<ext>`
+- [ ] Kernel docs pages + architecture policy updates
 
 ## Common Failure Modes
 
 - Forgot `tsdown` entry → build output missing
 - Forgot `kernels-entry.ts` export → consumer import fails
-- `canHandle` too broad → kernel mis-selection
-- Missing `builtinModuleNames` → transitive import detection fails
+- `canHandle` too broad/slow → kernel mis-selection
+- Missing `builtinModuleNames` for JS/TS kernels → transitive import detection fails
 - Missing `publishConfig` export → package consumers break
-
-For detailed reference, see [docs/playbook/new-kernel-instructions.md](docs/playbook/new-kernel-instructions.md).
+- Added kernel to code but not to docs comparisons → docs drift
+- Defined local mock helpers instead of using shared testing utils → maintenance burden
