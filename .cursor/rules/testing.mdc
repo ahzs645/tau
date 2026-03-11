@@ -43,6 +43,7 @@ Assert shape with `toEqual`/`toMatchObject`, not just `toBeDefined()` or `toBeGr
 
 ## Additional Rules
 
+- Use `mock<T>()` from `vitest-mock-extended` for partial mock objects -- never `as unknown as`.
 - Use shared mock factories -- never local mapped types with `ReturnType<typeof vi.fn>`.
 - Prefer `await expect(p).rejects.toThrow()` over try/catch for simple rejections.
 - Verify immutability: check inputs unchanged, outputs are new references.
@@ -55,4 +56,5 @@ Assert shape with `toEqual`/`toMatchObject`, not just `toBeDefined()` or `toBeGr
 - [ ] Error tests assert message and/or type
 - [ ] Resources cleaned up in `afterEach`/`finally`
 - [ ] Test names follow `should <verb> <outcome>`
+- [ ] No `as unknown as` for mock objects (use `mock<T>()`)
 - [ ] Structured data assertions check shape, not existence
