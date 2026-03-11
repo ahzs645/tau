@@ -21,6 +21,7 @@ import { createKernelError, createKernelSuccess } from '#framework/kernel-helper
 import { initOpenCascade, resolveCjsDefault } from '#kernels/opencascade/init-opencascade.js';
 import type { OpenCascadeModuleFactory } from '#kernels/opencascade/init-opencascade.js';
 import { meshShapesToGltf } from '#kernels/opencascade/opencascade-mesh.js';
+// eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
 
 const fullWasmUrl = new URL('wasm/opencascade_full.wasm', import.meta.url).href;
@@ -78,10 +79,11 @@ async function resolveWasm(wasm: 'full' | OpenCascadeWasmConfig): Promise<{
   bindingsFactory: OpenCascadeModuleFactory;
 }> {
   if (wasm === 'full') {
+    // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
     const module_ = await import('#kernels/opencascade/wasm/opencascade_full.js');
     return {
       wasmUrl: fullWasmUrl,
-      bindingsFactory: resolveCjsDefault(module_.default) as unknown as OpenCascadeModuleFactory,
+      bindingsFactory: resolveCjsDefault<OpenCascadeModuleFactory>(module_.default),
     };
   }
 
@@ -110,11 +112,11 @@ function getModuleRegistry(): Map<string, Record<string, unknown>> {
 }
 
 function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void {
-  const exports = oc as unknown as Record<string, unknown>;
   const registry = getModuleRegistry();
-  registry.set('opencascade', exports);
+  const ocRecord = oc as Record<string, unknown>;
+  registry.set('opencascade', ocRecord);
 
-  const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
+  const exportNames = Object.keys(ocRecord).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
   const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('opencascade');\n${namedExports}\nexport default __mod;\n`;
 
@@ -153,8 +155,8 @@ function enrichIssueLocation(
   return issues.map((issue) => ({
     ...issue,
     message: issue.message,
-    type: 'runtime' as const,
-    severity: issue.severity === 'warning' ? ('warning' as const) : ('error' as const),
+    type: 'runtime',
+    severity: issue.severity === 'warning' ? 'warning' : 'error',
     location: (issue.location as KernelIssue['location']) ?? {
       fileName: fallbackFileName,
       startLineNumber: 1,
@@ -302,8 +304,8 @@ export default defineKernel({
         issues: [
           {
             message: 'main() or default export function not found.',
-            type: 'runtime' as const,
-            severity: 'warning' as const,
+            type: 'runtime',
+            severity: 'warning',
             location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
           },
         ],
@@ -336,8 +338,8 @@ export default defineKernel({
         issues: [
           {
             message: 'main() did not return any shapes. Return a TopoDS_Shape or an array of shapes.',
-            type: 'runtime' as const,
-            severity: 'warning' as const,
+            type: 'runtime',
+            severity: 'warning',
             location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
           },
         ],
@@ -382,7 +384,7 @@ export default defineKernel({
       const results = nativeHandle.map((entry) => {
         const writer = new oc.STEPControl_Writer();
         const progress = new oc.Message_ProgressRange();
-        writer.Transfer(entry.shape, oc.STEPControl_StepModelType.STEPControl_AsIs as never, true, progress);
+        writer.Transfer(entry.shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true, progress);
         const filePath = `/tmp/export_${Date.now()}.step`;
         writer.Write(filePath);
         const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
@@ -399,7 +401,7 @@ export default defineKernel({
     if (fileType === 'stl' || fileType === 'stl-binary') {
       const { oc } = context;
       const results = nativeHandle.map((entry) => {
-        void new oc.BRepMesh_IncrementalMesh(entry.shape, 0.01, false, 0.5, false);
+        const mesh = new oc.BRepMesh_IncrementalMesh(entry.shape, 0.01, false, 0.5, false);
         const filePath = `/tmp/export_${Date.now()}.stl`;
         const writer = new oc.StlAPI_Writer();
         const progress = new oc.Message_ProgressRange();
@@ -407,6 +409,7 @@ export default defineKernel({
         const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
         const data = new Uint8Array(rawData);
         oc.FS.unlink(filePath);
+        mesh.delete();
         progress.delete();
         writer.delete();
         return createExportFile(fileType, entry.name ?? 'Geometry', data);

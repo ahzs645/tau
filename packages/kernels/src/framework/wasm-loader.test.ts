@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { loadWasmBinary, compileWasmStreaming } from '#framework/wasm-loader.js';
+import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -110,8 +111,8 @@ describe('compileWasmStreaming', () => {
     };
 
     try {
-      // oxlint-disable-next-line consistent-type-assertions -- tracer mock only implements startSpan
-      await compileWasmStreaming('https://example.com/module.wasm', tracer as never);
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- tracer mock only implements startSpan
+      await compileWasmStreaming('https://example.com/module.wasm', tracer as unknown as KernelSpanTracer);
       expect(tracer.startSpan).toHaveBeenCalledWith('wasm.compile', { url: 'https://example.com/module.wasm' });
       expect(endSpy).toHaveBeenCalled();
     } finally {

@@ -69,7 +69,8 @@ describe('createWorkerTransport', () => {
 
   it('should delegate send to worker.postMessage without transferables', () => {
     const transport = createWorkerTransport('https://example.com/worker.js');
-    const command = { type: 'initialize', requestId: '1' } as unknown as KernelCommand;
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- plain object required for postMessage serialization
+    const command = { type: 'initialize', requestId: '1' } as KernelCommand;
 
     transport.send(command);
 
@@ -79,7 +80,8 @@ describe('createWorkerTransport', () => {
 
   it('should delegate send to worker.postMessage with transferables', () => {
     const transport = createWorkerTransport('https://example.com/worker.js');
-    const command = { type: 'initialize', requestId: '1' } as unknown as KernelCommand;
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- plain object required for postMessage serialization
+    const command = { type: 'initialize', requestId: '1' } as KernelCommand;
     const buffer = new ArrayBuffer(8);
     const transferables = [buffer];
 

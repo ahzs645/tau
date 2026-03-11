@@ -11,6 +11,7 @@ import { OcKernelError } from '#kernels/replicad/oc-kernel-error.js';
 import type { KernelStackFrame } from '#types/kernel.types.js';
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 
+// oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to OpenCascadeInstance
 const emptyOcInstance = {} as unknown as OpenCascadeInstance;
 
 // ===================================================================
@@ -136,7 +137,8 @@ describe('decodeOcException', () => {
       },
     };
 
-    const result = decodeOcException(42, mockOcInstance as never);
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to OpenCascadeInstance
+    const result = decodeOcException(42, mockOcInstance as unknown as OpenCascadeInstance);
     expect(result.message).toContain('KernelError:');
     expect(result.message).toContain('Standard_NullObject');
     expect(result.cppStack).toBe('at BRepAlgoAPI_Fuse');
@@ -151,7 +153,8 @@ describe('decodeOcException', () => {
       },
     };
 
-    const result = decodeOcException(42, mockOcInstance as never);
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to OpenCascadeInstance
+    const result = decodeOcException(42, mockOcInstance as unknown as OpenCascadeInstance);
     expect(result.message).toContain('Unknown kernel error (code 42)');
     expect(result.cppStack).toBeUndefined();
   });
@@ -190,7 +193,8 @@ describe('formatRuntimeErrorWithOc', () => {
 
     const result = formatRuntimeErrorWithOc({
       error: 42,
-      ocInstance: mockOcInstance as never,
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to OpenCascadeInstance
+      ocInstance: mockOcInstance as unknown as OpenCascadeInstance,
       ...helpers,
     });
 
@@ -213,7 +217,8 @@ describe('formatRuntimeErrorWithOc', () => {
 
     const result = formatRuntimeErrorWithOc({
       error: sourceError,
-      ocInstance: mockOcInstance as never,
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to OpenCascadeInstance
+      ocInstance: mockOcInstance as unknown as OpenCascadeInstance,
       ...helpers,
     });
 

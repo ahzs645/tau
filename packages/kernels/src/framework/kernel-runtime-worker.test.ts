@@ -18,17 +18,17 @@ function createMockKernelDefinition(id: string, overrides?: Partial<KernelDefini
     initialize: initSpy,
     getDependencies: async (input) => [input.filePath],
     getParameters: async () => ({
-      success: true as const,
+      success: true,
       data: { defaultParameters: {}, jsonSchema: {} },
       issues: [] as KernelIssue[],
     }),
     createGeometry: async () => ({
-      geometry: [{ format: 'gltf' as const, content: new Uint8Array([1, 2, 3]) }],
+      geometry: [{ format: 'gltf', content: new Uint8Array([1, 2, 3]) }],
       issues: [] as KernelIssue[],
       nativeHandle: undefined,
     }),
     exportGeometry: async () => ({
-      success: true as const,
+      success: true,
       data: [] as ExportFile[],
       issues: [] as KernelIssue[],
     }),
@@ -40,6 +40,7 @@ function createMockKernelDefinition(id: string, overrides?: Partial<KernelDefini
 }
 
 function getInitSpy(definition: KernelDefinition): ReturnType<typeof vi.fn> {
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- test-injected property
   return (definition as unknown as { _initSpy: ReturnType<typeof vi.fn> })._initSpy;
 }
 

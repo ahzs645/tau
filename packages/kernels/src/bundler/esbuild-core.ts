@@ -1035,8 +1035,8 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
       issues: [
         {
           message: error instanceof Error ? error.message : String(error),
-          type: 'runtime' as const,
-          severity: 'error' as const,
+          type: 'runtime',
+          severity: 'error',
         },
       ],
     };

@@ -44,7 +44,7 @@ export class KernelTracer implements KernelSpanTracer {
           parentSpanId: parentId,
           ...attributes,
           devtools: {
-            dataType: 'track-entry' as const,
+            dataType: 'track-entry',
             track: 'Kernel Pipeline',
             trackGroup: 'Tau',
             properties: Object.entries(attributes ?? {}).map(([k, v]) => [k, String(v)]),

@@ -6,7 +6,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Document, NodeIO, Accessor } from '@gltf-transform/core';
 import type { GeometryGltf, GeometrySvg } from '@taucad/types';
-import type { CreateGeometryHandler } from '#types/kernel-middleware.types.js';
 import { gltfCoordinateTransformMiddleware } from '#middleware/gltf-coordinate-transform.middleware.js';
 import {
   createMockRuntime,
@@ -14,6 +13,7 @@ import {
   createSuccessResult,
   createErrorResult,
   createEmptySuccessResult,
+  createMockCreateGeometryHandler,
 } from '#testing/kernel-testing.utils.js';
 
 /**
@@ -111,13 +111,6 @@ function createTransformContext() {
   };
 }
 
-/**
- * Create a mock handler that returns the given result.
- */
-function createMockHandler(result: ReturnType<typeof createSuccessResult>): CreateGeometryHandler {
-  return vi.fn().mockResolvedValue(result);
-}
-
 describe('gltfCoordinateTransformMiddleware', () => {
   describe('wrapCreateGeometry', () => {
     describe('successful results with GLTF geometries', () => {
@@ -128,7 +121,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         const gltfData = await createTestGltf([1, 2, 3]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         expect(wrapCreateGeometry).toBeDefined();
@@ -165,7 +158,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         ]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         const transformed = await wrapCreateGeometry!(input, handler, runtime);
@@ -195,7 +188,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
           { format: 'gltf', content: gltfData2 },
         ]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         const transformed = await wrapCreateGeometry!(input, handler, runtime);
@@ -213,7 +206,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         const gltfData = await createTestGltf([0, 0, 0]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         const transformed = await wrapCreateGeometry!(input, handler, runtime);
@@ -231,7 +224,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         const gltfData = await createTestGltf([1, 2, 3]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         const transformed = await wrapCreateGeometry!(input, handler, runtime);
@@ -252,7 +245,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         };
         const handlerResult = createSuccessResult([svgGeometry]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         const transformed = await wrapCreateGeometry!(input, handler, runtime);
@@ -274,7 +267,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         };
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }, svgGeometry]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         const transformed = await wrapCreateGeometry!(input, handler, runtime);
@@ -322,7 +315,7 @@ describe('gltfCoordinateTransformMiddleware', () => {
         const gltfData = await createTestGltf([1, 0, 0]);
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createTransformContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfCoordinateTransformMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);

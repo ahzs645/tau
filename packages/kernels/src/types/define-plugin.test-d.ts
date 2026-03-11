@@ -271,7 +271,7 @@ describe('defineBundler type inference', () => {
           bundlerInstance: string;
           projectPath: string;
         }>();
-        return { success: true as const, value: undefined };
+        return { success: true, value: undefined };
       },
       registerModule(_name, _module, context) {
         expectTypeOf(context).toEqualTypeOf<{
@@ -314,7 +314,7 @@ describe('defineBundler type inference', () => {
         return { code: '', issues: [], success: true, dependencies: [] };
       },
       async execute() {
-        return { success: true as const, value: undefined };
+        return { success: true, value: undefined };
       },
       registerModule() {
         // Noop
@@ -338,7 +338,7 @@ describe('defineBundler type inference', () => {
         return { code: '', issues: [], success: true, dependencies: [] };
       },
       async execute() {
-        return { success: true as const, value: undefined };
+        return { success: true, value: undefined };
       },
       registerModule() {
         // No-op
@@ -661,14 +661,14 @@ describe('createKernelSuccess type inference', () => {
       {
         data: new Uint8Array(),
         name: 'model.stl',
-        mimeType: 'model/stl' as const,
-      },
+        mimeType: 'model/stl',
+      } as const,
     ]);
     expectTypeOf(result.data).toEqualTypeOf<
       Array<{
-        data: Uint8Array<ArrayBuffer>;
-        name: string;
-        mimeType: 'model/stl';
+        readonly data: Uint8Array<ArrayBuffer>;
+        readonly name: 'model.stl';
+        readonly mimeType: 'model/stl';
       }>
     >();
   });

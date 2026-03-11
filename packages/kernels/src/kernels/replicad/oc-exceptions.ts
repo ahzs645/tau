@@ -158,7 +158,7 @@ function extractExceptionTypeName(
   errorData: ReturnType<OpenCascadeWithExceptions['OCJS']['getStandard_FailureData']>,
 ): string {
   try {
-    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
+    // oxlint-disable-next-line new-cap, @typescript-eslint/consistent-type-assertions -- OpenCASCADE C++ bindings use PascalCase methods; WASM binding type mismatch
     const dynType = errorData.ExceptionType() as unknown as {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- C++ method with PascalCase convention
       Name(): string;

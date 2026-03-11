@@ -11,6 +11,7 @@ import type { ExportFormat, GeometryResponse, GeometryFile, OnWorkerLog, FileSta
 import { parentDirectory, joinPath } from '@taucad/utils/path';
 import type { Mock } from 'vitest';
 import { expect, vi } from 'vitest';
+import { mock } from 'vitest-mock-extended';
 import { configure, fs } from '@zenfs/core';
 import { InMemory } from '@zenfs/core/backends/memory.js';
 import type {
@@ -38,7 +39,13 @@ import type {
   ExportGeometryInput,
 } from '#types/kernel-worker.types.js';
 import type { BundlerDefinition } from '#types/kernel-bundler.types.js';
-import type { KernelMiddlewareRuntime, MiddlewareState } from '#types/kernel-middleware.types.js';
+import type { KernelClient } from '#client/kernel-client.js';
+import type {
+  KernelMiddlewareRuntime,
+  MiddlewareState,
+  CreateGeometryHandler,
+  GetParametersHandler,
+} from '#types/kernel-middleware.types.js';
 import type { Dependency } from '#types/kernel-dependency.types.js';
 import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
@@ -770,11 +777,51 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
     }> {
       return {
         success: false,
-        issues: [{ message: 'Mock executor', severity: 'error' as const }],
+        issues: [{ message: 'Mock executor', severity: 'error' }],
       };
     },
     tracer: { startSpan: () => ({ end: noopSpanEnd }) },
   };
+}
+
+// =============================================================================
+// Mock KernelClient for Testing
+// =============================================================================
+
+const noop = () => {
+  /* No-op */
+};
+
+/**
+ * Creates a mock KernelClient for integration tests that exercise state
+ * machines or other consumers without spinning up a real worker.
+ *
+ * All methods are vitest mocks with sensible defaults (connect resolves,
+ * export returns a successful stub, on returns an unsubscribe no-op, etc.).
+ *
+ * @returns A fully typed KernelClient backed by vitest mocks
+ *
+ * @example
+ * ```typescript
+ * const client = createMockKernelClient();
+ * vi.mocked(client.export).mockResolvedValue({ success: false, issues: [{ message: 'fail', type: 'runtime', severity: 'error' }] });
+ * ```
+ */
+export function createMockKernelClient(): KernelClient {
+  return mock<KernelClient>({
+    connect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    setFile: vi.fn<(file: GeometryFile, params: Record<string, unknown>) => void>(),
+    setParameters: vi.fn<(params: Record<string, unknown>) => void>(),
+    export: vi.fn().mockResolvedValue({
+      success: true,
+      data: { bytes: new Uint8Array([1, 2, 3]), mimeType: 'model/stl' },
+      issues: [],
+    }),
+    render: vi.fn(),
+    notifyFileChanged: vi.fn(),
+    terminate: vi.fn(),
+    on: vi.fn<(event: string, handler: (...args: never[]) => void) => () => void>().mockReturnValue(noop),
+  });
 }
 
 // =============================================================================
@@ -921,4 +968,101 @@ export class MockKernelWorker extends KernelWorker {
   ): Promise<string[]> {
     return [filePath];
   }
+}
+
+// =============================================================================
+// Mock Dependencies
+// =============================================================================
+
+/**
+ * Creates a standard set of mock dependencies for middleware testing.
+ *
+ * @param overrides - Additional dependency entries to append to the defaults
+ * @returns A readonly array of dependencies
+ */
+export function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
+  const defaults: Dependency[] = [
+    { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
+    {
+      type: 'middleware',
+      name: 'TestMiddleware',
+      version: '1',
+      index: 0,
+      options: {},
+    },
+    { type: 'framework', name: 'tau', version: '0.0.1' },
+  ];
+
+  if (overrides) {
+    return [...defaults, ...(overrides as Dependency[])];
+  }
+
+  return defaults;
+}
+
+// =============================================================================
+// Mock Middleware Handlers
+// =============================================================================
+
+/**
+ * Creates a mock createGeometry handler for middleware testing.
+ *
+ * @param result - The result to resolve with (defaults to a GLTF success result)
+ * @returns A vitest mock function typed as CreateGeometryHandler
+ */
+export function createMockCreateGeometryHandler(result?: CreateGeometryResult): CreateGeometryHandler {
+  return vi.fn().mockResolvedValue(result ?? createGltfSuccessResult(new Uint8Array([1, 2, 3])));
+}
+
+/**
+ * Creates a mock getParameters handler for middleware testing.
+ *
+ * @param result - The result to resolve with (defaults to a success with empty params)
+ * @returns A vitest mock function typed as GetParametersHandler
+ */
+export function createMockGetParametersHandler(result?: GetParametersResult): GetParametersHandler {
+  return vi.fn().mockResolvedValue(
+    result ?? {
+      success: true,
+      data: {
+        defaultParameters: {},
+        jsonSchema: { type: 'object', properties: {} },
+      },
+      issues: [],
+    },
+  );
+}
+
+// =============================================================================
+// Mock HTTP Response (Bundler Tests)
+// =============================================================================
+
+/**
+ * Creates a mock HTTP Response for fetch-based tests (CDN, module manager).
+ *
+ * @param body - The response body text
+ * @param headers - Optional response headers
+ * @returns A mock Response object with vitest mock functions
+ */
+export function createMockResponse(body: string, headers?: Record<string, string>): Response {
+  const headerMap = new Headers(headers);
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: headerMap,
+    text: vi.fn<() => Promise<string>>().mockResolvedValue(body),
+    json: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
+    clone: vi.fn<() => Response>(),
+    body: undefined,
+    bodyUsed: false,
+    arrayBuffer: vi.fn<() => Promise<ArrayBuffer>>(),
+    blob: vi.fn<() => Promise<Blob>>(),
+    formData: vi.fn<() => Promise<FormData>>(),
+    bytes: vi.fn<() => Promise<Uint8Array<ArrayBuffer>>>(),
+    redirected: false,
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- ResponseType union narrowing
+    type: 'basic' as ResponseType,
+    url: '',
+  } as unknown as Response;
 }

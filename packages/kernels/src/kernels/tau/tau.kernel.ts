@@ -134,7 +134,7 @@ export default defineKernel({
       logger.log(`Successfully converted ${formattedFormat} to GLB`);
 
       return {
-        geometry: [{ format: 'gltf' as const, content: glbData }],
+        geometry: [{ format: 'gltf', content: glbData }],
         nativeHandle: glbData,
       };
     } catch (error) {

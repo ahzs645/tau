@@ -18,12 +18,12 @@ import { defineMiddleware } from '#middleware/kernel-middleware.js';
 import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 
 describe('kernel-worker wrapExportGeometry middleware', () => {
-  type ExportGeometrySpyTarget = {
-    onExportGeometry: (...args: unknown[]) => Promise<ExportGeometryResult>;
-  };
-
   function spyOnExportGeometry(worker: MockKernelWorker) {
-    return vi.spyOn(worker as unknown as ExportGeometrySpyTarget, 'onExportGeometry');
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- keyof MockKernelWorker not assignable to vi.spyOn; use as unknown as to spy on protected method
+    return vi.spyOn(
+      worker as unknown as { onExportGeometry: (...args: unknown[]) => Promise<unknown> },
+      'onExportGeometry',
+    );
   }
 
   const defaultExportResult: ExportGeometryResult = {

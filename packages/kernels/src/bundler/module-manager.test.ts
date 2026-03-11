@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModuleManager } from '#bundler/module-manager.js';
-import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
+import { createMockFileSystem, createMockResponse } from '#testing/kernel-testing.utils.js';
 import type { MockFileSystem } from '#testing/kernel-testing.utils.js';
 
 // =============================================================================
@@ -22,28 +22,6 @@ import type { MockFileSystem } from '#testing/kernel-testing.utils.js';
 // =============================================================================
 
 const mockFetch = vi.fn<typeof fetch>();
-
-function createSuccessResponse(body: string, headers?: Record<string, string>): Response {
-  const headerMap = new Headers(headers);
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    headers: headerMap,
-    text: vi.fn<() => Promise<string>>().mockResolvedValue(body),
-    json: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
-    clone: vi.fn<() => Response>(),
-    body: undefined,
-    bodyUsed: false,
-    arrayBuffer: vi.fn<() => Promise<ArrayBuffer>>(),
-    blob: vi.fn<() => Promise<Blob>>(),
-    formData: vi.fn<() => Promise<FormData>>(),
-    bytes: vi.fn<() => Promise<Uint8Array<ArrayBuffer>>>(),
-    redirected: false,
-    type: 'basic' as ResponseType,
-    url: '',
-  } as unknown as Response;
-}
 
 // =============================================================================
 // Test Suite
@@ -84,7 +62,7 @@ describe('ModuleManager', () => {
 
     it('should fetch and cache when module is not cached', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash');
 
@@ -103,7 +81,7 @@ describe('ModuleManager', () => {
     it('should skip fetch on subsequent calls after caching', async () => {
       // First call: not cached
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash');
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -124,7 +102,7 @@ describe('ModuleManager', () => {
   describe('subpath caching', () => {
     it('should cache subpath modules independently from main module', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash', 'debounce');
 
@@ -141,7 +119,7 @@ describe('ModuleManager', () => {
 
     it('should handle scoped packages with subpaths', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - @jscad/modeling@2.12.6 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - @jscad/modeling@2.12.6 */\nexport {};'));
 
       await manager.ensureCdnModule('@jscad/modeling', 'primitives');
 
@@ -159,7 +137,7 @@ describe('ModuleManager', () => {
 
     it('should handle nested subpaths and ensure parent directories', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - three@0.160.0 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - three@0.160.0 */\nexport {};'));
 
       await manager.ensureCdnModule('three', 'examples/jsm/controls/OrbitControls');
 
@@ -192,7 +170,7 @@ describe('ModuleManager', () => {
       const promise2 = manager.ensureCdnModule('lodash');
 
       // Resolve the fetch
-      fetchResolve(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
+      fetchResolve(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await Promise.all([promise1, promise2]);
 
@@ -202,7 +180,7 @@ describe('ModuleManager', () => {
 
     it('should NOT deduplicate requests for different packages', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - pkg@1.0.0 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - pkg@1.0.0 */\nexport {};'));
 
       await Promise.all([manager.ensureCdnModule('lodash'), manager.ensureCdnModule('three')]);
 
@@ -212,7 +190,7 @@ describe('ModuleManager', () => {
 
     it('should NOT deduplicate subpath vs main module', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport {};'));
 
       await Promise.all([manager.ensureCdnModule('lodash'), manager.ensureCdnModule('lodash', 'debounce')]);
 
@@ -252,7 +230,7 @@ describe('ModuleManager', () => {
       vi.advanceTimersByTime(61_000);
 
       // Now set fetch to succeed
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - bad-package@1.0.0 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - bad-package@1.0.0 */\nexport {};'));
 
       // Second call: should retry
       await manager.ensureCdnModule('bad-package');
@@ -271,7 +249,7 @@ describe('ModuleManager', () => {
       vi.advanceTimersByTime(61_000);
 
       // Succeed on retry
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - recovered-package@1.0.0 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - recovered-package@1.0.0 */\nexport {};'));
 
       await manager.ensureCdnModule('recovered-package');
       const secondCallCount = mockFetch.mock.calls.length;
@@ -331,7 +309,7 @@ describe('ModuleManager', () => {
       filesystem.mocks.exists.mockResolvedValue(false);
 
       // Respond with Content-Length exceeding 10 MB
-      mockFetch.mockResolvedValue(createSuccessResponse('huge module', { 'Content-Length': '20000000' }));
+      mockFetch.mockResolvedValue(createMockResponse('huge module', { 'Content-Length': '20000000' }));
 
       await manager.ensureCdnModule('huge-package');
 
@@ -350,7 +328,7 @@ describe('ModuleManager', () => {
       // which are in the allowlist. This test verifies the safeFetch validation
       // works by checking that esm.sh URLs pass validation.
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport {};'));
 
       await manager.ensureCdnModule('lodash');
 
@@ -407,7 +385,7 @@ describe('ModuleManager', () => {
       mockFetch
         .mockRejectedValueOnce(new Error('esm.sh down'))
         // Second call (jsdelivr) succeeds
-        .mockResolvedValueOnce(createSuccessResponse('/* jsdelivr - lodash@4.17.21 */\nexport {};'));
+        .mockResolvedValueOnce(createMockResponse('/* jsdelivr - lodash@4.17.21 */\nexport {};'));
 
       await manager.ensureCdnModule('lodash');
 
@@ -454,7 +432,7 @@ describe('ModuleManager', () => {
   describe('atomic write ordering', () => {
     it('should write code file before package.json', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       const writeOrder: string[] = [];
       filesystem.mocks.writeFile.mockImplementation(async (path: string) => {
@@ -470,7 +448,7 @@ describe('ModuleManager', () => {
     it('should not overwrite package.json for subpath fetches', async () => {
       // First fetch the main module
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nexport default {};'));
 
       await manager.ensureCdnModule('lodash');
 
@@ -512,7 +490,7 @@ describe('ModuleManager', () => {
       manager.clearCaches();
 
       // Now succeed
-      mockFetch.mockResolvedValue(createSuccessResponse('/* esm.sh - clear-test@1.0.0 */\nexport {};'));
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - clear-test@1.0.0 */\nexport {};'));
 
       // Should retry immediately (no backoff after clear)
       await manager.ensureCdnModule('clear-test');
@@ -527,9 +505,7 @@ describe('ModuleManager', () => {
   describe('version extraction', () => {
     it('should extract version from esm.sh comment', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
-      mockFetch.mockResolvedValue(
-        createSuccessResponse('/* esm.sh - lodash@4.17.21 */\nconst x = 1;\nexport default x;'),
-      );
+      mockFetch.mockResolvedValue(createMockResponse('/* esm.sh - lodash@4.17.21 */\nconst x = 1;\nexport default x;'));
 
       await manager.ensureCdnModule('lodash');
 
@@ -547,7 +523,7 @@ describe('ModuleManager', () => {
     it('should use "unknown" when version cannot be extracted', async () => {
       filesystem.mocks.exists.mockResolvedValue(false);
       mockFetch.mockResolvedValue(
-        createSuccessResponse('export default {};'), // No version comment
+        createMockResponse('export default {};'), // No version comment
       );
 
       await manager.ensureCdnModule('no-version');

@@ -9,6 +9,11 @@ export {
   createSuccessResult,
   createErrorResult,
   createMockInput,
+  createMockKernelClient,
+  createMockDependencies,
+  createMockCreateGeometryHandler,
+  createMockGetParametersHandler,
+  createMockResponse,
   MockKernelWorker,
 } from '#testing/kernel-testing.utils.js';
 

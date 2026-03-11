@@ -8,7 +8,6 @@
 import type { Node } from '@taucad/kcl-wasm-lib/bindings/Node';
 import type { Program } from '@taucad/kcl-wasm-lib/bindings/Program';
 import type { BodyItem } from '@taucad/kcl-wasm-lib/bindings/BodyItem';
-import type { ImportStatement } from '@taucad/kcl-wasm-lib/bindings/ImportStatement';
 
 /**
  * Parse function interface - matches KclUtils.parseKcl signature
@@ -61,15 +60,15 @@ export function extractLocalImportPaths(program: Node<Program> | null): string[]
  * @returns The relative file path, or undefined if not a local KCL import
  */
 function extractImportPath(item: BodyItem & { type: 'ImportStatement' }): string | undefined {
-  const importStmt = item as unknown as Node<ImportStatement>;
-  const pathValue = importStmt.path;
-
-  // Only extract local KCL file imports: { type: 'Kcl', filename: 'bench-parts.kcl' }
-  if ('filename' in pathValue && typeof pathValue.filename === 'string') {
-    return pathValue.filename;
+  const pathValue = (item as Record<string, unknown>)['path'] as Record<string, unknown> | undefined;
+  if (!pathValue) {
+    return undefined;
   }
 
-  // Skip stdlib and foreign imports - they don't affect caching
+  if ('filename' in pathValue && typeof pathValue['filename'] === 'string') {
+    return pathValue['filename'];
+  }
+
   return undefined;
 }
 

@@ -30,10 +30,16 @@ if (typeof document === 'undefined') {
     addEventListener: noop,
   };
 
-  (globalThis as unknown as Record<string, unknown>)['document'] = {
-    getElementsByTagName: () => [],
-    querySelector: () => null,
-    createElement: () => noopElement,
-    head: { appendChild: noop },
-  };
+  Object.defineProperty(globalThis, 'document', {
+    value: {
+      getElementsByTagName: () => [],
+      querySelector: () => null,
+      createElement: () => noopElement,
+      head: { appendChild: noop },
+    },
+    writable: true,
+    configurable: true,
+  });
 }
+
+export {};

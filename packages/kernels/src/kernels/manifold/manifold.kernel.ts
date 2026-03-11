@@ -81,9 +81,9 @@ async function registerManifoldModules(runtime: KernelRuntime): Promise<Record<s
     import('manifold-3d/manifoldCAD'),
     import('manifold-3d/lib/gltf-node.js'),
   ]);
-  const manifoldRoot = rootImport as unknown as Record<string, unknown>;
-  const manifoldCad = manifoldCadImport as unknown as Record<string, unknown>;
-  const gltfNodeModule = gltfNodeImport as unknown as Record<string, unknown>;
+  const manifoldRoot = rootImport as Record<string, unknown>;
+  const manifoldCad = manifoldCadImport as Record<string, unknown>;
+  const gltfNodeModule = gltfNodeImport as Record<string, unknown>;
 
   // ManifoldCAD.js stubs GLTFNode (non-tracked) and getGLTFNodes (returns []).
   // These only work in manifold's own bundler which replaces the stubs.

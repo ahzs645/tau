@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import type { OnWorkerLog } from '@taucad/types';
+import type { CreateGeometryResult } from '#types/kernel.types.js';
 import type { Dependency } from '#types/kernel-dependency.types.js';
 import {
   defineMiddleware,
@@ -363,12 +364,11 @@ describe('wrap hook behavior', () => {
   });
 
   it('should allow wrap hooks to short-circuit by not calling handler', async () => {
-    const cachedResult = {
-      success: true as const,
+    const cachedResult: CreateGeometryResult = {
+      success: true,
       data: [
         {
-          format: 'gltf' as const,
-          hash: 'a'.repeat(64),
+          format: 'gltf',
           content: new Uint8Array([1, 2, 3]),
         },
       ],

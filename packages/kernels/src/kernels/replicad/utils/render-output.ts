@@ -18,20 +18,9 @@ export type InputShape = {
   strokeType?: string;
 };
 
-type SvgShapeConfiguration = {
-  name: string;
-  shape: Svgable;
-  color?: string;
-  opacity?: number;
-  strokeType?: string;
-};
+type SvgShapeConfiguration = InputShape & { shape: Svgable };
 
-type MeshableConfiguration = {
-  name: string;
-  shape: Meshable;
-  color?: string;
-  opacity?: number;
-};
+type MeshableConfiguration = InputShape & { shape: Meshable };
 
 /** Union of all valid return types from a Replicad model's main function. */
 export type MainResultShapes = AnyShape | AnyShape[] | InputShape | InputShape[] | undefined;
@@ -53,6 +42,10 @@ const isMeshable = (shape: unknown): shape is Meshable => {
     Boolean((shape as Meshable).mesh && (shape as Meshable).meshEdges)
   );
 };
+
+const hasSvgableShape = (config: InputShape): config is SvgShapeConfiguration => isSvgable(config.shape);
+
+const hasMeshableShape = (config: InputShape): config is MeshableConfiguration => isMeshable(config.shape);
 
 const isInputShape = (shape: unknown): shape is InputShape => {
   return typeof shape === 'object' && shape !== null && Boolean((shape as InputShape).shape);
@@ -108,7 +101,7 @@ function normalizeColorAndOpacity<T extends InputShape>(shape: T): InputShape {
 }
 
 function renderSvg(shapeConfig: SvgShapeConfiguration): GeometrySvg {
-  const { name, shape, color, strokeType, opacity } = shapeConfig;
+  const { name = 'Shape', shape, color, strokeType, opacity } = shapeConfig;
   return {
     format: 'svg',
     name,
@@ -126,7 +119,7 @@ const defaultPreviewTessellation: Tessellation = {
 };
 
 function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellation, withBrepEdges: boolean) {
-  const { name, shape, color, opacity } = shapeConfig;
+  const { name = 'Shape', shape, color, opacity } = shapeConfig;
   const geometry: GeometryReplicad = {
     format: 'replicad',
     name,
@@ -173,14 +166,12 @@ export function render(
   withBrepEdges = false,
 ): Array<GeometrySvg | GeometryReplicad> {
   return shapes.map((shapeConfig) => {
-    if (isSvgable(shapeConfig.shape)) {
-      // TODO: fix this type
-      return renderSvg(shapeConfig as unknown as SvgShapeConfiguration);
+    if (hasSvgableShape(shapeConfig)) {
+      return renderSvg(shapeConfig);
     }
 
-    if (isMeshable(shapeConfig.shape)) {
-      // TODO: fix this type
-      return renderMesh(shapeConfig as unknown as MeshableConfiguration, tessellation, withBrepEdges);
+    if (hasMeshableShape(shapeConfig)) {
+      return renderMesh(shapeConfig, tessellation, withBrepEdges);
     }
 
     throw new Error('Invalid shape');

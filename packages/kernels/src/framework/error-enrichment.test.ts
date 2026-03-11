@@ -221,7 +221,7 @@ describe('Minification-resilient function naming', () => {
     it('should replace mangled standalone function names', () => {
       const nameMap = new Map([['mr', 'basicFaceExtrusion']]);
       const frames = [
-        { functionName: 'mr', fileName: 'chunk.js', lineNumber: 1, columnNumber: 1, context: 'framework' as const },
+        { functionName: 'mr', fileName: 'chunk.js', lineNumber: 1, columnNumber: 1, context: 'framework' } as const,
       ];
       const demangled = demangleStackFrames(frames, nameMap);
       expect(demangled[0]!.functionName).toBe('basicFaceExtrusion');
@@ -235,15 +235,15 @@ describe('Minification-resilient function naming', () => {
           fileName: 'main.ts',
           lineNumber: 10,
           columnNumber: 20,
-          context: 'user' as const,
-        },
+          context: 'user',
+        } as const,
         {
           functionName: 'Object.createGeometry',
           fileName: 'chunk.js',
           lineNumber: 9,
           columnNumber: 3735,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
       const demangled = demangleStackFrames(frames, nameMap);
       expect(demangled[0]!.functionName).toBe('main');
@@ -261,36 +261,36 @@ describe('Minification-resilient function naming', () => {
           fileName: 'replicad.kernel-BsXdbiOY.js',
           lineNumber: 8,
           columnNumber: 199_345,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'mr',
           fileName: 'replicad.kernel-BsXdbiOY.js',
           lineNumber: 2,
           columnNumber: 59_809,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'e.extrude',
           fileName: 'replicad.kernel-BsXdbiOY.js',
           lineNumber: 2,
           columnNumber: 63_428,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'main',
           fileName: 'main.ts',
           lineNumber: 10,
           columnNumber: 20,
-          context: 'user' as const,
-        },
+          context: 'user',
+        } as const,
         {
           functionName: 'runMainRaw',
           fileName: 'replicad.kernel-BsXdbiOY.js',
           lineNumber: 9,
           columnNumber: 503,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
 
       const demangled = demangleStackFrames(frames, nameMap);
@@ -308,8 +308,8 @@ describe('Minification-resilient function naming', () => {
           fileName: 'chunk.js',
           lineNumber: 1,
           columnNumber: 1,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
       const demangled = demangleStackFrames(frames, new Map());
       expect(demangled).toEqual(frames);
@@ -372,8 +372,8 @@ describe('Minification-resilient function naming', () => {
           fileName: 'chunk.js',
           lineNumber: 2,
           columnNumber: 1,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
       const classified = classifyLibraryFrames(frames, libraryExportNames);
       expect(classified[0]!.context).toBe('library');
@@ -386,8 +386,8 @@ describe('Minification-resilient function naming', () => {
           fileName: 'chunk.js',
           lineNumber: 2,
           columnNumber: 1,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
       const classified = classifyLibraryFrames(frames, libraryExportNames);
       expect(classified[0]!.context).toBe('library');
@@ -400,8 +400,8 @@ describe('Minification-resilient function naming', () => {
           fileName: 'main.ts',
           lineNumber: 10,
           columnNumber: 6,
-          context: 'user' as const,
-        },
+          context: 'user',
+        } as const,
       ];
       const classified = classifyLibraryFrames(frames, libraryExportNames);
       expect(classified[0]!.context).toBe('user');
@@ -409,7 +409,7 @@ describe('Minification-resilient function naming', () => {
 
     it('should NOT reclassify runtime frames', () => {
       const frames = [
-        { functionName: 'draw', fileName: 'node:vm', lineNumber: 1, columnNumber: 1, context: 'runtime' as const },
+        { functionName: 'draw', fileName: 'node:vm', lineNumber: 1, columnNumber: 1, context: 'runtime' } as const,
       ];
       const classified = classifyLibraryFrames(frames, libraryExportNames);
       expect(classified[0]!.context).toBe('runtime');
@@ -422,15 +422,15 @@ describe('Minification-resilient function naming', () => {
           fileName: 'chunk.js',
           lineNumber: 9,
           columnNumber: 503,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'Object.createGeometry',
           fileName: 'chunk.js',
           lineNumber: 9,
           columnNumber: 3762,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
       const classified = classifyLibraryFrames(frames, libraryExportNames);
       expect(classified[0]!.context).toBe('framework');
@@ -449,44 +449,44 @@ describe('Minification-resilient function naming', () => {
           fileName: 'http://localhost:3000/assets/replicad.kernel-X.js',
           lineNumber: 8,
           columnNumber: 199_345,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'mr',
           fileName: 'http://localhost:3000/assets/replicad.kernel-X.js',
           lineNumber: 2,
           columnNumber: 59_809,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'e.extrude',
           fileName: 'http://localhost:3000/assets/replicad.kernel-X.js',
           lineNumber: 2,
           columnNumber: 63_428,
-          context: 'framework' as const,
-        },
-        { functionName: 'main', fileName: 'main.ts', lineNumber: 10, columnNumber: 6, context: 'user' as const },
+          context: 'framework',
+        } as const,
+        { functionName: 'main', fileName: 'main.ts', lineNumber: 10, columnNumber: 6, context: 'user' } as const,
         {
           functionName: 'runMainRaw',
           fileName: 'http://localhost:3000/assets/replicad.kernel-X.js',
           lineNumber: 9,
           columnNumber: 503,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'runMain',
           fileName: 'http://localhost:3000/assets/replicad.kernel-X.js',
           lineNumber: 9,
           columnNumber: 639,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
         {
           functionName: 'Object.createGeometry',
           fileName: 'http://localhost:3000/assets/replicad.kernel-X.js',
           lineNumber: 9,
           columnNumber: 3762,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
 
       // Phase 4: Demangle
@@ -513,8 +513,8 @@ describe('Minification-resilient function naming', () => {
           fileName: 'chunk.js',
           lineNumber: 1,
           columnNumber: 1,
-          context: 'framework' as const,
-        },
+          context: 'framework',
+        } as const,
       ];
       const classified = classifyLibraryFrames(frames, new Set());
       expect(classified).toEqual(frames);

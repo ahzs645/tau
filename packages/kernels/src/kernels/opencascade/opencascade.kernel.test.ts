@@ -115,7 +115,7 @@ export default function main() {
   const fillet = new oc.BRepFilletAPI_MakeFillet(box, oc.ChFi3d_FilletShape.ChFi3d_Rational);
   const explorer = new oc.TopExp_Explorer(box, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
   if (explorer.More()) {
-    const edge = oc.TopoDS_Cast.Edge(explorer.Current());
+    const edge = oc.TopoDS.Edge(explorer.Current());
     fillet.Add_2(2, edge);
   }
   explorer.delete();
@@ -318,6 +318,7 @@ export default function main() {}`,
       const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       assertSuccess(createResult, 'createGeometry for unsupported format test');
 
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid format for error-path testing
       const exportResult = await worker.exportGeometry('obj' as unknown as 'step');
       expect(exportResult.success).toBe(false);
     });

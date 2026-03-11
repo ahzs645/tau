@@ -1,10 +1,14 @@
 // oxlint-disable-next-line @typescript-eslint/triple-slash-reference -- required for emscripten ambient type declaration
 /// <reference types="emscripten" />
 
+// eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance } from '#kernels/opencascade/wasm/opencascade_full.js';
 import type { KernelSpanTracer } from '#types/kernel-tracer.types.js';
 import { compileWasmStreaming } from '#framework/wasm-loader.js';
 
+/**
+ *
+ */
 export type OpenCascadeModuleFactory = (options?: Partial<EmscriptenModule>) => Promise<OpenCascadeInstance>;
 
 type InitOpenCascadeOptions = {
@@ -17,6 +21,9 @@ const noop = (): void => {
   // Intentionally empty
 };
 
+/**
+ *
+ */
 export async function initOpenCascade(
   wasmUrl: string,
   bindingsFactory: OpenCascadeModuleFactory,

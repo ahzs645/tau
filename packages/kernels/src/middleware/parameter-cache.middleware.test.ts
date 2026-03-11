@@ -3,35 +3,16 @@
  * Tests the wrap-style hook with onion model execution.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { GetParametersResult } from '#types/kernel.types.js';
-import type { GetParametersHandler } from '#types/kernel-middleware.types.js';
 import type { Dependency } from '#types/kernel-dependency.types.js';
 import { parameterCacheMiddleware } from '#middleware/parameter-cache.middleware.js';
-import { createMockRuntime, createMockInput } from '#testing/kernel-testing.utils.js';
-
-/**
- * Create mock dependencies for testing.
- */
-function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
-  const defaults: Dependency[] = [
-    { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    {
-      type: 'middleware',
-      name: 'TestMiddleware',
-      version: '1',
-      index: 0,
-      options: {},
-    },
-    { type: 'framework', name: 'tau', version: '0.0.1' },
-  ];
-
-  if (overrides) {
-    return [...defaults, ...(overrides as Dependency[])];
-  }
-
-  return defaults;
-}
+import {
+  createMockRuntime,
+  createMockInput,
+  createMockDependencies,
+  createMockGetParametersHandler,
+} from '#testing/kernel-testing.utils.js';
 
 /** The data type for a successful GetParametersResult */
 type GetParametersData = {
@@ -105,13 +86,6 @@ function createCacheContext(options?: {
   };
 }
 
-/**
- * Create a mock handler for testing.
- */
-function createMockHandler(result?: GetParametersResult): GetParametersHandler {
-  return vi.fn().mockResolvedValue(result ?? createSuccessResult());
-}
-
 describe('parameterCacheMiddleware', () => {
   describe('wrapGetParameters', () => {
     describe('cache hit', () => {
@@ -124,7 +98,7 @@ describe('parameterCacheMiddleware', () => {
           cacheExists: true,
           cachedResult,
         });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         expect(wrapGetParameters).toBeDefined();
@@ -147,7 +121,7 @@ describe('parameterCacheMiddleware', () => {
           cacheExists: true,
           cachedResult,
         });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -169,7 +143,7 @@ describe('parameterCacheMiddleware', () => {
           cacheExists: true,
           cachedResult,
         });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         const result = await wrapGetParameters!(input, handler, runtime);
@@ -190,7 +164,7 @@ describe('parameterCacheMiddleware', () => {
           defaultParameters: { fresh: true },
         });
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         const result = await wrapGetParameters!(input, handler, runtime);
@@ -201,7 +175,7 @@ describe('parameterCacheMiddleware', () => {
 
       it('should log cache miss message', async () => {
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -212,7 +186,7 @@ describe('parameterCacheMiddleware', () => {
       it('should write result to cache after handler returns', async () => {
         const handlerResult = createSuccessResult();
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -229,7 +203,7 @@ describe('parameterCacheMiddleware', () => {
           defaultParameters: { a: 1, b: 2 },
         });
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -250,7 +224,7 @@ describe('parameterCacheMiddleware', () => {
       it('should ensure cache directory exists before writing', async () => {
         const handlerResult = createSuccessResult();
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -264,7 +238,7 @@ describe('parameterCacheMiddleware', () => {
       it('should log cache write message', async () => {
         const handlerResult = createSuccessResult();
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -275,7 +249,7 @@ describe('parameterCacheMiddleware', () => {
       it('should not cache failed results', async () => {
         const errorResult = createErrorResult();
         const { input, runtime } = createCacheContext({ cacheExists: false });
-        const handler = createMockHandler(errorResult);
+        const handler = createMockGetParametersHandler(errorResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -291,7 +265,7 @@ describe('parameterCacheMiddleware', () => {
           cacheExists: false,
           dependencyHash,
         });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -311,7 +285,7 @@ describe('parameterCacheMiddleware', () => {
           cachedResult,
           dependencyHash,
         });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -328,7 +302,7 @@ describe('parameterCacheMiddleware', () => {
         });
 
         const handlerResult = createSuccessResult();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -345,7 +319,7 @@ describe('parameterCacheMiddleware', () => {
         runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
         const handlerResult = createSuccessResult();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         const result = await wrapGetParameters!(input, handler, runtime);
@@ -359,7 +333,7 @@ describe('parameterCacheMiddleware', () => {
         const { input, runtime } = createCacheContext({ cacheExists: true });
         runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);
@@ -373,7 +347,7 @@ describe('parameterCacheMiddleware', () => {
         runtime.filesystem.mocks.writeFile.mockRejectedValue(new Error('Write error'));
 
         const handlerResult = createSuccessResult();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         // Should not throw, just log warning
@@ -389,7 +363,7 @@ describe('parameterCacheMiddleware', () => {
         runtime.filesystem.mocks.readFile.mockResolvedValue('not valid json {{{');
 
         const handlerResult = createSuccessResult();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockGetParametersHandler(handlerResult);
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         const result = await wrapGetParameters!(input, handler, runtime);
@@ -408,7 +382,7 @@ describe('parameterCacheMiddleware', () => {
           dependencyHash,
           input: { basePath: '/test/project' },
         });
-        const handler = createMockHandler();
+        const handler = createMockGetParametersHandler();
 
         const { wrapGetParameters } = parameterCacheMiddleware;
         await wrapGetParameters!(input, handler, runtime);

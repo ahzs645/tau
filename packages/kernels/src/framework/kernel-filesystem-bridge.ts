@@ -15,6 +15,7 @@
 
 import { safeDispose } from '@taucad/utils/dispose';
 import type { KernelFileSystemBase, KernelWatchRequest, KernelWatchEvent } from '#types/kernel-worker.types.js';
+import type { StringKeyedObject } from '#types/bridge.types.js';
 import { messagePortCallTimeoutMs } from '#framework/kernel-framework.constants.js';
 
 /**
@@ -105,7 +106,7 @@ export type BridgeServerHandle = {
  * @param options - Optional callbacks for disconnect, watch, and unwatch.
  * @returns Handle with emit function for server-to-client push messages.
  */
-export function createBridgeServer<T extends Record<string, unknown>>(
+export function createBridgeServer<T extends StringKeyedObject>(
   handlers: T,
   port: MessagePort,
   options?: {
@@ -139,7 +140,9 @@ export function createBridgeServer<T extends Record<string, unknown>>(
     const { id, method, args } = data as BridgeRequest;
     console.debug(`[BridgeServer] request: ${method}(${JSON.stringify(args).slice(0, 100)})`);
 
-    const function_ = handlers[method] as ((...functionArguments: unknown[]) => Promise<unknown>) | undefined;
+    const function_ = (handlers as Record<string, unknown>)[method] as
+      | ((...functionArguments: unknown[]) => Promise<unknown>)
+      | undefined;
     if (!function_) {
       console.debug(`[BridgeServer] method '${method}' not found on handlers`);
       port.postMessage({
@@ -320,7 +323,7 @@ export function createBridgeCall(port: MessagePort): {
   };
 
   if ('unref' in port && typeof port.unref === 'function') {
-    (port as unknown as { unref: () => void }).unref();
+    (port.unref as () => void)();
   }
 
   function dispose(): void {

@@ -15,30 +15,9 @@ import {
   createMockInput,
   createGltfSuccessResult,
   createErrorResult,
+  createMockDependencies,
+  createMockCreateGeometryHandler,
 } from '#testing/kernel-testing.utils.js';
-
-/**
- * Create mock dependencies for testing.
- */
-function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
-  const defaults: Dependency[] = [
-    { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
-    {
-      type: 'middleware',
-      name: 'TestMiddleware',
-      version: '1',
-      index: 0,
-      options: {},
-    },
-    { type: 'framework', name: 'tau', version: '0.0.1' },
-  ];
-
-  if (overrides) {
-    return [...defaults, ...(overrides as Dependency[])];
-  }
-
-  return defaults;
-}
 
 /**
  * Create serialized cache content (MessagePack binary format, v2).
@@ -102,13 +81,6 @@ function createCacheTestContext(options?: {
   };
 }
 
-/**
- * Create a mock handler for testing.
- */
-function createMockHandler(result?: CreateGeometryResult): CreateGeometryHandler {
-  return vi.fn().mockResolvedValue(result ?? createGltfSuccessResult(new Uint8Array([1, 2, 3])));
-}
-
 describe('geometryCacheMiddleware', () => {
   describe('wrapCreateGeometry', () => {
     describe('cache hit', () => {
@@ -119,7 +91,7 @@ describe('geometryCacheMiddleware', () => {
           cacheExists: true,
           cachedContent: gltfContent,
         });
-        const handler = createMockHandler();
+        const handler = createMockCreateGeometryHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         expect(wrapCreateGeometry).toBeDefined();
@@ -151,7 +123,7 @@ describe('geometryCacheMiddleware', () => {
           cacheExists: true,
           cachedContent: gltfContent,
         });
-        const handler = createMockHandler();
+        const handler = createMockCreateGeometryHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -186,7 +158,7 @@ describe('geometryCacheMiddleware', () => {
         });
 
         const input = createMockInput();
-        const handler = createMockHandler();
+        const handler = createMockCreateGeometryHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -207,7 +179,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -220,7 +192,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler();
+        const handler = createMockCreateGeometryHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -233,7 +205,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -250,7 +222,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -266,7 +238,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -290,7 +262,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -308,7 +280,7 @@ describe('geometryCacheMiddleware', () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
         });
-        const handler = createMockHandler(errorResult);
+        const handler = createMockCreateGeometryHandler(errorResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -324,7 +296,7 @@ describe('geometryCacheMiddleware', () => {
           cacheExists: false,
           dependencyHash,
         });
-        const handler = createMockHandler();
+        const handler = createMockCreateGeometryHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -344,7 +316,7 @@ describe('geometryCacheMiddleware', () => {
           cachedContent,
           dependencyHash,
         });
-        const handler = createMockHandler();
+        const handler = createMockCreateGeometryHandler();
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -366,7 +338,7 @@ describe('geometryCacheMiddleware', () => {
         runtime.filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -384,7 +356,7 @@ describe('geometryCacheMiddleware', () => {
         runtime.filesystem.mocks.writeFile.mockRejectedValue(new Error('Write error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         // Should not throw, just log warning
@@ -403,11 +375,11 @@ describe('geometryCacheMiddleware', () => {
         // Create a handler that returns webrtc geometry
         const mockStream = new ReadableStream();
         const videoStreamResult = {
-          success: true as const,
-          data: [{ format: 'webrtc' as const, stream: mockStream }],
+          success: true,
+          data: [{ format: 'webrtc', stream: mockStream } as const],
           issues: [],
         };
-        const handler = createMockHandler(videoStreamResult);
+        const handler = createMockCreateGeometryHandler(videoStreamResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -428,7 +400,7 @@ describe('geometryCacheMiddleware', () => {
           cacheExists: false,
         });
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -444,14 +416,14 @@ describe('geometryCacheMiddleware', () => {
         // Mixed result with both GLTF and webrtc
         const mockStream = new ReadableStream();
         const mixedResult = {
-          success: true as const,
+          success: true,
           data: [
-            { format: 'gltf' as const, content: new Uint8Array([1, 2, 3]) },
-            { format: 'webrtc' as const, stream: mockStream },
+            { format: 'gltf', content: new Uint8Array([1, 2, 3]) } as const,
+            { format: 'webrtc', stream: mockStream } as const,
           ],
           issues: [],
         };
-        const handler = createMockHandler(mixedResult);
+        const handler = createMockCreateGeometryHandler(mixedResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -467,7 +439,7 @@ describe('geometryCacheMiddleware', () => {
           cacheExists: false,
         });
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -494,7 +466,7 @@ describe('geometryCacheMiddleware', () => {
         ]);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -514,14 +486,14 @@ describe('geometryCacheMiddleware', () => {
         const entries = Array.from({ length: 102 }, (_, index) => ({
           path: `${cacheDirectory}/cache-${index}.bin`,
           name: `cache-${index}.bin`,
-          type: 'file' as const,
+          type: 'file',
           size: 100,
           mtimeMs: now - index * 1000,
         }));
         runtime.filesystem.mocks.readdirStat.mockResolvedValue(entries);
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -538,7 +510,7 @@ describe('geometryCacheMiddleware', () => {
         runtime.filesystem.mocks.readdirStat.mockRejectedValue(new Error('Readdir error'));
 
         const handlerResult = createGltfSuccessResult(new Uint8Array([1, 2, 3]));
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = geometryCacheMiddleware;
         // Should not throw, cleanup errors are non-fatal

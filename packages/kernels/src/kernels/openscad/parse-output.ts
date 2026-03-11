@@ -168,7 +168,7 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
       functionName: name,
       fileName: normalizeFileName(file ?? '', mainFilePath),
       lineNumber: Number(line),
-      context: openscadBuiltinFunctions.has(name) ? ('framework' as const) : ('user' as const),
+      context: openscadBuiltinFunctions.has(name) ? 'framework' : 'user',
     };
   }
 
@@ -183,7 +183,7 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
       functionName: name,
       fileName: normalizeFileName(file ?? '', mainFilePath),
       lineNumber: Number(line),
-      context: openscadBuiltinFunctions.has(name) ? ('framework' as const) : ('user' as const),
+      context: openscadBuiltinFunctions.has(name) ? 'framework' : 'user',
     };
   }
 
@@ -509,7 +509,7 @@ export class OpenScadStderrParser {
           functionName: 'include',
           fileName: topLevelFile,
           lineNumber: 1,
-          context: 'user' as const,
+          context: 'user',
         },
       ];
     }
@@ -526,7 +526,7 @@ export class OpenScadStderrParser {
           functionName: 'include',
           fileName: topLevelFile,
           lineNumber: directLine ?? 1,
-          context: 'user' as const,
+          context: 'user',
         },
       ];
     }
@@ -570,7 +570,7 @@ export class OpenScadStderrParser {
             functionName: 'include',
             fileName: entry.file,
             lineNumber: entry.line,
-            context: 'user' as const,
+            context: 'user',
           }));
         }
 

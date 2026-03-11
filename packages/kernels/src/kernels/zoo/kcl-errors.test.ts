@@ -12,19 +12,7 @@ import {
   extractExecutionError,
 } from '#kernels/zoo/kcl-errors.js';
 import type { KclError as WasmKclError } from '@taucad/kcl-wasm-lib/bindings/KclError';
-
-function createWasmError(overrides?: Partial<WasmKclError>): WasmKclError {
-  const base: WasmKclError = {
-    kind: 'semantic',
-    details: {
-      msg: 'something went wrong',
-      sourceRanges: [[10, 20, 0]],
-      backtrace: [],
-    },
-  };
-  // oxlint-disable-next-line typescript/consistent-type-assertions -- we know the type is correct
-  return { ...base, ...overrides } as WasmKclError;
-}
+import { createMockWasmKclError } from '#kernels/zoo/zoo-testing.utils.js';
 
 describe('KclError', () => {
   it('should set kind, msg, and sourceRange', () => {
@@ -129,17 +117,17 @@ describe('KclConnectionError', () => {
 
 describe('KclWasmError', () => {
   it('should wrap WASM error preserving kind and message', () => {
-    const wasmError = createWasmError();
+    const wasmError = createMockWasmKclError();
     const error = new KclWasmError(wasmError);
 
     expect(error).toBeInstanceOf(KclError);
     expect(error.kind).toBe('semantic');
-    expect(error.msg).toBe('something went wrong');
+    expect(error.msg).toBe('test error');
     expect(error.wasmError).toBe(wasmError);
   });
 
   it('should use first source range when available', () => {
-    const wasmError = createWasmError({
+    const wasmError = createMockWasmKclError({
       details: {
         msg: 'error',
         sourceRanges: [
@@ -154,7 +142,7 @@ describe('KclWasmError', () => {
   });
 
   it('should default sourceRange to [0,0,0] when no sourceRanges', () => {
-    const wasmError = createWasmError({
+    const wasmError = createMockWasmKclError({
       details: { msg: 'error', sourceRanges: [], backtrace: [] },
     });
     const error = new KclWasmError(wasmError);
@@ -163,12 +151,13 @@ describe('KclWasmError', () => {
 
   describe('createStackFrames', () => {
     it('should return empty array when backtrace is empty', () => {
-      const wasmError = createWasmError();
+      const wasmError = createMockWasmKclError();
       const error = new KclWasmError(wasmError);
       expect(error.createStackFrames('const x = 1')).toEqual([]);
     });
 
     it('should map backtrace entries to stack frames with filenames', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to WasmKclError
       const wasmError = {
         kind: 'runtime',
         details: {
@@ -224,7 +213,7 @@ describe('isKclError', () => {
 
 describe('isWasmKclError', () => {
   it('should return true for objects with kind and details', () => {
-    expect(isWasmKclError(createWasmError())).toBe(true);
+    expect(isWasmKclError(createMockWasmKclError())).toBe(true);
   });
 
   it('should return false for plain objects', () => {
@@ -238,7 +227,7 @@ describe('isWasmKclError', () => {
 
 describe('isWasmExecutionResultWithError', () => {
   it('should return true for objects with nested WasmKclError', () => {
-    const result = { error: createWasmError() };
+    const result = { error: createMockWasmKclError() };
     expect(isWasmExecutionResultWithError(result)).toBe(true);
   });
 
@@ -253,12 +242,12 @@ describe('isWasmExecutionResultWithError', () => {
 
 describe('extractWasmKclError', () => {
   it('should return direct WasmKclError', () => {
-    const wasmError = createWasmError();
+    const wasmError = createMockWasmKclError();
     expect(extractWasmKclError(wasmError)).toBe(wasmError);
   });
 
   it('should extract nested error from execution result', () => {
-    const wasmError = createWasmError();
+    const wasmError = createMockWasmKclError();
     const result = {
       error: wasmError,
       filenames: Object.fromEntries([[0, { type: 'local', value: 'main.kcl' }]]),
@@ -277,7 +266,7 @@ describe('extractWasmKclError', () => {
 
 describe('extractExecutionError', () => {
   it('should extract message and position from WASM error', () => {
-    const wasmError = createWasmError({
+    const wasmError = createMockWasmKclError({
       details: {
         msg: 'undefined variable',
         sourceRanges: [[15, 25, 0]],

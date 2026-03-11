@@ -236,6 +236,7 @@ async function mountFileSystem(
 ): Promise<void> {
   const { mainFile, basePath, filesystem, logger, fileContentCache, fileContentsCache } = options;
 
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Emscripten FS.chdir() exists at runtime but lacks type declaration
   (instance.FS as unknown as { chdir(path: string): void }).chdir('/');
   instance.FS.mkdir('/locale');
 

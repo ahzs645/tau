@@ -30,7 +30,7 @@ function createMockPort(): KernelMessagePort & {
 }
 
 function createMockWorker(overrides?: Partial<KernelWorker>): KernelWorker {
-  return {
+  const base = {
     initialize: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     render: vi.fn<() => Promise<{ success: true; data: unknown[] }>>().mockResolvedValue({ success: true, data: [] }),
     exportGeometry: vi
@@ -43,7 +43,9 @@ function createMockWorker(overrides?: Partial<KernelWorker>): KernelWorker {
     setTelemetrySend: vi.fn(),
     flushTelemetry: vi.fn(),
     ...overrides,
-  } as unknown as KernelWorker;
+  };
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to KernelWorker
+  return base as unknown as KernelWorker;
 }
 
 async function waitForMicrotasks(): Promise<void> {
@@ -301,7 +303,7 @@ describe('createWorkerDispatcher', () => {
         handleSetFile: vi.fn().mockImplementation(() => {
           throw new Error('setFile exploded');
         }),
-      } as never);
+      });
       const port = createMockPort();
       createWorkerDispatcher(worker, port);
 
@@ -324,7 +326,7 @@ describe('createWorkerDispatcher', () => {
         handleSetParameters: vi.fn().mockImplementation(() => {
           throw new Error('setParameters exploded');
         }),
-      } as never);
+      });
       const port = createMockPort();
       createWorkerDispatcher(worker, port);
 

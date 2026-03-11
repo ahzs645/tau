@@ -96,7 +96,7 @@ function generateModuleShim(name: string, exports: Record<string, unknown>): str
 }
 
 function registerJscadModules(runtime: KernelRuntime): void {
-  const rawImport = jscadModeling as unknown as Record<string, unknown>;
+  const rawImport = jscadModeling as Record<string, unknown>;
   const exports = (rawImport['default'] ?? rawImport) as Record<string, unknown>;
   const registry = getModuleRegistry();
   registry.set('@jscad/modeling', exports);

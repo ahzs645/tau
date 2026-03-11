@@ -162,7 +162,7 @@ describe('createKernelFileSystem', () => {
         {
           path: '/d/f',
           name: 'f',
-          type: 'file' as const,
+          type: 'file',
           size: 5,
           mtimeMs: 123,
         },

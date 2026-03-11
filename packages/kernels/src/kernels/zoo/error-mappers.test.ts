@@ -1,23 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { mapErrorToKclError, convertKclErrorToKernelIssue } from '#kernels/zoo/error-mappers.js';
 import { KclError, KclWasmError } from '#kernels/zoo/kcl-errors.js';
-import type { KclError as WasmKclError } from '@taucad/kcl-wasm-lib/bindings/KclError';
-
-// ===================================================================
-// Helpers
-// ===================================================================
-
-function createMinimalWasmError(overrides?: Partial<WasmKclError>): WasmKclError {
-  const base: WasmKclError = {
-    kind: 'semantic',
-    details: {
-      msg: 'test error',
-      sourceRanges: [[10, 20, 0]],
-      backtrace: [],
-    },
-  };
-  return { ...base, ...overrides } as WasmKclError;
-}
+import type { KclErrorKind } from '#kernels/zoo/kcl-errors.js';
+import { createMockWasmKclError } from '#kernels/zoo/zoo-testing.utils.js';
 
 // ===================================================================
 // mapErrorToKclError
@@ -31,7 +16,7 @@ describe('mapErrorToKclError', () => {
   });
 
   it('should wrap WASM KclError via extractWasmKclError', () => {
-    const wasmError = createMinimalWasmError({
+    const wasmError = createMockWasmKclError({
       kind: 'engine',
       details: { msg: 'engine crash', sourceRanges: [[0, 5, 0]], backtrace: [] },
     });
@@ -64,7 +49,7 @@ describe('mapErrorToKclError', () => {
 
 describe('convertKclErrorToKernelIssue', () => {
   it('should map KclWasmError with source ranges to correct line/column position', () => {
-    const wasmError = createMinimalWasmError({
+    const wasmError = createMockWasmKclError({
       details: { msg: 'error', sourceRanges: [[5, 15, 0]], backtrace: [] },
     });
     const kclError = new KclWasmError(wasmError);
@@ -77,7 +62,7 @@ describe('convertKclErrorToKernelIssue', () => {
   });
 
   it('should create stack frames from KclWasmError backtrace', () => {
-    const wasmError = createMinimalWasmError({
+    const wasmError = createMockWasmKclError({
       details: {
         msg: 'error',
         sourceRanges: [[0, 10, 0]],
@@ -94,7 +79,7 @@ describe('convertKclErrorToKernelIssue', () => {
   });
 
   it('should include stack string representation when stack frames exist', () => {
-    const wasmError = createMinimalWasmError({
+    const wasmError = createMockWasmKclError({
       details: {
         msg: 'error',
         sourceRanges: [[0, 5, 0]],
@@ -168,7 +153,8 @@ describe('convertKclErrorToKernelIssue', () => {
   });
 
   it('should map unknown kind to unknown type', () => {
-    const kclError = KclError.simple({ kind: 'some-unknown-kind' as never, message: 'unknown' });
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid kind to test unknown fallback
+    const kclError = KclError.simple({ kind: 'some-unknown-kind' as unknown as KclErrorKind, message: 'unknown' });
     const result = convertKclErrorToKernelIssue(kclError);
     expect(result.issues[0]!.type).toBe('unknown');
   });

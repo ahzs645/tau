@@ -49,6 +49,7 @@ const getWebSocket = async (): Promise<typeof WebSocket> => {
   // Node.js environment - try to import ws package
   try {
     const ws = await import('ws');
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- ws.WebSocket is API-compatible with browser WebSocket but types differ
     return ws.WebSocket as unknown as typeof WebSocket;
   } catch {
     throw new Error('WebSocket not available. In Node.js, install the "ws" package: npm install ws');

@@ -7,11 +7,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mock } from 'vitest-mock-extended';
 import type { PluginBuild, Metafile } from 'esbuild-wasm';
 import { createVfsPlugin, extractProjectDependencies, extractExternalImports } from '#bundler/esbuild-core.js';
 import { esbuildNamespace, httpFetchMaxSizeBytes } from '#bundler/esbuild.constants.js';
 import { ModuleManager } from '#bundler/module-manager.js';
-import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
+import { createMockFileSystem, createMockResponse } from '#testing/kernel-testing.utils.js';
 import type { MockFileSystem } from '#testing/kernel-testing.utils.js';
 
 // Mock esbuild-wasm to prevent its environment invariant check from failing in jsdom
@@ -25,28 +26,6 @@ vi.mock('esbuild-wasm', () => ({
 // =============================================================================
 
 const mockFetch = vi.fn<typeof fetch>();
-
-function createSuccessResponse(body: string, headers?: Record<string, string>): Response {
-  const headerMap = new Headers(headers);
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    headers: headerMap,
-    text: vi.fn<() => Promise<string>>().mockResolvedValue(body),
-    json: vi.fn<() => Promise<unknown>>().mockResolvedValue({}),
-    clone: vi.fn<() => Response>(),
-    body: undefined,
-    bodyUsed: false,
-    arrayBuffer: vi.fn<() => Promise<ArrayBuffer>>(),
-    blob: vi.fn<() => Promise<Blob>>(),
-    formData: vi.fn<() => Promise<FormData>>(),
-    bytes: vi.fn<() => Promise<Uint8Array<ArrayBuffer>>>(),
-    redirected: false,
-    type: 'basic' as ResponseType,
-    url: '',
-  } as unknown as Response;
-}
 
 // =============================================================================
 // Plugin Handler Capture Utility
@@ -114,7 +93,7 @@ function capturePluginHandlers(filesystem: MockFileSystem): CapturedHandlers {
     autoExportNames: ['main'],
   });
 
-  void plugin.setup(mockBuild as unknown as PluginBuild);
+  void plugin.setup(mock<PluginBuild>(mockBuild));
 
   if (!httpUrlOnLoad) {
     throw new Error('http-url onLoad handler was not registered');
@@ -151,7 +130,7 @@ describe('ESBuild Bundler – http-url onLoad handler', () => {
 
   describe('timeout signal', () => {
     it('should pass an AbortSignal to fetch', async () => {
-      mockFetch.mockResolvedValue(createSuccessResponse('export default 42;'));
+      mockFetch.mockResolvedValue(createMockResponse('export default 42;'));
 
       await handler({
         path: 'https://esm.sh/lodash',
@@ -194,7 +173,7 @@ describe('ESBuild Bundler – http-url onLoad handler', () => {
     it('should reject responses when content-length exceeds the limit', async () => {
       const oversizedLength = String(httpFetchMaxSizeBytes + 1);
       mockFetch.mockResolvedValue(
-        createSuccessResponse('export default 42;', {
+        createMockResponse('export default 42;', {
           'Content-Length': oversizedLength,
         }),
       );
@@ -216,7 +195,7 @@ describe('ESBuild Bundler – http-url onLoad handler', () => {
     it('should reject responses when actual body exceeds the limit', async () => {
       // No content-length header, but the body itself is too large
       const oversizedBody = 'x'.repeat(httpFetchMaxSizeBytes + 1);
-      mockFetch.mockResolvedValue(createSuccessResponse(oversizedBody));
+      mockFetch.mockResolvedValue(createMockResponse(oversizedBody));
 
       const result = (await handler({
         path: 'https://esm.sh/sneaky-large-package',
@@ -233,7 +212,7 @@ describe('ESBuild Bundler – http-url onLoad handler', () => {
     });
 
     it('should allow responses within the size limit', async () => {
-      mockFetch.mockResolvedValue(createSuccessResponse('export default 42;'));
+      mockFetch.mockResolvedValue(createMockResponse('export default 42;'));
 
       const result = (await handler({
         path: 'https://esm.sh/small-package/index.js',

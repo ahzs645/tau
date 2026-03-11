@@ -8,9 +8,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { Document, NodeIO, Accessor } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import type { GeometryGltf, GeometrySvg } from '@taucad/types';
-import type { CreateGeometryHandler, KernelMiddlewareRuntime } from '#types/kernel-middleware.types.js';
+import type { KernelMiddlewareRuntime } from '#types/kernel-middleware.types.js';
 import { gltfEdgeDetectionMiddleware } from '#middleware/gltf-edge-detection.middleware.js';
 import {
+  createMockCreateGeometryHandler,
   createMockRuntime,
   createMockInput,
   createSuccessResult,
@@ -343,10 +344,6 @@ function createEdgeDetectionContext(config?: EdgeDetectionOptions): {
   };
 }
 
-function createMockHandler(result: ReturnType<typeof createSuccessResult>): CreateGeometryHandler {
-  return vi.fn().mockResolvedValue(result);
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -358,7 +355,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createCubeGltfWithoutLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         expect(wrapCreateGeometry).toBeDefined();
@@ -385,7 +382,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createCubeGltfWithoutLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -405,7 +402,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createCubeGltfWithoutLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -424,7 +421,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createCubeGltfWithLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -455,7 +452,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         };
         const handlerResult = createSuccessResult([originalGeometry]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -472,7 +469,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createMixedMeshGltf();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -505,7 +502,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createMixedMeshGltf();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -528,7 +525,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         };
         const handlerResult = createSuccessResult([svgGeometry]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -550,7 +547,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         };
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }, svgGeometry]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);
@@ -596,7 +593,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createCubeGltfWithoutLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         await wrapCreateGeometry!(input, handler, runtime);
@@ -632,7 +629,7 @@ describe('gltfEdgeDetectionMiddleware', () => {
         const gltfData = await createCubeGltfWithoutLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
         const { input, runtime } = createEdgeDetectionContext();
-        const handler = createMockHandler(handlerResult);
+        const handler = createMockCreateGeometryHandler(handlerResult);
 
         const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
         const result = await wrapCreateGeometry!(input, handler, runtime);

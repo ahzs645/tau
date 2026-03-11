@@ -17,12 +17,12 @@ import { defineMiddleware } from '#middleware/kernel-middleware.js';
 import { MockKernelWorker } from '#testing/kernel-testing.utils.js';
 
 describe('kernel-worker middleware onion chain', () => {
-  type CreateGeometrySpyTarget = {
-    onCreateGeometry: (...args: unknown[]) => Promise<CreateGeometryResult>;
-  };
-
   function spyOnCreateGeometry(worker: MockKernelWorker) {
-    return vi.spyOn(worker as unknown as CreateGeometrySpyTarget, 'onCreateGeometry');
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- keyof MockKernelWorker not assignable to vi.spyOn; use as unknown as to spy on protected method
+    return vi.spyOn(
+      worker as unknown as { onCreateGeometry: (...args: unknown[]) => Promise<unknown> },
+      'onCreateGeometry',
+    );
   }
 
   const mockGltfContent = new Uint8Array([1, 2, 3, 4]);
@@ -352,7 +352,7 @@ describe('kernel-worker middleware onion chain', () => {
             // Add a suffix to the issues
             return {
               ...result,
-              issues: [...result.issues, { message: 'M1-processed', severity: 'info' as const }],
+              issues: [...result.issues, { message: 'M1-processed', severity: 'info' }],
             };
           }
 
@@ -368,7 +368,7 @@ describe('kernel-worker middleware onion chain', () => {
           if (result.success) {
             return {
               ...result,
-              issues: [...result.issues, { message: 'M2-processed', severity: 'info' as const }],
+              issues: [...result.issues, { message: 'M2-processed', severity: 'info' }],
             };
           }
 
@@ -379,7 +379,7 @@ describe('kernel-worker middleware onion chain', () => {
       const mainResult: CreateGeometryResult = {
         success: true,
         data: [],
-        issues: [{ message: 'main-issue', severity: 'warning' as const }],
+        issues: [{ message: 'main-issue', severity: 'warning' }],
       };
 
       const worker = new MockKernelWorker({

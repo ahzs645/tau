@@ -21,13 +21,15 @@ type MockOc = OpenCascadeInstance & {
   nonFunction?: string;
 };
 
+// Proxy from mock<T>() auto-adds getExceptionMessage, breaking "return original" test
 function createMockOc(overrides?: Record<string, unknown>): MockOc {
-  const mock: Record<string, unknown> = {
+  const base: Record<string, unknown> = {
     someMethod: vi.fn().mockReturnValue(42),
     nonFunction: 'string-value',
     ...overrides,
   };
-  return mock as unknown as MockOc;
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- plain object required for identity test
+  return base as unknown as MockOc;
 }
 
 function createMockTracer(): KernelSpanTracer & { startSpan: ReturnType<typeof vi.fn> } {

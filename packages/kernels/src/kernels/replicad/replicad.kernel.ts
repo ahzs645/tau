@@ -241,11 +241,11 @@ function getModuleRegistry(): Map<string, Record<string, unknown>> {
 }
 
 function registerReplicadModule(runtime: KernelRuntime): void {
-  const exports = replicad as unknown as Record<string, unknown>;
   const registry = getModuleRegistry();
-  registry.set('replicad', exports);
+  const replicadRecord = replicad as Record<string, unknown>;
+  registry.set('replicad', replicadRecord);
 
-  const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
+  const exportNames = Object.keys(replicadRecord).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
   const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('replicad');\n${namedExports}\nexport default __mod;\n`;
 
@@ -334,8 +334,8 @@ function enrichIssueLocation(
   return issues.map((issue) => ({
     ...issue,
     message: issue.message,
-    type: 'runtime' as const,
-    severity: issue.severity === 'warning' ? ('warning' as const) : ('error' as const),
+    type: 'runtime',
+    severity: issue.severity === 'warning' ? 'warning' : 'error',
     location: (issue.location as KernelIssue['location']) ?? {
       fileName: fallbackFileName,
       startLineNumber: 1,

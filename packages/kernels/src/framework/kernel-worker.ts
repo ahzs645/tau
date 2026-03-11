@@ -1680,7 +1680,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Add parameter dependency for geometry computation
     const parameterDep: ParameterDependency = {
-      type: 'parameter' as const,
+      type: 'parameter',
       parameters: input.parameters,
     };
     return [...baseDeps, parameterDep];
@@ -1726,7 +1726,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Contract: getDependencies() must return paths in deterministic order.
     const fileDeps: FileDependency[] = absolutePaths.map((absolutePath) => ({
-      type: 'file' as const,
+      type: 'file',
       path: absolutePath,
       contentHash: this.fileHashCache.get(absolutePath)!,
     }));
@@ -1736,7 +1736,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     const middlewareDeps: MiddlewareDependency[] = middleware
       .filter(({ enabled }) => enabled)
       .map(({ middleware: mw, options: mwOptions }, index) => ({
-        type: 'middleware' as const,
+        type: 'middleware',
         name: mw.name,
         version: mw.version ?? '1',
         index,
@@ -1745,14 +1745,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // 3. Framework dependency
     const frameworkDep: FrameworkDependency = {
-      type: 'framework' as const,
+      type: 'framework',
       name: 'tau',
       version: tauVersion,
     };
 
     // 4. Options dependencies (options are stable between renders, no sort needed)
     const optionDeps: OptionDependency[] = Object.entries(this.options).map(([key, value]) => ({
-      type: 'option' as const,
+      type: 'option',
       key,
       value,
     }));
@@ -1760,7 +1760,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     // 5. Asset dependencies (fonts, WASM, etc.)
     const assetUrls = this.getAssetUrls();
     const assetDeps: AssetDependency[] = assetUrls.map((urlOrVersion, index) => ({
-      type: 'asset' as const,
+      type: 'asset',
       name: `asset-${index}`,
       contentHash: this.hashAssetUrl(urlOrVersion),
     }));
