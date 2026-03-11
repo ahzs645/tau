@@ -45,6 +45,25 @@ Schema validation failures on input or output data.
 
 Domain-level errors returned by the client (e.g., `FILE_NOT_FOUND`). These pass through `ChatRpcService` validation as valid results — they are handled at the tool layer via `isRpcClientError()`.
 
+#### Errno-based Classification
+
+`getErrorCode()` classifies raw filesystem errors into `RpcClientErrorCode` values. The **primary signal** is the POSIX `error.code` property (e.g., `'ENOENT'`, `'EACCES'`), looked up in the `errnoToRpcCode` mapping:
+
+| `error.code` | `RpcClientErrorCode` |
+| ------------ | -------------------- |
+| `ENOENT`     | `FILE_NOT_FOUND`     |
+| `EACCES`     | `PERMISSION_DENIED`  |
+| `EPERM`      | `PERMISSION_DENIED`  |
+
+All filesystem implementations must set `error.code` on thrown errors:
+
+- **ZenFS** (kerium `Exception`): sets `code` automatically via `Errno` enum.
+- **Node.js** (`ErrnoException`): sets `code` natively.
+- **`fromMemoryFS`**: sets `code` via `(error as NodeJS.ErrnoException).code = 'ENOENT'`.
+- **Filesystem bridge**: preserves `error.code` across worker boundaries via `BridgeError`.
+
+When `error.code` is absent or unrecognized, `getErrorCode()` falls back to substring matching on `error.message` (e.g., `'not found'`, `'no such file'`, `'enoent'`). This fallback exists for defense-in-depth but should not be the primary classification path for any known filesystem implementation.
+
 ## Error Propagation Flow
 
 ```

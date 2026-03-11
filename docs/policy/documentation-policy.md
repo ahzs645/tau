@@ -341,6 +341,8 @@ All public APIs in `packages/` must have JSDoc documentation. This is enforced b
 - `@returns` tag with description for functions with non-void return types.
 - `@example` tag for key public functions (factory functions, `createKernelClient`, `defineKernel`, `defineMiddleware`, `defineBundler`).
 
+For `@example` standards (compilable examples, real-world usage, language tags), see [JSDoc Policy](jsdoc-policy.md).
+
 ### Auto-Generated Reference Docs
 
 Reference documentation is auto-generated from JSDoc using `fumadocs-typescript`'s `remarkAutoTypeTable` remark plugin. The workflow:

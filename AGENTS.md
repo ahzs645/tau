@@ -73,10 +73,9 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 
 ## Learned User Preferences
 
-- Write failing tests first (TDD), then fix the code to make them pass; preserve existing tests when adding new ones
-- Make minimal, targeted changes; run typecheck on changed files before considering work done — user will revert overly broad fixes
+- Write failing tests first (TDD), then fix to pass; preserve existing tests; make minimal, targeted changes and run typecheck before considering done
 - State machines own lifecycle and state logic; UI clients send events only and never decide open/close; avoid ref/state for sync guards
-- Follow policy docs when applicable: testing-policy, library-api-policy, xstate-policy, lint-policy, react-testing-policy, filesystem-policy
+- Follow policy docs when applicable: testing-policy, library-api-policy, xstate-policy, lint-policy, react-testing-policy, filesystem-policy, commit-policy, typescript-policy, agents-md-policy, context-engineering-policy, jsdoc-policy
 - Pin GitHub/dependency versions to exact commit hashes for reproducibility and immutability
 - Use `allowlist` over `whitelist` in naming
 - When behavior regressed from something that previously worked, prefer config changes over code changes — find the regression
@@ -84,14 +83,16 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 - Use `react-virtuoso` for virtualization, not `@tanstack/react-virtual`; follow patterns in `combobox-responsive.tsx`
 - Never blow away the entire IndexedDB database — user work is stored there
 - Prefer algorithmic, code-level solutions over bundler config or Vite plugins; optimize for 3rd-party consumer DX
+- Avoid type assertion escape hatches (`as never`, `as unknown as`, unnecessary `as const` on returns); fix underlying type issues instead
 - When asked to explore or investigate, present findings and analysis first; do not jump to code changes until implementation is explicitly requested
+- JSDoc codeblocks always use `ts` lang tag for TypeScript; `@public` tag gates compile-checking — never downgrade to `text` to avoid compilation; use `text` only for non-code content (output, trees)
 
 ## Learned Workspace Facts
 
-- Policy docs live in `docs/policy/` (testing, library-api, vision, lint, xstate, typescript, filesystem, react-testing); research docs in `docs/research/`
-- Hybrid oxlint + ESLint linting: oxlint runs first, ESLint handles residual rules; custom Oxlint JS plugins in `libs/oxlint/`
+- Policy docs live in `docs/policy/` (testing, library-api, vision, lint, xstate, typescript, filesystem, react-testing, commit, agents-md, context-engineering, jsdoc, and more); research docs in `docs/research/`
+- Hybrid oxlint + ESLint linting: oxlint runs first, ESLint handles residual rules; custom Oxlint JS plugins in `libs/oxlint/`; rule tests use `oxlint-disable` syntax (ESLint 9 RuleTester strips `eslint-disable` from `getAllComments()`)
 - External repos in `repos/` managed via `repos.yaml` and `pnpm repos`; gitignored and cursorignored; add to `.oxlintrc.json` ignorePatterns
-- `packages/kernels` is consumed as source via package.json exports, not built output
+- `packages/kernels` is consumed as source via package.json exports, not built output; test mocks in `packages/kernels/src/testing/kernel-testing.utils.ts`
 - Vite plugins in `@taucad/vite` with `*.vite-plugin.ts` suffix, `vite:` prefix for names, and Vite 8 hook filters for Rolldown
 - PR workflow: submit as draft; human reviews before marking ready via `gh pr ready`
 - Single FS worker architecture; all filesystem access flows through one serialized worker with ZenFS and IndexedDB backend
@@ -99,5 +100,4 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 - Two filesystem watch planes: kernel fast path (dependency-scoped) and UI tree path (directory-scoped); do not merge into one coarse stream
 - `repos/opencascade.js` WASM build: platform bindings in `BUILTIN_ADDITIONAL_BIND_CODE` (Python layer); full builds (10-30+ min) use `nohup`
 - `fromSafeAsync` (`#lib/xstate.lib.js`) replaces `fromPromise` for all UI XState async actors; uses `<TReturn, TInput>` generics matching `fromPromise<TOutput, TInput>`
-- Typechecking uses `tsgo` (Go-based TS compiler); do not add cross-project `references` arrays to `tsconfig.json` (causes TS6305)
-- Avoid `using`/`await using` syntax in shipped code; Rolldown does not downlevel it and Safari does not support it. Use try/finally with `[Symbol.asyncDispose]()` instead. ZenFS (`@zenfs/core`) also ships `using` in its dist — verify build output with `rg "await using" apps/ui/build/client/assets/`
+- Typechecking uses `tsgo` (Go-based TS compiler); do not add cross-project `references` arrays to `tsconfig.json` (causes TS6305); avoid `using`/`await using` in shipped code — Rolldown won't downlevel and Safari lacks support; use try/finally with `[Symbol.asyncDispose]()` instead
