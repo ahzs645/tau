@@ -5,13 +5,15 @@
  * Use in teardown paths where multiple resources must be released
  * and one failure must not prevent the rest from being cleaned up.
  *
+ * @public
  * @param cleanupFunction - Cleanup function to execute (no-ops if undefined)
  *
- * @example
+ * @example <caption>Safely terminating a worker</caption>
  * ```typescript
- * safeDispose(() => proxy.dispose());
+ * import { safeDispose } from '@taucad/utils/dispose';
+ *
+ * const worker = new Worker('/worker.js');
  * safeDispose(() => worker.terminate());
- * safeDispose(() => port.close());
  * ```
  */
 export function safeDispose(cleanupFunction: (() => void) | undefined): void {

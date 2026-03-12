@@ -3,6 +3,7 @@
  *
  * @param path - The path to normalize.
  * @returns A normalized path with single leading slash and no redundant slashes.
+ * @public
  */
 export function normalizePath(path: string): string {
   const segments = path.split('/').filter((segment) => segment.length > 0);
@@ -20,11 +21,15 @@ export function normalizePath(path: string): string {
  * @param paths - Path segments to join.
  * @returns A normalized absolute path.
  *
- * @example
+ * @public
+ *
+ * @example <caption>Joining path segments</caption>
+ * ```typescript
  * joinPath('/root', 'dir', 'file.txt') // '/root/dir/file.txt'
  * joinPath('/root', '/absolute', 'file.txt') // '/absolute/file.txt'
  * joinPath('/', '/builds/id/main.scad') // '/builds/id/main.scad'
  * joinPath('/root', '', 'file.txt') // '/root/file.txt'
+ * ```
  */
 export function joinPath(...paths: string[]): string {
   let result = '';
@@ -59,6 +64,7 @@ export function joinPath(...paths: string[]): string {
  *
  * @param path - absolute path
  * @returns parent directory path, or '/' for root-level paths
+ * @public
  */
 export function parentDirectory(path: string): string {
   const lastSlash = path.lastIndexOf('/');
@@ -75,6 +81,7 @@ export function parentDirectory(path: string): string {
  *
  * @param path - path to canonicalize
  * @returns canonical absolute path
+ * @public
  */
 export function canonicalizePath(path: string): string {
   let normalized = path.replaceAll(/\/+/g, '/');

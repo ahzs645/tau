@@ -14,6 +14,7 @@ import { parsePackage, CDN_URLS } from 'cdn-resolve';
 // Types
 // =============================================================================
 
+/** @public */
 export type PackageInfo = {
   name: string;
   version: string;
@@ -44,6 +45,7 @@ const nodeModulesRoot = '/node_modules';
  *
  * This utility is shared between the kernel worker (module resolution)
  * and the main thread (type acquisition).
+ * @public
  */
 export function isBareSpecifier(specifier: string): boolean {
   return !(
@@ -137,6 +139,7 @@ const cdnConfigs: readonly CdnConfig[] = [
  *
  * @param url - A full URL string
  * @returns The package name, or undefined if the URL is not a recognized CDN URL
+ * @public
  */
 export function extractPackageFromCdnUrl(url: string): string | undefined {
   const info = extractPackageInfoFromCdnUrl(url);
@@ -158,6 +161,7 @@ export function extractPackageFromCdnUrl(url: string): string | undefined {
  *
  * @param url - A full URL string
  * @returns Package info, or undefined if the URL is not a recognized CDN URL
+ * @public
  */
 export function extractPackageInfoFromCdnUrl(url: string): PackageInfo | undefined {
   let parsed: URL;
@@ -198,6 +202,7 @@ export function extractPackageInfoFromCdnUrl(url: string): PackageInfo | undefin
 
 /**
  * Check whether a URL belongs to the esm.sh CDN.
+ * @public
  */
 export function isEsmShUrl(url: string): boolean {
   try {
@@ -219,6 +224,7 @@ export function isEsmShUrl(url: string): boolean {
  * - 'replicad' -> { name: 'replicad', version: '', path: '' }
  * - 'replicad@0.19.1' -> { name: 'replicad', version: '0.19.1', path: '' }
  * - '@jscad/modeling@2.12.6/primitives' -> { name: '@jscad/modeling', version: '2.12.6', path: 'primitives' }
+ * @public
  */
 export function parsePackageSpecifier(specifier: string): PackageInfo {
   const parsed = parsePackage(specifier);
@@ -244,6 +250,7 @@ export function parsePackageSpecifier(specifier: string): PackageInfo {
  * @param specifier - The relative import (e.g., './utils.ts', '../helpers.ts')
  * @param fromPath - Absolute path of the importing file
  * @returns Resolved absolute path
+ * @public
  */
 export function resolveRelativePath(specifier: string, fromPath: string): string {
   const directory = fromPath.slice(0, fromPath.lastIndexOf('/'));
@@ -278,6 +285,7 @@ export function resolveRelativePath(specifier: string, fromPath: string): string
  *
  * @param packageName - Package name (e.g., 'lodash', '@jscad/modeling')
  * @returns Absolute path (e.g., '/node_modules/lodash')
+ * @public
  */
 export function getNodeModulesPath(packageName: string): string {
   return `${nodeModulesRoot}/${packageName}`;
@@ -291,6 +299,7 @@ export function getNodeModulesPath(packageName: string): string {
  * @returns Absolute file path:
  *   - No subpath: '/node_modules/lodash/index.js'
  *   - With subpath: '/node_modules/lodash/debounce.js'
+ * @public
  */
 export function getCdnCachePath(packageName: string, subpath?: string): string {
   const basePath = getNodeModulesPath(packageName);

@@ -9,6 +9,7 @@ const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm
  * Generates a prefixed ID
  * @param prefix - The prefix to use for the ID
  * @returns A string in the format "prefix_<id>"
+ * @public
  */
 export function generatePrefixedId<T extends IdPrefix>(prefix: T): `${T}_${string}` {
   return `${prefix}_${nanoid()}`;
@@ -19,6 +20,7 @@ export function generatePrefixedId<T extends IdPrefix>(prefix: T): `${T}_${strin
  * @param id - The prefixed ID
  * @returns The prefix portion of the ID
  * @throws Error if the ID is invalid or doesn't contain a valid prefix
+ * @public
  */
 export function extractPrefix(id: string): IdPrefix {
   // Validate first, then extract knowing it's safe
@@ -32,6 +34,7 @@ export function extractPrefix(id: string): IdPrefix {
  * Validates if a string is a valid prefixed ID
  * @param id - The string to validate
  * @throws Error if the ID is invalid
+ * @public
  */
 export function validatePrefixedId(id: string): void {
   if (!id) {
@@ -63,6 +66,7 @@ export function validatePrefixedId(id: string): void {
  * Checks if a string is a valid prefixed ID (non-throwing version)
  * @param id - The string to validate
  * @returns boolean indicating if the string is a valid prefixed ID
+ * @public
  */
 export function isValidPrefixedId(id: string): id is `${IdPrefix}_${string}` {
   try {

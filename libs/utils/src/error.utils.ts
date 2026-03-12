@@ -4,6 +4,7 @@
  * Covers both the standard `DOMException` with `name === 'AbortError'`
  * (thrown by `fetch`, XState's `waitFor`, etc.) and any `Error` subclass
  * whose `name` has been set to `'AbortError'`.
+ * @public
  */
 export function isAbortError(error: unknown): boolean {
   if (error instanceof DOMException && error.name === 'AbortError') {

@@ -8,9 +8,12 @@
  *
  * @param data - The Uint8Array or ArrayBuffer to convert
  * @returns The same data with a compatible type for Blob constructor
+ * @public
  */
 export function asBuffer(data: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>;
+/** @public */
 export function asBuffer(data: ArrayBufferLike): ArrayBuffer;
+/** @public */
 export function asBuffer(data: Uint8Array<ArrayBuffer> | ArrayBufferLike): Uint8Array<ArrayBuffer> | ArrayBuffer {
   if (data instanceof Uint8Array) {
     return data;
