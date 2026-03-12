@@ -936,7 +936,7 @@ export class MockKernelWorker extends KernelWorker {
     filename = 'test.kcl',
     parameters: Record<string, unknown> = {},
   ): Promise<HashedGeometryResult> {
-    const mockFile: GeometryFile = { filename, path: filename };
+    const mockFile = createGeometryFile(filename);
     return this.createGeometry({ file: mockFile, parameters });
   }
 
