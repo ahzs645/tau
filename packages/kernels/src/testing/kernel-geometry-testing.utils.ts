@@ -20,6 +20,7 @@ import type { CreateGeometryResult } from '#types/kernel.types.js';
 
 /**
  * Expected geometry properties for test assertions.
+ * @public
  */
 export type GeometryExpectation = {
   /** Total number of vertices across all meshes */
@@ -68,6 +69,7 @@ const glbToDocument = async (glbData: Uint8Array<ArrayBuffer>): Promise<Document
  *
  * @param glbData - The GLB binary content to inspect
  * @returns The inspection report with mesh, scene, and material details
+ * @public
  */
 export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promise<InspectReport> => {
   const document = await glbToDocument(glbData);
@@ -79,6 +81,7 @@ export const getInspectReport = async (glbData: Uint8Array<ArrayBuffer>): Promis
  *
  * @param glb - The GLB binary content to validate
  * @throws Error if the data is empty or has an invalid header
+ * @public
  */
 export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
   if (glb.length === 0) {
@@ -103,6 +106,7 @@ export const validateGlbData = (glb: Uint8Array<ArrayBuffer>): void => {
  *
  * @param report - The gltf-transform inspection report
  * @returns Aggregated geometry statistics across all meshes
+ * @public
  */
 export const getGeometryStatsFromInspect = (
   report: InspectReport,
@@ -123,6 +127,7 @@ export const getGeometryStatsFromInspect = (
  *
  * @param report - The gltf-transform inspection report
  * @returns The bounding box dimensions and center, or `undefined` if no scenes exist
+ * @public
  */
 export const getBoundingBoxFromInspect = (
   report: InspectReport,
@@ -176,6 +181,7 @@ function isGltfResponse(response: GeometryResponse): response is { format: 'gltf
  *
  * @param result - The geometry result to extract from
  * @returns The GLB binary content, or `undefined` if no GLTF geometry exists
+ * @public
  */
 export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<ArrayBuffer> | undefined {
   if (!result.success) {
@@ -196,6 +202,7 @@ export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<
  * @param base - The base expectation to clone
  * @param overrides - Partial overrides for vertex/face counts or bounding box
  * @returns A new expectation with the overrides applied
+ * @public
  */
 export const createGeometryVariant = (
   base: GeometryExpectation,
@@ -248,12 +255,16 @@ const expectVector3ToBeCloseTo = ({
  *
  * @returns An object of assertion helpers for validating geometry results
  *
- * @example
+ * @public
+ *
+ * @example <caption>Asserting geometry results in tests</caption>
  * ```typescript
+ * import { createGeometryTestHelpers, createMockKernelClient } from '@taucad/kernels/testing';
+ *
  * const helpers = createGeometryTestHelpers();
- * await helpers.expectValidGltf(result);
+ * const client = createMockKernelClient();
+ * const result = await client.render({ code: { '/main.ts': 'export default () => [];' } });
  * await helpers.expectMeshCount(result, 1);
- * await helpers.expectBoundingBoxSize(result, [10, 10, 10], 0.1);
  * ```
  */
 export function createGeometryTestHelpers(): {

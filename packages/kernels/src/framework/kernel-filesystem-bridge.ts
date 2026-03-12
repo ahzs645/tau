@@ -26,6 +26,7 @@ import { messagePortCallTimeoutMs } from '#framework/kernel-framework.constants.
  *
  * @param value - Arbitrarily nested value to scan for ArrayBuffers.
  * @returns De-duplicated list of transferable ArrayBuffers.
+ * @public
  */
 export function extractTransferables(value: unknown): Transferable[] {
   const seen = new Set<ArrayBuffer>();
@@ -57,7 +58,10 @@ type BridgeRequest = {
   args: unknown[];
 };
 
-/** Serializable error representation transmitted over the bridge wire protocol. */
+/**
+ * Serializable error representation transmitted over the bridge wire protocol.
+ * @public
+ */
 export type BridgeError = {
   message: string;
   name: string;
@@ -87,7 +91,10 @@ type BridgeMessage = BridgeRequest | BridgeResponse | BridgeEvent | BridgeContro
 
 // --- Server ---
 
-/** Handle returned by {@link createBridgeServer}, providing an event emitter for server-to-client push messages. */
+/**
+ * Handle returned by {@link createBridgeServer}, providing an event emitter for server-to-client push messages.
+ * @public
+ */
 export type BridgeServerHandle = {
   emit: (event: string, data: unknown) => void;
 };
@@ -105,6 +112,7 @@ export type BridgeServerHandle = {
  * @param port - MessagePort to serve on.
  * @param options - Optional callbacks for disconnect, watch, and unwatch.
  * @returns Handle with emit function for server-to-client push messages.
+ * @public
  */
 export function createBridgeServer<T extends StringKeyedObject>(
   handlers: T,
@@ -201,7 +209,10 @@ export function createBridgeServer<T extends StringKeyedObject>(
 
 // --- Client ---
 
-/** Handle returned by {@link createBridgePort}, providing the client-side MessagePort and a dispose function. */
+/**
+ * Handle returned by {@link createBridgePort}, providing the client-side MessagePort and a dispose function.
+ * @public
+ */
 export type BridgeHandle = {
   port: MessagePort;
   dispose(): void;
@@ -212,6 +223,7 @@ export type BridgeHandle = {
  *
  * @param handlers - Object whose methods are served over the bridge.
  * @returns Handle with port and dispose function.
+ * @public
  */
 export function createBridgePort<T extends Record<string, unknown>>(handlers: T): BridgeHandle {
   const channel = new MessageChannel();
@@ -229,7 +241,10 @@ export function createBridgePort<T extends Record<string, unknown>>(handlers: T)
   };
 }
 
-/** Proxy-based filesystem client backed by a MessagePort bridge, with watch subscription and disposal support. */
+/**
+ * Proxy-based filesystem client backed by a MessagePort bridge, with watch subscription and disposal support.
+ * @public
+ */
 export type FileSystemProxy = KernelFileSystemBase & {
   watch(request: KernelWatchRequest, handler: (event: KernelWatchEvent) => void): () => void;
   dispose(): void;
@@ -262,6 +277,7 @@ function reconstructError(bridgeError: BridgeError): Error & {
  *
  * @param port - MessagePort for bridge communication.
  * @returns Object with call, listen, watch, and dispose methods.
+ * @public
  */
 export function createBridgeCall(port: MessagePort): {
   call: (method: string, args: unknown[]) => Promise<unknown>;
@@ -420,6 +436,7 @@ export function createBridgeCall(port: MessagePort): {
  * @param port - MessagePort for bridge communication.
  * @returns Proxy that forwards method calls over the bridge.
  */
+/** @public */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
 export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
   port: MessagePort,
@@ -474,6 +491,7 @@ export function createBridgeProxy<T extends Record<string, (...args: any[]) => a
  *
  * @param port - MessagePort to buffer messages from.
  * @returns Flush function that replays buffered messages and removes the buffer.
+ * @public
  */
 export function catchMessages(port: MessagePort): () => void {
   const buffered: MessageEvent[] = [];

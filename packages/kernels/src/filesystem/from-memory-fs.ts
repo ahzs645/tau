@@ -1,5 +1,11 @@
 import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
 
+function enoent(message: string): Error {
+  const error = new Error(message);
+  (error as NodeJS.ErrnoException).code = 'ENOENT';
+  return error;
+}
+
 /**
  * Create a KernelFileSystem backed by an in-memory Map.
  * Useful for testing and for passing file content directly.
@@ -7,14 +13,23 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  * @param files - Initial file contents (path -> content string)
  * @returns KernelFileSystem backed by an in-memory store
  *
- * @example
+ * @public
+ *
+ * @example <caption>In-memory filesystem with inline source</caption>
  * ```typescript
- * import { fromMemoryFS } from '@taucad/kernels';
- * const fileSystem = fromMemoryFS({
- *   'main.ts': 'import { draw } from "replicad"; ...',
- *   'lib/utils.ts': 'export function helper() { ... }',
+ * import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
+ * import { replicad } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createInProcessTransport } from '@taucad/kernels/transport';
+ *
+ * const client = createKernelClient({
+ *   kernels: [replicad()],
+ *   bundlers: [esbuild()],
+ *   transport: createInProcessTransport(),
+ *   fileSystem: fromMemoryFS({
+ *     '/main.ts': 'import { draw } from "replicad";\nexport default () => draw();',
+ *   }),
  * });
- * await client.connect({ fileSystem });
  * ```
  */
 export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBase {
@@ -41,7 +56,7 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
   async function readFile(filePath: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
     const content = store.get(filePath);
     if (content === undefined) {
-      throw new Error(`ENOENT: no such file: ${filePath}`);
+      throw enoent(`ENOENT: no such file: ${filePath}`);
     }
 
     if (encoding === 'utf8') {
@@ -116,7 +131,7 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
         directories.delete(oldPath);
         directories.add(newPath);
       } else {
-        throw new Error(`ENOENT: no such file or directory: ${oldPath}`);
+        throw enoent(`ENOENT: no such file or directory: ${oldPath}`);
       }
     },
     async lstat(filePath) {
@@ -130,7 +145,7 @@ export function fromMemoryFS(files?: Record<string, string>): KernelFileSystemBa
         return { type: 'dir', size: 0, mtimeMs: Date.now() };
       }
 
-      throw new Error(`ENOENT: no such file or directory: ${filePath}`);
+      throw enoent(`ENOENT: no such file or directory: ${filePath}`);
     },
     async exists(filePath) {
       return store.has(filePath) || directories.has(filePath);

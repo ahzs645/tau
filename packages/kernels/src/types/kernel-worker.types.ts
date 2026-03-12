@@ -23,6 +23,7 @@ import type { ExecuteResult, KernelBundler } from '#types/kernel-bundler.types.j
 
 /**
  * Logger options for kernel and middleware logging methods.
+ * @public
  */
 export type KernelLogOptions = {
   /** Additional data to include in the log */
@@ -32,6 +33,7 @@ export type KernelLogOptions = {
 /**
  * Logger interface for kernel methods and middleware.
  * Provides convenience methods that automatically inject the component name.
+ * @public
  */
 export type KernelLogger = {
   /** Log an info-level message */
@@ -59,6 +61,7 @@ export type KernelLogger = {
  * Base filesystem interface -- 11 Node.js `fs.promises`-compatible primitives.
  * All paths are absolute. This is the minimal surface that filesystem backends
  * must implement (e.g. fromFsLike, fromMemoryFS, fromNodeFS).
+ * @public
  */
 export type KernelFileSystemBase = {
   /** Read file as text. */
@@ -95,6 +98,7 @@ export type KernelFileSystemBase = {
  * Watch request for kernel filesystem subscriptions.
  * Mirrors the full WatchRequest contract but is self-contained
  * within the kernels package (no dependency on the UI app types).
+ * @public
  */
 export type KernelWatchRequest = {
   paths: string[];
@@ -105,7 +109,10 @@ export type KernelWatchRequest = {
   correlationId?: string;
 };
 
-/** Filter for selecting which filesystem event types to receive in a watch subscription. */
+/**
+ * Filter for selecting which filesystem event types to receive in a watch subscription.
+ * @public
+ */
 export type KernelWatchEventFilter = {
   added?: boolean;
   updated?: boolean;
@@ -113,7 +120,10 @@ export type KernelWatchEventFilter = {
   renamed?: boolean;
 };
 
-/** Discriminated union of filesystem watch events emitted by the watch subscription. */
+/**
+ * Discriminated union of filesystem watch events emitted by the watch subscription.
+ * @public
+ */
 export type KernelWatchEvent =
   | { type: 'change'; path: string; correlationId?: string }
   | { type: 'delete'; path: string; correlationId?: string }
@@ -126,6 +136,7 @@ export type KernelWatchEvent =
  * Extends the 11 base primitives with higher-level helper methods that have
  * default implementations built from the primitives (via `createKernelFileSystem`).
  * Backends may supply optimized overrides for any of the enhanced methods.
+ * @public
  */
 export type KernelFileSystem = KernelFileSystemBase & {
   /** Batch-read multiple files as binary. Default: `Promise.all(paths.map(readFile))`. */
@@ -146,6 +157,7 @@ export type KernelFileSystem = KernelFileSystemBase & {
  * Runtime services provided to kernel methods.
  * The bundler and execute services are lazily initialised -- kernels that
  * never call them (OpenSCAD, Tau) pay zero cost.
+ * @public
  */
 export type KernelRuntime = {
   /** Filesystem interface (all paths are absolute) */
@@ -177,6 +189,7 @@ export type KernelRuntime = {
  * - Replicad: post-computation mesh tolerance (shape.mesh / shape.meshEdges)
  * - OpenSCAD: mapped to $fs (linearTolerance) and $fa (angularTolerance)
  * - Zoo/JSCAD/Tau: ignored (tessellation controlled externally)
+ * @public
  */
 export type Tessellation = {
   /** Maximum deviation between the mesh and the true geometry surface, in model units. */
@@ -191,6 +204,7 @@ export type Tessellation = {
 
 /**
  * File and project path identifying the active document for parameter extraction.
+ * @public
  */
 export type GetParametersInput = {
   /** Absolute path to the active file */
@@ -201,6 +215,7 @@ export type GetParametersInput = {
 
 /**
  * File path, parameters, and tessellation settings for geometry evaluation.
+ * @public
  */
 export type CreateGeometryInput = {
   /** Absolute path to the active file */
@@ -215,6 +230,7 @@ export type CreateGeometryInput = {
 
 /**
  * File and project path identifying the active document for dependency resolution.
+ * @public
  */
 export type GetDependenciesInput = {
   /** Absolute path to the active file */
@@ -225,6 +241,7 @@ export type GetDependenciesInput = {
 
 /**
  * File path and extension used to determine whether a kernel supports a given file.
+ * @public
  */
 export type CanHandleInput = {
   /** Absolute path to the active file */
@@ -237,6 +254,7 @@ export type CanHandleInput = {
 
 /**
  * Validated options passed to a kernel during worker initialization.
+ * @public
  */
 export type InitializeInput<Options = Record<string, unknown>> = {
   /** Worker options */
@@ -247,6 +265,7 @@ export type InitializeInput<Options = Record<string, unknown>> = {
  * Export format, tessellation, and native geometry handle for file export operations.
  *
  * @template NativeHandle - Kernel-specific native geometry representation, injected by the framework
+ * @public
  */
 export type ExportGeometryInput<NativeHandle = unknown> = {
   /** Export file format */
@@ -267,6 +286,7 @@ export type ExportGeometryInput<NativeHandle = unknown> = {
  * native handle is retained in the worker for subsequent export operations.
  *
  * @template NativeHandle - Kernel-specific type for the native geometry representation
+ * @public
  */
 export type CreateGeometryOutput<NativeHandle = unknown> = {
   geometry: GeometryResponse[];
@@ -288,6 +308,7 @@ export type CreateGeometryOutput<NativeHandle = unknown> = {
  * @template Context - Kernel-specific context type, inferred from initialize() return
  * @template NativeHandle - Kernel-specific native geometry representation, inferred from createGeometry() return
  * @template Options - Validated options type, inferred from optionsSchema when provided
+ * @public
  */
 export type KernelDefinition<
   Context = unknown,
@@ -303,34 +324,30 @@ export type KernelDefinition<
   optionsSchema?: z.ZodType<Options>;
 
   /** Initialize kernel with typed options. Options type is inferred from optionsSchema. */
-  initialize(options: NoInfer<Options>, runtime: KernelRuntime): Promise<Context>;
+  initialize(options: Options, runtime: KernelRuntime): Promise<Context>;
 
   /** Optional guard that determines whether this kernel can process a given file. Called during kernel selection. */
-  canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: NoInfer<Context>): Promise<boolean>;
+  canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
 
   /** Return absolute paths of all files the active file depends on, used for change-detection and cache invalidation. */
-  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: NoInfer<Context>): Promise<string[]>;
+  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: Context): Promise<string[]>;
   /** Extract user-facing parameters (and their JSON Schema) from the active file. */
-  getParameters(
-    input: GetParametersInput,
-    runtime: KernelRuntime,
-    context: NoInfer<Context>,
-  ): Promise<GetParametersResult>;
+  getParameters(input: GetParametersInput, runtime: KernelRuntime, context: Context): Promise<GetParametersResult>;
   /** Evaluate the active file and produce tessellated geometry plus a native handle for export. */
   createGeometry(
     input: CreateGeometryInput,
     runtime: KernelRuntime,
-    context: NoInfer<Context>,
+    context: Context,
   ): Promise<CreateGeometryOutput<NativeHandle>>;
   /** Convert a previously created native geometry handle into one or more export file blobs. */
   exportGeometry(
-    input: ExportGeometryInput<NoInfer<NativeHandle>>,
+    input: ExportGeometryInput<NativeHandle>,
     runtime: KernelRuntime,
-    context: NoInfer<Context>,
+    context: Context,
   ): Promise<ExportGeometryResult>;
 
   /** Tear down kernel resources (WASM instances, temp files, etc.) when the worker is disposed. */
-  cleanup?(context: NoInfer<Context>): Promise<void>;
+  cleanup?(context: Context): Promise<void>;
 };
 
 /**
@@ -343,8 +360,12 @@ export type KernelDefinition<
  * @param definition - The kernel definition object implementing all required lifecycle methods
  * @returns The same definition, typed as {@link KernelDefinition}
  *
- * @example
+ * @public
+ *
+ * @example <caption>Registering a custom kernel</caption>
  * ```typescript
+ * import { defineKernel } from '@taucad/kernels';
+ *
  * export default defineKernel({
  *   name: 'MyKernel',
  *   version: '1.0.0',
@@ -355,13 +376,13 @@ export type KernelDefinition<
  *     return [input.filePath];
  *   },
  *   async getParameters(input, runtime, context) {
- *     return { success: true, data: { defaultParameters: {}, jsonSchema: {} } };
+ *     return { success: true, data: { defaultParameters: {}, jsonSchema: {} }, issues: [] };
  *   },
  *   async createGeometry(input, runtime, context) {
- *     return { geometry: [...], nativeHandle: myShapes };
+ *     return { geometry: [], nativeHandle: {} };
  *   },
- *   async exportGeometry({ nativeHandle, ...input }, runtime, context) {
- *     return { success: true, data: [createExportFile('glb', 'model.glb', bytes)] };
+ *   async exportGeometry(input, runtime, context) {
+ *     return { success: true, data: [], issues: [] };
  *   },
  * });
  * ```

@@ -14,14 +14,15 @@ type AnyFunction = (...args: any[]) => any;
  * Set a function's `.name` property so it survives minification.
  * Returns the same function reference for inline use at assignment sites.
  *
+ * @internal
+ *
  * @param name - the desired `.name` for the function
  * @param callable - the function whose `.name` to override
  * @returns the same function reference (for inline chaining)
  *
- * @example
- * ```ts
- * const handler = named('kernelHandler', async (input) => { ... });
- * let chain = named(`middleware(${name})`, async (input) => inner(input));
+ * @example <caption>Naming an anonymous function</caption>
+ * ```typescript
+ * const handler = named('kernelHandler', async (input: string) => input);
  * ```
  */
 export function named<T extends AnyFunction>(name: string, callable: T): T {
@@ -38,12 +39,14 @@ export function named<T extends AnyFunction>(name: string, callable: T): T {
  * Preserve method names on a class prototype for readable production stack traces.
  * Call after the class definition to restore names that bundlers strip.
  *
+ * @internal
+ *
  * @param target - the class constructor whose prototype methods to name
  * @param methods - array of method names to preserve
  *
- * @example
- * ```ts
- * class MyWorker extends KernelWorker { ... }
+ * @example <caption>Preserving method names after bundling</caption>
+ * ```typescript
+ * class MyWorker { render() {} createGeometry() {} }
  * preserveMethodNames(MyWorker, ['render', 'createGeometry']);
  * ```
  */

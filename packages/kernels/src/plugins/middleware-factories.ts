@@ -8,11 +8,7 @@ import { createMiddlewarePlugin } from '#plugins/plugin-helpers.js';
 /**
  * Create a parameter cache middleware plugin registration.
  * Caches getParameters results to avoid redundant parameter parsing.
- *
- * @example
- * ```typescript
- * parameterCache()
- * ```
+ * @public
  */
 export const parameterCache = createMiddlewarePlugin({
   id: 'parameterCache',
@@ -22,11 +18,7 @@ export const parameterCache = createMiddlewarePlugin({
 /**
  * Create a geometry cache middleware plugin registration.
  * Caches createGeometry results to avoid redundant kernel computations.
- *
- * @example
- * ```typescript
- * geometryCache()
- * ```
+ * @public
  */
 export const geometryCache = createMiddlewarePlugin({
   id: 'geometryCache',
@@ -36,11 +28,7 @@ export const geometryCache = createMiddlewarePlugin({
 /**
  * Create a GLTF coordinate transform middleware plugin registration.
  * Transforms Y-up/meters coordinate system to Z-up/mm.
- *
- * @example
- * ```typescript
- * gltfCoordinateTransform()
- * ```
+ * @public
  */
 export const gltfCoordinateTransform = createMiddlewarePlugin({
   id: 'gltfCoordinateTransform',
@@ -50,11 +38,7 @@ export const gltfCoordinateTransform = createMiddlewarePlugin({
 /**
  * Create a GLTF edge detection middleware plugin registration.
  * Adds edge primitives for sharp edge rendering in the viewer.
- *
- * @example
- * ```typescript
- * gltfEdgeDetection()
- * ```
+ * @public
  */
 export const gltfEdgeDetection = createMiddlewarePlugin({
   id: 'gltfEdgeDetection',

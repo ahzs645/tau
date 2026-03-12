@@ -26,11 +26,14 @@ type KernelPluginConfig = Omit<KernelPlugin, 'options'>;
  *
  * @param config - Static plugin configuration or a builder that receives options
  * @returns A factory function that produces KernelPlugin registrations
+ * @public
  */
 export function createKernelPlugin(config: KernelPluginConfig): () => KernelPlugin;
+/** @public */
 export function createKernelPlugin<Options extends Record<string, unknown>>(
   config: KernelPluginConfig | ((options: Options | undefined) => KernelPluginConfig),
 ): Partial<Options> extends Options ? (options?: Options) => KernelPlugin : (options: Options) => KernelPlugin;
+/** @public */
 export function createKernelPlugin(
   config: KernelPluginConfig | ((options?: Record<string, unknown>) => KernelPluginConfig),
 ): (options?: Record<string, unknown>) => KernelPlugin {
@@ -49,11 +52,14 @@ type MiddlewarePluginConfig = Omit<MiddlewarePlugin, 'options'>;
  *
  * @param config - Static plugin configuration or a builder that receives options
  * @returns A factory function that produces MiddlewarePlugin registrations
+ * @public
  */
 export function createMiddlewarePlugin(config: MiddlewarePluginConfig): () => MiddlewarePlugin;
+/** @public */
 export function createMiddlewarePlugin<Options extends Record<string, unknown>>(
   config: MiddlewarePluginConfig | ((options: Options | undefined) => MiddlewarePluginConfig),
 ): Partial<Options> extends Options ? (options?: Options) => MiddlewarePlugin : (options: Options) => MiddlewarePlugin;
+/** @public */
 export function createMiddlewarePlugin(
   config: MiddlewarePluginConfig | ((options?: Record<string, unknown>) => MiddlewarePluginConfig),
 ): (options?: Record<string, unknown>) => MiddlewarePlugin {
@@ -72,11 +78,14 @@ type BundlerPluginConfig = Omit<BundlerPlugin, 'options'>;
  *
  * @param config - Static plugin configuration or a builder that receives options
  * @returns A factory function that produces BundlerPlugin registrations
+ * @public
  */
 export function createBundlerPlugin(config: BundlerPluginConfig): () => BundlerPlugin;
+/** @public */
 export function createBundlerPlugin<Options extends Record<string, unknown>>(
   config: BundlerPluginConfig | ((options: Options | undefined) => BundlerPluginConfig),
 ): Partial<Options> extends Options ? (options?: Options) => BundlerPlugin : (options: Options) => BundlerPlugin;
+/** @public */
 export function createBundlerPlugin(
   config: BundlerPluginConfig | ((options?: Record<string, unknown>) => BundlerPluginConfig),
 ): (options?: Record<string, unknown>) => BundlerPlugin {

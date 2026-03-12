@@ -21,101 +21,101 @@ describe('OpenCascade Kernel', { timeout: 30_000 }, () => {
 
   beforeAll(async () => {
     worker = await createTestWorker(opencascadeKernel, {
-      'box-import.ts': `import oc from 'opencascade';\nexport default function main() { return new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
-      'box-import-js.ts': `import oc from 'opencascade.js';\nexport default function main() { return new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
+      'box-import.ts': `import { BRepPrimAPI_MakeBox_2 } from 'opencascade';\nexport default function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
+      'box-import-js.ts': `import { BRepPrimAPI_MakeBox_2 } from 'opencascade.js';\nexport default function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
       'no-import.ts': `export default function main() { return { x: 1 }; }`,
       'model.scad': `cube([10, 10, 10]);`,
-      'box-require.js': `const oc = require('opencascade');\nmodule.exports = function main() { return new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
+      'box-require.js': `const { BRepPrimAPI_MakeBox_2 } = require('opencascade');\nmodule.exports = function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
       'params.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export const defaultParams = { width: 10, height: 20, depth: 30 };
 export default function main(params = defaultParams) {
-  return new oc.BRepPrimAPI_MakeBox_2(params.width, params.height, params.depth).Shape();
+  return new BRepPrimAPI_MakeBox_2(params.width, params.height, params.depth).Shape();
 }`,
       'no-params.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export default function main() {
-  return new oc.BRepPrimAPI_MakeBox_2(10, 20, 30).Shape();
+  return new BRepPrimAPI_MakeBox_2(10, 20, 30).Shape();
 }`,
       'box.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export default function main() {
-  const box = new oc.BRepPrimAPI_MakeBox_2(10, 20, 30);
+  const box = new BRepPrimAPI_MakeBox_2(10, 20, 30);
   return box.Shape();
 }`,
       'multi.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export default function main() {
-  const box1 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10);
-  const box2 = new oc.BRepPrimAPI_MakeBox_2(20, 20, 20);
+  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10);
+  const box2 = new BRepPrimAPI_MakeBox_2(20, 20, 20);
   return [box1.Shape(), box2.Shape()];
 }`,
       'named.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export default function main() {
-  const box = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10);
+  const box = new BRepPrimAPI_MakeBox_2(10, 10, 10);
   return [{ shape: box.Shape(), name: 'MyBox', color: '#ff0000' }];
 }`,
       'parameterized.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export const defaultParams = { size: 10 };
 export default function main(params = defaultParams) {
-  return new oc.BRepPrimAPI_MakeBox_2(params.size, params.size, params.size).Shape();
+  return new BRepPrimAPI_MakeBox_2(params.size, params.size, params.size).Shape();
 }`,
       'assembly.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export default function main() {
-  const box1 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10);
-  const box2 = new oc.BRepPrimAPI_MakeBox_2(20, 20, 20);
+  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10);
+  const box2 = new BRepPrimAPI_MakeBox_2(20, 20, 20);
   return [
     { shape: box1.Shape(), name: 'SmallBox' },
     { shape: box2.Shape(), name: 'LargeBox' },
   ];
 }`,
       'fuse.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2, Message_ProgressRange, BRepAlgoAPI_Fuse } from 'opencascade';
 export default function main() {
-  const box1 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const box2 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const progress = new oc.Message_ProgressRange();
-  const fused = new oc.BRepAlgoAPI_Fuse(box1, box2, progress);
+  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const box2 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const progress = new Message_ProgressRange();
+  const fused = new BRepAlgoAPI_Fuse(box1, box2, progress);
   const result = fused.Shape();
   progress.delete();
   fused.delete();
   return result;
 }`,
       'common.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2, Message_ProgressRange, BRepAlgoAPI_Common } from 'opencascade';
 export default function main() {
-  const box1 = new oc.BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
-  const box2 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const progress = new oc.Message_ProgressRange();
-  const common = new oc.BRepAlgoAPI_Common(box1, box2, progress);
+  const box1 = new BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
+  const box2 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const progress = new Message_ProgressRange();
+  const common = new BRepAlgoAPI_Common(box1, box2, progress);
   const result = common.Shape();
   progress.delete();
   common.delete();
   return result;
 }`,
       'cut.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2, Message_ProgressRange, BRepAlgoAPI_Cut } from 'opencascade';
 export default function main() {
-  const box1 = new oc.BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
-  const box2 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const progress = new oc.Message_ProgressRange();
-  const cut = new oc.BRepAlgoAPI_Cut(box1, box2, progress);
+  const box1 = new BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
+  const box2 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const progress = new Message_ProgressRange();
+  const cut = new BRepAlgoAPI_Cut(box1, box2, progress);
   const result = cut.Shape();
   progress.delete();
   cut.delete();
   return result;
 }`,
       'fillet.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2, BRepFilletAPI_MakeFillet, ChFi3d_FilletShape, TopExp_Explorer, TopAbs_ShapeEnum, TopoDS } from 'opencascade';
 export default function main() {
-  const box = new oc.BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
-  const fillet = new oc.BRepFilletAPI_MakeFillet(box, oc.ChFi3d_FilletShape.ChFi3d_Rational);
-  const explorer = new oc.TopExp_Explorer(box, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+  const box = new BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
+  const fillet = new BRepFilletAPI_MakeFillet(box, ChFi3d_FilletShape.ChFi3d_Rational);
+  const explorer = new TopExp_Explorer(box, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_SHAPE);
   if (explorer.More()) {
-    const edge = oc.TopoDS.Edge(explorer.Current());
+    const edge = TopoDS.Edge(explorer.Current());
     fillet.Add_2(2, edge);
   }
   explorer.delete();
@@ -124,13 +124,13 @@ export default function main() {
   return result;
 }`,
       'transform.ts': `
-import oc from 'opencascade';
+import { BRepPrimAPI_MakeBox_2, gp_Trsf, gp_Vec_4, BRepBuilderAPI_Transform } from 'opencascade';
 export default function main() {
-  const box = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const trsf = new oc.gp_Trsf();
-  const vec = new oc.gp_Vec_4(50, 50, 50);
+  const box = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const trsf = new gp_Trsf();
+  const vec = new gp_Vec_4(50, 50, 50);
   trsf.SetTranslation(vec);
-  const transformed = new oc.BRepBuilderAPI_Transform(box, trsf, true, false);
+  const transformed = new BRepBuilderAPI_Transform(box, trsf, true, false);
   const result = transformed.Shape();
   vec.delete();
   trsf.delete();
@@ -138,19 +138,19 @@ export default function main() {
   return result;
 }`,
       'compound.ts': `
-import oc from 'opencascade';
+import { TopoDS_Builder, TopoDS_Compound, BRepPrimAPI_MakeBox_2 } from 'opencascade';
 export default function main() {
-  const builder = new oc.TopoDS_Builder();
-  const compound = new oc.TopoDS_Compound();
+  const builder = new TopoDS_Builder();
+  const compound = new TopoDS_Compound();
   builder.MakeCompound(compound);
-  const box1 = new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const box2 = new oc.BRepPrimAPI_MakeBox_2(5, 5, 5).Shape();
+  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const box2 = new BRepPrimAPI_MakeBox_2(5, 5, 5).Shape();
   builder.Add(compound, box1);
   builder.Add(compound, box2);
   return compound;
 }`,
       'empty.ts': `
-import oc from 'opencascade';
+import init from 'opencascade';
 export default function main() {}`,
     });
   });

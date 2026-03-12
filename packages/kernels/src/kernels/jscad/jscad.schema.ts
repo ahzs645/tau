@@ -32,26 +32,23 @@ export type JscadParameterDefinition = {
  * can have an `initial` or `default` field specifying its default value.
  * This function prioritizes `initial` over `default` if both are present.
  *
+ * @internal
+ *
  * @param definitions - Array of JSCAD parameter definitions from getParameterDefinitions()
  * @returns Object mapping parameter names to their default values
  *
  * @see https://openjscad.xyz/docs/tutorial-10_parameters.html
  *
- * @example
+ * @example <caption>Extracting default parameters</caption>
  * ```typescript
- * const definitions = [
+ * const definitions: JscadParameterDefinition[] = [
  *   { name: 'width', caption: 'Width:', type: 'float', initial: 10 },
  *   { name: 'height', caption: 'Height:', type: 'int', initial: 20 },
- *   { name: 'color', caption: 'Color:', type: 'text', default: 'red' }
+ *   { name: 'color', caption: 'Color:', type: 'text', default: 'red' },
  * ];
  *
  * const defaults = convertParameterDefinitionsToDefaults(definitions);
- * // Returns:
- * // {
- * //   width: 10,
- * //   height: 20,
- * //   color: 'red'
- * // }
+ * // { width: 10, height: 20, color: 'red' }
  * ```
  */
 export function convertParameterDefinitionsToDefaults(
@@ -194,25 +191,20 @@ function convertParameterDefinitionToJsonSchemaProperty(definition: JscadParamet
  * into a proper JSON Schema object that can be used for validation
  * and UI generation.
  *
+ * @internal
+ *
  * @param definitions - Array of JSCAD parameter definitions
  * @returns JSON Schema object
  *
- * @example
+ * @example <caption>Generating JSON Schema from parameters</caption>
  * ```typescript
- * const definitions = [
+ * const definitions: JscadParameterDefinition[] = [
  *   { name: 'width', caption: 'Width:', type: 'float', initial: 10, min: 1, max: 100 },
- *   { name: 'height', caption: 'Height:', type: 'int', initial: 20, min: 1 }
+ *   { name: 'height', caption: 'Height:', type: 'int', initial: 20, min: 1 },
  * ];
  *
  * const schema = convertParameterDefinitionsToJsonSchema(definitions);
- * // Returns:
- * // {
- * //   type: 'object',
- * //   properties: {
- * //     width: { type: 'number', description: 'Width:', default: 10, minimum: 1, maximum: 100 },
- * //     height: { type: 'integer', description: 'Height:', default: 20, minimum: 1 }
- * //   }
- * // }
+ * // { type: 'object', properties: { width: { type: 'number', ... }, height: { type: 'integer', ... } } }
  * ```
  */
 export function convertParameterDefinitionsToJsonSchema(definitions: JscadParameterDefinition[]): JSONSchema7 {

@@ -35,6 +35,7 @@ type EmptyState = {};
  *   Defaults to an empty object schema when no state is needed.
  * @template OptionsSchema - Optional Zod object schema for the middleware options.
  *   Defaults to an empty object schema when no options are needed.
+ * @public
  */
 export type KernelMiddlewareOptions<
   StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
@@ -66,6 +67,7 @@ export type KernelMiddlewareOptions<
  *   Defaults to an empty object schema when no state is needed.
  * @template OptionsSchema - The Zod schema type for the options.
  *   Defaults to an empty object schema when no options are needed.
+ * @public
  */
 export type KernelMiddleware<
   StateSchema extends z.ZodObject<z.ZodRawShape> = EmptyZodObject,
@@ -99,42 +101,18 @@ export type KernelMiddleware<
  * @param options - Middleware configuration with wrap hooks and optional state schema
  * @returns A middleware instance that can be applied to kernel workers
  *
- * @example
+ * @public
+ *
+ * @example <caption>Wrapping geometry with logging</caption>
  * ```typescript
- * // Simple logging middleware - destructure what you need
+ * import { defineMiddleware } from '@taucad/kernels/middleware';
+ *
  * const loggingMiddleware = defineMiddleware({
  *   name: 'Logging',
  *   async wrapCreateGeometry(input, handler, { logger }) {
  *     logger.debug('Computing geometry...');
  *     const result = await handler(input);
  *     logger.debug('Geometry computed');
- *     return result;
- *   },
- * });
- *
- * // Caching middleware with type-safe state
- * const cacheMiddleware = defineMiddleware({
- *   name: 'GeometryCache',
- *   stateSchema: z.object({
- *     cacheKey: z.string(),
- *     cacheHit: z.boolean(),
- *   }),
- *   async wrapCreateGeometry({ basePath }, handler, { state, dependencyHash }) {
- *     const cacheKey = dependencyHash;
- *
- *     // Check cache - short-circuit on hit
- *     const cached = await checkCache(cacheKey);
- *     if (cached) {
- *       state.update({ cacheKey, cacheHit: true });
- *       return cached;  // Still flows through upstream middleware
- *     }
- *
- *     // Cache miss - execute downstream
- *     state.update({ cacheKey, cacheHit: false });
- *     const result = await handler(input);
- *
- *     // Write to cache on way back up
- *     await writeCache(cacheKey, result);
  *     return result;
  *   },
  * });
@@ -163,6 +141,7 @@ export function defineMiddleware<
  * @param onLog - The log callback from KernelWorker
  * @param middlewareName - Name of the middleware for origin.component
  * @returns Logger instance with convenience methods
+ * @public
  */
 export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: string): KernelLogger {
   const emit = (level: LogLevel, message: string, data?: unknown): void => {
@@ -206,6 +185,7 @@ export function createMiddlewareLogger(onLog: OnWorkerLog, middlewareName: strin
  *
  * @param schema - Optional Zod object schema for validation
  * @returns State instance with value and update method
+ * @public
  */
 export function createMiddlewareState<State extends Record<string, unknown> = EmptyState>(
   schema?: z.ZodObject<z.ZodRawShape>,
@@ -252,6 +232,7 @@ export function createMiddlewareState<State extends Record<string, unknown> = Em
 
 /**
  * Options for creating a middleware runtime.
+ * @public
  */
 export type CreateMiddlewareRuntimeOptions = {
   /** The log callback from KernelWorker */
@@ -277,6 +258,7 @@ export type CreateMiddlewareRuntimeOptions = {
  *
  * @param runtimeOptions - Runtime configuration options
  * @returns Runtime instance for middleware wrap hooks
+ * @public
  */
 export function createMiddlewareRuntime<
   State extends Record<string, unknown> = EmptyState,

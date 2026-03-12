@@ -12,6 +12,7 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import { defineKernel } from '#types/kernel-worker.types.js';
+import type { KernelDefinition } from '#types/kernel-worker.types.js';
 import { defineBundler } from '#types/kernel-bundler.types.js';
 import { defineMiddleware } from '#middleware/kernel-middleware.js';
 import type { KernelMiddleware } from '#middleware/kernel-middleware.js';
@@ -19,6 +20,26 @@ import { createKernelError, createKernelSuccess } from '#framework/kernel-helper
 import type { KernelSuccessResult } from '#types/kernel.types.js';
 import { createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin } from '#plugins/plugin-helpers.js';
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
+
+// =============================================================================
+// KernelDefinition structural assignability
+// =============================================================================
+
+describe('KernelDefinition structural assignability', () => {
+  it('should allow concrete KernelDefinition to be assigned to KernelDefinition (default generics)', () => {
+    type ConcreteKernel = KernelDefinition<{ fontCache: Map<string, Uint8Array<ArrayBuffer>> }, string>;
+    expectTypeOf<ConcreteKernel>().toExtend<KernelDefinition>();
+  });
+
+  it('should allow union NativeHandle to be assigned to KernelDefinition (default generics)', () => {
+    type ManifoldKernel = KernelDefinition<Record<string, unknown>, { glb: ArrayBuffer } | undefined>;
+    expectTypeOf<ManifoldKernel>().toExtend<KernelDefinition>();
+  });
+
+  it('should self-assign with default generic args', () => {
+    expectTypeOf<KernelDefinition>().toExtend<KernelDefinition>();
+  });
+});
 
 // =============================================================================
 // defineKernel

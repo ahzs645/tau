@@ -351,6 +351,7 @@ function enrichIssueLocation(
 /**
  * Custom WASM configuration for injecting non-standard builds at runtime.
  * Primarily used for Node.js tooling (benchmarks, CI) via `file://` URLs.
+ * @public
  */
 export type ReplicadWasmConfig = {
   /** Absolute URL to the `.wasm` binary (typically `file://` in Node.js). */
@@ -361,6 +362,7 @@ export type ReplicadWasmConfig = {
 
 /**
  * Configuration for the Replicad kernel, controlling WASM variant, OC tracing, and edge rendering.
+ * @public
  */
 export type ReplicadOptions = {
   /**
@@ -400,6 +402,7 @@ const replicadOptionsSchema = z.object({
 // Kernel module definition
 // =============================================================================
 
+/** @public */
 export default defineKernel({
   name: 'ReplicadKernel',
   version: '1.0.0',

@@ -70,13 +70,12 @@ function extractColorFromShape(shape: unknown): [number, number, number, number]
  *
  * @see {@link jscadToGltf} — the public API that orchestrates these helpers
  *
- * @example
+ * @example <caption>Extracting flat mesh data</caption>
  * ```typescript
- * // JSCAD shapes from user code execution
- * const { vertices, normals, indices } = extractMeshDataFromJscadShapes([sphere, cube]);
- * // vertices: [0, 0, 0, 1, 0, 0, 1, 1, 0, ...]  (flat XYZ coordinates)
- * // normals: [0, 0, 1, 0, 0, 1, 0.707, 0.707, 0, ...]  (normalized direction vectors)
- * // indices: [0, 1, 2, 3, 4, 5, ...]  (triangle vertex indices)
+ * const { vertices, normals, indices } = extractMeshDataFromJscadShapes(shapes);
+ * // vertices: flat XYZ coordinates [x1,y1,z1,x2,y2,z2,...]
+ * // normals: normalized direction vectors per vertex
+ * // indices: triangle vertex indices [0,1,2,3,4,5,...]
  * ```
  */
 function extractMeshDataFromJscadShapes(shapes: unknown[]): {
@@ -351,6 +350,8 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  * Material properties are set to sensible defaults (matte, double-sided, low metallic)
  * suitable for preview visualization. For production export, use specialized exporters.
  *
+ * @internal
+ *
  * @param shape - JSCAD geometry object(s):
  *               - Single geom3/geom2 object (colored or default)
  *               - Array of geometry objects
@@ -362,19 +363,14 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  * @throws {Error} If any shape cannot be converted to GLTF polygon
  * @throws May reject if glTF serialization fails (rare, typically only for memory issues)
  *
- * @example
+ * @example <caption>Converting JSCAD shapes to glTF</caption>
  * ```typescript
- * import { primitives, colors } from '@jscad/modeling';
- * import { jscadToGltf } from '#kernels/jscad/jscad-to-gltf.js';
- *
- * // Simple shape without color
  * const shape = primitives.cube({ size: 10 });
- * const gltfData = await jscadToGltf(shape);
+ * const glb = await jscadToGltf(shape);
  *
- * // Colored shapes (each will be a separate mesh with its own color)
  * const redSphere = colors.colorize([1, 0, 0], primitives.sphere({ radius: 5 }));
- * const blueCube = colors.colorize([0, 0, 1, 0.5], primitives.cube({ size: 10 })); // transparent
- * const coloredGltf = await jscadToGltf([redSphere, blueCube]);
+ * const blueCube = colors.colorize([0, 0, 1, 0.5], primitives.cube({ size: 10 }));
+ * const coloredGlb = await jscadToGltf([redSphere, blueCube]);
  * ```
  */
 export async function jscadToGltf(shape: unknown): Promise<Uint8Array<ArrayBuffer>> {

@@ -7,6 +7,7 @@ import { createBundlerPlugin } from '#plugins/plugin-helpers.js';
 
 /**
  * Esbuild bundler options.
+ * @public
  */
 export type EsbuildOptions = {
   /** Override the default file extensions this bundler handles. Defaults to ['ts', 'js', 'tsx', 'jsx']. */
@@ -17,10 +18,18 @@ export type EsbuildOptions = {
  * Create an esbuild bundler plugin registration.
  * Handles JS/TS file bundling, code execution, and module resolution via esbuild-wasm.
  *
- * @example
+ * @public
+ *
+ * @example <caption>Client with esbuild bundler</caption>
  * ```typescript
- * esbuild()                            // default: ['ts', 'js', 'tsx', 'jsx']
- * esbuild({ extensions: ['ts', 'tsx'] }) // TypeScript only
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { replicad } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ *
+ * const client = createKernelClient({
+ *   kernels: [replicad()],
+ *   bundlers: [esbuild({ extensions: ['ts', 'tsx'] })],
+ * });
  * ```
  */
 export const esbuild = createBundlerPlugin<EsbuildOptions>((options) => ({

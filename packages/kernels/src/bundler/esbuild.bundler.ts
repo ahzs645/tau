@@ -29,6 +29,7 @@ import {
 
 const autoExportNames = ['main', 'defaultParams', 'getParameterDefinitions'];
 
+/** @public */
 export default defineBundler({
   name: 'EsbuildBundler',
   version: '1.0.0',

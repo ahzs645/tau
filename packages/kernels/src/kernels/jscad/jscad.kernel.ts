@@ -189,6 +189,7 @@ function resolveModule(module: unknown): JscadModuleExports {
 // Kernel module definition
 // =============================================================================
 
+/** @public */
 export default defineKernel({
   name: 'JscadKernel',
   version: '1.0.0',

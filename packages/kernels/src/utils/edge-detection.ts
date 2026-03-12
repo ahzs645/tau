@@ -138,17 +138,19 @@ function dot(a: Vertex3, b: Vertex3): number {
  * The algorithm runs in O(n) time where n is the number of triangles, using hash-based
  * edge matching for efficient lookup.
  *
+ * @internal
+ *
  * @param positions - Flat array of vertex positions [x1, y1, z1, x2, y2, z2, ...]
  * @param indices - Optional index array. If undefined, vertices are processed sequentially as triangles.
  * @param thresholdDegrees - Angle threshold in degrees. Edges with dihedral angle greater than
  *   this value are considered sharp. Default is 30 degrees.
  * @returns Edge geometry data with positions and indices for LINES primitive mode
  *
- * @example
+ * @example <caption>Sharp edges from indexed mesh</caption>
  * ```typescript
- * const result = detectEdges(positions, indices, 30);
- * // result.positions contains edge vertex positions
- * // result.indices contains edge indices for LINES mode
+ * const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+ * const indices = new Uint32Array([0, 1, 2]);
+ * const edges = detectEdges(positions, indices, 30);
  * ```
  */
 export function detectEdges(

@@ -1,7 +1,5 @@
 /**
- * A 3D vertex position in Cartesian coordinates.
- *
- * @example [1.5, -2.0, 0.0] represents point at x=1.5, y=-2.0, z=0.0
+ * A 3D vertex position in Cartesian coordinates (e.g., `[1.5, -2.0, 0.0]`).
  */
 export type Vertex = [number, number, number];
 
@@ -9,19 +7,14 @@ export type Vertex = [number, number, number];
  * A polygonal face defined by vertex indices.
  *
  * Contains an ordered list of vertex indices that form a polygon.
- * During glTF export, faces with 4+ vertices are triangulated using fan triangulation.
- *
- * @example [0, 1, 2] represents a triangle using vertices at indices 0, 1, and 2
- * @example [0, 1, 2, 3] represents a quad that will be split into triangles (0,1,2) and (0,2,3)
+ * During glTF export, faces with 4+ vertices are triangulated using fan triangulation
+ * (e.g., `[0, 1, 2]` for a triangle, `[0, 1, 2, 3]` for a quad split into two triangles).
  */
 export type Face = number[];
 
 /**
- * RGBA color components in normalized range [0.0, 1.0].
- *
- * @example [1.0, 0.0, 0.0, 1.0] represents opaque red
- * @example [0.0, 0.0, 1.0, 0.5] represents semi-transparent blue
- * @example [0.5, 0.5, 0.5, 1.0] represents opaque 50% gray
+ * RGBA color components in normalized range [0.0, 1.0]
+ * (e.g., `[1.0, 0.0, 0.0, 1.0]` for opaque red, `[0.0, 0.0, 1.0, 0.5]` for semi-transparent blue).
  */
 export type Color = [number, number, number, number]; // RGBA values 0-1
 
@@ -40,7 +33,8 @@ export type IndexedPolyhedron = {
    * Each vertex is shared by multiple faces, reducing memory usage.
    * The index of each vertex in this array is used to reference it from faces.
    *
-   * @example
+   * @example <caption>Vertex position data</caption>
+   * ```text
    * // A simple pyramid with 4 vertices:
    * vertices: [
    *   [0, 0, 0],    // base vertex 0
@@ -48,6 +42,7 @@ export type IndexedPolyhedron = {
    *   [0.5, 1, 0],  // base vertex 2
    *   [0.5, 0.5, 1] // apex vertex 3
    * ]
+   * ```
    */
   vertices: Vertex[];
 
@@ -62,7 +57,8 @@ export type IndexedPolyhedron = {
    * - Triangles are used directly
    * - Quads and n-gons are triangulated using fan triangulation from the first vertex
    *
-   * @example
+   * @example <caption>Triangular face indices</caption>
+   * ```text
    * // Continuing the pyramid example:
    * faces: [
    *   [0, 1, 2],    // triangular base face
@@ -70,6 +66,7 @@ export type IndexedPolyhedron = {
    *   [1, 3, 2],    // triangular side face 2
    *   [2, 3, 0]     // triangular side face 3
    * ]
+   * ```
    */
   faces: Face[];
 
@@ -80,7 +77,8 @@ export type IndexedPolyhedron = {
    * During glTF export, face colors are replicated to all vertices of the
    * triangles created from that face during triangulation.
    *
-   * @example
+   * @example <caption>Per-face color assignment</caption>
+   * ```text
    * // Continuing the pyramid example (4 faces = 4 colors):
    * colors: [
    *   [0.8, 0.8, 0.8], // gray base
@@ -88,6 +86,7 @@ export type IndexedPolyhedron = {
    *   [0.0, 1.0, 0.0], // green side 2
    *   [0.0, 0.0, 1.0]  // blue side 3
    * ]
+   * ```
    */
   colors: Color[];
 
@@ -107,11 +106,13 @@ export type IndexedPolyhedron = {
      * - Line segment from (x1,y1,z1) to (x2,y2,z2)
      * - Next line segment from (x3,y3,z3) to (x4,y4,z4), etc.
      *
-     * @example
+     * @example <caption>Flattened line segment pairs</caption>
+     * ```text
      * // Two line segments:
      * // Line 1: from (0,0,0) to (1,0,0)
      * // Line 2: from (1,0,0) to (1,1,0)
      * positions: [0,0,0, 1,0,0, 1,0,0, 1,1,0]
+     * ```
      */
     positions: number[];
 
@@ -124,14 +125,13 @@ export type IndexedPolyhedron = {
      */
     edgeGroups?: Array<{
       /**
-       * Starting index in the positions array (in groups of 6 values per line).
-       * @example start: 0 means starting from the first line segment
+       * Starting index in the positions array, in groups of 6 values per line segment
+       * (e.g., `0` for the first line segment).
        */
       start: number;
 
       /**
-       * Number of line segments in this group.
-       * @example count: 3 means this group contains 3 line segments
+       * Number of line segments in this group (e.g., `3` for three line segments).
        */
       count: number;
 

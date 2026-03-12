@@ -180,6 +180,7 @@ async function addEdgePrimitivesToGltf(geometry: GeometryGltf, thresholdDegrees:
  * The browser-side renderer identifies primitives by Three.js object type:
  * - Mesh objects are surfaces (matcap applied, visibility toggleable)
  * - LineSegments objects are edges (converted to LineSegments2 for fat line rendering)
+ * @public
  */
 export const gltfEdgeDetectionMiddleware = defineMiddleware({
   name: 'GltfEdgeDetection',

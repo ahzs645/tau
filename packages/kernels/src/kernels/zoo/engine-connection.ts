@@ -9,15 +9,18 @@ import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 /**
  * The KCL WASM module, loaded via dynamic import, providing parse and execute entry points.
  */
+/** @public */
 // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() required for module type
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
 
 /**
  * Request model for Zoo modeling API WebSocket messages.
+ * @public
  */
 export type WebSocketRequest = Models['WebSocketRequest_type'];
 /**
  * Response model for Zoo modeling API WebSocket messages.
+ * @public
  */
 export type WebSocketResponse = Models['WebSocketResponse_type'];
 
@@ -58,6 +61,7 @@ const getWebSocket = async (): Promise<typeof WebSocket> => {
 
 /**
  * Stub connection for local-only KCL operations (parse, lint) that bypass the Zoo modeling API.
+ * @public
  */
 export class MockEngineConnection {
   /**
@@ -89,6 +93,7 @@ export class MockEngineConnection {
 
 /**
  * WebSocket connection to the Zoo modeling API for full KCL execution and export.
+ * @public
  */
 export class EngineConnection {
   public context: Context | undefined;

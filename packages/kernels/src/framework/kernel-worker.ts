@@ -78,6 +78,7 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
 
 /**
  * A resolved middleware instance paired with its parsed options.
+ * @public
  */
 export type ResolvedMiddleware = {
   middleware: KernelMiddleware;
@@ -86,7 +87,10 @@ export type ResolvedMiddleware = {
   enabled: boolean;
 };
 
-/** Base class for kernel workers providing lifecycle, middleware, bundler, and caching infrastructure. */
+/**
+ * Base class for kernel workers providing lifecycle, middleware, bundler, and caching infrastructure.
+ * @public
+ */
 export abstract class KernelWorker<Options extends Record<string, unknown> = Record<string, unknown>> {
   /**
    * The supported export formats for the worker.
@@ -179,9 +183,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected loadedBundlers = new Map<string, { definition: BundlerDefinition; ctx: unknown }>();
 
   /**
-   * Human-readable identifier for this worker, used in log output and error diagnostics.
-   *
-   * @example ReplicadWorker, TauWorker, ZooWorker.
+   * Human-readable identifier for this worker, used in log output and error diagnostics
+   * (e.g., `'ReplicadWorker'`, `'TauWorker'`, `'ZooWorker'`).
    */
   protected abstract readonly name: string;
 
@@ -388,7 +391,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Entry point for initializing the worker. This is called once when the worker is created.
    * Handles common initialization logic and then calls the protected initialize method.
    *
-   *
    * @param input - Initialization input containing callbacks, transferables, options, and middleware entries
    * @param input.callbacks - Object containing callback functions (proxied)
    * @param input.callbacks.onLog - The function to call when a log is emitted
@@ -428,7 +430,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Get the supported export formats for the worker.
-   *
    *
    * @returns The supported export formats.
    */
@@ -525,7 +526,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Entry point for checking if this worker can handle the given file.
    *
-   *
    * @param file - The geometry file to check.
    * @returns True if this worker can handle the file, false otherwise.
    */
@@ -546,7 +546,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Entry point for extracting parameters from a file.
    * Handles base path setup, timing, and middleware application using onion model.
-   *
    *
    * @param file - The geometry file to extract parameters from.
    * @returns The extracted parameters.
@@ -653,7 +652,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * - Code before handler() runs on the "request journey" (outside-in)
    * - Code after handler() runs on the "response journey" (inside-out)
    * - Short-circuited results still flow through upstream middleware post-processing
-   *
    *
    * @param entry - The geometry entry containing file, parameters, and optional tessellation
    * @param entry.file - The geometry file to compute geometry from
@@ -886,7 +884,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Get the resolved middleware array for this worker.
    * Override in subclasses to customize middleware (e.g., for testing).
    *
-   *
    * @returns Array of resolved middleware with their configs
    */
   public getMiddleware(): ResolvedMiddleware[] {
@@ -896,7 +893,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Reconfigure middleware at runtime without re-importing already loaded modules.
    * New URLs are imported, removed URLs are dropped, existing URLs get config updates.
-   *
    *
    * @param entries - New middleware configuration to apply
    */

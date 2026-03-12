@@ -15,6 +15,7 @@ import { esbuild } from '#plugins/bundler-factories.js';
 /**
  * Client options shape returned by preset functions.
  * Contains the full set of plugins required to configure a kernel client.
+ * @public
  */
 export type PresetOptions = {
   /** Kernel plugins that handle specific CAD file formats and languages */
@@ -27,6 +28,8 @@ export type PresetOptions = {
 
 /**
  * Preset configurations for common use cases.
+ *
+ * @public
  */
 export const presets = {
   /**
@@ -35,9 +38,10 @@ export const presets = {
    *
    * @returns Complete client options with all plugins
    *
-   * @example
+   * @example <caption>Zero-config full setup</caption>
    * ```typescript
    * import { createKernelClient, presets } from '@taucad/kernels';
+   *
    * const client = createKernelClient(presets.all());
    * ```
    */

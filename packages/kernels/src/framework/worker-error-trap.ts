@@ -32,15 +32,17 @@ type ErrorTrap = {
  * operation. If an unhandled rejection fires while the operation is
  * in-flight, the returned promise rejects with that error.
  *
+ * @internal
+ *
  * @param operation - The promise to race against unhandled rejections
  * @returns The resolved value of the operation
  * @throws The original error from the operation, or an Error wrapping
  *         an unhandled rejection that fired during the operation
  *
- * @example
+ * @example <caption>Catching unhandled rejections during WASM init</caption>
  * ```typescript
- * const result = await raceWithErrorTrap(
- *   someEmscriptenModule({ locateFile: ... })
+ * const module = await raceWithErrorTrap(
+ *   initOpenCascade({ locateFile: (file: string) => `/wasm/${file}` })
  * );
  * ```
  */

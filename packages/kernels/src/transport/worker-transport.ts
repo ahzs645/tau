@@ -14,13 +14,14 @@ import type { KernelTransport } from '#transport/kernel-transport.js';
  * @param workerUrl - URL of the worker module (must be type: 'module')
  * @returns KernelTransport wrapping the Worker's message channel
  *
- * @example
+ * @public
+ *
+ * @example <caption>Browser setup with Worker transport</caption>
  * ```typescript
  * import { createWorkerTransport } from '@taucad/kernels/transport';
  *
- * const transport = createWorkerTransport(myWorkerUrl);
- * transport.send({ type: 'initialize', requestId: '1', ... });
- * transport.onMessage((response) => console.log(response));
+ * const transport = createWorkerTransport('/kernel-worker.js');
+ * transport.onMessage((response) => console.log(response.type));
  * ```
  */
 export function createWorkerTransport(workerUrl: string): KernelTransport & { worker: Worker } {

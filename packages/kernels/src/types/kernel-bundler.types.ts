@@ -16,6 +16,7 @@ import type { KernelFileSystem } from '#types/kernel-worker.types.js';
 /**
  * Result of bundling a file and its dependencies via esbuild.
  * Used by JS/TS kernels through runtime.bundler.
+ * @public
  */
 export type BundleResult = {
   /** The bundled code as a string */
@@ -33,12 +34,14 @@ export type BundleResult = {
 /**
  * Result of executing bundled code via dynamic import.
  * Used by JS/TS kernels through runtime.execute().
+ * @public
  */
 export type ExecuteResult<T = unknown> = { success: true; value: T } | { success: false; issues: KernelIssue[] };
 
 /**
  * A built-in module registered on the bundler for pre-loaded libraries.
  * These modules are served directly from memory without filesystem I/O.
+ * @public
  */
 export type BuiltinModule = {
   /** Pre-bundled ESM code string */
@@ -53,6 +56,7 @@ export type BuiltinModule = {
  * Bundler service provided to kernel modules via KernelRuntime.
  * Wraps esbuild-wasm with virtual filesystem integration and CDN module resolution.
  * Created lazily on first access -- non-JS kernels incur zero cost.
+ * @public
  */
 export type KernelBundler = {
   /** Bundle a file and all its transitive dependencies. */
@@ -76,6 +80,7 @@ export type KernelBundler = {
 
 /**
  * Filesystem and project path context for bundler initialization.
+ * @public
  */
 export type BundlerInitOptions = {
   /** Filesystem interface for reading project files */
@@ -86,6 +91,7 @@ export type BundlerInitOptions = {
 
 /**
  * Entry file path for bundler operations (detectImports, bundle, resolveDependencies).
+ * @public
  */
 export type BundleInput = {
   /** Absolute path to the entry file */
@@ -95,6 +101,7 @@ export type BundleInput = {
 /**
  * Result of detectImports() -- a lightweight pass that discovers which
  * external modules are imported transitively without resolving them.
+ * @public
  */
 export type DetectImportsResult = {
   /** Bare specifiers imported transitively (e.g., 'replicad', '@jscad/modeling') */
@@ -123,6 +130,7 @@ export type DetectImportsResult = {
  *
  * @template Context - Bundler-specific context type, inferred from initialize() return
  * @template Options - Validated options type, inferred from optionsSchema when provided
+ * @public
  */
 export type BundlerDefinition<Context = unknown, Options extends Record<string, unknown> = Record<string, unknown>> = {
   /** Human-readable bundler name, used in logs and error messages */
@@ -136,7 +144,7 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
   optionsSchema?: z.ZodType<Options>;
 
   /** Initialize the bundler. Receives framework init options plus user-provided options. */
-  initialize(initOptions: BundlerInitOptions, options: NoInfer<Options>): Promise<Context>;
+  initialize(initOptions: BundlerInitOptions, options: Options): Promise<Context>;
 
   /**
    * Detect which bare-specifier modules are imported transitively.
@@ -144,28 +152,28 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
    * Returns detected modules and project dependencies without producing runnable code.
    * This is the primary mechanism for kernel selection -- no module stubs required.
    */
-  detectImports(input: BundleInput, context: NoInfer<Context>): Promise<DetectImportsResult>;
+  detectImports(input: BundleInput, context: Context): Promise<DetectImportsResult>;
 
   /**
    * Produce runnable code with all registered modules resolved.
    * Called AFTER kernel selection and initialization (modules are registered).
    */
-  bundle(input: BundleInput, context: NoInfer<Context>): Promise<BundleResult>;
+  bundle(input: BundleInput, context: Context): Promise<BundleResult>;
 
   /** Execute bundled code (tied to this bundler's output format). */
-  execute(code: string, context: NoInfer<Context>): Promise<ExecuteResult>;
+  execute(code: string, context: Context): Promise<ExecuteResult>;
 
   /** Register a builtin module for resolution during bundle(). */
-  registerModule(name: string, builtinModule: BuiltinModule, context: NoInfer<Context>): void;
+  registerModule(name: string, builtinModule: BuiltinModule, context: Context): void;
 
   /**
    * Optional fast-path dependency resolution without full bundling.
    * Falls back to bundle().dependencies when not implemented.
    */
-  resolveDependencies?(input: BundleInput, context: NoInfer<Context>): Promise<string[]>;
+  resolveDependencies?(input: BundleInput, context: Context): Promise<string[]>;
 
   /** Clean up bundler resources (e.g., esbuild.stop()). */
-  cleanup?(context: NoInfer<Context>): Promise<void>;
+  cleanup?(context: Context): Promise<void>;
 };
 
 /**
@@ -175,16 +183,29 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
  * @param definition - The bundler definition object implementing all required lifecycle methods
  * @returns The same definition, typed as {@link BundlerDefinition}
  *
- * @example
+ * @public
+ *
+ * @example <caption>Custom bundler with import detection</caption>
  * ```typescript
+ * import { defineBundler } from '@taucad/kernels/bundler';
+ *
  * export default defineBundler({
- *   name: 'EsbuildBundler',
+ *   name: 'MyBundler',
  *   version: '1.0.0',
- *   async initialize({ filesystem, projectPath }) { ... },
- *   async detectImports({ entryPath }, context) { ... },
- *   async bundle({ entryPath }, context) { ... },
- *   async execute(code, context) { ... },
- *   registerModule(name, module, context) { ... },
+ *   extensions: ['ts', 'js'],
+ *   async initialize({ filesystem, projectPath }) {
+ *     return { projectPath };
+ *   },
+ *   async detectImports({ entryPath }, context) {
+ *     return { detectedModules: [], dependencies: [entryPath] };
+ *   },
+ *   async bundle({ entryPath }, context) {
+ *     return { code: '', sourceMap: undefined, issues: [], success: true, dependencies: [] };
+ *   },
+ *   async execute(code, context) {
+ *     return { success: true, value: undefined };
+ *   },
+ *   registerModule(name, builtinModule, context) {},
  * });
  * ```
  */

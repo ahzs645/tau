@@ -14,6 +14,7 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  * libraries without importing them directly.
  * Uses `ArrayBufferLike` to accept both `ArrayBuffer` and `SharedArrayBuffer`
  * (ZenFS/BrowserFS returns `Buffer<ArrayBufferLike>`).
+ * @public
  */
 export type FsLike = {
   promises: {
@@ -39,13 +40,14 @@ export type FsLike = {
  * @param rootPath - Optional root path prefix for all operations (default: '/')
  * @returns KernelFileSystemBase backed by the provided fs-compatible object
  *
- * @example
+ * @public
+ *
+ * @example <caption>ZenFS-backed filesystem adapter</caption>
  * ```typescript
- * import { fromFsLike } from '@taucad/kernels';
+ * import { fromFsLike } from '@taucad/kernels/filesystem';
  * import { fs } from '@zenfs/core';
  *
  * const fileSystem = fromFsLike(fs);
- * await client.connect({ fileSystem });
  * ```
  */
 export function fromFsLike(fsLike: FsLike, rootPath = '/'): KernelFileSystemBase {

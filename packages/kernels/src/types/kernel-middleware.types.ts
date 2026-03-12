@@ -28,6 +28,7 @@ import type {
  * can be updated before calling handler() and read after it returns.
  *
  * @template T - The state schema type inferred from Zod. Must be an object type.
+ * @public
  */
 export type MiddlewareState<T extends Record<string, unknown>> = {
   /**
@@ -52,6 +53,7 @@ export type MiddlewareState<T extends Record<string, unknown>> = {
  *
  * @template State - The state type inferred from the middleware's stateSchema. Must be an object type.
  * @template Options - The options type inferred from the middleware's optionsSchema. Must be an object type.
+ * @public
  */
 export type KernelMiddlewareRuntime<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
@@ -90,6 +92,7 @@ export type KernelMiddlewareRuntime<
  * Called by wrap hooks to continue the middleware chain or execute the main operation.
  * Runtime is captured in the handler's closure, so middleware only passes input.
  * Uses internal geometry types (without hash) - hash is added by kernel-worker.ts.
+ * @public
  */
 export type CreateGeometryHandler = (input: CreateGeometryInput) => Promise<CreateGeometryResult>;
 
@@ -97,6 +100,7 @@ export type CreateGeometryHandler = (input: CreateGeometryInput) => Promise<Crea
  * Handler function for exportGeometry.
  * Called by wrap hooks to continue the middleware chain or execute the main operation.
  * Runtime is captured in the handler's closure, so middleware only passes input.
+ * @public
  */
 export type ExportGeometryHandler = (input: ExportGeometryInput) => Promise<ExportGeometryResult>;
 
@@ -104,6 +108,7 @@ export type ExportGeometryHandler = (input: ExportGeometryInput) => Promise<Expo
  * Handler function for getParameters.
  * Called by wrap hooks to continue the middleware chain or execute the main operation.
  * Runtime is captured in the handler's closure, so middleware only passes input.
+ * @public
  */
 export type GetParametersHandler = (input: GetParametersInput) => Promise<GetParametersResult>;
 
@@ -125,19 +130,21 @@ export type GetParametersHandler = (input: GetParametersInput) => Promise<GetPar
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
  *
- * @example
+ * @public
+ *
+ * @example <caption>Logging middleware for geometry pipeline</caption>
  * ```typescript
- * async wrapCreateGeometry({ basePath }, handler, { logger, filesystem, dependencyHash }) {
- *   // PRE: Check cache
- *   const cached = await checkCache(basePath, dependencyHash);
- *   if (cached) return cached;  // Short-circuit
+ * import { defineMiddleware } from '@taucad/kernels/middleware';
  *
- *   // EXECUTE: Call downstream (just pass input)
- *   const result = await handler(input);
- *
- *   // POST: Transform result (runs even if upstream short-circuited)
- *   return transform(result);
- * }
+ * const loggingMiddleware = defineMiddleware({
+ *   name: 'Logging',
+ *   async wrapCreateGeometry(input, handler, { logger }) {
+ *     logger.debug('Computing geometry...');
+ *     const result = await handler(input);
+ *     logger.debug('Geometry computed');
+ *     return result;
+ *   },
+ * });
  * ```
  */
 export type WrapCreateGeometryHook<
@@ -157,6 +164,7 @@ export type WrapCreateGeometryHook<
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
+ * @public
  */
 export type WrapExportGeometryHook<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
@@ -175,6 +183,7 @@ export type WrapExportGeometryHook<
  *
  * @template State - The state type from the middleware's stateSchema. Must be an object type.
  * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
+ * @public
  */
 export type WrapGetParametersHook<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>

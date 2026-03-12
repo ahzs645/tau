@@ -87,6 +87,7 @@ async function createDirectoryResolver(filesystem: KernelFileSystem, directory: 
   };
 }
 
+/** @public */
 export default defineKernel({
   name: 'TauKernel',
   version: '1.0.0',

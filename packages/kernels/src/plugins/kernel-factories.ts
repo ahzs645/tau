@@ -15,11 +15,30 @@ import type { ManifoldOptions } from '#kernels/manifold/manifold.kernel.js';
  * Create a Replicad kernel plugin registration.
  * Replicad is an OpenCASCADE-based parametric CAD kernel.
  *
- * @example
+ * @public
+ *
+ * @example <caption>Default WASM build</caption>
  * ```typescript
- * replicad()                                          // single WASM (~17 MB)
- * replicad({ wasm: 'single-exceptions' })               // exceptions WASM (~20 MB)
- * replicad({ wasm: { wasmUrl, wasmBindingsUrl } })    // custom build injection
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { replicad } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ *
+ * const client = createKernelClient({
+ *   kernels: [replicad()],
+ *   bundlers: [esbuild()],
+ * });
+ * ```
+ *
+ * @example <caption>Custom WASM build</caption>
+ * ```typescript
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { replicad } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ *
+ * const client = createKernelClient({
+ *   kernels: [replicad({ wasm: { wasmUrl: '/custom/oc.wasm', wasmBindingsUrl: '/custom/oc.js' } })],
+ *   bundlers: [esbuild()],
+ * });
  * ```
  */
 export const replicad = createKernelPlugin<ReplicadOptions>({
@@ -34,10 +53,18 @@ export const replicad = createKernelPlugin<ReplicadOptions>({
  * Create an OpenCascade kernel plugin registration.
  * OpenCascade provides direct access to the OpenCASCADE API without the Replicad abstraction.
  *
- * @example
+ * @public
+ *
+ * @example <caption>Custom WASM build</caption>
  * ```typescript
- * opencascade()                                          // single WASM
- * opencascade({ wasm: { wasmUrl, wasmBindingsUrl } })    // custom build injection
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { opencascade } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ *
+ * const client = createKernelClient({
+ *   kernels: [opencascade({ wasm: { wasmUrl: '/custom/oc.wasm', wasmBindingsUrl: '/custom/oc.js' } })],
+ *   bundlers: [esbuild()],
+ * });
  * ```
  */
 export const opencascade = createKernelPlugin<OpenCascadeOptions>({
@@ -52,9 +79,17 @@ export const opencascade = createKernelPlugin<OpenCascadeOptions>({
  * Create a Zoo (KCL) kernel plugin registration.
  * Zoo connects to the Zoo engine via WebSocket for KCL language support.
  *
- * @example
+ * @public
+ *
+ * @example <caption>WebSocket-based KCL kernel</caption>
  * ```typescript
- * zoo({ baseUrl: 'wss://my-server/v1/kernels/zoo' })
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { zoo } from '@taucad/kernels/kernels';
+ *
+ * const client = createKernelClient({
+ *   kernels: [zoo({ baseUrl: 'wss://api.zoo.dev/ws' })],
+ *   bundlers: [],
+ * });
  * ```
  */
 export const zoo = createKernelPlugin<ZooOptions>({
@@ -65,11 +100,7 @@ export const zoo = createKernelPlugin<ZooOptions>({
 
 /**
  * Create an OpenSCAD kernel plugin registration.
- *
- * @example
- * ```typescript
- * openscad()
- * ```
+ * @public
  */
 export const openscad = createKernelPlugin({
   id: 'openscad',
@@ -79,11 +110,7 @@ export const openscad = createKernelPlugin({
 
 /**
  * Create a JSCAD kernel plugin registration.
- *
- * @example
- * ```typescript
- * jscad()
- * ```
+ * @public
  */
 export const jscad = createKernelPlugin({
   id: 'jscad',
@@ -95,11 +122,7 @@ export const jscad = createKernelPlugin({
 
 /**
  * Create a Manifold kernel plugin registration.
- *
- * @example
- * ```typescript
- * manifold()
- * ```
+ * @public
  */
 export const manifold = createKernelPlugin<ManifoldOptions>({
   id: 'manifold',
@@ -112,11 +135,7 @@ export const manifold = createKernelPlugin<ManifoldOptions>({
 /**
  * Create a Tau converter kernel plugin registration.
  * Tau is the catch-all kernel that handles STEP, STL, 3MF, and other import formats.
- *
- * @example
- * ```typescript
- * tau()
- * ```
+ * @public
  */
 export const tau = createKernelPlugin({
   id: 'tau',

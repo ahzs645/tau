@@ -39,6 +39,7 @@ async function transformGltfGeometry(geometry: GeometryGltf): Promise<GeometryGl
  * - Workers produce spec-compliant GLTF (Y-up, meters)
  * - Middleware handles UI-specific transformations
  * - Exports bypass the middleware and return valid GLTF files
+ * @public
  */
 export const gltfCoordinateTransformMiddleware = defineMiddleware({
   name: 'GltfCoordinateTransform',

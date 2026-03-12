@@ -15,7 +15,10 @@ import { createBridgeServer, catchMessages } from '#framework/kernel-filesystem-
 
 const defaultBridgeMessageType = 'connect';
 
-/** Options for configuring the filesystem bridge message type. */
+/**
+ * Options for configuring the filesystem bridge message type.
+ * @public
+ */
 export type FileSystemBridgeOptions = {
   messageType?: string;
 };
@@ -23,13 +26,17 @@ export type FileSystemBridgeOptions = {
 /**
  * Optional watch handler for bridge servers.
  * When provided, enables watch/unwatch control messages over the bridge.
+ * @public
  */
 export type BridgeWatchHandler = {
   watch(request: KernelWatchRequest, handler: (event: KernelWatchEvent) => void, ownerId?: string): () => void;
   cleanupWatches(ownerId: string): void;
 };
 
-/** Handle returned by {@link exposeFileSystem} for managing bridge connections and cleanup. */
+/**
+ * Handle returned by {@link exposeFileSystem} for managing bridge connections and cleanup.
+ * @public
+ */
 export type ExposeFileSystemHandle = {
   cleanup: () => void;
   activePorts: Set<MessagePort>;
@@ -52,6 +59,7 @@ export type ExposeFileSystemHandle = {
  * @param handlers - Filesystem handler methods to expose
  * @param options - Optional message type and watch handler
  * @returns Handle with cleanup, activePorts, and serverHandles
+ * @public
  */
 export function exposeFileSystem<T extends StringKeyedObject>(
   handlers: T,
@@ -145,6 +153,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
  * @param worker - Target worker to receive the bridge port
  * @param options - Optional message type configuration
  * @returns Bridge handle with port and dispose
+ * @public
  */
 export function createFileSystemBridge(worker: Worker, options?: FileSystemBridgeOptions): BridgeHandle {
   const messageType = options?.messageType ?? defaultBridgeMessageType;

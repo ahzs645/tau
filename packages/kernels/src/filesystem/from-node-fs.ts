@@ -8,11 +8,22 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  * @param basePath - Root path for all filesystem operations
  * @returns KernelFileSystemBase backed by Node.js fs
  *
- * @example
+ * @public
+ *
+ * @example <caption>Server-side Node.js filesystem</caption>
  * ```typescript
- * import { fromNodeFS } from '@taucad/kernels';
- * const fileSystem = fromNodeFS('/path/to/project');
- * await client.connect({ fileSystem });
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { fromNodeFS } from '@taucad/kernels/filesystem';
+ * import { replicad } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createInProcessTransport } from '@taucad/kernels/transport';
+ *
+ * const client = createKernelClient({
+ *   kernels: [replicad()],
+ *   bundlers: [esbuild()],
+ *   transport: createInProcessTransport(),
+ *   fileSystem: fromNodeFS('/path/to/project'),
+ * });
  * ```
  */
 export function fromNodeFS(basePath: string): KernelFileSystemBase {

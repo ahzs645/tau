@@ -42,6 +42,7 @@ function getCacheDirectory(basePath: string): string {
  * Uses wrap-style hook with onion model execution:
  * - Check cache before calling handler()
  * - Write to cache after handler() returns (on cache miss)
+ * @public
  */
 export const parameterCacheMiddleware = defineMiddleware({
   name: 'ParameterCache',

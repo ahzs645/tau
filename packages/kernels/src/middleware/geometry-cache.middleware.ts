@@ -190,6 +190,7 @@ async function cleanupOldCacheEntries({
  *
  * Export operations are not cached - they are delegated to kernel workers
  * which handle format-specific conversion (e.g., GLTF JSON vs GLB binary).
+ * @public
  */
 export const geometryCacheMiddleware = defineMiddleware({
   name: 'GeometryCache',

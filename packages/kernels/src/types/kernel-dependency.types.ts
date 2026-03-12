@@ -8,6 +8,7 @@
 /**
  * A file dependency representing a source file or font file.
  * The contentHash is a SHA-256 hash of the file's contents.
+ * @public
  */
 export type FileDependency = {
   type: 'file';
@@ -20,6 +21,7 @@ export type FileDependency = {
 /**
  * A middleware dependency representing a middleware in the chain.
  * The index preserves the execution order in the chain.
+ * @public
  */
 export type MiddlewareDependency = {
   type: 'middleware';
@@ -35,6 +37,7 @@ export type MiddlewareDependency = {
 
 /**
  * A framework dependency representing the Tau framework version.
+ * @public
  */
 export type FrameworkDependency = {
   type: 'framework';
@@ -47,6 +50,7 @@ export type FrameworkDependency = {
 /**
  * An option dependency representing a kernel configuration option.
  * Used to track mesh tolerances, backend arguments, etc.
+ * @public
  */
 export type OptionDependency = {
   type: 'option';
@@ -59,6 +63,7 @@ export type OptionDependency = {
 /**
  * A parameter dependency representing user-provided parameter values.
  * Used to invalidate cache when parameter values change.
+ * @public
  */
 export type ParameterDependency = {
   type: 'parameter';
@@ -69,6 +74,7 @@ export type ParameterDependency = {
 /**
  * An asset dependency representing a bundled asset (font, WASM, etc.).
  * Used to invalidate cache when assets change between deployments.
+ * @public
  */
 export type AssetDependency = {
   type: 'asset';
@@ -82,6 +88,7 @@ export type AssetDependency = {
  * Discriminated union of all dependency types.
  * Used for cache key computation to ensure all factors affecting
  * the output are captured.
+ * @public
  */
 export type Dependency =
   | FileDependency

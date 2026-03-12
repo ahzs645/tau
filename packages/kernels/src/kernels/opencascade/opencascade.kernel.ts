@@ -18,8 +18,8 @@ import { defineKernel } from '#types/kernel-worker.types.js';
 import type { KernelRuntime } from '#types/kernel-worker.types.js';
 import type { KernelIssue } from '#types/kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#framework/kernel-helpers.js';
-import { initOpenCascade, resolveCjsDefault } from '#kernels/opencascade/init-opencascade.js';
-import type { OpenCascadeModuleFactory } from '#kernels/opencascade/init-opencascade.js';
+import { initOpenCascade } from '#kernels/opencascade/init-opencascade.js';
+import type { OpenCascadeModule } from '#kernels/opencascade/init-opencascade.js';
 import { meshShapesToGltf } from '#kernels/opencascade/opencascade-mesh.js';
 // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
@@ -52,13 +52,19 @@ type ShapeEntry = {
 // Options
 // =============================================================================
 
-/** Custom WASM binary location for the OpenCascade kernel. */
+/**
+ * Custom WASM binary location for the OpenCascade kernel.
+ * @public
+ */
 export type OpenCascadeWasmConfig = {
   wasmUrl: string;
   wasmBindingsUrl: string;
 };
 
-/** Configuration options for the OpenCascade kernel plugin. */
+/**
+ * Configuration options for the OpenCascade kernel plugin.
+ * @public
+ */
 export type OpenCascadeOptions = {
   wasm?: 'full' | OpenCascadeWasmConfig;
 };
@@ -76,22 +82,19 @@ const opencascadeOptionsSchema = z.object({
 
 async function resolveWasm(wasm: 'full' | OpenCascadeWasmConfig): Promise<{
   wasmUrl: string;
-  bindingsFactory: OpenCascadeModuleFactory;
+  moduleExports: OpenCascadeModule;
 }> {
   if (wasm === 'full') {
     // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
-    const module_ = await import('#kernels/opencascade/wasm/opencascade_full.js');
-    return {
-      wasmUrl: fullWasmUrl,
-      bindingsFactory: resolveCjsDefault<OpenCascadeModuleFactory>(module_.default),
-    };
+    const moduleExports = await import('#kernels/opencascade/wasm/opencascade_full.js');
+    return { wasmUrl: fullWasmUrl, moduleExports };
   }
 
   // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- dynamic import with variable URL
-  const module_: Record<string, unknown> = await import(/* @vite-ignore */ wasm.wasmBindingsUrl);
+  const moduleExports: Record<string, unknown> = await import(/* @vite-ignore */ wasm.wasmBindingsUrl);
   return {
     wasmUrl: wasm.wasmUrl,
-    bindingsFactory: resolveCjsDefault(module_['default'] ?? module_) as OpenCascadeModuleFactory,
+    moduleExports: moduleExports as unknown as OpenCascadeModule,
   };
 }
 
@@ -118,7 +121,7 @@ function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void
 
   const exportNames = Object.keys(ocRecord).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
-  const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('opencascade');\n${namedExports}\nexport default __mod;\n`;
+  const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('opencascade');\n${namedExports}\nexport default function init() {}\n`;
 
   runtime.bundler.registerModule('opencascade', { code, version: '2.0.0' });
   runtime.bundler.registerModule('opencascade.js', { code, version: '2.0.0' });
@@ -214,6 +217,7 @@ function isOpenCascadeShape(value: unknown): value is TopoDS_Shape {
 // Kernel definition
 // =============================================================================
 
+/** @public */
 export default defineKernel({
   name: 'OpenCascadeKernel',
   version: '1.0.0',
@@ -227,9 +231,8 @@ export default defineKernel({
 
     const span = tracer.startSpan('opencascade.wasm-init');
     const resolved = await resolveWasm(options.wasm);
-    const oc = await initOpenCascade(resolved.wasmUrl, resolved.bindingsFactory, { tracer });
+    const oc = (await initOpenCascade(resolved.wasmUrl, resolved.moduleExports, { tracer })) as OpenCascadeInstance;
     span.end();
-
     registerOcModule(oc, runtime);
     logger.debug('OpenCascade kernel initialized');
 

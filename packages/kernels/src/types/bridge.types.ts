@@ -7,8 +7,10 @@
  * string-keyed properties on either plain objects or class instances:
  *
  * ```typescript
+ * import type { StringKeyedObject } from '@taucad/kernels';
+ *
  * function dispatch<T extends StringKeyedObject>(handlers: T): void {
- *   const method = (handlers as Record<string, unknown>)[methodName];
+ *   const method = (handlers as Record<string, unknown>)['methodName'];
  * }
  * ```
  *
@@ -16,6 +18,8 @@
  * Class instances don't have an explicit index signature. TypeScript reports
  * "Index signature for type 'string' is missing in type 'ClassName'" when a
  * class instance is passed to a `T extends Record<string, unknown>` parameter.
+ *
+ * @public
  *
  * @see https://github.com/microsoft/TypeScript/issues/15300 — Index signature missing for class instances
  * @see https://github.com/sindresorhus/type-fest/blob/main/source/simplify.d.ts — type-fest's call-site workaround

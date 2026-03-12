@@ -5,11 +5,7 @@
 
 /**
  * Registration object for a kernel plugin. Returned by factory functions like `replicad()`.
- *
- * @example
- * ```typescript
- * const plugin: KernelPlugin = replicad({ withBrepEdges: true });
- * ```
+ * @public
  */
 export type KernelPlugin = {
   /** Unique identifier for this kernel */
@@ -28,11 +24,7 @@ export type KernelPlugin = {
 
 /**
  * Registration object for a middleware plugin. Returned by factory functions like `parameterCache()`.
- *
- * @example
- * ```typescript
- * const plugin: MiddlewarePlugin = parameterCache();
- * ```
+ * @public
  */
 export type MiddlewarePlugin = {
   /** Unique identifier for this middleware */
@@ -45,11 +37,7 @@ export type MiddlewarePlugin = {
 
 /**
  * Registration object for a bundler plugin. Returned by factory functions like `esbuild()`.
- *
- * @example
- * ```typescript
- * const plugin: BundlerPlugin = esbuild({ extensions: ['ts', 'tsx'] });
- * ```
+ * @public
  */
 export type BundlerPlugin = {
   /** Unique identifier for this bundler */

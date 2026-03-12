@@ -383,6 +383,7 @@ function formatValue(value: unknown): string {
 // Kernel module definition
 // =============================================================================
 
+/** @public */
 export default defineKernel({
   name: 'OpenScadKernel',
   version: '1.0.0',
@@ -537,9 +538,10 @@ export default defineKernel({
 
       if (tessellation) {
         args.push(`-D$fn=48`, `-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
-      } else {
-        args.push(`-D$fn=48`, `-D$fa=48`, `-D$fs=2`);
       }
+      //  Else {
+      //   args.push(`-D$fn=48`, `-D$fa=48`, `-D$fs=2`);
+      // }
 
       const flattenedParameters = flattenParametersForInjection(parameters);
       for (const [key, value] of Object.entries(flattenedParameters)) {

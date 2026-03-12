@@ -22,6 +22,7 @@ import type { Tessellation } from '#types/kernel-worker.types.js';
 /**
  * Commands sent from the kernel machine (main thread) to the kernel worker.
  * Request/response commands include a `requestId` for correlation.
+ * @public
  */
 export type KernelCommand =
   | {
@@ -63,6 +64,7 @@ export type KernelCommand =
 
 /**
  * Telemetry entry data collected via PerformanceObserver in the worker.
+ * @public
  */
 export type PerformanceEntryData = {
   name: string;
@@ -77,22 +79,30 @@ export type PerformanceEntryData = {
  * Framework-defined conventions: 'resolvingDeps', 'bundling', 'extractingParams',
  * 'computingGeometry', 'postProcessing'. Bundler and kernel modules may emit
  * custom phase strings for domain-specific progress tracking.
+ * @public
  */
 export type RenderPhase = string;
 
 /**
  * Worker state as reported via the shared signal channel and stateChanged responses.
+ * @public
  */
 export type WorkerState = 'idle' | 'rendering' | 'error';
 
-/** Integer enum for worker state in the SharedArrayBuffer signal channel. */
+/**
+ * Integer enum for worker state in the SharedArrayBuffer signal channel.
+ * @public
+ */
 export const workerStateEnum = {
   idle: 0,
   rendering: 1,
   error: 2,
 } as const satisfies Record<WorkerState, number>;
 
-/** Reverse lookup from integer to WorkerState string. */
+/**
+ * Reverse lookup from integer to WorkerState string.
+ * @public
+ */
 export const workerStateNames: Record<number, WorkerState> = {
   [workerStateEnum.idle]: 'idle',
   [workerStateEnum.rendering]: 'rendering',
@@ -106,6 +116,7 @@ export const workerStateNames: Record<number, WorkerState> = {
  * - Slot 1: worker state enum (worker -> main, Atomics.store + Atomics.notify / Atomics.waitAsync)
  * - Slot 2: progress percent (worker -> main, Atomics.store, polled)
  * - Slot 3: render phase (worker -> main, Atomics.store, polled)
+ * @public
  */
 export const signalSlot = {
   abortGeneration: 0,
@@ -117,6 +128,7 @@ export const signalSlot = {
 /**
  * Responses sent from the kernel worker back to the kernel machine (main thread).
  * Request-scoped responses include the `requestId` from the originating command.
+ * @public
  */
 export type KernelResponse =
   | { type: 'initialized'; requestId: string }

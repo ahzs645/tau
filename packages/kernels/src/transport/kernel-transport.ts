@@ -11,6 +11,7 @@ import type { KernelCommand, KernelResponse } from '#types/kernel-protocol.types
 /**
  * Low-level transport interface for kernel command/response messaging.
  * Portable across MessagePort, WebSocket, HTTP, and native FFI channels.
+ * @public
  */
 export type KernelTransport = {
   /**

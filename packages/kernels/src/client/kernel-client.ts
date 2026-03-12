@@ -34,6 +34,7 @@ type IsUnion<T, U = T> = T extends U ? ([U] extends [T] ? false : true) : never;
  * `file` is optional (the runtime picks the only key). When multiple keys
  * exist (or when `T` is a wide `Record<string, string>`), `file` is required
  * to specify the entry point.
+ * @public
  */
 export type CodeInput<T extends Record<string, string>> = {
   /** Inline source code as a filename-to-content map. */
@@ -61,6 +62,7 @@ export type CodeInput<T extends Record<string, string>> = {
  *
  * Renders from a connected filesystem. `file` can be a string shorthand
  * (e.g., `'/src/main.ts'`) or a `GeometryFile` object.
+ * @public
  */
 export type FileInput = {
   /** Prevents mixing code with file-mode rendering. @internal */
@@ -79,6 +81,7 @@ export type FileInput = {
  * Internally, the kernel pipeline produces `ExportFile[]`, but every current
  * kernel produces exactly one file. The client unwraps the first element for
  * a cleaner consumer API: `result.data.bytes` instead of `result.data[0].bytes`.
+ * @public
  */
 export type ExportResult = KernelResult<ExportFile>;
 
@@ -107,6 +110,7 @@ function resolveFileString(file: string): GeometryFile {
 
 /**
  * Options for creating a KernelClient.
+ * @public
  */
 export type KernelClientOptions = {
   /** Kernel plugins to register (order determines selection priority). */
@@ -140,6 +144,7 @@ export type KernelClientOptions = {
  *
  * - `{ fileSystem }` -- main-thread relay: the client creates a MessagePort bridge internally.
  * - `{ port }` -- direct bridge: pass a pre-existing MessagePort (e.g., from `createFileSystemBridge`).
+ * @public
  */
 export type ConnectOptions =
   //
@@ -165,6 +170,7 @@ type EventHandlers = {
 /**
  * High-level kernel client interface.
  * Lazy, Promise-based, event-subscribable.
+ * @public
  */
 export type KernelClient = {
   /**
@@ -282,7 +288,9 @@ export type KernelClient = {
  * @param options - Client configuration with plugin selections
  * @returns KernelClient instance
  *
- * @example
+ * @public
+ *
+ * @example <caption>Browser setup</caption>
  * ```typescript
  * import { createKernelClient } from '@taucad/kernels';
  * import { replicad, openscad } from '@taucad/kernels/kernels';
@@ -294,9 +302,24 @@ export type KernelClient = {
  *   middleware: [geometryCache()],
  *   bundlers: [esbuild()],
  * });
+ * ```
  *
- * await client.connect({ fileSystem: myFileSystem });
- * const result = await client.render({ file, params });
+ * @example <caption>Node.js / test setup with in-process transport</caption>
+ * ```typescript
+ * import { createKernelClient } from '@taucad/kernels';
+ * import { replicad } from '@taucad/kernels/kernels';
+ * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createInProcessTransport } from '@taucad/kernels/transport';
+ *
+ * const client = createKernelClient({
+ *   kernels: [replicad()],
+ *   bundlers: [esbuild()],
+ *   transport: createInProcessTransport(),
+ * });
+ *
+ * const result = await client.render({
+ *   code: { '/main.ts': 'import { draw } from "replicad";\nexport default () => draw();' },
+ * });
  * ```
  */
 export function createKernelClient(options: KernelClientOptions): KernelClient {

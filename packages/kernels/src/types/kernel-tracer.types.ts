@@ -9,6 +9,7 @@
 /**
  * Handle returned by `KernelSpanTracer.startSpan()`.
  * Call `end()` when the traced operation completes.
+ * @public
  */
 export type SpanHandle = {
   end(): void;
@@ -18,6 +19,7 @@ export type SpanHandle = {
  * Lightweight tracing interface exposed to kernel modules and middleware.
  * Creates hierarchical spans without requiring an OpenTelemetry SDK dependency.
  * Spans are collected by the framework and displayed in the Kernel Panel.
+ * @public
  */
 export type KernelSpanTracer = {
   /** Begin a new named span, optionally attaching key-value attributes for filtering. */

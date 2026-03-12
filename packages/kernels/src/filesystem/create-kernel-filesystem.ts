@@ -20,6 +20,7 @@ type EnhancedMethods = Pick<KernelFileSystem, 'readFiles' | 'readdirContents' | 
  *
  * @param base - Base filesystem (11 primitives) with optional enhanced method overrides
  * @returns Full KernelFileSystem with all enhanced methods guaranteed
+ * @public
  */
 export function createKernelFileSystem(base: KernelFileSystemBase & Partial<EnhancedMethods>): KernelFileSystem {
   return {

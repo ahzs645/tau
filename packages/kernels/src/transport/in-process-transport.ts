@@ -25,7 +25,9 @@ import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
  *
  * @returns KernelTransport for use with createKernelClient
  *
- * @example
+ * @public
+ *
+ * @example <caption>In-process testing setup</caption>
  * ```typescript
  * import { createKernelClient } from '@taucad/kernels';
  * import { createInProcessTransport } from '@taucad/kernels/transport';

@@ -69,6 +69,7 @@ async function resetFileSystem(): Promise<void> {
  * prior tests interfering with import resolution), then seeds with provided files.
  *
  * @param files - Record of absolute paths to file contents
+ * @public
  */
 export async function seedTestFileSystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
   // Reset to a clean in-memory filesystem to prevent stale files from prior tests
@@ -91,6 +92,7 @@ export async function seedTestFileSystem(files: Record<string, string | Uint8Arr
 
 /**
  * Clear the test filesystem by resetting to a fresh in-memory backend.
+ * @public
  */
 export async function clearTestFileSystem(): Promise<void> {
   await resetFileSystem();
@@ -102,6 +104,7 @@ export async function clearTestFileSystem(): Promise<void> {
 
 /**
  * Options for initializing a kernel worker in tests.
+ * @public
  */
 export type InitializeWorkerOptions = {
   /** Custom log handler */
@@ -126,6 +129,7 @@ export type InitializeWorkerOptions = {
  * @param worker - The kernel worker instance to initialize
  * @param options - Optional configuration (onLog, workerOptions for kernel-specific settings like withBrepEdges)
  * @returns Promise resolving to the initialized worker
+ * @public
  */
 export async function initializeWorkerForTesting<T extends KernelWorker>(
   worker: T,
@@ -161,6 +165,7 @@ type MockKernelLogger = {
  * Creates a mock logger for kernel and middleware testing.
  *
  * @returns A logger with vitest mock functions for all log levels
+ * @public
  */
 export function createMockLogger(): KernelLogger & MockKernelLogger {
   const logger: MockKernelLogger = {
@@ -177,6 +182,7 @@ export function createMockLogger(): KernelLogger & MockKernelLogger {
 
 /**
  * Options for creating a mock filesystem with vitest mocks.
+ * @public
  */
 export type MockFileSystemOptions = {
   /** Result for exists calls */
@@ -190,6 +196,7 @@ export type MockFileSystemOptions = {
 
 /**
  * Mock functions exposed for test assertions and setup.
+ * @public
  */
 export type MockFileSystemMocks = {
   readFile: ReturnType<typeof vi.fn>;
@@ -211,6 +218,7 @@ export type MockFileSystemMocks = {
 /**
  * A mock KernelFileSystem with vitest mock functions for verification.
  * Use the `mocks` property to access mock functions for test setup.
+ * @public
  */
 export type MockFileSystem = KernelFileSystem & {
   /** Access underlying mock functions for test assertions and setup */
@@ -224,13 +232,14 @@ export type MockFileSystem = KernelFileSystem & {
  * @param options - Optional overrides for default mock behavior
  * @returns A mock filesystem with vitest mock functions
  *
- * @example
+ * @public
+ *
+ * @example <caption>Mocking filesystem in tests</caption>
  * ```typescript
- * const filesystem = createMockFileSystem({ existsResult: true });
- * // Configure mock behavior
- * filesystem.mocks.readFile.mockRejectedValue(new Error('Read error'));
- * // Verify calls
- * expect(filesystem.mocks.writeFile).toHaveBeenCalledWith(path, data);
+ * import { createMockFileSystem } from '@taucad/kernels/testing';
+ *
+ * const filesystem = createMockFileSystem();
+ * filesystem.mocks.readFile.mockResolvedValue('file content');
  * ```
  */
 export function createMockFileSystem(options?: MockFileSystemOptions): MockFileSystem {
@@ -320,6 +329,7 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
  *
  * @template T - The state shape
  * @returns A middleware state with a vitest mock `update` function
+ * @public
  */
 export function createMockState<T extends Record<string, unknown>>(): MiddlewareState<T> & {
   update: ReturnType<typeof vi.fn>;
@@ -361,6 +371,7 @@ const defaultMockDependencyHash = 'a'.repeat(64);
  * @template Options - The options shape (defaults to empty object)
  * @param mockOptions - optional overrides for filesystem, dependencies, and options
  * @returns A fully mocked middleware runtime
+ * @public
  */
 export function createMockRuntime<
   // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
@@ -393,6 +404,7 @@ export function createMockRuntime<
  *
  * @param geometries - The geometry responses to include
  * @returns A successful result wrapping the provided geometries
+ * @public
  */
 export function createSuccessResult(geometries: GeometryResponse[]): CreateGeometryResult {
   return {
@@ -407,6 +419,7 @@ export function createSuccessResult(geometries: GeometryResponse[]): CreateGeome
  *
  * @param content - The GLB binary content
  * @returns A successful result with one GLTF geometry
+ * @public
  */
 export function createGltfSuccessResult(content: Uint8Array<ArrayBuffer>): CreateGeometryResult {
   return createSuccessResult([{ format: 'gltf', content }]);
@@ -418,6 +431,7 @@ export function createGltfSuccessResult(content: Uint8Array<ArrayBuffer>): Creat
  * @param content - The GLB binary content
  * @param issues - The diagnostic issues to attach
  * @returns A successful result with one GLTF geometry and issues
+ * @public
  */
 export function createGltfSuccessResultWithIssues(
   content: Uint8Array<ArrayBuffer>,
@@ -435,6 +449,7 @@ export function createGltfSuccessResultWithIssues(
  *
  * @param issues - Optional issues (defaults to a single generic error)
  * @returns A failed result with the provided issues
+ * @public
  */
 export function createErrorResult(issues?: KernelIssue[]): CreateGeometryResult {
   return {
@@ -453,6 +468,7 @@ export function createErrorResult(issues?: KernelIssue[]): CreateGeometryResult 
  * Creates an empty successful result with no geometries.
  *
  * @returns A successful result with an empty geometry array
+ * @public
  */
 export function createEmptySuccessResult(): CreateGeometryResult {
   return createSuccessResult([]);
@@ -467,6 +483,7 @@ export function createEmptySuccessResult(): CreateGeometryResult {
  *
  * @param result - The kernel result to assert on
  * @param context - Optional label for error messages
+ * @public
  */
 export function assertSuccess<T>(result: KernelResult<T>, context?: string): asserts result is KernelSuccessResult<T> {
   if (!result.success) {
@@ -483,6 +500,7 @@ export function assertSuccess<T>(result: KernelResult<T>, context?: string): ass
  *
  * @param result - The kernel result to assert on
  * @param context - Optional label for error messages
+ * @public
  */
 export function assertFailure<T>(result: KernelResult<T>, context?: string): asserts result is KernelErrorResult {
   if (result.success) {
@@ -498,6 +516,7 @@ export function assertFailure<T>(result: KernelResult<T>, context?: string): ass
  *
  * @param overrides - optional partial input to override default values
  * @returns a mock CreateGeometryInput with sensible defaults
+ * @public
  */
 export function createMockInput(overrides?: Partial<CreateGeometryInput>): CreateGeometryInput {
   return {
@@ -514,6 +533,7 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
  * @param filename - The file name (e.g. `'test.ts'`)
  * @param basePath - The project base path (defaults to `/builds/test`)
  * @returns A GeometryFile pointing to the given filename and path
+ * @public
  */
 export function createGeometryFile(filename: string, basePath = '/builds/test'): GeometryFile {
   return {
@@ -528,6 +548,7 @@ export function createGeometryFile(filename: string, basePath = '/builds/test'):
 
 /**
  * Options for createTestWorker.
+ * @public
  */
 export type CreateTestWorkerOptions = {
   /** Worker-specific options passed to initialize (e.g., ReplicadWorker: { withBrepEdges: true }) */
@@ -602,6 +623,7 @@ function inferDetectImport(definition: KernelDefinition): string | undefined {
  * @param files - Record of relative paths to file contents
  * @param options - Optional worker options
  * @returns Promise resolving to the initialized runtime worker
+ * @public
  */
 export async function createTestWorker(
   definition: KernelDefinition,
@@ -674,6 +696,7 @@ export async function createTestWorker(
  * @param files - Record of relative paths to file contents
  * @param mainFile - The main file to extract parameters from
  * @returns Promise resolving to the extracted parameters and JSON schema
+ * @public
  */
 export async function getTestParameters(
   definition: KernelDefinition,
@@ -707,6 +730,7 @@ export async function getTestParameters(
  * @param input.parameters - Optional parameters to pass to the geometry creation
  * @param input.options - Optional worker options
  * @returns Promise resolving to the geometry creation result
+ * @public
  */
 export async function createTestGeometry(input: {
   definition: KernelDefinition;
@@ -740,6 +764,7 @@ export async function createTestGeometry(input: {
  *
  * @param options - optional filesystem overrides for the mock runtime
  * @returns A mocked runtime with logger, filesystem, and no-op bundler/executor
+ * @public
  */
 export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFileSystemOptions }): KernelRuntime & {
   logger: ReturnType<typeof createMockLogger>;
@@ -801,10 +826,13 @@ const noop = () => {
  *
  * @returns A fully typed KernelClient backed by vitest mocks
  *
- * @example
+ * @public
+ *
+ * @example <caption>Stubbing a kernel client</caption>
  * ```typescript
+ * import { createMockKernelClient } from '@taucad/kernels/testing';
+ *
  * const client = createMockKernelClient();
- * vi.mocked(client.export).mockResolvedValue({ success: false, issues: [{ message: 'fail', type: 'runtime', severity: 'error' }] });
  * ```
  */
 export function createMockKernelClient(): KernelClient {
@@ -830,6 +858,7 @@ export function createMockKernelClient(): KernelClient {
 
 /**
  * Options for creating a MockKernelWorker.
+ * @public
  */
 export type MockKernelWorkerOptions = {
   /** Middleware array to use (overrides default middleware) */
@@ -851,6 +880,7 @@ export type MockKernelWorkerOptions = {
 /**
  * Mock concrete implementation of KernelWorker for testing.
  * Allows injection of custom middleware to test the onion chain behavior.
+ * @public
  */
 export class MockKernelWorker extends KernelWorker {
   protected override readonly name = 'MockKernelWorker';
@@ -979,6 +1009,7 @@ export class MockKernelWorker extends KernelWorker {
  *
  * @param overrides - Additional dependency entries to append to the defaults
  * @returns A readonly array of dependencies
+ * @public
  */
 export function createMockDependencies(overrides?: Array<Partial<Dependency>>): readonly Dependency[] {
   const defaults: Dependency[] = [
@@ -1009,6 +1040,7 @@ export function createMockDependencies(overrides?: Array<Partial<Dependency>>): 
  *
  * @param result - The result to resolve with (defaults to a GLTF success result)
  * @returns A vitest mock function typed as CreateGeometryHandler
+ * @public
  */
 export function createMockCreateGeometryHandler(result?: CreateGeometryResult): CreateGeometryHandler {
   return vi.fn().mockResolvedValue(result ?? createGltfSuccessResult(new Uint8Array([1, 2, 3])));
@@ -1019,6 +1051,7 @@ export function createMockCreateGeometryHandler(result?: CreateGeometryResult): 
  *
  * @param result - The result to resolve with (defaults to a success with empty params)
  * @returns A vitest mock function typed as GetParametersHandler
+ * @public
  */
 export function createMockGetParametersHandler(result?: GetParametersResult): GetParametersHandler {
   return vi.fn().mockResolvedValue(
@@ -1043,6 +1076,7 @@ export function createMockGetParametersHandler(result?: GetParametersResult): Ge
  * @param body - The response body text
  * @param headers - Optional response headers
  * @returns A mock Response object with vitest mock functions
+ * @public
  */
 export function createMockResponse(body: string, headers?: Record<string, string>): Response {
   const headerMap = new Headers(headers);

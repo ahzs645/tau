@@ -250,6 +250,7 @@ function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): K
 
 /**
  * Configuration for the Manifold kernel, allowing custom WASM builds for benchmarking or CI.
+ * @public
  */
 export type ManifoldOptions = {
   /** Override the default Manifold WASM URL for custom builds or benchmarking. */
@@ -264,6 +265,7 @@ const optionsSchema = z.object({
 // Kernel module definition
 // =============================================================================
 
+/** @public */
 export default defineKernel({
   name: 'ManifoldKernel',
   version: '1.0.0',

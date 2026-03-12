@@ -28,6 +28,7 @@ import type { KernelTransport } from '#transport/kernel-transport.js';
 /**
  * Error thrown when a render is superseded by a newer `render()` call.
  * Used by the auto-cancellation (latest-wins) mechanism.
+ * @public
  */
 export class RenderSupersededError extends Error {
   public constructor() {
@@ -41,6 +42,7 @@ export class RenderSupersededError extends Error {
  *
  * @param error - the value to test
  * @returns `true` when the error is a {@link RenderSupersededError}
+ * @public
  */
 export function isRenderSupersededError(error: unknown): error is RenderSupersededError {
   return error instanceof Error && error.name === 'RenderSupersededError';
@@ -50,6 +52,7 @@ export function isRenderSupersededError(error: unknown): error is RenderSupersed
  * Error thrown when a render is aborted via the SharedArrayBuffer abort channel.
  * The OC Proxy checks the abort generation before every WASM call and throws this
  * when the generation has been incremented by a newer setFile/setParameters call.
+ * @public
  */
 export class RenderAbortedError extends Error {
   public constructor() {
@@ -63,29 +66,46 @@ export class RenderAbortedError extends Error {
  *
  * @param error - the value to test
  * @returns `true` when the error is a {@link RenderAbortedError}
+ * @public
  */
 export function isRenderAbortedError(error: unknown): error is RenderAbortedError {
   return error instanceof Error && error.name === 'RenderAbortedError';
 }
 
-/** Callback for worker log events. */
+/**
+ * Callback for worker log events.
+ * @public
+ */
 export type OnLogCallback = (log: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => void;
 
-/** Callback for worker telemetry events. */
+/**
+ * Callback for worker telemetry events.
+ * @public
+ */
 export type OnTelemetryCallback = (entries: PerformanceEntryData[]) => void;
 
-/** Callback for render progress phase transitions. */
+/**
+ * Callback for render progress phase transitions.
+ * @public
+ */
 export type OnProgressCallback = (phase: RenderPhase, detail?: Record<string, unknown>) => void;
 
-/** Callback when the kernel worker detects file changes via its watch subscription. */
+/**
+ * Callback when the kernel worker detects file changes via its watch subscription.
+ * @public
+ */
 export type OnFilesChangedCallback = (paths: string[]) => void;
 
-/** Callback for worker state changes (idle, rendering, error). */
+/**
+ * Callback for worker state changes (idle, rendering, error).
+ * @public
+ */
 export type OnStateChangedCallback = (state: WorkerState, detail?: string) => void;
 
 /**
  * Main-thread client for communicating with kernel workers via the KernelTransport protocol.
  * Wraps a KernelTransport with request/response correlation and Promise-based methods.
+ * @public
  */
 export class KernelWorkerClient {
   /* oxlint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */

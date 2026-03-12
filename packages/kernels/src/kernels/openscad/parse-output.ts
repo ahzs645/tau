@@ -2,12 +2,14 @@ import type { ErrorLocation, KernelIssue, KernelStackFrame } from '#types/kernel
 
 /**
  * Callback function type for adding parsed errors.
+ * @public
  */
 export type AddErrorFunction = (error: KernelIssue) => void;
 
 /**
  * Function type for lazily fetching file contents on demand.
  * Takes a normalized filename and returns the file content, or undefined if not found.
+ * @public
  */
 export type GetFileContentsFunction = (fileName: string) => string | undefined;
 
@@ -199,10 +201,16 @@ function parseTraceLine(message: string, mainFilePath?: string): KernelStackFram
  *
  * Usage:
  * ```typescript
- * const parser = new OpenScadStderrParser(addError, getFileContents, mainFilePath);
- * // Call for each stderr line:
- * parser.parseLine(message);
+ * const issues: KernelIssue[] = [];
+ * const parser = new OpenScadStderrParser(
+ *   (issue) => issues.push(issue),
+ *   (fileName) => fileContents.get(fileName),
+ *   'main.scad',
+ * );
+ * parser.parseLine('ERROR: Parser error in file "main.scad", line 5: syntax error');
  * ```
+ *
+ * @internal
  */
 export class OpenScadStderrParser {
   /* oxlint-disable @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties */
@@ -672,6 +680,7 @@ export class OpenScadStderrParser {
  * @param options.addError - Callback to invoke when an error is parsed
  * @param options.getFileContents - Optional function to lazily fetch file content for calculating column positions
  * @param options.mainFilePath - Optional full relative path of the main file, used to map basename errors back to full paths
+ * @public
  */
 export function parseStderrLine(options: {
   message: string;
