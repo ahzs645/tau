@@ -122,7 +122,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
         // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
         const result = await client.render({ code: { 'main.ts': code } });
 
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
+        // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
         if (aborted) {
           return;
         }
@@ -143,7 +143,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
 
         const gltf = await gltfLoader.parseAsync(gltfGeometry.content.buffer, '');
 
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
+        // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
         if (aborted) {
           return;
         }
