@@ -158,11 +158,14 @@ export function expectReasoningTokensInUsage(chunks: UIMessageChunk[]): void {
 }
 
 /**
- * Assert that cache token normalization is correct: when cacheReadTokens > 0,
- * inputTokens must have had the cached portion subtracted (i.e. inputTokens
- * represents only non-cached input). We verify this by checking that
- * inputTokens < inputTokens + cacheReadTokens (trivially true) AND that
- * inputTokens is strictly less than the raw prompt token total.
+ * Assert that cache token normalization is plausible: when cacheReadTokens > 0,
+ * inputTokens should represent only non-cached input (the cached portion was
+ * subtracted by normalizeUsageTokens).
+ *
+ * We can only verify the shape here — that cache read tokens are present and
+ * input tokens are non-negative — because the raw (pre-normalization) prompt
+ * token count is not included in the stream usage data. The actual subtraction
+ * logic is tested at the unit level in ModelService.normalizeUsageTokens.
  *
  * Providers like Google Gemini include cachedContentTokenCount inside
  * promptTokenCount, so normalizeUsageTokens must subtract it.
@@ -181,10 +184,7 @@ export function expectCacheTokenNormalization(chunks: UIMessageChunk[]): void {
     const inputTokens = Number(u['inputTokens']) || 0;
     const cacheReadTokens = Number(u['cacheReadTokens']) || 0;
 
-    expect(
-      inputTokens,
-      `inputTokens (${inputTokens}) should be less than inputTokens + cacheReadTokens (${inputTokens + cacheReadTokens}), ` +
-        'meaning cached tokens were subtracted from the raw prompt count',
-    ).toBeLessThan(inputTokens + cacheReadTokens);
+    expect(inputTokens, 'Normalized inputTokens should be non-negative').toBeGreaterThanOrEqual(0);
+    expect(cacheReadTokens, 'cacheReadTokens should be positive').toBeGreaterThan(0);
   }
 }
