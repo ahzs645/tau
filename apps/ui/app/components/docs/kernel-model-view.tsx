@@ -101,19 +101,31 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
       return;
     }
 
+    let aborted = false;
+
     const initializeAndRender = async (): Promise<void> => {
       setViewState('loading');
 
       try {
         const client = createRuntimeClient({
           kernels: [replicad()],
-          middleware: [],
           bundlers: [esbuild()],
         });
+
+        if (aborted) {
+          client.terminate();
+          return;
+        }
+
         clientRef.current = client;
 
         // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
         const result = await client.render({ code: { 'main.ts': code } });
+
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
+        if (aborted) {
+          return;
+        }
 
         if (!result.success) {
           const firstIssue = result.issues[0];
@@ -130,6 +142,12 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
         }
 
         const gltf = await gltfLoader.parseAsync(gltfGeometry.content.buffer, '');
+
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
+        if (aborted) {
+          return;
+        }
+
         const scene = sceneRef.current;
         const camera = cameraRef.current;
         if (!scene || !camera) {
@@ -163,6 +181,9 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
         setViewState('ready');
         renderFrame();
       } catch (error) {
+        if (aborted) {
+          return;
+        }
         setErrorMessage(error instanceof Error ? error.message : 'Unknown error');
         setViewState('error');
       }
@@ -184,18 +205,13 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     observer.observe(container);
 
     return () => {
+      aborted = true;
       observer.disconnect();
+      clientRef.current?.terminate();
+      clientRef.current = undefined;
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- code is stable for the lifecycle of this component
   }, []);
-
-  useEffect(
-    () => () => {
-      clientRef.current?.terminate();
-      clientRef.current = undefined;
-    },
-    [],
-  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -203,7 +219,17 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
       return;
     }
 
-    const resizeObserver = new ResizeObserver(() => {
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      if (!entry) {
+        return;
+      }
+      const { width, height } = entry.contentRect;
+      const camera = cameraRef.current;
+      if (camera && height > 0) {
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+
       if (viewState === 'ready') {
         renderFrame();
       }
