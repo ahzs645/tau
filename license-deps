@@ -15,7 +15,7 @@ the combined work is subject to GPL-2.0-or-later terms.
 
 By using Tau, you agree to comply with the license terms of all included dependencies.
 
-*Generated on 2026-03-11*
+*Generated on 2026-03-12*
 
 ## Summary
 
@@ -23,6 +23,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 |---------|-------|
 | (MIT OR GPL-3.0-or-later) | 1 |
 | GPL-2.0-or-later | 1 |
+| LGPL-2.1-only | 1 |
 | LGPL-3.0-or-later | 2 |
 | Apache-2.0 | 22 |
 | (MIT OR CC0-1.0) | 1 |
@@ -33,9 +34,9 @@ By using Tau, you agree to comply with the license terms of all included depende
 | ISC | 3 |
 | SEE LICENSE IN LICENSE | 1 |
 | SIL OPEN FONT LICENSE | 1 |
-| UNKNOWN | 1 |
+| UNKNOWN | 3 |
 | Unlicense | 2 |
-| MIT | 214 |
+| MIT | 217 |
 
 ## (MIT OR GPL-3.0-or-later)
 
@@ -60,6 +61,15 @@ By using Tau, you agree to comply with the license terms of all included depende
 > Full license text: https://www.gnu.org/licenses/gpl-2.0.html
 
 - **openscad-wasm-prebuilt** v1.2.0 — [Repository](https://github.com/lorenzowritescode/openscad-wasm)
+
+## LGPL-2.1-only
+
+> **GPL License Notice**
+>
+> GPL-licensed packages require that derivative works be distributed under compatible licenses.
+> Source code is available at: https://github.com/taucad/tau
+
+- **opencascade.js** v2.0.0-beta.b5ff984 — [Repository](https://github.com/donalffons/opencascade.js)
 
 ## LGPL-3.0-or-later
 
@@ -138,7 +148,9 @@ By using Tau, you agree to comply with the license terms of all included depende
 
 ## UNKNOWN
 
+- **@taucad/chat** v0.1.0
 - **@taucad/kcl-wasm-lib** v0.1.111 — [Repository](https://github.com/taucad/modeling-app)
+- **@taucad/utils** v0.1.0
 
 ## Unlicense
 
@@ -222,7 +234,9 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@tanstack/react-query** v4.43.0 — [Repository](https://github.com/TanStack/query)
 - **@tanstack/react-table** v8.21.3 — [Repository](https://github.com/TanStack/table)
 - **@tanstack/react-virtual** v3.13.19 — [Repository](https://github.com/TanStack/virtual)
+- **@taucad/filesystem** v0.1.0 — [Repository](https://github.com/taucad/tau)
 - **@taucad/json-schema** v0.1.0 — [Repository](https://github.com/taucad/tau)
+- **@taucad/runtime** v0.1.0 — [Repository](https://github.com/taucad/tau)
 - **@testing-library/jest-dom** v6.6.3 — [Repository](https://github.com/testing-library/jest-dom)
 - **@testing-library/react** v16.2.0 — [Repository](https://github.com/testing-library/react-testing-library)
 - **@testing-library/user-event** v14.6.1 — [Repository](https://github.com/testing-library/user-event)
@@ -244,6 +258,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@types/three** v0.178.1 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/uzip** v0.20201231.2 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/ws** v8.18.1 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
+- **@typescript/vfs** v1.6.4 — [Repository](https://github.com/microsoft/TypeScript-Website)
 - **@vitest/coverage-v8** v4.1.0-beta.6 — [Repository](https://github.com/vitest-dev/vitest)
 - **@vitest/ui** v4.1.0-beta.6 — [Repository](https://github.com/vitest-dev/vitest)
 - **@xstate/react** v5.0.5 — [Repository](https://github.com/statelyai/xstate)
