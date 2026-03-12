@@ -12,7 +12,7 @@ export const screenshotToolDefinition = {
 
 Modes:
 - single: Captures the current camera perspective (1 image)
-- multi_angle: Captures all 6 orthographic views (front, back, right, left, top, bottom)
+- multi_angle: Captures a labeled composite of all 6 orthographic views (front, back, right, left, top, bottom) as a single image
 
 Use after tests pass to verify the model looks correct visually.`,
   schema: screenshotInputSchema,

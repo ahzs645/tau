@@ -15,8 +15,6 @@ import type {
   CaptureObservationsRpcResult,
   CaptureScreenshotRpcResult,
   FetchGeometryRpcResult,
-  Observation,
-  ViewSide,
 } from '@taucad/chat';
 import { createRpcDispatcher } from '@taucad/chat/rpc';
 import type { RpcDependencies, RpcFileSystem, RpcRuntimeClient, RpcGraphicsClient } from '@taucad/chat/rpc';
@@ -240,68 +238,53 @@ function createBrowserGraphicsClient(
 
     async captureObservations(): Promise<CaptureObservationsRpcResult> {
       try {
-        const viewSides: ViewSide[] = ['front', 'back', 'right', 'left', 'top', 'bottom'];
         const viewAngles = orthographicViews.slice(0, 6);
 
-        const observations: Observation[] = [];
+        const compositeDataUrl = await new Promise<string>((resolve, reject) => {
+          const screenshotActor = createActor(screenshotRequestMachine, {
+            input: { graphicsRef },
+          }).start();
 
-        for (const [index, side] of viewSides.entries()) {
-          const cameraAngle = viewAngles[index];
-          if (!cameraAngle) {
-            return {
-              success: false,
-              errorCode: 'UNKNOWN',
-              message: `Missing camera angle for ${side} view`,
-            };
-          }
-
-          // oxlint-disable-next-line no-await-in-loop -- Sequential operation required
-          const source = await new Promise<string>((resolve, reject) => {
-            const screenshotActor = createActor(screenshotRequestMachine, {
-              input: { graphicsRef },
-            }).start();
-
-            screenshotActor.send({
-              type: 'requestScreenshot',
-              options: {
-                output: {
-                  format: 'image/webp',
-                  quality: screenshotQuality,
-                  isPreview: true,
-                },
-                cameraAngles: [cameraAngle],
-                aspectRatio: 1,
-                maxResolution: 800,
-                zoomLevel: 1.2,
+          screenshotActor.send({
+            type: 'requestCompositeScreenshot',
+            options: {
+              output: {
+                format: 'image/webp',
+                quality: screenshotQuality,
+                isPreview: true,
               },
-              onSuccess(dataUrls) {
-                screenshotActor.stop();
-                const capturedScreenshot = dataUrls[0];
-                if (!capturedScreenshot) {
-                  reject(new Error(`No screenshot data received for ${side} view`));
-                  return;
-                }
+              cameraAngles: viewAngles,
+              aspectRatio: 1,
+              maxResolution: 800,
+              zoomLevel: 1.2,
+            },
+            onSuccess(dataUrls) {
+              screenshotActor.stop();
+              const compositeUrl = dataUrls[0];
+              if (!compositeUrl) {
+                reject(new Error('No composite screenshot data received'));
+                return;
+              }
 
-                resolve(capturedScreenshot);
-              },
-              onError(errorMessage) {
-                console.error(`[CaptureObservations] ${side} view capture failed:`, errorMessage);
-                screenshotActor.stop();
-                reject(new Error(errorMessage));
-              },
-            });
+              resolve(compositeUrl);
+            },
+            onError(errorMessage) {
+              screenshotActor.stop();
+              reject(new Error(errorMessage));
+            },
           });
+        });
 
-          const observation: Observation = {
-            id: generatePrefixedId(idPrefix.observation),
-            side,
-            src: source,
-          };
-
-          observations.push(observation);
-        }
-
-        return { success: true, observations };
+        return {
+          success: true,
+          observations: [
+            {
+              id: generatePrefixedId(idPrefix.observation),
+              side: 'composite',
+              src: compositeDataUrl,
+            },
+          ],
+        };
       } catch (error) {
         return {
           success: false,

@@ -10,7 +10,7 @@ import { diffStatsWithContentSchema } from '#schemas/tools/diff.schema.js';
  * Used internally for capturing model screenshots.
  * @public
  */
-export const viewSideSchema = z.enum(['front', 'back', 'right', 'left', 'top', 'bottom']);
+export const viewSideSchema = z.enum(['front', 'back', 'right', 'left', 'top', 'bottom', 'composite']);
 /** @public */
 export type ViewSide = z.infer<typeof viewSideSchema>;
 

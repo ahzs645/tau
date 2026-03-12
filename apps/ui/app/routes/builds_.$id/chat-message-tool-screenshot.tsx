@@ -27,7 +27,7 @@ export function ChatMessageToolScreenshot({
             <ChatToolCardTitle>
               <ChatToolAction>Capturing</ChatToolAction>
               <ChatToolDescription>
-                {mode === 'multi_angle' ? '6 orthographic views...' : 'screenshot...'}
+                {mode === 'multi_angle' ? 'orthographic views...' : 'screenshot...'}
               </ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
@@ -38,13 +38,16 @@ export function ChatMessageToolScreenshot({
     case 'output-available': {
       const { output } = part;
       const { images } = output;
+      const isComposite = images.length === 1 && images[0]?.view === 'composite';
 
       return (
         <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader className='text-success'>
             <ChatToolCardIcon icon={Camera} />
             <ChatToolCardTitle>
-              Captured {images.length} {images.length === 1 ? 'screenshot' : 'screenshots'}
+              {isComposite
+                ? 'Captured 6 screenshots'
+                : `Captured ${images.length} ${images.length === 1 ? 'screenshot' : 'screenshots'}`}
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           {images.length > 0 ? (
@@ -54,10 +57,10 @@ export function ChatMessageToolScreenshot({
                   <div key={image.view} className='flex flex-col items-center gap-1'>
                     <img
                       src={image.dataUrl}
-                      alt={`${image.view} view`}
+                      alt={isComposite ? 'Multi-angle composite view' : `${image.view} view`}
                       className='rounded-sm border bg-background object-contain'
                     />
-                    <span className='text-xs text-muted-foreground'>{image.view}</span>
+                    {isComposite ? undefined : <span className='text-xs text-muted-foreground'>{image.view}</span>}
                   </div>
                 ))}
               </div>
