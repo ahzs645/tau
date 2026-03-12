@@ -150,12 +150,12 @@ ANTI-PATTERNS TO AVOID:
 
 EXAMPLES OF CORRECT MESSAGES:
 - feat(api): Add user authentication endpoint
-- fix(kernels): Resolve OpenCASCADE null shape crash on empty STEP files
+- fix(runtime): Resolve OpenCASCADE null shape crash on empty STEP files
 - refactor(ui): Extract theme provider into separate module
 - chore(root): Bump Node.js requirement from 22 to 24
 - style(oxlint): Add no-literal-const-assertion linting rule
 - perf(converter): Reduce STL parse time via streaming decoder
-- test(kernels): Add integration tests for JSCAD boolean operations
+- test(runtime): Add integration tests for JSCAD boolean operations
 - ci(root): Add license-deps validation to CI pipeline
 PROMPT_EOF
 

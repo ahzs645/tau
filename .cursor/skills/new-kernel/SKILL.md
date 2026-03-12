@@ -9,8 +9,8 @@ Add a new first-party CAD kernel to Tau following the `@taucad/runtime` plugin a
 
 ## Definition of Done
 
-1. Kernel implementation at `packages/kernels/src/kernels/<id>/<id>.kernel.ts`
-2. Comprehensive tests pass at `packages/kernels/src/kernels/<id>/<id>.kernel.test.ts`
+1. Kernel implementation at `packages/runtime/src/kernels/<id>/<id>.kernel.ts`
+2. Comprehensive tests pass at `packages/runtime/src/kernels/<id>/<id>.kernel.test.ts`
 3. Wired into plugin factories, presets, exports, build entries
 4. UI default/debug options include kernel where applicable
 5. Type/catalog metadata in `libs/types/src/constants/kernel.constants.ts`
@@ -20,7 +20,7 @@ Add a new first-party CAD kernel to Tau following the `@taucad/runtime` plugin a
 
 ## 1) Implement Kernel
 
-**File:** `packages/kernels/src/kernels/<id>/<id>.kernel.ts`
+**File:** `packages/runtime/src/kernels/<id>/<id>.kernel.ts`
 
 Use `defineKernel({...})` from `#types/kernel-worker.types.js`:
 
@@ -65,11 +65,11 @@ Key patterns:
 - Throw `Error` with `.issues` array (custom `*BuildError`) for fatal geometry failures so framework returns structured issues
 - Prefer stack enrichment utilities in `#framework/error-enrichment.js` for JS/TS kernels
 
-Reference: `packages/kernels/src/kernels/replicad/replicad.kernel.ts`
+Reference: `packages/runtime/src/kernels/replicad/replicad.kernel.ts`
 
 ## 2) Add Tests
 
-**File:** `packages/kernels/src/kernels/<id>/<id>.kernel.test.ts`
+**File:** `packages/runtime/src/kernels/<id>/<id>.kernel.test.ts`
 
 ### Mandatory shared utils
 
@@ -137,7 +137,7 @@ Reference quality bar: `jscad.kernel.test.ts`, `replicad.kernel.test.ts`
 
 ### 3.1 Plugin factory
 
-**File:** `packages/kernels/src/plugins/kernel-factories.ts`
+**File:** `packages/runtime/src/plugins/kernel-factories.ts`
 
 ```typescript
 export const <id> = createKernelPlugin<Options>({
@@ -151,19 +151,19 @@ export const <id> = createKernelPlugin<Options>({
 
 ### 3.2 Export factory
 
-**File:** `packages/kernels/src/plugins/kernels-entry.ts`
+**File:** `packages/runtime/src/plugins/kernels-entry.ts`
 
 Add: `export { <id> } from '#plugins/kernel-factories.js';`
 
 ### 3.3 Presets
 
-**File:** `packages/kernels/src/plugins/presets.ts`
+**File:** `packages/runtime/src/plugins/presets.ts`
 
 Add `<id>()` to `presets.all().kernels` array in priority order.
 
 ### 3.4 Package exports
 
-**File:** `packages/kernels/package.json`
+**File:** `packages/runtime/package.json`
 
 Source export:
 
@@ -182,13 +182,13 @@ publishConfig export (mirror `./kernels/tau` pattern):
 
 ### 3.5 Build entry
 
-**File:** `packages/kernels/tsdown.config.ts`
+**File:** `packages/runtime/tsdown.config.ts`
 
 Add `'src/kernels/<id>/<id>.kernel.ts'` to `entry` array.
 
 ### 3.6 Smoke import
 
-**File:** `packages/kernels/src/testing/smoke-esm.test.ts`
+**File:** `packages/runtime/src/testing/smoke-esm.test.ts`
 
 ```typescript
 const <id>Module = await import('#kernels/<id>/<id>.kernel.js');
@@ -295,9 +295,9 @@ Update all kernel lists/comparison tables, examples, and selection priority refe
 ## 6) Verify
 
 ```bash
-pnpm nx typecheck kernels
-pnpm nx test kernels --watch=false
-pnpm nx lint kernels
+pnpm nx typecheck runtime
+pnpm nx test runtime --watch=false
+pnpm nx lint runtime
 pnpm nx typecheck ui
 pnpm nx lint ui
 ```
@@ -325,14 +325,14 @@ Keep commits logically grouped (implementation, wiring, docs) if practical.
 
 ## File Checklist
 
-- [ ] `packages/kernels/src/kernels/<id>/<id>.kernel.ts`
-- [ ] `packages/kernels/src/kernels/<id>/<id>.kernel.test.ts`
-- [ ] `packages/kernels/src/plugins/kernel-factories.ts`
-- [ ] `packages/kernels/src/plugins/kernels-entry.ts`
-- [ ] `packages/kernels/src/plugins/presets.ts`
-- [ ] `packages/kernels/package.json`
-- [ ] `packages/kernels/tsdown.config.ts`
-- [ ] `packages/kernels/src/testing/smoke-esm.test.ts`
+- [ ] `packages/runtime/src/kernels/<id>/<id>.kernel.ts`
+- [ ] `packages/runtime/src/kernels/<id>/<id>.kernel.test.ts`
+- [ ] `packages/runtime/src/plugins/kernel-factories.ts`
+- [ ] `packages/runtime/src/plugins/kernels-entry.ts`
+- [ ] `packages/runtime/src/plugins/presets.ts`
+- [ ] `packages/runtime/package.json`
+- [ ] `packages/runtime/tsdown.config.ts`
+- [ ] `packages/runtime/src/testing/smoke-esm.test.ts`
 - [ ] `apps/ui/app/constants/kernel-worker.constants.ts`
 - [ ] `libs/types/src/constants/kernel.constants.ts`
 - [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.config.ts`

@@ -945,7 +945,7 @@ importers:
         version: link:packages/filesystem
       '@taucad/runtime':
         specifier: workspace:*
-        version: link:packages/kernels
+        version: link:packages/runtime
       '@taucad/utils':
         specifier: workspace:*
         version: link:libs/utils
@@ -1140,7 +1140,7 @@ importers:
         version: link:../../libs/chat
       '@taucad/runtime':
         specifier: workspace:*
-        version: link:../../packages/kernels
+        version: link:../../packages/runtime
       '@taucad/tau-examples':
         specifier: workspace:*
         version: link:../../libs/tau-examples
@@ -1177,7 +1177,7 @@ importers:
         version: link:../../packages/json-schema
       '@taucad/runtime':
         specifier: workspace:*
-        version: link:../../packages/kernels
+        version: link:../../packages/runtime
       '@taucad/tau-examples':
         specifier: workspace:*
         version: link:../../libs/tau-examples
@@ -1204,7 +1204,7 @@ importers:
     dependencies:
       '@taucad/runtime':
         specifier: workspace:*
-        version: link:../../packages/kernels
+        version: link:../../packages/runtime
       '@taucad/types':
         specifier: workspace:*
         version: link:../types
@@ -1300,7 +1300,7 @@ importers:
         specifier: 'catalog:'
         version: 7.0.15
 
-  packages/kernels:
+  packages/runtime:
     dependencies:
       '@gltf-transform/core':
         specifier: 'catalog:'

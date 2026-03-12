@@ -496,7 +496,7 @@ The converter uses two WASM binaries:
 
 ### 6.2 Kernel-Level 3MF Export (TypeScript)
 
-A standalone TypeScript 3MF generator exists at `packages/kernels/src/utils/export-3mf.ts`, used exclusively by the OpenSCAD kernel for OFF-to-3MF conversion.
+A standalone TypeScript 3MF generator exists at `packages/runtime/src/utils/export-3mf.ts`, used exclusively by the OpenSCAD kernel for OFF-to-3MF conversion.
 
 **Capabilities**:
 

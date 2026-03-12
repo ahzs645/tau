@@ -33,7 +33,7 @@ todos:
     content: "Remove scheduleDebouncedRefresh, refreshTimer, toProviderStat duplication, notifyFileChanged command, changedPaths relay chain, use-build.tsx fileWritten forwarding"
     status: pending
   - id: final-validation
-    content: "Run full test suite + lint + typecheck for ui and kernels projects"
+    content: "Run full test suite + lint + typecheck for ui and runtime projects"
     status: pending
 isProject: false
 ---
@@ -227,7 +227,7 @@ export type WatchEvent =
 
 ### 3b. Bridge watch/unwatch protocol
 
-Extend the wire schema in [`kernel-filesystem-bridge.ts`](packages/kernels/src/framework/kernel-filesystem-bridge.ts):
+Extend the wire schema in [`kernel-filesystem-bridge.ts`](packages/runtime/src/framework/kernel-filesystem-bridge.ts):
 
 ```typescript
 type BridgeWatch = { type: 'watch'; watchId: string; paths: string[] };
@@ -235,7 +235,7 @@ type BridgeUnwatch = { type: 'unwatch'; watchId: string };
 type BridgeWatchEvent = { type: 'event'; event: 'watch'; data: { watchId: string } & WatchEvent };
 ```
 
-**Server side** ([`filesystem-bridge.ts`](packages/kernels/src/filesystem/filesystem-bridge.ts)):
+**Server side** ([`filesystem-bridge.ts`](packages/runtime/src/filesystem/filesystem-bridge.ts)):
 
 In `exposeFileSystem`, when a `watch` message arrives on a port:
 1. Call `fileService.watch(paths, handler)` (the handler is FileService's, not the port's)
@@ -264,7 +264,7 @@ async watch(paths: string[], handler: (event: WatchEvent) => void): Promise<() =
 
 ### 3c. Add `watch` to `KernelFileSystemBase`
 
-Update [`kernel-worker.types.ts`](packages/kernels/src/types/kernel-worker.types.ts) to include `watch`:
+Update [`kernel-worker.types.ts`](packages/runtime/src/types/kernel-worker.types.ts) to include `watch`:
 
 ```typescript
 export type KernelFileSystemBase = {
@@ -283,7 +283,7 @@ Also add `watch` to `FileManagerProtocol` in [`file-manager.machine.types.ts`](a
 
 ### 4a. Kernel worker watches dependencies after render
 
-In [`kernel-worker.ts`](packages/kernels/src/framework/kernel-worker.ts), after `render()` completes:
+In [`kernel-worker.ts`](packages/runtime/src/framework/kernel-worker.ts), after `render()` completes:
 
 ```typescript
 // After render resolves dependencies, update the watch set
@@ -324,13 +324,13 @@ Call `updateWatchSet()` after every successful render with the resolved dependen
 
 ### 4b. Kernel protocol: `filesChanged` response
 
-Add to `KernelResponse` in [`kernel-protocol.types.ts`](packages/kernels/src/types/kernel-protocol.types.ts):
+Add to `KernelResponse` in [`kernel-protocol.types.ts`](packages/runtime/src/types/kernel-protocol.types.ts):
 
 ```typescript
 | { type: 'filesChanged'; paths: string[] }
 ```
 
-The `onFilesChangedCallback` is passed via `initialize()` input (following the `onLog` pattern). In [`kernel-worker-dispatcher.ts`](packages/kernels/src/framework/kernel-worker-dispatcher.ts):
+The `onFilesChangedCallback` is passed via `initialize()` input (following the `onLog` pattern). In [`kernel-worker-dispatcher.ts`](packages/runtime/src/framework/kernel-worker-dispatcher.ts):
 
 ```typescript
 const onFilesChanged = (paths: string[]) => {
@@ -340,7 +340,7 @@ const onFilesChanged = (paths: string[]) => {
 
 ### 4c. KernelClient and machine handling
 
-In [`kernel-worker-client.ts`](packages/kernels/src/framework/kernel-worker-client.ts), handle `filesChanged`:
+In [`kernel-worker-client.ts`](packages/runtime/src/framework/kernel-worker-client.ts), handle `filesChanged`:
 
 ```typescript
 case 'filesChanged':
@@ -456,11 +456,11 @@ Import `joinPath`, `normalizePath` from `#utils/path.utils.js`. Move `parentDire
 ## Todo 11: Final Validation
 
 - `pnpm nx test ui --watch=false`
-- `pnpm nx test kernels --watch=false`
+- `pnpm nx test runtime --watch=false`
 - `pnpm nx lint ui`
-- `pnpm nx lint kernels`
+- `pnpm nx lint runtime`
 - `pnpm nx typecheck ui`
-- `pnpm nx typecheck kernels`
+- `pnpm nx typecheck runtime`
 
 ---
 

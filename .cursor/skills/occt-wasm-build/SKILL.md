@@ -23,7 +23,7 @@ The harness consists of four interconnected systems:
 1. **Build Cache** (`repos/opencascade.js/src/build-cache.py`) — Config-keyed compilation cache
 2. **Provenance Tracking** (`repos/opencascade.js/src/provenance.py`) — Build metadata sidecar
 3. **Experiment Orchestrator** (`scripts/wasm-experiment.sh`) — Full lifecycle runner
-4. **Comparison Reporting** (`packages/kernels/scripts/build-matrix-report.mts`) — Visual dashboard
+4. **Comparison Reporting** (`packages/runtime/scripts/build-matrix-report.mts`) — Visual dashboard
 
 All build operations go through `repos/opencascade.js/build-wasm.sh` as the single entry point.
 
@@ -70,13 +70,13 @@ tail -f build.log  # Monitor progress
 
 ```bash
 # Generate build matrix report from all experiments
-pnpm nx build-matrix kernels -- --experiments ../../tarballs/experiments/
+pnpm nx build-matrix runtime -- --experiments ../../tarballs/experiments/
 
 # Compare specific experiments
-pnpm nx build-matrix kernels -- --compare ../../tarballs/experiments/exp1 ../../tarballs/experiments/exp2
+pnpm nx build-matrix runtime -- --compare ../../tarballs/experiments/exp1 ../../tarballs/experiments/exp2
 
 # With baseline
-pnpm nx build-matrix kernels -- --experiments ../../tarballs/experiments/ --baseline ../../tarballs/baselines/v8-rc4-O2-single
+pnpm nx build-matrix runtime -- --experiments ../../tarballs/experiments/ --baseline ../../tarballs/baselines/v8-rc4-O2-single
 ```
 
 ## Experiment Config Reference
@@ -223,29 +223,29 @@ Example model tests validate that the WASM build can produce geometry for curate
 
 ```bash
 # Run all example model tests
-pnpm nx test kernels --testNamePattern="Example models" --watch=false
+pnpm nx test runtime --testNamePattern="Example models" --watch=false
 
 # Run a specific fixture
-pnpm nx test kernels --testNamePattern="cycloidal-gear" --watch=false
+pnpm nx test runtime --testNamePattern="cycloidal-gear" --watch=false
 ```
 
-Test fixtures are defined in `packages/kernels/src/kernels/replicad/replicad.test-fixtures.ts`.
-Benchmark cases are defined in `packages/kernels/src/benchmarks/benchmark-suite.ts`.
+Test fixtures are defined in `packages/runtime/src/kernels/replicad/replicad.test-fixtures.ts`.
+Benchmark cases are defined in `packages/runtime/src/benchmarks/benchmark-suite.ts`.
 
 ### Running Benchmarks
 
 ```bash
 # Run benchmarks with the installed WASM (default: single variant)
-pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single
+pnpm nx benchmark runtime -- --iterations 10 --wasm-variant single
 
 # Run benchmarks and save output to a specific directory
-pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single --output /abs/path/to/output/
+pnpm nx benchmark runtime -- --iterations 10 --wasm-variant single --output /abs/path/to/output/
 
 # Run with a custom WASM directory (must contain replicad_single.wasm + replicad_single.js)
-pnpm nx benchmark kernels -- --iterations 10 --wasm-dir /abs/path/to/wasm/ --wasm-variant single
+pnpm nx benchmark runtime -- --iterations 10 --wasm-dir /abs/path/to/wasm/ --wasm-variant single
 ```
 
-**Important:** `--wasm-dir` and `--output` paths are resolved relative to `packages/kernels/` (the project root). Use absolute paths to avoid confusion.
+**Important:** `--wasm-dir` and `--output` paths are resolved relative to `packages/runtime/` (the project root). Use absolute paths to avoid confusion.
 
 ### Cross-Version Benchmarking (e.g. v7.6.2 vs v8)
 
@@ -258,11 +258,11 @@ WASM-only injection (`--wasm-dir`) does NOT work for cross-version comparison be
 
 # 2. Install + copy WASM assets
 pnpm install --no-frozen-lockfile
-cd packages/kernels && rm -f src/kernels/replicad/wasm/replicad_*.wasm
+cd packages/runtime && rm -f src/kernels/replicad/wasm/replicad_*.wasm
 npx copy-files-from-to --config copy-files-from-to.cjson
 
 # 3. Run benchmarks
-pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single \
+pnpm nx benchmark runtime -- --iterations 10 --wasm-variant single \
   --output /abs/path/to/experiments/v762/benchmarks
 
 # 4. Swap pnpm-workspace.yaml back to v8 packages
@@ -272,11 +272,11 @@ pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single \
 # 5. Install + copy WASM assets (same as step 2)
 
 # 6. Run benchmarks for v8
-pnpm nx benchmark kernels -- --iterations 10 --wasm-variant single \
+pnpm nx benchmark runtime -- --iterations 10 --wasm-variant single \
   --output /abs/path/to/experiments/v8/benchmarks
 
 # 7. Generate comparison report
-pnpm nx build-matrix kernels -- \
+pnpm nx build-matrix runtime -- \
   --compare /abs/path/to/experiments/v762 \
   --compare /abs/path/to/experiments/v8
 ```
@@ -293,9 +293,9 @@ Each experiment directory must contain:
 ### Adding New Benchmark Fixtures
 
 1. Create the fixture in `libs/tau-examples/src/kernels/replicad/<name>/main.ts`
-2. Add to test fixtures: `packages/kernels/src/kernels/replicad/replicad.test-fixtures.ts`
-3. Add to benchmark suite: `packages/kernels/src/benchmarks/benchmark-suite.ts`
-4. Run tests to validate: `pnpm nx test kernels --testNamePattern="<name>" --watch=false`
+2. Add to test fixtures: `packages/runtime/src/kernels/replicad/replicad.test-fixtures.ts`
+3. Add to benchmark suite: `packages/runtime/src/benchmarks/benchmark-suite.ts`
+4. Run tests to validate: `pnpm nx test runtime --testNamePattern="<name>" --watch=false`
 
 ### Diagnosing Unbound Symbol Errors
 
@@ -323,8 +323,8 @@ npm pack --pack-destination /path/to/tarballs/
 # Update pnpm-workspace.yaml to point to new tarball
 pnpm install --no-frozen-lockfile
 
-# Copy WASM to kernels package
-cd packages/kernels
+# Copy WASM to runtime package
+cd packages/runtime
 rm -f src/kernels/replicad/wasm/replicad_*.wasm
 npx copy-files-from-to --config copy-files-from-to.cjson
 ```
@@ -438,7 +438,7 @@ When replicad adds new OCCT API usage:
 2. Add `- symbol: ClassName` to the YAML bindings
 3. If the class uses `opencascade::handle<T>`, also add the Handle typedef
 4. Rebuild with `./build-wasm.sh link` (fastest — reuses cached .o files)
-5. Run tests: `pnpm nx test kernels --testNamePattern="Example models" --watch=false`
+5. Run tests: `pnpm nx test runtime --testNamePattern="Example models" --watch=false`
 
 ## Related Documentation
 

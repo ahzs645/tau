@@ -653,11 +653,11 @@ cd ../../../..
 pnpm install
 
 # 6. Copy WASM assets to kernels
-pnpm nx copy-assets kernels
+pnpm nx copy-assets runtime
 
 # 7. Verify
-pnpm nx test kernels --watch=false
-pnpm nx benchmark kernels
+pnpm nx test runtime --watch=false
+pnpm nx benchmark runtime
 ```
 
 ### Important Notes
@@ -691,12 +691,12 @@ pnpm nx benchmark kernels
 | Multi build YAML          | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_multi_v8.yml`           |
 | Exceptions build YAML     | `repos/replicad/packages/replicad-opencascadejs/build-config/custom_build_with_exceptions_v8.yml` |
 | OCCT source               | `repos/OCCT/src/`                                                                                 |
-| Kernel entry              | `packages/kernels/src/kernels/replicad/replicad.kernel.ts`                                        |
-| Exception handler         | `packages/kernels/src/kernels/replicad/oc-exceptions.ts`                                          |
-| WASM init                 | `packages/kernels/src/kernels/replicad/init-open-cascade.ts`                                      |
-| Kernel tests              | `packages/kernels/src/kernels/replicad/replicad.kernel.test.ts`                                   |
+| Kernel entry              | `packages/runtime/src/kernels/replicad/replicad.kernel.ts`                                        |
+| Exception handler         | `packages/runtime/src/kernels/replicad/oc-exceptions.ts`                                          |
+| WASM init                 | `packages/runtime/src/kernels/replicad/init-open-cascade.ts`                                      |
+| Kernel tests              | `packages/runtime/src/kernels/replicad/replicad.kernel.test.ts`                                   |
 | Kernel options            | `apps/ui/app/constants/kernel-worker.constants.ts`                                                |
-| WASM inspect tool         | `packages/kernels/scripts/wasm-inspect.mts`                                                       |
+| WASM inspect tool         | `packages/runtime/scripts/wasm-inspect.mts`                                                       |
 | Size analysis             | `docs/research/wasm-size-analysis-v762-vs-v8rc4.md`                                               |
 | Optimization plan         | `.cursor/plans/wasm_size_optimization_288da51b.plan.md`                                           |
 | Stress test model         | `libs/tau-examples/src/kernels/replicad/stress-test/main.ts`                                      |

@@ -460,7 +460,7 @@ We use per-call `setTimeout` (30 seconds). On timeout, the pending entry is remo
 
 ### Priority 1: Clone Failure Should Send Error
 
-**File**: `packages/kernels/src/framework/kernel-filesystem-bridge.ts` line ~108
+**File**: `packages/runtime/src/framework/kernel-filesystem-bridge.ts` line ~108
 
 Currently sends `{ id, result: undefined }` when `postMessage` fails. Should send an error response so the caller knows something went wrong.
 
@@ -481,7 +481,7 @@ port.postMessage({
 
 ### Priority 2: Released Proxy Guard
 
-**File**: `packages/kernels/src/framework/kernel-filesystem-bridge.ts` `createBridgeProxy`
+**File**: `packages/runtime/src/framework/kernel-filesystem-bridge.ts` `createBridgeProxy`
 
 After `dispose()`, all method calls should throw immediately rather than attempting to use a closed port.
 
@@ -493,7 +493,7 @@ let isDisposed = false;
 
 ### Priority 3: Defensive Symbol/toJSON Traps
 
-**File**: `packages/kernels/src/framework/kernel-filesystem-bridge.ts` `createBridgeProxy`
+**File**: `packages/runtime/src/framework/kernel-filesystem-bridge.ts` `createBridgeProxy`
 
 Add guards for common non-method property accesses that shouldn't trigger bridge calls:
 
@@ -504,7 +504,7 @@ if (typeof method === 'symbol') return undefined;
 
 ### Priority 4: Clear Timeouts on Dispose
 
-**File**: `packages/kernels/src/framework/kernel-filesystem-bridge.ts` `createBridgeCall`
+**File**: `packages/runtime/src/framework/kernel-filesystem-bridge.ts` `createBridgeCall`
 
 Store timer IDs alongside pending entries and clear them during disposal to avoid unnecessary timer callbacks.
 

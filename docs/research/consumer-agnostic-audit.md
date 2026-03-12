@@ -120,7 +120,7 @@ These are the **only** places replicad should appear in the Tau workspace:
 1. **YAML overlay config** — consumer-specific symbol list for link-time selection
    (e.g. `tarballs/experiments/*/` build configs listing which OCCT symbols replicad needs)
 2. **Tau test suite** — validation that the WASM binary works with replicad
-   (e.g. `packages/kernels/` replicad kernel tests)
+   (e.g. `packages/runtime/` replicad kernel tests)
 3. **Tau orchestrator** — `packages/wasm-build/` which invokes opencascade.js
    build-wasm.sh with a consumer-specific YAML config
 

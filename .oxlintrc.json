@@ -1109,7 +1109,7 @@
         "jsdoc/check-tag-names": [
           "error",
           {
-            "definedTags": ["vitest-environment", "taucad/kernels/filesystem", "remarks", "internal"]
+            "definedTags": ["vitest-environment", "remarks", "internal"]
           }
         ],
         // Every exported function, class, method, type alias, and interface must have a JSDoc block.

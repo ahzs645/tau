@@ -228,7 +228,7 @@ The main entry exports constructors because they're the most common consumer nee
 
 ## ZenFS Decoupling
 
-The kernels package must be completely decoupled from ZenFS. The package provides a `node:fs`-compatible interface (`KernelFileSystem`) and constructors that normalize various fs implementations into that interface. No ZenFS types, imports, or naming should appear in the public API.
+The runtime package must be completely decoupled from ZenFS. The package provides a `node:fs`-compatible interface (`KernelFileSystem`) and constructors that normalize various fs implementations into that interface. No ZenFS types, imports, or naming should appear in the public API.
 
 **Current state:** Completed. `fromZenFS` and `ZenFSLike` have been renamed to `fromFsLike` and `FsLike` respectively. The function accepts _any_ object with a `promises` namespace -- not just ZenFS. The dead `fromProxy` code from the Comlink era has been removed.
 

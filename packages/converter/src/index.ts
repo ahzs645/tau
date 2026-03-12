@@ -21,7 +21,7 @@ export { exportFiles, supportedExportFormats } from '#export.js';
 // Format metadata (re-exported from @taucad/types)
 export { formatConfigurations } from '@taucad/types/constants';
 
-// Transform utilities for downstream consumers (e.g. kernels middleware)
+// Transform utilities for downstream consumers (e.g. runtime middleware)
 export {
   createCoordinateTransform,
   createScalingTransform,
@@ -29,7 +29,7 @@ export {
   createReverseScalingTransform,
 } from '#gltf.transforms.js';
 
-// Gltf-transform I/O utilities for downstream consumers (e.g. kernels middleware)
+// Gltf-transform I/O utilities for downstream consumers (e.g. runtime middleware)
 export { createNodeIo } from '#gltf.utils.js';
 export { allExtensions } from '#gltf.extensions.js';
 

@@ -59,10 +59,10 @@ The stripped result is still ~7.5 MB but Monaco's TS worker runs in a Web Worker
 
 Follow the Manifold extractor pattern:
 
-- Read `packages/kernels/src/kernels/opencascade/wasm/opencascade_full.d.ts`
+- Read `packages/runtime/src/kernels/opencascade/wasm/opencascade_full.d.ts`
 - Strip `export declare` to `export` (inside `declare module`, `declare` is implicit)
 - Strip namespace alias blocks (`export namespace Foo { ... }`) — these are ~268 blocks of shorthand aliases that duplicate full-qualified names
-- Wrap in two `declare module` blocks: `'opencascade.js'` and `'opencascade'` (both are registered as `builtinModuleNames` in [kernel-factories.ts](packages/kernels/src/plugins/kernel-factories.ts#L75))
+- Wrap in two `declare module` blocks: `'opencascade.js'` and `'opencascade'` (both are registered as `builtinModuleNames` in [kernel-factories.ts](packages/runtime/src/plugins/kernel-factories.ts#L75))
 - Export a `buildBundledTypes()` function (for testability) and a `main()` CLI entry
 - Output to `libs/api-extractor/src/generated/opencascade/opencascade.bundled.d.ts`
 

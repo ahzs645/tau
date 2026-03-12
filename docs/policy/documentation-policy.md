@@ -347,7 +347,7 @@ For `@example` standards (compilable examples, real-world usage, language tags),
 
 Reference documentation is auto-generated from JSDoc using `fumadocs-typescript`'s `remarkAutoTypeTable` remark plugin. The workflow:
 
-1. JSDoc comments on source types in `packages/kernels/src/` are the source of truth.
+1. JSDoc comments on source types in `packages/runtime/src/` are the source of truth.
 2. Dedicated props files in `apps/ui/content/docs/(kernels)/api/props/` re-export only the intended public API types.
 3. MDX reference pages use `<auto-type-table path="./props/[file].ts" name="[TypeName]" />` to render type tables.
 4. Only types explicitly re-exported in props files appear in docs. No internal types leak.

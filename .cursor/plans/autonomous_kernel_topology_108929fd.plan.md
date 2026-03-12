@@ -157,7 +157,7 @@ Geometry data (large payloads) still uses postMessage with transfer list -- Atom
 
 ### 9. Export transfer bug (pre-existing)
 
-The render path in [kernel-worker-dispatcher.ts](packages/kernels/src/framework/kernel-worker-dispatcher.ts) correctly transfers geometry `ArrayBuffer`s via `extractGltfTransferables()`. The export path does NOT -- export payloads (`ExportFile[]` with `bytes: Uint8Array`) are structured-cloned. For a 30MB STEP file, this is ~302ms clone vs ~6.6ms transfer (45x penalty). Must be fixed.
+The render path in [kernel-worker-dispatcher.ts](packages/runtime/src/framework/kernel-worker-dispatcher.ts) correctly transfers geometry `ArrayBuffer`s via `extractGltfTransferables()`. The export path does NOT -- export payloads (`ExportFile[]` with `bytes: Uint8Array`) are structured-cloned. For a 30MB STEP file, this is ~302ms clone vs ~6.6ms transfer (45x penalty). Must be fixed.
 
 ### 10. FinalizationRegistry for WASM handle safety
 
@@ -187,7 +187,7 @@ Not yet available (Safari missing): `using`/`await using` (explicit resource man
 
 ### Phase 0: Export Transfer Bugfix (independent, do first)
 
-**[kernel-worker-dispatcher.ts](packages/kernels/src/framework/kernel-worker-dispatcher.ts):**
+**[kernel-worker-dispatcher.ts](packages/runtime/src/framework/kernel-worker-dispatcher.ts):**
 
 The render path correctly uses `extractGltfTransferables()` to transfer geometry `ArrayBuffer`s. The export path does NOT -- export payloads (`ExportFile[]` with `bytes: Uint8Array`) are structured-cloned. For a 30MB STEP file this is ~302ms clone vs ~6.6ms transfer (45x penalty).
 
@@ -199,17 +199,17 @@ The render path correctly uses `extractGltfTransferables()` to transfer geometry
 
 Add new command/response types alongside existing ones. No behavioral changes yet.
 
-**[kernel-protocol.types.ts](packages/kernels/src/types/kernel-protocol.types.ts):**
+**[kernel-protocol.types.ts](packages/runtime/src/types/kernel-protocol.types.ts):**
 
 - Add `SetFileCommand = { type: 'setFile'; file: GeometryFile; parameters: Record<string, unknown>; tessellation?: Tessellation }`
 - Add `SetParametersCommand = { type: 'setParameters'; parameters: Record<string, unknown> }`
 - Add `StateChangedResponse = { type: 'stateChanged'; state: 'idle' | 'rendering' | 'error'; detail?: string }`
-- Add `RenderAbortedError` class to [kernel-worker-client.ts](packages/kernels/src/framework/kernel-worker-client.ts)
+- Add `RenderAbortedError` class to [kernel-worker-client.ts](packages/runtime/src/framework/kernel-worker-client.ts)
 - Keep existing `render`, `cancel`, `fileChanged` commands for backward compatibility during migration
 
 ### Phase 2: GrowableSharedArrayBuffer Bidirectional Channel
 
-**[kernel-worker-client.ts](packages/kernels/src/framework/kernel-worker-client.ts):**
+**[kernel-worker-client.ts](packages/runtime/src/framework/kernel-worker-client.ts):**
 
 - Allocate `GrowableSharedArrayBuffer`:
 
@@ -232,12 +232,12 @@ const signalView = new Int32Array(signalBuffer);
 - Add `incrementGeneration()` method: `Atomics.store(signalView, 0, ++generation)`
 - Add `monitorWorkerState()` using `Atomics.waitAsync(signalView, 1, currentState)` -- resolves when worker writes a new state, re-arms automatically. Falls back to polling via `stateChanged` postMessage if `Atomics.waitAsync` is unavailable.
 
-**[kernel-worker-dispatcher.ts](packages/kernels/src/framework/kernel-worker-dispatcher.ts):**
+**[kernel-worker-dispatcher.ts](packages/runtime/src/framework/kernel-worker-dispatcher.ts):**
 
 - Receive `signalBuffer` from `initialize` command
 - Create `Int32Array` view, pass to `KernelWorker` constructor/init
 
-**[kernel-worker.ts](packages/kernels/src/framework/kernel-worker.ts):**
+**[kernel-worker.ts](packages/runtime/src/framework/kernel-worker.ts):**
 
 - Store `signalView: Int32Array` and `renderGeneration: number`
 - Expose `getSignalView()` for OC Proxy consumption
@@ -248,7 +248,7 @@ const signalView = new Int32Array(signalBuffer);
 
 ### Phase 3: OC Proxy Cooperative Abort
 
-**[oc-tracing.ts](packages/kernels/src/kernels/replicad/oc-tracing.ts):**
+**[oc-tracing.ts](packages/runtime/src/kernels/replicad/oc-tracing.ts):**
 
 - Add `signalView: Int32Array | null` and `currentGeneration: number` to the proxy closure
 - In `wrapOcForExceptions` and `wrapOcWithTracing` function wrappers, before `Reflect.apply`/`Reflect.construct`:
@@ -265,7 +265,7 @@ if (signalView && Atomics.load(signalView, 0) !== currentGeneration) {
 
 ### Phase 4: Worker-Internal Render Loop
 
-**[kernel-worker.ts](packages/kernels/src/framework/kernel-worker.ts):**
+**[kernel-worker.ts](packages/runtime/src/framework/kernel-worker.ts):**
 
 - Add internal state: `currentFile`, `currentParameters`, `currentTessellation`, `renderGeneration`, `fileDebounceTimer`, `paramDebounceTimer`
 
@@ -330,7 +330,7 @@ const yieldToEventLoop = globalThis.scheduler?.yield
 - Call `scheduleRender(500)` instead of `onFilesChanged`
 - Still push `filesChanged` response for backward compat during migration
 
-**[kernel-worker-dispatcher.ts](packages/kernels/src/framework/kernel-worker-dispatcher.ts):**
+**[kernel-worker-dispatcher.ts](packages/runtime/src/framework/kernel-worker-dispatcher.ts):**
 
 - Handle `setFile` -> `worker.handleSetFile()`
 - Handle `setParameters` -> `worker.handleSetParameters()`
@@ -338,7 +338,7 @@ const yieldToEventLoop = globalThis.scheduler?.yield
 
 ### Phase 5: KernelClient API Modernization
 
-**[kernel-worker-client.ts](packages/kernels/src/framework/kernel-worker-client.ts):**
+**[kernel-worker-client.ts](packages/runtime/src/framework/kernel-worker-client.ts):**
 
 - Add `setFile(file, params, tessellation?)`:
   - `Atomics.store(signalView, 0, ++generation)` (abort in-flight render instantly)
@@ -375,7 +375,7 @@ return promise;
 
 - Keep `render()` for inline code mode backward compat
 
-**[kernel-client.ts](packages/kernels/src/client/kernel-client.ts):**
+**[kernel-client.ts](packages/runtime/src/client/kernel-client.ts):**
 
 - Add `setFile()` and `setParameters()` methods that delegate to the worker client
 - Keep `render()` for inline code mode

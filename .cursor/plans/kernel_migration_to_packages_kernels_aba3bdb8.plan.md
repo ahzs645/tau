@@ -1,6 +1,6 @@
 ---
-name: Kernel Migration to packages/kernels
-overview: Migrate the kernel runtime framework from apps/ui/app/components/geometry/kernel/ to packages/kernels/ (@taucad/runtime) as a first-class publishable npm package, fully decoupled from the UI application, with a minimal public API surface and comprehensive dual-environment (browser + Node.js) test validation.
+name: Kernel Migration to packages/runtime
+overview: Migrate the kernel runtime framework from apps/ui/app/components/geometry/kernel/ to packages/runtime/ (@taucad/runtime) as a first-class publishable npm package, fully decoupled from the UI application, with a minimal public API surface and comprehensive dual-environment (browser + Node.js) test validation.
 todos:
   - id: dep-tree
     content: "Phase 0: Generate and validate the full dependency tree inventory (every file, every import, classified as move/adapt/replace)"
@@ -12,10 +12,10 @@ todos:
     content: "Phase 2: Decouple FileManager type -- make kernel-worker-filemanager-bridge.ts self-contained without importing the UI FileManager type"
     status: completed
   - id: scaffold-package
-    content: "Phase 3a: Scaffold packages/kernels with package.json (exports map, deps), tsconfig, tsdown, vitest, project.json"
+    content: "Phase 3a: Scaffold packages/runtime with package.json (exports map, deps), tsconfig, tsdown, vitest, project.json"
     status: completed
   - id: copy-kernel-files
-    content: "Phase 3b: Copy kernel files to packages/kernels/src/ in new directory structure and rewrite all imports"
+    content: "Phase 3b: Copy kernel files to packages/runtime/src/ in new directory structure and rewrite all imports"
     status: completed
   - id: default-config-factory
     content: "Phase 3c: Implement createDefaultConfig() factory with self-resolving URLs via new URL(path, import.meta.url)"
@@ -30,18 +30,18 @@ todos:
     content: "Phase 6: Update UI app to consume @taucad/runtime via createDefaultConfig() and workspace dependency, remove old kernel directory"
     status: completed
   - id: verify-build
-    content: "Phase 7: Run typecheck, lint, test, build for both kernels package and UI app; verify tarball contents"
+    content: "Phase 7: Run typecheck, lint, test, build for both runtime package and UI app; verify tarball contents"
     status: completed
 isProject: false
 ---
 
-# Kernel Migration to `packages/kernels`
+# Kernel Migration to `packages/runtime`
 
 ## 1. Current State
 
 The kernel code lives at `[apps/ui/app/components/geometry/kernel/](apps/ui/app/components/geometry/kernel/)` (~80 files) and is tightly coupled to the UI app through `#`-prefixed imports.
 
-A placeholder `[packages/kernels/](packages/kernels/)` already exists with scaffolding (`package.json` for `@taucad/runtime`, tsconfig, vitest, tsdown configs, `project.json`) but only contains `export const hello = 'world'`.
+A placeholder `[packages/runtime/](packages/runtime/)` already exists with scaffolding (`package.json` for `@taucad/runtime`, tsconfig, vitest, tsdown configs, `project.json`) but only contains `export const hello = 'world'`.
 
 ## 2. Target State
 
@@ -62,7 +62,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 
 ### Legend
 
-- **Move**: Copy to `packages/kernels/src/`, rewrite internal `#` paths
+- **Move**: Copy to `packages/runtime/src/`, rewrite internal `#` paths
 - **Adapt**: Copy + modify (dependency replacement, API change, or environment fix)
 - **ExtDep**: External npm package (added to `package.json`)
 - **LibDep**: Workspace `@taucad/`* dependency
@@ -208,7 +208,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 | `utils/path.utils.ts`   | `joinPath`, `normalizePath`                                                                                | None                                 | `@taucad/utils/path`                                                             |
 | `utils/file.utils.ts`   | `asBuffer` only                                                                                            | None                                 | `@taucad/utils/file`                                                             |
 | `utils/import.utils.ts` | `isBareSpecifier`, `parsePackageSpecifier`, `getCdnCachePath`, `resolveRelativePath`, `getNodeModulesPath` | `cdn-resolve`                        | `@taucad/utils/import`                                                           |
-| `utils/schema.utils.ts` | `jsonSchemaFromJson`, `hasJsonSchemaObjectProperties`                                                      | `@taucad/json-schema`, `json-schema` | Keep in kernels package as local util (uses `@taucad/json-schema` as direct dep) |
+| `utils/schema.utils.ts` | `jsonSchemaFromJson`, `hasJsonSchemaObjectProperties`                                                      | `@taucad/json-schema`, `json-schema` | Keep in runtime package as local util (uses `@taucad/json-schema` as direct dep) |
 
 
 ### 3.10 Summary of UIReplace Resolutions
@@ -589,7 +589,7 @@ Beyond the unit/integration tests above, add these validation gates:
 
 ## 7. Package Configuration
 
-### 7.1 `packages/kernels/package.json`
+### 7.1 `packages/runtime/package.json`
 
 Key sections:
 
@@ -633,7 +633,7 @@ Project references to `libs/types`, `libs/utils`. `NodeNext` module resolution.
 ## 8. Directory Structure
 
 ```
-packages/kernels/
+packages/runtime/
   src/
     index.ts                          # Public API (Section 4.1)
     config.ts                         # createDefaultConfig() factory (Section 5.3)
@@ -739,7 +739,7 @@ packages/kernels/
 - The proxy's return type already inline-defines the interface -- make the `FileManagerPortable` type the canonical reference
 - Verify: `pnpm nx typecheck ui`
 
-### Phase 3: Scaffold and Populate `packages/kernels/`
+### Phase 3: Scaffold and Populate `packages/runtime/`
 
 - **3a**: Set up all config files based on existing `packages/converter/` patterns:
   - `package.json` with exports map, dependencies, publishConfig
@@ -773,7 +773,7 @@ packages/kernels/
 - Adapt `kernel-testing.utils.ts` to use self-contained in-memory ZenFS
 - Rewrite test import paths
 - Create `vitest.setup.ts` with minimal mocks
-- Run: `pnpm nx test kernels --watch=false`
+- Run: `pnpm nx test runtime --watch=false`
 - Fix any failures
 
 ### Phase 5: Dual-Environment Test Gates
@@ -781,7 +781,7 @@ packages/kernels/
 - Add CJS import smoke test
 - Add ESM import smoke test
 - Add jsdom browser-compatibility gate test
-- Run: `pnpm nx test kernels --watch=false`
+- Run: `pnpm nx test runtime --watch=false`
 
 ### Phase 6: Update UI App
 
@@ -801,10 +801,10 @@ packages/kernels/
 
 ### Phase 7: Final Verification
 
-- `pnpm nx typecheck kernels`
-- `pnpm nx lint kernels`
-- `pnpm nx build kernels` -- verify dist output structure
+- `pnpm nx typecheck runtime`
+- `pnpm nx lint runtime`
+- `pnpm nx build runtime` -- verify dist output structure
 - `pnpm nx typecheck ui && pnpm nx test ui --watch=false`
-- Inspect tarball contents: `cd packages/kernels && pnpm pack --dry-run`
+- Inspect tarball contents: `cd packages/runtime && pnpm pack --dry-run`
 - Verify exports map resolves correctly in built output
 

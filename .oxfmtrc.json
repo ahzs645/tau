@@ -18,7 +18,7 @@
     ".cursor/plans/**",
     "/tarballs/**",
     "/experiments/**",
-    "/packages/kernels/occt-reports/**",
+    "/packages/runtime/occt-reports/**",
     "/packages/converter/src/assets/**",
     "**/generated/**",
     "**/assets/**",

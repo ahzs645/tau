@@ -72,9 +72,9 @@ Component unmount
 
 **Files**:
 
-- `packages/kernels/src/transport/worker-transport.ts` — Worker creation and `close()`
-- `packages/kernels/src/client/kernel-client.ts` — `terminate()` method
-- `packages/kernels/src/framework/kernel-worker-client.ts` — `cleanup()` + `terminate()`
+- `packages/runtime/src/transport/worker-transport.ts` — Worker creation and `close()`
+- `packages/runtime/src/client/kernel-client.ts` — `terminate()` method
+- `packages/runtime/src/framework/kernel-worker-client.ts` — `cleanup()` + `terminate()`
 - `apps/ui/app/machines/kernel.machine.ts` — `destroyWorkers` action, `initKernelActor`, `renderActor`
 
 ### 2. File Manager Worker

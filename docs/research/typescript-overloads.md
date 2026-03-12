@@ -154,7 +154,7 @@ consumed and narrowed by the caller.
 ### Keep overloads on the interface
 
 The `KernelFileSystemBase.readFile` overloads provide excellent DX at call sites
-across 20+ files in the kernels package. Every usage is either
+across 20+ files in the runtime package. Every usage is either
 `readFile(path, 'utf8')` (expects `string`) or `readFile(path)` (expects `Uint8Array`).
 Replacing overloads with a union return would regress DX in every kernel, middleware,
 and bundler file.

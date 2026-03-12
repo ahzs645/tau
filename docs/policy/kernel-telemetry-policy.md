@@ -212,11 +212,11 @@ kernel.compute
 
 | Component                   | File                                                         | Role                                       |
 | --------------------------- | ------------------------------------------------------------ | ------------------------------------------ |
-| `KernelTracer`              | `packages/kernels/src/framework/kernel-tracer.ts`            | Span creation with parent-child hierarchy  |
-| `WorkerTelemetryCollector`  | `packages/kernels/src/framework/worker-telemetry.ts`         | Batched collection via PerformanceObserver |
-| `KernelWorkerDispatcher`    | `packages/kernels/src/framework/kernel-worker-dispatcher.ts` | Telemetry flush on render completion       |
-| `KernelWorker`              | `packages/kernels/src/framework/kernel-worker.ts`            | Framework span instrumentation             |
-| `KernelRuntimeWorker`       | `packages/kernels/src/framework/kernel-runtime-worker.ts`    | Kernel selection spans                     |
-| `wrapOcWithTracing`         | `packages/kernels/src/kernels/replicad/oc-tracing.ts`        | OC API call tracing proxy                  |
+| `KernelTracer`              | `packages/runtime/src/framework/kernel-tracer.ts`            | Span creation with parent-child hierarchy  |
+| `WorkerTelemetryCollector`  | `packages/runtime/src/framework/worker-telemetry.ts`         | Batched collection via PerformanceObserver |
+| `KernelWorkerDispatcher`    | `packages/runtime/src/framework/kernel-worker-dispatcher.ts` | Telemetry flush on render completion       |
+| `KernelWorker`              | `packages/runtime/src/framework/kernel-worker.ts`            | Framework span instrumentation             |
+| `KernelRuntimeWorker`       | `packages/runtime/src/framework/kernel-runtime-worker.ts`    | Kernel selection spans                     |
+| `wrapOcWithTracing`         | `packages/runtime/src/kernels/replicad/oc-tracing.ts`        | OC API call tracing proxy                  |
 | `buildSpanTree`             | `apps/ui/app/routes/builds_.$id/chat-kernel.tsx`             | UI tree reconstruction                     |
 | `createTelemetryAggregator` | `apps/ui/app/machines/kernel.machine.ts`                     | Main-thread forwarding                     |

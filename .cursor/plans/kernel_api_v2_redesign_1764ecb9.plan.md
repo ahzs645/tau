@@ -9,7 +9,7 @@ todos:
     content: Define KernelFileSystem (8 required Node.js-compatible methods), refactor kernel-worker-filemanager-bridge, build framework-internal helpers (readFiles, ensureDirectoryExists, getDirectoryContents, getDirectoryStat)
     status: completed
   - id: transport-interface
-    content: Create KernelTransport interface and createWorkerTransport() in packages/kernels/src/transport/; refactor KernelWorkerClient to accept KernelTransport
+    content: Create KernelTransport interface and createWorkerTransport() in packages/runtime/src/transport/; refactor KernelWorkerClient to accept KernelTransport
     status: completed
   - id: remove-canhandle
     content: Remove canHandle from protocol types, KernelWorkerClient, dispatcher, and kernel.machine.ts; internalize into renderEntry error path
@@ -249,7 +249,7 @@ The framework routes all bundler operations by file extension:
 
 ### Framework changes
 
-`**[packages/kernels/src/framework/kernel-worker.ts](packages/kernels/src/framework/kernel-worker.ts)**`:
+`**[packages/runtime/src/framework/kernel-worker.ts](packages/runtime/src/framework/kernel-worker.ts)**`:
 
 ```typescript
 // Before: single bundler
@@ -313,7 +313,7 @@ protected hasBundlerForExtension(ext: string): boolean {
 
 ### KernelRuntimeWorker changes
 
-`**[packages/kernels/src/framework/kernel-runtime-worker.ts](packages/kernels/src/framework/kernel-runtime-worker.ts)**`: Pass 2 (bundler-assisted detection) queries `hasBundlerForExtension(extension)` instead of `hasBundlerAvailable`, and routes `detectImports` to the correct bundler for the file's extension.
+`**[packages/runtime/src/framework/kernel-runtime-worker.ts](packages/runtime/src/framework/kernel-runtime-worker.ts)**`: Pass 2 (bundler-assisted detection) queries `hasBundlerForExtension(extension)` instead of `hasBundlerAvailable`, and routes `detectImports` to the correct bundler for the file's extension.
 
 ### Type changes
 
@@ -427,9 +427,9 @@ if (!result.success) {
 ### Changes
 
 - `**[libs/types/src/types/kernel-protocol.types.ts](libs/types/src/types/kernel-protocol.types.ts)**`: Remove `canHandle` command and `canHandleResult` response
-- `**[packages/kernels/src/framework/kernel-worker-client.ts](packages/kernels/src/framework/kernel-worker-client.ts)**`: Remove `canHandle()` method and `pendingCanHandle` state
-- `**[packages/kernels/src/framework/kernel-worker-dispatcher.ts](packages/kernels/src/framework/kernel-worker-dispatcher.ts)**`: Remove `canHandle` case
-- `**[packages/kernels/src/framework/kernel-worker.ts](packages/kernels/src/framework/kernel-worker.ts)**`: Modify `renderEntry` to return `{ success: false, issues: [...] }` when no kernel matches
+- `**[packages/runtime/src/framework/kernel-worker-client.ts](packages/runtime/src/framework/kernel-worker-client.ts)**`: Remove `canHandle()` method and `pendingCanHandle` state
+- `**[packages/runtime/src/framework/kernel-worker-dispatcher.ts](packages/runtime/src/framework/kernel-worker-dispatcher.ts)**`: Remove `canHandle` case
+- `**[packages/runtime/src/framework/kernel-worker.ts](packages/runtime/src/framework/kernel-worker.ts)**`: Modify `renderEntry` to return `{ success: false, issues: [...] }` when no kernel matches
 - `**[apps/ui/app/machines/kernel.machine.ts](apps/ui/app/machines/kernel.machine.ts)**`: Remove the `canHandle` call before `render`
 
 The `canHandle` method remains **internal** to `KernelRuntimeWorker` for kernel selection logic.
@@ -498,7 +498,7 @@ await client.connect({ fileSystem });
 
 ### MessagePort bridge changes
 
-`[packages/kernels/src/framework/kernel-worker-filemanager-bridge.ts](packages/kernels/src/framework/kernel-worker-filemanager-bridge.ts)` is refactored to proxy only the 8 `KernelFileSystem` methods. The 12+ extra methods (`rename`, `rmdir`, `copyDirectory`, `getZippedDirectory`, `reconfigure`, `setDirectoryHandle`, `readBackendFileTree`, etc.) are removed -- they were app-level operations that leaked into the kernel contract.
+`[packages/runtime/src/framework/kernel-worker-filemanager-bridge.ts](packages/runtime/src/framework/kernel-worker-filemanager-bridge.ts)` is refactored to proxy only the 8 `KernelFileSystem` methods. The 12+ extra methods (`rename`, `rmdir`, `copyDirectory`, `getZippedDirectory`, `reconfigure`, `setDirectoryHandle`, `readBackendFileTree`, etc.) are removed -- they were app-level operations that leaked into the kernel contract.
 
 ---
 
@@ -546,9 +546,9 @@ function createHttpTransport(endpoint: string): KernelTransport;
 
 ### Files
 
-- `[packages/kernels/src/transport/kernel-transport.ts](packages/kernels/src/transport/kernel-transport.ts)` (new) -- `KernelTransport` type
-- `[packages/kernels/src/transport/worker-transport.ts](packages/kernels/src/transport/worker-transport.ts)` (new) -- `createWorkerTransport()`
-- Refactor `[packages/kernels/src/framework/kernel-worker-client.ts](packages/kernels/src/framework/kernel-worker-client.ts)` to accept `KernelTransport` instead of raw `Worker`
+- `[packages/runtime/src/transport/kernel-transport.ts](packages/runtime/src/transport/kernel-transport.ts)` (new) -- `KernelTransport` type
+- `[packages/runtime/src/transport/worker-transport.ts](packages/runtime/src/transport/worker-transport.ts)` (new) -- `createWorkerTransport()`
+- Refactor `[packages/runtime/src/framework/kernel-worker-client.ts](packages/runtime/src/framework/kernel-worker-client.ts)` to accept `KernelTransport` instead of raw `Worker`
 
 ---
 

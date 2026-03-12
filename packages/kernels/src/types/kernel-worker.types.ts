@@ -97,7 +97,7 @@ export type KernelFileSystemBase = {
 /**
  * Watch request for kernel filesystem subscriptions.
  * Mirrors the full WatchRequest contract but is self-contained
- * within the kernels package (no dependency on the UI app types).
+ * within the runtime package (no dependency on the UI app types).
  * @public
  */
 export type KernelWatchRequest = {

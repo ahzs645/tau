@@ -32,9 +32,9 @@ Possible commands:
   - Single file: `pnpm nx lint <project> --files=<path>`
     - e.g. `pnpm nx lint ui --files=app/utils/crypto.utils.ts`
   - Glob pattern: `pnpm nx lint <project> --files='<glob>'`
-    - e.g. `pnpm nx lint kernels --files='src/utils/*.ts'`
+    - e.g. `pnpm nx lint runtime --files='src/utils/*.ts'`
   - Multiple files: `pnpm nx lint <project> --files='<path1> <path2>'`
-    - e.g. `pnpm nx lint kernels --files='src/utils/hash.utils.ts src/utils/edge-detection.ts'`
+    - e.g. `pnpm nx lint runtime --files='src/utils/hash.utils.ts src/utils/edge-detection.ts'`
 - `build` - Build the project
 
 The project is the name of the project you are working on, as designated by the path. For example, changes under `apps/ui` correspond to the `ui` project, whilst changes under `packages/converter` correspond to the `converter` project.

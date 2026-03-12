@@ -11,7 +11,7 @@ Release workflow for the `@taucad/*` npm packages using Nx Release with Version 
 
 | Package               | Path                   | Description                |
 | --------------------- | ---------------------- | -------------------------- |
-| `@taucad/runtime`     | `packages/kernels`     | Multi-kernel CAD runtime   |
+| `@taucad/runtime`     | `packages/runtime`     | Multi-kernel CAD runtime   |
 | `@taucad/converter`   | `packages/converter`   | CAD file format conversion |
 | `@taucad/json-schema` | `packages/json-schema` | JSON to JSON Schema        |
 | `@taucad/js`          | `packages/js`          | Tau JavaScript API         |
@@ -208,7 +208,7 @@ Before publishing, validate package structure:
 pnpm nx run-many -t pkgcheck --projects=packages/*
 
 # Inspect tarball contents
-cd packages/kernels && pnpm pack --pack-destination /tmp && tar -tzf /tmp/taucad-kernels-*.tgz
+cd packages/runtime && pnpm pack --pack-destination /tmp && tar -tzf /tmp/taucad-kernels-*.tgz
 ```
 
 Ensure each `package.json` has:

@@ -1,7 +1,7 @@
 {
-  "name": "kernels",
+  "name": "runtime",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "packages/kernels",
+  "sourceRoot": "packages/runtime",
   "projectType": "library",
   "tags": ["scope:shared", "type:lib"],
   "targets": {

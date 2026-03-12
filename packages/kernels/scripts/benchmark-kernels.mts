@@ -3,13 +3,13 @@
 /**
  * Kernel Benchmarking CLI
  *
- * Run with: pnpm nx benchmark kernels
+ * Run with: pnpm nx benchmark runtime
  *
  * Usage:
- *   pnpm nx benchmark kernels
- *   pnpm nx benchmark kernels -- --iterations 10 --filter "primitives,booleans"
- *   pnpm nx benchmark kernels -- --compare reports/benchmark-before.json reports/benchmark-after.json
- *   pnpm nx benchmark kernels -- --output ./my-reports
+ *   pnpm nx benchmark runtime
+ *   pnpm nx benchmark runtime -- --iterations 10 --filter "primitives,booleans"
+ *   pnpm nx benchmark runtime -- --compare reports/benchmark-before.json reports/benchmark-after.json
+ *   pnpm nx benchmark runtime -- --output ./my-reports
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
@@ -80,7 +80,7 @@ if (values.help) {
 ${c.bold}Kernel Benchmarking CLI${c.reset}
 
 ${c.dim}Usage:${c.reset}
-  pnpm nx benchmark kernels [-- options]
+  pnpm nx benchmark runtime [-- options]
 
 ${c.dim}Options:${c.reset}
   ${c.cyan}-n${c.reset}, ${c.cyan}--iterations${c.reset} <n>    Number of iterations per benchmark (default: 5)

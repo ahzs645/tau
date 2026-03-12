@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Runs a complete build→pack→install→benchmark cycle from an experiment
 # config YAML. Uses build-wasm.sh for all build operations and the
-# kernels benchmark system for evaluation.
+# runtime benchmark system for evaluation.
 #
 # Usage:
 #   ./scripts/wasm-experiment.sh <experiment.yml> [options]
@@ -167,7 +167,7 @@ print(exc)
     BENCH_OUT_DIR="$dir/benchmarks"
     mkdir -p "$BENCH_OUT_DIR"
 
-    BENCH_CMD="pnpm nx benchmark kernels -- --iterations $BENCH_ALL_ITERATIONS"
+    BENCH_CMD="pnpm nx benchmark runtime -- --iterations $BENCH_ALL_ITERATIONS"
     BENCH_CMD="$BENCH_CMD --wasm-dir $dir/unpacked"
     BENCH_CMD="$BENCH_CMD --wasm-variant $VARIANT"
     BENCH_CMD="$BENCH_CMD --output $BENCH_OUT_DIR"
@@ -203,11 +203,11 @@ print(exc)
       for dir in "${EXP_DIRS[@]}"; do
         COMPARE_ARGS+=(--compare "../../tarballs/experiments/$(basename "$dir")")
       done
-      pnpm nx build-matrix kernels -- "${COMPARE_ARGS[@]}"
-      pnpm nx compare-benchmarks kernels -- "${COMPARE_ARGS[@]}"
+      pnpm nx build-matrix runtime -- "${COMPARE_ARGS[@]}"
+      pnpm nx compare-benchmarks runtime -- "${COMPARE_ARGS[@]}"
     else
-      pnpm nx build-matrix kernels -- --experiments ../../tarballs/experiments/
-      pnpm nx compare-benchmarks kernels -- --experiments ../../tarballs/experiments/
+      pnpm nx build-matrix runtime -- --experiments ../../tarballs/experiments/
+      pnpm nx compare-benchmarks runtime -- --experiments ../../tarballs/experiments/
     fi
   fi
 
@@ -459,7 +459,7 @@ echo "═══ Step 6: Install and copy assets ═══"
 pnpm install --no-frozen-lockfile 2>&1 | tail -5
 echo ""
 
-KERNELS_DIR="$TAU_ROOT/packages/kernels"
+KERNELS_DIR="$TAU_ROOT/packages/runtime"
 cd "$KERNELS_DIR"
 
 rm -f src/kernels/replicad/wasm/replicad_single.wasm
@@ -469,7 +469,7 @@ npx copy-files-from-to --config copy-files-from-to.cjson 2>&1 | head -10
 
 # Verify WASM was copied
 if [ ! -f src/kernels/replicad/wasm/replicad_single.wasm ]; then
-  echo "ERROR: WASM not copied to kernels package" >&2
+  echo "ERROR: WASM not copied to runtime package" >&2
   exit 1
 fi
 
@@ -483,7 +483,7 @@ if [ "$SKIP_BENCHMARK" = "true" ]; then
 else
   echo "═══ Step 7: Run benchmarks ═══"
 
-  BENCH_CMD="pnpm nx benchmark kernels -- --iterations $BENCH_ITERATIONS --output $EXP_DIR"
+  BENCH_CMD="pnpm nx benchmark runtime -- --iterations $BENCH_ITERATIONS --output $EXP_DIR"
   BENCH_CMD="$BENCH_CMD --wasm-dir $EXP_DIR/unpacked"
 
   # Determine variant from exceptions setting
@@ -513,7 +513,7 @@ else
     if [ -n "$BASELINE_JSON" ] && [ -n "$CURRENT_JSON" ]; then
       COMP_DIR="$TARBALLS_DIR/comparisons"
       mkdir -p "$COMP_DIR"
-      pnpm nx benchmark kernels -- --compare "$BASELINE_JSON" "$CURRENT_JSON" --output "$COMP_DIR" || true
+      pnpm nx benchmark runtime -- --compare "$BASELINE_JSON" "$CURRENT_JSON" --output "$COMP_DIR" || true
     else
       echo "  No benchmark JSON found for comparison."
     fi

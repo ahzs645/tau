@@ -100,7 +100,7 @@ function defaultClassifyFrame(fileName: string): FrameContext {
     fileName.includes('/node_modules/') ||
     fileName.startsWith('data:') ||
     fileName.includes('/kernel/') ||
-    fileName.includes('/kernels/')
+    fileName.includes('/runtime/')
   ) {
     return 'framework';
   }

@@ -119,7 +119,7 @@ Key observations:
 
 **What it does**: Restricts the JS output to only support specified environments, eliminating detection code for others.
 
-**Why not**: The replicad-opencascadejs package must support all environments — it runs in browser web workers for the UI, but also in Node.js for testing (`pnpm nx test kernels`), server-side rendering, and CLI tools. Restricting environments would break Node.js test runners and any future server-side usage.
+**Why not**: The replicad-opencascadejs package must support all environments — it runs in browser web workers for the UI, but also in Node.js for testing (`pnpm nx test runtime`), server-side rendering, and CLI tools. Restricting environments would break Node.js test runners and any future server-side usage.
 
 **Impact**: ~2 KB JS savings — not worth the compatibility loss.
 
@@ -302,7 +302,7 @@ Build changes from current `O2-noLTO-single`:
 5. `scripts/experiments/O2-noLTO-optimized.yml` — New experiment config
 6. Test `--closure 1` separately; if it works, add to YAML emccFlags
 7. Run full experiment: `./scripts/wasm-experiment.sh scripts/experiments/O2-noLTO-optimized.yml`
-8. Validate with `pnpm nx test kernels --testNamePattern="Example models" --watch=false`
+8. Validate with `pnpm nx test runtime --testNamePattern="Example models" --watch=false`
 
 ---
 

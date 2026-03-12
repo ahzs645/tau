@@ -6,7 +6,7 @@
  * benchmark run from each experiment directory.
  *
  * Usage:
- *   pnpm nx compare-benchmarks kernels -- --experiments ../../tarballs/experiments
+ *   pnpm nx compare-benchmarks runtime -- --experiments ../../tarballs/experiments
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';

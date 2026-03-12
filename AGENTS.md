@@ -31,14 +31,14 @@ Tau is the AI-native CAD platform for the web (`tau.new`), built as an Nx monore
 | ----------------------- | ---------------------------------------------------------------------- |
 | `apps/ui`               | React Router v7 web app (CAD editor, file manager, AI chat, docs)      |
 | `apps/api`              | NestJS API (auth, database, chat WebSocket, LangGraph agent)           |
-| `packages/kernels`      | Multi-kernel CAD runtime — consumed as source via package.json exports |
+| `packages/runtime`      | Multi-kernel CAD runtime — consumed as source via package.json exports |
 | `packages/converter`    | CAD file conversion (STL, STEP, IGES, DXF, glTF, USDZ)                 |
 | `packages/json-schema`  | JSON to JSON Schema inference                                          |
 | `libs/chat`             | AI chat tool schemas, message schemas, RPC definitions                 |
 | `libs/types`            | Shared TypeScript types (API, build, CAD, file, graphics)              |
 | `libs/utils`            | Shared utilities (ID generation, path, file, schema, dispose)          |
 | `libs/units`            | Units of measurement and conversions                                   |
-| `apps/ui/content/docs/` | Docs site (Fumadocs): `(kernels)/` and `(editor)/` sections            |
+| `apps/ui/content/docs/` | Docs site (Fumadocs): `(runtime)/` and `(editor)/` sections            |
 
 ## Skills
 
@@ -91,7 +91,7 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 - Policy docs live in `docs/policy/` (testing, library-api, vision, lint, xstate, typescript, filesystem, react-testing, commit, agents-md, context-engineering, jsdoc, and more); research docs in `docs/research/`
 - Hybrid oxlint + ESLint linting: oxlint runs first, ESLint handles residual rules; custom Oxlint JS plugins in `libs/oxlint/`; rule tests use `oxlint-disable` syntax (ESLint 9 RuleTester strips `eslint-disable` from `getAllComments()`)
 - External repos in `repos/` managed via `repos.yaml` and `pnpm repos`; gitignored and cursorignored; add to `.oxlintrc.json` ignorePatterns
-- `packages/kernels` is consumed as source via package.json exports, not built output; test mocks in `packages/kernels/src/testing/kernel-testing.utils.ts`; Vite plugins in `@taucad/vite` with `*.vite-plugin.ts` suffix, `vite:` prefix, Vite 8 hook filters
+- `packages/runtime` is consumed as source via package.json exports, not built output; test mocks in `packages/runtime/src/testing/kernel-testing.utils.ts`; Vite plugins in `@taucad/vite` with `*.vite-plugin.ts` suffix, `vite:` prefix, Vite 8 hook filters
 - PR workflow: submit as draft; human reviews before marking ready via `gh pr ready`
 - Single FS worker architecture; all filesystem access flows through one serialized worker with ZenFS and IndexedDB backend
 - Editor architecture: machine owns openFiles, ref-counting, force-close; dockview subscribes only; use unique panel IDs (not file path)

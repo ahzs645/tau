@@ -35,7 +35,7 @@
       "path": "./packages/js"
     },
     {
-      "path": "./packages/kernels"
+      "path": "./packages/runtime"
     },
     {
       "path": "./libs/units"

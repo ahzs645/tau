@@ -12,7 +12,7 @@ related:
 
 # Testing Policy
 
-Internal reference for writing high-quality tests across the Tau monorepo. Distilled from patterns observed in `packages/kernels`, `apps/ui`, and `apps/api`.
+Internal reference for writing high-quality tests across the Tau monorepo. Distilled from patterns observed in `packages/runtime`, `apps/ui`, and `apps/api`.
 
 **See also:** [React Testing Policy](react-testing-policy.md) for hook and component testing patterns specific to `apps/ui`.
 

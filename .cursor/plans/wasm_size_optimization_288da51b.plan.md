@@ -55,9 +55,9 @@ The [research doc](docs/research/wasm-size-analysis-v762-vs-v8rc4.md) documented
    - npm pack → copy .tgz to tarballs/
    - Update pnpm-workspace.yaml catalog reference
    - pnpm install
-4. Copy WASM to packages/kernels/src/kernels/replicad/wasm/
-5. Run wasm-inspect to measure: pnpm nx wasm-inspect kernels -- --symbols <path> --json
-6. Run kernel tests: pnpm nx test kernels --watch=false
+4. Copy WASM to packages/runtime/src/kernels/replicad/wasm/
+5. Run wasm-inspect to measure: pnpm nx wasm-inspect runtime -- --symbols <path> --json
+6. Run kernel tests: pnpm nx test runtime --watch=false
 7. If tests fail → debug, fix, repeat from step 2
 ```
 
@@ -69,7 +69,7 @@ The [research doc](docs/research/wasm-size-analysis-v762-vs-v8rc4.md) documented
 - Package filter: `repos/opencascade.js/src/filter/filterPackages.py`
 - wasm-opt invocation: `repos/opencascade.js/src/buildFromYaml.py` line 116
 - Catalog ref: `pnpm-workspace.yaml` line 85
-- Kernels WASM: `packages/kernels/src/kernels/replicad/wasm/`
+- Kernels WASM: `packages/runtime/src/kernels/replicad/wasm/`
 
 ---
 

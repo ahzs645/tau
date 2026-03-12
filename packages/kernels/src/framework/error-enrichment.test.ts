@@ -347,7 +347,7 @@ describe('Minification-resilient function naming', () => {
 
     it('should classify dev Vite URLs as framework (not user)', () => {
       expect(
-        classify('http://localhost:3000/@fs/Users/me/tau/packages/kernels/src/kernels/replicad/replicad.kernel.ts'),
+        classify('http://localhost:3000/@fs/Users/me/tau/packages/runtime/src/kernels/replicad/replicad.kernel.ts'),
       ).toBe('framework');
       expect(classify('http://localhost:3000/@fs/Users/me/tau/node_modules/.vite/apps/ui/deps/replicad.js')).toBe(
         'framework',

@@ -12,7 +12,7 @@
  *
  * Requires: wabt (wasm-objdump) installed
  *
- * Run with: pnpm nx wasm-inspect kernels
+ * Run with: pnpm nx wasm-inspect runtime
  *   Options:
  *     --wasm <path>       Path to .wasm file (default: auto-detect replicad_single.wasm)
  *     --symbols <path>    Path to .symbols file from --emit-symbol-map

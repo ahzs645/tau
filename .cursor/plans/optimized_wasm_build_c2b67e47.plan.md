@@ -24,7 +24,7 @@ todos:
     content: Run the full experiment build (compile + link + wasm-opt)
     status: in_progress
   - id: run-tests
-    content: Validate with pnpm nx test kernels Example models
+    content: Validate with pnpm nx test runtime Example models
     status: pending
   - id: run-benchmarks
     content: Run benchmarks via wasm-experiment.sh
@@ -172,7 +172,7 @@ The build will require a new compilation cache entry (the cache key changes beca
 ### 10. Validate with tests
 
 ```bash
-pnpm nx test kernels --testNamePattern="Example models" --watch=false
+pnpm nx test runtime --testNamePattern="Example models" --watch=false
 ```
 
 If `--closure 1` breaks tests (known embind compatibility issues), revert closure by setting `closure: false` in the experiment YAML and re-run from the link step only (compilation cache is still valid).

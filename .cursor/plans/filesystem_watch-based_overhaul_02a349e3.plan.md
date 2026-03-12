@@ -45,7 +45,7 @@ todos:
     content: Remove scheduleDebouncedRefresh, refreshTimer, toProviderStat duplication, readBackendFileTree (replace all callers with readShallowDirectory), old notifyFileChanged command path
     status: completed
   - id: final-validation
-    content: Run pnpm nx test/lint/typecheck for ui and kernels projects; verify Remix -> editor file loading scenario; continue resolving failures until all gates pass
+    content: Run pnpm nx test/lint/typecheck for ui and runtime projects; verify Remix -> editor file loading scenario; continue resolving failures until all gates pass
     status: completed
 isProject: false
 ---
@@ -197,9 +197,9 @@ type WatchEvent =
   | { type: 'overflow'; correlationId?: string };
 ```
 
-Add `{ type: 'filesChanged'; paths: string[] }` to `KernelResponse` in [kernel-protocol.types.ts](packages/kernels/src/types/kernel-protocol.types.ts).
+Add `{ type: 'filesChanged'; paths: string[] }` to `KernelResponse` in [kernel-protocol.types.ts](packages/runtime/src/types/kernel-protocol.types.ts).
 
-Add `watch` method signature to `KernelFileSystemBase` in [kernel-worker.types.ts](packages/kernels/src/types/kernel-worker.types.ts) and `FileManagerProtocol` in [file-manager.machine.types.ts](apps/ui/app/machines/file-manager.machine.types.ts).
+Add `watch` method signature to `KernelFileSystemBase` in [kernel-worker.types.ts](packages/runtime/src/types/kernel-worker.types.ts) and `FileManagerProtocol` in [file-manager.machine.types.ts](apps/ui/app/machines/file-manager.machine.types.ts).
 
 ### Todo 3: Watch Registry with Dedup
 
@@ -225,19 +225,19 @@ Worker-side pipeline before delivery:
 
 ### Todo 5: Bridge Watch Protocol
 
-Extend [kernel-filesystem-bridge.ts](packages/kernels/src/framework/kernel-filesystem-bridge.ts) wire protocol:
+Extend [kernel-filesystem-bridge.ts](packages/runtime/src/framework/kernel-filesystem-bridge.ts) wire protocol:
 
 - `{ type: 'watch', watchId, request: WatchRequest }` -- client registers watch
 - `{ type: 'unwatch', watchId }` -- client unregisters
 - `{ type: 'event', event: 'watch', data: { watchId } & WatchEvent }` -- server pushes to client
 
-Server side in [filesystem-bridge.ts](packages/kernels/src/filesystem/filesystem-bridge.ts): On `watch` message, call `fileService.watch(request, handler)` where handler emits via bridge to port. Store unsubscribe keyed by watchId per port. On port disconnect, cleanup all watches.
+Server side in [filesystem-bridge.ts](packages/runtime/src/filesystem/filesystem-bridge.ts): On `watch` message, call `fileService.watch(request, handler)` where handler emits via bridge to port. Store unsubscribe keyed by watchId per port. On port disconnect, cleanup all watches.
 
 Client side: `proxy.watch(request, handler)` -> sends watch message, listens for matching events, returns unsubscribe function.
 
 ### Todo 6: Kernel Reactive Watch
 
-In [kernel-worker.ts](packages/kernels/src/framework/kernel-worker.ts):
+In [kernel-worker.ts](packages/runtime/src/framework/kernel-worker.ts):
 
 After `render()` completes, call `updateWatchSet(dependencies)`:
 
@@ -246,9 +246,9 @@ After `render()` completes, call `updateWatchSet(dependencies)`:
 - Handler: invalidate `fileHashCache`, `fileContentCache`, `bundleResultCache` for changed path; call `onFilesChanged(paths)` callback
 - On `overflow`/`reset` event: clear all dependency caches and set flag for fresh dependency pass on next render
 
-In [kernel-worker-dispatcher.ts](packages/kernels/src/framework/kernel-worker-dispatcher.ts): Pass `onFilesChanged` callback that calls `respond({ type: 'filesChanged', paths })` following existing `log`/`telemetry` fire-and-forget pattern.
+In [kernel-worker-dispatcher.ts](packages/runtime/src/framework/kernel-worker-dispatcher.ts): Pass `onFilesChanged` callback that calls `respond({ type: 'filesChanged', paths })` following existing `log`/`telemetry` fire-and-forget pattern.
 
-In [kernel-worker-client.ts](packages/kernels/src/framework/kernel-worker-client.ts): Handle `filesChanged` response -> emit event.
+In [kernel-worker-client.ts](packages/runtime/src/framework/kernel-worker-client.ts): Handle `filesChanged` response -> emit event.
 
 In [kernel.machine.ts](apps/ui/app/machines/kernel.machine.ts): Subscribe `client.on('filesChanged')` -> send `kernelFilesChanged` to parent.
 
@@ -375,9 +375,9 @@ Remove:
 
 ```bash
 pnpm nx test ui --watch=false
-pnpm nx test kernels --watch=false
-pnpm nx lint ui && pnpm nx lint kernels
-pnpm nx typecheck ui && pnpm nx typecheck kernels
+pnpm nx test runtime --watch=false
+pnpm nx lint ui && pnpm nx lint runtime
+pnpm nx typecheck ui && pnpm nx typecheck runtime
 ```
 
 Verify Remix -> editor file loading scenario works (previously broken by `openFiles` -> `fileCache` migration).

@@ -8,9 +8,9 @@
  * per-benchmark heatmaps, and size breakdown charts.
  *
  * Usage:
- *   pnpm nx build-matrix kernels -- --experiments ../../tarballs/experiments/
- *   pnpm nx build-matrix kernels -- --experiments ../../tarballs/experiments/ --baseline ../../tarballs/baselines/v8-rc4-O2-single
- *   pnpm nx build-matrix kernels -- --compare ../../tarballs/experiments/exp1 ../../tarballs/experiments/exp2
+ *   pnpm nx build-matrix runtime -- --experiments ../../tarballs/experiments/
+ *   pnpm nx build-matrix runtime -- --experiments ../../tarballs/experiments/ --baseline ../../tarballs/baselines/v8-rc4-O2-single
+ *   pnpm nx build-matrix runtime -- --compare ../../tarballs/experiments/exp1 ../../tarballs/experiments/exp2
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'node:fs';
@@ -40,7 +40,7 @@ if (values.help) {
 Build Matrix Report Generator
 
 Usage:
-  pnpm nx build-matrix kernels [-- options]
+  pnpm nx build-matrix runtime [-- options]
 
 Options:
   -e, --experiments <dir>   Directory containing experiment subdirectories

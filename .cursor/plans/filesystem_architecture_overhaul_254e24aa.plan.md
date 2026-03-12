@@ -445,7 +445,7 @@ The current [file-manager.ts](apps/ui/app/machines/file-manager.ts) (542 lines) 
 
 ## Phase 3: Bridge Event Channel Extension
 
-**File:** `packages/kernels/src/framework/kernel-filesystem-bridge.ts`
+**File:** `packages/runtime/src/framework/kernel-filesystem-bridge.ts`
 
 Extend the existing bridge with a `listen()` mechanism alongside `call()`:
 
@@ -646,7 +646,7 @@ Complete rewrite per the lazy loading plan:
 
 ### 7a. Port tracking in worker
 
-**File:** `packages/kernels/src/filesystem/filesystem-bridge.ts`
+**File:** `packages/runtime/src/filesystem/filesystem-bridge.ts`
 
 Modify `exposeFileSystem` to track active ports:
 
@@ -661,7 +661,7 @@ function exposeFileSystem(handlers, options?): { cleanup: () => void; activePort
 
 ### 7b. Disconnect protocol
 
-**File:** `packages/kernels/src/framework/kernel-filesystem-bridge.ts`
+**File:** `packages/runtime/src/framework/kernel-filesystem-bridge.ts`
 
 - `createBridgeProxy.dispose()` sends `{ type: 'disconnect' }` before closing port
 - Server side listens for disconnect and removes port from active set
@@ -727,8 +727,8 @@ Tests: Add port lifecycle tests to `kernel-filesystem-bridge.test.ts`.
 ### Existing tests to update
 
 - `apps/ui/app/machines/file-manager.test.ts` — Update to test `WriteCoordinator` directly
-- `packages/kernels/src/framework/kernel-filesystem-bridge.test.ts` — Add event channel + interleaving + port lifecycle tests
-- `packages/kernels/src/filesystem/filesystem-wrappers.test.ts` — Update if `exposeFileSystem` signature changes
+- `packages/runtime/src/framework/kernel-filesystem-bridge.test.ts` — Add event channel + interleaving + port lifecycle tests
+- `packages/runtime/src/filesystem/filesystem-wrappers.test.ts` — Update if `exposeFileSystem` signature changes
 
 ---
 

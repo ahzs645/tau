@@ -442,7 +442,7 @@ After analyzing the architecture, this capability spans **three layers**:
 
 ```mermaid
 graph LR
-    subgraph "Kernel Layer (packages/kernels)"
+    subgraph "Kernel Layer (packages/runtime)"
         K1[Provenance Tracking<br/>OC operation → face mapping]
         K2[Artifact Graph<br/>geometry → code ranges]
         K3[Measurement<br/>BRepGProp queries]

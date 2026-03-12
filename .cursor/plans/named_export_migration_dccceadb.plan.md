@@ -300,7 +300,7 @@ describe.skipIf(!wasmExists)('Smoke: BRep primitives', () => {
 
 1. Run full test suite in opencascade.js: `pnpm test`
 2. Pack tarball: `npm pack`
-3. Copy WASM + d.ts to `packages/kernels/src/kernels/opencascade/wasm/`
+3. Copy WASM + d.ts to `packages/runtime/src/kernels/opencascade/wasm/`
 4. Install tarball: `pnpm install ./repos/opencascade.js/opencascade.js-*.tgz --force`
 5. Validate integration with kernels tests
 
@@ -310,13 +310,13 @@ describe.skipIf(!wasmExists)('Smoke: BRep primitives', () => {
 
 ### Replicad tracing/exceptions: zero changes required
 
-The Proxy-based tracing ([packages/kernels/src/kernels/replicad/oc-tracing.ts](packages/kernels/src/kernels/replicad/oc-tracing.ts)) and exception handling ([packages/kernels/src/kernels/replicad/oc-exceptions.ts](packages/kernels/src/kernels/replicad/oc-exceptions.ts)) modules are fully compatible with the named export migration. Their contract depends solely on property access via `Reflect.get()` inside `Proxy` handlers, which works identically with ES Module Namespace Objects as with plain factory return objects. The tests (`oc-tracing.test.ts`, `oc-exceptions.test.ts`) use plain mock objects and test Proxy mechanics -- they require no changes.
+The Proxy-based tracing ([packages/runtime/src/kernels/replicad/oc-tracing.ts](packages/runtime/src/kernels/replicad/oc-tracing.ts)) and exception handling ([packages/runtime/src/kernels/replicad/oc-exceptions.ts](packages/runtime/src/kernels/replicad/oc-exceptions.ts)) modules are fully compatible with the named export migration. Their contract depends solely on property access via `Reflect.get()` inside `Proxy` handlers, which works identically with ES Module Namespace Objects as with plain factory return objects. The tests (`oc-tracing.test.ts`, `oc-exceptions.test.ts`) use plain mock objects and test Proxy mechanics -- they require no changes.
 
 When the `getExceptionMessage` binding is emitted in the d.ts (Phase 2b), the manual type workarounds (`OcWithExceptionHelpers`, `EmscriptenExceptionHelpers`) can be removed and replaced with direct type usage from the package. This is tracked separately as it also applies to `replicad-opencascadejs`.
 
 ### 8a. Init helper
 
-**File:** [packages/kernels/src/kernels/opencascade/init-opencascade.ts](packages/kernels/src/kernels/opencascade/init-opencascade.ts)
+**File:** [packages/runtime/src/kernels/opencascade/init-opencascade.ts](packages/runtime/src/kernels/opencascade/init-opencascade.ts)
 
 The `initOpenCascade` function changes from calling a factory to calling the module's `init()` default export:
 
@@ -339,7 +339,7 @@ No longer returns `OpenCascadeInstance` -- the module namespace object IS the in
 
 ### 8b. Kernel main file
 
-**File:** [packages/kernels/src/kernels/opencascade/opencascade.kernel.ts](packages/kernels/src/kernels/opencascade/opencascade.kernel.ts)
+**File:** [packages/runtime/src/kernels/opencascade/opencascade.kernel.ts](packages/runtime/src/kernels/opencascade/opencascade.kernel.ts)
 
 - `resolveWasm()` returns the module namespace instead of a factory
 - `initialize()` stores the module namespace as `oc` in context (same shape as before)
@@ -349,14 +349,14 @@ No longer returns `OpenCascadeInstance` -- the module namespace object IS the in
 
 ### 8c. Mesh helper
 
-**File:** [packages/kernels/src/kernels/opencascade/opencascade-mesh.ts](packages/kernels/src/kernels/opencascade/opencascade-mesh.ts)
+**File:** [packages/runtime/src/kernels/opencascade/opencascade-mesh.ts](packages/runtime/src/kernels/opencascade/opencascade-mesh.ts)
 
 - Parameter type changes from `OpenCascadeInstance` to the module type or a compatible interface
 - Runtime code (`oc.ClassName(...)`) stays the same
 
 ### 8d. Type re-exports
 
-**File:** [packages/kernels/src/kernels/opencascade/opencascade.types.ts](packages/kernels/src/kernels/opencascade/opencascade.types.ts)
+**File:** [packages/runtime/src/kernels/opencascade/opencascade.types.ts](packages/runtime/src/kernels/opencascade/opencascade.types.ts)
 
 - Keep `OpenCascadeInstance` re-export (useful as a convenience type)
 
@@ -366,7 +366,7 @@ No longer returns `OpenCascadeInstance` -- the module namespace object IS the in
 
 ### 9a. Kernel tests
 
-**File:** [packages/kernels/src/kernels/opencascade/opencascade.kernel.test.ts](packages/kernels/src/kernels/opencascade/opencascade.kernel.test.ts)
+**File:** [packages/runtime/src/kernels/opencascade/opencascade.kernel.test.ts](packages/runtime/src/kernels/opencascade/opencascade.kernel.test.ts)
 
 Update all ~14 inline code strings from:
 
@@ -431,7 +431,7 @@ export default function main(p = defaultParams) {
 
 ### 9e. Detection regex
 
-**File:** [packages/kernels/src/plugins/kernel-factories.ts](packages/kernels/src/plugins/kernel-factories.ts) (line 47)
+**File:** [packages/runtime/src/plugins/kernel-factories.ts](packages/runtime/src/plugins/kernel-factories.ts) (line 47)
 
 The current regex `/import.*from\s+["']opencascade(\.js)?["']/s` already matches named imports (`import { X } from 'opencascade.js'`). No change needed.
 
@@ -441,9 +441,9 @@ The current regex `/import.*from\s+["']opencascade(\.js)?["']/s` already matches
 
 Run all affected projects:
 
-- `pnpm nx test kernels --watch=false`
-- `pnpm nx typecheck kernels`
-- `pnpm nx lint kernels`
+- `pnpm nx test runtime --watch=false`
+- `pnpm nx typecheck runtime`
+- `pnpm nx lint runtime`
 - `pnpm nx typecheck ui` (for kernel.constants.ts)
 - `pnpm nx typecheck api` (for prompt example)
 - `pnpm nx lint api`
@@ -468,7 +468,7 @@ Each WASM initialization creates its own embind type registry. Passing objects b
 
 - Tests must share a single `init()` call (the `let initialized = false` singleton in `helpers.ts` is mandatory)
 - Never call `init()` more than once per process/worker
-- The kernel test suite already documents this: `packages/kernels/src/kernels/opencascade/opencascade.kernel.test.ts` lines 15-16
+- The kernel test suite already documents this: `packages/runtime/src/kernels/opencascade/opencascade.kernel.test.ts` lines 15-16
 
 ### G4. `resolveCjsDefault` workaround becomes unnecessary
 
