@@ -97,6 +97,18 @@ export function registerChatAbort(chatId: string): void {
  *
  * This two-condition check prevents accidentally swallowing unrelated
  * AbortErrors from other subsystems.
+ *
+ * **Known limitation:** This checks for ANY active chat abort, not the
+ * specific chat that produced the error. If two chats run concurrently and
+ * one is cancelled, AbortErrors from the other chat will also be suppressed
+ * during the ~10 s tracking window. In practice this is acceptable because
+ * unhandled AbortErrors from node-fetch are benign (the request was already
+ * torn down), but it means a genuine unexpected AbortError could be silenced
+ * if it happens to coincide with a chat cancellation.
+ *
+ * @todo Correlate errors to specific chatIds for precise attribution. This
+ * would require threading `chatId` through the unhandledRejection handler,
+ * which is non-trivial since node-fetch rejections don't carry chat context.
  */
 export function isTrackedAbortError(error: unknown): boolean {
   if (activeChatAborts.size === 0) {
