@@ -15,16 +15,13 @@ import { validateJsdocCodeblocksRule } from './rules/validate-jsdoc-codeblocks.j
 import { requirePublicExportJsdocRule } from './rules/require-public-export-jsdoc.js';
 import { noConsecutiveJsdocBlankLinesRule } from './rules/no-consecutive-jsdoc-blank-lines.js';
 import { validateMdxCodeblocksRule } from './rules/validate-mdx-codeblocks.js';
-import * as mdxParser from './mdx-parser.js';
+import { validateMdxLinksRule } from './rules/validate-mdx-links.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.7.0',
-  },
-  parsers: {
-    mdx: mdxParser,
+    version: '1.8.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -35,6 +32,7 @@ const plugin = {
     'require-public-export-jsdoc': requirePublicExportJsdocRule,
     'no-consecutive-jsdoc-blank-lines': noConsecutiveJsdocBlankLinesRule,
     'validate-mdx-codeblocks': validateMdxCodeblocksRule,
+    'validate-mdx-links': validateMdxLinksRule,
   },
 };
 

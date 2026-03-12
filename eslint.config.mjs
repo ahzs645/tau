@@ -3,6 +3,7 @@ import nxEslintPlugin from '@nx/eslint-plugin';
 import * as importXPlugin from 'eslint-plugin-import-x';
 import maxParamsNoConstructorPlugin from 'eslint-plugin-max-params-no-constructor';
 import tauLintPlugin from '@taucad/oxlint/tau-lint';
+import * as mdxParser from '@taucad/oxlint/mdx-parser';
 
 /**
  * Minimal ESLint config -- only rules that cannot run in oxlint.
@@ -320,9 +321,12 @@ const config = [
 
   {
     files: ['apps/ui/content/docs/**/*.mdx'],
-    languageOptions: { parser: tauLintPlugin.parsers.mdx },
+    languageOptions: { parser: mdxParser },
     plugins: { 'tau-lint': tauLintPlugin },
-    rules: { 'tau-lint/validate-mdx-codeblocks': 'error' },
+    rules: {
+      'tau-lint/validate-mdx-codeblocks': 'error',
+      'tau-lint/validate-mdx-links': 'error',
+    },
   },
 ];
 
