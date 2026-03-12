@@ -75,7 +75,7 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 
 - Write failing tests first (TDD), then fix to pass; preserve existing tests; make minimal, targeted changes and run typecheck before considering done
 - State machines own lifecycle and state logic; UI clients send events only and never decide open/close; avoid ref/state for sync guards
-- Follow policy docs when applicable: testing-policy, library-api-policy, xstate-policy, lint-policy, react-testing-policy, filesystem-policy, commit-policy, typescript-policy, agents-md-policy, context-engineering-policy, jsdoc-policy
+- Follow policy docs when applicable: testing-policy, library-api-policy, xstate-policy, lint-policy, react-testing-policy, filesystem-policy, commit-policy, typescript-policy, agents-md-policy, context-engineering-policy, jsdoc-policy, documentation-policy
 - Pin GitHub/dependency versions to exact commit hashes for reproducibility and immutability
 - When behavior regressed from something that previously worked, prefer config changes over code changes — find the regression
 - Use `pnpm patch` tool for dependency patches; do not manually create patch files
