@@ -132,7 +132,7 @@ export function getFieldDefaultValue({
   defaultParameters: Record<string, unknown>;
 }): unknown {
   // For array items, we need to compare against the default array item at this index
-  if (fieldPath.length > 1 && typeof formData !== 'object') {
+  if (fieldPath.length > 1 && (typeof formData !== 'object' || formData === null)) {
     // Check if the last segment is numeric (array index)
     const lastSegment = fieldPath.at(-1);
     if (lastSegment !== undefined) {
