@@ -113,7 +113,18 @@ while $HAS_NEXT; do
 
   RESPONSE=$(gh api graphql "${ARGS[@]}")
 
+  if echo "$RESPONSE" | jq -e '.errors' &>/dev/null; then
+    echo "Error: GraphQL query failed:" >&2
+    echo "$RESPONSE" | jq -r '.errors[].message' >&2
+    exit 1
+  fi
+
   PR_DATA=$(echo "$RESPONSE" | jq '.data.repository.pullRequest')
+
+  if [[ "$(echo "$PR_DATA" | jq -r '.')" == "null" ]]; then
+    echo "Error: PR #${PR_NUMBER} not found in ${OWNER}/${REPO}." >&2
+    exit 1
+  fi
 
   if [[ -z "$PR_META" ]]; then
     PR_META=$(echo "$PR_DATA" | jq '{ number, title, url }')
