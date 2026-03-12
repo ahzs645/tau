@@ -101,6 +101,14 @@ export default defineConfig(({ mode }) => {
       format: 'es',
     },
 
+    // Force-bundle these into the SSR output so Netlify's secondary esbuild
+    // pass doesn't re-resolve them. Without this, headless-tree's broken
+    // package.json `main` field (points to .d.ts) and posthog-js's CJS/ESM
+    // interop cause runtime crashes in the Netlify SSR function.
+    ssr: {
+      noExternal: ['@headless-tree/core', '@headless-tree/react', 'posthog-js'],
+    },
+
     server: {
       port: 3000,
       // TODO: set to actual domain

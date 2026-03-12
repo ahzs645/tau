@@ -26,6 +26,7 @@ command = "pnpm nx build ui"
 NODE_ENV = "production"
 TAU_API_URL = "https://api.tau.new"
 TAU_FRONTEND_URL = "https://tau.new"
+TAU_WEBSOCKET_URL = "wss://api.tau.new"
 
 # Deploy preview context (pull requests)
 [context.deploy-preview]
@@ -33,6 +34,7 @@ command = "pnpm nx build ui"
 [context.deploy-preview.environment]
 NODE_ENV = "production"
 TAU_API_URL = "https://api.tau.new"
+TAU_WEBSOCKET_URL = "wss://api.tau.new"
 # TAU_FRONTEND_URL not set - will use NETLIFY_AI_GATEWAY_URL
 
 # Branch deploy context (non-production branches)
@@ -41,6 +43,7 @@ command = "pnpm nx build ui"
 [context.branch-deploy.environment]
 NODE_ENV = "production"
 TAU_API_URL = "https://api.tau.new"
+TAU_WEBSOCKET_URL = "wss://api.tau.new"
 # TAU_FRONTEND_URL not set - will use NETLIFY_AI_GATEWAY_URL
 
 # Local development configuration (for Netlify Dev)
@@ -52,6 +55,7 @@ autoLaunch = false
 NODE_ENV = "development"
 TAU_API_URL = "http://localhost:4000"
 TAU_FRONTEND_URL = "http://localhost:3000"
+TAU_WEBSOCKET_URL = "ws://localhost:4001"
 
 [[headers]]
 for = "/*"
