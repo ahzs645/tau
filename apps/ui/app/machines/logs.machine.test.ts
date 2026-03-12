@@ -49,11 +49,11 @@ describe('logMachine', () => {
       actor.send({
         type: 'addLog',
         message: 'error occurred',
-        options: { level: logLevels.error, origin: 'kernel' },
+        options: { level: logLevels.error, origin: { component: 'kernel' } },
       });
       const entry = actor.getSnapshot().context.logBuffer.get(0);
       expect(entry?.level).toBe(logLevels.error);
-      expect(entry?.origin).toBe('kernel');
+      expect(entry?.origin?.component).toBe('kernel');
       actor.stop();
     });
 

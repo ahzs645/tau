@@ -157,7 +157,7 @@ describe('screenshotRequestMachine', () => {
         onSuccess,
       });
 
-      const requestId = actor.getSnapshot().context.currentRequest!.requestId;
+      const { requestId } = actor.getSnapshot().context.currentRequest!;
       const completedHandler = subscriptions.get('screenshotCompleted');
       completedHandler?.({ dataUrls: ['data:image/png;base64,abc'], requestId });
 
@@ -178,7 +178,7 @@ describe('screenshotRequestMachine', () => {
         onError,
       });
 
-      const requestId = actor.getSnapshot().context.currentRequest!.requestId;
+      const { requestId } = actor.getSnapshot().context.currentRequest!;
       const failedHandler = subscriptions.get('screenshotFailed');
       failedHandler?.({ error: 'canvas disconnected', requestId });
 

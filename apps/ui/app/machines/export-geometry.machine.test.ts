@@ -13,13 +13,17 @@ type CadRef = ActorRefFrom<typeof cadMachine>;
 
 function createMockCadRef() {
   const subscriptions = new Map<string, (event: Record<string, unknown>) => void>();
-  const cadRef = mock<CadRef>({
+  const implementation = {
     send: vi.fn(),
     on: vi.fn((eventType: string, handler: (event: Record<string, unknown>) => void) => {
       subscriptions.set(eventType, handler);
       return mock<Subscription>();
     }),
-  });
+  };
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- on() overload not satisfiable by vi.fn; mock needs partial impl for test
+  const mockRef = mock<CadRef>(implementation as unknown as Parameters<typeof mock<CadRef>>[0]);
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock type narrowing for test; vitest-mock-extended proxy not assignable to overloaded ActorRef
+  const cadRef = mockRef as unknown as CadRef;
   return { cadRef, subscriptions };
 }
 

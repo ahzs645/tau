@@ -2,7 +2,10 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createActor } from 'xstate';
 import { mock } from 'vitest-mock-extended';
 import type { AnyActorRef } from 'xstate';
+import type * as THREE from 'three';
 import { screenshotCapabilityMachine, calculateOptimalGrid } from '#machines/screenshot-capability.machine.js';
+
+/* oxlint-disable @typescript-eslint/consistent-type-assertions -- test mocks use type assertions for complex third-party types */
 
 // ---------------------------------------------------------------------------
 // Factory helpers

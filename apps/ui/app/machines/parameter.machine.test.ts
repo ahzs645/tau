@@ -20,15 +20,28 @@ function createDefaultInput(overrides?: Partial<ParameterInput>): ParameterInput
   };
 }
 
-// oxlint-disable-next-line no-empty-function -- no-op stub for tests
-const noopCallback = fromCallback(() => () => {});
+/* oxlint-disable no-empty-function, @typescript-eslint/no-restricted-types -- no-op stubs for tests; null matches React.RefObject<T | null> */
+const keydownNoop = fromCallback<{ type: 'keyStateChanged'; key: string; isPressed: boolean }, { key: string }>(
+  () => () => {},
+);
+
+const focusNoop = fromCallback<
+  { type: 'focusStateChanged'; isFocused: boolean },
+  { elementRef: React.RefObject<HTMLElement | null> }
+>(() => () => {});
+
+const arrowKeyNoop = fromCallback<
+  { type: 'arrowKeyPressed'; direction: 'up' | 'down' },
+  { elementRef: React.RefObject<HTMLElement | null> }
+>(() => () => {});
+/* oxlint-enable no-empty-function, @typescript-eslint/no-restricted-types */
 
 function createTestActor(overrides?: Partial<ParameterInput>) {
   const machine = parameterMachine.provide({
     actors: {
-      keydownListener: noopCallback,
-      focusListener: noopCallback,
-      arrowKeyListener: noopCallback,
+      keydownListener: keydownNoop,
+      focusListener: focusNoop,
+      arrowKeyListener: arrowKeyNoop,
     },
   });
 

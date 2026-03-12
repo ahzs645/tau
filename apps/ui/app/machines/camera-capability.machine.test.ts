@@ -48,8 +48,8 @@ describe('cameraCapabilityMachine', () => {
     it('should transition to registered on registerReset', () => {
       const actor = createTestActor();
       actor.start();
-      const resetFn = vi.fn();
-      actor.send({ type: 'registerReset', reset: resetFn });
+      const resetFunction = vi.fn();
+      actor.send({ type: 'registerReset', reset: resetFunction });
       expect(actor.getSnapshot().value).toBe('registered');
       actor.stop();
     });
@@ -57,9 +57,9 @@ describe('cameraCapabilityMachine', () => {
     it('should store reset function in context on registration', () => {
       const actor = createTestActor();
       actor.start();
-      const resetFn = vi.fn();
-      actor.send({ type: 'registerReset', reset: resetFn });
-      expect(actor.getSnapshot().context.resetFunction).toBe(resetFn);
+      const resetFunction = vi.fn();
+      actor.send({ type: 'registerReset', reset: resetFunction });
+      expect(actor.getSnapshot().context.resetFunction).toBe(resetFunction);
       actor.stop();
     });
 
@@ -69,46 +69,46 @@ describe('cameraCapabilityMachine', () => {
       actor.send({ type: 'registerReset', reset: vi.fn() });
       expect(actor.getSnapshot().value).toBe('registered');
 
-      const newResetFn = vi.fn();
-      actor.send({ type: 'registerReset', reset: newResetFn });
+      const newResetFunction = vi.fn();
+      actor.send({ type: 'registerReset', reset: newResetFunction });
       expect(actor.getSnapshot().value).toBe('registered');
-      expect(actor.getSnapshot().context.resetFunction).toBe(newResetFn);
+      expect(actor.getSnapshot().context.resetFunction).toBe(newResetFunction);
       actor.stop();
     });
   });
 
   describe('camera reset', () => {
     it('should call the registered reset function and return to registered', () => {
-      const resetFn = vi.fn();
+      const resetFunction = vi.fn();
       const actor = createTestActor();
       actor.start();
-      actor.send({ type: 'registerReset', reset: resetFn });
+      actor.send({ type: 'registerReset', reset: resetFunction });
       actor.send({ type: 'reset' });
 
       expect(actor.getSnapshot().value).toBe('registered');
-      expect(resetFn).toHaveBeenCalledOnce();
+      expect(resetFunction).toHaveBeenCalledOnce();
       actor.stop();
     });
 
     it('should pass options to the reset function', () => {
-      const resetFn = vi.fn();
+      const resetFunction = vi.fn();
       const actor = createTestActor();
       actor.start();
-      actor.send({ type: 'registerReset', reset: resetFn });
+      actor.send({ type: 'registerReset', reset: resetFunction });
       actor.send({ type: 'reset', options: { enableConfiguredAngles: true } });
 
-      expect(resetFn).toHaveBeenCalledWith({ enableConfiguredAngles: true });
+      expect(resetFunction).toHaveBeenCalledWith({ enableConfiguredAngles: true });
       actor.stop();
     });
 
     it('should return to registered and log error after failed reset', () => {
-      const resetFn = vi.fn(() => {
+      const resetFunction = vi.fn(() => {
         throw new Error('camera reset failed');
       });
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const actor = createTestActor();
       actor.start();
-      actor.send({ type: 'registerReset', reset: resetFn });
+      actor.send({ type: 'registerReset', reset: resetFunction });
       actor.send({ type: 'reset' });
 
       expect(actor.getSnapshot().value).toBe('registered');
