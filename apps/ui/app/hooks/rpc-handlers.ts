@@ -100,7 +100,7 @@ function createBrowserRpcFileSystem(
   };
 }
 
-function createBrowserKernelClient(buildRef: ActorRefFrom<typeof buildMachine>): RpcRuntimeClient {
+function createBrowserRuntimeClient(buildRef: ActorRefFrom<typeof buildMachine>): RpcRuntimeClient {
   return {
     async getKernelResult(targetFile: string): Promise<GetKernelResultRpcResult> {
       try {
@@ -330,7 +330,7 @@ export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
 
   const rpcDeps: RpcDependencies = {
     fileSystem: createBrowserRpcFileSystem(fileManager, fileTree),
-    kernelClient: createBrowserKernelClient(buildRef),
+    kernelClient: createBrowserRuntimeClient(buildRef),
     graphics: graphicsRef ? createBrowserGraphicsClient(graphicsRef, buildRef, screenshotQuality) : undefined,
   };
 

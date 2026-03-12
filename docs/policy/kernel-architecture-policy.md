@@ -206,7 +206,7 @@ type RuntimeTransport = {
 5. CadMachine enters rendering state → sends createGeometry to KernelMachine
    │
 6. KernelMachine pipeline:
-   │  ├─ Lazily creates RuntimeClient (ensureKernelClient)
+   │  ├─ Lazily creates RuntimeClient (ensureRuntimeClient)
    │  ├─ Subscribes to geometry/progress/parametersResolved events once
    │  ├─ RuntimeClient creates Worker + Transport on first connect
    │  ├─ Worker selects kernel via three-pass detection

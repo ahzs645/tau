@@ -331,7 +331,7 @@ export const cadMachine = setup({
       assertEvent(event, 'initializeModel');
       console.log('[CadMachine] forwardInitializeModel', {
         file: event.file,
-        hasKernelClient: Boolean(context.kernelClient),
+        hasRuntimeClient: Boolean(context.kernelClient),
       });
       context.kernelClient?.setFile(event.file, event.parameters);
     },
@@ -379,7 +379,7 @@ export const cadMachine = setup({
     }),
   },
   guards: {
-    hasKernelClient: ({ context }) => Boolean(context.kernelClient),
+    hasRuntimeClient: ({ context }) => Boolean(context.kernelClient),
   },
 }).createMachine({
   id: 'cad',

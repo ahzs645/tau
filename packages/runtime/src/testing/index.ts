@@ -9,7 +9,7 @@ export {
   createSuccessResult,
   createErrorResult,
   createMockInput,
-  createMockKernelClient,
+  createMockRuntimeClient,
   createMockDependencies,
   createMockCreateGeometryHandler,
   createMockGetParametersHandler,

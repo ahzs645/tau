@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
 import type { RuntimeClient, RuntimeClientOptions, KernelIssue, PerformanceEntryData } from '@taucad/runtime';
-import { createMockKernelClient } from '@taucad/runtime/testing';
+import { createMockRuntimeClient } from '@taucad/runtime/testing';
 import type { Geometry, GeometryFile } from '@taucad/types';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
@@ -25,7 +25,7 @@ function createTestActor(options?: {
   connectError?: Error;
   shouldInitializeKernelOnStart?: boolean;
 }) {
-  const mockClient = createMockKernelClient();
+  const mockClient = createMockRuntimeClient();
   const cleanups: Array<() => void> = [];
 
   const connectWork =
@@ -119,7 +119,7 @@ describe('cadMachine', () => {
 
     it('should buffer initializeModel during connecting and forward on connect', async () => {
       let resolveConnect!: () => void;
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
 
       const { actor } = createTestActor({
         connectResult: async () =>
@@ -466,7 +466,7 @@ describe('cadMachine', () => {
     }
 
     it('should reconnect on setFile from error state', async () => {
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
       let connectAttempt = 0;
 
       const { actor } = createTestActor({
@@ -492,7 +492,7 @@ describe('cadMachine', () => {
     });
 
     it('should reconnect on initializeModel from error state', async () => {
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
       let connectAttempt = 0;
 
       const { actor } = createTestActor({
@@ -523,7 +523,7 @@ describe('cadMachine', () => {
     });
 
     it('should reconnect on setParameters from error state', async () => {
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
       let connectAttempt = 0;
 
       const { actor } = createTestActor({
@@ -616,7 +616,7 @@ describe('cadMachine', () => {
     });
 
     it('should handle export failure', async () => {
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
       vi.mocked(mockClient.export).mockResolvedValue({
         success: false,
         issues: [{ message: 'Export failed', type: 'runtime', severity: 'error' }],
@@ -640,7 +640,7 @@ describe('cadMachine', () => {
     });
 
     it('should handle export exception', async () => {
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
       vi.mocked(mockClient.export).mockRejectedValue(new Error('Network error'));
 
       const { actor } = await startAndConnect({
@@ -672,7 +672,7 @@ describe('cadMachine', () => {
     it('should store event cleanups from connect result', async () => {
       const cleanup1 = vi.fn();
       const cleanup2 = vi.fn();
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
 
       const { actor } = await startAndConnect({
         connectResult: async () => {
@@ -767,7 +767,7 @@ describe('cadMachine', () => {
     });
 
     it('should handle error recovery: error -> setFile -> reconnect -> idle -> rendering -> idle', async () => {
-      const mockClient = createMockKernelClient();
+      const mockClient = createMockRuntimeClient();
 
       const { actor } = createTestActor({
         connectResult: async () => {

@@ -157,7 +157,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
   return worker;
 }
 
-type MockKernelLogger = {
+type MockLogger = {
   [Key in keyof RuntimeLogger]: Mock<RuntimeLogger[Key]>;
 };
 
@@ -167,8 +167,8 @@ type MockKernelLogger = {
  * @returns A logger with vitest mock functions for all log levels
  * @public
  */
-export function createMockLogger(): RuntimeLogger & MockKernelLogger {
-  const logger: MockKernelLogger = {
+export function createMockLogger(): RuntimeLogger & MockLogger {
+  const logger: MockLogger = {
     log: vi.fn<RuntimeLogger['log']>(),
     debug: vi.fn<RuntimeLogger['debug']>(),
     trace: vi.fn<RuntimeLogger['trace']>(),
@@ -830,12 +830,12 @@ const noop = () => {
  *
  * @example <caption>Stubbing a runtime client</caption>
  * ```typescript
- * import { createMockKernelClient } from '@taucad/runtime/testing';
+ * import { createMockRuntimeClient } from '@taucad/runtime/testing';
  *
- * const client = createMockKernelClient();
+ * const client = createMockRuntimeClient();
  * ```
  */
-export function createMockKernelClient(): RuntimeClient {
+export function createMockRuntimeClient(): RuntimeClient {
   return mock<RuntimeClient>({
     connect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     setFile: vi.fn<(file: GeometryFile, params: Record<string, unknown>) => void>(),
@@ -1011,7 +1011,7 @@ export class MockKernelWorker extends KernelWorker {
  * @returns A readonly array of dependencies
  * @public
  */
-export function createMockDependencies(overrides?: Array<Dependency>): readonly Dependency[] {
+export function createMockDependencies(overrides?: Dependency[]): readonly Dependency[] {
   const defaults: Dependency[] = [
     { type: 'file', path: 'test.kcl', contentHash: 'abc123' },
     {

@@ -40,7 +40,7 @@ export type {
 export { createBridgePort } from '#framework/runtime-filesystem-bridge.js';
 export type { BridgeHandle } from '#framework/runtime-filesystem-bridge.js';
 
-// Kernel types (re-exported for consumers, includes defineKernel and defineBundler)
+// Core types (runtime, kernel, bundler, middleware, protocol)
 export * from '#types/index.js';
 
 // Helpers

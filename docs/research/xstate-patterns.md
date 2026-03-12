@@ -185,7 +185,7 @@ fireRender({ context, event, self }) {
   assertEvent(event, 'createGeometry');
   void (async () => {
     try {
-      const client = await ensureKernelClient(context, self);
+      const client = await ensureRuntimeClient(context, self);
       await client.render({ ... });
     } catch (error) { /* ... */ }
   })();
@@ -194,7 +194,7 @@ fireRender({ context, event, self }) {
 
 **Problem**: XState actions are synchronous and fire-and-forget by design. The `void (async () => { ... })()` pattern creates an async task completely invisible to XState. The machine has no visibility into the async operation and cannot cancel it on state exit or machine stop.
 
-**Why it matters**: If the machine stops while `ensureKernelClient` is awaiting, the async function continues running independently. The `context.destroyed` guard mitigates creation races, but the pattern is architecturally fragile.
+**Why it matters**: If the machine stops while `ensureRuntimeClient` is awaiting, the async function continues running independently. The `context.destroyed` guard mitigates creation races, but the pattern is architecturally fragile.
 
 **Fix**: Convert to an invoked `fromPromise` actor in the `rendering` state. XState automatically aborts the promise via `AbortSignal` on state exit:
 
@@ -202,7 +202,7 @@ fireRender({ context, event, self }) {
 rendering: {
   invoke: {
     src: fromPromise(async ({ input, signal }) => {
-      const client = await ensureKernelClient(input.context, signal);
+      const client = await ensureRuntimeClient(input.context, signal);
       return client.render({ file: input.file, parameters: input.parameters });
     }),
     input: ({ context, event }) => ({ context, ...event }),
@@ -216,7 +216,7 @@ rendering: {
 
 **Locations**:
 
-- `kernel.machine.ts:46` — `context.kernelClient = client` (inside `ensureKernelClient`)
+- `kernel.machine.ts:46` — `context.kernelClient = client` (inside `ensureRuntimeClient`)
 - `kernel.machine.ts:286-296` — `context.destroyed = true`, `context.eventCleanups = []`, `context.kernelClient = undefined`
 - `file-manager.machine.ts:92-94` — `context.worker`, `context.proxy`, `context.bridgeDispose` (inside `fromPromise` output)
 - `file-manager.machine.ts:331-343` — `context.proxy`, `context.bridgeDispose`, `context.worker` in `destroyWorker`
@@ -228,10 +228,10 @@ rendering: {
 
 **Why it matters for workers**: When `@xstate/react`'s `stopRootWithRehydration` captures the snapshot before `destroyWorkers` runs and then restores it, the `destroyed` flag is reset to `false` and `kernelClient` is restored to its pre-stop value. In React Strict Mode, this means the restarted actor has a reference to a terminated worker.
 
-**Fix**: Use `assign()` for all context updates. For `ensureKernelClient`, return values from the async operation and use `assign` in `onDone`:
+**Fix**: Use `assign()` for all context updates. For `ensureRuntimeClient`, return values from the async operation and use `assign` in `onDone`:
 
 ```typescript
-// Instead of mutating context inside ensureKernelClient:
+// Instead of mutating context inside ensureRuntimeClient:
 invoke: {
   src: fromPromise(async ({ input }) => {
     const client = createRuntimeClient(input.kernelOptions);
@@ -431,11 +431,11 @@ test('kernel machine terminates worker on stop', async () => {
 
 ### P1: High (Correctness / Robustness) — ALL RESOLVED
 
-| ID       | Issue                                               | Location                  | Status                                                                 |
-| -------- | --------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------- |
-| ~~AP-2~~ | ~~Direct context mutation in `ensureKernelClient`~~ | `kernel.machine.ts`       | **Resolved** — split into `initKernelActor` + `connectingKernel` state |
-| ~~AP-2~~ | ~~Direct context mutation in worker init~~          | `file-manager.machine.ts` | **Resolved** — actor returns resources, `onDone` assigns them          |
-| ~~AP-5~~ | ~~Side effects in `assign` (log buffer)~~           | `logs.machine.ts`         | **Documented** — intentional mutation for performance                  |
+| ID       | Issue                                                | Location                  | Status                                                                 |
+| -------- | ---------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------- |
+| ~~AP-2~~ | ~~Direct context mutation in `ensureRuntimeClient`~~ | `kernel.machine.ts`       | **Resolved** — split into `initKernelActor` + `connectingKernel` state |
+| ~~AP-2~~ | ~~Direct context mutation in worker init~~           | `file-manager.machine.ts` | **Resolved** — actor returns resources, `onDone` assigns them          |
+| ~~AP-5~~ | ~~Side effects in `assign` (log buffer)~~            | `logs.machine.ts`         | **Documented** — intentional mutation for performance                  |
 
 ### P2: Medium (DX / Maintainability)
 

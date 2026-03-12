@@ -287,7 +287,7 @@ BuildManagerProvider (useActorRef)
 ```typescript
 fireRender({ context, event, self }) {
   void (async () => {
-    const client = await ensureKernelClient(context, self);
+    const client = await ensureRuntimeClient(context, self);
     await client.render({ ... });
   })();
 }
@@ -296,7 +296,7 @@ fireRender({ context, event, self }) {
 **Problem**: XState actions are synchronous. The `void (async () => { ... })()` pattern creates an async task that is completely invisible to XState's lifecycle management. When the machine stops:
 
 - The async function continues running independently
-- `ensureKernelClient` may be mid-`await` and will resume after `destroyWorkers` has run
+- `ensureRuntimeClient` may be mid-`await` and will resume after `destroyWorkers` has run
 - The `context.destroyed` guard mitigates the creation race, but does not handle in-flight render operations
 
 **Impact**: Medium. The `destroyed` guard prevents worker creation after stop, but the fire-and-forget pattern is architecturally unsound and fragile.
@@ -344,7 +344,7 @@ persistedSnapshots.forEach(([ref, snapshot]) => {
 });
 ```
 
-**Problem**: The `@xstate/react` hook captures actor snapshots before stop, then restores them after stop. This is designed for React Strict Mode (double-effect execution). In Strict Mode, the restored snapshot may reference a terminated `kernelClient`, and the `destroyed` flag is reset to `false`. On re-start, `ensureKernelClient` would return the terminated client instead of creating a new one.
+**Problem**: The `@xstate/react` hook captures actor snapshots before stop, then restores them after stop. This is designed for React Strict Mode (double-effect execution). In Strict Mode, the restored snapshot may reference a terminated `kernelClient`, and the `destroyed` flag is reset to `false`. On re-start, `ensureRuntimeClient` would return the terminated client instead of creating a new one.
 
 **Impact**: Medium in development (Strict Mode). No impact in production.
 

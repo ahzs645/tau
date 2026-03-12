@@ -109,7 +109,7 @@ Match the example to who calls the function:
 | **Framework internal** (low-level utility)      | How the utility is called within the framework              |
 | **Test author**                                 | Mock setup and assertion patterns                           |
 
-An internal utility like `detectEdges` should show how it is called inside middleware, not a synthetic standalone call. A testing utility like `createMockKernelClient` should show the test setup pattern.
+An internal utility like `detectEdges` should show how it is called inside middleware, not a synthetic standalone call. A testing utility like `createMockRuntimeClient` should show the test setup pattern.
 
 ### 7. Keep Examples Minimal but Complete
 

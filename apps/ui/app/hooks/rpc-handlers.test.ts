@@ -457,10 +457,10 @@ describe('rpc-handlers', () => {
   });
 
   // ===============================================================
-  // createBrowserKernelClient
+  // createBrowserRuntimeClient
   // ===============================================================
 
-  describe('createBrowserKernelClient', () => {
+  describe('createBrowserRuntimeClient', () => {
     describe('getKernelResult', () => {
       it('should return ready status when cad unit is idle with no errors', async () => {
         const cadUnit = createMockCadUnit({ value: 'idle' });

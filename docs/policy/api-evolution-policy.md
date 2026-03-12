@@ -24,7 +24,7 @@ Library APIs evolve over time; consumers need incremental adoption paths and cle
 Configuration objects that accept future flags use a `future` field with a flat record of boolean flags. Each flag follows the naming convention from the [Version Policy](version-policy.md): `unstable_*` for experimental, `v{N}_*` for stabilized opt-in breaking changes.
 
 ```typescript
-type KernelClientConfig = {
+type RuntimeClientConfig = {
   kernels: KernelPlugin[];
   middleware?: MiddlewarePlugin[];
   future?: Partial<FutureConfig>;
@@ -61,7 +61,7 @@ export default {
   future: {
     v2_middlewareApi: true,
   },
-} satisfies KernelClientConfig;
+} satisfies RuntimeClientConfig;
 ```
 
 ## 2. Stability Annotations in Code
