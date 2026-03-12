@@ -551,3 +551,39 @@ For kernels with long-running synchronous WASM operations (replicad/OpenCASCADE)
 - [MDN AbortSignal.throwIfAborted()](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/throwIfAborted) -- built-in abort check
 - [Prioritized Task Scheduling API](https://wicg.github.io/scheduling-apis/) -- TaskController/AbortSignal integration pattern
 - [OpenCASCADE.js Progress Indicator](https://ocjs.org/docs/stable/usage/progress) -- WASM cooperative cancellation via `Message_ProgressIndicator`
+
+## Monaco IntelliSense Type Pipeline
+
+The editor provides IntelliSense (autocompletion, hover, diagnostics) for kernel imports via bundled `.d.ts` files registered with Monaco's TypeScript language service.
+
+### Architecture
+
+```
+Kernel package .d.ts files
+  → extract-<id>-types.ts (extraction script)
+    → <id>.bundled.json (JSON map: module path → raw .d.ts content)
+      → @taucad/api-extractor export (raw string via ?raw import)
+        → javascript-contribution.ts (JSON.parse → addExtraLib per entry)
+          → Monaco TypeScript language service
+```
+
+### Why JSON Maps
+
+Each kernel exports a JSON map of `Record<string, string>` where keys are module paths (e.g. `@jscad/modeling`, `@jscad/modeling/primitives`) and values are raw `.d.ts` content. This uniform format exists because:
+
+- **Module identity = file path**: Monaco's TypeScript service resolves `import { cube } from '@jscad/modeling/primitives'` by looking for a virtual file at `file:///node_modules/@jscad/modeling/primitives/index.d.ts`. Each subpath export needs its own `addExtraLib` registration.
+- **No `declare module` wrappers**: Earlier versions wrapped content in `declare module '<pkg>' { ... }` blocks. This caused TS1038 errors (`'declare' modifier cannot be used in an already ambient context`) because the source `.d.ts` files already use `export declare`. Raw module files registered at the correct virtual path avoid this entirely.
+- **Uniform consumer code**: Every kernel uses the same format regardless of whether it has one entry point (replicad) or fifteen (JSCAD). The consumer in `javascript-contribution.ts` is a single `flatMap` over all kernel type maps.
+
+### Adding Types for a New Kernel
+
+1. Create `libs/api-extractor/src/extract-<id>-types.ts` with a `buildBundledTypes(): Record<string, string>` function
+2. Write output to `libs/api-extractor/src/generated/<id>/<id>.bundled.json`
+3. Also write individual `.d.ts` files under `generated/<id>/modules/` for type-level testing
+4. Export from `libs/api-extractor/src/index.ts` as `<id>TypesMap` via `?raw` import
+5. Add the exported map to the `kernelTypeMaps` array in `apps/ui/app/lib/javascript-contribution.ts`
+6. Add `.test-d.ts` type-level tests under `generated/<id>/` using `tsconfig.typetest.json` path mappings
+
+### Type-Level Testing
+
+Type-level tests (`.test-d.ts` files) verify that the generated types resolve correctly when imported via module names. They use a separate `tsconfig.typetest.json` with `moduleResolution: Bundler` and path mappings pointing at the `modules/` directory structure. These tests run via `vitest --typecheck` (not `tsgo`) because the path mappings require Bundler resolution mode.
