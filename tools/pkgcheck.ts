@@ -87,9 +87,9 @@ async function runPublint(): Promise<CheckResult> {
  * Apply publishConfig overrides to a package.json object, the same way
  * `npm publish` / `pnpm publish` does at publish time.
  */
-function applyPublishConfig(pkg: PackageJson): PackageJson {
-  const result = { ...pkg };
-  const { publishConfig } = pkg;
+function applyPublishConfig(package_: PackageJson): PackageJson {
+  const result = { ...package_ };
+  const { publishConfig } = package_;
   if (!publishConfig) {
     return result;
   }

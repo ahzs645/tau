@@ -19,11 +19,11 @@ if (!projectRoot) {
 }
 
 const absoluteRoot = resolve(projectRoot);
-const esmDir = join(absoluteRoot, 'dist', 'esm');
+const esmDirectory = join(absoluteRoot, 'dist', 'esm');
 const cjsDir = join(absoluteRoot, 'dist', 'cjs');
 
-if (!existsSync(esmDir)) {
-  console.error(`ESM dist directory not found: ${esmDir}`);
+if (!existsSync(esmDirectory)) {
+  console.error(`ESM dist directory not found: ${esmDirectory}`);
   process.exit(1);
 }
 
@@ -57,7 +57,7 @@ function processDtsFiles(dir: string): void {
       continue;
     }
 
-    const relativePath = fullPath.slice(esmDir.length);
+    const relativePath = fullPath.slice(esmDirectory.length);
     const ctsPath = join(cjsDir, relativePath.replace(/\.d\.ts$/, '.d.cts'));
     const ctsParentDir = ctsPath.slice(0, ctsPath.lastIndexOf('/'));
 
@@ -72,5 +72,5 @@ function processDtsFiles(dir: string): void {
   }
 }
 
-processDtsFiles(esmDir);
+processDtsFiles(esmDirectory);
 console.log(`Generated ${generated} CJS type declaration (.d.cts) files`);
