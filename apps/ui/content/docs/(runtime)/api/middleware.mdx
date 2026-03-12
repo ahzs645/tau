@@ -10,8 +10,6 @@ Use the middleware API when extending kernel behavior with caching, coordinate t
 
 ## Types
 
-<auto-type-table path='./props/middleware.ts' name='KernelMiddleware' />
-
 <auto-type-table path='./props/middleware.ts' name='MiddlewareState' />
 
 <auto-type-table path='./props/middleware.ts' name='KernelMiddlewareRuntime' />
@@ -20,14 +18,14 @@ Use the middleware API when extending kernel behavior with caching, coordinate t
 
 ## defineMiddleware
 
-`defineMiddleware` creates a middleware plugin from a configuration object. Provide optional hooks: `wrapGetParameters`, `wrapCreateGeometry`, `wrapExportGeometry`, `onInitialize`, `onTeardown`.
+`defineMiddleware` creates a middleware instance from a configuration object. Provide optional wrap hooks: `wrapGetParameters`, `wrapCreateGeometry`, `wrapExportGeometry`. Each hook receives `(input, handler, runtime)` where `runtime` is `KernelMiddlewareRuntime`.
 
 ## Built-in Factories
 
 | Factory                     | Purpose                                           |
 | --------------------------- | ------------------------------------------------- |
-| `parameterCache()`          | Cache parameter definitions by input hash         |
-| `geometryCache()`           | Cache geometry output by input hash               |
+| `parameterCache()`          | Cache parameter definitions by dependency hash    |
+| `geometryCache()`           | Cache geometry output by dependency hash          |
 | `gltfCoordinateTransform()` | Apply coordinate system transforms to glTF output |
 | `gltfEdgeDetection()`       | Add edge geometry to glTF meshes                  |
 
@@ -49,5 +47,6 @@ const client = createRuntimeClient({
 
 ## Related
 
-- [Using Middleware](/docs/guides/using-middleware)
-- [Custom Middleware](/docs/guides/custom-middleware)
+- [Use Middleware](../guides/using-middleware)
+- [Create Custom Middleware](../guides/custom-middleware)
+- [Middleware Model](../concepts/middleware-model)

@@ -1,17 +1,17 @@
 ---
-title: Using Middleware
+title: Use Middleware
 description: Add caching, coordinate transforms, and edge detection to your kernel pipeline.
 icon: lucide:layers
 ---
 
-# Using Middleware
+# Use Middleware
 
 Add caching, coordinate transforms, and edge detection to your kernel pipeline. Middleware intercepts kernel operations and transforms results without modifying kernel code.
 
 ## Prerequisites
 
-- [Install @taucad/runtime](/docs/getting-started/installation)
-- Completed the [Quick Start](/docs/getting-started/quick-start)
+- [Install @taucad/runtime](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
 
 ## Goal
 
@@ -93,20 +93,30 @@ const result = await client.render({
 });
 
 if (result.success) {
-  console.log(`Rendered ${result.data.length} geometry`);
+  console.log(`Rendered ${result.data.length} geometries`);
 }
 ```
 
 ## Variations
 
-- **Preset with all middleware**: Use `presets.all()` from `@taucad/runtime` to get kernels, middleware, and bundlers. Merge with `filesystem` and `transport`: `createRuntimeClient({ ...presets.all(), filesystem, transport })`. See [API Reference: Client](/docs/api/client).
+- **Preset with all middleware**: Use `presets.all()` from `@taucad/runtime` to get all kernels, middleware, and bundlers. The preset returns `{ kernels, middleware, bundlers }` which you pass directly to [`createRuntimeClient`](../api/client). Add `fileSystem` separately:
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem';
+
+const client = createRuntimeClient({
+  ...presets.all(),
+  fileSystem: fromNodeFS('/path/to/project'),
+});
+```
+
 - **Selective middleware**: Omit middleware you do not need. For example, skip `gltfEdgeDetection()` if your viewer does not use edge rendering.
 - **Middleware order**: Place caches (parameterCache, geometryCache) before transforms (gltfCoordinateTransform, gltfEdgeDetection) so cached results still flow through transforms on the return path.
-- **Disable at runtime**: Middleware plugins support an `enabled` option. Check the [API Reference: Middleware](/docs/api/middleware) for per-plugin configuration.
 
 ## Related
 
-- [Middleware Model](/docs/concepts/middleware-model) -- How the onion model works
+- [Middleware Model](../concepts/middleware-model) -- How the onion model works
 - [Create Custom Middleware](./custom-middleware) -- Build your own middleware
-- [API Reference: Middleware](/docs/api/middleware) -- Middleware types and factories
-- [API Reference: Client](/docs/api/client) -- createRuntimeClient options
+- [API Reference: Middleware](../api/middleware) -- Middleware types and factories
+- [API Reference: Client](../api/client) -- createRuntimeClient options

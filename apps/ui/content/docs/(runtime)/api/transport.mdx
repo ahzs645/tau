@@ -1,6 +1,6 @@
 ---
 title: Transport API
-description: RuntimeTransport interface and createWorkerTransport for worker communication.
+description: RuntimeTransport interface, createWorkerTransport, and createInProcessTransport for worker communication.
 icon: lucide:cable
 ---
 
@@ -16,7 +16,13 @@ Use the transport API when configuring how the runtime client communicates with 
 
 `createWorkerTransport(workerUrl)` creates a `RuntimeTransport` that spawns a Web Worker from the given URL and establishes a MessageChannel for bidirectional communication. Returns `RuntimeTransport & { worker: Worker }`.
 
+## createInProcessTransport
+
+`createInProcessTransport()` creates a `RuntimeTransport` that runs the kernel in the same process using a MessageChannel. No Web Worker is spawned. Use this for testing or Node.js environments where worker isolation is not needed.
+
 ## Usage
+
+### Web Worker Transport (Default)
 
 ```typescript
 import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
@@ -34,6 +40,32 @@ const client = createRuntimeClient({
 });
 ```
 
+### In-Process Transport (Testing)
+
+```typescript
+import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { createInProcessTransport } from '@taucad/runtime/transport';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromMemoryFS(),
+  transport: createInProcessTransport(),
+});
+```
+
+## When to Use Each
+
+| Transport                    | Use when                                                  |
+| ---------------------------- | --------------------------------------------------------- |
+| Default (none specified)     | Standard browser usage. Client auto-creates a worker.     |
+| `createWorkerTransport(url)` | Custom worker URL or pre-built worker bundle.             |
+| `createInProcessTransport()` | Testing, Node.js, or when worker isolation is not needed. |
+
 ## Related
 
-- [Worker Model](/docs/concepts/worker-model)
+- [Worker Model](../concepts/worker-model)
+- [Architecture](../concepts/architecture)
+- [Quick Start](../getting-started/quick-start) -- End-to-end setup using the default transport

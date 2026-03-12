@@ -1,21 +1,21 @@
 ---
-title: Error Handling
-description: Work with KernelResult, KernelIssue, and type guards to handle kernel errors.
+title: Handle Errors
+description: Handle KernelResult, KernelIssue, render cancellation errors, and type guards.
 icon: lucide:triangle-alert
 ---
 
-# Error Handling
+# Handle Errors
 
-Kernel operations return a discriminated union `KernelResult<T>`. Check the `success` field to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames.
+Kernel operations return a discriminated union `KernelResult<T>`. Check the `success` field to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames. Render cancellation errors (`RenderAbortedError`, `RenderSupersededError`) signal when renders are interrupted.
 
 ## Prerequisites
 
-- [Install @taucad/runtime](/docs/getting-started/installation)
-- Completed the [Quick Start](/docs/getting-started/quick-start)
+- [Install @taucad/runtime](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
 
 ## Goal
 
-Handle success and error results from `render`, `export`, and `getParameters` using the `success` discriminant and the `KernelIssue` structure. Apply patterns that work for both render and export calls.
+Handle success and error results from `render`, `export`, and `getParameters` using the `success` discriminant and the `KernelIssue` structure. Handle render cancellation scenarios in autonomous rendering mode.
 
 ## Steps
 
@@ -60,7 +60,7 @@ const result = await client.render({
 });
 
 if (result.success) {
-  console.log(`Rendered ${result.data.length} geometry`);
+  console.log(`Rendered ${result.data.length} geometries`);
 } else {
   console.error('Render failed:', result.issues.map((i) => i.message).join('; '));
 }
@@ -114,7 +114,7 @@ const result = await client.render({ code: { 'main.ts': userCode } });
 
 if (result.success) {
   for (const geom of result.data) {
-    // Use geom.blob, geom.type
+    // Use geom.blob, geom.format
   }
   if (result.issues.length > 0) {
     console.warn('Warnings:', result.issues);
@@ -138,7 +138,6 @@ const result = await client.export('glb');
 
 if (result.success) {
   const { bytes, name, mimeType } = result.data;
-  // Convert to Blob for download
   const blob = new Blob([bytes], { type: mimeType });
   console.log(`Exported: ${name} (${blob.size} bytes)`);
 } else {
@@ -146,7 +145,45 @@ if (result.success) {
 }
 ```
 
-### 6. Error Enrichment (Kernel Authors)
+### 6. Handle Render Cancellation Errors
+
+When using `client.render()`, a render can be cancelled if a newer render is requested before the current one completes. Two error types signal cancellation:
+
+**RenderSupersededError** -- Thrown when a newer `render()` call supersedes the current one. The client rejected the in-flight render in favor of the latest request:
+
+```typescript @ts-nocheck
+import { isRenderSupersededError } from '@taucad/runtime';
+
+try {
+  const result = await client.render({ code: { 'main.ts': code } });
+} catch (error) {
+  if (isRenderSupersededError(error)) {
+    console.log('Render was superseded by a newer render call');
+  } else {
+    throw error;
+  }
+}
+```
+
+**RenderAbortedError** -- Thrown when a render is aborted via the SharedArrayBuffer abort channel. This occurs during autonomous rendering when the worker aborts an in-progress render due to a file change or parameter update:
+
+```typescript @ts-nocheck
+import { isRenderAbortedError } from '@taucad/runtime';
+
+try {
+  const result = await client.render({ code: { 'main.ts': code } });
+} catch (error) {
+  if (isRenderAbortedError(error)) {
+    console.log('Render was aborted (file or parameter changed)');
+  } else {
+    throw error;
+  }
+}
+```
+
+Both errors are normal control flow, not bugs. Use the realm-safe type guards (`isRenderSupersededError`, `isRenderAbortedError`) rather than `instanceof` for reliable cross-realm checks.
+
+### 7. Error Enrichment (Kernel Authors)
 
 Kernels enrich raw errors into `KernelIssue` with location and stack. Replicad maps OpenCASCADE exceptions; JSCAD and Zoo map their engine errors. When building custom kernels, use `createKernelError`:
 
@@ -169,9 +206,11 @@ return createKernelError([
 - **Filter by severity**: Iterate `result.issues` and handle `error` vs `warning` differently.
 - **Success with warnings**: `KernelSuccessResult` can have non-empty `issues` (e.g., deprecation warnings). Check `result.issues` after confirming success.
 - **Connection errors**: `type: 'connection'` indicates transport/worker failures rather than kernel logic.
+- **Autonomous mode errors**: Subscribe to `client.on('state', (state, detail) => ...)` to receive error state transitions in autonomous rendering mode.
 
 ## Related
 
 - [Create a Custom Kernel](./custom-kernel) -- Return createKernelError from kernel methods
-- [API Reference: Types](/docs/api/types) -- KernelResult, KernelIssue, ErrorLocation
-- [API Reference: Client](/docs/api/client) -- render and export return types
+- [Render Lifecycle](../concepts/render-lifecycle) -- How render cancellation works
+- [API Reference: Types](../api/types) -- KernelResult, KernelIssue, ErrorLocation
+- [API Reference: Client](../api/client) -- render and export return types

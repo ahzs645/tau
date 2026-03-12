@@ -1,17 +1,17 @@
 ---
-title: Testing Kernels
+title: Test Kernels
 description: Use testing utilities to write unit tests for custom kernels and middleware.
 icon: lucide:flask-conical
 ---
 
-# Testing Kernels
+# Test Kernels
 
 Use the `@taucad/runtime/testing` utilities to write unit tests for custom kernels and middleware. The package provides worker setup, mock runtimes, filesystem seeding, and geometry validation helpers.
 
 ## Prerequisites
 
-- [Install @taucad/runtime](/docs/getting-started/installation)
-- Completed the [Quick Start](/docs/getting-started/quick-start)
+- [Install @taucad/runtime](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
 - Vitest configured in your project (peer dependency of `@taucad/runtime`)
 
 ## Goal
@@ -33,6 +33,15 @@ import {
   createMockLogger,
   createMockFileSystem,
   createMockRuntime,
+  createMockRuntimeClient,
+  createMockDependencies,
+  createMockCreateGeometryHandler,
+  createMockGetParametersHandler,
+  createSuccessResult,
+  createErrorResult,
+  createMockInput,
+  createMockResponse,
+  MockKernelWorker,
   validateGlbData,
   getInspectReport,
   createGeometryTestHelpers,
@@ -41,7 +50,7 @@ import {
 
 ### 2. Use createTestWorker for Kernel Integration Tests
 
-`createTestWorker` creates and initializes a `KernelRuntimeWorker` with a kernel definition and seeded files. It uses the production code path:
+`createTestWorker` creates and initializes a [`KernelRuntimeWorker`](../concepts/worker-model) with a kernel definition and seeded files. It uses the production code path:
 
 ```typescript
 import { describe, it, expect } from 'vitest';
@@ -71,8 +80,6 @@ describe('Replicad kernel', () => {
   });
 });
 ```
-
-Call `seedTestFileSystem` before `initializeWorkerForTesting` if you need to set up files separately.
 
 ### 3. Use initializeWorkerForTesting for Custom Worker Setup
 
@@ -116,14 +123,20 @@ afterEach(async () => {
 });
 ```
 
-Paths can be absolute or relative; relative paths are normalized to start with `/`.
-
-### 5. Use createMockLogger, createMockFileSystem, createMockRuntime
+### 5. Use Mock Utilities for Middleware Tests
 
 For middleware unit tests, use mocks to avoid a real worker:
 
 ```typescript @ts-nocheck
-import { createMockLogger, createMockFileSystem, createMockRuntime } from '@taucad/runtime/testing';
+import {
+  createMockLogger,
+  createMockFileSystem,
+  createMockRuntime,
+  createMockInput,
+  createMockCreateGeometryHandler,
+  createSuccessResult,
+  createErrorResult,
+} from '@taucad/runtime/testing';
 
 const logger = createMockLogger();
 const filesystem = createMockFileSystem({
@@ -137,18 +150,31 @@ const runtime = createMockRuntime({
   dependencyHash: 'abc123',
 });
 
-// Assert on mock calls
-expect(filesystem.mocks.readFile).toHaveBeenCalledWith('/path/to/file');
+const input = createMockInput({ filePath: '/builds/test/main.ts' });
+const handler = createMockCreateGeometryHandler(createSuccessResult([]));
+
+const result = await myMiddleware.wrapCreateGeometry(input, handler, runtime);
+expect(result.success).toBe(true);
 ```
 
-`createMockFileSystem` returns a `RuntimeFileSystem` with a `mocks` property for vitest assertions.
+**`createMockRuntimeClient()`** -- Returns a [`RuntimeClient`](../api/client) mock for transport-level testing.
+
+**`MockKernelWorker`** -- A worker-shaped mock class for middleware integration tests.
+
+**`createMockResponse(body, headers?)`** -- Creates a mock `Response` object for testing HTTP-dependent kernels (e.g., Zoo).
 
 ### 6. Validate Geometry with validateGlbData and getInspectReport
 
 Use `validateGlbData` to assert GLB format and `getInspectReport` for detailed geometry stats:
 
 ```typescript @ts-nocheck
-import { validateGlbData, getInspectReport, extractGltfFromResult } from '@taucad/runtime/testing';
+import {
+  validateGlbData,
+  getInspectReport,
+  extractGltfFromResult,
+  getGeometryStatsFromInspect,
+  getBoundingBoxFromInspect,
+} from '@taucad/runtime/testing';
 
 const result = await worker.createGeometry({
   /* ... */
@@ -159,7 +185,13 @@ expect(glb).toBeDefined();
 validateGlbData(glb!);
 
 const report = await getInspectReport(glb!);
-expect(report.meshes.properties).toHaveLength(1);
+const stats = getGeometryStatsFromInspect(report);
+console.log(`Vertices: ${stats.vertexCount}, Faces: ${stats.faceCount}, Meshes: ${stats.meshCount}`);
+
+const bbox = getBoundingBoxFromInspect(report);
+if (bbox) {
+  console.log(`Size: ${bbox.size}, Center: ${bbox.center}`);
+}
 ```
 
 ### 7. Use createGeometryTestHelpers for Geometry Assertions
@@ -167,7 +199,7 @@ expect(report.meshes.properties).toHaveLength(1);
 `createGeometryTestHelpers` provides helpers for common geometry assertions:
 
 ```typescript @ts-nocheck
-import { createGeometryTestHelpers } from '@taucad/runtime/testing';
+import { createGeometryTestHelpers, createGeometryVariant } from '@taucad/runtime/testing';
 
 const helpers = createGeometryTestHelpers();
 
@@ -181,17 +213,17 @@ await helpers.expectVertexCount(result, 24);
 await helpers.expectBoundingBoxSize(result, [30, 50, 10], 0.1);
 ```
 
-Helpers include `expectValidGltf`, `expectMeshCount`, `expectVertexCount`, `expectFaceCount`, `expectBoundingBoxSize`, and `expectBoundingBoxCenter`.
+**`createGeometryVariant(base, overrides)`** -- Create variant `GeometryExpectation` objects from a base for parametric testing.
 
 ## Variations
 
-- **createSuccessResult / createErrorResult**: Build `CreateGeometryResult` values for middleware tests without running a kernel.
-- **createMockInput**: Create `CreateGeometryInput` for testing middleware hooks.
-- **MockKernelWorker**: Use when you need a worker-shaped mock for transport tests.
-- **getGeometryStatsFromInspect / getBoundingBoxFromInspect**: Extract stats from an `InspectReport` for custom assertions.
+- **`createSuccessResult` / `createErrorResult`**: Build `CreateGeometryResult` values for middleware tests without running a kernel.
+- **`createMockDependencies(overrides?)`**: Create mock `Dependency[]` arrays for dependency hash testing.
+- **`createMockGetParametersHandler(result?)`**: Create a mock handler for `wrapGetParameters` tests.
+- **Skip bundler in tests**: Use `skipBundler: true` in `createTestWorker` for kernels that do not need bundling.
 
 ## Related
 
 - [Create a Custom Kernel](./custom-kernel) -- Test custom kernel definitions
 - [Create Custom Middleware](./custom-middleware) -- Test middleware with createMockRuntime
-- [API Reference: Testing](/docs/api/testing) -- Full testing utility documentation
+- [API Reference: Testing](../api/testing) -- Full testing utility documentation

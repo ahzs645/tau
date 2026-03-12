@@ -6,28 +6,37 @@ icon: lucide:rocket
 
 # Quick Start
 
-Render a 3D model from TypeScript code using the Replicad kernel. You will create a runtime client, write a simple CAD model, and render it to glTF.
+Render a 3D model from TypeScript code using the Replicad kernel. You will install the package, create a runtime client, and render geometry to glTF.
 
 ## Prerequisites
 
-- [Install @taucad/runtime](/docs/getting-started/installation)
+- Node.js 20 or later
+- A package manager: npm, pnpm, or yarn
+
+## Install
+
+```bash tab="pnpm"
+pnpm add @taucad/runtime
+```
+
+```bash tab="npm"
+npm install @taucad/runtime
+```
+
+```bash tab="yarn"
+yarn add @taucad/runtime
+```
+
+For framework-specific configuration (Vite, Node.js), see [Installation](./installation).
 
 ## Render a 3D Model
 
 Create a file called `render.ts` and paste the following code:
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
-import { replicad } from '@taucad/runtime/kernels';
-import { esbuild } from '@taucad/runtime/bundler';
+import { createRuntimeClient, presets } from '@taucad/runtime';
 
-const client = createRuntimeClient({
-  kernels: [replicad()],
-  bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
-});
-
-client.on('log', ({ message }) => console.log(message));
+const client = createRuntimeClient(presets.all());
 
 const result = await client.render({
   code: {
@@ -42,7 +51,7 @@ const result = await client.render({
 });
 
 if (result.success) {
-  console.log(`Rendered ${result.data.length} geometry`);
+  console.log(`Rendered ${result.data.length} geometries`);
   console.log(`Format: ${result.data[0].format}`);
 } else {
   console.error('Render failed:', result.issues);
@@ -51,10 +60,24 @@ if (result.success) {
 client.terminate();
 ```
 
+`presets.all()` includes all built-in kernels, middleware, and bundlers. For tree-shaking, configure individual plugins instead:
+
+```typescript
+import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromMemoryFS(),
+});
+```
+
 ## Expected Output
 
 ```
-Rendered 1 geometry
+Rendered 1 geometries
 Format: gltf
 ```
 
@@ -62,6 +85,6 @@ Each entry in `result.data` is a `Geometry` object containing a glTF binary (GLB
 
 ## What's Next
 
-- [Your First Kernel](./your-first-kernel) -- Learn step-by-step how to build parametric models
-- [Choosing a Kernel](/docs/guides/choosing-a-kernel) -- Compare Replicad, Manifold, OpenSCAD, JSCAD, and Zoo
-- [API Reference: Client](/docs/api/client) -- Full documentation for `createRuntimeClient`
+- [Your First Kernel](./your-first-kernel) -- Build parametric models with parameters and STEP export
+- [Choose a Kernel](../guides/choosing-a-kernel) -- Compare Replicad, OpenCASCADE, Manifold, OpenSCAD, JSCAD, and Zoo
+- [API Reference: Client](../api/client) -- Full documentation for `createRuntimeClient`

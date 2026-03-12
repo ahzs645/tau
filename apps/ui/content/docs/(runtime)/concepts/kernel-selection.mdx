@@ -6,19 +6,19 @@ icon: lucide:git-branch
 
 # Kernel Selection
 
-When you call `render({ file })`, the runtime must choose which kernel handles the file. Extension alone is insufficient: `.ts` files might use Replicad or JSCAD depending on imports. The selection cascade uses four strategies in order, with caching to avoid repeated work.
+When you call `render({ file })` or `setFile(file)`, the runtime must choose which kernel handles the file. Extension alone is insufficient: `.ts` files might use Replicad, OpenCASCADE, or JSCAD depending on imports. The selection cascade uses three strategies in order, with caching to avoid repeated work.
 
 ## Context and Motivation
 
-Different CAD kernels handle different file types: OpenSCAD for `.scad`, Zoo for `.kcl`, Replicad and JSCAD for `.ts`/`.js`. For JS/TS, the same extension can map to multiple kernels; the decision depends on which library the file imports (e.g., `replicad` vs `@jscad/modeling`). The selection logic must be fast for common cases (extension match) and accurate for ambiguous cases (bundler-assisted import analysis). Caching ensures that repeated renders of the same file skip detection.
+Different CAD kernels handle different file types: OpenSCAD for `.scad`, Zoo for `.kcl`, Replicad, OpenCASCADE, and JSCAD for `.ts`/`.js`. For JS/TS, the same extension can map to multiple kernels; the decision depends on which library the file imports (e.g., `replicad` vs `@jscad/modeling` vs `opencascade.js`). The selection logic must be fast for common cases (extension match) and accurate for ambiguous cases (bundler-assisted import analysis). Caching ensures that repeated renders of the same file skip detection.
 
 ## How It Works
 
-The selection runs inside `KernelRuntimeWorker.selectKernel()`. It tries four passes in order; the first match wins.
+The selection runs inside [`KernelRuntimeWorker`](./worker-model)`.selectKernel()`. It tries three passes in order; the first match wins.
 
 ```mermaid
 flowchart TD
-    Start["render({ file })"] --> Ext["1. Extension fast path"]
+    Start["render / setFile"] --> Ext["1. Extension fast path"]
     Ext -->|"extensions includes ext"| NoDetect{"detectImport?"}
     NoDetect -->|No| LoadExt["Load kernel, cache, return"]
     NoDetect -->|Yes| Regex["Regex test on file content"]
@@ -33,7 +33,7 @@ flowchart TD
     MatchBuiltin -->|No| Next2["Try next"]
 
     Next2 --> CatchAll["3. Catch-all fallback"]
-    CatchAll -->|"extensions: ['*']"| LoadCatchAll["Load kernel, cache, return"]
+    CatchAll -->|"extensions: '*'"| LoadCatchAll["Load kernel, cache, return"]
     CatchAll -->|None| Fail["No kernel can handle"]
 ```
 
@@ -43,8 +43,8 @@ For each kernel config in registration order:
 
 1. Check if the file extension is in `config.extensions` (or config has `extensions: ['*']`).
 2. If `extensions: ['*']`, store as catch-all and continue (defer to pass 3 if nothing else matches).
-3. If no `detectImport`, select this kernel immediately. Examples: `.scad` → OpenSCAD, `.kcl` → Zoo.
-4. If `detectImport` exists, read the file and run the regex. On match, select this kernel. Example: `.ts` with `import ... from 'replicad'` → Replicad.
+3. If no `detectImport`, select this kernel immediately. Examples: `.scad` -> OpenSCAD, `.kcl` -> Zoo.
+4. If `detectImport` exists, read the file and run the regex. On match, select this kernel. Example: `.ts` with `import ... from 'replicad'` -> Replicad.
 
 This pass is fast: at most one file read when regex detection is needed. No bundling.
 
@@ -62,38 +62,39 @@ This pass handles cases where the entry file does not directly import the kernel
 
 If a kernel registered with `extensions: ['*']` was found in pass 1, select it now. The Tau converter kernel uses this to handle STEP, STL, 3MF, and other import formats that have no dedicated kernel.
 
-### Pass 4: No Match
-
-If no kernel matches, selection returns `undefined`. The framework reports that no kernel can handle the file.
+If no kernel matches at all, selection returns `undefined`. The framework reports that no kernel can handle the file.
 
 ## Why This Layered Approach
 
-- **Performance** — Extension and regex are cheap. Bundler detection is more expensive; it runs only when extension/regex fail or when multiple kernels share an extension.
-- **Correctness** — Regex can only see the entry file. Transitive imports require the bundler. Catch-all ensures a fallback for unknown formats.
-- **Priority** — Kernel order in `createRuntimeClient({ kernels: [...] })` matters. When multiple kernels match, the first wins. Put specific kernels before catch-all.
+- **Performance** -- Extension and regex are cheap. Bundler detection is more expensive; it runs only when extension/regex fail or when multiple kernels share an extension.
+- **Correctness** -- Regex can only see the entry file. Transitive imports require the bundler. Catch-all ensures a fallback for unknown formats.
+- **Priority** -- Kernel order in `createRuntimeClient({ kernels: [...] })` matters. When multiple kernels match, the first wins. Put specific kernels before catch-all.
 
 ## Caching of Selection Results
 
-Selection results are cached in `selectionCache` keyed by file path. On a cache hit, the same kernel is used without re-running detection. The cache is cleared when `notifyFileChanged(paths)` is called, so edits to the file or its dependencies trigger re-selection on the next render.
+Selection results are cached in `selectionCache` keyed by file path. On a cache hit, the same kernel is used without re-running detection.
+
+In **autonomous rendering mode** (using `setFile`/`setParameters`), the worker's filesystem watch subscription handles cache invalidation automatically when files change. In **inline code mode** (using `client.render()` with `code`), call `client.notifyFileChanged(paths)` to invalidate the selection cache.
 
 The selection method (`extension`, `regex`, `bundler`, `catchall`) is also stored. When the method is `bundler`, the framework skips the kernel's own `canHandle` check, because the bundler has already traced transitive imports and the kernel might only inspect the entry file.
 
 ## Key Relationships
 
-- **Selection and Plugins** — Kernel plugins supply `extensions`, `detectImport`, and `builtinModuleNames`. These drive all four passes.
-- **Selection and Bundler** — The bundler plugin must implement `detectImports` for pass 2. The esbuild bundler does this via a lightweight build with externals extraction.
-- **Selection and Worker** — Selection runs inside the worker. The client sends a render command; the worker selects the kernel before calling `getParameters` or `createGeometry`.
+- **Selection and Plugins** -- Kernel plugins supply `extensions`, `detectImport`, and `builtinModuleNames`. These drive all three passes.
+- **Selection and Bundler** -- The bundler plugin must implement `detectImports` for pass 2. The esbuild bundler does this via a lightweight build with externals extraction.
+- **Selection and Worker** -- Selection runs inside the worker. The client sends a render command or `setFile`; the worker selects the kernel before calling `getParameters` or `createGeometry`.
 
 ## Implications
 
-- **Order matters** — Register kernels in priority order. Put Replicad before JSCAD if both match `.ts` and you prefer Replicad for ambiguous cases.
-- **Catch-all last** — The Tau kernel (`extensions: ['*']`) should typically be last so specific kernels get first chance.
-- **File changes** — Call `client.notifyFileChanged(changedPaths)` when files change so the selection cache is invalidated.
+- **Order matters** -- Register kernels in priority order. Put Replicad before JSCAD if both match `.ts` and you prefer Replicad for ambiguous cases.
+- **Catch-all last** -- The Tau kernel (`extensions: ['*']`) should typically be last so specific kernels get first chance.
+- **Automatic invalidation** -- In autonomous mode, file changes trigger re-selection automatically through the worker's watch subscription.
 
 ## Further Reading
 
-- [Architecture](./architecture) — Where selection runs in the worker
-- [Plugin System](./plugin-system) — How kernel plugins declare extensions and detection
-- [Worker Model](./worker-model) — How the runtime worker hosts multiple kernels
-- [Choosing a Kernel](/docs/guides/choosing-a-kernel) — Practical guide to kernel selection
-- [API: Kernels](/docs/api/kernels) — `KernelPlugin` and `KernelDefinition`
+- [Architecture](./architecture) -- Where selection runs in the worker
+- [Plugin System](./plugin-system) -- How kernel plugins declare extensions and detection
+- [Worker Model](./worker-model) -- How the runtime worker hosts multiple kernels
+- [Render Lifecycle](./render-lifecycle) -- How file changes trigger re-renders and re-selection
+- [Choose a Kernel](../guides/choosing-a-kernel) -- Practical guide to kernel selection
+- [API: Kernels](../api/kernels) -- `KernelPlugin` and kernel factory functions

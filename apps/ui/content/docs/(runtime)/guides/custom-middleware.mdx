@@ -10,10 +10,10 @@ Build middleware with `defineMiddleware` to intercept and transform kernel opera
 
 ## Prerequisites
 
-- [Install @taucad/runtime](/docs/getting-started/installation)
-- Completed the [Quick Start](/docs/getting-started/quick-start)
-- [Using Middleware](./using-middleware) -- Add built-in middleware to your client
-- [Middleware Model](/docs/concepts/middleware-model) -- Understand the onion model
+- [Install @taucad/runtime](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+- [Use Middleware](./using-middleware) -- Add built-in middleware to your client
+- [Middleware Model](../concepts/middleware-model) -- Understand the onion model
 
 ## Goal
 
@@ -56,20 +56,24 @@ The wrap pattern gives you full control. You can short-circuit (return without c
 ```typescript @ts-nocheck
 import { defineMiddleware } from '@taucad/runtime/middleware';
 
+// Application-specific cache — replace with your storage backend
+const cache = new Map<string, unknown>();
+const checkCache = async (key: string) => cache.get(key) ?? null;
+const writeCache = async (key: string, value: unknown) => {
+  cache.set(key, value);
+};
+
 const cacheMiddleware = defineMiddleware({
   name: 'SimpleCache',
   async wrapCreateGeometry(input, handler, { logger, dependencyHash }) {
-    // PRE: Check cache (short-circuit on hit)
     const cached = await checkCache(dependencyHash);
     if (cached) {
       logger.debug('Cache hit');
       return cached;
     }
 
-    // EXECUTE: Call downstream
     const result = await handler(input);
 
-    // POST: Write to cache (runs on return journey)
     await writeCache(dependencyHash, result);
     return result;
   },
@@ -150,7 +154,7 @@ Options are resolved from schema defaults and caller overrides when the middlewa
 
 ### 6. Export and Register Your Middleware
 
-Middleware runs in the worker and must be loaded as a separate module. Create a module file that exports the middleware (default or named with a `name` property), then a factory that returns a `MiddlewarePlugin`:
+Middleware runs in the worker and must be loaded as a separate module. Create a module file that exports the middleware (default or named with a `name` property), then a factory that returns a [`MiddlewarePlugin`](../api/middleware):
 
 ```typescript @ts-nocheck
 // my-cache.middleware.ts
@@ -185,7 +189,7 @@ export function myCache(): MiddlewarePlugin {
 }
 ```
 
-Pass the factory to `createRuntimeClient`:
+Pass the factory to [`createRuntimeClient`](../api/client):
 
 ```typescript @ts-nocheck
 import { createRuntimeClient } from '@taucad/runtime';
@@ -201,8 +205,6 @@ const client = createRuntimeClient({
   middleware: [myCache()],
 });
 ```
-
-The framework dynamically imports the module at `moduleUrl` and resolves the middleware (default export or first export with a `name` property). Ensure your build outputs the middleware as a separate chunk so the worker can load it.
 
 ### 7. Wrap Multiple Operations
 
@@ -228,14 +230,12 @@ const fullMiddleware = defineMiddleware({
 
 ## Variations
 
-- **Enabled flag**: Set `enabled: false` to disable the middleware by default. Override at registration with `{ url: moduleUrl, enabled: true }`.
 - **Version**: Set `version` for cache-key computation. Changing the version invalidates caches that include middleware signatures.
-- **Runtime services**: Destructure `logger`, `filesystem`, `dependencies`, `dependencyHash`, `state`, and `options` from the runtime as needed.
+- **Runtime services**: Destructure `logger`, `filesystem`, `dependencies`, `dependencyHash`, `state`, and `options` from the `KernelMiddlewareRuntime` as needed.
 - **Inline middleware**: For testing or single-app use, you can pass middleware objects directly if your setup supports it. Production use typically requires a module URL for worker loading.
 
 ## Related
 
-- [Middleware Model](/docs/concepts/middleware-model) -- Onion model and execution order
-- [Using Middleware](./using-middleware) -- Add built-in middleware
-- [API Reference: Middleware](/docs/api/middleware) -- defineMiddleware and types
-- [API Reference: defineMiddleware](/docs/api/middleware) -- Full type documentation
+- [Middleware Model](../concepts/middleware-model) -- Onion model and execution order
+- [Use Middleware](./using-middleware) -- Add built-in middleware
+- [API Reference: Middleware](../api/middleware) -- defineMiddleware and types

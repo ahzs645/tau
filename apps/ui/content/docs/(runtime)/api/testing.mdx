@@ -12,28 +12,43 @@ Use the testing API when writing unit tests for custom kernels, middleware, or k
 
 <auto-type-table path='./props/testing.ts' name='GeometryExpectation' />
 
-## Exported Functions
+## Worker and Filesystem Utilities
 
-| Function                      | Description                                                                           |
-| ----------------------------- | ------------------------------------------------------------------------------------- |
-| `createTestWorker`            | Create and initialize a `KernelRuntimeWorker` with kernel definition and seeded files |
-| `initializeWorkerForTesting`  | Initialize an existing worker with MessageChannel-based filesystem bridge             |
-| `seedTestFileSystem`          | Seed ZenFS with files; resets to clean state first                                    |
-| `clearTestFileSystem`         | Reset ZenFS to empty in-memory backend                                                |
-| `createMockLogger`            | Create a mock logger for testing                                                      |
-| `createMockFileSystem`        | Create a mock filesystem implementation                                               |
-| `createMockRuntime`           | Create a mock kernel runtime with stubbed methods                                     |
-| `createSuccessResult`         | Create a successful CreateGeometryResult for middleware tests                         |
-| `createErrorResult`           | Create a failed CreateGeometryResult for middleware tests                             |
-| `createMockInput`             | Create mock input for middleware tests                                                |
-| `MockKernelWorker`            | Mock worker class for unit testing                                                    |
-| `validateGlbData`             | Assert GLB data has valid header and non-zero length                                  |
-| `getInspectReport`            | Get gltf-transform inspect report from GLB data                                       |
-| `getGeometryStatsFromInspect` | Extract vertexCount, faceCount, meshCount from InspectReport                          |
-| `getBoundingBoxFromInspect`   | Extract bounding box size and center from InspectReport                               |
-| `extractGltfFromResult`       | Extract GLB/GLTF blob from CreateGeometryResult                                       |
-| `createGeometryVariant`       | Create a geometry variant for test assertions                                         |
-| `createGeometryTestHelpers`   | Create helpers that combine validation and expectation checking                       |
+| Function                     | Description                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `createTestWorker`           | Create and initialize a [`KernelRuntimeWorker`](../concepts/worker-model) with kernel definition and seeded files |
+| `initializeWorkerForTesting` | Initialize an existing worker with MessageChannel-based filesystem bridge                                         |
+| `seedTestFileSystem`         | Seed ZenFS with files; resets to clean state first                                                                |
+| `clearTestFileSystem`        | Reset ZenFS to empty in-memory backend                                                                            |
+
+## Mock Utilities
+
+| Function                          | Description                                                           |
+| --------------------------------- | --------------------------------------------------------------------- |
+| `createMockLogger`                | Create a mock logger with vitest spy methods                          |
+| `createMockFileSystem`            | Create a mock filesystem with configurable return values              |
+| `createMockRuntime`               | Create a mock `KernelMiddlewareRuntime` with stubbed services         |
+| `createMockRuntimeClient`         | Create a mock [`RuntimeClient`](./client) for transport-level testing |
+| `createMockDependencies`          | Create mock `Dependency[]` arrays for dependency hash testing         |
+| `createMockCreateGeometryHandler` | Create a mock handler for `wrapCreateGeometry` middleware tests       |
+| `createMockGetParametersHandler`  | Create a mock handler for `wrapGetParameters` middleware tests        |
+| `createMockResponse`              | Create a mock `Response` for HTTP-dependent kernel tests              |
+| `createSuccessResult`             | Create a successful `CreateGeometryResult` for middleware tests       |
+| `createErrorResult`               | Create a failed `CreateGeometryResult` for middleware tests           |
+| `createMockInput`                 | Create mock `CreateGeometryInput` for middleware tests                |
+| `MockKernelWorker`                | Mock worker class for unit testing middleware integration             |
+
+## Geometry Validation
+
+| Function                      | Description                                                  |
+| ----------------------------- | ------------------------------------------------------------ |
+| `validateGlbData`             | Assert GLB data has valid header and non-zero length         |
+| `getInspectReport`            | Get gltf-transform inspect report from GLB data              |
+| `getGeometryStatsFromInspect` | Extract vertexCount, faceCount, meshCount from report        |
+| `getBoundingBoxFromInspect`   | Extract bounding box size and center from report             |
+| `extractGltfFromResult`       | Extract GLB/GLTF blob from CreateGeometryResult              |
+| `createGeometryVariant`       | Create a geometry variant for parametric test assertions     |
+| `createGeometryTestHelpers`   | Create helpers combining validation and expectation checking |
 
 ## Usage
 
@@ -61,4 +76,6 @@ describe('kernel test', () => {
 
 ## Related
 
-- [Testing Kernels](/docs/guides/testing-kernels)
+- [Test Kernels](../guides/testing-kernels)
+- [Create a Custom Kernel](../guides/custom-kernel)
+- [Create Custom Middleware](../guides/custom-middleware)

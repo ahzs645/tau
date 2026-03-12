@@ -6,11 +6,11 @@ icon: lucide:layers
 
 # Architecture
 
-The @taucad/runtime runtime is built as a layered architecture. Each layer has a single responsibility, and data flows unidirectionally from the consumer-facing API down to the CAD engine. Understanding this structure explains why the package supports multiple kernels, middleware, and transport backends without coupling.
+The @taucad/runtime is built as a layered architecture. Each layer has a single responsibility, and data flows from the consumer-facing API down to the CAD engine. The runtime supports two interaction modes: request/response rendering via `client.render()` and autonomous reactive rendering via `client.setFile()` and `client.setParameters()`.
 
 ## Context and Motivation
 
-CAD kernels (Replicad, Manifold, OpenSCAD, JSCAD, Zoo) have different execution models: some run in WASM, some call external processes, some connect to remote APIs. A unified API must abstract these differences while preserving isolation (heavy computation must not block the main thread) and extensibility (new kernels and features must plug in without modifying core code). The layered design achieves both.
+CAD kernels (Replicad, OpenCASCADE, Manifold, OpenSCAD, JSCAD, Zoo) have different execution models: some run in WASM, some call external processes, some connect to remote APIs. A unified API must abstract these differences while preserving isolation (heavy computation must not block the main thread) and extensibility (new kernels and features must plug in without modifying core code). The layered design achieves both.
 
 ## How It Works
 
@@ -27,18 +27,20 @@ flowchart TB
     end
 
     subgraph Framework["Framework Layer"]
-        KW["KernelWorker"]
+        KW["KernelRuntimeWorker"]
         MC["Middleware Chain"]
         B["Bundler"]
+        RL["Render Loop + Watch"]
     end
 
     subgraph Kernel["Kernel Layer"]
         DK["defineKernel implementations"]
     end
 
-    KC -->|"send/receive"| MP
+    KC -->|"commands / events"| MP
     MP -->|"RuntimeCommand / RuntimeResponse"| KW
     KW --> MC
+    KW --> RL
     MC --> DK
     KW --> B
     B -->|"bundle/execute"| DK
@@ -46,84 +48,128 @@ flowchart TB
 
 ### Client Layer (RuntimeClient)
 
-The [RuntimeClient](/docs/api/client) is the primary consumer API. It exposes Promise-based methods (`render()`, `export()`, `connect()`) and event subscription (`on('log')`, `on('progress')`). It does not know about workers or message protocols; it delegates to `RuntimeWorkerClient`, which wraps the transport. The client lazily initializes the worker and transport on first `connect()` or `render()`.
+The [RuntimeClient](../api/client) is the primary consumer API. It supports two modes:
+
+**Request/response mode** -- Promise-based `render()` and `export()` methods for one-shot operations. The client sends a command, waits for the result, and resolves the Promise.
+
+**Autonomous mode** -- `setFile()` and `setParameters()` trigger autonomous rendering inside the worker. The worker watches file dependencies, debounces changes, and pushes results back via events. Subscribe with `client.on('geometry', ...)`, `client.on('state', ...)`, and `client.on('parametersResolved', ...)`.
+
+The client lazily initializes the worker and transport on first `connect()`, `render()`, or `setFile()`.
 
 ### Transport Layer (MessagePort)
 
-The [RuntimeTransport](/docs/api/transport) is a low-level interface: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses a Web Worker and `postMessage`. The protocol is defined by `RuntimeCommand` and `RuntimeResponse` types. This abstraction allows swapping in WebSocket, HTTP, or native FFI without changing the client or framework.
+The [RuntimeTransport](../api/transport) is a low-level interface: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses a Web Worker and `postMessage`. The protocol is defined by `RuntimeCommand` and `RuntimeResponse` types. For testing or Node.js environments, `createInProcessTransport()` provides an in-process alternative.
 
-### Framework Layer (KernelWorker, Middleware, Bundler)
+### Framework Layer (KernelRuntimeWorker)
 
-The framework runs inside the worker. [KernelWorker](/docs/api/kernels) is the base class that orchestrates:
+The framework runs inside the worker. [`KernelRuntimeWorker`](./worker-model) (exported from `@taucad/runtime/worker`) is the multi-kernel host that orchestrates:
 
-- **Middleware chain** — Onion-model wrappers around `createGeometry`, `getParameters`, and `exportGeometry`. Middleware runs in registration order (first registered = outermost).
-- **Bundler** — Lazy-loaded for JS/TS kernels. Bundles entry files and dependencies, executes code, and supports `detectImports` for kernel selection.
-- **Lifecycle** — `initialize()`, `cleanup()`, `notifyFileChanged()` for cache invalidation.
-
-`KernelRuntimeWorker` extends `KernelWorker` and dynamically loads kernel modules via `defineKernel()`. It selects the active kernel per file and delegates to the kernel definition.
+- **Kernel selection** -- Selects the active kernel per file using extension, regex, and bundler-assisted detection. See [Kernel Selection](./kernel-selection).
+- **Middleware chain** -- Onion-model wrappers around `createGeometry`, `getParameters`, and `exportGeometry`. Middleware runs in registration order (first registered = outermost).
+- **Bundler** -- Lazy-loaded for JS/TS kernels. Bundles entry files and dependencies, executes code, and supports `detectImports` for kernel selection.
+- **Autonomous render loop** -- Manages the internal render lifecycle: `setFile` triggers immediate rendering, dependency discovery, and filesystem watch subscription. File changes are debounced (500ms) and parameter changes are debounced (50ms) before re-rendering.
+- **Abort infrastructure** -- SharedArrayBuffer-based abort channel for cancelling in-progress renders without waiting for completion.
 
 ### Kernel Layer (defineKernel implementations)
 
-Kernels are plain objects returned by [defineKernel](/docs/api/kernels). They implement `getDependencies`, `getParameters`, `createGeometry`, and `exportGeometry`. No inheritance; state lives in a context returned by `initialize()`. The framework invokes these methods through the middleware chain.
+Kernels are plain objects returned by [defineKernel](../api/kernels). They implement `getDependencies`, `getParameters`, `createGeometry`, and `exportGeometry`. No inheritance; state lives in a context returned by `initialize()`. The framework invokes these methods through the middleware chain.
 
-## Data Flow for a render() Call
+## Protocol
+
+The runtime uses an asymmetric protocol: few commands in, many event types out.
+
+**Main thread -> Worker (commands):**
+
+| Command         | Trigger                   | Worker Behavior                                   |
+| --------------- | ------------------------- | ------------------------------------------------- |
+| `setFile`       | User opens file           | Render immediately, discover deps, start watching |
+| `setParameters` | User adjusts slider/input | Store params, debounce 50ms, re-render            |
+| `render`        | `client.render()` call    | One-shot render, return result                    |
+| `export`        | `client.export()` call    | Export from last native handle                    |
+
+**Worker -> Main thread (events):**
+
+| Event                | Trigger              | Main Thread Behavior              |
+| -------------------- | -------------------- | --------------------------------- |
+| `geometryComputed`   | Render completes     | Update 3D scene / resolve Promise |
+| `parametersResolved` | Parameters extracted | Update parameter UI controls      |
+| `stateChanged`       | Worker state changes | Update progress indicator         |
+| `progress`           | During render        | Progress bar                      |
+| `error`              | Render fails         | Diagnostics panel                 |
+| `log`                | Ongoing              | Console output                    |
+
+## Data Flow: render() vs setFile()
+
+### render() -- Request/Response
 
 ```mermaid
 sequenceDiagram
     participant App
     participant Client
-    participant WorkerClient
     participant Transport
-    participant Dispatcher
     participant Worker
     participant Middleware
     participant Kernel
 
-    App->>Client: render({ file, parameters })
-    Client->>WorkerClient: render(...)
-    WorkerClient->>Transport: send({ type: 'render', file, params })
-    Transport->>Dispatcher: postMessage
-    Dispatcher->>Worker: worker.render(...)
-    Worker->>Worker: getParameters(file)
+    App->>Client: render({ code, parameters })
+    Client->>Transport: send(render command)
+    Transport->>Worker: postMessage
     Worker->>Middleware: wrapGetParameters chain
     Middleware->>Kernel: getParameters
-    Worker->>Worker: createGeometry(file, mergedParams)
     Worker->>Middleware: wrapCreateGeometry chain
     Middleware->>Kernel: createGeometry
     Kernel-->>Middleware: geometry + nativeHandle
     Middleware-->>Worker: result
-    Worker-->>Dispatcher: HashedGeometryResult
-    Dispatcher->>Transport: postMessage(geometryComputed, [ArrayBuffer])
-    Transport->>WorkerClient: onMessage
-    WorkerClient->>Client: resolve(pendingRender)
-    Client->>App: Promise resolves
+    Worker-->>Transport: geometryComputed + transferables
+    Transport-->>Client: resolve Promise
+    Client-->>App: HashedGeometryResult
 ```
 
-1. **Client** receives `render()`, calls `ensureConnected()` if needed, then `RuntimeWorkerClient.render()`.
-2. **WorkerClient** sends a `render` command with `requestId` and awaits the matching `geometryComputed` response.
-3. **Transport** delivers the command to the worker via `postMessage`. Transferables (e.g., glTF `ArrayBuffer`) are passed for zero-copy.
-4. **Dispatcher** routes the command to `worker.render()`, which runs `getParameters` then `createGeometry` through the middleware chain.
-5. **Middleware** wraps the kernel; each layer can short-circuit, transform input, or transform output.
-6. **Kernel** performs the actual CAD computation and returns geometry plus a native handle for export.
-7. The result flows back through middleware, the dispatcher, and the transport. The client resolves the Promise.
+### setFile() -- Autonomous Reactive
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Client
+    participant Worker
+    participant FS as FileSystem Watch
+
+    App->>Client: setFile(path, params)
+    Client->>Worker: setFile command + abort signal
+    Worker->>Worker: render immediately
+    Worker-->>App: geometry event
+    Worker->>Worker: discover deps, start watch
+    FS-->>Worker: file changed event
+    Worker->>Worker: invalidate caches, debounce 500ms
+    Worker->>Worker: re-render
+    Worker-->>App: geometry event
+    App->>Client: setParameters(newParams)
+    Client->>Worker: setParameters + abort signal
+    Worker->>Worker: debounce 50ms, re-render
+    Worker-->>App: geometry event
+```
+
+In autonomous mode, the worker is a self-contained render service. The main thread sends `setFile` and `setParameters`; the worker handles scheduling, dependency watching, cache invalidation, and abort. Results are pushed back as events.
 
 ## Key Relationships
 
 - **Client and Transport**: The client creates or receives a transport and passes it to `RuntimeWorkerClient`. Custom transports enable testing (mock transport) or non-browser environments (Node.js worker threads, HTTP).
-- **Framework and Kernel**: The framework loads kernel modules by URL, initializes them, and invokes their methods. Kernels receive `KernelRuntime` (filesystem, logger, bundler, execute) and their own context.
+- **Framework and Kernel**: The framework loads kernel modules by URL, initializes them, and invokes their methods. Kernels receive `KernelRuntime` (filesystem, logger, bundler, execute, tracer) and their own context.
 - **Middleware and Kernel**: Middleware sits between the framework entry points and the kernel. It has no direct reference to the kernel; it receives a `handler` that continues the chain.
+- **Worker and FileSystem**: The filesystem is bridged to the worker via MessagePort. In autonomous mode, the worker watches the filesystem for changes and re-renders automatically.
 
 ## Implications
 
 - **Testability**: Each layer can be tested in isolation. Mock transports, in-process workers, and kernel stubs are straightforward.
 - **Extensibility**: New kernels, middleware, and bundlers plug in via factory functions. No core code changes.
-- **Performance**: Transferables avoid copying large geometry buffers. Lazy bundler initialization means non-JS kernels pay no bundling cost.
+- **Performance**: Transferables avoid copying large geometry buffers. Lazy bundler initialization means non-JS kernels pay no bundling cost. SharedArrayBuffer abort avoids wasting CPU on superseded renders.
 - **Single worker**: One `KernelRuntimeWorker` hosts all registered kernels. Selection happens per file; only the matching kernel runs.
 
 ## Further Reading
 
-- [Plugin System](./plugin-system) — How `defineKernel`, `defineMiddleware`, and `defineBundler` compose
-- [Worker Model](./worker-model) — Why Web Workers and the MessagePort protocol
-- [API: Client](/docs/api/client) — `createRuntimeClient` and `RuntimeClient` types
-- [API: Transport](/docs/api/transport) — `RuntimeTransport` and `createWorkerTransport`
-- [Quick Start](/docs/getting-started/quick-start) — End-to-end setup
+- [Plugin System](./plugin-system) -- How `defineKernel`, `defineMiddleware`, and `defineBundler` compose
+- [Worker Model](./worker-model) -- Web Workers, SharedArrayBuffer abort channel, and the autonomous render service
+- [Render Lifecycle](./render-lifecycle) -- Detailed render loop, cancellation strategies, and signal channel
+- [API: Client](../api/client) -- `createRuntimeClient` and `RuntimeClient` types
+- [API: Transport](../api/transport) -- `RuntimeTransport` and `createWorkerTransport`
+- [Quick Start](../getting-started/quick-start) -- End-to-end setup

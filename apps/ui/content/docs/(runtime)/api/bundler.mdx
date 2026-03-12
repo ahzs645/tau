@@ -26,7 +26,7 @@ Use the bundler API when configuring how JS/TS kernel inputs are bundled and exe
 
 ## defineBundler
 
-`defineBundler` creates a bundler plugin from a definition object. Implement `initialize`, `bundle`, and optionally `detectImports` for custom bundling logic.
+`defineBundler` creates a bundler definition from a configuration object. Required methods: `initialize`, `detectImports`, `bundle`, `execute`, `registerModule`. Optional: `resolveDependencies`, `cleanup`.
 
 ## Usage
 
@@ -44,4 +44,5 @@ const client = createRuntimeClient({
 
 ## Related
 
-- [Bundler Configuration](/docs/guides/bundler-configuration)
+- [Configure the Bundler](../guides/bundler-configuration)
+- [Plugin System](../concepts/plugin-system)

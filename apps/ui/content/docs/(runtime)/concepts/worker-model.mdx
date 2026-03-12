@@ -1,93 +1,160 @@
 ---
 title: Worker Model
-description: How Web Workers provide isolation and the MessagePort protocol enables communication.
+description: How Web Workers provide isolation, the autonomous render service, and the SharedArrayBuffer abort channel.
 icon: lucide:cpu
 ---
 
 # Worker Model
 
-All kernel computation runs in Web Workers. The main thread stays responsive while CAD operations execute in isolation. Communication uses the MessagePort protocol with transferable support for zero-copy binary data. This design avoids main-thread blocking and enables the same API in browser and Node.js.
+The runtime worker is an **autonomous reactive render service**. It watches file dependencies, debounces changes, renders geometry, and pushes results -- without the main thread telling it when to act. Communication uses MessagePort for commands/events and SharedArrayBuffer for instant render abort. This design mirrors the Language Server Protocol pattern: the worker is a "geometry server" and the main thread is a display client.
 
 ## Context and Motivation
 
-CAD kernels perform heavy work: WASM-based geometry computation, bundling, tessellation. Running this on the main thread would freeze the UI. Web Workers provide a separate thread with their own event loop. The challenge is communication: the main thread and worker must exchange commands and results efficiently. Structured clone (the default for `postMessage`) copies data; for multi-megabyte geometry buffers, that is costly. Transferables allow zero-copy transfer of `ArrayBuffer` and `MessagePort` across the boundary. The protocol is kept simple so it can map to other channels (WebSocket, HTTP) if needed.
+CAD kernels perform heavy work: WASM-based geometry computation, bundling, tessellation. Running this on the main thread would freeze the UI. Web Workers provide a separate thread with their own event loop. Beyond isolation, the worker owns scheduling decisions: it knows the dependency graph, cache state, and which renders are stale. Pushing this intelligence to the worker eliminates unnecessary main-thread round-trips and enables instant abort of superseded renders.
 
 ## How It Works
 
 ```mermaid
-flowchart LR
-    subgraph Main["Main Thread"]
+flowchart TB
+    subgraph Main["Main Thread (display + user input)"]
+        Editor["Editor / App"]
         Client["RuntimeClient"]
-        WorkerClient["RuntimeWorkerClient"]
-        FS["FileSystem"]
+        Scene["Three.js / UI"]
     end
 
-    subgraph Worker["Web Worker"]
-        Dispatcher["createWorkerDispatcher"]
-        RuntimeWorker["KernelRuntimeWorker"]
+    subgraph Worker["Kernel Worker (autonomous render service)"]
+        RenderLoop["Render Loop + Debounce"]
+        KernelWorker["KernelRuntimeWorker"]
+        Middleware["Middleware Chain"]
         Kernels["Kernel Modules"]
+        WatchSub["Watch Subscription"]
     end
 
-    Client --> WorkerClient
-    WorkerClient -->|"postMessage"| Dispatcher
-    Dispatcher --> RuntimeWorker
-    RuntimeWorker --> Kernels
-    FS -.->|"MessagePort"| RuntimeWorker
-    RuntimeWorker -.->|"postMessage + transferables"| WorkerClient
+    subgraph FSWorker["FileSystem"]
+        FS["FileSystem Backend"]
+    end
+
+    Editor -->|"setFile / setParameters"| Client
+    Client -->|"MessagePort + SharedArrayBuffer"| RenderLoop
+    RenderLoop --> KernelWorker
+    KernelWorker --> Middleware
+    Middleware --> Kernels
+    Kernels -.->|"geometry events"| Scene
+    FS -.->|"watch events"| WatchSub
+    WatchSub -->|"file changed"| RenderLoop
 ```
 
 ### Why Web Workers
 
-- **Isolation** — The worker has its own global scope and event loop. Crashes or infinite loops in kernel code do not freeze the main thread.
-- **No main-thread blocking** — Geometry computation, bundling, and WASM execution run off the main thread. The UI remains responsive.
-- **Memory separation** — Large allocations (WASM heaps, geometry buffers) live in the worker. The main thread can stay lean.
+- **Isolation** -- The worker has its own global scope and event loop. Crashes or infinite loops in kernel code do not freeze the main thread.
+- **No main-thread blocking** -- Geometry computation, bundling, and WASM execution run off the main thread. The UI remains responsive.
+- **Memory separation** -- Large allocations (WASM heaps, geometry buffers) live in the worker. The main thread can stay lean.
 
 ### KernelRuntimeWorker as Multi-Kernel Host
 
-A single worker instance hosts all registered kernels. The `KernelRuntimeWorker` extends `KernelWorker` and dynamically loads kernel modules via `defineKernel()`. When a render is requested, it selects the appropriate kernel (see [Kernel Selection](./kernel-selection)) and delegates to that kernel's methods. This avoids one worker per kernel, which would multiply memory and startup cost.
+A single worker instance hosts all registered kernels. The `KernelRuntimeWorker` dynamically loads kernel modules via `defineKernel()`. When a render is requested, it selects the appropriate kernel (see [Kernel Selection](./kernel-selection)) and delegates to that kernel's methods. This avoids one worker per kernel, which would multiply memory and startup cost.
+
+### Autonomous Render Loop
+
+After receiving `setFile`, the worker manages its own render lifecycle:
+
+1. **setFile(file, params)** -- Store file and params. Render immediately (aborting any in-progress render). Discover dependencies. Set up filesystem watch subscription. Push `geometryComputed`.
+
+2. **Watch event (file in dependency graph changed)** -- Invalidate caches. Start/reset 500ms debounce timer. On timer fire: render (aborting any in-progress render). Discover new deps and diff watch set. Push `geometryComputed`.
+
+3. **setParameters(params)** -- Store new params. Start/reset 50ms debounce timer. On timer fire: render (aborting any in-progress render). Push `geometryComputed`.
+
+4. **export(format)** -- Export from the last native handle. Push exported result.
+
+### SharedArrayBuffer Abort Channel
+
+The abort flag must be readable during **synchronous WASM execution**, when the worker's event loop is blocked and cannot process messages. `SharedArrayBuffer` provides a memory region visible to both the main thread and the worker simultaneously:
+
+```mermaid
+flowchart LR
+    MainThread["Main Thread"] -->|"Atomics.store"| SAB["SharedArrayBuffer"]
+    SAB -->|"Atomics.load"| KernelProxy["OC Proxy in Worker"]
+```
+
+When the main thread calls `setFile()` or `setParameters()`:
+
+1. [`RuntimeClient`](../api/client) writes `Atomics.store(abortFlag, 0, newGeneration)` **before** posting the message.
+2. The worker may be mid-WASM. Its event loop is blocked. The message queues.
+3. The next OC Proxy call reads `Atomics.load(abortFlag, 0)` -- sees mismatch -- throws `RenderAbortedError`.
+4. The render aborts. The worker's event loop resumes and processes the queued message.
+5. New render starts.
+
+The signal channel carries four `Int32` slots:
+
+| Slot                  | Direction      | Mechanism                              | Purpose                                  |
+| --------------------- | -------------- | -------------------------------------- | ---------------------------------------- |
+| `abortGeneration` (0) | main -> worker | Polled by OC Proxy per WASM call       | Abort in-progress render                 |
+| `workerState` (1)     | worker -> main | `Atomics.notify` / `Atomics.waitAsync` | State transitions (idle/rendering/error) |
+| `progressPercent` (2) | worker -> main | Polled on demand                       | Render progress (cosmetic)               |
+| `renderPhase` (3)     | worker -> main | Polled on demand                       | Current phase (bundling/meshing/etc.)    |
+
+### Per-Kernel Abort Capabilities
+
+| Kernel          | Proxy abort | Async abort | Mid-WASM abort? | Worst-case latency   |
+| --------------- | ----------- | ----------- | --------------- | -------------------- |
+| **Replicad**    | Yes         | Yes         | Yes             | < 1ms (next OC call) |
+| **OpenCASCADE** | Yes         | Yes         | Yes             | < 1ms (next OC call) |
+| **JSCAD**       | N/A         | Yes         | N/A             | < 10ms (next await)  |
+| **Manifold**    | Possible    | Yes         | Possible        | < 10ms               |
+| **Zoo/KCL**     | N/A         | Yes         | N/A             | < 50ms               |
+| **OpenSCAD**    | N/A         | No          | No              | Full render duration |
+| **Tau**         | N/A         | Yes         | N/A             | < 10ms               |
 
 ### MessagePort-Based Communication Protocol
 
-The [RuntimeTransport](/docs/api/transport) interface abstracts the channel: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses `worker.postMessage()` and `worker.addEventListener('message')`. Messages are typed as `RuntimeCommand` (main → worker) and `RuntimeResponse` (worker → main). Each request/response pair carries a `requestId` for correlation.
-
-Commands include `initialize`, `render`, `export`, `fileChanged`, `configureMiddleware`, `cleanup`. Responses include `initialized`, `geometryComputed`, `exported`, `parametersResolved`, `progress`, `log`, `logBatch`, `telemetry`, `error`.
-
-### Why Not Comlink for the Hot Path
-
-Comlink and similar RPC libraries simplify worker communication by exposing remote objects as proxies. For the kernel hot path, the framework uses a simpler request/response protocol:
-
-- **Explicit transferables** — Geometry buffers must be transferred, not copied. The dispatcher explicitly extracts `ArrayBuffer`s from results and passes them in the `postMessage` transfer list. Comlink's automatic serialization would copy.
-- **Batch semantics** — Logs and telemetry are batched and flushed at the end of a render. A proxy-based approach would send many small messages.
-- **Control over lifecycle** — The client manages initialization, connection, and termination. A transparent proxy can obscure when the worker is ready or when resources are released.
-
-The protocol is intentionally low-level so that performance-critical paths stay predictable.
+The [RuntimeTransport](../api/transport) interface abstracts the channel: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses `worker.postMessage()` and `worker.addEventListener('message')`. Messages are typed as `RuntimeCommand` (main -> worker) and `RuntimeResponse` (worker -> main).
 
 ### Transferable Support for Zero-Copy Binary Data
 
-When the worker returns geometry (e.g., glTF as `ArrayBuffer`), the dispatcher calls `port.postMessage(response, [buffer])`. The second argument is the transfer list. The buffer is transferred to the main thread; the worker can no longer access it. No copy occurs. For large meshes, this significantly reduces latency and memory pressure.
+When the worker returns geometry (e.g., glTF as `ArrayBuffer`), the dispatcher calls `port.postMessage(response, [buffer])`. The buffer is transferred to the main thread; the worker can no longer access it. No copy occurs. For large meshes, this significantly reduces latency and memory pressure.
 
-The framework extracts transferables from `HashedGeometryResult` when the format is `gltf` and the content is an `ArrayBuffer`. The filesystem bridge also uses `extractTransferables()` to transfer `Uint8Array` buffers for file read/write operations, ensuring large CAD files are moved zero-copy between the filesystem worker and kernel workers.
+The filesystem bridge also uses `extractTransferables()` to transfer `Uint8Array` buffers for file read/write operations, ensuring large CAD files are moved zero-copy between workers.
 
-### Generic Bridge Proxy
+### Comparison to Prior Art
 
-For application-level RPC (e.g., the `FileManager` protocol), `createBridgeProxy<T>(port)` provides a generic `Proxy`-based client that auto-dispatches method calls over the MessagePort bridge. This eliminates hand-written per-method stubs while preserving full type safety and control over transferables.
+**VS Code Language Server Protocol:**
+
+| Concept         | LSP                           | Tau Runtime                            |
+| --------------- | ----------------------------- | -------------------------------------- |
+| Server role     | Autonomous analysis service   | Autonomous render service              |
+| Client role     | Display + user input          | Display + user input                   |
+| Communication   | JSON-RPC events               | MessagePort events + SharedArrayBuffer |
+| File watching   | Server watches workspace      | Worker watches dependency graph        |
+| Result delivery | Push diagnostics, completions | Push geometry, parameters, errors      |
+| Lifecycle       | Client starts/stops server    | Main thread creates/terminates worker  |
+
+**Vite HMR:**
+
+| Concept          | Vite                           | Tau Runtime                                       |
+| ---------------- | ------------------------------ | ------------------------------------------------- |
+| File watcher     | chokidar (OS-level)            | FileSystem watch (VFS-level)                      |
+| Dependency graph | Module graph (import analysis) | Bundle deps (esbuild metafile) + kernel resolvers |
+| Debounce         | HMR batching                   | Worker-internal 500ms/50ms timers                 |
+| Rebuild trigger  | HMR update pushed to browser   | `geometryComputed` pushed to main thread          |
 
 ## Key Relationships
 
-- **Transport and Client** — The client creates or receives a transport and passes it to `RuntimeWorkerClient`. Custom transports enable testing (mock) or alternative channels (WebSocket for remote workers).
-- **Dispatcher and Worker** — The dispatcher is the worker-side message handler. It receives `RuntimeCommand`, invokes `KernelWorker` methods, and sends `RuntimeResponse`. It runs inside the worker.
-- **FileSystem and MessagePort** — The filesystem is often in a separate worker or the main thread. A `MessagePort` bridges the runtime worker to the filesystem. The client creates this port via `createBridgePort(fileSystem)` (which returns a `BridgeHandle` with `{ port, dispose() }`) and transfers it during `initialize`. For worker-to-worker bridges, `createFileSystemBridge(worker)` similarly returns a `BridgeHandle`. Call `dispose()` when the bridge is no longer needed to close the underlying ports.
+- **Transport and Client** -- The client creates or receives a transport and passes it to `RuntimeWorkerClient`. Custom transports enable testing (mock) or alternative channels.
+- **Dispatcher and Worker** -- The dispatcher is the worker-side message handler. It receives `RuntimeCommand`, invokes worker methods, and sends `RuntimeResponse`.
+- **FileSystem and Worker** -- The filesystem is bridged via MessagePort. In autonomous mode, the worker subscribes to file change events scoped to the current file's dependency graph.
 
 ## Implications
 
-- **Async by design** — All kernel operations are async. The client API is Promise-based.
-- **Single-threaded worker** — The worker runs one render at a time. Concurrent renders would require multiple workers or a queue.
-- **Transfer semantics** — Transferred buffers are moved, not copied. The worker must not retain references after transfer.
+- **Async by design** -- All kernel operations are async. The client API is Promise-based or event-driven.
+- **Single-threaded worker** -- The worker runs one render at a time. Abort ensures stale renders are cancelled quickly so the latest render starts with minimal delay.
+- **Transfer semantics** -- Transferred buffers are moved, not copied. The worker must not retain references after transfer.
+- **Cross-origin isolation** -- SharedArrayBuffer requires COOP + COEP headers. This is already a prerequisite for OpenCASCADE's pthread support via `assertCrossOriginIsolated()`.
 
 ## Further Reading
 
-- [Architecture](./architecture) — How the transport fits in the layered design
-- [Kernel Selection](./kernel-selection) — How the runtime worker selects kernels
-- [API: Transport](/docs/api/transport) — `RuntimeTransport` and `createWorkerTransport`
-- [Bundler Configuration](/docs/guides/bundler-configuration) — Worker and bundler setup
-- [Filesystem Setup](/docs/guides/filesystem-setup) — Connecting a filesystem to the worker
+- [Architecture](./architecture) -- How the transport fits in the layered design
+- [Render Lifecycle](./render-lifecycle) -- Detailed render loop, cancellation strategies, and concurrency model
+- [Kernel Selection](./kernel-selection) -- How the runtime worker selects kernels
+- [API: Transport](../api/transport) -- `RuntimeTransport` and `createWorkerTransport`
+- [Configure the Bundler](../guides/bundler-configuration) -- Worker and bundler setup
+- [Set Up the Filesystem](../guides/filesystem-setup) -- Connecting a filesystem to the worker

@@ -1,6 +1,6 @@
 ---
 title: Kernel Factories
-description: Factory functions for Replicad, Manifold, OpenSCAD, JSCAD, Zoo, and Tau kernel plugins.
+description: Factory functions for Replicad, OpenCASCADE, Manifold, OpenSCAD, JSCAD, Zoo, and Tau kernel plugins.
 icon: lucide:cog
 ---
 
@@ -14,42 +14,48 @@ Use kernel factories when registering CAD engines with `createRuntimeClient`. Ea
 
 <auto-type-table path='./props/kernels.ts' name='ReplicadOptions' />
 
+<auto-type-table path='./props/kernels.ts' name='OpenCascadeOptions' />
+
 <auto-type-table path='./props/kernels.ts' name='ManifoldOptions' />
 
 <auto-type-table path='./props/kernels.ts' name='ZooOptions' />
 
 ## Factories
 
-| Factory              | Extensions | Purpose                                           |
-| -------------------- | ---------- | ------------------------------------------------- |
-| `replicad(options?)` | `ts`, `js` | OpenCASCADE-based parametric BRep                 |
-| `manifold(options?)` | `ts`, `js` | Mesh-first manifold modeling with robust booleans |
-| `openscad()`         | `scad`     | CSG modeling                                      |
-| `jscad()`            | `ts`, `js` | @jscad/modeling parametric CSG                    |
-| `zoo(options)`       | `kcl`      | KCL via Zoo API                                   |
-| `tau()`              | `*`        | Catch-all for STEP, STL, 3MF                      |
+| Factory                 | Extensions | Purpose                                             |
+| ----------------------- | ---------- | --------------------------------------------------- |
+| `replicad(options?)`    | `ts`, `js` | OpenCASCADE-based parametric BRep via Replicad API  |
+| `opencascade(options?)` | `ts`, `js` | Direct OpenCASCADE API access                       |
+| `manifold(options?)`    | `ts`, `js` | Mesh-first manifold modeling with robust booleans   |
+| `openscad()`            | `scad`     | CSG modeling with OpenSCAD language                 |
+| `jscad()`               | `ts`, `js` | @jscad/modeling parametric CSG                      |
+| `zoo(options)`          | `kcl`      | KCL via Zoo WebSocket API                           |
+| `tau()`                 | `*`        | Catch-all converter for STEP, STL, 3MF, OBJ imports |
 
 ## Usage
 
 ```typescript
 import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
-import { replicad, manifold, openscad, jscad, zoo, tau } from '@taucad/runtime/kernels';
+import { replicad, opencascade, manifold, openscad, jscad, zoo, tau } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [
     replicad({ withBrepEdges: true }),
+    opencascade(),
     manifold(),
     openscad(),
     jscad(),
     zoo({ baseUrl: 'wss://example.com/v1/kernels/zoo' }),
     tau(),
   ],
-  bundlers: [],
+  bundlers: [esbuild()],
   fileSystem: fromMemoryFS(),
 });
 ```
 
 ## Related
 
-- [Choosing a Kernel](/docs/guides/choosing-a-kernel)
-- [Plugin System](/docs/concepts/plugin-system)
+- [Choose a Kernel](../guides/choosing-a-kernel)
+- [Plugin System](../concepts/plugin-system)
+- [Create a Custom Kernel](../guides/custom-kernel)

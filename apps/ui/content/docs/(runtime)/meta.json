@@ -1,5 +1,5 @@
 {
-  "title": "Kernels",
+  "title": "Runtime",
   "description": "Multi-kernel CAD runtime for browser and Node.js",
   "icon": "Blocks",
   "root": true,
@@ -26,6 +26,7 @@
     "concepts/plugin-system",
     "concepts/middleware-model",
     "concepts/kernel-selection",
+    "concepts/render-lifecycle",
     "concepts/worker-model",
 
     "---API Reference---",
@@ -33,8 +34,12 @@
     "api/kernels",
     "api/middleware",
     "api/bundler",
+    "api/filesystem",
     "api/types",
     "api/testing",
-    "api/transport"
+    "api/transport",
+
+    "---Reference---",
+    "reference/replicad"
   ]
 }

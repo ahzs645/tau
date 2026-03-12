@@ -1,12 +1,12 @@
 ---
 title: Core Types
-description: KernelResult, KernelIssue, CreateGeometryResult, and other fundamental type definitions.
+description: KernelResult, KernelIssue, Tessellation, WorkerState, and other fundamental type definitions.
 icon: lucide:file-type
 ---
 
 # Core Types
 
-Use these types when handling kernel operation results, errors, and geometry output. They form the shared contract between the client and worker runtime.
+Use these types when handling kernel operation results, errors, geometry output, and worker state. They form the shared contract between the client and worker runtime.
 
 ## Result Types
 
@@ -28,18 +28,75 @@ type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 
 <auto-type-table path='./props/types.ts' name='ErrorLocation' />
 
+## Tessellation
+
+<auto-type-table path='./props/types.ts' name='Tessellation' />
+
+Controls the quality of mesh tessellation. `linearTolerance` controls chord deviation and `angularTolerance` controls angular deviation. Lower values produce finer meshes.
+
+## Worker State and Render Phase
+
+`WorkerState` is the worker's current lifecycle state: `'idle'`, `'rendering'`, or `'error'`. Subscribe via `client.on('state', handler)`.
+
+`RenderPhase` identifies the current phase of a render: `'resolvingDeps'`, `'bundling'`, `'extractingParams'`, `'computingGeometry'`, `'postProcessing'`. Subscribe via `client.on('progress', handler)`.
+
+## Dependency Types
+
+Dependencies represent what a kernel's geometry depends on. The `Dependency` union type is used for cache key computation, middleware, and change detection:
+
+<auto-type-table path='./props/types.ts' name='FileDependency' />
+
+<auto-type-table path='./props/types.ts' name='MiddlewareDependency' />
+
+<auto-type-table path='./props/types.ts' name='FrameworkDependency' />
+
+<auto-type-table path='./props/types.ts' name='OptionDependency' />
+
+<auto-type-table path='./props/types.ts' name='ParameterDependency' />
+
+<auto-type-table path='./props/types.ts' name='AssetDependency' />
+
+`Dependency` is the union: `FileDependency | MiddlewareDependency | FrameworkDependency | OptionDependency | ParameterDependency | AssetDependency`.
+
+## Filesystem Types
+
+<auto-type-table path='./props/types.ts' name='RuntimeFileSystemBase' />
+
+<auto-type-table path='./props/types.ts' name='RuntimeFileSystem' />
+
+## Kernel Types
+
+<auto-type-table path='./props/types.ts' name='KernelDefinition' />
+
+<auto-type-table path='./props/types.ts' name='KernelRuntime' />
+
+## Bundler Types
+
+<auto-type-table path='./props/types.ts' name='BundlerDefinition' />
+
+<auto-type-table path='./props/types.ts' name='KernelBundler' />
+
+<auto-type-table path='./props/types.ts' name='BundleResult' />
+
+<auto-type-table path='./props/types.ts' name='BuiltinModule' />
+
+## Tracer Types
+
+<auto-type-table path='./props/types.ts' name='SpanHandle' />
+
+<auto-type-table path='./props/types.ts' name='RuntimeSpanTracer' />
+
 ## Geometry and Export Types
 
-| Type                   | Definition                                                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `CreateGeometryResult` | `KernelResult<GeometryResponse[]>`                                                                                                   |
-| `HashedGeometryResult` | `KernelResult<Geometry[]>` — with content-hash for React keys                                                                        |
-| `GetParametersResult`  | `KernelResult<{ defaultParameters: Record<string, unknown>; jsonSchema: unknown }>`                                                  |
-| `ExportResult`         | `KernelResult<ExportFile>` — client-facing unwrapped type where `ExportFile = { name: string; bytes: Uint8Array; mimeType: string }` |
-| `ExportGeometryResult` | `KernelResult<ExportFile[]>` — internal pipeline type (middleware and kernel authors)                                                |
-| `RenderPhase`          | `string` — framework phases: `'resolvingDeps'`, `'bundling'`, `'extractingParams'`, `'computingGeometry'`, `'postProcessing'`        |
+<auto-type-table path='./props/types.ts' name='CreateGeometryResult' />
 
-## Narrowing Results
+<auto-type-table path='./props/types.ts' name='HashedGeometryResult' />
+
+<auto-type-table path='./props/types.ts' name='GetParametersResult' />
+
+<auto-type-table path='./props/types.ts' name='ExportGeometryResult' />
+
+## Usage
 
 ```typescript @ts-nocheck
 const result = await client.render({ file: 'main.ts' });
@@ -53,4 +110,6 @@ if (result.success) {
 
 ## Related
 
-- [Error Handling](/docs/guides/error-handling)
+- [Handle Errors](../guides/error-handling)
+- [API: Client](./client)
+- [API: Filesystem](./filesystem)

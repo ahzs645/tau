@@ -1,22 +1,17 @@
 ---
-title: Runtime
-description: A CAD runtime for browser and Node.js. Run Replicad, Manifold, OpenSCAD, JSCAD, and Zoo from a unified API.
+title: '@taucad/runtime'
+description: A multi-kernel CAD runtime for browser and Node.js with autonomous rendering, middleware, and Web Worker isolation.
 icon: lucide:blocks
 ---
 
 # @taucad/runtime
 
-A multi-kernel CAD runtime for browser and Node.js. Run multiple CAD engines from a single, unified API with middleware support, automatic kernel selection, and Web Worker isolation.
+A multi-kernel CAD runtime for browser and Node.js. Run multiple CAD engines from a single, unified API with middleware support, automatic kernel selection, autonomous rendering, and Web Worker isolation.
 
 ```typescript
-import { createRuntimeClient } from '@taucad/runtime';
-import { replicad } from '@taucad/runtime/kernels';
-import { esbuild } from '@taucad/runtime/bundler';
+import { createRuntimeClient, presets } from '@taucad/runtime';
 
-const client = createRuntimeClient({
-  kernels: [replicad()],
-  bundlers: [esbuild()],
-});
+const client = createRuntimeClient(presets.all());
 
 const result = await client.export('step', {
   code: {
@@ -32,22 +27,39 @@ const result = await client.export('step', {
 // result.data -> { name: 'box.step', bytes: Uint8Array, mimeType: 'model/step' }
 ```
 
+Or configure individual plugins for tree-shaking:
+
+```typescript
+import { createRuntimeClient } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+});
+```
+
 ## Supported Kernels
 
-| Kernel        | Language      | Strengths                                                     |
-| ------------- | ------------- | ------------------------------------------------------------- |
-| **Replicad**  | TypeScript/JS | Parametric BRep modeling via OpenCASCADE. STEP export.        |
-| **Manifold**  | TypeScript/JS | Robust mesh booleans with `manifold-3d`. Fast WASM workflows. |
-| **OpenSCAD**  | OpenSCAD      | CSG modeling for 3D printing. Familiar `.scad` syntax.        |
-| **JSCAD**     | TypeScript/JS | Parametric CSG with `@jscad/modeling`.                        |
-| **Zoo (KCL)** | KCL           | Cloud-native CAD with AI integration via Zoo API.             |
+| Kernel          | Language      | Strengths                                                       |
+| --------------- | ------------- | --------------------------------------------------------------- |
+| **Replicad**    | TypeScript/JS | Parametric BRep modeling via OpenCASCADE. STEP export.          |
+| **OpenCASCADE** | TypeScript/JS | Direct OpenCASCADE API access. Full BRep control.               |
+| **Manifold**    | TypeScript/JS | Robust mesh booleans with `manifold-3d`. Fast WASM workflows.   |
+| **OpenSCAD**    | OpenSCAD      | CSG modeling for 3D printing. Familiar `.scad` syntax.          |
+| **JSCAD**       | TypeScript/JS | Parametric CSG with `@jscad/modeling`.                          |
+| **Zoo (KCL)**   | KCL           | Cloud-native CAD with AI integration via Zoo API.               |
+| **Tau**         | Any           | Catch-all converter for STEP, STL, 3MF, and other file imports. |
 
 ## Key Capabilities
 
 - **Multi-kernel runtime** -- Switch between CAD engines based on file type or explicit selection.
-- **Plugin architecture** -- Extend with custom kernels, middleware, and bundlers via `defineKernel`, `defineMiddleware`, and `defineBundler`.
+- **Autonomous rendering** -- `setFile` and `setParameters` trigger autonomous rendering with file watching, debounced re-renders, and event-driven geometry push.
+- **Plugin architecture** -- Extend with custom kernels, middleware, and bundlers via [`defineKernel`](./api/kernels), [`defineMiddleware`](./api/middleware), and [`defineBundler`](./api/bundler).
 - **Middleware pipeline** -- Add caching, coordinate transforms, and edge detection with an onion-model middleware system.
-- **Web Worker isolation** -- All kernel computation runs in Web Workers with MessagePort-based communication.
+- **Web Worker isolation** -- All kernel computation runs in Web Workers with MessagePort-based communication and SharedArrayBuffer abort signaling.
+- **Render cancellation** -- Abort in-progress renders instantly via cooperative proxy abort, async boundary checks, and generation counters.
 - **Filesystem abstraction** -- Use Node.js fs, in-memory, or browser-based filesystems interchangeably.
 - **TypeScript bundling** -- Built-in esbuild integration for JS/TS kernel inputs.
 

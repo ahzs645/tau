@@ -34,7 +34,9 @@ yarn add @taucad/runtime
 `@taucad/runtime` uses Web Workers for kernel isolation. Vite handles worker URLs natively via `new URL(..., import.meta.url)`:
 
 ```typescript
-import { createRuntimeClient } from '@taucad/runtime';
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
 ```
 
 ### Node.js
@@ -44,11 +46,12 @@ For server-side usage, workers run as Node.js worker threads. Use `fromNodeFS` f
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
 import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
-  kernels: [
-    /* ... */
-  ],
+  kernels: [replicad()],
+  bundlers: [esbuild()],
   fileSystem: fromNodeFS('/path/to/project'),
 });
 ```
@@ -57,17 +60,21 @@ const client = createRuntimeClient({
 
 The package exposes multiple subpath imports for tree-shaking:
 
-| Import Path                  | Contents                                                              |
-| ---------------------------- | --------------------------------------------------------------------- |
-| `@taucad/runtime`            | Client, filesystem constructors, helpers                              |
-| `@taucad/runtime/kernels`    | Kernel factories (`replicad`, `manifold`, `openscad`, `jscad`, `zoo`) |
-| `@taucad/runtime/middleware` | `defineMiddleware` and built-in middleware                            |
-| `@taucad/runtime/bundler`    | `defineBundler` and esbuild bundler                                   |
-| `@taucad/runtime/transport`  | Transport layer (`createWorkerTransport`)                             |
-| `@taucad/runtime/types`      | All TypeScript type exports                                           |
-| `@taucad/runtime/testing`    | Testing utilities                                                     |
+| Import Path                  | Contents                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| `@taucad/runtime`            | Client, presets, `fromMemoryFS`, `fromFsLike`, plugin factories, error types, core types    |
+| `@taucad/runtime/kernels`    | Kernel factories (`replicad`, `opencascade`, `manifold`, `openscad`, `jscad`, `zoo`, `tau`) |
+| `@taucad/runtime/middleware` | `defineMiddleware` and built-in middleware factories                                        |
+| `@taucad/runtime/bundler`    | `defineBundler` and esbuild bundler factory                                                 |
+| `@taucad/runtime/transport`  | Transport layer (`createWorkerTransport`, `createInProcessTransport`)                       |
+| `@taucad/runtime/filesystem` | `fromNodeFS` (Node.js-only), plus `fromMemoryFS`, `fromFsLike`, bridge utilities            |
+| `@taucad/runtime/types`      | All TypeScript type exports                                                                 |
+| `@taucad/runtime/testing`    | Testing utilities for kernel and middleware development                                     |
+| `@taucad/runtime/worker`     | Runtime worker entry point ([`KernelRuntimeWorker`](../concepts/worker-model))              |
+
+`fromMemoryFS` and `fromFsLike` are available from both the main `@taucad/runtime` entry and `@taucad/runtime/filesystem`. `fromNodeFS` is only available from `@taucad/runtime/filesystem` because it depends on Node.js APIs.
 
 ## What's Next
 
 - [Quick Start](./quick-start) -- Render your first 3D model in under 4 minutes
-- [API Reference](/docs/api/client) -- Full API documentation for `createRuntimeClient`
+- [API Reference: Client](../api/client) -- Full API documentation for `createRuntimeClient`
