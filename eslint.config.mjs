@@ -2,6 +2,7 @@ import tseslint from 'typescript-eslint';
 import nxEslintPlugin from '@nx/eslint-plugin';
 import * as importXPlugin from 'eslint-plugin-import-x';
 import maxParamsNoConstructorPlugin from 'eslint-plugin-max-params-no-constructor';
+import tauLintPlugin from '@taucad/oxlint/tau-lint';
 
 /**
  * Minimal ESLint config -- only rules that cannot run in oxlint.
@@ -167,7 +168,7 @@ const config = [
       '**/*.prompt.example.*',
       '**/*.cjs',
       '**/*.jscad.js',
-      '**/content/docs/**',
+      '**/content/docs/**/props/**',
       '**/vitest.integration.config.ts',
       'tarballs/**',
       'experiments/**',
@@ -184,7 +185,9 @@ const config = [
       // oxlint-disable-next-line typescript/no-unsafe-assignment -- parserOptions is a runtime-resolved object
       parserOptions: {
         ...tseslint.configs.base.languageOptions?.parserOptions,
-        projectService: true,
+        projectService: {
+          allowDefaultProject: ['eslint.config.mjs'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -313,6 +316,13 @@ const config = [
     rules: {
       '@typescript-eslint/naming-convention': 'warn',
     },
+  },
+
+  {
+    files: ['apps/ui/content/docs/**/*.mdx'],
+    languageOptions: { parser: tauLintPlugin.parsers.mdx },
+    plugins: { 'tau-lint': tauLintPlugin },
+    rules: { 'tau-lint/validate-mdx-codeblocks': 'error' },
   },
 ];
 

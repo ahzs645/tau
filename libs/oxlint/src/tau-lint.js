@@ -14,12 +14,17 @@ import { requireIgnoreDescriptionRule } from './rules/require-ignore-description
 import { validateJsdocCodeblocksRule } from './rules/validate-jsdoc-codeblocks.js';
 import { requirePublicExportJsdocRule } from './rules/require-public-export-jsdoc.js';
 import { noConsecutiveJsdocBlankLinesRule } from './rules/no-consecutive-jsdoc-blank-lines.js';
+import { validateMdxCodeblocksRule } from './rules/validate-mdx-codeblocks.js';
+import * as mdxParser from './mdx-parser.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.6.0',
+    version: '1.7.0',
+  },
+  parsers: {
+    mdx: mdxParser,
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -29,6 +34,7 @@ const plugin = {
     'validate-jsdoc-codeblocks': validateJsdocCodeblocksRule,
     'require-public-export-jsdoc': requirePublicExportJsdocRule,
     'no-consecutive-jsdoc-blank-lines': noConsecutiveJsdocBlankLinesRule,
+    'validate-mdx-codeblocks': validateMdxCodeblocksRule,
   },
 };
 

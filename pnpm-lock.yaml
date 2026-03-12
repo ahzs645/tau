@@ -937,6 +937,9 @@ importers:
       '@taucad/filesystem':
         specifier: workspace:*
         version: link:packages/filesystem
+      '@taucad/oxlint':
+        specifier: workspace:*
+        version: link:libs/oxlint
       '@taucad/runtime':
         specifier: workspace:*
         version: link:packages/runtime
@@ -24979,7 +24982,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/ui@4.1.0-beta.6)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.1))(vite@8.0.0-beta.16(@types/node@25.3.0)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      vitest: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@24.0.15)(@vitest/ui@4.1.0-beta.6)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.1))(vite@8.0.0-beta.16(@types/node@24.0.15)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
 
   '@vitest/utils@4.1.0-beta.6':
     dependencies:
@@ -35753,7 +35756,7 @@ snapshots:
     dependencies:
       ts-essentials: 10.1.1(typescript@5.9.3)
       typescript: 5.9.3
-      vitest: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@25.3.0)(@vitest/ui@4.1.0-beta.6)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.1))(vite@8.0.0-beta.16(@types/node@25.3.0)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      vitest: 4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@24.0.15)(@vitest/ui@4.1.0-beta.6)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.1))(vite@8.0.0-beta.16(@types/node@24.0.15)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
 
   vitest@4.1.0-beta.6(@opentelemetry/api@1.9.0)(@types/node@24.0.15)(@vitest/ui@4.1.0-beta.6)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.1))(vite@8.0.0-beta.16(@types/node@24.0.15)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)):
     dependencies:

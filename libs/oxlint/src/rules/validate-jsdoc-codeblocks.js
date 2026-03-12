@@ -8,9 +8,14 @@
  * - Enforces full language names (`typescript` over `ts`, `javascript` over `js`)
  * - Type-checks `typescript` codeblocks in `@public` JSDoc via tsgolint
  *
+ * Note: tsgolint utilities are inlined here rather than imported from a shared
+ * module because oxlint's JS plugin runtime cannot resolve secondary imports
+ * beyond the rule files referenced by the plugin entry point.
+ *
  * @typedef {import('eslint').Rule.RuleModule} RuleModule
  * @typedef {import('eslint').Rule.RuleContext} RuleContext
  * @typedef {{ kind: number; range?: { pos: number; end: number }; message: { id: string; description: string }; file_path?: string }} TsgolintDiagnostic
+ * @typedef {{ virtualPath: string; strippedCode: string; codeStartIndex: number; mapToRaw: (offset: number) => number }} CodeblockEntry
  */
 
 import { spawnSync } from 'node:child_process';
@@ -26,19 +31,6 @@ const SHORTHAND_LANGS = {
   ts: { full: 'typescript', messageId: 'preferTypescriptTag' },
   js: { full: 'javascript', messageId: 'preferJavascriptTag' },
 };
-
-/** @type {string | undefined} */
-let cachedTsgolintBinary;
-let tsgolintResolved = false;
-
-/**
- * @typedef {{
- *   virtualPath: string;
- *   strippedCode: string;
- *   codeStartIndex: number;
- *   mapToRaw: (offset: number) => number;
- * }} CodeblockEntry
- */
 
 // ---------------------------------------------------------------------------
 // Star-prefix stripping
@@ -88,8 +80,12 @@ function stripStarPrefixes(rawCode) {
 }
 
 // ---------------------------------------------------------------------------
-// tsgolint integration
+// tsgolint integration (inlined — see file header for rationale)
 // ---------------------------------------------------------------------------
+
+/** @type {string | undefined} */
+let cachedTsgolintBinary;
+let tsgolintResolved = false;
 
 function resolveTsgolintBinary() {
   if (tsgolintResolved) {
@@ -113,9 +109,6 @@ function resolveTsgolintBinary() {
 }
 
 /**
- * Parse binary-framed tsgolint output.
- * Wire format: [uint32 LE size][uint8 type (0=Error, 1=Diagnostic)][UTF-8 JSON]
- *
  * @param {Buffer} buffer
  * @returns {TsgolintDiagnostic[]}
  */

@@ -245,6 +245,7 @@
     "@tailwindcss/vite": "^4.2.1",
     "@taucad/chat": "workspace:*",
     "@taucad/filesystem": "workspace:*",
+    "@taucad/oxlint": "workspace:*",
     "@taucad/runtime": "workspace:*",
     "@taucad/utils": "workspace:*",
     "@testing-library/jest-dom": "catalog:",
