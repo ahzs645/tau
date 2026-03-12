@@ -3230,8 +3230,8 @@ describe('OC API Call Tracing', () => {
 
   /** Wait for PerformanceObserver callbacks to fire and then flush. */
   async function collectTelemetry(worker: Awaited<ReturnType<typeof createTestWorker>>): Promise<void> {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 200);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 500);
     });
     worker.flushTelemetry();
   }
