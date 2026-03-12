@@ -103,9 +103,10 @@ jobs:
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
       (github.event_name == 'issues' &&
         (contains(github.event.issue.body, '@claude') ||
-         contains(github.event.issue.title, '@claude') ||
-         (github.event.action == 'labeled' && github.event.label.name == 'claude')) &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+         contains(github.event.issue.title, '@claude')) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
+      (github.event_name == 'issues' &&
+        github.event.action == 'labeled' && github.event.label.name == 'claude')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
