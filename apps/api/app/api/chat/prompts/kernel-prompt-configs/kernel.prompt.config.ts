@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import { jscadConfig } from '#api/chat/prompts/kernel-prompt-configs/jscad.prompt.config.js';
 import { manifoldConfig } from '#api/chat/prompts/kernel-prompt-configs/manifold.prompt.config.js';

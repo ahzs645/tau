@@ -1,11 +1,11 @@
 /**
- * @taucad/kernels/filesystem -- advanced filesystem bridge primitives.
+ * @taucad/runtime/filesystem -- advanced filesystem bridge primitives.
  *
  * Low-level primitives for custom filesystem bridge setups, plus high-level
  * wrappers for zero-config worker-to-worker communication.
  *
  * Most consumers should use `fromNodeFS`, `fromMemoryFS`, or `fromFsLike`
- * from the main `@taucad/kernels` entry instead.
+ * from the main `@taucad/runtime` entry instead.
  */
 
 // Filesystem constructors

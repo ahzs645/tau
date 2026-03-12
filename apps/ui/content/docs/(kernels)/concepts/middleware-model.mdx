@@ -6,7 +6,7 @@ icon: lucide:circle-dot
 
 # Middleware Model
 
-Middleware in @taucad/kernels uses the onion model: each layer wraps the next, and code after the inner call runs on the return journey. This pattern enables caching, transformation, and cross-cutting concerns without modifying kernel code.
+Middleware in @taucad/runtime uses the onion model: each layer wraps the next, and code after the inner call runs on the return journey. This pattern enables caching, transformation, and cross-cutting concerns without modifying kernel code.
 
 ## Context and Motivation
 
@@ -65,7 +65,7 @@ Example: a cache middleware uses `dependencyHash` as the cache key. It can store
 
 ### Comparison to Express/Koa Middleware
 
-Express and Koa use a similar pattern: `(req, res, next) => { ...; next(); ... }`. The @taucad/kernels model differs in two ways:
+Express and Koa use a similar pattern: `(req, res, next) => { ...; next(); ... }`. The @taucad/runtime model differs in two ways:
 
 1. **Wrap style** — Instead of `next()`, you receive `handler` and call `handler(input)`. The return value flows back through the chain. This makes async composition and result transformation natural.
 2. **Typed input/output** — Each hook has a specific input and output type. No generic request/response object; the types reflect the operation.

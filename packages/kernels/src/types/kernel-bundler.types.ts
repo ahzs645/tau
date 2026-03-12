@@ -187,7 +187,7 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
  *
  * @example <caption>Custom bundler with import detection</caption>
  * ```typescript
- * import { defineBundler } from '@taucad/kernels/bundler';
+ * import { defineBundler } from '@taucad/runtime/bundler';
  *
  * export default defineBundler({
  *   name: 'MyBundler',

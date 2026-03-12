@@ -1,6 +1,6 @@
 ---
 name: Kernel Migration to packages/kernels
-overview: Migrate the kernel runtime framework from apps/ui/app/components/geometry/kernel/ to packages/kernels/ (@taucad/kernels) as a first-class publishable npm package, fully decoupled from the UI application, with a minimal public API surface and comprehensive dual-environment (browser + Node.js) test validation.
+overview: Migrate the kernel runtime framework from apps/ui/app/components/geometry/kernel/ to packages/kernels/ (@taucad/runtime) as a first-class publishable npm package, fully decoupled from the UI application, with a minimal public API surface and comprehensive dual-environment (browser + Node.js) test validation.
 todos:
   - id: dep-tree
     content: "Phase 0: Generate and validate the full dependency tree inventory (every file, every import, classified as move/adapt/replace)"
@@ -27,7 +27,7 @@ todos:
     content: "Phase 5: Add dual-environment test gates -- node + jsdom matrix, CJS/ESM import smoke tests"
     status: completed
   - id: update-ui-imports
-    content: "Phase 6: Update UI app to consume @taucad/kernels via createDefaultConfig() and workspace dependency, remove old kernel directory"
+    content: "Phase 6: Update UI app to consume @taucad/runtime via createDefaultConfig() and workspace dependency, remove old kernel directory"
     status: completed
   - id: verify-build
     content: "Phase 7: Run typecheck, lint, test, build for both kernels package and UI app; verify tarball contents"
@@ -41,11 +41,11 @@ isProject: false
 
 The kernel code lives at `[apps/ui/app/components/geometry/kernel/](apps/ui/app/components/geometry/kernel/)` (~80 files) and is tightly coupled to the UI app through `#`-prefixed imports.
 
-A placeholder `[packages/kernels/](packages/kernels/)` already exists with scaffolding (`package.json` for `@taucad/kernels`, tsconfig, vitest, tsdown configs, `project.json`) but only contains `export const hello = 'world'`.
+A placeholder `[packages/kernels/](packages/kernels/)` already exists with scaffolding (`package.json` for `@taucad/runtime`, tsconfig, vitest, tsdown configs, `project.json`) but only contains `export const hello = 'world'`.
 
 ## 2. Target State
 
-`@taucad/kernels` becomes a standalone, environment-agnostic, npm-publishable package that:
+`@taucad/runtime` becomes a standalone, environment-agnostic, npm-publishable package that:
 
 - Contains all kernel framework code, middleware, bundlers, kernel implementations, and utilities
 - Depends only on `@taucad/*` packages/libs and external npm packages (zero `apps/ui/` imports)
@@ -231,7 +231,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 
 Minimal viable API. Everything not listed here is internal and must not be importable by consumers.
 
-### 4.1 Main Entry (`@taucad/kernels`)
+### 4.1 Main Entry (`@taucad/runtime`)
 
 Consumer-facing runtime API:
 
@@ -254,7 +254,7 @@ export { defineKernel, defineBundler } from '@taucad/types';
 export { createKernelSuccess, createKernelError } from './framework/kernel-helpers.js';
 ```
 
-### 4.2 Worker Entry (`@taucad/kernels/worker`)
+### 4.2 Worker Entry (`@taucad/runtime/worker`)
 
 Entry point for `new Worker()` or Node.js `worker_threads`. This file self-registers:
 
@@ -263,7 +263,7 @@ Entry point for `new Worker()` or Node.js `worker_threads`. This file self-regis
 export { KernelRuntimeWorker } from './framework/kernel-runtime-worker.js';
 ```
 
-### 4.3 Middleware Authoring (`@taucad/kernels/middleware`)
+### 4.3 Middleware Authoring (`@taucad/runtime/middleware`)
 
 For middleware authors:
 
@@ -272,30 +272,30 @@ export { createKernelMiddleware, createMiddlewareRuntime } from './middleware/ke
 export type { KernelMiddleware, KernelMiddlewareConfig } from './middleware/kernel-middleware.js';
 ```
 
-### 4.4 Individual Kernel Modules (`@taucad/kernels/kernels/*`)
+### 4.4 Individual Kernel Modules (`@taucad/runtime/kernels/*`)
 
 Each kernel is a standalone entry point, default-exporting a `KernelDefinition`. Consumers reference these by URL (browser) or import directly (Node.js/testing):
 
-- `@taucad/kernels/kernels/replicad`
-- `@taucad/kernels/kernels/jscad`
-- `@taucad/kernels/kernels/openscad`
-- `@taucad/kernels/kernels/zoo`
-- `@taucad/kernels/kernels/tau`
+- `@taucad/runtime/kernels/replicad`
+- `@taucad/runtime/kernels/jscad`
+- `@taucad/runtime/kernels/openscad`
+- `@taucad/runtime/kernels/zoo`
+- `@taucad/runtime/kernels/tau`
 
-### 4.5 Bundler Modules (`@taucad/kernels/bundler/*`)
+### 4.5 Bundler Modules (`@taucad/runtime/bundler/*`)
 
-- `@taucad/kernels/bundler/esbuild`
+- `@taucad/runtime/bundler/esbuild`
 
-### 4.6 Middleware Modules (`@taucad/kernels/middleware/*`)
+### 4.6 Middleware Modules (`@taucad/runtime/middleware/*`)
 
 Each middleware is a standalone entry point, default-exporting a `KernelMiddleware`:
 
-- `@taucad/kernels/middleware/parameter-cache`
-- `@taucad/kernels/middleware/geometry-cache`
-- `@taucad/kernels/middleware/gltf-coordinate-transform`
-- `@taucad/kernels/middleware/gltf-edge-detection`
+- `@taucad/runtime/middleware/parameter-cache`
+- `@taucad/runtime/middleware/geometry-cache`
+- `@taucad/runtime/middleware/gltf-coordinate-transform`
+- `@taucad/runtime/middleware/gltf-edge-detection`
 
-### 4.7 Testing Utilities (`@taucad/kernels/testing`)
+### 4.7 Testing Utilities (`@taucad/runtime/testing`)
 
 For kernel/middleware authors writing tests:
 
@@ -427,7 +427,7 @@ export function createDefaultConfig(options?: DefaultConfigOptions): DefaultConf
 **Zero-config (any bundler or Node.js)** -- the recommended path:
 
 ```typescript
-import { createDefaultConfig, KernelWorkerClient, createFileManagerPort } from '@taucad/kernels';
+import { createDefaultConfig, KernelWorkerClient, createFileManagerPort } from '@taucad/runtime';
 
 const { workerUrl, kernelConfig, middlewareConfig, bundlerConfig } = createDefaultConfig();
 const worker = new Worker(workerUrl, { type: 'module' });
@@ -449,7 +449,7 @@ const config = createDefaultConfig({
 **Full manual control (power users)**:
 
 ```typescript
-import { KernelWorkerClient, createFileManagerPort } from '@taucad/kernels';
+import { KernelWorkerClient, createFileManagerPort } from '@taucad/runtime';
 import type { KernelConfig, MiddlewareConfig, BundlerConfig } from '@taucad/types';
 
 // Consumer resolves URLs however their environment requires
@@ -463,7 +463,7 @@ const kernelConfig: KernelConfig = [
 
 ```typescript
 import { Worker } from 'node:worker_threads';
-import { createDefaultConfig, KernelWorkerClient } from '@taucad/kernels';
+import { createDefaultConfig, KernelWorkerClient } from '@taucad/runtime';
 
 const { workerUrl, kernelConfig, middlewareConfig, bundlerConfig } = createDefaultConfig();
 const worker = new Worker(new URL(workerUrl));
@@ -473,8 +473,8 @@ const worker = new Worker(new URL(workerUrl));
 **Testing (direct injection, no worker or URL resolution needed)**:
 
 ```typescript
-import replicadKernel from '@taucad/kernels/kernels/replicad';
-import { createTestWorker } from '@taucad/kernels/testing';
+import replicadKernel from '@taucad/runtime/kernels/replicad';
+import { createTestWorker } from '@taucad/runtime/testing';
 
 const worker = await createTestWorker({
   kernels: [{ id: 'replicad', definition: replicadKernel }],
@@ -785,18 +785,18 @@ packages/kernels/
 
 ### Phase 6: Update UI App
 
-- Add `@taucad/kernels: workspace:`* to UI `package.json`
+- Add `@taucad/runtime: workspace:`* to UI `package.json`
 - Rewrite `kernel-worker.constants.ts`:
-  - Replace all `?url` imports with a single `createDefaultConfig()` call from `@taucad/kernels`
+  - Replace all `?url` imports with a single `createDefaultConfig()` call from `@taucad/runtime`
   - `defaultKernelConfig`, `debugKernelConfig`, `defaultMiddlewareConfig`, `defaultBundlerConfig` derived from the factory
   - The `debugKernelConfig` variant passes `{ kernels: { replicad: { options: { withExceptions: true } } } }`
   - The `ENV.TAU_WEBSOCKET_URL` for zoo kernel is injected via `createDefaultConfig({ kernels: { zoo: { options: { baseUrl } } } })`
-- Update `kernel.machine.ts` to import `KernelWorkerClient` and `createFileManagerPort` from `@taucad/kernels`
+- Update `kernel.machine.ts` to import `KernelWorkerClient` and `createFileManagerPort` from `@taucad/runtime`
 - Update `kernel.machine.ts` to use `workerUrl` from the config instead of `?url` import of runtime worker
 - Update route files that import kernel/middleware URLs directly (e.g. `auth-splashback.tsx`) to use `createDefaultConfig()` or individual subpath imports with the universal `new URL` pattern
 - Update `kcl-register-language.ts` dynamic import path
 - Remove `apps/ui/app/components/geometry/kernel/` directory
-- Add `@taucad/kernels` to Vite's `optimizeDeps.exclude` to preserve `new URL()` resolution during dev
+- Add `@taucad/runtime` to Vite's `optimizeDeps.exclude` to preserve `new URL()` resolution during dev
 - Run: `pnpm nx test ui --watch=false`
 
 ### Phase 7: Final Verification

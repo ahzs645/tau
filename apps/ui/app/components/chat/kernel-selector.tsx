@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';

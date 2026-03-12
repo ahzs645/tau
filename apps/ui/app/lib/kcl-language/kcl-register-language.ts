@@ -502,7 +502,7 @@ async function initializeSymbolServiceWasm(): Promise<void> {
     const [wasmModule, wasmPathModule, engineModule] = await Promise.all([
       import('@taucad/kcl-wasm-lib'),
       import('@taucad/kcl-wasm-lib/kcl.wasm?url'),
-      import('@taucad/kernels/kernels/zoo/engine-connection'),
+      import('@taucad/runtime/kernels/zoo/engine-connection'),
     ]);
 
     // Initialize WASM

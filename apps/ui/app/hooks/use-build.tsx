@@ -5,7 +5,7 @@ import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Remote } from 'comlink';
 import { useQueryClient } from '@tanstack/react-query';
-import type { KernelClientOptions } from '@taucad/kernels';
+import type { KernelClientOptions } from '@taucad/runtime';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import type { ObjectStoreWorker } from '#hooks/object-store.worker.js';

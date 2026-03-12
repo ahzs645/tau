@@ -1,6 +1,6 @@
 ---
 title: Quick Start
-description: Render your first 3D model with @taucad/kernels in under 4 minutes.
+description: Render your first 3D model with @taucad/runtime in under 4 minutes.
 icon: lucide:rocket
 ---
 
@@ -10,16 +10,16 @@ Render a 3D model from TypeScript code using the Replicad kernel. You will creat
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 
 ## Render a 3D Model
 
 Create a file called `render.ts` and paste the following code:
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],

@@ -77,7 +77,7 @@ Every public API, kernel, and feature carries one of three stability tiers. Adap
 Experimental APIs use the `unstable_` prefix in both code and configuration. They can change or be removed in any minor release without the standard deprecation period. They are explicitly not recommended for production use.
 
 ```typescript
-import { unstable_streamingExport } from '@taucad/kernels';
+import { unstable_streamingExport } from '@taucad/runtime';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -203,7 +203,7 @@ function warnOnce(condition: boolean, message: string): void {
 // Usage
 warnOnce(
   !options.onCleanup,
-  '[@taucad/kernels] "onCleanup" is deprecated and will be removed in v2.0.0. ' +
+  '[@taucad/runtime] "onCleanup" is deprecated and will be removed in v2.0.0. ' +
     'Use "onDispose" instead. See https://docs.tau.new/migration/v2#ondispose',
 );
 ```
@@ -254,7 +254,7 @@ Tau uses `@internal` JSDoc for non-exported internals and the `/internal` subpat
 
 ### Dist Tags
 
-Pre-release versions are published under npm dist-tags so that `npm install @taucad/kernels` always resolves to the latest stable version.
+Pre-release versions are published under npm dist-tags so that `npm install @taucad/runtime` always resolves to the latest stable version.
 
 | Tag      | Purpose                                 | Version Format  |
 | -------- | --------------------------------------- | --------------- |
@@ -369,7 +369,7 @@ Every major release has a dedicated migration guide in the docs site covering:
 Before every major release, publish release candidates under the `next` npm tag for community testing:
 
 ```bash
-pnpm install @taucad/kernels@next
+pnpm install @taucad/runtime@next
 ```
 
 This gives early adopters a low-risk path to validate their applications against upcoming changes and report issues before the stable release.

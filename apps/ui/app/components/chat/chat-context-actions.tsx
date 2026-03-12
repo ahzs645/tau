@@ -4,7 +4,7 @@ import { useSelector } from '@xstate/react';
 import { createActor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { CodeIssue } from '@taucad/types';
-import type { KernelIssue } from '@taucad/kernels';
+import type { KernelIssue } from '@taucad/runtime';
 import { TooltipTrigger, TooltipContent, Tooltip } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
 import { useBuild, useMainGraphics } from '#hooks/use-build.js';

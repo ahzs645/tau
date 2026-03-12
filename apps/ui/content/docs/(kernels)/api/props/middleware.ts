@@ -1,3 +1,3 @@
-export type { KernelMiddleware } from '@taucad/kernels/middleware/kernel-middleware';
-export type { MiddlewareState, KernelMiddlewareRuntime } from '@taucad/kernels/types';
-export type { MiddlewarePlugin } from '@taucad/kernels';
+export type { KernelMiddleware } from '@taucad/runtime/middleware/kernel-middleware';
+export type { MiddlewareState, KernelMiddlewareRuntime } from '@taucad/runtime/types';
+export type { MiddlewarePlugin } from '@taucad/runtime';

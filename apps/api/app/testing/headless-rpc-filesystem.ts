@@ -1,4 +1,4 @@
-import type { KernelFileSystem } from '@taucad/kernels';
+import type { KernelFileSystem } from '@taucad/runtime';
 import type { RpcFileSystem } from '@taucad/chat/rpc';
 
 /**

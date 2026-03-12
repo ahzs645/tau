@@ -245,33 +245,33 @@ protected abstract onCreateGeometry(input, runtime): Promise<Result>;
 Organize `package.json` exports by what each audience needs, not by internal file structure.
 
 ```text
-@taucad/kernels                -- createKernelClient, presets, types (consumer)
-@taucad/kernels/kernel         -- replicad(), openscad() factories (consumer)
-@taucad/kernels/middleware     -- defineMiddleware(), cache factories (author + consumer)
-@taucad/kernels/bundler        -- defineBundler(), esbuild() factory (author + consumer)
-@taucad/kernels/transport      -- KernelTransport, createWorkerTransport (advanced)
-@taucad/kernels/testing        -- test utilities (testing)
+@taucad/runtime                -- createKernelClient, presets, types (consumer)
+@taucad/runtime/kernel         -- replicad(), openscad() factories (consumer)
+@taucad/runtime/middleware     -- defineMiddleware(), cache factories (author + consumer)
+@taucad/runtime/bundler        -- defineBundler(), esbuild() factory (author + consumer)
+@taucad/runtime/transport      -- KernelTransport, createWorkerTransport (advanced)
+@taucad/runtime/testing        -- test utilities (testing)
 ```
 
 ### Singular subpath naming
 
 Use **singular nouns** for all subpath export segments. Subpaths are module namespaces that a developer imports from, not REST-style collection endpoints. The package name itself may be plural (it scopes a collection of modules), but every subpath within it is singular.
 
-**Why**: Singular subpaths eliminate the doubled-name stutter (`@taucad/kernels/kernels`), align sibling categories so developers can predict paths by analogy, and match the convention used by tRPC, Effect-TS, Drizzle ORM, and TanStack Router.
+**Why**: Singular subpaths eliminate the doubled-name stutter (`@taucad/runtime/kernels`), align sibling categories so developers can predict paths by analogy, and match the convention used by tRPC, Effect-TS, Drizzle ORM, and TanStack Router.
 
 CORRECT:
 
 ```typescript
-import { replicad } from '@taucad/kernels/kernel';
-import { esbuild } from '@taucad/kernels/bundler';
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { replicad } from '@taucad/runtime/kernel';
+import { esbuild } from '@taucad/runtime/bundler';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 ```
 
 INCORRECT:
 
 ```typescript
-import { replicad } from '@taucad/kernels/kernels'; // stutters package name
-import { esbuild } from '@taucad/kernels/bundlers'; // inconsistent with ./middleware
+import { replicad } from '@taucad/runtime/kernels'; // stutters package name
+import { esbuild } from '@taucad/runtime/bundlers'; // inconsistent with ./middleware
 ```
 
 | Segment type              | Convention    | Examples                                   |
@@ -279,7 +279,7 @@ import { esbuild } from '@taucad/kernels/bundlers'; // inconsistent with ./middl
 | Category barrel           | Singular      | `./kernel`, `./bundler`, `./middleware`    |
 | Individual implementation | Singular      | `./kernel/replicad`, `./bundler/esbuild`   |
 | Standalone module         | Singular      | `./transport`, `./filesystem`, `./testing` |
-| Package name              | May be plural | `@taucad/kernels` (scopes a collection)    |
+| Package name              | May be plural | `@taucad/runtime` (scopes a collection)    |
 
 For the full library survey, analysis, and trade-offs behind this convention, see [Subpath Export Naming Research](../research/subpath-export-naming.md).
 
@@ -328,10 +328,10 @@ Expose a simple high-level API for 90% of users. Export the lower-level primitiv
 
 ```typescript
 // High-level (most users)
-import { createKernelClient } from '@taucad/kernels';
+import { createKernelClient } from '@taucad/runtime';
 
 // Low-level (custom transport authors)
-import { createWorkerTransport } from '@taucad/kernels/transport';
+import { createWorkerTransport } from '@taucad/runtime/transport';
 ```
 
 ## 11. No Optional Interface Methods
@@ -401,7 +401,7 @@ Use `package.json` export conditions for environment-specific code:
 Provide preset configurations that cover common use cases. Let advanced users compose their own.
 
 ```typescript
-import { createKernelClient, presets } from '@taucad/kernels';
+import { createKernelClient, presets } from '@taucad/runtime';
 
 const client = createKernelClient(presets.all());
 ```

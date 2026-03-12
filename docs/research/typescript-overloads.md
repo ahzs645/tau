@@ -1,6 +1,6 @@
 ---
 title: 'TypeScript Function Overloads: Patterns, Limitations, and Mock Compatibility'
-description: 'Root cause, official TypeScript stance, and recommended patterns for overloads in @taucad/kernels; mock compatibility and factory patterns.'
+description: 'Root cause, official TypeScript stance, and recommended patterns for overloads in @taucad/runtime; mock compatibility and factory patterns.'
 status: active
 created: '2026-03-03'
 updated: '2026-03-09'
@@ -18,7 +18,7 @@ structural-type incompatibilities with generic utilities like `Parameters<T>`,
 `ReturnType<T>`, and testing mocks (`vi.fn()` / `jest.fn()`).
 
 This document captures the root cause, the official TypeScript stance, and
-recommended patterns for the `@taucad/kernels` codebase.
+recommended patterns for the `@taucad/runtime` codebase.
 
 ---
 
@@ -149,7 +149,7 @@ consumed and narrowed by the caller.
 
 ---
 
-## Recommended Pattern for `@taucad/kernels`
+## Recommended Pattern for `@taucad/runtime`
 
 ### Keep overloads on the interface
 

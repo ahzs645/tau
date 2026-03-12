@@ -1,11 +1,11 @@
 ---
 name: new-kernel
-description: Add a new first-party CAD kernel to Tau's @taucad/kernels plugin system. Use when adding a kernel, integrating a new CAD engine, implementing defineKernel, or wiring kernel factories, exports, presets, and UI catalog entries.
+description: Add a new first-party CAD kernel to Tau's @taucad/runtime plugin system. Use when adding a kernel, integrating a new CAD engine, implementing defineKernel, or wiring kernel factories, exports, presets, and UI catalog entries.
 ---
 
 # New Kernel Integration
 
-Add a new first-party CAD kernel to Tau following the `@taucad/kernels` plugin architecture.
+Add a new first-party CAD kernel to Tau following the `@taucad/runtime` plugin architecture.
 
 ## Definition of Done
 

@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useCallback } from 'reac
 import { useActorRef, useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import type { Geometry } from '@taucad/types';
-import type { KernelClientOptions } from '@taucad/kernels';
+import type { KernelClientOptions } from '@taucad/runtime';
 import type { JSONSchema7 } from 'json-schema';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';

@@ -364,7 +364,7 @@ export type KernelDefinition<
  *
  * @example <caption>Registering a custom kernel</caption>
  * ```typescript
- * import { defineKernel } from '@taucad/kernels';
+ * import { defineKernel } from '@taucad/runtime';
  *
  * export default defineKernel({
  *   name: 'MyKernel',

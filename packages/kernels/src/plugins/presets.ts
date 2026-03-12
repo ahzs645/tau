@@ -40,7 +40,7 @@ export const presets = {
    *
    * @example <caption>Zero-config full setup</caption>
    * ```typescript
-   * import { createKernelClient, presets } from '@taucad/kernels';
+   * import { createKernelClient, presets } from '@taucad/runtime';
    *
    * const client = createKernelClient(presets.all());
    * ```

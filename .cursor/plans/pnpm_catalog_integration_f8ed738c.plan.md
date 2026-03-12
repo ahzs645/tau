@@ -24,7 +24,7 @@ isProject: false
 
 ## Context
 
-The Tau monorepo (pnpm 10.13.1, which supports catalogs since 9.5.0) currently has ~160 production deps + ~78 dev deps in the root [package.json](package.json), with minimal overlap across sub-packages today. However, as `@taucad/kernels` is extracted (carrying ~20 production deps out of root into its own `package.json`), version drift becomes a real risk. Catalogs solve this preemptively.
+The Tau monorepo (pnpm 10.13.1, which supports catalogs since 9.5.0) currently has ~160 production deps + ~78 dev deps in the root [package.json](package.json), with minimal overlap across sub-packages today. However, as `@taucad/runtime` is extracted (carrying ~20 production deps out of root into its own `package.json`), version drift becomes a real risk. Catalogs solve this preemptively.
 
 Current [pnpm-workspace.yaml](pnpm-workspace.yaml) has no catalog entries. The workspace contains 3 publishable packages (`converter`, `js`, `json-schema`) plus the soon-to-be-created `kernels`, 6 internal libs, and 2 apps.
 
@@ -134,7 +134,7 @@ catalog:
   "@react-router/node": "^7.9.6"
   isbot: "^5.1.28"
 
-  # === Tier 2: Will be shared with @taucad/kernels ===
+  # === Tier 2: Will be shared with @taucad/runtime ===
   replicad: "^0.19.1"
   replicad-opencascadejs: "^0.19.0"
   "@jscad/modeling": "^2.12.6"

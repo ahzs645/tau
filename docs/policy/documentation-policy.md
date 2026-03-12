@@ -302,7 +302,7 @@ Individual pages are available as raw markdown at `*.mdx` endpoints via the `llm
 
 - Use clear H2/H3 headings to structure content.
 - Use fenced code blocks with language tags (`typescript`, `bash`, `json`).
-- Include explicit package import paths in code examples (`@taucad/kernels`, `@taucad/kernels/kernels`, etc.).
+- Include explicit package import paths in code examples (`@taucad/runtime`, `@taucad/runtime/kernels`, etc.).
 
 ### Structured Metadata
 

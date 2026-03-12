@@ -259,7 +259,7 @@ const expectVector3ToBeCloseTo = ({
  *
  * @example <caption>Asserting geometry results in tests</caption>
  * ```typescript
- * import { createGeometryTestHelpers, createMockKernelClient } from '@taucad/kernels/testing';
+ * import { createGeometryTestHelpers, createMockKernelClient } from '@taucad/runtime/testing';
  *
  * const helpers = createGeometryTestHelpers();
  * const client = createMockKernelClient();

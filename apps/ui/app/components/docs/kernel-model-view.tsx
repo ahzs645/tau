@@ -3,10 +3,10 @@ import { Scene, PerspectiveCamera, AmbientLight, DirectionalLight, Box3, Vector3
 import type { Group } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { KernelClient } from '@taucad/kernels';
-import { createKernelClient } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import type { KernelClient } from '@taucad/runtime';
+import { createKernelClient } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 import { Loader } from '#components/ui/loader.js';
 import { useSharedRenderer } from '#components/docs/shared-renderer.js';
 import { cn } from '#utils/ui.utils.js';

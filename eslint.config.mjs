@@ -196,7 +196,7 @@ const config = [
       '@nx/enforce-module-boundaries': [
         'error',
         {
-          allow: ['@taucad/kernels'],
+          allow: ['@taucad/runtime'],
           allowCircularSelfDependency: true,
           depConstraints: [
             {

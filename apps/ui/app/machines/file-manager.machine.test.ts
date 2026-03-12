@@ -12,7 +12,7 @@ vi.mock('#machines/file-manager.worker.js?worker', () => ({
   },
 }));
 
-vi.mock('@taucad/kernels/filesystem', () => ({
+vi.mock('@taucad/runtime/filesystem', () => ({
   createFileSystemBridge: vi.fn(() => ({
     port: new MessageChannel().port1,
     dispose: vi.fn(),

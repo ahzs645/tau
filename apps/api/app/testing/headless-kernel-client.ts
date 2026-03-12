@@ -1,4 +1,4 @@
-import type { KernelIssue } from '@taucad/kernels';
+import type { KernelIssue } from '@taucad/runtime';
 import type { GetKernelResultRpcResult } from '@taucad/chat';
 import type { RpcKernelClient } from '@taucad/chat/rpc';
 

@@ -14,7 +14,7 @@ import { Virtuoso } from 'react-virtuoso';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import type { LogEntry } from '@taucad/types';
-import type { RenderPhase, PerformanceEntryData } from '@taucad/kernels';
+import type { RenderPhase, PerformanceEntryData } from '@taucad/runtime';
 import { logLevels } from '@taucad/types/constants';
 import {
   FloatingPanel,

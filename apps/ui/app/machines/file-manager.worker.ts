@@ -7,7 +7,7 @@
  * the TOCTOU race condition in ZenFS's commitNew (zen-fs/core#256).
  */
 
-import { exposeFileSystem } from '@taucad/kernels/filesystem';
+import { exposeFileSystem } from '@taucad/runtime/filesystem';
 import {
   ProviderRegistry,
   WriteCoordinator,

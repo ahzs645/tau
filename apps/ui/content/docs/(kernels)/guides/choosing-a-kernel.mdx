@@ -10,7 +10,7 @@ Compare the built-in kernels and select the right one for your CAD workflow. Thi
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](/docs/getting-started/quick-start)
 
 ## Kernel Comparison
@@ -55,9 +55,9 @@ Use Replicad when you need:
 - Professional mechanical design
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -75,8 +75,8 @@ Use OpenSCAD when you have:
 - Familiarity with OpenSCAD syntax
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { openscad } from '@taucad/kernels/kernels';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { openscad } from '@taucad/runtime/kernels';
 
 const client = createKernelClient({
   kernels: [openscad()],
@@ -93,9 +93,9 @@ Use Manifold when you need:
 - Browser-friendly WASM performance with robust topology
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { manifold } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { manifold } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [manifold()],
@@ -113,9 +113,9 @@ Use JSCAD when you need:
 - No STEP or STL export (glTF/GLB only)
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { jscad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { jscad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [jscad()],
@@ -133,8 +133,8 @@ Use Zoo when you need:
 - KCL language with remote engine
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { zoo } from '@taucad/kernels/kernels';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { zoo } from '@taucad/runtime/kernels';
 
 const client = createKernelClient({
   kernels: [zoo({ baseUrl: 'wss://your-zoo-server/v1/kernels/zoo' })],
@@ -147,9 +147,9 @@ const client = createKernelClient({
 You can register multiple kernels in a single client. The framework selects the kernel automatically based on file extension and `canHandle` detection:
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad, manifold, openscad, jscad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad, manifold, openscad, jscad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad(), manifold(), openscad(), jscad()],

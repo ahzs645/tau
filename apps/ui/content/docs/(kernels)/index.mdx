@@ -4,14 +4,14 @@ description: A multi-kernel CAD runtime for browser and Node.js. Run Replicad, M
 icon: lucide:blocks
 ---
 
-# @taucad/kernels
+# @taucad/runtime
 
 A multi-kernel CAD runtime for browser and Node.js. Run multiple CAD engines from a single, unified API with middleware support, automatic kernel selection, and Web Worker isolation.
 
 ```typescript
-import { createKernelClient } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -53,7 +53,7 @@ const result = await client.export('step', {
 
 ## Part of the Tau Ecosystem
 
-`@taucad/kernels` is the CAD runtime that powers [Tau](https://tau.new), the AI-powered CAD platform. The package is designed for standalone use -- you can integrate it into any JavaScript application without the Tau editor.
+`@taucad/runtime` is the CAD runtime that powers [Tau](https://tau.new), the AI-powered CAD platform. The package is designed for standalone use -- you can integrate it into any JavaScript application without the Tau editor.
 
 The Tau ecosystem also includes:
 

@@ -18,7 +18,7 @@ import type { KernelTransport } from '#transport/kernel-transport.js';
  *
  * @example <caption>Browser setup with Worker transport</caption>
  * ```typescript
- * import { createWorkerTransport } from '@taucad/kernels/transport';
+ * import { createWorkerTransport } from '@taucad/runtime/transport';
  *
  * const transport = createWorkerTransport('/kernel-worker.js');
  * transport.onMessage((response) => console.log(response.type));

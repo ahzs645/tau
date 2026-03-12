@@ -1,6 +1,6 @@
 ---
 name: Kernel API v2 redesign
-overview: "Breaking redesign of @taucad/kernels into a world-class, layered CAD kernel API: event-driven transport foundation, tree-shakeable plugin factories, Node.js-compatible filesystem, Promise-based high-level client, and comprehensive JSDoc enforcement."
+overview: "Breaking redesign of @taucad/runtime into a world-class, layered CAD kernel API: event-driven transport foundation, tree-shakeable plugin factories, Node.js-compatible filesystem, Promise-based high-level client, and comprehensive JSDoc enforcement."
 todos:
   - id: docs-best-practices
     content: Create docs/library-api-best-practices.md with API design patterns distilled from Clerk JS codebase analysis
@@ -27,7 +27,7 @@ todos:
     content: Rename createKernelMiddleware() to defineMiddleware() across codebase
     status: completed
   - id: reorganize-exports
-    content: "Reorganize package.json exports: @taucad/kernels, /kernels, /middleware, /bundler, /transport, /testing"
+    content: "Reorganize package.json exports: @taucad/runtime, /kernels, /middleware, /bundler, /transport, /testing"
     status: completed
   - id: simplify-ui-consumption
     content: Migrate apps/ui to new createKernelClient API with plugin factories and .on() events
@@ -39,7 +39,7 @@ todos:
     content: Install eslint-plugin-jsdoc, configure rules for packages/, add comprehensive JSDoc to all public APIs
     status: in_progress
   - id: fs-helpers
-    content: Ship fromNodeFS() and fromMemoryFS() convenience constructors in @taucad/kernels
+    content: Ship fromNodeFS() and fromMemoryFS() convenience constructors in @taucad/runtime
     status: completed
 isProject: false
 ---
@@ -99,10 +99,10 @@ Each built-in kernel, middleware, and bundler is a **named export factory functi
 ### Consumer API
 
 ```typescript
-import { createKernelClient } from '@taucad/kernels';
-import { replicad, zoo, openscad } from '@taucad/kernels/kernels';
-import { parameterCache, geometryCache, gltfEdgeDetection } from '@taucad/kernels/middleware';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient } from '@taucad/runtime';
+import { replicad, zoo, openscad } from '@taucad/runtime/kernels';
+import { parameterCache, geometryCache, gltfEdgeDetection } from '@taucad/runtime/middleware';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [
@@ -150,7 +150,7 @@ type BundlerPlugin = {
 Each factory resolves its module URL via `new URL()` relative to its own file in the built package:
 
 ```typescript
-// @taucad/kernels/kernels
+// @taucad/runtime/kernels
 export function replicad(options?: ReplicadOptions): KernelPlugin {
   return {
     id: 'replicad',
@@ -193,7 +193,7 @@ const client = createKernelClient({
 Zero-config defaults for consumers who want everything:
 
 ```typescript
-import { createKernelClient, presets } from '@taucad/kernels';
+import { createKernelClient, presets } from '@taucad/runtime';
 
 const client = createKernelClient(presets.all());
 
@@ -345,7 +345,7 @@ type BundlerDefinition<Context> = {
 ### Factory
 
 ```typescript
-import { createKernelClient } from '@taucad/kernels';
+import { createKernelClient } from '@taucad/runtime';
 
 const client = createKernelClient({
   kernels: [replicad(), openscad()],
@@ -482,7 +482,7 @@ batchExists(paths)           → Promise.all(paths.map(exists))
 ### Convenience constructors
 
 ```typescript
-import { fromNodeFS, fromMemoryFS } from '@taucad/kernels';
+import { fromNodeFS, fromMemoryFS } from '@taucad/runtime';
 
 // Node.js: wraps fs.promises in 10 lines
 const fileSystem = fromNodeFS('/path/to/project');
@@ -527,8 +527,8 @@ function createWorkerTransport(workerUrl: string): KernelTransport;
 ### Advanced usage
 
 ```typescript
-import { createKernelClient } from '@taucad/kernels';
-import { createWorkerTransport } from '@taucad/kernels/transport';
+import { createKernelClient } from '@taucad/runtime';
+import { createWorkerTransport } from '@taucad/runtime/transport';
 
 const transport = createWorkerTransport(myCustomWorkerUrl);
 const client = createKernelClient({ transport, kernels: [...] });
@@ -557,14 +557,14 @@ function createHttpTransport(endpoint: string): KernelTransport;
 ### Reorganized subpath exports
 
 ```
-@taucad/kernels                -- createKernelClient, presets, defineKernel, defineBundler,
+@taucad/runtime                -- createKernelClient, presets, defineKernel, defineBundler,
                                   fromNodeFS, fromMemoryFS, KernelClient type, KernelFileSystem type
-@taucad/kernels/kernels        -- replicad(), zoo(), openscad(), jscad(), tau() plugin factories
-@taucad/kernels/middleware     -- defineMiddleware(), parameterCache(), geometryCache(),
+@taucad/runtime/kernels        -- replicad(), zoo(), openscad(), jscad(), tau() plugin factories
+@taucad/runtime/middleware     -- defineMiddleware(), parameterCache(), geometryCache(),
                                   gltfCoordinateTransform(), gltfEdgeDetection() plugin factories
-@taucad/kernels/bundler        -- defineBundler(), esbuild() plugin factory
-@taucad/kernels/transport      -- KernelTransport type, createWorkerTransport()
-@taucad/kernels/testing        -- createTestWorker, mocks, geometry helpers
+@taucad/runtime/bundler        -- defineBundler(), esbuild() plugin factory
+@taucad/runtime/transport      -- KernelTransport type, createWorkerTransport()
+@taucad/runtime/testing        -- createTestWorker, mocks, geometry helpers
 ```
 
 ### Naming changes
@@ -573,7 +573,7 @@ function createHttpTransport(endpoint: string): KernelTransport;
 - `createDefaultConfig()` → removed from public API (internal to `createKernelClient`)
 - `KernelFileManager` → `KernelFileSystem` (8 methods, Node.js-compatible)
 - `createFileManagerPort()` → internal (handled by `client.connect()`)
-- `KernelWorkerClient` → still exported from `@taucad/kernels/transport` for advanced use
+- `KernelWorkerClient` → still exported from `@taucad/runtime/transport` for advanced use
 
 ---
 
@@ -583,7 +583,7 @@ function createHttpTransport(endpoint: string): KernelTransport;
 
 ```typescript
 // kernel-worker.constants.ts -- 5 separate exports
-import { createDefaultConfig } from '@taucad/kernels';
+import { createDefaultConfig } from '@taucad/runtime';
 const baseConfig = createDefaultConfig({ ... });
 export const defaultKernelConfig = baseConfig.kernelConfig;
 export const debugKernelConfig = defaultKernelConfig.map(...);
@@ -605,9 +605,9 @@ const result = await client.render(file, params, onParametersResolved, onProgres
 
 ```typescript
 // kernel-worker.constants.ts -- single export
-import { replicad, zoo, openscad, jscad, tau } from '@taucad/kernels/kernels';
-import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
-import { esbuild } from '@taucad/kernels/bundler';
+import { replicad, zoo, openscad, jscad, tau } from '@taucad/runtime/kernels';
+import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
+import { esbuild } from '@taucad/runtime/bundler';
 
 export const defaultKernelConfig = {
   kernels: [
@@ -656,7 +656,7 @@ The only edge case is **Vite's dev server** `optimizeDeps` pre-bundling. The fix
 
 ```typescript
 // Consumer's vite.config.ts
-optimizeDeps: { exclude: ['@taucad/kernels'] }
+optimizeDeps: { exclude: ['@taucad/runtime'] }
 ```
 
 This is the same standard practice used by sql.js, ffmpeg.wasm, and Monaco Editor. Documented in the package README.
@@ -756,7 +756,7 @@ pnpm install -d eslint-plugin-jsdoc
 
 ## 12. Complete Type Reference
 
-### Consumer-facing types (exported from `@taucad/kernels`)
+### Consumer-facing types (exported from `@taucad/runtime`)
 
 ```typescript
 // Client
@@ -816,7 +816,7 @@ type KernelClientOptions = {
 };
 ```
 
-### Transport types (exported from `@taucad/kernels/transport`)
+### Transport types (exported from `@taucad/runtime/transport`)
 
 ```typescript
 type KernelTransport = {
@@ -826,7 +826,7 @@ type KernelTransport = {
 };
 ```
 
-### Plugin author types (exported from `@taucad/kernels`)
+### Plugin author types (exported from `@taucad/runtime`)
 
 ```typescript
 // defineKernel() -- kernel implementation contract

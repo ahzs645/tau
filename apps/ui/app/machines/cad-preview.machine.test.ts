@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createActor, waitFor } from 'xstate';
 import { mock } from 'vitest-mock-extended';
-import type { KernelClientOptions } from '@taucad/kernels';
-import { createMockKernelClient } from '@taucad/kernels/testing';
+import type { KernelClientOptions } from '@taucad/runtime';
+import { createMockKernelClient } from '@taucad/runtime/testing';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { stopRootWithRehydration } from '#lib/xstate-test.utils.js';
 import { cadMachine } from '#machines/cad.machine.js';

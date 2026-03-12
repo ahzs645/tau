@@ -4,7 +4,7 @@ import { createAgent } from 'langchain';
 import type { ReactAgent } from 'langchain';
 import { streamText } from 'ai';
 import type { ModelMessage } from 'ai';
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import type { ToolSelection } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';

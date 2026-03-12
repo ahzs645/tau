@@ -36,7 +36,7 @@ icon: lucide:icon-name  # optional
 ## Code Examples
 
 - TypeScript only.
-- Include ALL imports with full package paths (`@taucad/kernels`, `@taucad/kernels/kernels`).
+- Include ALL imports with full package paths (`@taucad/runtime`, `@taucad/runtime/kernels`).
 - Complete, runnable snippets -- never fragments.
 - Annotate expected output.
 

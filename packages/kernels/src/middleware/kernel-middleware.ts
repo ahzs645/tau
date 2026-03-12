@@ -105,7 +105,7 @@ export type KernelMiddleware<
  *
  * @example <caption>Wrapping geometry with logging</caption>
  * ```typescript
- * import { defineMiddleware } from '@taucad/kernels/middleware';
+ * import { defineMiddleware } from '@taucad/runtime/middleware';
  *
  * const loggingMiddleware = defineMiddleware({
  *   name: 'Logging',

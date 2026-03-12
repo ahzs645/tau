@@ -1,7 +1,7 @@
 import { memo, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { Check } from 'lucide-react';
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useSelector } from '@xstate/react';
 import type * as Monaco from 'monaco-editor';
 import type { AnyActorRef } from 'xstate';
-import type { IssueSeverity, KernelStackFrame } from '@taucad/kernels';
+import type { IssueSeverity, KernelStackFrame } from '@taucad/runtime';
 import type { MonacoMarkerService } from '#lib/monaco-marker-service.js';
 
 const kernelMarkerOwner = 'kernel';

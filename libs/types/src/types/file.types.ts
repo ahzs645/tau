@@ -56,7 +56,7 @@ export type FileInput = {
 
 /**
  * A named binary file produced by an export operation.
- * Shared across @taucad/kernels (ExportGeometryResult) and @taucad/converter output.
+ * Shared across @taucad/runtime (ExportGeometryResult) and @taucad/converter output.
  */
 export type ExportFile = {
   name: string;

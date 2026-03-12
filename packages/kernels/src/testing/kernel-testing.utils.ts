@@ -236,7 +236,7 @@ export type MockFileSystem = KernelFileSystem & {
  *
  * @example <caption>Mocking filesystem in tests</caption>
  * ```typescript
- * import { createMockFileSystem } from '@taucad/kernels/testing';
+ * import { createMockFileSystem } from '@taucad/runtime/testing';
  *
  * const filesystem = createMockFileSystem();
  * filesystem.mocks.readFile.mockResolvedValue('file content');
@@ -830,7 +830,7 @@ const noop = () => {
  *
  * @example <caption>Stubbing a kernel client</caption>
  * ```typescript
- * import { createMockKernelClient } from '@taucad/kernels/testing';
+ * import { createMockKernelClient } from '@taucad/runtime/testing';
  *
  * const client = createMockKernelClient();
  * ```

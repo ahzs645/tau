@@ -1,1 +1,1 @@
-export type { KernelTransport } from '@taucad/kernels/transport';
+export type { KernelTransport } from '@taucad/runtime/transport';

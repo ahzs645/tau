@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
-import type { KernelClient, KernelClientOptions, KernelIssue, PerformanceEntryData } from '@taucad/kernels';
-import { createMockKernelClient } from '@taucad/kernels/testing';
+import type { KernelClient, KernelClientOptions, KernelIssue, PerformanceEntryData } from '@taucad/runtime';
+import { createMockKernelClient } from '@taucad/runtime/testing';
 import type { Geometry, GeometryFile } from '@taucad/types';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';

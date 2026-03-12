@@ -1,4 +1,4 @@
-import type { KernelIssue } from '@taucad/kernels';
+import type { KernelIssue } from '@taucad/runtime';
 import { z } from 'zod';
 import { kernelIssueSchema } from '#schemas/tools/issue.schema.js';
 

@@ -221,7 +221,7 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "catalog:",
     "@taucad/chat": "workspace:*",
-    "@taucad/kernels": "workspace:*",
+    "@taucad/runtime": "workspace:*",
     "@taucad/filesystem": "workspace:*",
     "@taucad/utils": "workspace:*",
     "@eslint-community/eslint-plugin-eslint-comments": "catalog:",

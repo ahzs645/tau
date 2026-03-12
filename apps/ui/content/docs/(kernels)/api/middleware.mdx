@@ -34,10 +34,10 @@ Use the middleware API when extending kernel behavior with caching, coordinate t
 ## Usage
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
-import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
 
 const client = createKernelClient({
   kernels: [replicad()],

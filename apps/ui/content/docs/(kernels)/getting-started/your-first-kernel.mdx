@@ -17,7 +17,7 @@ Build a parametric box with rounded edges using the Replicad kernel. You will le
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](./quick-start)
 
 ## Step 1: Set Up the Client
@@ -25,9 +25,9 @@ Build a parametric box with rounded edges using the Replicad kernel. You will le
 Create a kernel client with the Replicad kernel, esbuild bundler, and an in-memory filesystem:
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],

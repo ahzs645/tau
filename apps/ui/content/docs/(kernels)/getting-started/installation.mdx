@@ -1,12 +1,12 @@
 ---
 title: Installation
-description: Install @taucad/kernels and configure it for your project.
+description: Install @taucad/runtime and configure it for your project.
 icon: lucide:download
 ---
 
 # Installation
 
-Install `@taucad/kernels` and its peer dependencies to start using the multi-kernel CAD runtime in your project.
+Install `@taucad/runtime` and its peer dependencies to start using the multi-kernel CAD runtime in your project.
 
 ## Prerequisites
 
@@ -16,25 +16,25 @@ Install `@taucad/kernels` and its peer dependencies to start using the multi-ker
 ## Install the Package
 
 ```bash tab="pnpm"
-pnpm add @taucad/kernels
+pnpm add @taucad/runtime
 ```
 
 ```bash tab="npm"
-npm install @taucad/kernels
+npm install @taucad/runtime
 ```
 
 ```bash tab="yarn"
-yarn add @taucad/kernels
+yarn add @taucad/runtime
 ```
 
 ## Framework Configuration
 
 ### Vite
 
-`@taucad/kernels` uses Web Workers for kernel isolation. Vite handles worker URLs natively via `new URL(..., import.meta.url)`:
+`@taucad/runtime` uses Web Workers for kernel isolation. Vite handles worker URLs natively via `new URL(..., import.meta.url)`:
 
 ```typescript
-import { createKernelClient } from '@taucad/kernels';
+import { createKernelClient } from '@taucad/runtime';
 ```
 
 ### Node.js
@@ -42,7 +42,7 @@ import { createKernelClient } from '@taucad/kernels';
 For server-side usage, workers run as Node.js worker threads. Use `fromNodeFS` for filesystem access:
 
 ```typescript
-import { createKernelClient, fromNodeFS } from '@taucad/kernels';
+import { createKernelClient, fromNodeFS } from '@taucad/runtime';
 import fs from 'node:fs';
 
 const client = createKernelClient({
@@ -59,13 +59,13 @@ The package exposes multiple subpath imports for tree-shaking:
 
 | Import Path                  | Contents                                                              |
 | ---------------------------- | --------------------------------------------------------------------- |
-| `@taucad/kernels`            | Client, filesystem constructors, helpers                              |
-| `@taucad/kernels/kernels`    | Kernel factories (`replicad`, `manifold`, `openscad`, `jscad`, `zoo`) |
-| `@taucad/kernels/middleware` | `defineMiddleware` and built-in middleware                            |
-| `@taucad/kernels/bundler`    | `defineBundler` and esbuild bundler                                   |
-| `@taucad/kernels/transport`  | Transport layer (`createWorkerTransport`)                             |
-| `@taucad/kernels/types`      | All TypeScript type exports                                           |
-| `@taucad/kernels/testing`    | Testing utilities                                                     |
+| `@taucad/runtime`            | Client, filesystem constructors, helpers                              |
+| `@taucad/runtime/kernels`    | Kernel factories (`replicad`, `manifold`, `openscad`, `jscad`, `zoo`) |
+| `@taucad/runtime/middleware` | `defineMiddleware` and built-in middleware                            |
+| `@taucad/runtime/bundler`    | `defineBundler` and esbuild bundler                                   |
+| `@taucad/runtime/transport`  | Transport layer (`createWorkerTransport`)                             |
+| `@taucad/runtime/types`      | All TypeScript type exports                                           |
+| `@taucad/runtime/testing`    | Testing utilities                                                     |
 
 ## What's Next
 

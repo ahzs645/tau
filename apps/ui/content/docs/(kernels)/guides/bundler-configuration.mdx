@@ -10,7 +10,7 @@ Configure the esbuild bundler for JS/TS kernels (Replicad, Manifold, JSCAD). The
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](/docs/getting-started/quick-start)
 - [Choosing a Kernel](./choosing-a-kernel) -- Understand which kernels use bundlers
 
@@ -20,12 +20,12 @@ Configure the esbuild bundler for your JS/TS kernels, understand how bundling in
 
 ## Steps
 
-### 1. Import esbuild from @taucad/kernels/bundler
+### 1. Import esbuild from @taucad/runtime/bundler
 
 The default bundler is created via the `esbuild()` factory:
 
 ```typescript
-import { esbuild } from '@taucad/kernels/bundler';
+import { esbuild } from '@taucad/runtime/bundler';
 ```
 
 ### 2. Add the Bundler to createKernelClient
@@ -33,9 +33,9 @@ import { esbuild } from '@taucad/kernels/bundler';
 Pass the bundler in the `bundlers` array. JS/TS kernels (Replicad, Manifold, JSCAD) require a bundler to resolve imports and execute code:
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -49,7 +49,7 @@ const client = createKernelClient({
 Use `EsbuildOptions` to override the default file extensions:
 
 ```typescript
-import { esbuild } from '@taucad/kernels/bundler';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const bundler = esbuild({ extensions: ['ts', 'tsx'] });
 ```
@@ -72,7 +72,7 @@ Kernels access the bundler through `runtime.bundler` and `runtime.execute`. You 
 If you build a custom JS/TS kernel, register built-in modules during `initialize`:
 
 ```typescript
-import { defineKernel } from '@taucad/kernels';
+import { defineKernel } from '@taucad/runtime';
 
 export default defineKernel({
   async initialize(options, runtime) {
@@ -97,7 +97,7 @@ See the Replicad and JSCAD kernel source for full examples.
 For non-esbuild bundlers (e.g., custom transpiler, different execution model), use `defineBundler`:
 
 ```typescript
-import { defineBundler } from '@taucad/kernels/bundler';
+import { defineBundler } from '@taucad/runtime/bundler';
 
 const myBundler = defineBundler({
   name: 'MyBundler',

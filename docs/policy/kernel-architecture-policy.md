@@ -368,15 +368,15 @@ During detection, bare specifiers appear as external imports in `metafile.output
 ## Package Exports
 
 ```
-@taucad/kernels          → createKernelClient, types, presets, fromNodeFS, fromMemoryFS, fromFsLike
-@taucad/kernels/kernels  → replicad(), manifold(), zoo(), openscad(), jscad(), tau()
-@taucad/kernels/middleware → parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()
-@taucad/kernels/bundler  → esbuild()
-@taucad/kernels/transport → KernelTransport, createWorkerTransport()
-@taucad/kernels/testing  → Testing utilities (createTestFilesystem, mocks)
+@taucad/runtime          → createKernelClient, types, presets, fromNodeFS, fromMemoryFS, fromFsLike
+@taucad/runtime/kernels  → replicad(), manifold(), zoo(), openscad(), jscad(), tau()
+@taucad/runtime/middleware → parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()
+@taucad/runtime/bundler  → esbuild()
+@taucad/runtime/transport → KernelTransport, createWorkerTransport()
+@taucad/runtime/testing  → Testing utilities (createTestFilesystem, mocks)
 ```
 
-Individual plugin subpaths are also maintained for direct imports (e.g., `@taucad/kernels/kernels/replicad`).
+Individual plugin subpaths are also maintained for direct imports (e.g., `@taucad/runtime/kernels/replicad`).
 
 ## Tessellation
 

@@ -217,8 +217,8 @@ await client.connect({ port });
 ## Subpath Export Structure
 
 ```
-@taucad/kernels              → fromNodeFS, fromMemoryFS, fromFsLike (constructors)
-@taucad/kernels/filesystem   → exposeFileSystem, createFileSystemBridge (high-level)
+@taucad/runtime              → fromNodeFS, fromMemoryFS, fromFsLike (constructors)
+@taucad/runtime/filesystem   → exposeFileSystem, createFileSystemBridge (high-level)
                                createKernelFileSystem (wrapper)
                                createBridgeServer, createBridgePort, createBridgeCall (low-level)
                                createBridgeProxy, catchMessages, extractTransferables (low-level)
@@ -264,13 +264,13 @@ The function is generic (`<T extends Record<string, unknown>>`), not `KernelFile
 
 ## Open Questions
 
-### Should `@taucad/kernels/filesystem` split into two subpaths?
+### Should `@taucad/runtime/filesystem` split into two subpaths?
 
 Currently, `/filesystem` exports both filesystem-typed APIs (`createFileSystemBridge`) and generic bridge primitives (`createBridgeServer`, `createBridgeProxy`, `createBridgeCall`). A potential split:
 
 ```
-@taucad/kernels/filesystem   → filesystem-typed exports only
-@taucad/kernels/bridge       → generic bridge primitives
+@taucad/runtime/filesystem   → filesystem-typed exports only
+@taucad/runtime/bridge       → generic bridge primitives
 ```
 
 **Current recommendation:** Keep them together. The bridge exists primarily for filesystem communication within Tau. A separate `/bridge` subpath adds complexity without clear consumer benefit. Revisit if the bridge primitives gain non-filesystem consumers.

@@ -4,7 +4,7 @@ import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { FastifyReply } from 'fastify';
 import type { ReactAgent } from 'langchain';
 import type { ToolSelection, ChatSnapshot } from '@taucad/chat';
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 import { ModelService } from '#api/models/model.service.js';

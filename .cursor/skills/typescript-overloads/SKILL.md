@@ -87,7 +87,7 @@ async function readFile(path: string, encoding?: 'utf8') {
 // readFileFn is available for mock assertions
 ```
 
-Use `createMockFileSystem()` shared factory for `@taucad/kernels` tests.
+Use `createMockFileSystem()` shared factory for `@taucad/runtime` tests.
 
 ## Decision Matrix
 

@@ -1,2 +1,2 @@
-export type { ReplicadOptions, ZooOptions, ManifoldOptions } from '@taucad/kernels/kernels';
-export type { KernelPlugin } from '@taucad/kernels';
+export type { ReplicadOptions, ZooOptions, ManifoldOptions } from '@taucad/runtime/kernels';
+export type { KernelPlugin } from '@taucad/runtime';

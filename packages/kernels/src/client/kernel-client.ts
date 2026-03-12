@@ -292,10 +292,10 @@ export type KernelClient = {
  *
  * @example <caption>Browser setup</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { replicad, openscad } from '@taucad/kernels/kernels';
- * import { geometryCache } from '@taucad/kernels/middleware';
- * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { replicad, openscad } from '@taucad/runtime/kernels';
+ * import { geometryCache } from '@taucad/runtime/middleware';
+ * import { esbuild } from '@taucad/runtime/bundler';
  *
  * const client = createKernelClient({
  *   kernels: [replicad(), openscad()],
@@ -306,10 +306,10 @@ export type KernelClient = {
  *
  * @example <caption>Node.js / test setup with in-process transport</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { replicad } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
- * import { createInProcessTransport } from '@taucad/kernels/transport';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
+ * import { createInProcessTransport } from '@taucad/runtime/transport';
  *
  * const client = createKernelClient({
  *   kernels: [replicad()],

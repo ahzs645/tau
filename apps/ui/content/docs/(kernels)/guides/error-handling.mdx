@@ -10,7 +10,7 @@ Kernel operations return a discriminated union `KernelResult<T>`. Check the `suc
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](/docs/getting-started/quick-start)
 
 ## Goal
@@ -45,9 +45,9 @@ The `success` field is the discriminant. When `success` is `true`, `data` is pre
 Check `result.success` to narrow the discriminated union. TypeScript automatically infers the correct type in each branch:
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -71,7 +71,7 @@ if (result.success) {
 Each `KernelIssue` has a message, severity, optional location, and optional stack information:
 
 ```typescript
-import type { KernelIssue } from '@taucad/kernels';
+import type { KernelIssue } from '@taucad/runtime';
 
 const issue: KernelIssue = {
   message: 'Cannot read property "extrude" of undefined',
@@ -151,7 +151,7 @@ if (result.success) {
 Kernels enrich raw errors into `KernelIssue` with location and stack. Replicad maps OpenCASCADE exceptions; JSCAD and Zoo map their engine errors. When building custom kernels, use `createKernelError`:
 
 ```typescript
-import { createKernelError } from '@taucad/kernels';
+import { createKernelError } from '@taucad/runtime';
 
 return createKernelError([
   {

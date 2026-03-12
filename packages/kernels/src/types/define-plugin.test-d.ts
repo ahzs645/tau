@@ -1,5 +1,5 @@
 /**
- * Type-level tests for all generic inference APIs in @taucad/kernels.
+ * Type-level tests for all generic inference APIs in @taucad/runtime.
  *
  * Covers: defineKernel, defineBundler, defineMiddleware,
  *         createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin,

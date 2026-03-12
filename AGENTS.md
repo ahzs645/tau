@@ -50,7 +50,7 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 | `create-research`       | Writing or updating `docs/research/*.md` investigation documents                           |
 | `adding-tools`          | Adding new tools to the AI chat system                                                     |
 | `create-vite-plugin`    | Adding a Vite plugin to `@taucad/vite`                                                     |
-| `new-kernel`            | Adding a first-party CAD kernel to `@taucad/kernels`                                       |
+| `new-kernel`            | Adding a first-party CAD kernel to `@taucad/runtime`                                       |
 | `package-release`       | Versioning, building, publishing `@taucad/*` packages                                      |
 | `repos`                 | Investigating dependency source code; cloning, adding, or exploring repos via `repos.yaml` |
 | `submit-pr`             | Submitting draft PRs to upstream dependency forks                                          |

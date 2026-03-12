@@ -1,7 +1,7 @@
 import { assign, assertEvent, setup, enqueueActions, waitFor } from 'xstate';
 import type { ActorRefFrom, AnyActorRef } from 'xstate';
 import type { CodeIssue, ExportFormat, Geometry, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
-import { createKernelClient } from '@taucad/kernels';
+import { createKernelClient } from '@taucad/runtime';
 import type {
   ExportResult,
   GetParametersResult,
@@ -12,8 +12,8 @@ import type {
   RenderPhase,
   PerformanceEntryData,
   WorkerState,
-} from '@taucad/kernels';
-import { createFileSystemBridge } from '@taucad/kernels/filesystem';
+} from '@taucad/runtime';
+import { createFileSystemBridge } from '@taucad/runtime/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import type { JSONSchema7 } from 'json-schema';
 import type { LengthSymbol } from '@taucad/units';

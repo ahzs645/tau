@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useAuthenticate } from '@daveyplate/better-auth-ui';
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '#components/ui/card.js';

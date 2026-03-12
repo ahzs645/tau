@@ -6,7 +6,7 @@ icon: lucide:monitor
 
 # Client API
 
-Use the client API when you need to create a kernel runtime, configure filesystem access, or manage worker connections. The factory and constructors are the primary entry points for integrating `@taucad/kernels` into an application.
+Use the client API when you need to create a kernel runtime, configure filesystem access, or manage worker connections. The factory and constructors are the primary entry points for integrating `@taucad/runtime` into an application.
 
 ## createKernelClient
 
@@ -25,9 +25,9 @@ Use the client API when you need to create a kernel runtime, configure filesyste
 ## Usage
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],

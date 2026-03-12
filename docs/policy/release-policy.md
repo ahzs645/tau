@@ -20,7 +20,7 @@ Nx Release with version plans provides native monorepo integration and decouples
 
 | Package               | Description                                                |
 | --------------------- | ---------------------------------------------------------- |
-| `@taucad/kernels`     | Multi-kernel CAD runtime framework for browser and Node.js |
+| `@taucad/runtime`     | Multi-kernel CAD runtime framework for browser and Node.js |
 | `@taucad/converter`   | CAD file format conversion (STL, STEP, IGES, USDZ, etc.)   |
 | `@taucad/json-schema` | JSON to JSON Schema conversion                             |
 | `@taucad/js`          | Tau JavaScript API                                         |
@@ -33,7 +33,7 @@ Internal workspace packages (`@taucad/types`, `@taucad/utils`, `@taucad/tau-exam
 
 All four packages share a single version number. When any package changes, all packages are bumped to the same version. This simplifies dependency management for consumers who use multiple `@taucad` packages together.
 
-**Rationale**: The packages are tightly coupled (e.g., `@taucad/kernels` depends on `@taucad/converter` and `@taucad/json-schema`). Independent versioning would create a combinatorial compatibility matrix that is difficult to test and communicate.
+**Rationale**: The packages are tightly coupled (e.g., `@taucad/runtime` depends on `@taucad/converter` and `@taucad/json-schema`). Independent versioning would create a combinatorial compatibility matrix that is difficult to test and communicate.
 
 ### Semantic Versioning
 
@@ -96,7 +96,7 @@ A post-build plugin (`tools/generate-cjs-dts.plugin.ts`) copies `.d.ts` files to
 
 Nx Release is configured with a `preVersionCommand` that builds all packages before versioning. This ensures the `dist/` directories exist with correct content before `package.json` versions are updated, so the published tarball contains the built artifacts at the correct version.
 
-The build respects Nx's dependency graph: `@taucad/json-schema` and `@taucad/converter` build before `@taucad/kernels` (which depends on both).
+The build respects Nx's dependency graph: `@taucad/json-schema` and `@taucad/converter` build before `@taucad/runtime` (which depends on both).
 
 ### Package Validation
 
@@ -172,7 +172,7 @@ Developer                          CI (GitHub Actions)
 
 For alpha, beta, and release candidate versions:
 
-- Publish under a dist-tag (`next`, `alpha`, `beta`, `rc`) so `npm install @taucad/kernels` always resolves to the latest stable version
+- Publish under a dist-tag (`next`, `alpha`, `beta`, `rc`) so `npm install @taucad/runtime` always resolves to the latest stable version
 - Prerelease versions follow the format `X.Y.Z-alpha.N`
 - Prereleases do not generate changelog entries in the stable changelog
 

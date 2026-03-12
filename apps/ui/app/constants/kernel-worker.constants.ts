@@ -1,7 +1,7 @@
-import { replicad, opencascade, zoo, openscad, jscad, manifold, tau } from '@taucad/kernels/kernels';
-import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
-import { esbuild } from '@taucad/kernels/bundler';
-import type { KernelClientOptions } from '@taucad/kernels';
+import { replicad, opencascade, zoo, openscad, jscad, manifold, tau } from '@taucad/runtime/kernels';
+import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
+import { esbuild } from '@taucad/runtime/bundler';
+import type { KernelClientOptions } from '@taucad/runtime';
 import { ENV } from '#environment.config.js';
 
 /**

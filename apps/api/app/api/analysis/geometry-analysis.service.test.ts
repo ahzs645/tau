@@ -6,10 +6,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
-import { createKernelClient } from '@taucad/kernels';
-import { createInProcessTransport } from '@taucad/kernels/transport';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient } from '@taucad/runtime';
+import { createInProcessTransport } from '@taucad/runtime/transport';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 import type { MeasurementTestRequirement } from '@taucad/chat';
 import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 

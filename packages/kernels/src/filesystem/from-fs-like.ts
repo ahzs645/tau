@@ -44,7 +44,7 @@ export type FsLike = {
  *
  * @example <caption>ZenFS-backed filesystem adapter</caption>
  * ```typescript
- * import { fromFsLike } from '@taucad/kernels/filesystem';
+ * import { fromFsLike } from '@taucad/runtime/filesystem';
  * import { fs } from '@zenfs/core';
  *
  * const fileSystem = fromFsLike(fs);

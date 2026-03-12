@@ -7,7 +7,7 @@
  * string-keyed properties on either plain objects or class instances:
  *
  * ```typescript
- * import type { StringKeyedObject } from '@taucad/kernels';
+ * import type { StringKeyedObject } from '@taucad/runtime';
  *
  * function dispatch<T extends StringKeyedObject>(handlers: T): void {
  *   const method = (handlers as Record<string, unknown>)['methodName'];

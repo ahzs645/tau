@@ -12,11 +12,11 @@ import type { KernelFileSystemBase } from '#types/kernel-worker.types.js';
  *
  * @example <caption>Server-side Node.js filesystem</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { fromNodeFS } from '@taucad/kernels/filesystem';
- * import { replicad } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
- * import { createInProcessTransport } from '@taucad/kernels/transport';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { fromNodeFS } from '@taucad/runtime/filesystem';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
+ * import { createInProcessTransport } from '@taucad/runtime/transport';
  *
  * const client = createKernelClient({
  *   kernels: [replicad()],

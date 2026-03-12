@@ -552,7 +552,7 @@ flowchart TD
 - **OpenSCAD uninterruptible render**: Mitigated by generation counter (correctness guaranteed, UX suboptimal). JSPI is the long-term fix.
 - **SharedArrayBuffer COOP/COEP**: Already required for OpenCASCADE pthreads. No new requirements. GrowableSharedArrayBuffer inherits the same COOP/COEP requirement.
 - **cadMachine rewrite scope**: Large but mechanical. The new machine is dramatically simpler (4 states vs 7, ~150 lines vs ~761).
-- **Breaking changes to `@taucad/kernels` public API**: `render()` kept for backward compat. `setFile()`/`setParameters()` are additive. Non-breaking.
+- **Breaking changes to `@taucad/runtime` public API**: `render()` kept for backward compat. `setFile()`/`setParameters()` are additive. Non-breaking.
 - `**Atomics.waitAsync` availability**: Baseline November 2025 (Chrome 90+, Firefox 145+, Safari 16.4+). Fallback to postMessage `stateChanged` response if unavailable. The `monitorWorkerState()` loop checks for `Atomics.waitAsync` support at startup.
 - `**scheduler.yield()` Safari gap**: Safari does not support it. Fallback to `setTimeout(0)` -- slightly worse priority inversion but functionally equivalent.
 - `**FinalizationRegistry` non-determinism**: GC timing varies across engines. It is a safety net, NOT the primary cleanup path. Deterministic `handle.delete()` in catch/finally blocks handles the normal case.

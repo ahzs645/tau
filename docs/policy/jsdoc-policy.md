@@ -45,7 +45,7 @@ Add `@public` or `@internal` as the last line of the description section, before
  *
  * @example <caption>Basic usage</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
+ * import { createKernelClient } from '@taucad/runtime';
  * ```
  */
 ````
@@ -104,7 +104,7 @@ Match the example to who calls the function:
 
 | Audience                                        | Example shows                                               |
 | ----------------------------------------------- | ----------------------------------------------------------- |
-| **Consumer** (app developer)                    | Importing from `@taucad/kernels` and calling the public API |
+| **Consumer** (app developer)                    | Importing from `@taucad/runtime` and calling the public API |
 | **Plugin author** (middleware/kernel developer) | The `defineX` pattern with lifecycle hooks                  |
 | **Framework internal** (low-level utility)      | How the utility is called within the framework              |
 | **Test author**                                 | Mock setup and assertion patterns                           |
@@ -149,7 +149,7 @@ CORRECT:
  *
  * @example <caption>Browser setup</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
+ * import { createKernelClient } from '@taucad/runtime';
  * const client = createKernelClient({ kernels: [replicad()] });
  * ```
  */
@@ -163,7 +163,7 @@ INCORRECT:
  *
  * @example Browser setup
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
+ * import { createKernelClient } from '@taucad/runtime';
  * const client = createKernelClient({ kernels: [replicad()] });
  * ```
  */

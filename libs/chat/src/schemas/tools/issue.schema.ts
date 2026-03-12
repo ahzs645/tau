@@ -3,7 +3,7 @@
  * These schemas are registered with unique IDs in Zod's registry.
  */
 import type { CodeIssue } from '@taucad/types';
-import type { KernelIssue } from '@taucad/kernels';
+import type { KernelIssue } from '@taucad/runtime';
 import { z } from 'zod';
 
 export const codeIssueSchema: z.ZodType<CodeIssue> = z

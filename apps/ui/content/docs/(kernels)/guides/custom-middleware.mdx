@@ -10,7 +10,7 @@ Build middleware with `defineMiddleware` to intercept and transform kernel opera
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](/docs/getting-started/quick-start)
 - [Using Middleware](./using-middleware) -- Add built-in middleware to your client
 - [Middleware Model](/docs/concepts/middleware-model) -- Understand the onion model
@@ -23,10 +23,10 @@ Create a logging middleware and a stateful caching middleware. Learn the wrap pa
 
 ### 1. Import defineMiddleware
 
-Import from `@taucad/kernels/middleware`:
+Import from `@taucad/runtime/middleware`:
 
 ```typescript
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 ```
 
 ### 2. Create a Simple Logging Middleware
@@ -34,7 +34,7 @@ import { defineMiddleware } from '@taucad/kernels/middleware';
 Use `wrapCreateGeometry` (or `wrapGetParameters`, `wrapExportGeometry`) to log before and after the operation. Call `handler(input)` to continue the chain:
 
 ```typescript
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 
 const loggingMiddleware = defineMiddleware({
   name: 'Logging',
@@ -54,7 +54,7 @@ Code before `handler()` runs on the way down; code after runs on the way back up
 The wrap pattern gives you full control. You can short-circuit (return without calling `handler`), transform input, or transform output:
 
 ```typescript
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 
 const cacheMiddleware = defineMiddleware({
   name: 'SimpleCache',
@@ -83,7 +83,7 @@ Short-circuited results still flow through upstream middleware because each laye
 Use `stateSchema` (Zod) for type-safe state that persists during the operation. Access `state` from the runtime:
 
 ```typescript
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 import { z } from 'zod';
 
 const statefulCacheMiddleware = defineMiddleware({
@@ -116,7 +116,7 @@ const statefulCacheMiddleware = defineMiddleware({
 Use `optionsSchema` for configurable middleware. The schema supports `.default()` for optional options:
 
 ```typescript
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 import { z } from 'zod';
 
 const configurableCacheMiddleware = defineMiddleware({
@@ -154,7 +154,7 @@ Middleware runs in the worker and must be loaded as a separate module. Create a 
 
 ```typescript
 // my-cache.middleware.ts
-import { defineMiddleware } from '@taucad/kernels/middleware';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 import { z } from 'zod';
 
 const myCacheMiddleware = defineMiddleware({
@@ -174,7 +174,7 @@ export default myCacheMiddleware;
 
 ```typescript
 // my-cache-plugin.ts
-import type { MiddlewarePlugin } from '@taucad/kernels';
+import type { MiddlewarePlugin } from '@taucad/runtime';
 
 export function myCache(): MiddlewarePlugin {
   return {
@@ -188,9 +188,9 @@ export function myCache(): MiddlewarePlugin {
 Pass the factory to `createKernelClient`:
 
 ```typescript
-import { createKernelClient, fromNodeFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromNodeFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 import { myCache } from './my-cache-plugin.js';
 
 const client = createKernelClient({

@@ -32,8 +32,8 @@ Use kernel factories when registering CAD engines with `createKernelClient`. Eac
 ## Usage
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad, manifold, openscad, jscad, zoo, tau } from '@taucad/kernels/kernels';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad, manifold, openscad, jscad, zoo, tau } from '@taucad/runtime/kernels';
 
 const client = createKernelClient({
   kernels: [

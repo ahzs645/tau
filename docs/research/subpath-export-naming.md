@@ -11,29 +11,29 @@ related:
 
 # Subpath Export Naming Conventions
 
-Investigation into whether `package.json` subpath exports should use singular or plural nouns, surveying major TypeScript libraries and analyzing the current `@taucad/kernels` structure.
+Investigation into whether `package.json` subpath exports should use singular or plural nouns, surveying major TypeScript libraries and analyzing the current `@taucad/runtime` structure.
 
 ## Executive Summary
 
-No official specification prescribes singular vs plural for subpath exports. Survey of major TypeScript libraries (tRPC, Effect-TS, TanStack Router, Drizzle ORM) shows a strong consensus toward singular nouns — treating subpaths as module namespaces, not REST-style collections. The current `@taucad/kernels` package has an inconsistency (`./kernels` plural vs `./bundler` and `./middleware` singular) that creates cognitive friction and a doubled-name stutter. Recommendation: use singular for all subpath segments.
+No official specification prescribes singular vs plural for subpath exports. Survey of major TypeScript libraries (tRPC, Effect-TS, TanStack Router, Drizzle ORM) shows a strong consensus toward singular nouns — treating subpaths as module namespaces, not REST-style collections. The current `@taucad/runtime` package has an inconsistency (`./kernels` plural vs `./bundler` and `./middleware` singular) that creates cognitive friction and a doubled-name stutter. Recommendation: use singular for all subpath segments.
 
 ## Problem Statement
 
-The `@taucad/kernels` package uses inconsistent casing across its subpath exports:
+The `@taucad/runtime` package uses inconsistent casing across its subpath exports:
 
 ```text
-@taucad/kernels/kernels        (plural)
-@taucad/kernels/bundler        (singular)
-@taucad/kernels/middleware     (singular)
-@taucad/kernels/transport      (singular)
-@taucad/kernels/filesystem     (singular)
-@taucad/kernels/testing        (singular)
+@taucad/runtime/kernels        (plural)
+@taucad/runtime/bundler        (singular)
+@taucad/runtime/middleware     (singular)
+@taucad/runtime/transport      (singular)
+@taucad/runtime/filesystem     (singular)
+@taucad/runtime/testing        (singular)
 ```
 
 This inconsistency creates three problems:
 
 1. **Unpredictability**: a developer who knows `./bundler` cannot predict whether the kernel barrel is `./kernel` or `./kernels`
-2. **Doubled name**: `import { replicad } from '@taucad/kernels/kernels'` stutters the package name
+2. **Doubled name**: `import { replicad } from '@taucad/runtime/kernels'` stutters the package name
 3. **Masked inconsistency**: `middleware` happens to work as both singular and plural (mass noun), hiding the mismatch with `kernels`
 
 ## Methodology
@@ -41,7 +41,7 @@ This inconsistency creates three problems:
 1. Checked npm, Node.js, and TypeScript documentation for any specification on subpath export naming — none exists
 2. Surveyed subpath export structures of five high-DX TypeScript libraries with rich subpath maps
 3. Examined REST API naming conventions for comparison (different domain but useful signal)
-4. Analyzed the current `@taucad/kernels` export structure against the findings
+4. Analyzed the current `@taucad/runtime` export structure against the findings
 
 ## Findings
 
@@ -74,7 +74,7 @@ REST APIs have standardized on plural nouns for collection endpoints (`/users`, 
 
 Every source examined — library documentation, style guides, developer experience research — agrees on one universal finding: **consistency is the critical success factor**. Inconsistent naming creates "cognitive friction" — developers cannot predict the import path and must constantly look it up. Predictable, consistent naming enables autocomplete-driven discovery.
 
-### Finding 5: Current `@taucad/kernels` Analysis
+### Finding 5: Current `@taucad/runtime` Analysis
 
 The package has three plugin categories, each with a parent entry (the barrel) and child entries (individual implementations):
 
@@ -97,21 +97,21 @@ The standalone modules (`./transport`, `./filesystem`, `./testing`, `./types`, `
 ### Recommended structure
 
 ```text
-@taucad/kernels                            (root — package name is plural scope)
-@taucad/kernels/kernel                     (barrel: replicad, jscad, manifold, ...)
-@taucad/kernels/kernel/replicad            (individual kernel)
-@taucad/kernels/bundler                    (barrel: esbuild — already singular)
-@taucad/kernels/bundler/esbuild            (individual bundler — already singular)
-@taucad/kernels/middleware                 (barrel: parameterCache, ... — already singular)
-@taucad/kernels/middleware/parameter-cache  (individual middleware — already singular)
-@taucad/kernels/transport                  (standalone — already singular)
-@taucad/kernels/filesystem                 (standalone — already singular)
-@taucad/kernels/testing                    (standalone — already singular)
+@taucad/runtime                            (root — package name is plural scope)
+@taucad/runtime/kernel                     (barrel: replicad, jscad, manifold, ...)
+@taucad/runtime/kernel/replicad            (individual kernel)
+@taucad/runtime/bundler                    (barrel: esbuild — already singular)
+@taucad/runtime/bundler/esbuild            (individual bundler — already singular)
+@taucad/runtime/middleware                 (barrel: parameterCache, ... — already singular)
+@taucad/runtime/middleware/parameter-cache  (individual middleware — already singular)
+@taucad/runtime/transport                  (standalone — already singular)
+@taucad/runtime/filesystem                 (standalone — already singular)
+@taucad/runtime/testing                    (standalone — already singular)
 ```
 
-The semantic distinction: the **package name** (`@taucad/kernels`) is plural because it scopes a collection of many things. The **subpath** (`/kernel`) is singular because it is a module namespace you import from.
+The semantic distinction: the **package name** (`@taucad/runtime`) is plural because it scopes a collection of many things. The **subpath** (`/kernel`) is singular because it is a module namespace you import from.
 
-This aligns with the tRPC pattern where `@trpc/server` (singular "server") uses `./adapters/express` (plural category, singular implementation). In our case: `@taucad/kernels` (plural package) → `./kernel/replicad` (singular namespace → specific implementation).
+This aligns with the tRPC pattern where `@trpc/server` (singular "server") uses `./adapters/express` (plural category, singular implementation). In our case: `@taucad/runtime` (plural package) → `./kernel/replicad` (singular namespace → specific implementation).
 
 ## Trade-offs
 

@@ -149,7 +149,7 @@ const route = useRoute();
 const parentRoute = useRoute('parent');
 ```
 
-Apply the same principle to `@taucad/kernels`: when adding a new API, check whether an existing API can be extended to cover the use case.
+Apply the same principle to `@taucad/runtime`: when adding a new API, check whether an existing API can be extended to cover the use case.
 
 ### Removal
 
@@ -192,10 +192,10 @@ function createInlineTransport(runtime: KernelRuntimeWorker): KernelTransport { 
 Adapters are exported from dedicated subpaths, not from the main entry point. This prevents platform-specific code from being bundled in environments where it can't run:
 
 ```text
-@taucad/kernels                     -- core (platform-agnostic)
-@taucad/kernels/transport           -- transport adapters
-@taucad/kernels/transport/worker    -- Web Worker adapter (browser)
-@taucad/kernels/transport/node      -- worker_threads adapter (Node.js)
+@taucad/runtime                     -- core (platform-agnostic)
+@taucad/runtime/transport           -- transport adapters
+@taucad/runtime/transport/worker    -- Web Worker adapter (browser)
+@taucad/runtime/transport/node      -- worker_threads adapter (Node.js)
 ```
 
 ### Shared API Across Adapters

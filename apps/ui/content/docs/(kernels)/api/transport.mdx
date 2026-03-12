@@ -19,12 +19,12 @@ Use the transport API when configuring how the kernel client communicates with w
 ## Usage
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
-import { createWorkerTransport } from '@taucad/kernels/transport';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { createWorkerTransport } from '@taucad/runtime/transport';
 
-const transport = createWorkerTransport(new URL('@taucad/kernels/worker', import.meta.url).href);
+const transport = createWorkerTransport(new URL('@taucad/runtime/worker', import.meta.url).href);
 
 const client = createKernelClient({
   kernels: [replicad()],

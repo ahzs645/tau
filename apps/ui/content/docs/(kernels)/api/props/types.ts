@@ -4,4 +4,4 @@ export type {
   KernelIssue,
   KernelStackFrame,
   ErrorLocation,
-} from '@taucad/kernels/types';
+} from '@taucad/runtime/types';

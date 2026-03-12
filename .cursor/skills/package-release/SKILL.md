@@ -11,7 +11,7 @@ Release workflow for the `@taucad/*` npm packages using Nx Release with Version 
 
 | Package               | Path                   | Description                |
 | --------------------- | ---------------------- | -------------------------- |
-| `@taucad/kernels`     | `packages/kernels`     | Multi-kernel CAD runtime   |
+| `@taucad/runtime`     | `packages/kernels`     | Multi-kernel CAD runtime   |
 | `@taucad/converter`   | `packages/converter`   | CAD file format conversion |
 | `@taucad/json-schema` | `packages/json-schema` | JSON to JSON Schema        |
 | `@taucad/js`          | `packages/js`          | Tau JavaScript API         |
@@ -69,7 +69,7 @@ For multi-package changes, specify per-project:
 
 ```markdown
 ---
-@taucad/kernels: minor
+@taucad/runtime: minor
 @taucad/converter: patch
 ---
 
@@ -196,7 +196,7 @@ For each `@taucad/*` package on npmjs.com:
 Bulk configure with npm CLI v11.10.0+:
 
 ```bash
-npm trust add --publisher github --repository taucad/tau --workflow publish.yml @taucad/kernels @taucad/converter @taucad/json-schema @taucad/js
+npm trust add --publisher github --repository taucad/tau --workflow publish.yml @taucad/runtime @taucad/converter @taucad/json-schema @taucad/js
 ```
 
 ## Package Validation
@@ -232,7 +232,7 @@ pnpm nx release version --specifier prerelease --preid alpha
 pnpm nx release publish --tag next
 ```
 
-Published with `--tag next` so `npm install @taucad/kernels` still resolves to stable.
+Published with `--tag next` so `npm install @taucad/runtime` still resolves to stable.
 
 ## Troubleshooting
 

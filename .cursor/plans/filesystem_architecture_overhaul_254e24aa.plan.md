@@ -418,7 +418,7 @@ Write operations:
 **File:** `apps/ui/app/machines/file-manager.worker.ts`
 
 ```typescript
-import { exposeFileSystem } from '@taucad/kernels/filesystem';
+import { exposeFileSystem } from '@taucad/runtime/filesystem';
 import { FileService } from '#filesystem/file-service.js';
 import { ProviderRegistry } from '#filesystem/provider-registry.js';
 import { WriteCoordinator } from '#filesystem/write-coordinator.js';

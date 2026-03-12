@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/kernels';
+import type { KernelProvider } from '@taucad/runtime';
 import { kernelConfigurations } from '@taucad/types/constants';
 import type { KernelConfiguration } from '@taucad/types/constants';
 

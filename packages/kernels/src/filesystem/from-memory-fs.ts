@@ -17,10 +17,10 @@ function enoent(message: string): Error {
  *
  * @example <caption>In-memory filesystem with inline source</caption>
  * ```typescript
- * import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
- * import { replicad } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
- * import { createInProcessTransport } from '@taucad/kernels/transport';
+ * import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
+ * import { createInProcessTransport } from '@taucad/runtime/transport';
  *
  * const client = createKernelClient({
  *   kernels: [replicad()],

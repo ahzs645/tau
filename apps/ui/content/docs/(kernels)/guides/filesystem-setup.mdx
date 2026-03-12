@@ -10,7 +10,7 @@ Configure the filesystem backend that kernels use to read project files. The fra
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](/docs/getting-started/quick-start)
 
 ## Goal
@@ -19,12 +19,12 @@ Choose and configure a `KernelFileSystem` implementation so your kernel client c
 
 ## Steps
 
-### 1. Import Filesystem Constructors from @taucad/kernels
+### 1. Import Filesystem Constructors from @taucad/runtime
 
 All three constructors are exported from the main package:
 
 ```typescript
-import { fromNodeFS, fromMemoryFS, fromFsLike } from '@taucad/kernels';
+import { fromNodeFS, fromMemoryFS, fromFsLike } from '@taucad/runtime';
 ```
 
 ### 2. Use fromNodeFS for Disk-Based Projects
@@ -32,9 +32,9 @@ import { fromNodeFS, fromMemoryFS, fromFsLike } from '@taucad/kernels';
 Use `fromNodeFS` when your project files live on disk. Pass the base path; all file operations are resolved relative to it. Requires Node.js (not available in browser builds).
 
 ```typescript
-import { createKernelClient, fromNodeFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromNodeFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -50,9 +50,9 @@ Use this when running in Node.js (CLI, tests, server-side) and when you need per
 Use `fromMemoryFS` when file content is passed directly (e.g., from an editor) or when you want no disk I/O. Optionally seed with initial files:
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 
 const filesystem = fromMemoryFS({
   'main.ts': `
@@ -78,7 +78,7 @@ When you call `client.render({ file: 'main.ts', code: '...' })`, the `code` is w
 Use `fromFsLike` when you have an fs-compatible object with a `promises` namespace (e.g., ZenFS, BrowserFS, memfs, or any polyfill). Pass the fs instance:
 
 ```typescript
-import { createKernelClient, fromFsLike } from '@taucad/kernels';
+import { createKernelClient, fromFsLike } from '@taucad/runtime';
 import { fs } from '@zenfs/core';
 
 const filesystem = fromFsLike(fs, '/');
@@ -132,7 +132,7 @@ All paths are absolute. Backends can supply optimized overrides for any enhanced
 
 - **Reading files from disk vs in-memory**: With `fromNodeFS`, kernels read from the real filesystem. With `fromMemoryFS`, they read from the in-memory Map. The bundler and kernels use the same interface; only the backend differs.
 - **Custom implementation**: Implement `KernelFileSystem` directly for custom backends (e.g., cloud storage, virtual mounts). See [API Reference: Types](/docs/api/types) for the full interface.
-- **Filesystem bridge**: For advanced setups (e.g., UI exposing a filesystem to a worker), use `createBridgePort` and `exposeFileSystem` from `@taucad/kernels/filesystem`. Both `createBridgePort` and `createFileSystemBridge` return a `BridgeHandle` with `{ port, dispose() }` -- call `dispose()` when the bridge is no longer needed to release the underlying MessagePort resources.
+- **Filesystem bridge**: For advanced setups (e.g., UI exposing a filesystem to a worker), use `createBridgePort` and `exposeFileSystem` from `@taucad/runtime/filesystem`. Both `createBridgePort` and `createFileSystemBridge` return a `BridgeHandle` with `{ port, dispose() }` -- call `dispose()` when the bridge is no longer needed to release the underlying MessagePort resources.
 
 ## Related
 

@@ -10,7 +10,7 @@ Add caching, coordinate transforms, and edge detection to your kernel pipeline. 
 
 ## Prerequisites
 
-- [Install @taucad/kernels](/docs/getting-started/installation)
+- [Install @taucad/runtime](/docs/getting-started/installation)
 - Completed the [Quick Start](/docs/getting-started/quick-start)
 
 ## Goal
@@ -19,12 +19,12 @@ Configure a kernel client with middleware plugins to cache geometry and paramete
 
 ## Steps
 
-### 1. Import Middleware from @taucad/kernels/middleware
+### 1. Import Middleware from @taucad/runtime/middleware
 
-All built-in middleware is exported from the `@taucad/kernels/middleware` subpath:
+All built-in middleware is exported from the `@taucad/runtime/middleware` subpath:
 
 ```typescript
-import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
+import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
 ```
 
 ### 2. Add Middleware to createKernelClient
@@ -32,10 +32,10 @@ import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetecti
 Pass the middleware array to the `middleware` option. Order matters: middleware runs in onion-model order (first registered = outermost layer):
 
 ```typescript
-import { createKernelClient, fromMemoryFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
-import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/kernels/middleware';
+import { createKernelClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -60,10 +60,10 @@ const client = createKernelClient({
 Geometry and parameter caches require a writable filesystem. Use `fromNodeFS` in Node.js or a writable ZenFS instance in the browser:
 
 ```typescript
-import { createKernelClient, fromNodeFS } from '@taucad/kernels';
-import { replicad } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
-import { geometryCache, parameterCache } from '@taucad/kernels/middleware';
+import { createKernelClient, fromNodeFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { geometryCache, parameterCache } from '@taucad/runtime/middleware';
 
 const client = createKernelClient({
   kernels: [replicad()],
@@ -98,7 +98,7 @@ if (result.success) {
 
 ## Variations
 
-- **Preset with all middleware**: Use `presets.all()` from `@taucad/kernels` to get kernels, middleware, and bundlers. Merge with `filesystem` and `transport`: `createKernelClient({ ...presets.all(), filesystem, transport })`. See [API Reference: Client](/docs/api/client).
+- **Preset with all middleware**: Use `presets.all()` from `@taucad/runtime` to get kernels, middleware, and bundlers. Merge with `filesystem` and `transport`: `createKernelClient({ ...presets.all(), filesystem, transport })`. See [API Reference: Client](/docs/api/client).
 - **Selective middleware**: Omit middleware you do not need. For example, skip `gltfEdgeDetection()` if your viewer does not use edge rendering.
 - **Middleware order**: Place caches (parameterCache, geometryCache) before transforms (gltfCoordinateTransform, gltfEdgeDetection) so cached results still flow through transforms on the return path.
 - **Disable at runtime**: Middleware plugins support an `enabled` option. Check the [API Reference: Middleware](/docs/api/middleware) for per-plugin configuration.

@@ -943,7 +943,7 @@ importers:
       '@taucad/filesystem':
         specifier: workspace:*
         version: link:packages/filesystem
-      '@taucad/kernels':
+      '@taucad/runtime':
         specifier: workspace:*
         version: link:packages/kernels
       '@taucad/utils':
@@ -1138,7 +1138,7 @@ importers:
       '@taucad/chat':
         specifier: workspace:*
         version: link:../../libs/chat
-      '@taucad/kernels':
+      '@taucad/runtime':
         specifier: workspace:*
         version: link:../../packages/kernels
       '@taucad/tau-examples':
@@ -1175,7 +1175,7 @@ importers:
       '@taucad/json-schema':
         specifier: workspace:*
         version: link:../../packages/json-schema
-      '@taucad/kernels':
+      '@taucad/runtime':
         specifier: workspace:*
         version: link:../../packages/kernels
       '@taucad/tau-examples':
@@ -1202,7 +1202,7 @@ importers:
 
   libs/chat:
     dependencies:
-      '@taucad/kernels':
+      '@taucad/runtime':
         specifier: workspace:*
         version: link:../../packages/kernels
       '@taucad/types':

@@ -1,2 +1,2 @@
-export type { KernelClient, KernelClientOptions, ConnectOptions } from '@taucad/kernels';
-export type { KernelFileSystem } from '@taucad/kernels/types';
+export type { KernelClient, KernelClientOptions, ConnectOptions } from '@taucad/runtime';
+export type { KernelFileSystem } from '@taucad/runtime/types';

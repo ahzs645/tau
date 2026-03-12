@@ -134,7 +134,7 @@ export type GetParametersHandler = (input: GetParametersInput) => Promise<GetPar
  *
  * @example <caption>Logging middleware for geometry pipeline</caption>
  * ```typescript
- * import { defineMiddleware } from '@taucad/kernels/middleware';
+ * import { defineMiddleware } from '@taucad/runtime/middleware';
  *
  * const loggingMiddleware = defineMiddleware({
  *   name: 'Logging',

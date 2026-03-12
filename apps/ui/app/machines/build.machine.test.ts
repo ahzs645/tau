@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
 import type { Build } from '@taucad/types';
-import type { KernelClientOptions } from '@taucad/kernels';
+import type { KernelClientOptions } from '@taucad/runtime';
 import { buildMachine } from '#machines/build.machine.js';
 import type { BuildContext } from '#machines/build.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';

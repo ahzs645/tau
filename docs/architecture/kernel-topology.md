@@ -396,7 +396,7 @@ client.on('state', (state) => {
 });
 ```
 
-This is a clean, publishable API for `@taucad/kernels` as an npm package.
+This is a clean, publishable API for `@taucad/runtime` as an npm package.
 
 ### KernelWorker
 

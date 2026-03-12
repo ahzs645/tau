@@ -294,12 +294,12 @@ Kernel Worker → PortFS(port) → ZenFS RPC → file-manager worker → attachF
 
 **Cons**:
 
-- Tight coupling to ZenFS in the `@taucad/kernels` package (which we explicitly decoupled)
+- Tight coupling to ZenFS in the `@taucad/runtime` package (which we explicitly decoupled)
 - ZenFS's RPC is lower-level (inode-based), more verbose than our method-based bridge
 - No transfer list optimization (same as our current bridge)
 - PortFS has a default 250ms timeout, too aggressive for large file operations
 
-**Recommendation**: Keep our bridge for `@taucad/kernels` (preserves the `FsLike` abstraction). Use ZenFS's PortFS capabilities only in the `apps/ui` layer where ZenFS coupling is acceptable. Specifically, consider using `resolveRemoteMount` / `attachFS` for the **main-thread ↔ file-manager worker** connection (replacing `createFileManagerProxy`), as this would give the main thread a full `node:fs`-compatible API without a manual proxy.
+**Recommendation**: Keep our bridge for `@taucad/runtime` (preserves the `FsLike` abstraction). Use ZenFS's PortFS capabilities only in the `apps/ui` layer where ZenFS coupling is acceptable. Specifically, consider using `resolveRemoteMount` / `attachFS` for the **main-thread ↔ file-manager worker** connection (replacing `createFileManagerProxy`), as this would give the main thread a full `node:fs`-compatible API without a manual proxy.
 
 ### 2. `catchMessages` for Initialization Race Handling
 

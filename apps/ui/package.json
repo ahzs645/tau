@@ -14,7 +14,7 @@
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*",
     "@taucad/filesystem": "workspace:*",
-    "@taucad/kernels": "workspace:*",
+    "@taucad/runtime": "workspace:*",
     "isbot": "catalog:"
   },
   "devDependencies": {

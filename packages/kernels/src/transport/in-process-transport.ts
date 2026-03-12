@@ -29,10 +29,10 @@ import { createWorkerDispatcher } from '#framework/kernel-worker-dispatcher.js';
  *
  * @example <caption>In-process testing setup</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { createInProcessTransport } from '@taucad/kernels/transport';
- * import { replicad } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { createInProcessTransport } from '@taucad/runtime/transport';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
  *
  * const client = createKernelClient({
  *   kernels: [replicad()],

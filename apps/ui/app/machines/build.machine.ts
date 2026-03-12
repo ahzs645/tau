@@ -2,7 +2,7 @@ import { assign, assertEvent, setup, emit, enqueueActions } from 'xstate';
 import type { ActorRefFrom, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
 import type { Build } from '@taucad/types';
-import type { KernelClientOptions } from '@taucad/kernels';
+import type { KernelClientOptions } from '@taucad/runtime';
 import { isBrowser } from '#constants/browser.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';

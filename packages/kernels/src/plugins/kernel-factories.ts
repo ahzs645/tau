@@ -19,9 +19,9 @@ import type { ManifoldOptions } from '#kernels/manifold/manifold.kernel.js';
  *
  * @example <caption>Default WASM build</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { replicad } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
  *
  * const client = createKernelClient({
  *   kernels: [replicad()],
@@ -31,9 +31,9 @@ import type { ManifoldOptions } from '#kernels/manifold/manifold.kernel.js';
  *
  * @example <caption>Custom WASM build</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { replicad } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
  *
  * const client = createKernelClient({
  *   kernels: [replicad({ wasm: { wasmUrl: '/custom/oc.wasm', wasmBindingsUrl: '/custom/oc.js' } })],
@@ -57,9 +57,9 @@ export const replicad = createKernelPlugin<ReplicadOptions>({
  *
  * @example <caption>Custom WASM build</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { opencascade } from '@taucad/kernels/kernels';
- * import { esbuild } from '@taucad/kernels/bundler';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { opencascade } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
  *
  * const client = createKernelClient({
  *   kernels: [opencascade({ wasm: { wasmUrl: '/custom/oc.wasm', wasmBindingsUrl: '/custom/oc.js' } })],
@@ -83,8 +83,8 @@ export const opencascade = createKernelPlugin<OpenCascadeOptions>({
  *
  * @example <caption>WebSocket-based KCL kernel</caption>
  * ```typescript
- * import { createKernelClient } from '@taucad/kernels';
- * import { zoo } from '@taucad/kernels/kernels';
+ * import { createKernelClient } from '@taucad/runtime';
+ * import { zoo } from '@taucad/runtime/kernels';
  *
  * const client = createKernelClient({
  *   kernels: [zoo({ baseUrl: 'wss://api.zoo.dev/ws' })],

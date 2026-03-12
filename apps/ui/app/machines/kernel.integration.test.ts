@@ -19,13 +19,13 @@ import {
   ChangeEventBus,
   FileService,
 } from '@taucad/filesystem';
-import { createBridgeServer, createBridgeProxy } from '@taucad/kernels/filesystem';
-import { createKernelClient } from '@taucad/kernels';
-import type { KernelClient } from '@taucad/kernels';
-import { replicad, tau } from '@taucad/kernels/kernels';
-import { esbuild } from '@taucad/kernels/bundler';
-import { createInProcessTransport } from '@taucad/kernels/transport';
-import type { HashedGeometryResult } from '@taucad/kernels/types';
+import { createBridgeServer, createBridgeProxy } from '@taucad/runtime/filesystem';
+import { createKernelClient } from '@taucad/runtime';
+import type { KernelClient } from '@taucad/runtime';
+import { replicad, tau } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { createInProcessTransport } from '@taucad/runtime/transport';
+import type { HashedGeometryResult } from '@taucad/runtime/types';
 
 const hollowBoxSource = `
 import { drawRoundedRectangle } from 'replicad';
