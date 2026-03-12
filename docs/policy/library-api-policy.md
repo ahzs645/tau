@@ -3,11 +3,12 @@ title: 'Library API Policy'
 description: 'Design rules for world-class JavaScript/TypeScript library APIs: factories, defineX, flat options, max 3 params, naming, subpath exports, events, plugins, lazy init, escape hatches.'
 status: active
 created: '2026-02-23'
-updated: '2026-03-10'
+updated: '2026-03-11'
 related:
   - docs/policy/api-evolution-policy.md
   - docs/policy/resource-cleanup-policy.md
   - docs/research/typescript-overloads.md
+  - docs/research/subpath-export-naming.md
 ---
 
 # Library API Policy
@@ -239,18 +240,48 @@ protected abstract onCreateGeometry(input, runtime): Promise<Result>;
 
 **Why**: Consistent naming prefixes let developers predict API shape without reading docs. When every factory starts with `create`_, every type guard starts with `is_`, and every hook starts with `on\*`, the API becomes self-documenting.
 
-## 6. Subpath Exports by Consumer Role
+## 6. Subpath Exports
 
 Organize `package.json` exports by what each audience needs, not by internal file structure.
 
 ```text
 @taucad/kernels                -- createKernelClient, presets, types (consumer)
-@taucad/kernels/kernels        -- replicad(), openscad() factories (consumer)
+@taucad/kernels/kernel         -- replicad(), openscad() factories (consumer)
 @taucad/kernels/middleware     -- defineMiddleware(), cache factories (author + consumer)
 @taucad/kernels/bundler        -- defineBundler(), esbuild() factory (author + consumer)
 @taucad/kernels/transport      -- KernelTransport, createWorkerTransport (advanced)
 @taucad/kernels/testing        -- test utilities (testing)
 ```
+
+### Singular subpath naming
+
+Use **singular nouns** for all subpath export segments. Subpaths are module namespaces that a developer imports from, not REST-style collection endpoints. The package name itself may be plural (it scopes a collection of modules), but every subpath within it is singular.
+
+**Why**: Singular subpaths eliminate the doubled-name stutter (`@taucad/kernels/kernels`), align sibling categories so developers can predict paths by analogy, and match the convention used by tRPC, Effect-TS, Drizzle ORM, and TanStack Router.
+
+CORRECT:
+
+```typescript
+import { replicad } from '@taucad/kernels/kernel';
+import { esbuild } from '@taucad/kernels/bundler';
+import { defineMiddleware } from '@taucad/kernels/middleware';
+```
+
+INCORRECT:
+
+```typescript
+import { replicad } from '@taucad/kernels/kernels'; // stutters package name
+import { esbuild } from '@taucad/kernels/bundlers'; // inconsistent with ./middleware
+```
+
+| Segment type              | Convention    | Examples                                   |
+| ------------------------- | ------------- | ------------------------------------------ |
+| Category barrel           | Singular      | `./kernel`, `./bundler`, `./middleware`    |
+| Individual implementation | Singular      | `./kernel/replicad`, `./bundler/esbuild`   |
+| Standalone module         | Singular      | `./transport`, `./filesystem`, `./testing` |
+| Package name              | May be plural | `@taucad/kernels` (scopes a collection)    |
+
+For the full library survey, analysis, and trade-offs behind this convention, see [Subpath Export Naming Research](../research/subpath-export-naming.md).
 
 ## 7. Subscribe-Anytime Events
 

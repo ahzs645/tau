@@ -1,6 +1,6 @@
 ---
 title: 'JSDoc Policy'
-description: 'Standards for JSDoc documentation: @public/@internal visibility tags, compilable examples gated on @public, real-world usage patterns, and language tag requirements.'
+description: 'Standards for JSDoc documentation: @public/@internal visibility, compilable examples, real-world usage, language tags, and @example <caption> requirements.'
 status: active
 created: '2026-03-11'
 updated: '2026-03-11'
@@ -11,9 +11,9 @@ related:
 
 # JSDoc Policy
 
-Internal reference for writing JSDoc documentation on exported functions, types, and classes in `packages/` and `libs/`. Enforced by two tau-lint rules in `.oxlintrc.json`:
+Internal reference for writing JSDoc documentation on exported functions, types, and classes in `packages/` and `libs/`. Enforced by two tau-lint rules:
 
-- **`tau-lint/validate-jsdoc-codeblocks`** — compiles `ts`-tagged codeblocks in `@public` JSDoc.
+- **`tau-lint/validate-jsdoc-codeblocks`** — validates codeblock formatting (language tags, shorthand expansion) and type-checks `@public` TypeScript codeblocks inline via `tsgolint` (typescript-go).
 - **`tau-lint/require-public-export-jsdoc`** — requires `@public` on symbols exported from package.json export entry files.
 
 Both rules are **disabled for `apps/`** — only library and package code is enforced.
@@ -43,8 +43,8 @@ Add `@public` or `@internal` as the last line of the description section, before
  * @param options - Client configuration
  * @returns A configured KernelClient instance
  *
- * @example
- * ```ts
+ * @example <caption>Basic usage</caption>
+ * ```typescript
  * import { createKernelClient } from '@taucad/kernels';
  * ```
  */
@@ -53,7 +53,7 @@ Add `@public` or `@internal` as the last line of the description section, before
 ### Enforcement
 
 - **`tau-lint/require-public-export-jsdoc`** (`warn`) resolves which files are publicly reachable from `package.json` exports by following barrel re-exports. Exported declarations in those files must have `@public` in their JSDoc.
-- **`tau-lint/validate-jsdoc-codeblocks`** only compile-checks `ts` blocks when `@public` is present. Without `@public`, examples still get syntax highlighting in editors but are not validated.
+- **`tau-lint/validate-jsdoc-codeblocks`** type-checks `@public` TypeScript codeblocks inline by spawning `tsgolint headless` per-file with `source_overrides`. Diagnostics flow through oxlint's native pipeline and appear in the IDE. Without `@public`, examples still get syntax highlighting in editors but are not type-checked.
 
 ### Why not just use `text` tags for internal code?
 
@@ -77,24 +77,20 @@ Never use `declare const`, `declare function`, or placeholder variables that exi
 
 Every fenced codeblock in a JSDoc comment must specify a language tag. Enforced by `tau-lint/validate-jsdoc-codeblocks` (`missingLanguageTag` message).
 
-| Tag    | When to use                                                                                 |
-| ------ | ------------------------------------------------------------------------------------------- |
-| `ts`   | TypeScript code examples (always use `ts` — compilation is gated on `@public`, not the tag) |
-| `text` | Non-code content: output format, directory trees, data shapes                               |
-| `json` | JSON configuration or data                                                                  |
+| Tag          | When to use                                                                                    |
+| ------------ | ---------------------------------------------------------------------------------------------- |
+| `typescript` | TypeScript code examples (always use full name — `ts` shorthand is auto-fixed to `typescript`) |
+| `javascript` | JavaScript code examples (always use full name — `js` shorthand is auto-fixed to `javascript`) |
+| `text`       | Non-code content: output format, directory trees, data shapes                                  |
+| `json`       | JSON configuration or data                                                                     |
 
-**Why**: The `ts` tag provides syntax highlighting and IDE support. Omitting the tag bypasses the linter silently.
+**Why**: The `typescript` tag provides syntax highlighting and IDE support. Omitting the tag bypasses the linter silently. The `ts`/`js` shorthands are auto-fixed to their full forms by `tau-lint/validate-jsdoc-codeblocks`.
 
 ### 4. Public TypeScript Examples Must Compile
 
-`ts`-tagged codeblocks in `@public` JSDoc are compiled by `tau-lint/validate-jsdoc-codeblocks` using a virtual TypeScript environment backed by the workspace filesystem. Module resolution works for `@taucad/*` packages via `node_modules` symlinks.
+`typescript`-tagged codeblocks in `@public` JSDoc are type-checked inline by `tau-lint/validate-jsdoc-codeblocks`. The rule spawns `tsgolint headless` (typescript-go) per-file with `source_overrides`, parses binary-framed diagnostics, and reports errors via `context.report()`. This flows through oxlint's native diagnostic pipeline, so errors appear as IDE squigglies via the oxlint VS Code extension.
 
-The compiler options are strict but lenient on unused bindings:
-
-- `strict: true`
-- `noUnusedLocals: false`, `noUnusedParameters: false`
-- `module: NodeNext`, `moduleResolution: NodeNext`
-- `skipLibCheck: true`
+Module resolution works for `@taucad/*` packages because virtual files are placed adjacent to their source files in the project tree. The compiler uses the workspace `tsconfig.json` settings.
 
 ### 5. Use Self-Referencing Package Imports
 
@@ -127,6 +123,51 @@ Include only what a developer needs to understand the function. Remove ceremony 
 ### 8. One Example per Distinct Use Case
 
 Use multiple `@example` tags when a function has genuinely different usage patterns (e.g., with vs. without options, different option shapes). Do not combine unrelated patterns into a single block.
+
+### 9. Every `@example` Must Have a `<caption>`
+
+Use the JSDoc `<caption>` tag on the same line as `@example` to provide a title. This is part of the JSDoc specification ([jsdoc.app/tags-example](https://jsdoc.app/tags-example)) and preserves full syntax highlighting in VS Code hover tooltips.
+
+**Why**: Bare text after `@example` (e.g., `@example Browser setup`) causes VS Code's TypeScript language server to treat the entire block as plain text, breaking syntax highlighting. The `<caption>` tag is explicitly handled by VS Code's rendering pipeline and avoids this issue.
+
+Enforced by `tau-lint/validate-jsdoc-codeblocks` (`exampleBareText` and `exampleMissingCaption` messages). Both violations are auto-fixable.
+
+| Pattern                                           | Syntax highlighting? | Allowed?                                     |
+| ------------------------------------------------- | -------------------- | -------------------------------------------- |
+| `@example <caption>Title</caption>` + fenced code | Yes                  | **Yes**                                      |
+| `@example <caption></caption>` + fenced code      | Yes                  | **Yes**                                      |
+| `@example Title text` + fenced code               | No                   | **No** (auto-fixed to `<caption>`)           |
+| `@example` + fenced code (no caption)             | Yes                  | **No** (auto-fixed to `<caption></caption>`) |
+
+CORRECT:
+
+````typescript
+/**
+ * Create a kernel client.
+ *
+ * @public
+ *
+ * @example <caption>Browser setup</caption>
+ * ```typescript
+ * import { createKernelClient } from '@taucad/kernels';
+ * const client = createKernelClient({ kernels: [replicad()] });
+ * ```
+ */
+````
+
+INCORRECT:
+
+````typescript
+/**
+ * Create a kernel client.
+ *
+ * @example Browser setup
+ * ```typescript
+ * import { createKernelClient } from '@taucad/kernels';
+ * const client = createKernelClient({ kernels: [replicad()] });
+ * ```
+ */
+````
 
 ## Scope
 
@@ -167,15 +208,16 @@ Never use `text` tags for TypeScript examples just to avoid compilation. Use `@i
 - [ ] Symbol has `@public` (if publicly exported) or `@internal` (if framework-internal)
 - [ ] Example shows real-world usage (how a developer would actually call this)
 - [ ] No `declare const/function` synthetic stubs
-- [ ] Fenced codeblock has a language tag (`ts`, `text`, `json`)
-- [ ] `@public` `ts`-tagged examples compile without errors
+- [ ] Fenced codeblock has a language tag (`typescript`, `text`, `json`)
+- [ ] `@public` `typescript`-tagged examples compile without errors
 - [ ] Imports use public API paths (`@taucad/...`), not internal `#` paths
 - [ ] Example audience matches the function's audience (consumer, plugin author, internal, test)
 - [ ] Example is minimal but complete (all imports, no unrelated ceremony)
+- [ ] Every `@example` has a `<caption>` tag (e.g., `@example <caption>Title</caption>`)
 
 ## References
 
 - Related: `docs/policy/documentation-policy.md`
 - Related: `docs/policy/library-api-policy.md`
-- Lint rule (compile): `libs/oxlint/src/rules/validate-jsdoc-codeblocks.js`
+- Lint rule (tag validation + type-check): `libs/oxlint/src/rules/validate-jsdoc-codeblocks.js`
 - Lint rule (require @public): `libs/oxlint/src/rules/require-public-export-jsdoc.js`
