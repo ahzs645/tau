@@ -70,7 +70,7 @@ The `main` function is the entry point that the kernel calls. It receives a `par
 
 Pass the code and optional parameter overrides to `client.render()`:
 
-```typescript
+```typescript @ts-nocheck
 const result = await client.render({
   code: { 'main.ts': modelCode },
   parameters: { width: 50, depth: 15 },
@@ -91,7 +91,7 @@ The `success` field is the discriminant -- TypeScript narrows the result type so
 
 Export the rendered geometry to STEP format for use in professional CAD tools:
 
-```typescript
+```typescript @ts-nocheck
 const exportResult = await client.export('step');
 
 if (exportResult.success) {
@@ -105,7 +105,7 @@ if (exportResult.success) {
 
 You can also export directly from code without a separate `render()` call:
 
-```typescript
+```typescript @ts-nocheck
 const result = await client.export('step', {
   code: { 'main.ts': modelCode },
   parameters: { width: 50, depth: 15 },
@@ -118,7 +118,7 @@ STEP export is available for the Replicad kernel. Other kernels support differen
 
 Terminate the client to shut down workers:
 
-```typescript
+```typescript @ts-nocheck
 client.terminate();
 ```
 

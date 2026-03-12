@@ -42,14 +42,14 @@ import { createRuntimeClient } from '@taucad/runtime';
 For server-side usage, workers run as Node.js worker threads. Use `fromNodeFS` for filesystem access:
 
 ```typescript
-import { createRuntimeClient, fromNodeFS } from '@taucad/runtime';
-import fs from 'node:fs';
+import { createRuntimeClient } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem';
 
 const client = createRuntimeClient({
   kernels: [
     /* ... */
   ],
-  fileSystem: fromNodeFS(fs),
+  fileSystem: fromNodeFS('/path/to/project'),
 });
 ```
 

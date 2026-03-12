@@ -78,7 +78,7 @@ Call `seedTestFileSystem` before `initializeWorkerForTesting` if you need to set
 
 When you need more control over worker initialization (e.g., custom middleware, telemetry):
 
-```typescript
+```typescript @ts-nocheck
 import { KernelRuntimeWorker } from '@taucad/runtime/worker';
 import { initializeWorkerForTesting, seedTestFileSystem } from '@taucad/runtime/testing';
 
@@ -101,7 +101,7 @@ await initializeWorkerForTesting(worker, {
 
 `seedTestFileSystem` resets the ZenFS in-memory backend and writes files. `clearTestFileSystem` resets without seeding:
 
-```typescript
+```typescript @ts-nocheck
 import { seedTestFileSystem, clearTestFileSystem } from '@taucad/runtime/testing';
 
 beforeEach(async () => {
@@ -122,7 +122,7 @@ Paths can be absolute or relative; relative paths are normalized to start with `
 
 For middleware unit tests, use mocks to avoid a real worker:
 
-```typescript
+```typescript @ts-nocheck
 import { createMockLogger, createMockFileSystem, createMockRuntime } from '@taucad/runtime/testing';
 
 const logger = createMockLogger();
@@ -147,7 +147,7 @@ expect(filesystem.mocks.readFile).toHaveBeenCalledWith('/path/to/file');
 
 Use `validateGlbData` to assert GLB format and `getInspectReport` for detailed geometry stats:
 
-```typescript
+```typescript @ts-nocheck
 import { validateGlbData, getInspectReport, extractGltfFromResult } from '@taucad/runtime/testing';
 
 const result = await worker.createGeometry({
@@ -166,7 +166,7 @@ expect(report.meshes.properties).toHaveLength(1);
 
 `createGeometryTestHelpers` provides helpers for common geometry assertions:
 
-```typescript
+```typescript @ts-nocheck
 import { createGeometryTestHelpers } from '@taucad/runtime/testing';
 
 const helpers = createGeometryTestHelpers();

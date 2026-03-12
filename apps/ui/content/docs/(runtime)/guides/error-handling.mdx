@@ -23,7 +23,7 @@ Handle success and error results from `render`, `export`, and `getParameters` us
 
 `KernelResult<T>` is a union of two shapes:
 
-```typescript
+```typescript @ts-nocheck
 type KernelSuccessResult<T> = {
   success: true;
   data: T;
@@ -109,7 +109,7 @@ const issue: KernelIssue = {
 
 Pattern for `client.render`:
 
-```typescript
+```typescript @ts-nocheck
 const result = await client.render({ code: { 'main.ts': userCode } });
 
 if (result.success) {
@@ -133,7 +133,7 @@ if (result.success) {
 
 The same pattern applies to `client.export`:
 
-```typescript
+```typescript @ts-nocheck
 const result = await client.export('glb');
 
 if (result.success) {
@@ -150,7 +150,7 @@ if (result.success) {
 
 Kernels enrich raw errors into `KernelIssue` with location and stack. Replicad maps OpenCASCADE exceptions; JSCAD and Zoo map their engine errors. When building custom kernels, use `createKernelError`:
 
-```typescript
+```typescript @ts-nocheck
 import { createKernelError } from '@taucad/runtime';
 
 return createKernelError([

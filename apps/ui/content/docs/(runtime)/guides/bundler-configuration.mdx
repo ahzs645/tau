@@ -71,7 +71,7 @@ Kernels access the bundler through `runtime.bundler` and `runtime.execute`. You 
 
 If you build a custom JS/TS kernel, register built-in modules during `initialize`:
 
-```typescript
+```typescript @ts-nocheck
 import { defineKernel } from '@taucad/runtime';
 
 export default defineKernel({
@@ -96,7 +96,7 @@ See the Replicad and JSCAD kernel source for full examples.
 
 For non-esbuild bundlers (e.g., custom transpiler, different execution model), use `defineBundler`:
 
-```typescript
+```typescript @ts-nocheck
 import { defineBundler } from '@taucad/runtime/bundler';
 
 const myBundler = defineBundler({

@@ -24,7 +24,8 @@ Choose and configure a `RuntimeFileSystem` implementation so your runtime client
 All three constructors are exported from the main package:
 
 ```typescript
-import { fromNodeFS, fromMemoryFS, fromFsLike } from '@taucad/runtime';
+import { fromMemoryFS, fromFsLike } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem';
 ```
 
 ### 2. Use fromNodeFS for Disk-Based Projects
@@ -32,7 +33,8 @@ import { fromNodeFS, fromMemoryFS, fromFsLike } from '@taucad/runtime';
 Use `fromNodeFS` when your project files live on disk. Pass the base path; all file operations are resolved relative to it. Requires Node.js (not available in browser builds).
 
 ```typescript
-import { createRuntimeClient, fromNodeFS } from '@taucad/runtime';
+import { createRuntimeClient } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
@@ -79,6 +81,8 @@ Use `fromFsLike` when you have an fs-compatible object with a `promises` namespa
 
 ```typescript
 import { createRuntimeClient, fromFsLike } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
 import { fs } from '@zenfs/core';
 
 const filesystem = fromFsLike(fs, '/');

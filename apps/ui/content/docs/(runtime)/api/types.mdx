@@ -12,7 +12,7 @@ Use these types when handling kernel operation results, errors, and geometry out
 
 All kernel operations return a discriminated union: `KernelSuccessResult<T> | KernelErrorResult`. Check the `success` field to narrow the result.
 
-```typescript
+```typescript @ts-nocheck
 type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 ```
 
@@ -41,7 +41,7 @@ type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 
 ## Narrowing Results
 
-```typescript
+```typescript @ts-nocheck
 const result = await client.render({ file: 'main.ts' });
 
 if (result.success) {

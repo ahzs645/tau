@@ -43,7 +43,7 @@ const result = await client.render({
 
 if (result.success) {
   console.log(`Rendered ${result.data.length} geometry`);
-  console.log(`Format: ${result.data[0].type}`);
+  console.log(`Format: ${result.data[0].format}`);
 } else {
   console.error('Render failed:', result.issues);
 }
@@ -55,7 +55,7 @@ client.terminate();
 
 ```
 Rendered 1 geometry
-Format: model/gltf-binary
+Format: gltf
 ```
 
 Each entry in `result.data` is a `Geometry` object containing a glTF binary (GLB) that you can display in any 3D viewer, save to disk, or pass to a renderer like Three.js.

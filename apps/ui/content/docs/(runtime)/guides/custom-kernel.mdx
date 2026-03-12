@@ -24,7 +24,7 @@ Implement a kernel that handles a custom file type, produces geometry, and suppo
 
 Import `defineKernel` and result helpers from `@taucad/runtime`:
 
-```typescript
+```typescript @ts-nocheck
 import { defineKernel, createKernelSuccess, createKernelError } from '@taucad/runtime';
 ```
 
@@ -35,6 +35,8 @@ Use `defineKernel` with a definition object. You must implement `initialize`, `g
 ```typescript
 // my-kernel.kernel.ts
 import { defineKernel, createKernelSuccess, createKernelError } from '@taucad/runtime';
+import { createExportFile } from '@taucad/types/constants';
+import type { GeometryResponse } from '@taucad/types';
 
 type MyContext = {
   engine: unknown; // Your CAD engine instance
@@ -69,11 +71,11 @@ export default defineKernel<MyContext, MyNativeHandle>({
     });
   },
 
-  async createGeometry({ filePath, basePath, parameters }, { filesystem, logger }, context) {
+  async createGeometry({ filePath }, { filesystem }, _context) {
     const code = await filesystem.readFile(filePath, 'utf8');
     // Evaluate code with your engine, produce geometry
-    const geometry = []; // GeometryResponse[]
-    const nativeHandle = null; // Opaque handle for exportGeometry
+    const geometry: GeometryResponse[] = [];
+    const nativeHandle = null;
     return { geometry, nativeHandle };
   },
 
@@ -87,8 +89,8 @@ export default defineKernel<MyContext, MyNativeHandle>({
         },
       ]);
     }
-    // Convert nativeHandle to ExportFile using createExportFile
-    return createKernelSuccess([createExportFile('glb', 'model.glb', data)]);
+    const glbData = new Uint8Array(); // Convert nativeHandle to binary data
+    return createKernelSuccess([createExportFile('glb', 'model.glb', glbData)]);
   },
 });
 ```
@@ -97,7 +99,7 @@ export default defineKernel<MyContext, MyNativeHandle>({
 
 Use `createKernelSuccess` for successful operations and `createKernelError` for failures:
 
-```typescript
+```typescript @ts-nocheck
 import { createKernelSuccess, createKernelError } from '@taucad/runtime';
 import { createExportFile } from '@taucad/types/constants';
 
@@ -133,7 +135,7 @@ export function myKernel(): KernelPlugin {
 
 Pass your kernel factory to `createRuntimeClient`:
 
-```typescript
+```typescript @ts-nocheck
 import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
 import { esbuild } from '@taucad/runtime/bundler';
 import { myKernel } from './my-kernel-plugin.js';
@@ -153,7 +155,7 @@ const result = await client.render({
 
 Return all file paths that affect the geometry. The framework uses this for change detection and cache keys:
 
-```typescript
+```typescript @ts-nocheck
 async getDependencies({ filePath, basePath }, { filesystem }, _context) {
   const content = await filesystem.readFile(filePath, 'utf8');
   const imports = parseImports(content); // Your import parser
@@ -166,7 +168,7 @@ async getDependencies({ filePath, basePath }, { filesystem }, _context) {
 
 Extract parameters and a JSON Schema for UI generation:
 
-```typescript
+```typescript @ts-nocheck
 async getParameters({ filePath }, { filesystem }, _context) {
   const code = await filesystem.readFile(filePath, 'utf8');
   const { defaultParameters, jsonSchema } = extractParameters(code);

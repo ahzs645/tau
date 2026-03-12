@@ -23,7 +23,7 @@ Configure a runtime client with middleware plugins to cache geometry and paramet
 
 All built-in middleware is exported from the `@taucad/runtime/middleware` subpath:
 
-```typescript
+```typescript @ts-nocheck
 import { geometryCache, parameterCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
 ```
 
@@ -60,7 +60,8 @@ const client = createRuntimeClient({
 Geometry and parameter caches require a writable filesystem. Use `fromNodeFS` in Node.js or a writable ZenFS instance in the browser:
 
 ```typescript
-import { createRuntimeClient, fromNodeFS } from '@taucad/runtime';
+import { createRuntimeClient } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { geometryCache, parameterCache } from '@taucad/runtime/middleware';
@@ -79,7 +80,7 @@ With `fromMemoryFS()`, caches are not persisted; geometry and parameter caches w
 
 Render as usual. Middleware runs automatically:
 
-```typescript
+```typescript @ts-nocheck
 const result = await client.render({
   code: {
     'main.ts': `
