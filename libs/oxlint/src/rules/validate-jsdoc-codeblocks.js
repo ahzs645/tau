@@ -235,6 +235,7 @@ function typecheckCodeblocks(context, codeblocks) {
 // ---------------------------------------------------------------------------
 
 const CAPTION_REGEX = /^<caption>.*<\/caption>$/;
+const EMPTY_CAPTION = '<caption></caption>';
 
 /**
  * Validate @example caption usage per JSDoc spec (https://jsdoc.app/tags-example):
@@ -267,6 +268,8 @@ function checkExampleCaptions(context, comment) {
         reportBareTextOnExample(context, { absStart, absEnd, bareText: trailing });
       } else if (!trailing) {
         reportMissingCaption(context, absStart);
+      } else if (trailing === EMPTY_CAPTION) {
+        reportEmptyCaption(context, absStart, absEnd);
       } else if (/example/i.test(trailing.replaceAll(/<\/?caption>/g, ''))) {
         reportRedundantExampleWord(context, absStart, absEnd);
       }
@@ -306,9 +309,21 @@ function reportMissingCaption(context, absStart) {
       end: context.sourceCode.getLocFromIndex(tagEnd),
     },
     messageId: 'exampleMissingCaption',
-    fix(fixer) {
-      return fixer.replaceTextRange([absStart, tagEnd], '@example <caption></caption>');
+  });
+}
+
+/**
+ * @param {RuleContext} context
+ * @param {number} absStart
+ * @param {number} absEnd
+ */
+function reportEmptyCaption(context, absStart, absEnd) {
+  context.report({
+    loc: {
+      start: context.sourceCode.getLocFromIndex(absStart),
+      end: context.sourceCode.getLocFromIndex(absEnd),
     },
+    messageId: 'exampleEmptyCaption',
   });
 }
 
@@ -347,7 +362,9 @@ export const validateJsdocCodeblocksRule = {
       exampleBareText:
         'Wrap @example description in <caption></caption> tags per JSDoc spec (https://jsdoc.app/tags-example)',
       exampleMissingCaption:
-        'Every @example tag must include a <caption></caption> per JSDoc spec (https://jsdoc.app/tags-example)',
+        'Every @example tag must include a <caption>description</caption> per JSDoc spec (https://jsdoc.app/tags-example)',
+      exampleEmptyCaption:
+        'Empty <caption></caption> — describe the use-case (e.g., "Browser setup", "Custom WASM build", "With middleware")',
       exampleRedundantWord:
         'Avoid the word "example" in <caption> — it is redundant with the @example tag. Describe the use-case instead (e.g., "Browser setup", "Custom WASM build")',
     },

@@ -293,6 +293,90 @@ export const foo = 1;
     });
   });
 
+  describe('@example caption enforcement', () => {
+    it('should report bare text, missing captions, empty captions, and redundant "example" word', () => {
+      ruleTester.run('validate-jsdoc-codeblocks', validateJsdocCodeblocksRule, {
+        valid: [
+          {
+            name: 'caption with descriptive text is accepted',
+            code: `
+/**
+ * @example <caption>Browser setup</caption>
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+          },
+        ],
+        invalid: [
+          {
+            name: 'bare text after @example is wrapped in caption',
+            code: `
+/**
+ * @example Browser setup
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            output: `
+/**
+ * @example <caption>Browser setup</caption>
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            errors: [{ messageId: 'exampleBareText' }],
+          },
+          {
+            name: 'missing caption entirely',
+            code: `
+/**
+ * @example
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            errors: [{ messageId: 'exampleMissingCaption' }],
+          },
+          {
+            name: 'empty caption tag',
+            code: `
+/**
+ * @example <caption></caption>
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            errors: [{ messageId: 'exampleEmptyCaption' }],
+          },
+          {
+            name: 'redundant word "example" in caption',
+            code: `
+/**
+ * @example <caption>Example of usage</caption>
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            errors: [{ messageId: 'exampleRedundantWord' }],
+          },
+        ],
+      });
+    });
+  });
+
   describe('shorthand language tag expansion', () => {
     it('should report ts shorthand and suggest typescript', () => {
       ruleTester.run('validate-jsdoc-codeblocks', validateJsdocCodeblocksRule, {
