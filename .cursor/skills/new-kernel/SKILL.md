@@ -209,15 +209,28 @@ Add entry to `kernelConfigurations` with `id`, `name`, `language`, `dimensions`,
 
 ### 3.9 Monaco IntelliSense types
 
-The editor provides IntelliSense for kernel imports via bundled `.d.ts` files. If the kernel exposes a JS/TS API that users import (e.g. `import ... from '<library>'`), add type definitions to the Monaco pipeline:
+The editor provides IntelliSense for kernel imports via bundled `.d.ts` files registered with Monaco's `addExtraLib`. If the kernel exposes a JS/TS API that users import (e.g. `import ... from '<library>'`), add type definitions to the Monaco pipeline.
+
+All kernels use the same **JSON map approach**: `buildBundledTypes()` returns `Record<string, string>` mapping module paths to raw `.d.ts` content. Each entry is registered at `file:///node_modules/<modulePath>/index.d.ts`. Do **not** use `declare module` wrappers (causes TS1038 in already-ambient contexts).
 
 1. **Create extraction script:** `libs/api-extractor/src/extract-<id>-types.ts`
    - Read the kernel's `.d.ts` file(s)
-   - Strip `export declare` to `export` (inside `declare module`, `declare` is implicit)
-   - Wrap in `declare module '<package-name>' { ... }` blocks for each registered `builtinModuleNames`
-   - Export a `buildBundledTypes()` function (for testability) and a `main()` CLI entry
-   - Output to `libs/api-extractor/src/generated/<id>/<id>.bundled.d.ts`
-   - Use `extract-manifold-types.ts` as template (simple file wrapping) or `extract-replicad-api.ts` / `extract-jscad-types.ts` (TS Compiler API deep extraction)
+   - Keep `export declare` as-is (valid in raw module `.d.ts` files)
+   - Export `buildBundledTypes(): Record<string, string>` (for testability) and a `main()` CLI entry
+   - In `main()`, write `<id>.bundled.json` (JSON-serialized map) to `generated/<id>/`
+   - Also write individual `.d.ts` files under `generated/<id>/modules/<module-path>/index.d.ts` for type-level testing
+   - Use `extract-manifold-types.ts` as template (simple wrapping) or `extract-jscad-types.ts` (TS Compiler API deep extraction)
+
+   For single-module kernels, the map has one entry. For kernels with subpath exports, include an entry per subpath:
+
+   ```typescript
+   export function buildBundledTypes(): Record<string, string> {
+     return {
+       '<library>': mainContent,
+       '<library>/sub': subContent,
+     };
+   }
+   ```
 
 2. **Add Nx target:** `libs/api-extractor/project.json`
 
@@ -234,22 +247,28 @@ The editor provides IntelliSense for kernel imports via bundled `.d.ts` files. I
 3. **Export from `@taucad/api-extractor`:** `libs/api-extractor/src/index.ts`
 
    ```typescript
-   export { default as <id>Types } from '#generated/<id>/<id>.bundled.d.ts?raw';
+   export { default as <id>TypesMap } from '#generated/<id>/<id>.bundled.json?raw';
    ```
 
 4. **Register in Monaco:** `apps/ui/app/lib/javascript-contribution.ts`
 
+   Add the imported map to the `kernelTypeMaps` array. The existing `flatMap` loop handles parsing and registration automatically:
+
    ```typescript
-   {
-     packageName: '<library>',
-     content: <id>Types,
-     prewrapped: true,
-   },
+   const kernelTypeMaps = [
+     opencascadeTypesMap,
+     replicadTypesMap,
+     jscadModelingTypesMap,
+     manifoldTypesMap,
+     <id>TypesMap,
+   ];
    ```
 
-   If the kernel has multiple `builtinModuleNames`, add an extra entry with empty `content` for each alias to prevent ATA from trying to fetch them from esm.sh.
+5. **Add type-level tests:** `libs/api-extractor/src/generated/<id>/<id>.bundled.test-d.ts`
 
-5. **Run extraction:** `pnpm nx extract-<id> api-extractor`
+   Add path mappings in `tsconfig.typetest.json` pointing to the `modules/` directory. Write `.test-d.ts` tests verifying module resolution, key exports, and class shapes using `expectTypeOf`.
+
+6. **Run extraction:** `pnpm nx extract-<id> api-extractor`
 
 ## 4) Prompt System Integration
 
@@ -316,9 +335,11 @@ Keep commits logically grouped (implementation, wiring, docs) if practical.
 - [ ] `libs/types/src/constants/kernel.constants.ts`
 - [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.config.ts`
 - [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.example.<ext>`
-- [ ] `libs/api-extractor/src/extract-<id>-types.ts` (Monaco IntelliSense types)
-- [ ] `libs/api-extractor/src/index.ts` (export bundled types via `?raw`)
-- [ ] `apps/ui/app/lib/javascript-contribution.ts` (register in `staticTypes`)
+- [ ] `libs/api-extractor/src/extract-<id>-types.ts` (extraction script producing JSON map)
+- [ ] `libs/api-extractor/src/index.ts` (export `<id>TypesMap` via `?raw`)
+- [ ] `apps/ui/app/lib/javascript-contribution.ts` (add to `kernelTypeMaps` array)
+- [ ] `libs/api-extractor/src/generated/<id>/<id>.bundled.test-d.ts` (type-level tests)
+- [ ] `libs/api-extractor/tsconfig.typetest.json` (add path mappings for new kernel)
 - [ ] Kernel docs pages + architecture policy updates
 
 ## Common Failure Modes
@@ -331,3 +352,6 @@ Keep commits logically grouped (implementation, wiring, docs) if practical.
 - Added kernel to code but not to docs comparisons → docs drift
 - Defined local mock helpers instead of using shared testing utils → maintenance burden
 - Forgot Monaco IntelliSense types → no editor autocomplete for the kernel's API
+- Used `declare module` wrapper instead of raw `.d.ts` + JSON map → TS1038 errors in Monaco
+- Forgot to add `modules/` directory output in extraction script → type-level tests can't resolve imports
+- Forgot to add path mappings in `tsconfig.typetest.json` → `vitest --typecheck` fails
