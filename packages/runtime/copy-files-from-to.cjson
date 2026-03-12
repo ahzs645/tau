@@ -42,6 +42,19 @@
     {
       "from": "./node_modules/manifold-3d/manifold.wasm",
       "to": "src/kernels/manifold/wasm/manifold.wasm"
+    },
+    // OpenCascade full kernel — JS factory, WASM binary, and type declarations
+    {
+      "from": "./node_modules/opencascade.js/dist/opencascade_full.js",
+      "to": "src/kernels/opencascade/wasm/opencascade_full.js"
+    },
+    {
+      "from": "./node_modules/opencascade.js/dist/opencascade_full.wasm",
+      "to": "src/kernels/opencascade/wasm/opencascade_full.wasm"
+    },
+    {
+      "from": "./node_modules/opencascade.js/dist/opencascade_full.d.ts",
+      "to": "src/kernels/opencascade/wasm/opencascade_full.d.ts"
     }
   ],
   // Always overwrite files
