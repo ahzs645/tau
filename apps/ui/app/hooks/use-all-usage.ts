@@ -67,6 +67,7 @@ export function useAllUsage(): {
   const {
     data: buildsWithChats = [],
     isLoading: isDataLoading,
+    error: queryError,
     refetch,
   } = useQuery({
     queryKey: ['all-usage-data'],
@@ -149,7 +150,7 @@ export function useAllUsage(): {
   return {
     records,
     isLoading,
-    error: undefined,
+    error: queryError instanceof Error ? queryError : undefined,
     refetch: handleRefetch,
   };
 }
