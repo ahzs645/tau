@@ -59,6 +59,9 @@ export class ChatRpcService implements OnModuleDestroy {
    *  from a previous abort can be cancelled when a new signal is registered. */
   private readonly abortCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** Track active abort signal listeners per chatId for cleanup on re-registration */
+  private readonly activeAbortListeners = new Map<string, { signal: AbortSignal; listener: () => void }>();
+
   /**
    * Register a Socket.IO connection for a chat room.
    * Multiple sockets can join the same room (e.g., multiple tabs).
@@ -146,6 +149,13 @@ export class ChatRpcService implements OnModuleDestroy {
    * Zero tool changes needed — tools keep calling sendRpcRequest as before.
    */
   public registerAbortSignal(chatId: string, signal: AbortSignal): void {
+    // Remove listener from any previously registered signal for this chatId
+    const existing = this.activeAbortListeners.get(chatId);
+    if (existing) {
+      existing.signal.removeEventListener('abort', existing.listener);
+      this.activeAbortListeners.delete(chatId);
+    }
+
     // Cancel any stale cleanup timer from a previous abort so it cannot
     // prematurely clear the abort entry for the new request.
     this.cancelAbortCleanupTimer(chatId);
@@ -164,10 +174,12 @@ export class ChatRpcService implements OnModuleDestroy {
       this.abortedChats.add(chatId);
       this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
       signal.removeEventListener('abort', onAbort);
+      this.activeAbortListeners.delete(chatId);
       this.scheduleAbortCleanup(chatId);
     };
 
     signal.addEventListener('abort', onAbort);
+    this.activeAbortListeners.set(chatId, { signal, listener: onAbort });
   }
 
   /**
@@ -200,6 +212,11 @@ export class ChatRpcService implements OnModuleDestroy {
 
     this.abortCleanupTimers.clear();
     this.abortedChats.clear();
+
+    for (const { signal, listener } of this.activeAbortListeners.values()) {
+      signal.removeEventListener('abort', listener);
+    }
+    this.activeAbortListeners.clear();
 
     this.logger.log('RPC service cleanup complete');
   }

@@ -394,6 +394,51 @@ describe('ChatRpcService', () => {
         rpcName: 'read_file',
       });
     });
+
+    it('should remove old abort listener when re-registering so it does not fire', async () => {
+      const socket = createMockSocket('s1');
+      service.registerConnection('chat_1', socket);
+
+      // Register signal A
+      const controllerA = new AbortController();
+      service.registerAbortSignal('chat_1', controllerA.signal);
+
+      // Register signal B for the same chatId — should detach listener from signal A
+      const controllerB = new AbortController();
+      service.registerAbortSignal('chat_1', controllerB.signal);
+
+      // Start an RPC request (belongs to the new signal B session)
+      const resultPromise = service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
+
+      // Abort signal A — this should NOT affect the current request
+      // because the old listener was removed on re-registration
+      controllerA.abort();
+
+      // The RPC should still be in-flight (not rejected)
+      // Verify by checking the socket still has the request and no error was returned yet
+      expect(socket.emit).toHaveBeenCalledWith(
+        'rpc_request',
+        expect.objectContaining({ rpcName: 'read_file', chatId: 'chat_1' }),
+      );
+
+      // Now respond to the pending request successfully
+      service.handleRpcResponse({
+        type: 'rpc_response',
+        requestId: 'req_test_1',
+        toolCallId: 'call_1',
+        result: { content: 'success' },
+      });
+
+      const result = await resultPromise;
+      // If the old listener was NOT removed, this would be CLIENT_DISCONNECTED.
+      // Mock resultSchema returns { content: 'hello' } for validated result.
+      expect(result).toEqual({ content: 'hello' });
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -685,6 +730,16 @@ describe('ChatRpcService', () => {
       expect(() => {
         service.onModuleDestroy();
       }).not.toThrow();
+    });
+
+    it('should clean up active abort listeners on destroy', () => {
+      const controller = new AbortController();
+      const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+
+      service.registerAbortSignal('chat_1', controller.signal);
+      service.onModuleDestroy();
+
+      expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
     });
   });
 });
