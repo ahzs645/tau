@@ -1105,7 +1105,7 @@
         ],
         // Bare @returns with no description is as unhelpful as omitting the tag entirely.
         "jsdoc/require-returns-description": "warn",
-        // Validates tag names. Custom tags used by vitest and the kernels filesystem marker are allowlisted.
+        // Validates tag names. Custom tags used by vitest and the runtime filesystem marker are allowlisted.
         "jsdoc/check-tag-names": [
           "error",
           {

@@ -435,7 +435,7 @@ flowchart TD
 - Watch API includes dedup, coalescing, overflow/resync, and lifecycle safety.
 - All filesystem capabilities have direct unit tests and pass.
 - Performance gates met (watch -> kernel < 25ms p95, watch -> tree < 75ms p95, 0 silent drops under 100-event burst).
-- `pnpm nx test/lint/typecheck` passes for both `ui` and `kernels`.
+- `pnpm nx test/lint/typecheck` passes for both `ui` and `runtime`.
 - Remix -> editor file loading scenario verified.
 
 ## Execution Directive

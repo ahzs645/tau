@@ -219,7 +219,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 | `#utils/path.utils.js`        | 7 files             | → `@taucad/utils/path` (new export in `libs/utils`)                                      |
 | `#utils/file.utils.js`        | 5 files             | → `@taucad/utils/file` (new export in `libs/utils`)                                      |
 | `#utils/import.utils.js`      | 2 files             | → `@taucad/utils/import` (new export in `libs/utils`)                                    |
-| `#utils/schema.utils.js`      | 2 files             | → `#utils/schema.utils.js` (local copy in kernels pkg, depends on `@taucad/json-schema`) |
+| `#utils/schema.utils.js`      | 2 files             | → `#utils/schema.utils.js` (local copy in runtime pkg, depends on `@taucad/json-schema`) |
 | `#machines/file-manager.js`   | 2 files (type only) | → Self-contained `FileManagerPortable` type in bridge file                               |
 | `#filesystem/zenfs-config.js` | 1 file (test only)  | → Self-contained in-memory ZenFS setup in testing utils                                  |
 | `package.json` (version)      | 1 file              | → Own `package.json` version or build-time constant                                      |

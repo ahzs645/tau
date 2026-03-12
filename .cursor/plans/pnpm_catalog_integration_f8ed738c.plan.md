@@ -26,7 +26,7 @@ isProject: false
 
 The Tau monorepo (pnpm 10.13.1, which supports catalogs since 9.5.0) currently has ~160 production deps + ~78 dev deps in the root [package.json](package.json), with minimal overlap across sub-packages today. However, as `@taucad/runtime` is extracted (carrying ~20 production deps out of root into its own `package.json`), version drift becomes a real risk. Catalogs solve this preemptively.
 
-Current [pnpm-workspace.yaml](pnpm-workspace.yaml) has no catalog entries. The workspace contains 3 publishable packages (`converter`, `js`, `json-schema`) plus the soon-to-be-created `kernels`, 6 internal libs, and 2 apps.
+Current [pnpm-workspace.yaml](pnpm-workspace.yaml) has no catalog entries. The workspace contains 3 publishable packages (`converter`, `js`, `json-schema`) plus the soon-to-be-created `runtime`, 6 internal libs, and 2 apps.
 
 ---
 
@@ -55,7 +55,7 @@ These deps currently live only in root but will also appear in `packages/runtime
 - `cdn-resolve` (via `@taucad/utils`), `@msgpack/msgpack`, `deepmerge`
 - `source-map-js`, `json-schema`, `json-schema-default`, `uint8array-extras`
 - `zod`, `type-fest`, `comlink`
-- `@zenfs/core`, `@zenfs/dom` (kernels devDeps)
+- `@zenfs/core`, `@zenfs/dom` (runtime devDeps)
 
 **Tier 3 -- Shared tooling/framework deps (single version enforcement):**
 
@@ -248,7 +248,7 @@ cd packages/json-schema && pnpm pack --dry-run
 The catalog phases (C0-C4) should be executed **before Phase 3a** (Scaffold `packages/runtime`) of the existing kernel migration plan. This way:
 
 1. The catalog infrastructure is already in place when we create `packages/runtime/package.json`
-2. All of the kernels' production deps (Tier 2) can use `catalog:` from the start
+2. All of the runtime's production deps (Tier 2) can use `catalog:` from the start
 3. The root `package.json` already uses `catalog:` for these deps, guaranteeing version alignment
 
 When Phase 3a creates `packages/runtime/package.json`, its deps will look like:
