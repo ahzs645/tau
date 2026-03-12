@@ -83,20 +83,20 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 - Never blow away the entire IndexedDB database — user work is stored there
 - Prefer algorithmic, code-level solutions over bundler config or Vite plugins; optimize for 3rd-party consumer DX
 - Avoid type assertion escape hatches (`as never`, `as unknown as`, unnecessary `as const` on returns); fix underlying type issues instead
-- When asked to explore or investigate, present findings and analysis first; do not jump to code changes until implementation is explicitly requested
+- When asked to explore or investigate, present findings and analysis first; do not jump to code changes until implementation is explicitly requested; dig for the concrete root cause (the smoking gun) — targeted fixes only, not broad investigation plans
 - JSDoc codeblocks use explicit language tags (`typescript`/`javascript`, not `ts`/`js`); `@public` tag gates compile-checking — never downgrade to `text` to avoid compilation; use `text` only for non-code content (output, trees); examples must reflect actual consumer usage patterns, not synthetic isolated calls; public JSDoc required for `libs/` and `packages/` only — apps are exempt
 
 ## Learned Workspace Facts
 
 - Policy docs live in `docs/policy/` (testing, library-api, vision, lint, xstate, typescript, filesystem, react-testing, commit, agents-md, context-engineering, jsdoc, and more); research docs in `docs/research/`
 - Hybrid oxlint + ESLint linting: oxlint runs first, ESLint handles residual rules; custom Oxlint JS plugins in `libs/oxlint/`; rule tests use `oxlint-disable` syntax (ESLint 9 RuleTester strips `eslint-disable` from `getAllComments()`)
-- External repos in `repos/` managed via `repos.yaml` and `pnpm repos`; gitignored and cursorignored; add to `.oxlintrc.json` ignorePatterns
-- `packages/runtime` is consumed as source via package.json exports, not built output; test mocks in `packages/runtime/src/testing/kernel-testing.utils.ts`; Vite plugins in `@taucad/vite` with `*.vite-plugin.ts` suffix, `vite:` prefix, Vite 8 hook filters
+- External repos in `repos/` managed via `repos.yaml` and `pnpm repos`; gitignored and cursorignored; add to `.oxlintrc.json` ignorePatterns; `repos/opencascade.js` WASM build uses `BUILTIN_ADDITIONAL_BIND_CODE` (Python layer), full builds (10-30+ min) use `nohup`
+- UI deployed to Netlify (`apps/ui/netlify.toml`); `netlify.toml` env vars are build-time only — not available in SSR functions, so derive runtime values in `environment.config.ts` preprocess; `NX_PREFER_NODE_STRIP_TYPES=true` must be inlined in build commands (Nx evaluates at module load, before `.env` files)
+- `packages/runtime` is consumed as source via package.json exports, not built output; test mocks in `packages/runtime/src/testing/kernel-testing.utils.ts`; Vite plugins in `@taucad/vite` with `*.vite-plugin.ts` suffix, `vite:` prefix, Vite 8 hook filters; gitignored `src/**/wasm/` dirs populated by `copy-assets` target via `copy-files-from-to.cjson`
 - PR workflow: submit as draft; human reviews before marking ready via `gh pr ready`
 - Single FS worker architecture; all filesystem access flows through one serialized worker with ZenFS and IndexedDB backend
 - Editor architecture: machine owns openFiles, ref-counting, force-close; dockview subscribes only; use unique panel IDs (not file path)
 - Two filesystem watch planes: kernel fast path (dependency-scoped) and UI tree path (directory-scoped); do not merge into one coarse stream
-- `repos/opencascade.js` WASM build: platform bindings in `BUILTIN_ADDITIONAL_BIND_CODE` (Python layer); full builds (10-30+ min) use `nohup`
 - `fromSafeAsync` (`#lib/xstate.lib.js`) replaces `fromPromise` for all UI XState async actors; uses `<TReturn, TInput>` generics matching `fromPromise<TOutput, TInput>`
 - Monaco IntelliSense types: `libs/api-extractor` generates bundled `.d.ts` per kernel; `TypeAcquisitionService` registers them via `addExtraLib` at `file:///node_modules/<pkg>/index.d.ts`; custom declarations for opencascade.js live in `repos/opencascade.js/src/declarations/`
 - Typechecking uses `tsgo` (Go-based TS compiler); do not add cross-project `references` arrays to `tsconfig.json` (causes TS6305); avoid `using`/`await using` in shipped code — Rolldown won't downlevel and Safari lacks support; use try/finally with `[Symbol.asyncDispose]()` instead
