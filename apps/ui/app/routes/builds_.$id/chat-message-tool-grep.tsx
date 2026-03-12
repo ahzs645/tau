@@ -25,7 +25,7 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
-              <ChatToolAction>Searching for</ChatToolAction>{' '}
+              <ChatToolAction>Searching for</ChatToolAction>
               <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
@@ -53,10 +53,10 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Search} />
             <ChatToolCardTitle>
-              <ChatToolAction>
+              <ChatToolAction className='min-w-0 shrink truncate'>
                 <span className='font-mono'>/{pattern}/</span>
-              </ChatToolAction>{' '}
-              <ChatToolDescription>
+              </ChatToolAction>
+              <ChatToolDescription className='shrink-0'>
                 ({totalMatches} match{totalMatches === 1 ? '' : 'es'}
                 {truncated ? ', truncated' : ''})
               </ChatToolDescription>

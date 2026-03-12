@@ -191,7 +191,9 @@ export function CollapsibleFileOperationTrigger({
       </span>
       {filenameElement}
       {showChangeIndicator ? (
-        <ChangeIndicator linesAdded={diffStats.linesAdded} linesRemoved={diffStats.linesRemoved} />
+        <span className='shrink-0'>
+          <ChangeIndicator linesAdded={diffStats.linesAdded} linesRemoved={diffStats.linesRemoved} />
+        </span>
       ) : undefined}
     </CollapsibleTrigger>
   );
@@ -272,7 +274,9 @@ export function CollapsibleFileOperation({
               </TooltipContent>
             </Tooltip>
           ) : (
-            <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+            <span className='min-w-0 truncate'>
+              <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+            </span>
           )}
         </div>
         {shouldShowContent ? (

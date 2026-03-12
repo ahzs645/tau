@@ -88,7 +88,8 @@ export function ChatMessageToolTestModel({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FlaskConical} />
             <ChatToolCardTitle>
-              <ChatToolAction>Running</ChatToolAction> <ChatToolDescription>tests...</ChatToolDescription>
+              <ChatToolAction>Running</ChatToolAction>
+              <ChatToolDescription>tests...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>

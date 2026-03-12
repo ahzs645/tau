@@ -108,8 +108,8 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
           <span className={cn('shrink-0 font-medium whitespace-nowrap', accentColor)}>{title}</span>
           <span className='text-muted-foreground/50'>·</span>
           <code className='text-muted-foreground'>{toolName}</code>
-          <span className='hidden text-muted-foreground/50 @xs/error:inline'>·</span>
-          <span className='hidden min-w-0 truncate text-muted-foreground @xs/error:inline'>{description}</span>
+          <span className='text-muted-foreground/50'>·</span>
+          <span className='min-w-0 truncate text-muted-foreground'>{description}</span>
         </div>
       </div>
     );
@@ -129,8 +129,8 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
         <span className='shrink-0 font-medium whitespace-nowrap text-destructive'>{title}</span>
         <span className='text-muted-foreground/50'>·</span>
         <code className='text-muted-foreground'>{toolName}</code>
-        <span className='hidden text-muted-foreground/50 @xs/error:inline'>·</span>
-        <span className='hidden min-w-0 truncate text-muted-foreground @xs/error:inline'>{description}</span>
+        <span className='text-muted-foreground/50'>·</span>
+        <span className='min-w-0 truncate text-muted-foreground'>{description}</span>
         <div className='flex-1' />
         <ChevronRight
           className={cn('size-3 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}

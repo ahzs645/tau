@@ -43,7 +43,9 @@ export function ChatMessageToolDeleteFile({
                 </TooltipContent>
               </Tooltip>
             ) : (
-              <AnimatedShinyText>{targetFile}</AnimatedShinyText>
+              <span className='min-w-0 truncate'>
+                <AnimatedShinyText>{targetFile}</AnimatedShinyText>
+              </span>
             )}
           </div>
         </div>
@@ -72,7 +74,7 @@ export function ChatMessageToolDeleteFile({
             ) : (
               <span className='min-w-0 truncate'>{filename}</span>
             )}
-            <span className='text-destructive/80'>Deleted</span>
+            <span className='shrink-0 text-destructive/80'>Deleted</span>
           </div>
         </div>
       );

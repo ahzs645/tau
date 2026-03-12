@@ -104,7 +104,8 @@ export function ChatMessageToolGetKernelResult({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={CheckCircle} />
             <ChatToolCardTitle>
-              <ChatToolAction>Checking</ChatToolAction> <ChatToolDescription>kernel status...</ChatToolDescription>
+              <ChatToolAction>Checking</ChatToolAction>
+              <ChatToolDescription>kernel status...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>

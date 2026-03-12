@@ -58,8 +58,8 @@ export function ChatMessageToolWebBrowser({
             <ChatToolCardTitle>
               {domains.length > 0 ? (
                 <>
-                  <ChatToolAction>Visiting</ChatToolAction>{' '}
-                  <span className='text-muted-foreground'>{domains.join(', ')}...</span>
+                  <ChatToolAction>Visiting</ChatToolAction>
+                  <span className='min-w-0 truncate text-muted-foreground'>{domains.join(', ')}...</span>
                 </>
               ) : (
                 'Visiting pages...'
@@ -86,8 +86,8 @@ export function ChatMessageToolWebBrowser({
           <ChatToolCardHeader>
             <img src={faviconUrl} alt={firstDomain} className='size-3 shrink-0 rounded-sm' />
             <ChatToolCardTitle>
-              <ChatToolAction>Visited</ChatToolAction>{' '}
-              <span className='text-muted-foreground'>
+              <ChatToolAction>Visited</ChatToolAction>
+              <span className='min-w-0 truncate text-muted-foreground'>
                 {firstDomain}
                 {remainingCount > 0 && (
                   <>

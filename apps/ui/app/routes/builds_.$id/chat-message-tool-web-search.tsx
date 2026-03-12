@@ -116,7 +116,7 @@ export function ChatMessageToolWebSearch({
             <ChatToolCardTitle>
               {query ? (
                 <>
-                  <ChatToolAction>Searching web</ChatToolAction>{' '}
+                  <ChatToolAction>Searching web</ChatToolAction>
                   <ChatToolDescription>
                     <span className='italic'>{query}</span>
                   </ChatToolDescription>
@@ -157,7 +157,7 @@ export function ChatMessageToolWebSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
-              <ChatToolAction>Searched web</ChatToolAction>{' '}
+              <ChatToolAction>Searched web</ChatToolAction>
               <ChatToolDescription>
                 <span className='italic'>{query}</span>
               </ChatToolDescription>

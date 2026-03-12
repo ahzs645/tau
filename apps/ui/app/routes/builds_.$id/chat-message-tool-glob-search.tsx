@@ -29,7 +29,7 @@ export function ChatMessageToolGlobSearch({
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
-              <ChatToolAction>Finding files matching</ChatToolAction>{' '}
+              <ChatToolAction>Finding files matching</ChatToolAction>
               <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
@@ -47,10 +47,10 @@ export function ChatMessageToolGlobSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Files} />
             <ChatToolCardTitle>
-              <ChatToolAction>
+              <ChatToolAction className='min-w-0 shrink truncate'>
                 <span className='font-mono'>{pattern}</span>
-              </ChatToolAction>{' '}
-              <ChatToolDescription>
+              </ChatToolAction>
+              <ChatToolDescription className='shrink-0'>
                 ({totalFiles} file{totalFiles === 1 ? '' : 's'})
               </ChatToolDescription>
             </ChatToolCardTitle>

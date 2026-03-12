@@ -29,7 +29,8 @@ export function ChatMessageToolListDirectory({
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
-              <ChatToolAction>Listing</ChatToolAction> <ChatToolDescription>{path}...</ChatToolDescription>
+              <ChatToolAction>Listing</ChatToolAction>
+              <ChatToolDescription>{path}...</ChatToolDescription>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -54,7 +55,7 @@ export function ChatMessageToolListDirectory({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FolderOpen} />
             <ChatToolCardTitle>
-              <ChatToolAction>Listed</ChatToolAction>{' '}
+              <ChatToolAction>Listed</ChatToolAction>
               <ChatToolDescription>
                 {path || '/'} ({entries.length} items)
               </ChatToolDescription>

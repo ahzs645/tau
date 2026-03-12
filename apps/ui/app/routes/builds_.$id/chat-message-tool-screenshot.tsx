@@ -25,7 +25,7 @@ export function ChatMessageToolScreenshot({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Camera} />
             <ChatToolCardTitle>
-              <ChatToolAction>Capturing</ChatToolAction>{' '}
+              <ChatToolAction>Capturing</ChatToolAction>
               <ChatToolDescription>
                 {mode === 'multi_angle' ? '6 orthographic views...' : 'screenshot...'}
               </ChatToolDescription>

@@ -274,13 +274,13 @@ function ChatToolCardTitle({ children, className }: ChatToolCardTitleProps): Rea
 
   if (status === 'loading') {
     return (
-      <span className={cn('min-w-0 truncate', className)}>
-        <AnimatedShinyText>{children}</AnimatedShinyText>
-      </span>
+      <AnimatedShinyText className={cn('flex max-w-none min-w-0 items-baseline gap-1', className)}>
+        {children}
+      </AnimatedShinyText>
     );
   }
 
-  return <span className={cn('min-w-0 truncate', className)}>{children}</span>;
+  return <span className={cn('flex min-w-0 items-baseline gap-1', className)}>{children}</span>;
 }
 
 // ============================================================================

@@ -18,7 +18,7 @@ type ChatToolActionProps = {
  * <ChatToolAction>Listed</ChatToolAction>
  */
 export function ChatToolAction({ children, className }: ChatToolActionProps): React.JSX.Element {
-  return <span className={cn('font-medium text-foreground/60', className)}>{children}</span>;
+  return <span className={cn('shrink-0 whitespace-nowrap font-medium text-foreground/60', className)}>{children}</span>;
 }
 
 // ============================================================================
@@ -39,5 +39,5 @@ type ChatToolDescriptionProps = {
  * <ChatToolDescription>for 2.5s</ChatToolDescription>
  */
 export function ChatToolDescription({ children, className }: ChatToolDescriptionProps): React.JSX.Element {
-  return <span className={cn('text-foreground/50', className)}>{children}</span>;
+  return <span className={cn('min-w-0 truncate text-foreground/50', className)}>{children}</span>;
 }

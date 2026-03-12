@@ -43,7 +43,7 @@ export function ChatMessageToolReadFile({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
-              <ChatToolAction>Reading</ChatToolAction>{' '}
+              <ChatToolAction>Reading</ChatToolAction>
               <ChatToolDescription>
                 {targetFile}
                 {lineRange}...
@@ -65,8 +65,8 @@ export function ChatMessageToolReadFile({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
-              <ChatToolAction>Read</ChatToolAction>{' '}
-              <FileLink path={targetFile} lineNumber={startLine} className='text-foreground/50'>
+              <ChatToolAction>Read</ChatToolAction>
+              <FileLink path={targetFile} lineNumber={startLine} className='min-w-0 truncate text-foreground/50'>
                 {targetFile}
                 {lineRange}
               </FileLink>
