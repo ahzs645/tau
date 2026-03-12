@@ -599,6 +599,7 @@ export const editorMachine = setup({
               on: {
                 openFile: { target: 'pending' },
                 closeFile: { target: 'pending' },
+                closeAll: { target: 'pending' },
                 setActiveFile: { target: 'pending' },
                 renameFile: { target: 'pending' },
                 setLastChatId: { target: 'pending' },
@@ -617,6 +618,7 @@ export const editorMachine = setup({
               on: {
                 openFile: { target: 'pending', reenter: true },
                 closeFile: { target: 'pending', reenter: true },
+                closeAll: { target: 'pending', reenter: true },
                 setActiveFile: { target: 'pending', reenter: true },
                 renameFile: { target: 'pending', reenter: true },
                 setLastChatId: { target: 'pending', reenter: true },
@@ -661,6 +663,7 @@ export const editorMachine = setup({
                 // Track mutations during write so we persist again after completion
                 openFile: { actions: 'setPendingChanges' },
                 closeFile: { actions: 'setPendingChanges' },
+                closeAll: { actions: 'setPendingChanges' },
                 setActiveFile: { actions: 'setPendingChanges' },
                 renameFile: { actions: 'setPendingChanges' },
                 setLastChatId: { actions: 'setPendingChanges' },

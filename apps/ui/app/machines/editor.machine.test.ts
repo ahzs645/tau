@@ -244,6 +244,16 @@ describe('editorMachine', () => {
       actor.stop();
     });
 
+    it('should enter pending after closeAll', async () => {
+      const actor = await startAndLoad({ loadResult: stubEditorState });
+      expect(actor.getSnapshot().context.openFiles).toHaveLength(2);
+
+      actor.send({ type: 'closeAll' });
+      expect(actor.getSnapshot().context.openFiles).toHaveLength(0);
+      expect(actor.getSnapshot().matches({ ready: { storing: 'pending' } })).toBe(true);
+      actor.stop();
+    });
+
     it('should write after debounce elapses', async () => {
       vi.useFakeTimers();
       try {
