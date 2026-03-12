@@ -242,7 +242,8 @@ function findJsdocBefore(node, sourceCode, jsdocComments) {
 
   const closestEnd = /** @type {[number, number]} */ (closest.range)[1];
   const gap = sourceCode.getText().slice(closestEnd, nodeStart);
-  if (gap.trim().length > 0) {
+  const gapWithoutLineComments = gap.replaceAll(/\/\/[^\n]*/g, '');
+  if (gapWithoutLineComments.trim().length > 0) {
     return undefined;
   }
 

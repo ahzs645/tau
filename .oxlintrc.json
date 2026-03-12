@@ -86,6 +86,9 @@
     "tau-lint/require-disable-description": "error",
     "tau-lint/require-ignore-description": "error",
     "tau-lint/no-literal-const-assertion": "error",
+    "tau-lint/validate-jsdoc-codeblocks": "error",
+    "tau-lint/require-public-export-jsdoc": "warn",
+    "tau-lint/no-consecutive-jsdoc-blank-lines": "warn",
     "unicorn/no-accessor-recursion": "error",
     "unicorn/no-anonymous-default-export": "error",
     "unicorn/no-array-callback-reference": "error",
@@ -1106,7 +1109,7 @@
         "jsdoc/check-tag-names": [
           "error",
           {
-            "definedTags": ["vitest-environment", "taucad/kernels/filesystem", "remarks"]
+            "definedTags": ["vitest-environment", "taucad/kernels/filesystem", "remarks", "internal"]
           }
         ],
         // Every exported function, class, method, type alias, and interface must have a JSDoc block.
@@ -1223,11 +1226,31 @@
       "rules": {
         "jsdoc-js/no-types": "off"
       }
+    },
+    {
+      // The oxlint JS plugin uses relative imports between rule files and shared utils.
+      // Type-aware rules produce false positives in .js files (JSON.parse → any, ESTree AST types).
+      "files": ["libs/oxlint/src/**/*.js"],
+      "rules": {
+        "no-restricted-imports": "off",
+        "@typescript-eslint/no-unsafe-assignment": "off",
+        "@typescript-eslint/no-unsafe-argument": "off",
+        "@typescript-eslint/no-unnecessary-condition": "off"
+      }
+    },
+    {
+      // Apps are excluded from JSDoc codeblock validation and @public export enforcement.
+      // Only libs/ and packages/ need compile-checked public API documentation.
+      "files": ["apps/**/*.{ts,tsx}"],
+      "rules": {
+        "tau-lint/validate-jsdoc-codeblocks": "off",
+        "tau-lint/require-public-export-jsdoc": "off"
+      }
     }
   ],
   "settings": {
     "jsdoc": {
-      "definedTags": ["vitest-environment", "remarks"]
+      "definedTags": ["vitest-environment", "remarks", "internal"]
     }
   }
 }

@@ -1,17 +1,21 @@
 /**
- * Validates that fenced TypeScript codeblocks in JSDoc comments compile
- * without errors, and requires all JSDoc fenced codeblocks to specify a
- * language tag. Only compile-checks codeblocks in `@public`-tagged JSDoc;
- * `@internal` or untagged JSDoc still gets syntax highlighting but skips
- * compilation. Adapted from type-fest's validate-jsdoc-codeblocks ESLint
- * rule, with a star-prefix stripping layer for standard JSDoc formatting.
+ * Validates JSDoc fenced codeblock formatting and compiles `@public` TypeScript
+ * codeblocks via tsgolint (typescript-go) inline. Diagnostics flow through
+ * oxlint's native pipeline so they appear in the IDE.
+ *
+ * Checks performed:
+ * - Requires all fenced codeblocks to specify a language tag
+ * - Enforces full language names (`typescript` over `ts`, `javascript` over `js`)
+ * - Type-checks `typescript` codeblocks in `@public` JSDoc via tsgolint
  *
  * @typedef {import('eslint').Rule.RuleModule} RuleModule
+ * @typedef {import('eslint').Rule.RuleContext} RuleContext
+ * @typedef {{ kind: number; range?: { pos: number; end: number }; message: { id: string; description: string }; file_path?: string }} TsgolintDiagnostic
  */
 
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import path from 'node:path';
-import ts from 'typescript';
-import { createFSBackedSystem, createVirtualTypeScriptEnvironment } from '@typescript/vfs';
 
 // oxlint-disable-next-line unicorn-js/better-regex -- named capture groups should not be reordered
 const CODEBLOCK_REGEX = /(?<openingFence>```(?<lang>[a-zA-Z]*)\n)(?<code>[\s\S]*?)```/g;
@@ -22,36 +26,26 @@ const SHORTHAND_LANGS = {
   ts: { full: 'typescript', messageId: 'preferTypescriptTag' },
   js: { full: 'javascript', messageId: 'preferJavascriptTag' },
 };
-const FILENAME = 'example-codeblock.ts';
 
-const compilerOptions = {
-  lib: ['lib.esnext.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts'],
-  target: ts.ScriptTarget.ESNext,
-  module: ts.ModuleKind.NodeNext,
-  moduleResolution: ts.ModuleResolutionKind.NodeNext,
-  strict: true,
-  noUnusedLocals: false,
-  noUnusedParameters: false,
-  noImplicitReturns: false,
-  skipLibCheck: true,
-  esModuleInterop: true,
-  allowSyntheticDefaultImports: true,
-};
-
-const rootDirectory = path.resolve(import.meta.dirname, '..', '..', '..', '..');
-/** @type {Map<string, string>} */
-const virtualFsMap = new Map();
-virtualFsMap.set(FILENAME, '// placeholder');
-
-const system = createFSBackedSystem(virtualFsMap, rootDirectory, ts);
-const defaultEnvironment = createVirtualTypeScriptEnvironment(system, [FILENAME], ts, compilerOptions);
+/** @type {string | undefined} */
+let cachedTsgolintBinary;
+let tsgolintResolved = false;
 
 /**
- * Strip leading ` * ` prefixes from JSDoc codeblock lines and provide an
- * offset mapping function to translate stripped-code positions back to
- * positions in the raw (prefixed) code.
- *
- * @param {string} rawCode - Code extracted from between fences (with `*` prefixes)
+ * @typedef {{
+ *   virtualPath: string;
+ *   strippedCode: string;
+ *   codeStartIndex: number;
+ *   mapToRaw: (offset: number) => number;
+ * }} CodeblockEntry
+ */
+
+// ---------------------------------------------------------------------------
+// Star-prefix stripping
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {string} rawCode
  */
 function stripStarPrefixes(rawCode) {
   const lines = rawCode.split('\n');
@@ -70,22 +64,20 @@ function stripStarPrefixes(rawCode) {
   return {
     code: strippedLines.join('\n'),
     /**
-     * Map an offset in the stripped code back to the corresponding offset
-     * in the raw (star-prefixed) code.
      * @param {number} strippedOffset
      * @returns {number}
      */
     mapToRaw(strippedOffset) {
       let pos = 0;
-      for (let i = 0; i < strippedLines.length; i++) {
-        const lineLength = strippedLines[i].length;
-        if (pos + lineLength >= strippedOffset || i === strippedLines.length - 1) {
+      for (let index = 0; index < strippedLines.length; index++) {
+        const lineLength = strippedLines[index].length;
+        if (pos + lineLength >= strippedOffset || index === strippedLines.length - 1) {
           const col = strippedOffset - pos;
           let rawPos = 0;
-          for (let j = 0; j < i; j++) {
+          for (let j = 0; j < index; j++) {
             rawPos += prefixLengths[j] + strippedLines[j].length + 1;
           }
-          rawPos += prefixLengths[i] + col;
+          rawPos += prefixLengths[index] + col;
           return rawPos;
         }
         pos += lineLength + 1;
@@ -95,28 +87,285 @@ function stripStarPrefixes(rawCode) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// tsgolint integration
+// ---------------------------------------------------------------------------
+
+function resolveTsgolintBinary() {
+  if (tsgolintResolved) {
+    return cachedTsgolintBinary;
+  }
+  tsgolintResolved = true;
+
+  const workspaceRoot = process.env.NX_WORKSPACE_ROOT ?? path.resolve(import.meta.dirname, '..', '..', '..', '..');
+  const rootRequire = createRequire(path.join(workspaceRoot, 'node_modules', '_placeholder.js'));
+  try {
+    const wrapperPath = rootRequire.resolve('oxlint-tsgolint/bin/tsgolint.js');
+    const wrapperRequire = createRequire(wrapperPath);
+    const suffix = process.platform === 'win32' ? '.exe' : '';
+    cachedTsgolintBinary = wrapperRequire.resolve(
+      `@oxlint-tsgolint/${process.platform}-${process.arch}/tsgolint${suffix}`,
+    );
+  } catch {
+    cachedTsgolintBinary = undefined;
+  }
+  return cachedTsgolintBinary;
+}
+
+/**
+ * Parse binary-framed tsgolint output.
+ * Wire format: [uint32 LE size][uint8 type (0=Error, 1=Diagnostic)][UTF-8 JSON]
+ *
+ * @param {Buffer} buffer
+ * @returns {TsgolintDiagnostic[]}
+ */
+function parseDiagnostics(buffer) {
+  /** @type {TsgolintDiagnostic[]} */
+  const diagnostics = [];
+  let offset = 0;
+
+  while (offset + 5 <= buffer.length) {
+    const payloadSize = buffer.readUInt32LE(offset);
+    const messageType = buffer[offset + 4];
+    offset += 5;
+
+    if (offset + payloadSize > buffer.length) {
+      break;
+    }
+
+    const payload = buffer.subarray(offset, offset + payloadSize).toString('utf8');
+    offset += payloadSize;
+
+    if (messageType === 1) {
+      try {
+        diagnostics.push(JSON.parse(payload));
+      } catch {
+        // Malformed payload -- skip silently
+      }
+    }
+  }
+
+  return diagnostics;
+}
+
+/**
+ * @param {string} binary
+ * @param {CodeblockEntry[]} blocks
+ * @returns {TsgolintDiagnostic[]}
+ */
+function runTsgolint(binary, blocks) {
+  /** @type {Record<string, string>} */
+  const sourceOverrides = {};
+  const filePaths = [];
+
+  for (const block of blocks) {
+    sourceOverrides[block.virtualPath] = block.strippedCode;
+    filePaths.push(block.virtualPath);
+  }
+
+  const result = spawnSync(binary, ['headless'], {
+    input: JSON.stringify({
+      version: 2,
+      configs: [{ file_paths: filePaths, rules: [] }],
+      source_overrides: sourceOverrides,
+      report_syntactic: true,
+      report_semantic: true,
+    }),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  if (result.error) {
+    return [];
+  }
+
+  if (!result.stdout || result.stdout.length === 0) {
+    return [];
+  }
+
+  return parseDiagnostics(result.stdout);
+}
+
+/**
+ * Run tsgolint on extracted codeblocks and report diagnostics via context.report().
+ *
+ * @param {RuleContext} context
+ * @param {CodeblockEntry[]} codeblocks
+ */
+function typecheckCodeblocks(context, codeblocks) {
+  const binary = resolveTsgolintBinary();
+  if (!binary) {
+    return;
+  }
+
+  const diagnostics = runTsgolint(binary, codeblocks);
+  /** @type {Map<string, CodeblockEntry>} */
+  const blockMap = new Map(codeblocks.map((block) => [block.virtualPath, block]));
+
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.kind !== 1 || !diagnostic.file_path) {
+      continue;
+    }
+
+    const block = blockMap.get(diagnostic.file_path);
+    if (!block) {
+      continue;
+    }
+
+    const strippedPos = diagnostic.range?.pos ?? 0;
+    const strippedEnd = diagnostic.range?.end ?? strippedPos;
+    const rawStart = block.mapToRaw(strippedPos);
+    const rawEnd = block.mapToRaw(strippedEnd);
+
+    context.report({
+      loc: {
+        start: context.sourceCode.getLocFromIndex(block.codeStartIndex + rawStart),
+        end: context.sourceCode.getLocFromIndex(block.codeStartIndex + rawEnd),
+      },
+      messageId: 'invalidCodeblock',
+      data: {
+        errorMessage: `${diagnostic.message.id}: ${diagnostic.message.description}`,
+      },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// @example <caption> enforcement
+// ---------------------------------------------------------------------------
+
+const CAPTION_REGEX = /^<caption>.*<\/caption>$/;
+
+/**
+ * Validate @example caption usage per JSDoc spec (https://jsdoc.app/tags-example):
+ * - Every @example must have a <caption>...</caption> on the same line
+ * - Bare text (not wrapped in <caption>) → auto-fix wraps it
+ * - No trailing text at all → auto-fix inserts empty <caption></caption>
+ *
+ * @param {RuleContext} context
+ * @param {{ range: [number, number]; value: string }} comment
+ */
+function checkExampleCaptions(context, comment) {
+  const commentStart = Number(comment.range[0]) + 2;
+  const lines = String(comment.value).split('\n');
+  let lineOffset = 0;
+
+  for (const line of lines) {
+    const lineString = String(line);
+    const stripped = lineString.replace(/^\s*\*\s?/, '');
+
+    // oxlint-disable-next-line unicorn-js/better-regex -- character class order is intentional
+    const exampleMatch = /^@example([\t ]+\S.*)?$/.exec(stripped);
+
+    if (exampleMatch) {
+      const trailing = exampleMatch[1]?.trim() ?? '';
+      const exampleIndex = lineString.indexOf('@example');
+      const absStart = commentStart + lineOffset + exampleIndex;
+      const absEnd = commentStart + lineOffset + lineString.length;
+
+      if (trailing && !CAPTION_REGEX.test(trailing)) {
+        reportBareTextOnExample(context, { absStart, absEnd, bareText: trailing });
+      } else if (!trailing) {
+        reportMissingCaption(context, absStart);
+      } else if (/example/i.test(trailing.replaceAll(/<\/?caption>/g, ''))) {
+        reportRedundantExampleWord(context, absStart, absEnd);
+      }
+    }
+
+    lineOffset += lineString.length + 1;
+  }
+}
+
+/**
+ * @param {RuleContext} context
+ * @param {{ absStart: number; absEnd: number; bareText: string }} options
+ */
+function reportBareTextOnExample(context, options) {
+  const { absStart, absEnd, bareText } = options;
+  context.report({
+    loc: {
+      start: context.sourceCode.getLocFromIndex(absStart),
+      end: context.sourceCode.getLocFromIndex(absEnd),
+    },
+    messageId: 'exampleBareText',
+    fix(fixer) {
+      return fixer.replaceTextRange([absStart, absEnd], `@example <caption>${bareText}</caption>`);
+    },
+  });
+}
+
+/**
+ * @param {RuleContext} context
+ * @param {number} absStart
+ */
+function reportMissingCaption(context, absStart) {
+  const tagEnd = absStart + '@example'.length;
+  context.report({
+    loc: {
+      start: context.sourceCode.getLocFromIndex(absStart),
+      end: context.sourceCode.getLocFromIndex(tagEnd),
+    },
+    messageId: 'exampleMissingCaption',
+    fix(fixer) {
+      return fixer.replaceTextRange([absStart, tagEnd], '@example <caption></caption>');
+    },
+  });
+}
+
+/**
+ * @param {RuleContext} context
+ * @param {number} absStart
+ * @param {number} absEnd
+ */
+function reportRedundantExampleWord(context, absStart, absEnd) {
+  context.report({
+    loc: {
+      start: context.sourceCode.getLocFromIndex(absStart),
+      end: context.sourceCode.getLocFromIndex(absEnd),
+    },
+    messageId: 'exampleRedundantWord',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Rule
+// ---------------------------------------------------------------------------
+
 /** @type {RuleModule} */
 export const validateJsdocCodeblocksRule = {
   meta: {
     type: 'suggestion',
     fixable: 'code',
     docs: {
-      description: 'Ensures JSDoc example codeblocks compile without TypeScript errors',
+      description: 'Validates JSDoc codeblock formatting and type-checks @public TypeScript examples via tsgolint',
     },
     messages: {
       invalidCodeblock: '{{errorMessage}}',
       missingLanguageTag: 'JSDoc fenced codeblock must specify a language tag (e.g., typescript, json, text)',
       preferTypescriptTag: 'Use ```typescript instead of ```ts for JSDoc fenced codeblocks',
       preferJavascriptTag: 'Use ```javascript instead of ```js for JSDoc fenced codeblocks',
+      exampleBareText:
+        'Wrap @example description in <caption></caption> tags per JSDoc spec (https://jsdoc.app/tags-example)',
+      exampleMissingCaption:
+        'Every @example tag must include a <caption></caption> per JSDoc spec (https://jsdoc.app/tags-example)',
+      exampleRedundantWord:
+        'Avoid the word "example" in <caption> — it is redundant with the @example tag. Describe the use-case instead (e.g., "Browser setup", "Custom WASM build")',
     },
   },
   create(context) {
     return {
       Program() {
+        /** @type {CodeblockEntry[]} */
+        const codeblocks = [];
+
         for (const comment of context.sourceCode.getAllComments()) {
           if (comment.type !== 'Block' || !comment.value.startsWith('*')) {
             continue;
           }
+
+          checkExampleCaptions(context, comment);
+
+          const isPublic = PUBLIC_TAG_REGEX.test(comment.value);
 
           for (const match of comment.value.matchAll(CODEBLOCK_REGEX)) {
             const { code: rawCode, openingFence, lang } = match.groups ?? {};
@@ -153,46 +402,28 @@ export const validateJsdocCodeblocksRule = {
               });
             }
 
-            if (!TS_LANGS.has(lang) || !rawCode?.trim()) {
-              continue;
-            }
-
-            if (!PUBLIC_TAG_REGEX.test(comment.value)) {
+            if (!isPublic || !TS_LANGS.has(lang) || !rawCode?.trim()) {
               continue;
             }
 
             const matchOffset = match.index + openingFence.length + 2;
             const codeStartIndex = comment.range[0] + matchOffset;
-
             const { code, mapToRaw } = stripStarPrefixes(rawCode);
 
             if (!code.trim()) {
               continue;
             }
 
-            defaultEnvironment.updateFile(FILENAME, code);
-            const syntacticDiagnostics = defaultEnvironment.languageService.getSyntacticDiagnostics(FILENAME);
-            const semanticDiagnostics = defaultEnvironment.languageService.getSemanticDiagnostics(FILENAME);
-            const diagnostics = syntacticDiagnostics.length > 0 ? syntacticDiagnostics : semanticDiagnostics;
+            const basename = path.basename(context.filename, path.extname(context.filename));
+            const directory = path.dirname(context.filename);
+            const virtualPath = path.join(directory, `__jsdoc_${basename}_${codeblocks.length}.ts`);
 
-            for (const diagnostic of diagnostics) {
-              const rawStart = mapToRaw(diagnostic.start ?? 0);
-              const rawEnd = mapToRaw((diagnostic.start ?? 0) + (diagnostic.length ?? code.length));
-              const diagnosticStart = codeStartIndex + rawStart;
-              const diagnosticEnd = codeStartIndex + rawEnd;
-
-              context.report({
-                loc: {
-                  start: context.sourceCode.getLocFromIndex(diagnosticStart),
-                  end: context.sourceCode.getLocFromIndex(diagnosticEnd),
-                },
-                messageId: 'invalidCodeblock',
-                data: {
-                  errorMessage: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
-                },
-              });
-            }
+            codeblocks.push({ virtualPath, strippedCode: code, codeStartIndex, mapToRaw });
           }
+        }
+
+        if (codeblocks.length > 0) {
+          typecheckCodeblocks(context, codeblocks);
         }
       },
     };

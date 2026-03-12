@@ -13,12 +13,13 @@ import { requireDisableDescriptionRule } from './rules/require-disable-descripti
 import { requireIgnoreDescriptionRule } from './rules/require-ignore-description.js';
 import { validateJsdocCodeblocksRule } from './rules/validate-jsdoc-codeblocks.js';
 import { requirePublicExportJsdocRule } from './rules/require-public-export-jsdoc.js';
+import { noConsecutiveJsdocBlankLinesRule } from './rules/no-consecutive-jsdoc-blank-lines.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.4.0',
+    version: '1.6.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -27,7 +28,9 @@ const plugin = {
     'no-literal-const-assertion': noLiteralConstAssertionRule,
     'validate-jsdoc-codeblocks': validateJsdocCodeblocksRule,
     'require-public-export-jsdoc': requirePublicExportJsdocRule,
+    'no-consecutive-jsdoc-blank-lines': noConsecutiveJsdocBlankLinesRule,
   },
 };
 
+/** @public */
 export default plugin;

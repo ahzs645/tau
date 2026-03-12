@@ -15,11 +15,11 @@ describe('validate-jsdoc-codeblocks', () => {
       ruleTester.run('validate-jsdoc-codeblocks', validateJsdocCodeblocksRule, {
         valid: [
           {
-            name: 'codeblock with ts language tag',
+            name: 'codeblock with typescript language tag',
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = 1;
  * \`\`\`
  */
@@ -94,7 +94,7 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = 1;
  * \`\`\`
  */
@@ -106,7 +106,7 @@ export const foo = 1;
             code: `
 /**
  * @internal
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = "not a number";
  * \`\`\`
  */
@@ -117,7 +117,7 @@ export const foo = 1;
             name: 'TypeScript in untagged JSDoc is not compile-checked',
             code: `
 /**
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = "not a number";
  * \`\`\`
  */
@@ -141,7 +141,7 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * \`\`\`
  */
 export const foo = 1;
@@ -154,7 +154,7 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = "not a number";
  * \`\`\`
  */
@@ -167,7 +167,7 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: = ;
  * \`\`\`
  */
@@ -212,11 +212,11 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const a: number = 1;
  * \`\`\`
  *
- * \`\`\`ts
+ * \`\`\`typescript
  * const b: string = "hello";
  * \`\`\`
  */
@@ -230,11 +230,11 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const a: number = 1;
  * \`\`\`
  *
- * \`\`\`ts
+ * \`\`\`typescript
  * const b: number = "wrong";
  * \`\`\`
  */
@@ -256,7 +256,7 @@ export const foo = 1;
             code: `
 /**
  * @publicAPI
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = "not a number";
  * \`\`\`
  */
@@ -268,7 +268,7 @@ export const foo = 1;
             code: `
 /**
  * Some docs @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = 1;
  * \`\`\`
  */
@@ -280,7 +280,7 @@ export const foo = 1;
             code: `
 /**
  * @public
- * \`\`\`ts
+ * \`\`\`typescript
  * const x: number = 1;
  * \`\`\`
  */
@@ -289,6 +289,80 @@ export const foo = 1;
           },
         ],
         invalid: [],
+      });
+    });
+  });
+
+  describe('shorthand language tag expansion', () => {
+    it('should report ts shorthand and suggest typescript', () => {
+      ruleTester.run('validate-jsdoc-codeblocks', validateJsdocCodeblocksRule, {
+        valid: [
+          {
+            name: 'typescript tag is accepted',
+            code: `
+/**
+ * @public
+ * \`\`\`typescript
+ * const x: number = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+          },
+          {
+            name: 'javascript tag is accepted',
+            code: `
+/**
+ * \`\`\`javascript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+          },
+        ],
+        invalid: [
+          {
+            name: 'ts shorthand is flagged with fix',
+            code: `
+/**
+ * \`\`\`ts
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            errors: [{ messageId: 'preferTypescriptTag' }],
+            output: `
+/**
+ * \`\`\`typescript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+          },
+          {
+            name: 'js shorthand is flagged with fix',
+            code: `
+/**
+ * \`\`\`js
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+            errors: [{ messageId: 'preferJavascriptTag' }],
+            output: `
+/**
+ * \`\`\`javascript
+ * const x = 1;
+ * \`\`\`
+ */
+export const foo = 1;
+`,
+          },
+        ],
       });
     });
   });
