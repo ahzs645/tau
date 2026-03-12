@@ -418,14 +418,20 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     }
 
     const bootstrapSpan = this.tracer.startSpan('kernel.bootstrap');
-    await this.loadMiddleware(input.middlewareEntries);
+    try {
+      await this.loadMiddleware(input.middlewareEntries);
 
-    const initSpan = this.tracer.startSpan('kernel.init', {
-      kernel: this.constructor.name,
-    });
-    await this.onInitialize({ options: this.options }, this.createRuntime());
-    initSpan.end();
-    bootstrapSpan.end();
+      const initSpan = this.tracer.startSpan('kernel.init', {
+        kernel: this.constructor.name,
+      });
+      try {
+        await this.onInitialize({ options: this.options }, this.createRuntime());
+      } finally {
+        initSpan.end();
+      }
+    } finally {
+      bootstrapSpan.end();
+    }
   }
 
   /**
