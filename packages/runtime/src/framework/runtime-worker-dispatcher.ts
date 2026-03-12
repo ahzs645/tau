@@ -23,14 +23,14 @@ function extractGltfTransferables(result: HashedGeometryResult): Transferable[] 
     return [];
   }
 
-  const buffers: Transferable[] = [];
+  const seen = new Set<ArrayBuffer>();
   for (const geometry of result.data) {
     if (geometry.format === 'gltf') {
-      buffers.push(geometry.content.buffer);
+      seen.add(geometry.content.buffer);
     }
   }
 
-  return buffers;
+  return [...seen];
 }
 
 function extractExportTransferables(result: ExportGeometryResult): Transferable[] {
@@ -38,12 +38,12 @@ function extractExportTransferables(result: ExportGeometryResult): Transferable[
     return [];
   }
 
-  const buffers: Transferable[] = [];
+  const seen = new Set<ArrayBuffer>();
   for (const file of result.data) {
-    buffers.push(file.bytes.buffer);
+    seen.add(file.bytes.buffer);
   }
 
-  return buffers;
+  return [...seen];
 }
 
 /**
