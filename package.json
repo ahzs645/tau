@@ -170,6 +170,7 @@
     "nestjs-zod": "^5.1.1",
     "ollama": "^0.5.18",
     "openai": "^4.104.0",
+    "opencascade.js": "catalog:",
     "openscad-wasm-prebuilt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
@@ -320,7 +321,8 @@
     },
     "overrides": {
       "@langchain/google-common": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz",
-      "@langchain/google-vertexai": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz"
+      "@langchain/google-vertexai": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz",
+      "vitest": "catalog:"
     },
     "onlyBuiltDependencies": [
       "@nestjs/core",
