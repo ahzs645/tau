@@ -326,7 +326,7 @@ class ToJsonSchema {
  * @param options - conversion options (string format detection, required fields, array mode)
  * @returns A JSON Schema that would validate the input value.
  *
- * @example
+ * @example <caption>Inferring schema from a value</caption>
  * ```typescript
  * import { toJsonSchema } from '@taucad/json-schema';
  *
