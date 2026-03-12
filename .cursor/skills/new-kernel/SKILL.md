@@ -15,7 +15,8 @@ Add a new first-party CAD kernel to Tau following the `@taucad/kernels` plugin a
 4. UI default/debug options include kernel where applicable
 5. Type/catalog metadata in `libs/types/src/constants/kernel.constants.ts`
 6. Prompt configuration supports the kernel
-7. Nx lint/typecheck/test pass
+7. Monaco IntelliSense types extracted, exported, and registered
+8. Nx lint/typecheck/test pass
 
 ## 1) Implement Kernel
 
@@ -206,6 +207,50 @@ Import and add `<id>()` to `defaultKernelOptions.kernels`.
 
 Add entry to `kernelConfigurations` with `id`, `name`, `language`, `dimensions`, `description`, `mainFile`, `backendProvider`, `longDescription`, `emptyCode`, `recommended`, `tags`, `features`.
 
+### 3.9 Monaco IntelliSense types
+
+The editor provides IntelliSense for kernel imports via bundled `.d.ts` files. If the kernel exposes a JS/TS API that users import (e.g. `import ... from '<library>'`), add type definitions to the Monaco pipeline:
+
+1. **Create extraction script:** `libs/api-extractor/src/extract-<id>-types.ts`
+   - Read the kernel's `.d.ts` file(s)
+   - Strip `export declare` to `export` (inside `declare module`, `declare` is implicit)
+   - Wrap in `declare module '<package-name>' { ... }` blocks for each registered `builtinModuleNames`
+   - Export a `buildBundledTypes()` function (for testability) and a `main()` CLI entry
+   - Output to `libs/api-extractor/src/generated/<id>/<id>.bundled.d.ts`
+   - Use `extract-manifold-types.ts` as template (simple file wrapping) or `extract-replicad-api.ts` / `extract-jscad-types.ts` (TS Compiler API deep extraction)
+
+2. **Add Nx target:** `libs/api-extractor/project.json`
+
+   ```json
+   "extract-<id>": {
+     "executor": "nx:run-commands",
+     "options": {
+       "command": "tsx src/extract-<id>-types.ts",
+       "cwd": "libs/api-extractor"
+     }
+   }
+   ```
+
+3. **Export from `@taucad/api-extractor`:** `libs/api-extractor/src/index.ts`
+
+   ```typescript
+   export { default as <id>Types } from '#generated/<id>/<id>.bundled.d.ts?raw';
+   ```
+
+4. **Register in Monaco:** `apps/ui/app/lib/javascript-contribution.ts`
+
+   ```typescript
+   {
+     packageName: '<library>',
+     content: <id>Types,
+     prewrapped: true,
+   },
+   ```
+
+   If the kernel has multiple `builtinModuleNames`, add an extra entry with empty `content` for each alias to prevent ATA from trying to fetch them from esm.sh.
+
+5. **Run extraction:** `pnpm nx extract-<id> api-extractor`
+
 ## 4) Prompt System Integration
 
 Add kernel prompt config files under `apps/api/app/api/chat/prompts/kernel-prompt-configs/`:
@@ -271,6 +316,9 @@ Keep commits logically grouped (implementation, wiring, docs) if practical.
 - [ ] `libs/types/src/constants/kernel.constants.ts`
 - [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.config.ts`
 - [ ] `apps/api/app/api/chat/prompts/kernel-prompt-configs/<id>.prompt.example.<ext>`
+- [ ] `libs/api-extractor/src/extract-<id>-types.ts` (Monaco IntelliSense types)
+- [ ] `libs/api-extractor/src/index.ts` (export bundled types via `?raw`)
+- [ ] `apps/ui/app/lib/javascript-contribution.ts` (register in `staticTypes`)
 - [ ] Kernel docs pages + architecture policy updates
 
 ## Common Failure Modes
@@ -282,3 +330,4 @@ Keep commits logically grouped (implementation, wiring, docs) if practical.
 - Missing `publishConfig` export → package consumers break
 - Added kernel to code but not to docs comparisons → docs drift
 - Defined local mock helpers instead of using shared testing utils → maintenance burden
+- Forgot Monaco IntelliSense types → no editor autocomplete for the kernel's API
