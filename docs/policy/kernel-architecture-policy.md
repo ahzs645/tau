@@ -16,7 +16,7 @@ A layered kernel API (Client, Transport, Protocol) separates consumer convenienc
 
 ## Architecture Overview
 
-```
+```text
 Route (builds_.$id)
   └─ BuildMachine (1 per build)
        ├─ FileManagerMachine (1 per build, shared)
@@ -37,7 +37,7 @@ Route (builds_.$id)
 
 The kernel API follows a three-layer design. Each layer has a distinct audience and abstraction level:
 
-```
+```text
 ┌────────────────────────────────────────────────────────┐
 │  RuntimeClient (consumer-facing)                        │
 │  Promise-based, lazy initialization, event subscription│
@@ -125,7 +125,7 @@ Previously, all 5 kernels were loaded eagerly (~90 MB per CadMachine).
 
 ## RuntimeClient Lifecycle
 
-```
+```text
 1. createRuntimeClient(options)                          → RuntimeClient created, no Worker yet
 2. client.on('geometry', handler)                       → Subscribe to render results (any time)
 3. client.render({ code: { 'box.ts': '...' } })        → Auto-creates filesystem, auto-connects, renders
