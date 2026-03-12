@@ -7,6 +7,7 @@ import type { GlobSearchOutput } from '#schemas/tools/glob-search.tool.schema.js
 import type { GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
 import type { TestModelOutput } from '#schemas/tools/test-model.tool.schema.js';
 import type { EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
+import type { ScreenshotOutput } from '#schemas/tools/screenshot.tool.schema.js';
 
 /**
  * Type-only registry mapping tool names to their output types.
@@ -25,4 +26,5 @@ export type ToolOutputRegistry = {
   [toolName.listDirectory]: ListDirectoryOutput;
   [toolName.grep]: GrepOutput;
   [toolName.globSearch]: GlobSearchOutput;
+  [toolName.screenshot]: ScreenshotOutput;
 };

@@ -7,6 +7,7 @@ import type {
   CreateFileOutput,
   EditFileOutput,
   GetKernelResultOutput,
+  ScreenshotOutput,
 } from '@taucad/chat';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
@@ -525,6 +526,138 @@ describe('toolResultTrimmerMiddleware', () => {
       const parsed = JSON.parse(trimmedMessage.content as string) as unknown;
 
       expect(parsed).toEqual({ status: 'ready' });
+    });
+  });
+
+  // ==========================================================================
+  // Screenshot Trimmer
+  // ==========================================================================
+
+  describe('screenshot trimmer', () => {
+    const base64Stub = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ';
+
+    function createScreenshotOutput(views: string[]): ScreenshotOutput {
+      return {
+        images: views.map((view) => ({ view, dataUrl: base64Stub })),
+      };
+    }
+
+    it('should strip dataUrl from older screenshot messages, keeping only view names', async () => {
+      const olderScreenshot = createScreenshotOutput(['front', 'back', 'top', 'bottom', 'left', 'right']);
+      const latestScreenshot = createScreenshotOutput(['current']);
+
+      const messages: BaseMessage[] = [
+        new HumanMessage('Take a screenshot'),
+        new AIMessage({
+          content: '',
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_calls: [{ id: 'call_ss_1', name: toolName.screenshot, args: {} }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify(olderScreenshot),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_1',
+          name: toolName.screenshot,
+        }),
+        new AIMessage('Here is the model. Let me take another screenshot.'),
+        new AIMessage({
+          content: '',
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_calls: [{ id: 'call_ss_2', name: toolName.screenshot, args: {} }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify(latestScreenshot),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_2',
+          name: toolName.screenshot,
+        }),
+      ];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const toolMessages = request.messages.filter((message) => ToolMessage.isInstance(message)) as ToolMessage[];
+      expect(toolMessages).toHaveLength(2);
+
+      // Older screenshot: trimmed to view names only, no dataUrl
+      const olderContent = JSON.parse(toolMessages[0]!.content as string) as Record<string, unknown>;
+      expect(olderContent).toEqual({
+        images: [
+          { view: 'front' },
+          { view: 'back' },
+          { view: 'top' },
+          { view: 'bottom' },
+          { view: 'left' },
+          { view: 'right' },
+        ],
+        _trimmed: true,
+      });
+
+      // Latest screenshot: converted to multimodal image blocks (not trimmed to JSON)
+      const latestContent = toolMessages[1]!.content;
+      expect(Array.isArray(latestContent)).toBe(true);
+    });
+
+    it('should trim screenshot by content shape detection when name is missing', async () => {
+      const olderOutput = createScreenshotOutput(['front', 'back']);
+      const latestOutput = createScreenshotOutput(['current']);
+
+      const messages: BaseMessage[] = [
+        new ToolMessage({
+          content: JSON.stringify(olderOutput),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_no_name',
+          // No name set — triggers content shape detection
+        }),
+        new ToolMessage({
+          content: JSON.stringify(latestOutput),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_latest',
+          name: toolName.screenshot,
+        }),
+      ];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const trimmedMessage = request.messages[0] as ToolMessage;
+      const parsed = JSON.parse(trimmedMessage.content as string) as Record<string, unknown>;
+
+      expect(parsed).toEqual({
+        images: [{ view: 'front' }, { view: 'back' }],
+        _trimmed: true,
+      });
+    });
+
+    it('should handle older screenshot with empty images array', async () => {
+      const emptyOutput: ScreenshotOutput = { images: [] };
+      const latestOutput = createScreenshotOutput(['current']);
+
+      const messages: BaseMessage[] = [
+        new ToolMessage({
+          content: JSON.stringify(emptyOutput),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_empty',
+          name: toolName.screenshot,
+        }),
+        new ToolMessage({
+          content: JSON.stringify(latestOutput),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_latest',
+          name: toolName.screenshot,
+        }),
+      ];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const trimmedMessage = request.messages[0] as ToolMessage;
+      const parsed = JSON.parse(trimmedMessage.content as string) as Record<string, unknown>;
+
+      expect(parsed).toEqual({
+        images: [],
+        _trimmed: true,
+      });
     });
   });
 });

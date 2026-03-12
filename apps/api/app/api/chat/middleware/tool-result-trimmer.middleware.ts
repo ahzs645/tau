@@ -160,6 +160,18 @@ function isGlobSearchShape(content: unknown): boolean {
 }
 
 /**
+ * Checks if content has the shape of ScreenshotOutput.
+ * Unique: has images array.
+ */
+function isScreenshotShape(content: unknown): boolean {
+  if (!isObject(content)) {
+    return false;
+  }
+
+  return Array.isArray(content['images']);
+}
+
+/**
  * Registry of content shape detectors.
  * Maps tool names to functions that detect if content matches that tool's output shape.
  * Used as a fallback when message.name is undefined.
@@ -176,6 +188,7 @@ const contentShapeDetectors: Record<string, ContentShapeDetector> = {
   [toolName.listDirectory]: isListDirectoryShape,
   [toolName.grep]: isGrepShape,
   [toolName.globSearch]: isGlobSearchShape,
+  [toolName.screenshot]: isScreenshotShape,
 };
 
 /**
@@ -272,6 +285,21 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
    * Trims get_kernel_result by removing verbose stack traces.
    * The message and location are sufficient for debugging.
    */
+  /**
+   * Trims screenshot results by stripping base64 dataUrl from each image.
+   * Older screenshots don't need the full image data — only view names are kept.
+   */
+  [toolName.screenshot]: createTrimmer(toolName.screenshot, (result) => {
+    if (!Array.isArray(result.images)) {
+      return result;
+    }
+
+    return {
+      images: result.images.map((img) => ({ view: img.view })),
+      _trimmed: true,
+    };
+  }),
+
   [toolName.getKernelResult]: createTrimmer(toolName.getKernelResult, (result) => {
     // Guard: return unchanged if status is missing (error/malformed response)
     // Uses hasDefined to bypass TypeScript's type narrowing for runtime safety
