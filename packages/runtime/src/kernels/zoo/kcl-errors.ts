@@ -43,12 +43,11 @@ export class KclError extends Error {
   /**
    * Creates a KclError from a kind and message without requiring a full source range.
    *
-   * @param input - the error kind, message, and optional location
+   * @param input - the error kind and message
    * @returns a new KclError instance
    */
-  public static simple(input: { kind: KclErrorKind; message: string; lineNumber?: number; column?: number }): KclError {
-    const sourceRange: SourceRange = [input.column ?? 0, input.column ?? 0, input.lineNumber ?? 0];
-    return new KclError(input.kind, input.message, sourceRange);
+  public static simple(input: { kind: KclErrorKind; message: string }): KclError {
+    return new KclError(input.kind, input.message, [0, 0, 0]);
   }
 
   public readonly kind: KclErrorKind;

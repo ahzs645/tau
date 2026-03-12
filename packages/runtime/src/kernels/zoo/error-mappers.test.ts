@@ -97,7 +97,7 @@ describe('convertKclErrorToKernelIssue', () => {
   });
 
   it('should fall back to raw sourceRange positions for non-WASM KclError', () => {
-    const kclError = KclError.simple({ kind: 'syntax', message: 'bad', lineNumber: 5, column: 10 });
+    const kclError = new KclError('syntax', 'bad', [10, 10, 5]);
 
     const result = convertKclErrorToKernelIssue(kclError, undefined, 'test.kcl');
     const issue = result.issues[0]!;
@@ -166,7 +166,7 @@ describe('convertKclErrorToKernelIssue', () => {
   });
 
   it('should include location when fileName and position are provided', () => {
-    const kclError = KclError.simple({ kind: 'syntax', message: 'error', lineNumber: 5, column: 10 });
+    const kclError = new KclError('syntax', 'error', [10, 10, 5]);
     const result = convertKclErrorToKernelIssue(kclError, undefined, 'main.kcl');
     expect(result.issues[0]!.location).toEqual({
       fileName: 'main.kcl',

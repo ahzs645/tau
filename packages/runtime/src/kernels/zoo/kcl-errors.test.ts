@@ -33,17 +33,12 @@ describe('KclError', () => {
   });
 
   describe('simple()', () => {
-    it('should create KclError with defaults when no line/column provided', () => {
+    it('should create KclError with defaults', () => {
       const error = KclError.simple({ kind: 'internal', message: 'oops' });
       expect(error).toBeInstanceOf(KclError);
       expect(error.kind).toBe('internal');
       expect(error.msg).toBe('oops');
       expect(error.sourceRange).toEqual([0, 0, 0]);
-    });
-
-    it('should create KclError with provided line and column', () => {
-      const error = KclError.simple({ kind: 'syntax', message: 'bad', lineNumber: 5, column: 3 });
-      expect(error.sourceRange).toEqual([3, 3, 5]);
     });
   });
 });
