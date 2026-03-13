@@ -5,6 +5,7 @@ import { InlineCode, Pre } from '#components/code/code-block.js';
 import { DocsCodeBlock } from '#routes/docs.$/docs-codeblock.js';
 import { MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
 import { Mermaid } from '#components/docs/mermaid.js';
+import { ReplicadReference } from '#components/docs/replicad-reference.js';
 import { cn } from '#utils/ui.utils.js';
 import { extractTextFromChildren } from '#utils/react.utils.js';
 
@@ -13,6 +14,7 @@ export function getMdxComponents(): MDXComponents {
     ...defaultMdxComponents,
     TypeTable,
     Mermaid,
+    ReplicadReference,
     a: MarkdownHyperlink,
     pre(properties) {
       const { className, children, title } = properties as {
