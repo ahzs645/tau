@@ -7,7 +7,7 @@ import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
-import { asBuffer, downloadBlob } from '#utils/file.utils.js';
+import { asBuffer, downloadBlob } from '@taucad/utils/file';
 import { FormatSelector } from '#components/geometry/converter/format-selector.js';
 import { ConverterFileTree } from '#components/geometry/converter/converter-file-tree.js';
 import { formatDisplayName, getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';

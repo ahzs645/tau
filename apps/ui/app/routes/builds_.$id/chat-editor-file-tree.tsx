@@ -79,7 +79,7 @@ import { EmptyItems } from '#components/ui/empty-items.js';
 import { HighlightText } from '#components/highlight-text.js';
 import { FileExtensionIcon, getIconIdFromExtension } from '#components/icons/file-extension-icon.js';
 import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
-import { downloadBlob, asBuffer } from '#utils/file.utils.js';
+import { downloadBlob, asBuffer } from '@taucad/utils/file';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { parentDirectory } from '@taucad/utils/path';
 

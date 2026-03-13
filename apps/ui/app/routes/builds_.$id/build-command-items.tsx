@@ -7,7 +7,7 @@ import type { ExportFormat } from '@taucad/types';
 import { fileExtensionFromExportFormat } from '@taucad/types/constants';
 import { useBuild, useMainGraphics } from '#hooks/use-build.js';
 import { toast } from '#components/ui/sonner.js';
-import { downloadBlob } from '#utils/file.utils.js';
+import { downloadBlob } from '@taucad/utils/file';
 import { screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
 import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';

@@ -33,7 +33,7 @@ import { useChatSelector } from '#hooks/use-chat.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import { downloadBlob } from '#utils/file.utils.js';
+import { downloadBlob } from '@taucad/utils/file';
 import { serializeTranscript } from '#utils/chat.utils.js';
 import { toSnakeCase } from '#utils/string.utils.js';
 

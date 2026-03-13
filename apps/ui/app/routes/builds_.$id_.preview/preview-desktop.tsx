@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
-import { downloadBlob } from '#utils/file.utils.js';
+import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
 import { cn } from '#utils/ui.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
