@@ -32,6 +32,7 @@ Tau is the AI-native CAD platform for the web (`tau.new`), built as an Nx monore
 | `apps/ui`               | React Router v7 web app (CAD editor, file manager, AI chat, docs)      |
 | `apps/api`              | NestJS API (auth, database, chat WebSocket, LangGraph agent)           |
 | `packages/runtime`      | Multi-kernel CAD runtime — consumed as source via package.json exports |
+| `packages/react`        | React hooks for `@taucad/runtime` (useRender, useGeometryExport)       |
 | `packages/converter`    | CAD file conversion (STL, STEP, IGES, DXF, glTF, USDZ)                 |
 | `packages/json-schema`  | JSON to JSON Schema inference                                          |
 | `libs/chat`             | AI chat tool schemas, message schemas, RPC definitions                 |
@@ -49,6 +50,7 @@ Project skills in `.cursor/skills/` provide guided workflows. Read the relevant 
 | `create-policy`         | Writing or updating `docs/policy/*.md` documents                                           |
 | `create-research`       | Writing or updating `docs/research/*.md` investigation documents                           |
 | `adding-tools`          | Adding new tools to the AI chat system                                                     |
+| `create-package`        | Scaffolding new `@taucad/*` packages via workspace generator                               |
 | `create-vite-plugin`    | Adding a Vite plugin to `@taucad/vite`                                                     |
 | `new-kernel`            | Adding a first-party CAD kernel to `@taucad/runtime`                                       |
 | `package-release`       | Versioning, building, publishing `@taucad/*` packages                                      |
