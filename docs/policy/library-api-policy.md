@@ -406,7 +406,60 @@ import { createRuntimeClient, presets } from '@taucad/runtime';
 const client = createRuntimeClient(presets.all());
 ```
 
-## 16. ES Module Asset Injection
+## 16. Type-Safe Options Helpers
+
+Every options type that consumers declare as a standalone constant should have a companion `createXOptions()` helper. The helper provides full intellisense via generic inference -- consumers get autocomplete and type checking without importing the type explicitly.
+
+```typescript
+// Without helper: requires explicit type import
+import type { RuntimeClientOptions } from '@taucad/runtime';
+const options: RuntimeClientOptions = { kernels: [replicad()] };
+
+// With helper: intellisense via inference, no type import needed
+import { createRuntimeClientOptions } from '@taucad/runtime';
+const options = createRuntimeClientOptions({ kernels: [replicad()] });
+```
+
+The identity overload returns the input as-is (zero runtime cost). A second merge overload enables declarative overrides when consumers need variations of a base configuration.
+
+Add `createXOptions` to the naming conventions table in section 5:
+
+| Prefix           | Role                                  | Examples                     |
+| ---------------- | ------------------------------------- | ---------------------------- |
+| `createXOptions` | Options helper (intellisense + merge) | `createRuntimeClientOptions` |
+
+**Canonical implementation**: `createRuntimeClientOptions` in `@taucad/runtime`.
+
+## 17. Options Override Patterns
+
+When an options object contains **plugin arrays** (items with an `id` field), **config objects** (nested plain objects), and **opaque fields** (functional objects like transports), use a three-tier merge strategy in the `createXOptions` merge overload:
+
+| Tier           | Field type                          | Strategy                                                                               | Rationale                                                                                               |
+| -------------- | ----------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Plugin arrays  | `kernels`, `middleware`, `bundlers` | **ID-based merge**: match by `id`, replace in-place preserving order, append new items | Plugins have identity (`id`); consumers want to swap one plugin without rewriting the entire array      |
+| Config objects | `tessellation`, nested settings     | **Deep merge**: recursively merge keys; absent keys preserve base                      | Config objects have structure (keys); consumers want to override one nested key without losing siblings |
+| Opaque fields  | `transport`, `fileSystem`           | **Full replacement**: override replaces entirely                                       | Functional objects have unity (methods work as a set); deep merge would create broken hybrids           |
+
+### Before (manual array manipulation)
+
+```typescript
+const debugOptions: RuntimeClientOptions = {
+  ...defaultOptions,
+  kernels: defaultOptions.kernels.map((k) => (k.id === 'replicad' ? replicad({ withSourceMapping: true }) : k)),
+};
+```
+
+### After (declarative ID-based merge)
+
+```typescript
+const debugOptions = createRuntimeClientOptions(defaultOptions, {
+  kernels: [replicad({ withSourceMapping: true })],
+});
+```
+
+The merge automatically finds the `replicad` kernel by `id`, replaces it in-place, and preserves all other kernels in their original position.
+
+## 18. ES Module Asset Injection
 
 When a factory option selects between heavy asset variants (e.g., WASM builds, large modules), use the **two-tier dynamic import pattern** to enable code-splitting and tree-shaking.
 
@@ -420,7 +473,7 @@ This allows zero-config consumers to benefit from code-split presets, while adva
 
 See [ES Module Policy](es-module-policy.md) for the full pattern, bundler compatibility matrix, serialization constraints, and anti-patterns.
 
-## 17. Error Design
+## 19. Error Design
 
 Errors in a library API should be predictable, debuggable, and actionable. Adapted from Stripe's error object design and Google Cloud's error model.
 
