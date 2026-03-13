@@ -16,10 +16,11 @@ CAD kernels perform heavy work: WASM-based geometry computation, bundling, tesse
 
 ```mermaid
 flowchart TB
-    subgraph Main["Main Thread (display + user input)"]
+    subgraph Main["Main Thread (display client)"]
         Editor["Editor / App"]
         Client["RuntimeClient"]
         Scene["Three.js / UI"]
+        FMProxy["FileManager Proxy"]
     end
 
     subgraph Worker["Kernel Worker (autonomous render service)"]
@@ -28,20 +29,27 @@ flowchart TB
         Middleware["Middleware Chain"]
         Kernels["Kernel Modules"]
         WatchSub["Watch Subscription"]
+        Caches["Caches (file, bundle, selection)"]
     end
 
-    subgraph FSWorker["FileSystem"]
-        FS["FileSystem Backend"]
+    subgraph FSWorker["File Manager Worker (ZenFS + IndexedDB)"]
+        FS["Filesystem Backend"]
+        EventBus["EventBus + WatchRegistry"]
     end
 
     Editor -->|"setFile / setParameters"| Client
-    Client -->|"MessagePort + SharedArrayBuffer"| RenderLoop
+    Client -->|"MessagePort (kernel protocol)\n+ SharedArrayBuffer (abort)"| RenderLoop
     RenderLoop --> KernelWorker
     KernelWorker --> Middleware
     Middleware --> Kernels
-    Kernels -.->|"geometry events"| Scene
-    FS -.->|"watch events"| WatchSub
-    WatchSub -->|"file changed"| RenderLoop
+    KernelWorker -.->|"geometry / state events"| Scene
+
+    Editor -->|"file edits"| FMProxy
+    FMProxy -->|"MessagePort (FS bridge A)\nwriteFile / readFile"| FS
+
+    FS --> EventBus
+    EventBus -->|"MessagePort (FS bridge B)\nwatch events"| WatchSub
+    WatchSub -->|"file changed → invalidate + debounce"| RenderLoop
 ```
 
 ### Why Web Workers
@@ -65,6 +73,18 @@ After receiving `setFile`, the worker manages its own render lifecycle:
 3. **setParameters(params)** -- Store new params. Start/reset 50ms debounce timer. On timer fire: render (aborting any in-progress render). Push `geometryComputed`.
 
 4. **export(format)** -- Export from the last native handle. Push exported result.
+
+### Filesystem Bridge
+
+The File Manager Worker is the single owner of the virtual filesystem. It accepts multiple MessagePort bridge connections via `exposeFileSystem(handlers, { watchHandler })`. Two bridges are established at startup:
+
+**Bridge A (main thread):** The editor and file manager UI use `createFileSystemBridge(fsWorker)` + `createBridgeProxy<FileManagerProtocol>(port)` to write files, read directory trees, and perform file management operations. When a file is written, `FileService` persists it via ZenFS and emits a `fileWritten` event on the EventBus.
+
+**Bridge B (kernel worker):** The kernel worker receives its own port as `fileSystemPort` during initialization and creates a `createBridgeProxy<RuntimeFileSystemBase>(port)` for file reads, dependency resolution, and watch subscriptions. The `WatchRegistry` matches EventBus change events against the kernel worker's watch subscriptions and pushes watch events directly over this bridge.
+
+This dual-bridge design means editor writes (Bridge A) trigger watch events to the kernel worker (Bridge B) without any main-thread relay. The main thread never sits on the hot path between a file change and a re-render.
+
+For environments without a separate filesystem worker (e.g., Node.js or testing), `createBridgePort(fileSystem)` provides an in-process bridge that uses the same protocol.
 
 ### SharedArrayBuffer Abort Channel
 
@@ -141,7 +161,8 @@ The filesystem bridge also uses `extractTransferables()` to transfer `Uint8Array
 
 - **Transport and Client** -- The client creates or receives a transport and passes it to `RuntimeWorkerClient`. Custom transports enable testing (mock) or alternative channels.
 - **Dispatcher and Worker** -- The dispatcher is the worker-side message handler. It receives `RuntimeCommand`, invokes worker methods, and sends `RuntimeResponse`.
-- **FileSystem and Worker** -- The filesystem is bridged via MessagePort. In autonomous mode, the worker subscribes to file change events scoped to the current file's dependency graph.
+- **Editor and FileSystem** -- The editor writes files to the File Manager Worker through Bridge A. These writes trigger EventBus emissions that feed the kernel worker's watch subscriptions, closing the loop between user edits and autonomous re-renders.
+- **FileSystem and Worker** -- The kernel worker accesses the filesystem through Bridge B. Watch events flow directly between the File Manager Worker and the kernel worker without main-thread relay. In autonomous mode, the kernel worker subscribes to file change events scoped to the current file's dependency graph.
 
 ## Implications
 
