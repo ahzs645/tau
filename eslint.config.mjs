@@ -326,6 +326,7 @@ const config = [
     rules: {
       'tau-lint/validate-mdx-codeblocks': 'error',
       'tau-lint/validate-mdx-links': 'error',
+      'tau-lint/validate-mdx-external-links': 'warn', // `warn` here to prevent network errors from failing the build
     },
   },
 ];

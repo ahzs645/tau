@@ -16,12 +16,13 @@ import { requirePublicExportJsdocRule } from './rules/require-public-export-jsdo
 import { noConsecutiveJsdocBlankLinesRule } from './rules/no-consecutive-jsdoc-blank-lines.js';
 import { validateMdxCodeblocksRule } from './rules/validate-mdx-codeblocks.js';
 import { validateMdxLinksRule } from './rules/validate-mdx-links.js';
+import { validateMdxExternalLinksRule } from './rules/validate-mdx-external-links.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.8.0',
+    version: '1.9.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -33,6 +34,7 @@ const plugin = {
     'no-consecutive-jsdoc-blank-lines': noConsecutiveJsdocBlankLinesRule,
     'validate-mdx-codeblocks': validateMdxCodeblocksRule,
     'validate-mdx-links': validateMdxLinksRule,
+    'validate-mdx-external-links': validateMdxExternalLinksRule,
   },
 };
 
