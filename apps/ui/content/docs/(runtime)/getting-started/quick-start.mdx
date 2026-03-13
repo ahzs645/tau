@@ -60,18 +60,20 @@ if (result.success) {
 client.terminate();
 ```
 
-`presets.all()` includes all built-in kernels, middleware, and bundlers. For tree-shaking, configure individual plugins instead:
+`presets.all()` includes all built-in kernels, middleware, and bundlers. For tree-shaking, configure individual plugins with `createRuntimeClientOptions`:
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, createRuntimeClientOptions, fromMemoryFS } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
-const client = createRuntimeClient({
+const options = createRuntimeClientOptions({
   kernels: [replicad()],
   bundlers: [esbuild()],
   fileSystem: fromMemoryFS(),
 });
+
+const client = createRuntimeClient(options);
 ```
 
 ## Expected Output

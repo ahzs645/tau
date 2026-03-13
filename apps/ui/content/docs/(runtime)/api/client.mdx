@@ -16,6 +16,63 @@ Use the client API when you need to create a kernel runtime, configure filesyste
 
 <auto-type-table path='./props/client.ts' name='RuntimeClient' />
 
+## createRuntimeClientOptions
+
+A helper that provides full intellisense when declaring options -- without importing the `RuntimeClientOptions` type -- and smart-merges a base configuration with partial overrides.
+
+### Identity overload
+
+Provides type inference for the options object:
+
+```typescript
+import { createRuntimeClientOptions } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const options = createRuntimeClientOptions({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+});
+```
+
+### Merge overload
+
+Smart-merges a base with overrides using three strategies based on field type:
+
+| Field type     | Examples                            | Strategy                                                                                                                   |
+| -------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Plugin arrays  | `kernels`, `middleware`, `bundlers` | **ID-based merge** -- plugins with a matching `id` are replaced in-place (preserving priority order); new IDs are appended |
+| Config objects | `tessellation`                      | **Deep merge** -- override keys replace base keys; absent keys preserve the base value                                     |
+| Opaque fields  | `transport`, `fileSystem`           | **Full replacement** -- the override replaces the base value entirely                                                      |
+
+```typescript
+import { createRuntimeClientOptions } from '@taucad/runtime';
+import { openscad, replicad, jscad } from '@taucad/runtime/kernels';
+import { parameterCache, geometryCache } from '@taucad/runtime/middleware';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const defaults = createRuntimeClientOptions({
+  kernels: [openscad(), replicad(), jscad()],
+  middleware: [parameterCache(), geometryCache()],
+  bundlers: [esbuild()],
+  tessellation: {
+    preview: { linearTolerance: 0.1, angularTolerance: 0.1 },
+  },
+});
+
+// Replace replicad with a debug-enabled version (matched by id)
+const debug = createRuntimeClientOptions(defaults, {
+  kernels: [replicad({ withSourceMapping: true })],
+});
+
+// Add export tessellation without losing preview settings
+const highQuality = createRuntimeClientOptions(defaults, {
+  tessellation: {
+    export: { linearTolerance: 0.01, angularTolerance: 0.01 },
+  },
+});
+```
+
 ## Methods
 
 | Method              | Signature                                                          | Description                                                   |

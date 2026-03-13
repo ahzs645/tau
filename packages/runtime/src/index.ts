@@ -1,6 +1,7 @@
 /* oxlint-disable no-barrel-files/no-barrel-files -- public API re-export */
 // Client
 export { createRuntimeClient } from '#client/runtime-client.js';
+export { createRuntimeClientOptions } from '#client/runtime-client-options.js';
 export {
   RenderSupersededError,
   isRenderSupersededError,
