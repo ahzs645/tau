@@ -17,18 +17,20 @@ import { noConsecutiveJsdocBlankLinesRule } from './rules/no-consecutive-jsdoc-b
 import { validateMdxCodeblocksRule } from './rules/validate-mdx-codeblocks.js';
 import { validateMdxLinksRule } from './rules/validate-mdx-links.js';
 import { validateMdxExternalLinksRule } from './rules/validate-mdx-external-links.js';
+import { noUselessCatchUnknownRule } from './rules/no-useless-catch-unknown.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.9.0',
+    version: '1.10.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
     'require-disable-description': requireDisableDescriptionRule,
     'require-ignore-description': requireIgnoreDescriptionRule,
     'no-literal-const-assertion': noLiteralConstAssertionRule,
+    'no-useless-catch-unknown': noUselessCatchUnknownRule,
     'validate-jsdoc-codeblocks': validateJsdocCodeblocksRule,
     'require-public-export-jsdoc': requirePublicExportJsdocRule,
     'no-consecutive-jsdoc-blank-lines': noConsecutiveJsdocBlankLinesRule,
