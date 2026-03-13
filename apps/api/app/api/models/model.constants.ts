@@ -31,10 +31,10 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
       configuration: {
         streaming: true,
-        maxTokens: 40_000,
+        maxTokens: 120_000,
         // @ts-expect-error: FIXME - some models use camelCase
         // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-        max_tokens: 40_000,
+        max_tokens: 120_000,
         thinking: {
           type: 'adaptive',
         },
@@ -70,10 +70,10 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
       configuration: {
         streaming: true,
-        maxTokens: 40_000,
+        maxTokens: 120_000,
         // @ts-expect-error: FIXME - some models use camelCase
         // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-        max_tokens: 40_000,
+        max_tokens: 120_000,
         thinking: {
           type: 'adaptive',
         },
@@ -122,26 +122,26 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
     },
   },
   openai: {
-    'gpt-5.2': {
-      id: 'openai-gpt-5.2',
-      name: 'GPT-5.2',
-      slug: 'gpt-5.2',
+    'gpt-5.4': {
+      id: 'openai-gpt-5.4',
+      name: 'GPT-5.4',
+      slug: 'gpt-5.4',
       description:
-        "OpenAI's most capable model with advanced reasoning, great for design tasks that require complex reasoning.",
+        "OpenAI's most capable model for professional work with frontier reasoning, coding, and 1M+ context window.",
       provider: {
         id: 'openai',
         name: 'OpenAI',
       },
-      model: 'gpt-5.2',
+      model: 'gpt-5.4',
       details: {
         family: 'gpt',
-        families: ['GPT-5.2'],
-        contextWindow: 400_000,
+        families: ['GPT-5.4'],
+        contextWindow: 1_050_000,
         maxTokens: 128_000,
         cost: {
-          inputTokens: 1.75,
-          outputTokens: 14,
-          cacheReadTokens: 0.175,
+          inputTokens: 2.5,
+          outputTokens: 15,
+          cacheReadTokens: 0.25,
           cacheWriteTokens: 0,
         },
       },
@@ -154,19 +154,19 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         },
       },
     },
-    'gpt-5.2-codex': {
-      id: 'openai-gpt-5.2-codex',
-      name: 'GPT-5.2 Codex',
-      slug: 'gpt-5.2-codex',
-      description: 'Specialized for code generation and programming tasks.',
+    'gpt-5.3-codex': {
+      id: 'openai-gpt-5.3-codex',
+      name: 'GPT-5.3 Codex',
+      slug: 'gpt-5.3-codex',
+      description: 'Agentic coding model optimized for code generation and multi-step programming tasks.',
       provider: {
         id: 'openai',
         name: 'OpenAI',
       },
-      model: 'gpt-5.2-codex',
+      model: 'gpt-5.3-codex',
       details: {
         family: 'gpt',
-        families: ['GPT-5.2'],
+        families: ['GPT-5.3'],
         contextWindow: 400_000,
         maxTokens: 128_000,
         cost: {
