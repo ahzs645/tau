@@ -1,27 +1,33 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
+import type { Geometry } from '@taucad/types';
+import { createRuntimeClientOptions } from '@taucad/runtime';
 import { jscad } from '@taucad/runtime/kernels';
 import { parameterCache, geometryCache, gltfCoordinateTransform } from '@taucad/runtime/middleware';
-import type { RuntimeClientOptions } from '@taucad/runtime';
+import { esbuild } from '@taucad/runtime/bundler';
 import { authSplashbackMachine, timing as machineTiming } from '#routes/auth.$/splashback/auth-splashback.machine.js';
 import { UnifiedSplashbackViewer } from '#routes/auth.$/splashback/unified-splashback-viewer.js';
 import type { SplashbackPhase } from '#routes/auth.$/splashback/unified-splashback-viewer.js';
 import { useSampledPoints } from '#routes/auth.$/splashback/use-sampled-points.js';
 import { Loader } from '#components/ui/loader.js';
-import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
-import { encodeTextFile } from '#utils/filesystem.utils.js';
+import { useRender } from '@taucad/react';
+import type { RenderStatus } from '@taucad/react';
 import gearJscad from '#routes/auth.$/splashback/gear.jscad.js?raw';
 import {
   morphPointCount,
   assemblySplitRatio as defaultAssemblySplitRatio,
 } from '#routes/auth.$/splashback/auth-splashback.constants.js';
 
-const splashbackKernelOptions: RuntimeClientOptions = {
+const splashbackOptions = createRuntimeClientOptions({
   kernels: [jscad()],
   middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform()],
-};
+  bundlers: [esbuild()],
+});
+
+// eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
+const gearCode = { 'main.js': gearJscad };
 
 const prompt1Text = 'Create a gear with 12 teeth';
 const prompt2Text = 'Change it to 8 teeth';
@@ -507,11 +513,17 @@ type AuthSplashbackContentProperties = {
   readonly state: ReturnType<typeof authSplashbackMachine.transition>;
   readonly send: AuthSplashbackSend;
   readonly derivedState: DerivedState;
+  readonly geometries: Geometry[];
+  readonly cadStatus: RenderStatus;
 };
 
-function AuthSplashbackContent({ state, send, derivedState }: AuthSplashbackContentProperties): React.JSX.Element {
-  const { geometries, status: cadStatus } = useCadPreview();
-
+function AuthSplashbackContent({
+  state,
+  send,
+  derivedState,
+  geometries,
+  cadStatus,
+}: AuthSplashbackContentProperties): React.JSX.Element {
   const {
     showPrompt1,
     showPrompt2,
@@ -761,20 +773,19 @@ export function AuthSplashback(): React.JSX.Element {
   const { send } = actorRef;
   const derivedState = useSelector(actorRef, deriveVisibilityState);
 
-  const gearFiles = useMemo(() => {
-    const mainFileName = 'main.js';
-    return { [mainFileName]: { content: encodeTextFile(gearJscad) } };
-  }, []);
+  const { geometries, status } = useRender({
+    clientOptions: splashbackOptions,
+    code: gearCode,
+    enabled: derivedState.showContainer,
+  });
 
   return (
-    <CadPreviewProvider
-      buildId='auth-gears'
-      mainFile='main.js'
-      files={gearFiles}
-      isEnabled={derivedState.showContainer}
-      kernelOptions={splashbackKernelOptions}
-    >
-      <AuthSplashbackContent state={state} send={send} derivedState={derivedState} />
-    </CadPreviewProvider>
+    <AuthSplashbackContent
+      state={state}
+      send={send}
+      derivedState={derivedState}
+      geometries={geometries}
+      cadStatus={status}
+    />
   );
 }

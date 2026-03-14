@@ -1,24 +1,36 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useSelector } from '@xstate/react';
 import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
-import { exportFromGlb } from '@taucad/converter';
 import type { SupportedExportFormat } from '@taucad/converter';
+import { createRuntimeClientOptions } from '@taucad/runtime';
+import { openscad } from '@taucad/runtime/kernels';
+import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
+import { esbuild } from '@taucad/runtime/bundler';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
+import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
 import { useBuildManager } from '#hooks/use-build-manager.js';
-import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
-import { CadPreviewViewer, CadPreviewStatus } from '#components/cad-preview.js';
+import { useRender, useGeometryExport } from '@taucad/react';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { toast } from '#components/ui/sonner.js';
-import { asBuffer, downloadBlob } from '#utils/file.utils.js';
-import qrcodeScad from '#routes/_index/qrcode.scad?raw';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import { Loader } from '#components/ui/loader.js';
+import type { Units } from '#components/geometry/parameters/rjsf-context.js';
+import qrcodeScad from '#routes/_index/qrcode.scad?raw';
 
 const heroBuildId = 'hero-qrcode-v2';
 const heroMainFile = 'main.scad';
+
+const heroOptions = createRuntimeClientOptions({
+  kernels: [openscad()],
+  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
+  bundlers: [esbuild()],
+});
+
+const heroCode = { [heroMainFile]: qrcodeScad };
+
+const heroUnits: Units = { length: { symbol: 'mm', factor: 1 } };
 
 type ExportFormatOption = {
   format: SupportedExportFormat;
@@ -36,64 +48,44 @@ const exportFormatOptions: ExportFormatOption[] = [
   { format: 'ply', label: 'PLY' },
 ];
 
-function HeroViewerInner(): React.JSX.Element {
+export function HeroViewer(): React.JSX.Element {
   const navigate = useNavigate();
-  const { geometries, cadRef, graphicsRef, defaultParameters, jsonSchema, setParameters } = useCadPreview();
-  const parameters = useSelector(cadRef, (snapshot) => snapshot.context.parameters);
-  const units = useSelector(graphicsRef, (state) => state.context.units);
-  const hasParameters = Boolean(jsonSchema);
   const buildManager = useBuildManager();
 
+  const [currentParams, setCurrentParams] = useState<Record<string, unknown>>({});
   const [selectedFormat, setSelectedFormat] = useState<ExportFormatOption>(exportFormatOptions[0]!);
   const [isCreatingBuild, setIsCreatingBuild] = useState(false);
 
-  const getGlbData = useCallback((): Uint8Array<ArrayBuffer> => {
-    const gltfGeometry = geometries.find((g) => g.format === 'gltf');
-    if (!gltfGeometry) {
-      throw new Error('No GLB geometry available. Model must be rendered first.');
-    }
-
-    return gltfGeometry.content;
-  }, [geometries]);
-
-  const handleParametersChange = useCallback(
-    (newParameters: Record<string, unknown>) => {
-      setParameters(newParameters);
-    },
-    [setParameters],
+  const renderParams = useMemo(
+    () => (Object.keys(currentParams).length > 0 ? currentParams : undefined),
+    [currentParams],
   );
 
+  const { geometries, status, defaultParameters, jsonSchema } = useRender({
+    clientOptions: heroOptions,
+    code: heroCode,
+    parameters: renderParams,
+  });
+
+  const hasParameters = Boolean(jsonSchema);
+
+  const { exportGeometry, canExport } = useGeometryExport({
+    geometries,
+    defaultFilename: 'qrcode',
+    onSuccess: (filename) => toast.success(`Downloaded ${filename}`),
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Export failed';
+      toast.error(`Failed to export: ${message}`);
+    },
+  });
+
+  const handleParametersChange = useCallback((newParameters: Record<string, unknown>) => {
+    setCurrentParams(newParameters);
+  }, []);
+
   const handleExport = useCallback(() => {
-    const { format } = selectedFormat;
-    const filename = `qrcode.${format}`;
-
-    toast.promise(
-      (async () => {
-        const glbData = getGlbData();
-        const exportedFiles = await exportFromGlb(glbData, format);
-        const file = exportedFiles[0];
-        if (!file) {
-          throw new Error('No file returned from export');
-        }
-
-        const blob = new Blob([asBuffer(file.bytes.buffer)]);
-        downloadBlob(blob, filename);
-        return blob;
-      })(),
-      {
-        loading: `Exporting ${filename}...`,
-        success: `Downloaded ${filename}`,
-        error(error) {
-          let message = `Failed to download ${filename}`;
-          if (error instanceof Error) {
-            message = `${message}: ${error.message}`;
-          }
-
-          return message;
-        },
-      },
-    );
-  }, [selectedFormat, getGlbData]);
+    exportGeometry(selectedFormat.format);
+  }, [selectedFormat, exportGeometry]);
 
   const handleFormatSelect = useCallback((value: string) => {
     const option = exportFormatOptions.find((o) => o.format === value);
@@ -110,8 +102,6 @@ function HeroViewerInner(): React.JSX.Element {
     setIsCreatingBuild(true);
 
     try {
-      const currentParameters = cadRef.getSnapshot().context.parameters;
-
       const createdBuild = await buildManager.createBuild({
         build: {
           name: 'QR Code Generator',
@@ -125,7 +115,7 @@ function HeroViewerInner(): React.JSX.Element {
           assets: {
             mechanical: {
               main: heroMainFile,
-              parameters: currentParameters,
+              parameters: currentParams,
             },
           },
           forkedFrom: heroBuildId,
@@ -134,18 +124,15 @@ function HeroViewerInner(): React.JSX.Element {
       });
 
       await navigate(`/builds/${createdBuild.id}`);
-    } catch (error: unknown) {
+    } catch (error) {
       console.error('Failed to create build:', error);
       toast.error('Failed to create build');
       setIsCreatingBuild(false);
     }
-  }, [isCreatingBuild, cadRef, buildManager, navigate]);
-
-  const canExport = geometries.length > 0;
+  }, [isCreatingBuild, currentParams, buildManager, navigate]);
 
   return (
     <div className='space-y-6'>
-      {/* Hero Text */}
       <div className='text-center'>
         <h2 className='text-2xl font-semibold tracking-tight md:text-3xl'>See It in Action</h2>
         <p className='mt-2 text-muted-foreground'>
@@ -155,11 +142,9 @@ function HeroViewerInner(): React.JSX.Element {
       </div>
 
       <div className='flex flex-col overflow-hidden rounded-xl border bg-sidebar md:h-[700px] md:flex-row'>
-        {/* 3D Viewer */}
         <div className='relative h-[300px] md:h-full md:flex-1'>
-          <CadPreviewStatus className='top-auto right-4 bottom-4' />
+          <RenderStatusOverlay status={status} className='top-auto right-4 bottom-4' />
 
-          {/* Continue in Editor Button */}
           <Button
             variant='outline'
             size='sm'
@@ -171,15 +156,14 @@ function HeroViewerInner(): React.JSX.Element {
             {isCreatingBuild ? <Loader className='size-4' /> : <ArrowUpRight className='size-4' />}
           </Button>
 
-          <CadPreviewViewer
+          <ModelViewer
+            geometries={geometries}
             enablePan
-            className='size-full'
-            stageOptions={{ zoomLevel: 1.2 }}
             graphicsOptions={{ enableGrid: true, enableAxes: true }}
+            stageOptions={{ zoomLevel: 1.2 }}
           />
         </div>
 
-        {/* Parameters Panel */}
         {hasParameters ? (
           <div className='border-t bg-background md:w-80 md:border-t-0 md:border-l'>
             <div className='flex h-full flex-col'>
@@ -190,15 +174,14 @@ function HeroViewerInner(): React.JSX.Element {
               <div className='h-[280px] overflow-hidden md:h-auto md:flex-1'>
                 <Parameters
                   isInitialExpanded={false}
-                  parameters={parameters}
+                  parameters={currentParams}
                   defaultParameters={defaultParameters}
                   jsonSchema={jsonSchema}
-                  units={units}
+                  units={heroUnits}
                   emptyDescription='Loading parameters...'
                   onParametersChange={handleParametersChange}
                 />
               </div>
-              {/* Export Controls */}
               <div className='border-t p-3'>
                 <div className='flex items-center gap-2'>
                   <ComboBoxResponsive
@@ -248,15 +231,5 @@ function HeroViewerInner(): React.JSX.Element {
         ) : null}
       </div>
     </div>
-  );
-}
-
-export function HeroViewer(): React.JSX.Element {
-  const heroFiles = useMemo(() => ({ [heroMainFile]: { content: encodeTextFile(qrcodeScad) } }), []);
-
-  return (
-    <CadPreviewProvider buildId={heroBuildId} mainFile={heroMainFile} files={heroFiles}>
-      <HeroViewerInner />
-    </CadPreviewProvider>
   );
 }

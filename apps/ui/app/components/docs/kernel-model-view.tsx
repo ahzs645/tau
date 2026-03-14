@@ -1,31 +1,33 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Scene, PerspectiveCamera, AmbientLight, DirectionalLight, Box3, Vector3 } from 'three';
 import type { Group } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { RuntimeClient } from '@taucad/runtime';
-import { createRuntimeClient } from '@taucad/runtime';
+import { createRuntimeClientOptions } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { Loader } from '#components/ui/loader.js';
 import { useSharedRenderer } from '#components/docs/shared-renderer.js';
+import { useRender } from '@taucad/react';
 import { cn } from '#utils/ui.utils.js';
 
 const gltfLoader = new GLTFLoader();
+const defaultClientOptions = createRuntimeClientOptions({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+});
 
 type KernelModelViewProps = {
   readonly code: string;
   readonly className?: string;
 };
 
-type ViewState = 'idle' | 'loading' | 'ready' | 'error';
-
 /**
- * Renders a Replicad model using a dedicated runtime client and the shared Three.js renderer.
+ * Renders a Replicad model using `useRender` and the shared Three.js renderer.
  *
  * Lifecycle:
- * 1. Lazily creates a runtime client when the component enters the viewport
- * 2. Renders the code to produce GLTF geometry
+ * 1. Lazily starts rendering when the component enters the viewport
+ * 2. `useRender` produces GLTF geometry via an in-memory RuntimeClient
  * 3. Loads GLTF into a Three.js scene
  * 4. Uses OrbitControls on the visible canvas for interaction
  * 5. Delegates actual WebGL rendering to the SharedRenderer
@@ -34,16 +36,22 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
   const sharedRenderer = useSharedRenderer();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [viewState, setViewState] = useState<ViewState>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   const sceneRef = useRef<Scene | undefined>(undefined);
   const cameraRef = useRef<PerspectiveCamera | undefined>(undefined);
   const controlsRef = useRef<OrbitControls | undefined>(undefined);
-  const clientRef = useRef<RuntimeClient | undefined>(undefined);
   const gltfSceneRef = useRef<Group | undefined>(undefined);
-  const isVisibleRef = useRef(false);
-  const hasInitializedRef = useRef(false);
+
+  const [isVisible, setIsVisible] = useState(false);
+
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
+  const renderCode = useMemo(() => ({ 'main.ts': code }), [code]);
+
+  const { geometries, status, error } = useRender({
+    clientOptions: defaultClientOptions,
+    code: renderCode,
+    enabled: isVisible,
+  });
 
   const renderFrame = useCallback(() => {
     const canvas = canvasRef.current;
@@ -56,6 +64,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     sharedRenderer.render(scene, camera, canvas);
   }, [sharedRenderer]);
 
+  // Scene + camera setup
   useEffect(() => {
     const scene = new Scene();
     const camera = new PerspectiveCamera(50, 1, 0.1, 10_000);
@@ -76,6 +85,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     };
   }, []);
 
+  // OrbitControls
   useEffect(() => {
     const canvas = canvasRef.current;
     const camera = cameraRef.current;
@@ -95,109 +105,17 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     };
   }, [renderFrame]);
 
+  // IntersectionObserver for lazy loading
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
       return;
     }
 
-    let aborted = false;
-
-    const initializeAndRender = async (): Promise<void> => {
-      setViewState('loading');
-
-      try {
-        const client = createRuntimeClient({
-          kernels: [replicad()],
-          bundlers: [esbuild()],
-        });
-
-        if (aborted) {
-          client.terminate();
-          return;
-        }
-
-        clientRef.current = client;
-
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
-        const result = await client.render({ code: { 'main.ts': code } });
-
-        // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
-        if (aborted) {
-          return;
-        }
-
-        if (!result.success) {
-          const firstIssue = result.issues[0];
-          setErrorMessage(firstIssue?.message ?? 'Render failed');
-          setViewState('error');
-          return;
-        }
-
-        const gltfGeometry = result.data.find((geometry) => geometry.format === 'gltf');
-        if (!gltfGeometry) {
-          setErrorMessage('No GLTF geometry produced');
-          setViewState('error');
-          return;
-        }
-
-        const gltf = await gltfLoader.parseAsync(gltfGeometry.content.buffer, '');
-
-        // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- aborted is mutated by cleanup after await
-        if (aborted) {
-          return;
-        }
-
-        const scene = sceneRef.current;
-        const camera = cameraRef.current;
-        if (!scene || !camera) {
-          return;
-        }
-
-        if (gltfSceneRef.current) {
-          scene.remove(gltfSceneRef.current);
-        }
-
-        scene.add(gltf.scene);
-        gltfSceneRef.current = gltf.scene;
-
-        const box = new Box3().setFromObject(gltf.scene);
-        const center = box.getCenter(new Vector3());
-        const size = box.getSize(new Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const distance = maxDim * 2;
-
-        camera.position.set(center.x + distance * 0.7, center.y + distance * 0.5, center.z + distance * 0.7);
-        camera.lookAt(center);
-        camera.near = distance * 0.01;
-        camera.far = distance * 10;
-        camera.updateProjectionMatrix();
-
-        if (controlsRef.current) {
-          controlsRef.current.target.copy(center);
-          controlsRef.current.update();
-        }
-
-        setViewState('ready');
-        renderFrame();
-      } catch (error) {
-        if (aborted) {
-          return;
-        }
-        setErrorMessage(error instanceof Error ? error.message : 'Unknown error');
-        setViewState('error');
-      }
-    };
-
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry) {
-          isVisibleRef.current = entry.isIntersecting;
-        }
-
-        if (isVisibleRef.current && !hasInitializedRef.current) {
-          hasInitializedRef.current = true;
-          void initializeAndRender();
+        if (entry?.isIntersecting) {
+          setIsVisible(true);
         }
       },
       { threshold: 0.1 },
@@ -205,15 +123,66 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     observer.observe(container);
 
     return () => {
-      aborted = true;
-      hasInitializedRef.current = false;
       observer.disconnect();
-      clientRef.current?.terminate();
-      clientRef.current = undefined;
     };
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- code is stable for the lifecycle of this component
   }, []);
 
+  // Load GLTF from geometries into Three.js scene
+  useEffect(() => {
+    const gltfGeometry = geometries.find((geometry) => geometry.format === 'gltf');
+    if (!gltfGeometry) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const gltf = await gltfLoader.parseAsync(gltfGeometry.content.buffer, '');
+
+      // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- cancelled is mutated by cleanup after await
+      if (cancelled) {
+        return;
+      }
+
+      const scene = sceneRef.current;
+      const camera = cameraRef.current;
+      if (!scene || !camera) {
+        return;
+      }
+
+      if (gltfSceneRef.current) {
+        scene.remove(gltfSceneRef.current);
+      }
+
+      scene.add(gltf.scene);
+      gltfSceneRef.current = gltf.scene;
+
+      const box = new Box3().setFromObject(gltf.scene);
+      const center = box.getCenter(new Vector3());
+      const size = box.getSize(new Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const distance = maxDim * 2;
+
+      camera.position.set(center.x + distance * 0.7, center.y + distance * 0.5, center.z + distance * 0.7);
+      camera.lookAt(center);
+      camera.near = distance * 0.01;
+      camera.far = distance * 10;
+      camera.updateProjectionMatrix();
+
+      if (controlsRef.current) {
+        controlsRef.current.target.copy(center);
+        controlsRef.current.update();
+      }
+
+      renderFrame();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [geometries, renderFrame]);
+
+  // Resize handling
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
@@ -231,7 +200,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
         camera.updateProjectionMatrix();
       }
 
-      if (viewState === 'ready') {
+      if (status === 'success') {
         renderFrame();
       }
     });
@@ -240,7 +209,9 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
     return () => {
       resizeObserver.disconnect();
     };
-  }, [viewState, renderFrame]);
+  }, [status, renderFrame]);
+
+  const viewState = isVisible ? status : 'idle';
 
   return (
     <div ref={containerRef} className={cn('relative size-full', className)}>
@@ -250,9 +221,9 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
           <Loader className='size-8' />
         </div>
       )}
-      {viewState === 'error' && (
+      {(viewState === 'error' || error) && (
         <div className='absolute inset-0 flex items-center justify-center bg-background/50'>
-          <span className='max-w-48 text-center text-xs text-destructive'>{errorMessage}</span>
+          <span className='max-w-48 text-center text-xs text-destructive'>{error?.message ?? 'Render failed'}</span>
         </div>
       )}
       {viewState === 'idle' && (
