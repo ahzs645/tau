@@ -118,7 +118,7 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
         scrollBeyondLastColumn: 1,
         // Disable vertical scroll beyond last line
         scrollBeyondLastLine: false,
-        wordWrap: 'on',
+        wordWrap: 'off',
         // Render overflow widgets (hover, suggest, parameter hints) in a shared
         // container on document.body so they escape Dockview's CSS containment.
         // fixedOverflowWidgets uses position:fixed with viewport coordinates;
