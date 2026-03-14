@@ -49,6 +49,7 @@ export function Safari({
             </clipPath>
           </defs>
 
+          {/* oxlint-disable tau-lint/no-hardcoded-color -- static Safari browser chrome SVG */}
           <g clipPath={`url(#${clipPathId})`}>
             {/* Header background */}
             <path
@@ -147,6 +148,7 @@ export function Safari({
               </>
             ) : null}
           </g>
+          {/* oxlint-enable tau-lint/no-hardcoded-color */}
         </svg>
       </div>
 

@@ -447,11 +447,13 @@ export function SectionViewControls({
   const pivotPointRef = useRef<THREE.Vector3>(new THREE.Vector3());
 
   const planes = React.useMemo(() => {
+    /* oxlint-disable tau-lint/no-hardcoded-color -- Three.js plane selector colors */
     const planes: Array<{ idPos: PlaneSelectorId; idNeg: PlaneSelectorId; normal: THREE.Vector3; color: string }> = [
       { idPos: 'xy', idNeg: 'yx', normal: new THREE.Vector3(0, 0, -1), color: '#3b82f6' },
       { idPos: 'xz', idNeg: 'zx', normal: new THREE.Vector3(0, -1, 0), color: '#22c55e' },
       { idPos: 'yz', idNeg: 'zy', normal: new THREE.Vector3(-1, 0, 0), color: '#ef4444' },
     ];
+    /* oxlint-enable tau-lint/no-hardcoded-color */
 
     return planes;
   }, []);

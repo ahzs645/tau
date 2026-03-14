@@ -78,8 +78,10 @@ type UnifiedSplashbackViewerProperties = {
 const autoRotateSpeed = 0.5;
 
 /** Gear colors - using constants */
+/* oxlint-disable tau-lint/no-hardcoded-color -- Three.js gear colors */
 const gear12Color = '#14b8a6'; // Teal
 const gear8Color = '#5B8FD9'; // Blue
+/* oxlint-enable tau-lint/no-hardcoded-color */
 
 /**
  * Gear assembly constants calculated from circularPitch = 5

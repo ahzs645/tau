@@ -138,17 +138,17 @@
   --chart-4: oklch(0.55 0.18 150deg); /* Green */
   --chart-5: oklch(0.55 0.2 30deg); /* Orange */
 
-  /* Diagram colors — derived from primary hue so they adapt automatically */
-  --diagram-node: oklch(0.95 0.03 var(--hue-primary));
-  --diagram-node-border: oklch(0.78 0.1 var(--hue-primary));
+  /* Diagram colors — softened primary tint */
+  --diagram-node: oklch(0.96 0.015 var(--hue-primary));
+  --diagram-node-border: oklch(0.8 0.05 var(--hue-primary));
   --diagram-node-text: var(--foreground);
-  --diagram-cluster: oklch(0.97 0.015 var(--hue-primary));
-  --diagram-cluster-border: oklch(0.87 0.06 var(--hue-primary));
-  --diagram-line: oklch(0.55 0.1 var(--hue-primary));
+  --diagram-cluster: oklch(0.97 0.008 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.88 0.03 var(--hue-primary));
+  --diagram-line: oklch(0.55 0.05 var(--hue-primary));
   --diagram-text: var(--muted-foreground);
-  --diagram-note: oklch(0.95 0.025 calc(var(--hue-primary) + 60deg));
-  --diagram-note-border: oklch(0.75 0.08 calc(var(--hue-primary) + 60deg));
-  --diagram-accent: var(--primary);
+  --diagram-note: oklch(0.96 0.012 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.78 0.04 calc(var(--hue-primary) + 60deg));
+  --diagram-accent: var(--muted-foreground);
 }
 
 .dark,
@@ -193,13 +193,13 @@
   --chart-5: oklch(0.7 0.18 30deg); /* Orange */
 
   /* Diagram colors - dark mode */
-  --diagram-node: oklch(0.3 0.04 var(--hue-primary));
-  --diagram-node-border: oklch(0.42 0.06 var(--hue-primary));
-  --diagram-cluster: oklch(0.2 0.015 var(--hue-primary));
-  --diagram-cluster-border: oklch(0.28 0.035 var(--hue-primary));
-  --diagram-line: oklch(0.5 0.06 var(--hue-primary));
-  --diagram-note: oklch(0.26 0.025 calc(var(--hue-primary) + 60deg));
-  --diagram-note-border: oklch(0.38 0.05 calc(var(--hue-primary) + 60deg));
+  --diagram-node: oklch(0.28 0.02 var(--hue-primary));
+  --diagram-node-border: oklch(0.4 0.03 var(--hue-primary));
+  --diagram-cluster: oklch(0.22 0.01 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.3 0.02 var(--hue-primary));
+  --diagram-line: oklch(0.5 0.03 var(--hue-primary));
+  --diagram-note: oklch(0.26 0.015 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.38 0.025 calc(var(--hue-primary) + 60deg));
 }
 
 /* Dark variant is provided by fumadocs-ui/css/preset.css: @variant dark (&:where(.dark, .dark *)) */

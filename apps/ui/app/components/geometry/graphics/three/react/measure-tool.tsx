@@ -417,6 +417,7 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
         <cylinderGeometry args={[borderSize, borderSize, height, segments]} />
         <meshMatcapMaterial
           transparent
+          // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js material color
           color='#000000'
           opacity={1}
           depthTest={false}
@@ -437,6 +438,7 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
           transparent
           toneMapped={false}
           fog={false}
+          // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js material color
           color={isActive ? '#00ff00' : '#ffffff'}
           opacity={1}
           depthTest={false}

@@ -216,11 +216,13 @@ export function Lights({
       ) : null}
 
       {/* Soft preset: hemisphere + ambient only, no environment map */}
+      {/* oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color */}
       {!enableMatcap && environmentPreset === 'soft' ? <hemisphereLight args={['#ffffff', '#444444', 0.8]} /> : null}
 
       {/* Performance preset: minimal lights, no environment (equivalent to legacy setup) */}
       {!enableMatcap && environmentPreset === 'performance' ? (
         <>
+          {/* oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color */}
           <hemisphereLight args={['#ffffff', '#444444', 1]} />
           <directionalLight color='white' intensity={2} position={[-1, -3, 5]} />
           <directionalLight color='white' intensity={2} position={[1, 3, 5]} />

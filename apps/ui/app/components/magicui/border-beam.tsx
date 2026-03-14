@@ -54,7 +54,9 @@ export function BorderBeam({
   size = 50,
   delay = 0,
   duration = 6,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorFrom = '#ffaa40',
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorTo = '#9c40ff',
   transition,
   style,

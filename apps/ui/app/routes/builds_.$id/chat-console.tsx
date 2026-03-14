@@ -51,7 +51,7 @@ const defaultDisplayConfig = {
 // Generate a deterministic color based on the component name
 const getComponentColor = (component: string | undefined): string => {
   if (!component) {
-    return '#6b7280'; // Default gray
+    return 'var(--muted-foreground)';
   }
 
   return stringToColor(component, 0.5);
@@ -67,7 +67,7 @@ function ComponentBadge({ origin, searchTerm }: { readonly origin?: LogOrigin; r
 
   return (
     <Badge
-      className='rounded-sm rounded-xs px-0.5 py-0 text-xs font-normal'
+      className='rounded-xs px-0.5 py-0 text-xs font-normal'
       variant='outline'
       style={{
         borderColor: bgColor,

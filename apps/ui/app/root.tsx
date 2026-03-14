@@ -36,6 +36,7 @@ export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestL
 export const meta: MetaFunction = () => [
   { title: metaConfig.name },
   { name: 'description', content: metaConfig.description },
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- browser meta tag
   { name: 'theme-color', content: '#ffffff' },
   { name: 'apple-mobile-web-app-title', content: metaConfig.name },
   { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },

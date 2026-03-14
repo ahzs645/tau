@@ -10,12 +10,13 @@ export type MaterialItem = {
   readonly color?: string;
 };
 
-// Mock material data
+/* oxlint-disable tau-lint/no-hardcoded-color -- mock material color data */
 const mockMaterials: readonly MaterialItem[] = [
   { id: 'mat-1', name: '820303FF', color: '#820303' },
   { id: 'mat-2', name: '2E2E2EFF', color: '#2E2E2E' },
   { id: 'mat-3', name: '07B072FF', color: '#07B072' },
 ];
+/* oxlint-enable tau-lint/no-hardcoded-color */
 
 type ChatEditorExplorerMaterialsProps = {
   readonly materials?: readonly MaterialItem[];
@@ -53,7 +54,7 @@ export function ChatEditorExplorerMaterials({
             key={material.id}
             id={material.id}
             name={material.name}
-            icon={<Palette className='size-4' style={{ color: material.color ?? '#888' }} />}
+            icon={<Palette className='size-4' style={{ color: material.color ?? 'var(--muted-foreground)' }} />}
             isSelected={isSelected}
             onClick={() => {
               handleMaterialClick(material.id);

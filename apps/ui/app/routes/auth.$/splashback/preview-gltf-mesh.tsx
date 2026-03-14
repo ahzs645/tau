@@ -47,6 +47,7 @@ type PreviewGltfMeshProperties = {
  */
 export function PreviewGltfMesh({
   gltfFile,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js material color
   color = '#14b8a6',
   metalness = 0.7,
   roughness = 0.2,

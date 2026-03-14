@@ -60,7 +60,7 @@ function computedColorToHex(color: string): string {
   canvas.height = 1;
   const context = canvas.getContext('2d');
   if (!context) {
-    return '#808080';
+    return 'var(--muted-foreground)';
   }
 
   context.fillStyle = color;
@@ -100,7 +100,7 @@ function buildThemeVariables(colors: DiagramColors, { isDark }: { isDark: boolea
     nodeTextColor: nodeText,
     clusterBkg: cluster,
     clusterBorder,
-    edgeLabelBackground: cluster,
+    edgeLabelBackground: node,
     titleColor: nodeText,
     actorBkg: node,
     actorBorder: nodeBorder,
@@ -125,11 +125,14 @@ const themeCss = [
   '.node rect, .node circle, .node ellipse, .node polygon { rx: 12px; ry: 12px; }',
   '.cluster rect { rx: 16px; ry: 16px; }',
   'rect.actor { rx: 12px; ry: 12px; }',
-  '.nodeLabel { font-weight: 500; }',
-  '.cluster-label .nodeLabel { font-weight: 600; font-size: 0.85em; }',
-  '.edgeLabel { font-size: 0.85em; font-weight: 500; }',
-  '.edgePath .path { stroke-width: 1.5px; }',
-  '.messageText { font-size: 13px; font-weight: 500; }',
+  '.nodeLabel { font-weight: 500; font-size: 16px; }',
+  '.cluster-label .nodeLabel { font-weight: 600; font-size: 16px; }',
+  '.edgeLabel { font-size: 15px; font-weight: 500; }',
+  '.edgeLabel rect { opacity: 1; rx: 8px; ry: 8px; stroke: var(--diagram-node-border); stroke-width: 1px; }',
+  '.edgePath .path { stroke-width: 2px; }',
+  '.messageText { font-size: 14px; font-weight: 500; }',
+  '.loopText { font-size: 13px; }',
+  '.actor { stroke-width: 1.5px; }',
 ].join('\n');
 
 let mermaidIdCounter = 0;

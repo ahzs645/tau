@@ -159,9 +159,11 @@ export function ViewportGizmoCube({
         rendererSize: size,
         xAxisColor: 'red',
         yAxisColor: 'green',
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
         zAxisColor: 'rgb(37, 78, 136)',
         xLabelColor: 'red',
         yLabelColor: 'green',
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
         zLabelColor: 'rgb(37, 78, 136)',
         lineWidth: 2,
       }),

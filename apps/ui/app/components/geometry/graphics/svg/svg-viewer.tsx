@@ -36,10 +36,12 @@ function SvgGrid({ viewbox, transform }: SvgGridProps): React.ReactElement {
   const id = useId();
 
   // Calculate theme-aware grid color
+  /* oxlint-disable tau-lint/no-hardcoded-color -- SVG grid overlay color */
   const gridColor = React.useMemo(
     () => (theme === Theme.LIGHT ? 'rgba(128, 128, 128, 0.15)' : 'rgba(128, 128, 128, 0.1)'),
     [theme],
   );
+  /* oxlint-enable tau-lint/no-hardcoded-color */
 
   // Grid sizes come from graphics machine (kept in-sync via controlsChanged)
   const { smallSize, largeSize } = gridSizes;

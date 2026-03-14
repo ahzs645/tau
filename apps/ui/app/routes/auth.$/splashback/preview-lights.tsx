@@ -35,6 +35,7 @@ type PreviewLightsProperties = {
  * - Environment map for realistic reflections
  */
 export function PreviewLights({
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color
   accentColor = '#14b8a6',
   environmentPreset = 'city',
 }: PreviewLightsProperties): React.JSX.Element {

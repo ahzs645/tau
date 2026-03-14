@@ -108,6 +108,7 @@ export function MorphingPoints({
   targetPoints,
   targetProgress,
   animationSpeed = 2,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js point color
   sourceColor = '#14b8a6',
   targetColor,
   pointSize = 3,

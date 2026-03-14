@@ -181,7 +181,7 @@ export function ChatContextActions({
               padding: 12,
               labelHeight: 24,
               backgroundColor: 'transparent',
-              dividerColor: '#666666',
+              dividerColor: 'var(--border)',
               dividerWidth: 1,
             },
           },
@@ -325,17 +325,17 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
   const contextItems = useMemo((): ContextActionItem[] => {
     const items: ContextActionItem[] = [
       {
-        id: 'add-model-screenshot',
-        label: 'Model screenshot',
-        group: 'Visual',
+        id: 'add-current-view-screenshot',
+        label: 'Current view',
+        group: 'Screenshot',
         icon: <Image />,
         action: handleAddModelScreenshot,
         disabled: !isScreenshotReady,
       },
       {
         id: 'add-all-views-screenshots',
-        label: 'All views screenshots',
-        group: 'Visual',
+        label: 'Orthographic views x 6',
+        group: 'Screenshot',
         icon: <Camera />,
         action: handleAddAllViewsScreenshots,
         disabled: !isScreenshotReady,
@@ -346,7 +346,7 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
     if (viewGraphics.size >= 2) {
       for (const [viewId, graphicsRef] of viewGraphics) {
         const settings = viewSettings[viewId];
-        // Skip the main entry file view (already covered by "Model screenshot")
+        // Skip the main entry file view (already covered by "Current view screenshot")
         if (settings?.entryFile === mainEntryFile) {
           continue;
         }

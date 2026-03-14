@@ -37,9 +37,11 @@ type CustomAxesHelperProps = {
 
 export function AxesHelper({
   size = 50_000,
+  /* oxlint-disable tau-lint/no-hardcoded-color -- Three.js axis colors */
   xAxisColor = 'rgb(125, 56, 50)',
   yAxisColor = 'rgb(64, 115, 63)',
   zAxisColor = 'rgb(37, 78, 136)',
+  /* oxlint-enable tau-lint/no-hardcoded-color */
   thickness = 1.25,
   hoverThickness = 2,
 }: CustomAxesHelperProps): React.JSX.Element {
