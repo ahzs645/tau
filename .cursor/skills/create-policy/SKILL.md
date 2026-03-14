@@ -150,6 +150,67 @@ Follow `docs/policy/{name}-policy.md` for the full policy. Key rules:
 - Rule 2 summary
 ```
 
+## Programmatic Enforcement
+
+**Strong preference**: when a policy rule can be checked by static analysis, create an oxlint rule to enforce it. Lint rules scale across the entire codebase and prevent regressions without human review overhead.
+
+### When to Create a Lint Rule
+
+| Policy rule characteristic                                                | Lint rule? | Example                                                              |
+| ------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------- |
+| Pattern detectable in AST (string literals, node types, attribute values) | **Yes**    | "No hardcoded hex colors" → `no-hardcoded-color`                     |
+| File structure constraint (imports, exports, naming)                      | **Yes**    | "Public exports need JSDoc" → `require-public-export-jsdoc`          |
+| Comment/annotation requirement                                            | **Yes**    | "Disable comments need descriptions" → `require-disable-description` |
+| Semantic/architectural decision                                           | No         | "Use composition over inheritance"                                   |
+| Requires runtime context (contrast ratios, render output)                 | No         | "Meet 4.5:1 contrast"                                                |
+| Subjective judgment (code clarity, naming quality)                        | No         | "Names should describe the action"                                   |
+
+### Creating an Oxlint Rule
+
+Rules live in `libs/oxlint/src/rules/`. Follow the existing pattern:
+
+1. **Rule file**: `src/rules/<rule-name>.js`
+   - Export a `RuleModule` with `meta` (type, docs, messages, **fixable**) and `create(context)` returning an AST visitor
+   - **Autofix is mandatory by default.** Set `meta.fixable: 'code'` (or `'whitespace'`) and provide a `fix(fixer)` callback in every `context.report()` call. Only omit autofix when the correct replacement requires human judgment (e.g., choosing which semantic token to use). Even then, prefer `suggest` (suggestions) over no fix.
+   - Use `context.report({ node, messageId, data, fix(fixer) { ... } })` — the `fix` callback uses `fixer.replaceText()`, `fixer.replaceTextRange()`, `fixer.remove()`, or `fixer.insertTextBefore()`/`fixer.insertTextAfter()`
+   - Keep algorithms O(n) in file size — avoid nested traversals
+
+2. **Test file**: `src/rules/<rule-name>.test.js`
+   - Use `RuleTester` from `eslint` with `tseslint.parser`
+   - Include `valid` cases (must NOT flag) and `invalid` cases (must flag with correct `messageId`)
+   - Name each test case descriptively
+
+3. **Registration**: Import in `tau-lint.js`, add to `rules` object, bump version
+
+4. **Configuration**: Add to `.oxlintrc.json`
+   - Global scope: `"tau-lint/<rule-name>": "warn"` (or `"error"` for zero-tolerance)
+   - File-type scope: use `overrides` with `"files"` pattern when the rule applies to specific extensions
+
+5. **Run tests**: `pnpm nx test oxlint ./src/rules/<rule-name>.test.js --watch=false`
+
+### Linking Policy to Lint Rule
+
+When a policy has a companion lint rule, add a note in the policy's rule section:
+
+```markdown
+### 1. No Hardcoded Colors
+
+Use semantic design tokens, never raw hex/rgb/hsl values in component files.
+
+**Enforced by**: `tau-lint/no-hardcoded-color` (warn in `.tsx` files)
+```
+
+This creates a bidirectional link: the policy explains _why_, the lint rule enforces _what_.
+
+### Existing Policy-to-Lint Mappings
+
+| Policy                                        | Lint Rule                              | Severity           |
+| --------------------------------------------- | -------------------------------------- | ------------------ |
+| Color Policy § No hardcoded colors            | `tau-lint/no-hardcoded-color`          | warn (`.tsx` only) |
+| JSDoc Policy § Public exports                 | `tau-lint/require-public-export-jsdoc` | warn               |
+| Lint Policy § Disable descriptions            | `tau-lint/require-disable-description` | error              |
+| TypeScript Policy § No `as const` on literals | `tau-lint/no-literal-const-assertion`  | error              |
+
 ## Checklist
 
 Before finalizing a policy:
@@ -166,3 +227,4 @@ Before finalizing a policy:
 - [ ] Under 500 lines
 - [ ] Passes `pnpm docs:validate`
 - [ ] Companion `.cursor/rules/*.mdc` only if policy governs active editing patterns
+- [ ] Lint rules created for any programmatically enforceable rules (strong preference)
