@@ -89,6 +89,8 @@
     "tau-lint/validate-jsdoc-codeblocks": "error",
     "tau-lint/require-public-export-jsdoc": "warn",
     "tau-lint/no-consecutive-jsdoc-blank-lines": "warn",
+    // Enabled per-file-type via overrides (only .tsx files). See docs/policy/color-policy.md.
+    "tau-lint/no-hardcoded-color": "off",
     "unicorn/no-accessor-recursion": "error",
     "unicorn/no-anonymous-default-export": "error",
     "unicorn/no-array-callback-reference": "error",
@@ -1239,6 +1241,15 @@
       "rules": {
         "tau-lint/validate-jsdoc-codeblocks": "off",
         "tau-lint/require-public-export-jsdoc": "off"
+      }
+    },
+    {
+      // Color policy enforcement: flag hardcoded hex/rgb/hsl in component files.
+      // Scoped to .tsx only — .ts files like color.constants.ts legitimately contain color values.
+      // See docs/policy/color-policy.md for the full color system rules.
+      "files": ["**/*.tsx"],
+      "rules": {
+        "tau-lint/no-hardcoded-color": "warn"
       }
     }
   ],

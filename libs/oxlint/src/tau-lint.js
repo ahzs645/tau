@@ -18,12 +18,13 @@ import { validateMdxCodeblocksRule } from './rules/validate-mdx-codeblocks.js';
 import { validateMdxLinksRule } from './rules/validate-mdx-links.js';
 import { validateMdxExternalLinksRule } from './rules/validate-mdx-external-links.js';
 import { noUselessCatchUnknownRule } from './rules/no-useless-catch-unknown.js';
+import { noHardcodedColorRule } from './rules/no-hardcoded-color.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.10.0',
+    version: '1.11.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -37,6 +38,7 @@ const plugin = {
     'validate-mdx-codeblocks': validateMdxCodeblocksRule,
     'validate-mdx-links': validateMdxLinksRule,
     'validate-mdx-external-links': validateMdxExternalLinksRule,
+    'no-hardcoded-color': noHardcodedColorRule,
   },
 };
 
