@@ -56,6 +56,7 @@ catalog:
   '@typescript/vfs': ^1.6.4
   '@vitest/coverage-v8': 4.1.0-beta.6
   '@vitest/ui': 4.1.0-beta.6
+  '@xyflow/react': ^12.10.1
   '@zenfs/core': ^2.5.0
   '@zenfs/dom': ^1.2.7
   cdn-resolve: ^2.1.2
