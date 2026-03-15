@@ -73,16 +73,11 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
   const { editMessage, retryMessage, startEditingMessage, exitEditMode } = useChatActions();
   const [isEditing, setIsEditing] = useState(false);
 
-  // Early return if message not found (shouldn't happen in normal operation)
-  if (!message || !displayMessage) {
-    return <div>Message not found</div>;
-  }
-
-  const isUser = message.role === messageRole.user;
+  const isUser = message?.role === messageRole.user;
   const isCollapsedUserMessage = isUser && !isEditing;
 
   const collapsedUserRows = useMemo(() => {
-    if (!isCollapsedUserMessage || fileParts.length > 0) {
+    if (!isCollapsedUserMessage || !displayMessage || fileParts.length > 0) {
       return [];
     }
 
@@ -106,10 +101,10 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
     }
 
     return rows.length > 0 ? rows : [''];
-  }, [displayMessage.parts, fileParts.length, isCollapsedUserMessage]);
+  }, [displayMessage, fileParts.length, isCollapsedUserMessage]);
 
   const collapsedUserCharacterCount = useMemo(() => {
-    if (!isCollapsedUserMessage || fileParts.length > 0) {
+    if (!isCollapsedUserMessage || !displayMessage || fileParts.length > 0) {
       return 0;
     }
 
@@ -121,7 +116,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
     }
 
     return characterCount;
-  }, [displayMessage.parts, fileParts.length, isCollapsedUserMessage]);
+  }, [displayMessage, fileParts.length, isCollapsedUserMessage]);
 
   const shouldCollapseUserMessage =
     isCollapsedUserMessage &&
@@ -140,6 +135,10 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
     },
     [collapsedUserRows],
   );
+
+  if (!message || !displayMessage) {
+    return <div>Message not found</div>;
+  }
 
   const handleEditClick = () => {
     if (!isUser) {
