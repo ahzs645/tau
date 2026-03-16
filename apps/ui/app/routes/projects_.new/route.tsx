@@ -203,8 +203,8 @@ export default function ProjectsNew(): React.JSX.Element {
           </div>
         </CardContent>
 
-        <CardHeader className='shrink-0'>
-          <CardTitle>Choose CAD Kernel *</CardTitle>
+        <CardHeader className='shrink-0 text-sm'>
+          <CardTitle className='font-medium'>Choose CAD Kernel *</CardTitle>
           <CardDescription>Select the technology that best fits your project needs</CardDescription>
         </CardHeader>
         <CardContent className='min-h-0 flex-1'>
