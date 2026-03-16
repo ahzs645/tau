@@ -10,7 +10,7 @@ import { Label } from '#components/ui/label.js';
 import { Badge } from '#components/ui/badge.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { RadioGroup, RadioGroupItem } from '#components/ui/radio-group.js';
-import { Textarea } from '#components/ui/textarea.js';
+
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '#components/ui/accordion.js';
 import { getKernelOption } from '#utils/kernel.utils.js';
 import { toast } from '#components/ui/sonner.js';
@@ -29,7 +29,7 @@ export const handle: Handle = {
       </Button>
     );
   },
-  enableOverflowY: true,
+  enableOverflowY: false,
 };
 
 // Reusable component for kernel details content
@@ -166,17 +166,16 @@ export default function BuildsNew(): React.JSX.Element {
   );
 
   return (
-    <div className='container mx-auto max-w-4xl px-4 pb-8'>
-      <div className='mb-8 text-center'>
+    <div className='container mx-auto flex h-full max-w-4xl flex-col px-4 pb-6'>
+      <div className='mb-6 shrink-0 text-center'>
         <h1 className='mb-2 text-3xl font-semibold tracking-tight'>Create New Build</h1>
         <p className='text-muted-foreground'>Choose a CAD kernel and start building</p>
       </div>
 
-      <div className='space-y-6'>
-        {/* Build Details */}
-        <Card>
-          <CardContent className='space-y-4'>
-            <div className='space-y-2'>
+      <Card className='flex min-h-0 flex-1 flex-col'>
+        <CardContent className='shrink-0 space-y-4 border-b pb-6'>
+          <div className='flex flex-col gap-4'>
+            <div className='flex-1 space-y-2'>
               <Label htmlFor='build-name'>Build Name *</Label>
               <Input
                 autoFocus
@@ -190,32 +189,29 @@ export default function BuildsNew(): React.JSX.Element {
                 }}
               />
             </div>
-
-            <div className='space-y-2'>
+            <div className='flex-1 space-y-2'>
               <Label htmlFor='build-description'>Description (optional)</Label>
-              <Textarea
+              <Input
                 id='build-description'
                 value={buildDescription}
                 placeholder="Describe what you're building..."
                 maxLength={500}
-                rows={3}
                 onChange={(event) => {
                   setBuildDescription(event.target.value);
                 }}
               />
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardContent>
 
-        {/* Kernel Selection */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Choose CAD Kernel *</CardTitle>
-            <CardDescription>Select the technology that best fits your build needs</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {/* Mobile Accordion Layout */}
-            <div className='block md:hidden'>
+        <CardHeader className='shrink-0'>
+          <CardTitle>Choose CAD Kernel *</CardTitle>
+          <CardDescription>Select the technology that best fits your build needs</CardDescription>
+        </CardHeader>
+        <CardContent className='min-h-0 flex-1'>
+          {/* Mobile Accordion Layout */}
+          <div className='block h-full overflow-hidden rounded-lg border border-border md:hidden'>
+            <div className='h-full scroll-shadows-y'>
               <RadioGroup
                 value={kernel}
                 onValueChange={(value) => {
@@ -225,7 +221,6 @@ export default function BuildsNew(): React.JSX.Element {
                 <Accordion
                   type='single'
                   value={kernel}
-                  className='space-y-2'
                   onValueChange={(value) => {
                     if (value) {
                       setSelectedKernel(value as KernelProvider);
@@ -237,8 +232,8 @@ export default function BuildsNew(): React.JSX.Element {
                       key={option.id}
                       value={option.id}
                       className={cn(
-                        'rounded-lg border transition-all',
-                        kernel === option.id && 'border-ring bg-primary/5 ring-3 ring-ring/50',
+                        'border-b border-border last:border-b-0 transition-all',
+                        kernel === option.id && 'bg-primary/5',
                       )}
                     >
                       <div className='flex items-start gap-3 p-4'>
@@ -275,14 +270,16 @@ export default function BuildsNew(): React.JSX.Element {
                 </Accordion>
               </RadioGroup>
             </div>
+          </div>
 
-            {/* Desktop Side-by-Side Layout */}
-            <div className='hidden md:flex md:gap-6'>
-              {/* Left side - Radio Group */}
-              <div className='flex flex-col gap-2 md:min-w-80'>
+          {/* Desktop Side-by-Side Layout */}
+          <div className='hidden h-full md:flex md:gap-6'>
+            {/* Left side - Radio Group (scrollable, wrapped in border) */}
+            <div className='min-h-0 basis-1/2 overflow-hidden rounded-lg border border-border'>
+              <div className='h-full scroll-shadows-y'>
                 <RadioGroup
                   value={kernel}
-                  className='space-y-2'
+                  className='gap-0'
                   onValueChange={(value) => {
                     setSelectedKernel(value as KernelProvider);
                   }}
@@ -292,9 +289,8 @@ export default function BuildsNew(): React.JSX.Element {
                       key={option.id}
                       htmlFor={option.id}
                       className={cn(
-                        'flex h-auto cursor-pointer items-start justify-start gap-3 rounded-lg border p-4 text-left transition-all hover:border-primary/50 hover:bg-primary/5',
-                        kernel === option.id &&
-                          'border-ring bg-primary/5 ring-3 ring-ring/50 hover:border-ring hover:bg-primary/10',
+                        'flex h-auto cursor-pointer items-start justify-start gap-3 border-b border-border p-4 text-left transition-all last:border-b-0 hover:bg-primary/5',
+                        kernel === option.id && 'bg-primary/5 hover:bg-primary/10',
                       )}
                     >
                       <RadioGroupItem value={option.id} id={option.id} className='mt-1' />
@@ -310,24 +306,24 @@ export default function BuildsNew(): React.JSX.Element {
                   ))}
                 </RadioGroup>
               </div>
-
-              {/* Right side - Content panel */}
-              <div className='flex-1 rounded-lg border border-border bg-card p-6'>
-                <KernelDetailsContent kernelId={kernel} />
-              </div>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* Action Buttons */}
-        <div className='flex flex-col gap-3 sm:flex-row sm:justify-between sm:gap-4'>
-          <Button variant='outline' disabled={isCreating} onClick={handleCancel}>
-            Cancel
-          </Button>
-          <Button disabled={isCreateButtonDisabled} className='min-w-[120px]' onClick={handleCreateBuild}>
-            {isCreating ? 'Creating...' : `Create Build ${formattedKeyCombination}`}
-          </Button>
-        </div>
+            {/* Right side - Content panel (fixed) */}
+            <div className='basis-1/2 rounded-lg border border-border bg-card p-6'>
+              <KernelDetailsContent kernelId={kernel} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Action Buttons - pinned at bottom */}
+      <div className='flex shrink-0 flex-col gap-3 pt-6 sm:flex-row sm:justify-between sm:gap-4'>
+        <Button variant='outline' disabled={isCreating} onClick={handleCancel}>
+          Cancel
+        </Button>
+        <Button disabled={isCreateButtonDisabled} className='min-w-[120px]' onClick={handleCreateBuild}>
+          {isCreating ? 'Creating...' : `Create Build ${formattedKeyCombination}`}
+        </Button>
       </div>
     </div>
   );
