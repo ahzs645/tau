@@ -115,10 +115,9 @@ function useProjectCreation() {
 
         void navigate(`/projects/${createProject.id}`);
       } catch (error) {
+        setIsCreating(false);
         console.error('Failed to create project:', error);
         throw error;
-      } finally {
-        setIsCreating(false);
       }
     },
     [user?.name, user?.image, projectManager, navigate],
