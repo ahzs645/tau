@@ -25,10 +25,12 @@ export function normalizePath(path: string): string {
  *
  * @example <caption>Joining path segments</caption>
  * ```typescript
- * joinPath('/root', 'dir', 'file.txt') // '/root/dir/file.txt'
- * joinPath('/root', '/absolute', 'file.txt') // '/absolute/file.txt'
- * joinPath('/', '/projects/id/main.scad') // '/projects/id/main.scad'
- * joinPath('/root', '', 'file.txt') // '/root/file.txt'
+ * import { joinPath } from '@taucad/utils/path';
+ *
+ * joinPath('/root', 'dir', 'file.txt'); // '/root/dir/file.txt'
+ * joinPath('/root', '/absolute', 'file.txt'); // '/absolute/file.txt'
+ * joinPath('/', '/projects/id/main.scad'); // '/projects/id/main.scad'
+ * joinPath('/root', '', 'file.txt'); // '/root/file.txt'
  * ```
  */
 export function joinPath(...paths: string[]): string {
@@ -72,6 +74,40 @@ export function parentDirectory(path: string): string {
     return '/';
   }
   return path.slice(0, lastSlash);
+}
+
+/**
+ * Joins relative path segments without introducing a leading slash.
+ * Use this when building paths relative to a root (e.g. file tree entry keys).
+ * For building absolute paths to pass to ZenFS/workers, use {@link joinPath} instead.
+ *
+ * @param paths - Relative path segments to join.
+ * @returns Joined relative path, or empty string if no non-empty segments.
+ *
+ * @public
+ *
+ * @example <caption>Joining relative path segments</caption>
+ * ```typescript
+ * import { joinRelativePath } from '@taucad/utils/path';
+ *
+ * joinRelativePath('lib', 'utils.ts'); // 'lib/utils.ts'
+ * joinRelativePath('', 'main.ts'); // 'main.ts'
+ * joinRelativePath('src', 'components', 'App.tsx'); // 'src/components/App.tsx'
+ * ```
+ */
+export function joinRelativePath(...paths: string[]): string {
+  const segments: string[] = [];
+  for (const path of paths) {
+    if (path === '') {
+      continue;
+    }
+    for (const segment of path.split('/')) {
+      if (segment.length > 0) {
+        segments.push(segment);
+      }
+    }
+  }
+  return segments.join('/');
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { joinPath, normalizePath, parentDirectory, canonicalizePath } from '#path.utils.js';
+import { joinPath, joinRelativePath, normalizePath, parentDirectory, canonicalizePath } from '#path.utils.js';
 
 describe('normalizePath', () => {
   it('should normalize a simple path', () => {
@@ -93,6 +93,65 @@ describe('joinPath', () => {
 
     it('should normalize the final result', () => {
       expect(joinPath('/root/', '/dir/', 'file.txt')).toBe('/dir/file.txt');
+    });
+  });
+});
+
+describe('joinRelativePath', () => {
+  describe('basic joining', () => {
+    it('should join two relative segments', () => {
+      expect(joinRelativePath('lib', 'utils.ts')).toBe('lib/utils.ts');
+    });
+
+    it('should join multiple segments', () => {
+      expect(joinRelativePath('src', 'components', 'App.tsx')).toBe('src/components/App.tsx');
+    });
+
+    it('should handle single segment', () => {
+      expect(joinRelativePath('main.ts')).toBe('main.ts');
+    });
+  });
+
+  describe('empty segment handling', () => {
+    it('should skip empty segments', () => {
+      expect(joinRelativePath('', 'main.ts')).toBe('main.ts');
+    });
+
+    it('should skip empty segments in the middle', () => {
+      expect(joinRelativePath('lib', '', 'utils.ts')).toBe('lib/utils.ts');
+    });
+
+    it('should return empty string for all empty segments', () => {
+      expect(joinRelativePath('', '', '')).toBe('');
+    });
+
+    it('should return empty string for no arguments', () => {
+      expect(joinRelativePath()).toBe('');
+    });
+  });
+
+  describe('slash handling', () => {
+    it('should collapse redundant slashes within segments', () => {
+      expect(joinRelativePath('lib/', 'utils.ts')).toBe('lib/utils.ts');
+    });
+
+    it('should handle segments with trailing slashes', () => {
+      expect(joinRelativePath('src/', 'components/', 'App.tsx')).toBe('src/components/App.tsx');
+    });
+
+    it('should handle segments with leading slashes (strips them)', () => {
+      expect(joinRelativePath('/lib', 'utils.ts')).toBe('lib/utils.ts');
+    });
+  });
+
+  describe('file tree key construction', () => {
+    it('should build tree keys like readDirectoryActor does', () => {
+      expect(joinRelativePath('lib', 'utils.ts')).toBe('lib/utils.ts');
+      expect(joinRelativePath('src/components', 'Button.tsx')).toBe('src/components/Button.tsx');
+    });
+
+    it('should handle root-level entries (empty parent)', () => {
+      expect(joinRelativePath('', 'main.ts')).toBe('main.ts');
     });
   });
 });
