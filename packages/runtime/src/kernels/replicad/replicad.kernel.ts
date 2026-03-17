@@ -327,16 +327,13 @@ const runMain = named('runMain', async function <
   }
 });
 
-function enrichIssueLocation(
-  issues: Array<{ message: string; severity: string; location?: unknown }>,
-  fallbackFileName: string,
-): KernelIssue[] {
+function enrichIssueLocation(issues: Array<KernelIssue>, fallbackFileName: string): KernelIssue[] {
   return issues.map((issue) => ({
     ...issue,
     message: issue.message,
     type: 'runtime',
     severity: issue.severity === 'warning' ? 'warning' : 'error',
-    location: (issue.location as KernelIssue['location']) ?? {
+    location: issue.location ?? {
       fileName: fallbackFileName,
       startLineNumber: 1,
       startColumn: 1,
@@ -574,7 +571,7 @@ export default defineKernel({
               startColumn: 1,
             },
             type: 'runtime',
-            severity: 'warning',
+            severity: 'info',
           },
         ],
       };
