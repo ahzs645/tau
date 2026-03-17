@@ -23,6 +23,18 @@ export class BoundedFileCache {
   }
 
   /**
+   * Retrieve cached file data without promoting the entry in the LRU order.
+   * Safe to call inside React selectors and render paths where side effects
+   * must be avoided.
+   *
+   * @param path - Cache key (absolute file path).
+   * @returns Cached bytes or `undefined` on miss.
+   */
+  public peek(path: string): Uint8Array<ArrayBuffer> | undefined {
+    return this._map.get(path);
+  }
+
+  /**
    * Retrieve cached file data, promoting the entry to most-recently-used.
    *
    * @param path - Cache key (absolute file path).

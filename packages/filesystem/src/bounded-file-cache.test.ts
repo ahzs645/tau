@@ -105,6 +105,37 @@ describe('BoundedFileCache', () => {
     });
   });
 
+  describe('peek', () => {
+    it('should return cached data without promoting to most-recently-used', () => {
+      const cache = new BoundedFileCache({ maxEntries: 3, maxTotalBytes: 100 });
+      cache.set('/a', new Uint8Array([1]));
+      cache.set('/b', new Uint8Array([2]));
+      cache.set('/c', new Uint8Array([3]));
+      cache.peek('/a');
+      cache.set('/d', new Uint8Array([4]));
+      expect(cache.has('/a')).toBe(false);
+      expect(cache.has('/b')).toBe(true);
+      expect(cache.has('/c')).toBe(true);
+      expect(cache.has('/d')).toBe(true);
+    });
+
+    it('should return undefined on cache miss', () => {
+      const cache = new BoundedFileCache({ maxEntries: 10, maxTotalBytes: 100 });
+      expect(cache.peek('/missing')).toBeUndefined();
+    });
+
+    it('should not mutate internal iteration order', () => {
+      const cache = new BoundedFileCache({ maxEntries: 10, maxTotalBytes: 100 });
+      cache.set('/a', new Uint8Array([1]));
+      cache.set('/b', new Uint8Array([2]));
+      cache.set('/c', new Uint8Array([3]));
+      const orderBefore = [...cache.entries()].map(([k]) => k);
+      cache.peek('/a');
+      const orderAfter = [...cache.entries()].map(([k]) => k);
+      expect(orderAfter).toEqual(orderBefore);
+    });
+  });
+
   describe('get moves entry to end of LRU', () => {
     it('should make entry most recently used on get', () => {
       const cache = new BoundedFileCache({ maxEntries: 3, maxTotalBytes: 100 });
