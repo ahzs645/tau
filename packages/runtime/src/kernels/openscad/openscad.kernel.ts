@@ -17,7 +17,7 @@ import type { JSONSchema7 } from 'json-schema';
 import type { GeometryGltf, LogLevel } from '@taucad/types';
 import { logLevels, createExportFile } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
-import { joinPath } from '@taucad/utils/path';
+import { joinPath, joinRelativePath } from '@taucad/utils/path';
 import type { KernelIssue } from '#types/runtime.types.js';
 import type { RuntimeFileSystem, RuntimeLogger } from '#types/runtime-kernel.types.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
@@ -98,7 +98,7 @@ function parseUseIncludeStatements(code: string): string[] {
 function resolveIncludePath(baseFilePath: string, relativePath: string): string {
   const lastSlash = baseFilePath.lastIndexOf('/');
   const baseDirectory = lastSlash === -1 ? '' : baseFilePath.slice(0, lastSlash);
-  const combinedPath = baseDirectory ? joinPath(baseDirectory, relativePath) : relativePath;
+  const combinedPath = baseDirectory ? joinRelativePath(baseDirectory, relativePath) : relativePath;
   const segments = combinedPath.split('/');
   const resolved: string[] = [];
   for (const segment of segments) {
