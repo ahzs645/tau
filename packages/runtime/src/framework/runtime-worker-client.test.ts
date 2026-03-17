@@ -4,6 +4,7 @@ import {
   RenderSupersededError,
   isRenderSupersededError,
 } from '#framework/runtime-worker-client.js';
+import { createRuntimeClient } from '#client/runtime-client.js';
 import { signalSlot } from '#types/runtime-protocol.types.js';
 import type { RuntimeTransport } from '#transport/runtime-transport.js';
 import type { RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
@@ -458,6 +459,61 @@ describe('RuntimeWorkerClient', () => {
       client.setFile({ path: '/', filename: 'sphere.ts' }, {});
 
       expect(Atomics.load(workerView, signalSlot.abortGeneration)).toBe(4);
+    });
+  });
+
+  describe('RuntimeClient error event forwarding', () => {
+    it('should accept error as a valid event type for subscription', () => {
+      const runtimeClient = createRuntimeClient({ kernels: [] });
+      const errorHandler = vi.fn();
+
+      expect(() => {
+        runtimeClient.on('error', errorHandler);
+      }).not.toThrow();
+
+      runtimeClient.terminate();
+    });
+
+    it('should deliver worker error events to subscribed error handlers', async () => {
+      const transport = createMockTransport();
+      const errorHandler = vi.fn();
+      const stubFs = {
+        readFile: vi.fn(),
+        writeFile: vi.fn(),
+        mkdir: vi.fn(),
+        readdir: vi.fn(),
+        unlink: vi.fn(),
+        rmdir: vi.fn(),
+        rename: vi.fn(),
+        stat: vi.fn(),
+        lstat: vi.fn(),
+        exists: vi.fn(),
+      } as never;
+
+      const runtimeClient = createRuntimeClient({
+        kernels: [],
+        transport,
+      });
+
+      runtimeClient.on('error', errorHandler);
+
+      const connectPromise = runtimeClient.connect({ fileSystem: stubFs });
+
+      transport.simulateResponse({ type: 'initialized', requestId: '0' });
+      await connectPromise;
+
+      transport.simulateResponse({
+        type: 'error',
+        requestId: '',
+        issues: [{ message: 'Render failed: syntax error', type: 'runtime', severity: 'error' }],
+      });
+
+      expect(errorHandler).toHaveBeenCalledTimes(1);
+      expect(errorHandler).toHaveBeenCalledWith([
+        { message: 'Render failed: syntax error', type: 'runtime', severity: 'error' },
+      ]);
+
+      runtimeClient.terminate();
     });
   });
 });

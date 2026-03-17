@@ -6,7 +6,7 @@
  */
 
 import type { GeometryFile, ExportFormat, ExportFile, LogOrigin } from '@taucad/types';
-import type { HashedGeometryResult, GetParametersResult, KernelResult } from '#types/runtime.types.js';
+import type { HashedGeometryResult, GetParametersResult, KernelResult, KernelIssue } from '#types/runtime.types.js';
 import type { RuntimeFileSystemBase, Tessellation } from '#types/runtime-kernel.types.js';
 import type { PerformanceEntryData, RenderPhase, WorkerState } from '#types/runtime-protocol.types.js';
 import { RuntimeWorkerClient } from '#framework/runtime-worker-client.js';
@@ -165,6 +165,7 @@ type EventHandlers = {
   geometry: Set<(result: HashedGeometryResult) => void>;
   filesChanged: Set<(paths: string[]) => void>;
   state: Set<(state: WorkerState, detail?: string) => void>;
+  error: Set<(issues: KernelIssue[]) => void>;
 };
 
 /**
@@ -272,6 +273,7 @@ export type RuntimeClient = {
   on(event: 'telemetry', handler: (entries: PerformanceEntryData[]) => void): () => void;
   on(event: 'parametersResolved', handler: (result: GetParametersResult) => void): () => void;
   on(event: 'filesChanged', handler: (paths: string[]) => void): () => void;
+  on(event: 'error', handler: (issues: KernelIssue[]) => void): () => void;
 
   /**
    * Terminate the worker and clean up all resources.
@@ -340,6 +342,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     geometry: new Set(),
     filesChanged: new Set(),
     state: new Set(),
+    error: new Set(),
   };
 
   function getWorkerUrl(): string {
@@ -393,6 +396,11 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
         onProgress(phase, detail) {
           for (const handler of handlers.progress) {
             handler(phase, detail);
+          }
+        },
+        onError(issues) {
+          for (const handler of handlers.error) {
+            handler(issues);
           }
         },
       },

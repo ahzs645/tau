@@ -492,6 +492,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     clearTimeout(this.fileDebounceTimer);
     clearTimeout(this.paramDebounceTimer);
 
+    // Phase 1: immediately watch the entry file so edits during
+    // a long-running (or failing) first render are never missed.
+    this.setBasePath(file);
+    this.updateWatchSet([this.activeFileAbsolutePath]);
+
     void this.executeRender();
   }
 
@@ -937,30 +942,33 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     this.renderDependencyCache = undefined;
     this.setBasePath(input.file);
 
-    const parametersResult = await this.getParameters(input.file);
-    input.onParametersResolved?.(parametersResult);
+    try {
+      const parametersResult = await this.getParameters(input.file);
+      input.onParametersResolved?.(parametersResult);
 
-    let mergedParameters = input.parameters;
-    if (parametersResult.success) {
-      const extracted = parametersResult.data as {
-        defaultParameters?: Record<string, unknown>;
-      };
-      if (extracted.defaultParameters) {
-        mergedParameters = deepmerge(extracted.defaultParameters, input.parameters);
+      let mergedParameters = input.parameters;
+      if (parametersResult.success) {
+        const extracted = parametersResult.data as {
+          defaultParameters?: Record<string, unknown>;
+        };
+        if (extracted.defaultParameters) {
+          mergedParameters = deepmerge(extracted.defaultParameters, input.parameters);
+        }
       }
+
+      const result = await this.createGeometry({
+        file: input.file,
+        parameters: mergedParameters,
+        tessellation: input.tessellation,
+      });
+
+      this._updateWatchSetFromCaches();
+
+      return result;
+    } finally {
+      this.onProgress = undefined;
+      renderSpan.end();
     }
-
-    const result = await this.createGeometry({
-      file: input.file,
-      parameters: mergedParameters,
-      tessellation: input.tessellation,
-    });
-    this.onProgress = undefined;
-    renderSpan.end();
-
-    this._updateWatchSetFromCaches();
-
-    return result;
   }
 
   /**
@@ -970,18 +978,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param changedPaths - Absolute paths of files that changed
    */
   public async notifyFileChanged(changedPaths: string[]): Promise<void> {
-    for (const path of changedPaths) {
-      this.fileHashCache.delete(path);
-      this.fileContentCache.delete(path);
-      this.fileContentCache.delete(`utf8:${path}`);
-    }
-
-    for (const [entryPath, result] of this.bundleResultCache) {
-      if (result.dependencies.some((dep) => changedPaths.includes(dep))) {
-        this.bundleResultCache.delete(entryPath);
-      }
-    }
-
+    this._invalidateCachesForPaths(changedPaths);
     this.onFileChanged(changedPaths);
   }
 
@@ -1038,17 +1035,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           return;
         }
         if (changedPaths.length > 0) {
-          for (const path of changedPaths) {
-            this.fileHashCache.delete(path);
-            this.fileContentCache.delete(path);
-            this.fileContentCache.delete(`utf8:${path}`);
+          this._invalidateCachesForPaths(changedPaths);
+          try {
+            this.onFilesChanged?.(changedPaths);
+          } catch (error) {
+            console.error('[KernelWorker] onFilesChanged handler error:', error);
           }
-          for (const [entryPath, result] of this.bundleResultCache) {
-            if (result.dependencies.some((dep) => changedPaths.includes(dep))) {
-              this.bundleResultCache.delete(entryPath);
-            }
-          }
-          this.onFilesChanged?.(changedPaths);
           if (this.currentFile) {
             this.scheduleRender(fileChangeDebounceMs);
           }
@@ -1446,13 +1438,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.onProgress = undefined;
       renderSpan.end();
 
-      this._updateWatchSetFromCaches();
-
       this.flushTelemetry();
       this.onGeometryComputed?.(result);
       this.pushState('idle');
     } catch (error) {
       console.error('[KernelWorker] executeRender: error', error);
+      this.onProgress = undefined;
       if (isRenderAbortedError(error) || this.isAborted(generation)) {
         this.pushState('idle');
         return;
@@ -1462,7 +1453,27 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.onError?.([{ message: errorMessage, type: 'runtime', severity: 'error' }]);
       this.pushState('error');
     } finally {
-      this._renderInProgress = false;
+      if (generation === this.renderGeneration) {
+        this._renderInProgress = false;
+      }
+      this._updateWatchSetFromCaches();
+    }
+  }
+
+  /**
+   * Invalidate file-level caches for the given changed paths.
+   * Shared by both `notifyFileChanged` (command-driven) and the watch handler (autonomous).
+   */
+  private _invalidateCachesForPaths(changedPaths: string[]): void {
+    for (const path of changedPaths) {
+      this.fileHashCache.delete(path);
+      this.fileContentCache.delete(path);
+      this.fileContentCache.delete(`utf8:${path}`);
+    }
+    for (const [entryPath, result] of this.bundleResultCache) {
+      if (changedPaths.includes(entryPath) || result.dependencies.some((dep) => changedPaths.includes(dep))) {
+        this.bundleResultCache.delete(entryPath);
+      }
     }
   }
 
@@ -1472,6 +1483,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private _updateWatchSetFromCaches(): void {
     const allDeps = new Set<string>();
+    if (this.activeFilePath) {
+      allDeps.add(this.activeFileAbsolutePath);
+    }
     for (const result of this.bundleResultCache.values()) {
       for (const dep of result.dependencies) {
         allDeps.add(dep);
@@ -2029,6 +2043,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     this.cachedRuntime = undefined;
     this.cachedProjectRoot = undefined;
+    this.cachedBundlerFacade = undefined;
   }
 
   private computeDependencyHash(dependencies: readonly Dependency[]): string {
