@@ -53,6 +53,34 @@ describe('coalesceEvents (pure)', () => {
     expect(result).toEqual([written('/a.txt'), renamed('/old.txt', '/new.txt')]);
   });
 
+  it('should preserve rename event when fileRenamed is followed by fileDeleted on oldPath', () => {
+    const events = [renamed('/a', '/b'), deleted('/a')];
+    const result = coalesceEvents(events);
+    // newPath '/b' must appear in the coalesced result — either as a rename or
+    // as a write — so that downstream consumers learn about the new location.
+    const allPaths = result.flatMap((e) => {
+      const paths: string[] = [];
+      if ('path' in e) paths.push(e.path);
+      if ('newPath' in e) paths.push(e.newPath);
+      return paths;
+    });
+    expect(allPaths).toContain('/b');
+  });
+
+  it('should not cancel rename when fileWritten + fileRenamed + fileDeleted occur on same path', () => {
+    const events = [written('/a'), renamed('/a', '/b'), deleted('/a')];
+    const result = coalesceEvents(events);
+    // The rename to /b should survive — a consumer watching /a should learn
+    // that the content moved to /b, not just that /a was deleted.
+    const allPaths = result.flatMap((e) => {
+      const paths: string[] = [];
+      if ('path' in e) paths.push(e.path);
+      if ('newPath' in e) paths.push(e.newPath);
+      return paths;
+    });
+    expect(allPaths).toContain('/b');
+  });
+
   it('should deduplicate repeated writes to the same path', () => {
     const events = [written('/a.txt'), written('/a.txt'), written('/a.txt')];
     const result = coalesceEvents(events);

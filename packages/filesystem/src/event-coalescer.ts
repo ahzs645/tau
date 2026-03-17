@@ -138,10 +138,17 @@ export function coalesceEvents(events: ChangeEvent[]): ChangeEvent[] {
     return events;
   }
 
+  const renameEvents: ChangeEvent[] = [];
+  const renamedFromPaths = new Set<string>();
   const pathHistory = new Map<string, ChangeEvent[]>();
   const nonPathEvents: ChangeEvent[] = [];
 
   for (const event of events) {
+    if (event.type === 'fileRenamed') {
+      renameEvents.push(event);
+      renamedFromPaths.add(event.oldPath);
+      continue;
+    }
     const path = getEventPath(event);
     if (!path) {
       nonPathEvents.push(event);
@@ -168,10 +175,18 @@ export function coalesceEvents(events: ChangeEvent[]): ChangeEvent[] {
       continue;
     }
 
+    if (collapsed.type === 'fileDeleted' && renamedFromPaths.has(path)) {
+      continue;
+    }
+
     if (collapsed.type === 'fileDeleted') {
       deletedDirectories.add(path);
     }
     result.push(collapsed);
+  }
+
+  for (const event of renameEvents) {
+    result.push(event);
   }
 
   return result.filter((event) => {
