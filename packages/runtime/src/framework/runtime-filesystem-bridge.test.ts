@@ -437,6 +437,95 @@ describe('runtime-filesystem-bridge', () => {
     });
   });
 
+  describe('bridge disconnect lifecycle', () => {
+    it('should fire server onDisconnect when createBridgePort is disposed', async () => {
+      const onDisconnect = vi.fn();
+      const channel = new MessageChannel();
+      createBridgeServer({}, channel.port1, { onDisconnect });
+
+      channel.port2.postMessage({ type: 'disconnect' });
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      expect(onDisconnect).toHaveBeenCalledOnce();
+
+      channel.port1.close();
+      channel.port2.close();
+    });
+  });
+
+  describe('ChangeEventBus bridge broadcasting', () => {
+    it('should broadcast change events to all connected ports via listen()', async () => {
+      const { exposeFileSystem } = await import('#filesystem/filesystem-bridge.js');
+      const received: unknown[] = [];
+
+      const changeEventBus = {
+        subscribe: vi.fn((handler: (event: unknown) => void) => {
+          (changeEventBus as { _handler?: (event: unknown) => void })._handler = handler;
+          return () => {
+            (changeEventBus as { _handler?: undefined })._handler = undefined;
+          };
+        }),
+      };
+
+      const originalSelf = globalThis.self;
+      const listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+
+      globalThis.self = {
+        addEventListener(type: string, handler: (event: MessageEvent) => void) {
+          if (!listeners.has(type)) {
+            listeners.set(type, new Set());
+          }
+          listeners.get(type)!.add(handler);
+        },
+        removeEventListener(type: string, handler: (event: MessageEvent) => void) {
+          listeners.get(type)?.delete(handler);
+        },
+      } as unknown as typeof globalThis.self;
+
+      try {
+        const handle = exposeFileSystem({ readFile: vi.fn() }, { changeEventBus });
+
+        const channel = new MessageChannel();
+        const messageHandler = listeners.get('message')?.values().next().value;
+
+        messageHandler?.({
+          data: { type: 'connect', port: channel.port1 },
+        } as MessageEvent);
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+
+        channel.port2.addEventListener('message', (event: MessageEvent) => {
+          received.push(event.data);
+        });
+        channel.port2.start();
+
+        const testEvent = { type: 'fileWritten', path: '/test.ts', backend: 'indexeddb' };
+        (changeEventBus as { _handler?: (event: unknown) => void })._handler?.(testEvent);
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+
+        expect(received).toHaveLength(1);
+        expect(received[0]).toEqual({
+          type: 'event',
+          event: 'fileChanged',
+          data: testEvent,
+        });
+
+        handle.cleanup();
+        channel.port2.close();
+      } finally {
+        globalThis.self = originalSelf;
+      }
+    });
+  });
+
   describe('extractTransferables', () => {
     it('should extract ArrayBuffer', () => {
       const buffer = new ArrayBuffer(8);

@@ -232,6 +232,9 @@ export function createBridgePort<T extends Record<string, unknown>>(handlers: T)
     port: channel.port2,
     dispose() {
       safeDispose(() => {
+        channel.port2.postMessage({ type: 'disconnect' });
+      });
+      safeDispose(() => {
         channel.port1.close();
       });
       safeDispose(() => {
