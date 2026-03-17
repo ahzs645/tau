@@ -173,6 +173,7 @@ export type WatchRegistryOptions = {
 export class WatchRegistry {
   private readonly _subscriptions = new Map<string, WatchSubscription>();
   private readonly _ownerWatches = new Map<string, Set<string>>();
+  private readonly _ownerHandlers = new Map<string, Map<string, Set<(event: WatchEvent) => void>>>();
   private readonly _eventBus: ChangeEventBus;
   private readonly _maxQueueDepth?: number;
   private _caseSensitive: boolean;
@@ -250,6 +251,18 @@ export class WatchRegistry {
         this._ownerWatches.set(ownerId, owned);
       }
       owned.add(hash);
+
+      let ownerHandlerMap = this._ownerHandlers.get(ownerId);
+      if (!ownerHandlerMap) {
+        ownerHandlerMap = new Map();
+        this._ownerHandlers.set(ownerId, ownerHandlerMap);
+      }
+      let handlersForHash = ownerHandlerMap.get(hash);
+      if (!handlersForHash) {
+        handlersForHash = new Set();
+        ownerHandlerMap.set(hash, handlersForHash);
+      }
+      handlersForHash.add(handler);
     }
 
     let unsubscribed = false;
@@ -268,19 +281,14 @@ export class WatchRegistry {
    * @param ownerId - Port/session identifier whose watches to remove.
    */
   public cleanupOwner(ownerId: string): void {
-    const owned = this._ownerWatches.get(ownerId);
-    if (!owned) {
-      return;
-    }
-
-    for (const hash of owned) {
-      const subscription = this._subscriptions.get(hash);
-      if (subscription) {
-        subscription.handlers.clear();
-        subscription.coalescer.dispose();
-        subscription.unsubscribeFromBus();
-        this._subscriptions.delete(hash);
+    const ownerHandlerMap = this._ownerHandlers.get(ownerId);
+    if (ownerHandlerMap) {
+      for (const [hash, handlers] of ownerHandlerMap) {
+        for (const handler of handlers) {
+          this._removeHandler(hash, handler);
+        }
       }
+      this._ownerHandlers.delete(ownerId);
     }
     this._ownerWatches.delete(ownerId);
   }
@@ -330,6 +338,7 @@ export class WatchRegistry {
     }
     this._subscriptions.clear();
     this._ownerWatches.clear();
+    this._ownerHandlers.clear();
   }
 
   /**
@@ -454,6 +463,20 @@ export class WatchRegistry {
         owned.delete(hash);
         if (owned.size === 0) {
           this._ownerWatches.delete(ownerId);
+        }
+      }
+
+      const ownerHandlerMap = this._ownerHandlers.get(ownerId);
+      if (ownerHandlerMap) {
+        const handlersForHash = ownerHandlerMap.get(hash);
+        if (handlersForHash) {
+          handlersForHash.delete(handler);
+          if (handlersForHash.size === 0) {
+            ownerHandlerMap.delete(hash);
+          }
+        }
+        if (ownerHandlerMap.size === 0) {
+          this._ownerHandlers.delete(ownerId);
         }
       }
     }

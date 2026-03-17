@@ -263,6 +263,28 @@ describe('WatchRegistry', () => {
       expect(h2).toHaveBeenCalledTimes(1);
     });
 
+    it('should only remove the disconnecting owner handlers when multiple owners share a subscription', () => {
+      const h1 = vi.fn();
+      const h2 = vi.fn();
+      const request: WatchRequest = { paths: ['/src'], recursive: true };
+
+      registry.watch(request, h1, 'port-1');
+      registry.watch(request, h2, 'port-2');
+
+      expect(registry.subscriptionCount).toBe(1);
+      expect(registry.handlerCount).toBe(2);
+
+      registry.cleanupOwner('port-1');
+
+      // Subscription should survive because port-2 still has a handler
+      expect(registry.subscriptionCount).toBe(1);
+      expect(registry.handlerCount).toBe(1);
+
+      emitAndFlush(written('/src/file.txt'));
+      expect(h1).not.toHaveBeenCalled();
+      expect(h2).toHaveBeenCalledTimes(1);
+    });
+
     it('should tolerate cleanup of nonexistent owner', () => {
       expect(() => {
         registry.cleanupOwner('nonexistent');
