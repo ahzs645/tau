@@ -68,13 +68,37 @@ export class ChatRpcGateway
    * Initialize Socket.IO handlers for development mode.
    * Uses the shared DevWebSocketService's Socket.IO server.
    * The server is already configured with path: chatRpcPath to match production.
+   *
+   * Auth runs as Socket.IO middleware so the `connection` event fires only after
+   * auth succeeds. This prevents a race where clients emit 'join' before handlers
+   * are registered (the old async handleDevConnection pattern dropped those events).
    */
   private initDevSocketIo(): void {
     const io = this.devWebSocketService.getSocketIoServer();
 
-    // Use default namespace - path isolation is handled by Socket.IO server config
+    io.use(async (socket, next) => {
+      try {
+        const session = await this.auth.api.getSession({
+          headers: fromNodeHeaders(socket.handshake.headers),
+        });
+
+        if (!session) {
+          this.logger.warn(`[Dev] Unauthenticated connection rejected: ${socket.id}`);
+          next(new Error('UNAUTHENTICATED'));
+          return;
+        }
+
+        socket.data.userId = session.user.id;
+        this.logger.debug(`[Dev] Authenticated connection: ${socket.id} (user: ${session.user.id})`);
+        next();
+      } catch (authError) {
+        this.logger.error(`[Dev] Authentication error for ${socket.id}:`, authError);
+        next(new Error('AUTH_ERROR'));
+      }
+    });
+
     io.on('connection', (socket: Socket) => {
-      void this.handleDevConnection(socket);
+      this.handleDevConnection(socket);
     });
 
     const port = this.devWebSocketService.getPort();
@@ -82,60 +106,30 @@ export class ChatRpcGateway
   }
 
   /**
-   * Handle connection in dev mode (manually wired up).
+   * Register event handlers for a dev mode connection.
+   * Auth is already verified by middleware — handlers are registered synchronously
+   * so they are ready before the client's `connect` event fires.
    */
-  private async handleDevConnection(client: Socket): Promise<void> {
-    this.logger.debug(`[Dev] Client connecting: ${client.id}`);
+  private handleDevConnection(client: Socket): void {
+    this.logger.debug(`[Dev] Client connected: ${client.id}`);
 
-    try {
-      // Authenticate using cookies from the handshake request
-      const session = await this.auth.api.getSession({
-        headers: fromNodeHeaders(client.handshake.headers),
-      });
+    client.on('join', (data: { chatId: string }, callback?: (ack: { success: boolean }) => void) => {
+      const result = this.handleJoinMessage(client, data);
+      callback?.(result);
+    });
 
-      if (!session) {
-        this.logger.warn(`[Dev] Unauthenticated connection rejected: ${client.id}`);
-        client.emit('error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
-        client.disconnect(true);
-        return;
-      }
+    client.on('leave', (data: { chatId: string }) => {
+      this.handleLeaveMessage(client, data);
+    });
 
-      // Store user info on socket for later use
-      client.data.userId = session.user.id;
-      this.logger.debug(`[Dev] Authenticated connection: ${client.id} (user: ${session.user.id})`);
+    client.on('rpc_response', (message: RpcResponse) => {
+      this.chatRpcService.handleRpcResponse(message);
+    });
 
-      // Set up message handlers
-      client.on('join', (data: { chatId: string }) => {
-        const result = this.handleJoinMessage(client, data);
-        // Socket.IO acknowledgment
-        client.emit('join_ack', result);
-      });
-
-      client.on('leave', (data: { chatId: string }) => {
-        this.handleLeaveMessage(client, data);
-      });
-
-      client.on('rpc_response', (message: RpcResponse) => {
-        this.chatRpcService.handleRpcResponse(message);
-      });
-
-      client.on('disconnect', () => {
-        this.handleDevDisconnect(client);
-      });
-    } catch (authError) {
-      this.logger.error(`[Dev] Authentication error for ${client.id}:`, authError);
-      client.emit('error', { code: 'AUTH_ERROR', message: 'Authentication failed' });
-      client.disconnect(true);
-    }
-  }
-
-  /**
-   * Handle disconnect in dev mode.
-   */
-  private handleDevDisconnect(client: Socket): void {
-    // Clean up all chat registrations for this socket
-    this.chatRpcService.handleSocketDisconnect(client);
-    this.logger.debug(`[Dev] Client disconnected: ${client.id}`);
+    client.on('disconnect', (reason) => {
+      this.chatRpcService.handleSocketDisconnect(client);
+      this.logger.warn(`[Dev] Client disconnected: ${client.id} (reason: ${reason})`);
+    });
   }
 
   /**
@@ -183,8 +177,13 @@ export class ChatRpcGateway
   /**
    * Called when the Socket.IO server is initialized (production only).
    */
-  public afterInit(_server: Server): void {
+  public afterInit(server: Server): void {
     if (import.meta.env.PROD) {
+      server.on('connection', (socket) => {
+        socket.on('disconnect', (reason) => {
+          this.logger.warn(`Client disconnected: ${socket.id} (reason: ${reason})`);
+        });
+      });
       this.logger.log('Chat RPC Socket.IO gateway initialized (production)');
     }
   }
@@ -269,8 +268,6 @@ export class ChatRpcGateway
       return;
     }
 
-    // Clean up all chat registrations for this socket
     this.chatRpcService.handleSocketDisconnect(client);
-    this.logger.debug(`Client disconnected: ${client.id}`);
   }
 }
