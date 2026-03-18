@@ -7,7 +7,8 @@ import { WebSocketGateway, WebSocketServer, SubscribeMessage, ConnectedSocket, M
 import type { Server, Socket } from 'socket.io';
 import type { Auth } from 'better-auth';
 import { fromNodeHeaders } from 'better-auth/node';
-import type { RpcResponse } from '@taucad/chat';
+import { AttributeKey } from '@taucad/telemetry';
+import { MetricsService } from '#telemetry/metrics.js';
 import { authInstanceKey } from '#constants/auth.constant.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 // oxlint-disable-next-line eslint-plugin-import/no-cycle -- gateway and dev-websocket are tightly coupled
@@ -46,6 +47,7 @@ export class ChatRpcGateway
     private readonly chatRpcService: ChatRpcService,
     private readonly devWebSocketService: DevWebSocketService,
     @Inject(authInstanceKey) private readonly auth: Auth,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -75,6 +77,8 @@ export class ChatRpcGateway
    */
   private initDevSocketIo(): void {
     const io = this.devWebSocketService.getSocketIoServer();
+
+    this.bindConnectionMetrics(io);
 
     io.use(async (socket, next) => {
       try {
@@ -114,16 +118,14 @@ export class ChatRpcGateway
     this.logger.debug(`[Dev] Client connected: ${client.id}`);
 
     client.on('join', (data: { chatId: string }, callback?: (ack: { success: boolean }) => void) => {
-      const result = this.handleJoinMessage(client, data);
-      callback?.(result);
+      void (async () => {
+        const result = await this.handleJoinMessage(client, data);
+        callback?.(result);
+      })();
     });
 
     client.on('leave', (data: { chatId: string }) => {
       this.handleLeaveMessage(client, data);
-    });
-
-    client.on('rpc_response', (message: RpcResponse) => {
-      this.chatRpcService.handleRpcResponse(message);
     });
 
     client.on('disconnect', (reason) => {
@@ -135,8 +137,10 @@ export class ChatRpcGateway
   /**
    * Shared join logic for both dev and prod.
    * Supports joining multiple rooms - doesn't leave previous rooms.
+   * Enforces chat ownership: the first user to join a chatId owns it,
+   * subsequent joins by different users are rejected.
    */
-  private handleJoinMessage(client: Socket, data: { chatId: string } | undefined): { success: boolean } {
+  private async handleJoinMessage(client: Socket, data: { chatId: string } | undefined): Promise<{ success: boolean }> {
     const chatId = data?.chatId;
 
     if (!chatId) {
@@ -144,9 +148,25 @@ export class ChatRpcGateway
       return { success: false };
     }
 
-    // Join chat room and register connection
-    void client.join(chatId);
-    this.chatRpcService.registerConnection(chatId, client);
+    const { userId } = client.data as { userId?: string };
+    if (!userId) {
+      this.logger.warn(`Join request from unauthenticated socket ${client.id}`);
+      return { success: false };
+    }
+
+    const registered = this.chatRpcService.registerConnection(chatId, client, userId);
+    if (!registered) {
+      this.logger.warn(`User ${userId} denied access to chat ${chatId} (owned by another user)`);
+      return { success: false };
+    }
+
+    try {
+      await client.join(chatId);
+    } catch (joinError) {
+      this.logger.error(`Failed to join room ${chatId} for socket ${client.id}:`, joinError);
+      this.chatRpcService.unregisterConnection(chatId, client);
+      return { success: false };
+    }
 
     this.logger.debug(`Client ${client.id} joined chat: ${chatId}`);
     return { success: true };
@@ -170,20 +190,59 @@ export class ChatRpcGateway
     this.logger.debug(`Client ${client.id} left chat: ${chatId}`);
   }
 
+  private bindConnectionMetrics(server: Server): void {
+    server.on('connection', (socket) => {
+      this.metrics.wsActiveConnections.add(1);
+      socket.on('disconnect', (reason) => {
+        this.metrics.wsActiveConnections.add(-1);
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- OTEL semantic convention attribute
+        this.metrics.wsDisconnections.add(1, { [AttributeKey.WS_CLOSE_REASON]: reason });
+      });
+    });
+  }
+
   // ============================================
   // Production mode handlers (NestJS decorators)
   // ============================================
 
   /**
    * Called when the Socket.IO server is initialized (production only).
+   *
+   * Auth runs as Socket.IO middleware so the `connection` event fires only after
+   * auth succeeds. This prevents a race where `@SubscribeMessage` handlers process
+   * events before the async `handleConnection` completes authentication.
    */
   public afterInit(server: Server): void {
     if (import.meta.env.PROD) {
+      server.use(async (socket, next) => {
+        try {
+          const session = await this.auth.api.getSession({
+            headers: fromNodeHeaders(socket.handshake.headers),
+          });
+
+          if (!session) {
+            this.logger.warn(`Unauthenticated connection rejected: ${socket.id}`);
+            next(new Error('UNAUTHENTICATED'));
+            return;
+          }
+
+          socket.data.userId = session.user.id;
+          this.logger.debug(`Authenticated connection: ${socket.id} (user: ${session.user.id})`);
+          next();
+        } catch (authError) {
+          this.logger.error(`Authentication error for ${socket.id}:`, authError);
+          next(new Error('AUTH_ERROR'));
+        }
+      });
+
       server.on('connection', (socket) => {
         socket.on('disconnect', (reason) => {
           this.logger.warn(`Client disconnected: ${socket.id} (reason: ${reason})`);
         });
       });
+
+      this.bindConnectionMetrics(server);
+
       this.logger.log('Chat RPC Socket.IO gateway initialized (production)');
     }
   }
@@ -192,8 +251,10 @@ export class ChatRpcGateway
    * Handle client joining a chat room (production only).
    */
   @SubscribeMessage('join')
-  public handleJoin(@ConnectedSocket() client: Socket, @MessageBody() data: { chatId: string }): { success: boolean } {
-    // In dev mode, this is handled by the dev connection handler
+  public async handleJoin(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { chatId: string },
+  ): Promise<{ success: boolean }> {
     if (import.meta.env.DEV) {
       return { success: false };
     }
@@ -215,48 +276,15 @@ export class ChatRpcGateway
   }
 
   /**
-   * Handle RPC responses from the client (production only).
-   */
-  @SubscribeMessage('rpc_response')
-  public handleRpcResponse(@ConnectedSocket() _client: Socket, @MessageBody() message: RpcResponse): void {
-    // In dev mode, this is handled by the dev connection handler
-    if (import.meta.env.DEV) {
-      return;
-    }
-
-    this.chatRpcService.handleRpcResponse(message);
-  }
-
-  /**
    * Handle a new client connection (production only).
+   * Auth is already verified by middleware registered in afterInit.
    */
-  public async handleConnection(client: Socket): Promise<void> {
-    // In dev mode, this is handled by handleDevConnection
+  public handleConnection(client: Socket): void {
     if (import.meta.env.DEV) {
       return;
     }
 
-    this.logger.debug(`Client connecting: ${client.id}`);
-
-    try {
-      const session = await this.auth.api.getSession({
-        headers: fromNodeHeaders(client.handshake.headers),
-      });
-
-      if (!session) {
-        this.logger.warn(`Unauthenticated connection rejected: ${client.id}`);
-        client.emit('error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
-        client.disconnect(true);
-        return;
-      }
-
-      client.data.userId = session.user.id;
-      this.logger.debug(`Authenticated connection: ${client.id} (user: ${session.user.id})`);
-    } catch (authError) {
-      this.logger.error(`Authentication error for ${client.id}:`, authError);
-      client.emit('error', { code: 'AUTH_ERROR', message: 'Authentication failed' });
-      client.disconnect(true);
-    }
+    this.logger.debug(`Client connected: ${client.id} (user: ${client.data.userId})`);
   }
 
   /**

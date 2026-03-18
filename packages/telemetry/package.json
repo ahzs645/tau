@@ -1,0 +1,52 @@
+{
+  "name": "@taucad/telemetry",
+  "version": "0.0.1",
+  "description": "Canonical telemetry metric registry, typed reporter, observability middleware, and ingest schemas",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/telemetry"
+  },
+  "main": "./dist/cjs/index.cjs",
+  "types": "./dist/cjs/index.d.cts",
+  "module": "./dist/esm/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "cad",
+    "typescript"
+  ],
+  "author": "Richard Fontein",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./middleware": "./src/middleware.ts",
+    "./middleware/observability": "./src/middleware/observability.middleware.ts"
+  },
+  "dependencies": {
+    "@taucad/runtime": "workspace:*",
+    "zod": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "require": {
+          "types": "./dist/cjs/index.d.cts",
+          "default": "./dist/cjs/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        }
+      }
+    }
+  },
+  "imports": {
+    "#*": "./src/*"
+  }
+}

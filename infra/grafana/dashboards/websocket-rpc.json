@@ -1,0 +1,89 @@
+{
+  "uid": "tau-websocket-rpc",
+  "title": "WebSocket / RPC",
+  "tags": ["tau", "websocket", "rpc", "red"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "title": "Active WS Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "ws_connections_active{service_name=\"tau-api\"}" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Active RPC Calls",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "rpc_server_active_calls{service_name=\"tau-api\"}" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Connection Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(ws_disconnections_total{service_name=\"tau-api\"}[5m])",
+          "legendFormat": "connections/s"
+        }
+      ]
+    },
+    {
+      "title": "RPC Call Rate by Method",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(rpc_server_call_duration_count{service_name=\"tau-api\"}[5m])) by (rpc_method)",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "title": "RPC Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(rpc_server_call_duration_bucket{service_name=\"tau-api\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(rpc_server_call_duration_bucket{service_name=\"tau-api\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(rpc_server_call_duration_bucket{service_name=\"tau-api\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "RPC Error Rate by Method",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(rpc_server_call_duration_count{service_name=\"tau-api\",rpc_status=\"error\"}[5m])) by (rpc_method, error_type)",
+          "legendFormat": "{{rpc_method}} ({{error_type}})"
+        }
+      ]
+    },
+    {
+      "title": "Disconnections by Reason",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(ws_disconnections_total{service_name=\"tau-api\",ws_close_reason!=\"\"}[5m])) by (ws_close_reason)",
+          "legendFormat": "{{ws_close_reason}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39
+}

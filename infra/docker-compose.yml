@@ -32,6 +32,22 @@ services:
       retries: 5
     command: redis-server --appendonly yes
 
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    container_name: tau-otel-lgtm
+    restart: unless-stopped
+    ports:
+      - '6100:3000' # Grafana UI
+      - '4317:4317' # OTLP gRPC
+      - '4318:4318' # OTLP HTTP
+      - '9090:9090' # Prometheus
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ./grafana/provisioning:/otel-lgtm/grafana/conf/provisioning
+      - ./grafana/dashboards:/otel-lgtm/grafana/dashboards
+      - ./grafana/otelcol-config.yaml:/otel-lgtm/otelcol-config.yaml
+
 volumes:
   postgres_data:
   redis_data:

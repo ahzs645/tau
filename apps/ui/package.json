@@ -16,6 +16,7 @@
     "@taucad/filesystem": "workspace:*",
     "@taucad/react": "workspace:*",
     "@taucad/runtime": "workspace:*",
+    "@taucad/telemetry": "workspace:*",
     "isbot": "catalog:"
   },
   "devDependencies": {

@@ -1,0 +1,119 @@
+{
+  "uid": "tau-slo-executive",
+  "title": "SLO / Executive",
+  "tags": ["tau", "slo", "executive"],
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "title": "API Availability (% requests < 5xx)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(http_server_duration_count{service_name=\"tau-api\",http_status_code=~\"5..\"}[24h])) / sum(rate(http_server_duration_count{service_name=\"tau-api\"}[24h])))) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 95,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "value": 95, "color": "red" },
+              { "value": 99, "color": "yellow" },
+              { "value": 99.9, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "RPC Success Rate (24h)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "(sum(rate(rpc_server_call_duration_count{service_name=\"tau-api\",rpc_status=\"ok\"}[24h])) / sum(rate(rpc_server_call_duration_count{service_name=\"tau-api\"}[24h]))) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 95,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "value": 95, "color": "red" },
+              { "value": 99, "color": "yellow" },
+              { "value": 99.9, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "API Latency SLO (p95 < 500ms)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_bucket{service_name=\"tau-api\"}[24h])) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "max": 2000,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 500, "color": "yellow" },
+              { "value": 1000, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Active Sessions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "ws_connections_active{service_name=\"tau-api\"}",
+          "legendFormat": "WebSocket"
+        },
+        {
+          "expr": "sse_connections_active{service_name=\"tau-api\"}",
+          "legendFormat": "SSE (Chat)"
+        }
+      ]
+    },
+    {
+      "title": "Total LLM Cost (24h)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(gen_ai_client_cost_total{service_name=\"tau-api\"}[24h]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "title": "Total Kernel Executions (24h)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(kernel_executions_total{service_name=\"tau-api\"}[24h]))"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39
+}

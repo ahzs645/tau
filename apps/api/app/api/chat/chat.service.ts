@@ -8,7 +8,9 @@ import type { KernelProvider } from '@taucad/runtime';
 import type { ToolSelection } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';
-import { usageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
+import { createUsageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
+import { createToolMetricsMiddleware } from '#api/chat/middleware/tool-metrics.middleware.js';
+import { MetricsService } from '#telemetry/metrics.js';
 import { messageLoggingMiddleware } from '#api/chat/middleware/message-logging.middleware.js';
 import { toolErrorHandlerMiddleware } from '#api/chat/middleware/tool-error-handler.middleware.js';
 import { createCachedSystemMessage } from '#api/chat/utils/create-cached-system-message.js';
@@ -27,6 +29,7 @@ export class ChatService {
     private readonly modelService: ModelService,
     private readonly toolService: ToolService,
     private readonly checkpointerService: CheckpointerService,
+    private readonly metricsService: MetricsService,
   ) {}
 
   public getBuildNameGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
@@ -110,6 +113,8 @@ export class ChatService {
       systemPrompt,
       checkpointer,
       middleware: [
+        // Record tool invocation metrics (runs before error handler to count all calls)
+        createToolMetricsMiddleware(this.metricsService),
         // Handle tool errors and convert to structured JSON (must wrap tool calls)
         toolErrorHandlerMiddleware,
         // Trim tool results (e.g., remove base64 images) before sending to the LLM
@@ -121,7 +126,7 @@ export class ChatService {
         // Log messages before each model call (for debugging)
         messageLoggingMiddleware,
         // Track token usage and costs after each model call
-        usageTrackingMiddleware,
+        createUsageTrackingMiddleware(this.metricsService),
       ],
     });
 

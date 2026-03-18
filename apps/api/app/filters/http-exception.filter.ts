@@ -4,6 +4,7 @@ import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ZodSerializationException, ZodValidationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
+import { trace, SpanStatusCode, context as otelContext } from '@opentelemetry/api';
 import type { HttpErrorResponse } from '@taucad/types';
 import { httpHeader } from '#constants/http-header.constant.js';
 
@@ -109,6 +110,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Log error details
     if (statusCode >= 500) {
       this.logger.error(exception, `Unhandled exception: ${errorResponse.error}`);
+
+      const span = trace.getSpan(otelContext.active());
+      if (span) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: errorResponse.error });
+        if (exception instanceof Error) {
+          span.recordException(exception);
+        }
+      }
     } else if (statusCode >= 400) {
       this.logger.warn(`Client error: ${errorResponse.error}`);
     }

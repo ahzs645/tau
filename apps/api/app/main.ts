@@ -1,7 +1,5 @@
-/**
- * This is not a production server yet!
- * This is only a minimal backend to get started.
- */
+import '#telemetry/otel.js'; // oxlint-disable-line eslint-plugin-import/no-unassigned-import -- OTEL SDK must initialize before any other module
+
 import process from 'node:process';
 import { Logger, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -10,6 +8,7 @@ import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { ConfigService } from '@nestjs/config';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from '@fastify/helmet';
+import { FastifyOtelInstrumentation } from '@fastify/otel';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { AppModule } from '#app.module.js';
@@ -73,7 +72,13 @@ async function bootstrap() {
   });
   await app.register(helmet);
 
+  const fastifyInstance = app.getHttpAdapter().getInstance();
+  const fastifyOtel = new FastifyOtelInstrumentation();
+  await fastifyInstance.register(fastifyOtel.plugin());
+
   if (import.meta.env.PROD) {
+    app.enableShutdownHooks();
+
     // Set up Socket.IO with Redis adapter for horizontal scaling
     const redisService = app.get(RedisService);
     const redisIoAdapter = new RedisIoAdapter(app, redisService);

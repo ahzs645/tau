@@ -35,5 +35,5 @@ FROM base
 WORKDIR /app
 COPY --from=pruned /app/pruned /app
 ENV NODE_ENV="production"
-EXPOSE 3000
+EXPOSE 3000 9464
 CMD [ "node", "/app/dist/main.js" ]

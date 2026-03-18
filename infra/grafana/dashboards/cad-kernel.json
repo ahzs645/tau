@@ -1,0 +1,72 @@
+{
+  "uid": "tau-cad-kernel",
+  "title": "CAD Kernel",
+  "tags": ["tau", "kernel", "cad"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "title": "Kernel Execution Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(kernel_executions_total{service_name=\"tau-api\"}[5m])) by (kernel_status)",
+          "legendFormat": "{{kernel_status}}"
+        }
+      ]
+    },
+    {
+      "title": "Kernel Execution Duration (p50 / p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(kernel_execution_duration_bucket{service_name=\"tau-api\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(kernel_execution_duration_bucket{service_name=\"tau-api\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Error Rate",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(kernel_executions_total{service_name=\"tau-api\",kernel_status=\"error\"}[5m])) / sum(rate(kernel_executions_total{service_name=\"tau-api\"}[5m])) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 5, "color": "yellow" },
+              { "value": 20, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Export Duration by Format",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(kernel_geometry_export_duration_bucket{service_name=\"tau-api\"}[5m])) by (le, export_format))",
+          "legendFormat": "{{export_format}} p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    }
+  ],
+  "schemaVersion": 39
+}

@@ -1,0 +1,83 @@
+{
+  "uid": "tau-infrastructure",
+  "title": "Infrastructure",
+  "tags": ["tau", "infra", "redis", "postgres"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "title": "Redis Connection State",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "redis_connection_state{service_name=\"tau-api\"}" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": { "text": "Disconnected", "color": "red" },
+                "1": { "text": "Connected", "color": "green" }
+              },
+              "type": "value"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Active SSE Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "sse_connections_active{service_name=\"tau-api\"}" }]
+    },
+    {
+      "title": "Node.js Heap Used",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(v8js_memory_heap_used{service_name=\"tau-api\"})",
+          "legendFormat": "heap used"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "title": "DB Query Duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=\"tau-api\"}[5m])) by (le, db_operation_name))",
+          "legendFormat": "{{db_operation_name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Redis Command Duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=\"tau-api\",db_system=\"redis\"}[5m])) by (le, db_operation_name))",
+          "legendFormat": "{{db_operation_name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "SSE Events Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(sse_events_total{service_name=\"tau-api\"}[5m]))",
+          "legendFormat": "events/s"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39
+}

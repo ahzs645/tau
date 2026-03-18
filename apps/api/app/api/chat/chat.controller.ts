@@ -187,6 +187,8 @@ export class ChatController {
       );
 
       void response.header('content-type', 'text/event-stream');
+      void response.header('cache-control', 'no-cache, no-store');
+      void response.header('connection', 'keep-alive');
       void response.header('x-vercel-ai-ui-message-stream', 'v1');
       void response.header('x-accel-buffering', 'no');
 
