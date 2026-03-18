@@ -110,7 +110,7 @@ export class ChatRpcSocketService {
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 30_000,
+      reconnectionDelayMax: 5_000,
       randomizationFactor: 0.5,
       timeout: 20_000,
       withCredentials: true,
@@ -143,11 +143,9 @@ export class ChatRpcSocketService {
     // Store/update the handler for this chat
     this.chatHandlers.set(chatId, onRpcRequest);
 
-    // If connected, join the room immediately
     if (this.socket?.connected) {
-      this.socket.emit('join', { chatId });
+      void this.emitJoinWithRetry(chatId);
     }
-    // If not connected yet, the room will be joined when connection establishes
   }
 
   /**
@@ -247,19 +245,18 @@ export class ChatRpcSocketService {
     socket.on('connect', () => {
       this.setStatus('connected');
 
-      // Rejoin all active chat rooms
       for (const chatId of this.chatHandlers.keys()) {
-        socket.emit('join', { chatId });
+        void this.emitJoinWithRetry(chatId);
       }
     });
 
     socket.on('disconnect', (reason) => {
-      // Don't update status or reconnect if this was an auth failure - already handled by error event
       if (this.isAuthenticationFailure) {
         return;
       }
 
-      // Map disconnect reasons to user-friendly error messages
+      console.warn(`[ChatRpcSocket] Disconnected (reason: ${reason})`);
+
       const errorMessages: Record<string, string> = {
         'io server disconnect': 'Server closed connection',
         'io client disconnect': 'Disconnected by client',
@@ -288,6 +285,13 @@ export class ChatRpcSocketService {
     });
 
     socket.on('connect_error', (connectError) => {
+      if (connectError.message === 'UNAUTHENTICATED' || connectError.message === 'AUTH_ERROR') {
+        this.isAuthenticationFailure = true;
+        this.setStatus('unauthenticated');
+        socket.disconnect();
+        return;
+      }
+
       this.setStatus('error', connectError.message);
     });
 
@@ -303,9 +307,8 @@ export class ChatRpcSocketService {
     socket.io.on('reconnect', () => {
       this.setStatus('connected');
 
-      // Rejoin all active chat rooms after reconnection
       for (const chatId of this.chatHandlers.keys()) {
-        socket.emit('join', { chatId });
+        void this.emitJoinWithRetry(chatId);
       }
     });
 
@@ -382,6 +385,50 @@ export class ChatRpcSocketService {
       globalThis.removeEventListener('online', this.handleOnline);
       this.handleOnline = undefined;
     }
+  }
+
+  private static readonly JOIN_ACK_TIMEOUT_MS = 5_000;
+  private static readonly JOIN_MAX_RETRIES = 3;
+
+  /**
+   * Emit a 'join' event with callback acknowledgment and retry on failure.
+   * Retries with linear backoff if the server doesn't ack or returns failure.
+   */
+  private async emitJoinWithRetry(chatId: string): Promise<void> {
+    const { socket } = this;
+    if (!socket?.connected) return;
+
+    for (let attempt = 0; attempt <= ChatRpcSocketService.JOIN_MAX_RETRIES; attempt++) {
+      if (!socket.connected) return;
+
+      const ack = await new Promise<{ success: boolean } | null>((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve(null);
+        }, ChatRpcSocketService.JOIN_ACK_TIMEOUT_MS);
+
+        socket.emit('join', { chatId }, (response: { success: boolean }) => {
+          clearTimeout(timeout);
+          resolve(response);
+        });
+      });
+
+      if (ack?.success) return;
+
+      if (attempt < ChatRpcSocketService.JOIN_MAX_RETRIES) {
+        await new Promise<void>((resolve) => {
+          setTimeout(
+            () => {
+              resolve();
+            },
+            1_000 * (attempt + 1),
+          );
+        });
+      }
+    }
+
+    console.error(
+      `[ChatRpcSocket] Failed to join chat ${chatId} after ${ChatRpcSocketService.JOIN_MAX_RETRIES + 1} attempts`,
+    );
   }
 
   /**
