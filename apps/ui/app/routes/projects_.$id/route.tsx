@@ -14,6 +14,7 @@ import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { useChatRpcConnection } from '#hooks/use-chat-rpc-socket.js';
 import { MonacoModelServiceProvider } from '#hooks/use-monaco-model-service.js';
 import { useFlushOnClose } from '#hooks/use-flush-on-close.js';
+import { useBlockBrowserNavigation } from '#hooks/use-block-browser-navigation.js';
 import { debugKernelOptions } from '#constants/kernel-worker.constants.js';
 
 // Define provider component at module level for stable reference across HMR
@@ -114,5 +115,7 @@ function FlushOnCloseGuard(): React.JSX.Element {
 }
 
 export default function ChatRoute(): React.JSX.Element {
+  useBlockBrowserNavigation();
+
   return <ChatWithProvider />;
 }
