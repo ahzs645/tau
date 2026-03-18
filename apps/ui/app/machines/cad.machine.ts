@@ -63,7 +63,6 @@ type CadEvent =
   | { type: 'stateChanged'; state: WorkerState; detail?: string }
   | { type: 'geometryExported'; blob: Blob; format: ExportFormat }
   | { type: 'geometryExportFailed'; errors: KernelIssue[] }
-  | { type: 'kernelFilesChanged'; paths: string[] }
   | KernelConnectedEvent;
 
 type CadEmitted =
@@ -146,9 +145,6 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
           jsonSchema: parametersResult.data.jsonSchema as JSONSchema7,
         });
       }
-    }),
-    client.on('filesChanged', (paths: string[]) => {
-      machineRef.send({ type: 'kernelFilesChanged', paths });
     }),
     client.on('log', (entry: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => {
       machineRef.send({
@@ -491,7 +487,6 @@ export const cadMachine = setup({
         kernelLog: { actions: 'sendKernelLogs' },
         kernelProgress: { actions: 'trackProgress' },
         kernelTelemetry: { actions: 'storeTelemetry' },
-        kernelFilesChanged: {},
         stateChanged: [
           { guard: ({ event }) => event.state === 'rendering', target: 'rendering' },
           { guard: ({ event }) => event.state === 'error', target: 'error' },
@@ -526,7 +521,6 @@ export const cadMachine = setup({
         kernelLog: { actions: 'sendKernelLogs' },
         kernelProgress: { actions: 'trackProgress' },
         kernelTelemetry: { actions: 'storeTelemetry' },
-        kernelFilesChanged: {},
         stateChanged: [
           { guard: ({ event }) => event.state === 'idle', target: 'idle' },
           { guard: ({ event }) => event.state === 'error', target: 'error' },
@@ -557,7 +551,6 @@ export const cadMachine = setup({
         kernelLog: { actions: 'sendKernelLogs' },
         kernelProgress: { actions: 'trackProgress' },
         kernelTelemetry: { actions: 'storeTelemetry' },
-        kernelFilesChanged: {},
         stateChanged: [
           { guard: ({ event }) => event.state === 'idle', target: 'idle' },
           { guard: ({ event }) => event.state === 'rendering', target: 'rendering' },

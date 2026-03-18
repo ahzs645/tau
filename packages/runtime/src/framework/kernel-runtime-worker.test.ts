@@ -243,6 +243,41 @@ describe('KernelRuntimeWorker kernel selection', () => {
 
       await worker.canHandle(createGeometryFile('model.scad'));
     });
+
+    it('should clear selection cache when a watch event fires (not just notifyFileChanged)', async () => {
+      const scadDefinition = createMockKernelDefinition('openscad');
+
+      const worker = await createMultiKernelWorker([
+        { id: 'openscad', extensions: ['scad'], definition: scadDefinition },
+      ]);
+
+      await worker.canHandle(createGeometryFile('model.scad'));
+      expect(getInitSpy(scadDefinition)).toHaveBeenCalledOnce();
+
+      // @ts-expect-error - accessing private for test verification
+      expect(worker.selectionCache.size).toBe(1);
+
+      let capturedWatchCallback: ((event: { type: string; path: string }) => void) | undefined;
+      const mockWatch = vi
+        .fn()
+        .mockImplementation((_request: unknown, callback: (event: { type: string; path: string }) => void) => {
+          capturedWatchCallback = callback;
+          return () => {
+            capturedWatchCallback = undefined;
+          };
+        });
+
+      // @ts-expect-error - accessing private for test verification
+      worker.fileSystem = { watch: mockWatch, dispose: vi.fn(), listen: vi.fn() };
+
+      worker.updateWatchSet([`${basePath}/model.scad`]);
+      expect(capturedWatchCallback).toBeDefined();
+
+      capturedWatchCallback!({ type: 'change', path: `${basePath}/model.scad` });
+
+      // @ts-expect-error - accessing private for test verification
+      expect(worker.selectionCache.size).toBe(0);
+    });
   });
 
   describe('no kernel matches', () => {

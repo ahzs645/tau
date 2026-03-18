@@ -360,14 +360,6 @@ describe('cadMachine', () => {
       expect(emitted[0]).toMatchObject({ type: 'geometryEvaluated', geometries: stubGeometries });
       actor.stop();
     });
-
-    it('should handle kernelFilesChanged as no-op', async () => {
-      const { actor } = await startAndConnect();
-
-      actor.send({ type: 'kernelFilesChanged', paths: ['/projects/test/main.ts'] });
-      expect(actor.getSnapshot().value).toBe('idle');
-      actor.stop();
-    });
   });
 
   // =========================================================================

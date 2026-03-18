@@ -163,7 +163,6 @@ type EventHandlers = {
   telemetry: Set<(entries: PerformanceEntryData[]) => void>;
   parametersResolved: Set<(result: GetParametersResult) => void>;
   geometry: Set<(result: HashedGeometryResult) => void>;
-  filesChanged: Set<(paths: string[]) => void>;
   state: Set<(state: WorkerState, detail?: string) => void>;
   error: Set<(issues: KernelIssue[]) => void>;
 };
@@ -272,7 +271,6 @@ export type RuntimeClient = {
   on(event: 'progress', handler: (phase: RenderPhase, detail?: Record<string, unknown>) => void): () => void;
   on(event: 'telemetry', handler: (entries: PerformanceEntryData[]) => void): () => void;
   on(event: 'parametersResolved', handler: (result: GetParametersResult) => void): () => void;
-  on(event: 'filesChanged', handler: (paths: string[]) => void): () => void;
   on(event: 'error', handler: (issues: KernelIssue[]) => void): () => void;
 
   /**
@@ -340,7 +338,6 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     telemetry: new Set(),
     parametersResolved: new Set(),
     geometry: new Set(),
-    filesChanged: new Set(),
     state: new Set(),
     error: new Set(),
   };
@@ -373,11 +370,6 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
         onTelemetry(entries) {
           for (const handler of handlers.telemetry) {
             handler(entries);
-          }
-        },
-        onFilesChanged(paths) {
-          for (const handler of handlers.filesChanged) {
-            handler(paths);
           }
         },
         onStateChanged(state, detail) {

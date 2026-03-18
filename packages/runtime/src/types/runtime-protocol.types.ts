@@ -171,5 +171,4 @@ export type RuntimeResponse =
         data?: unknown;
       }>;
     }
-  | { type: 'telemetry'; entries: PerformanceEntryData[] }
-  | { type: 'filesChanged'; paths: string[] };
+  | { type: 'telemetry'; entries: PerformanceEntryData[] };

@@ -154,9 +154,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     return joinPath(basePath, relativePath);
   }
 
-  /** Callback for notifying the dispatcher when watched files change. */
-  public onFilesChanged?: (paths: string[]) => void;
-
   /** Callback for pushing state changes to the dispatcher (postMessage fallback). */
   public onStateChanged?: (state: 'idle' | 'rendering' | 'error', detail?: string) => void;
 
@@ -293,7 +290,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Progress callback set during render, used by entry methods to emit phase transitions */
   private onProgress?: (phase: RenderPhase) => void;
 
-  /** Per-render bundle result cache. Cleared at the start of each render cycle. */
+  /** Bundle result cache keyed by entry path. Selectively invalidated when dependencies change; fully cleared on reset/overflow events. */
   private readonly bundleResultCache = new Map<string, BundleResult>();
 
   /** Per-render dependency computation cache. Cleared at the start of each render cycle. */
@@ -319,9 +316,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /** Current tessellation for autonomous render loop. */
   private currentTessellation: Tessellation | undefined;
-
-  /** Debounce timer for file change re-renders. */
-  private readonly fileDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Debounce timer for parameter change re-renders. */
   private paramDebounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -489,7 +483,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       Atomics.store(this.signalView, signalSlot.abortGeneration, this.renderGeneration);
     }
 
-    clearTimeout(this.fileDebounceTimer);
     clearTimeout(this.paramDebounceTimer);
 
     // Phase 1: immediately watch the entry file so edits during
@@ -520,7 +513,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /** Clean up worker state, native handles, telemetry collector, and filesystem proxy. */
   public async cleanup(): Promise<void> {
-    clearTimeout(this.fileDebounceTimer);
     clearTimeout(this.paramDebounceTimer);
     this.watchUnsubscribe?.();
     this.watchUnsubscribe = undefined;
@@ -962,10 +954,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         tessellation: input.tessellation,
       });
 
-      this._updateWatchSetFromCaches();
-
       return result;
     } finally {
+      this._updateWatchSetFromCaches();
       this.onProgress = undefined;
       renderSpan.end();
     }
@@ -980,6 +971,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   public async notifyFileChanged(changedPaths: string[]): Promise<void> {
     this._invalidateCachesForPaths(changedPaths);
     this.onFileChanged(changedPaths);
+  }
+
+  /**
+   * Get the current set of watched file paths.
+   * Primarily for test assertions — production code should not depend on this.
+   */
+  public getWatchedPaths(): Set<string> {
+    return new Set(this.watchedPaths);
   }
 
   /**
@@ -1028,7 +1027,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           this.fileHashCache.clear();
           this.fileContentCache.clear();
           this.bundleResultCache.clear();
-          this.onFilesChanged?.([]);
+          this.onFileChanged([]);
           if (this.currentFile) {
             this.scheduleRender(fileChangeDebounceMs);
           }
@@ -1036,11 +1035,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         }
         if (changedPaths.length > 0) {
           this._invalidateCachesForPaths(changedPaths);
-          try {
-            this.onFilesChanged?.(changedPaths);
-          } catch (error) {
-            console.error('[KernelWorker] onFilesChanged handler error:', error);
-          }
+          this.onFileChanged(changedPaths);
           if (this.currentFile) {
             this.scheduleRender(fileChangeDebounceMs);
           }
@@ -1348,7 +1343,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param delayMs - Debounce delay in milliseconds.
    */
   private scheduleRender(delayMs: number): void {
-    clearTimeout(this.fileDebounceTimer);
     clearTimeout(this.paramDebounceTimer);
     this.paramDebounceTimer = setTimeout(() => {
       void this.executeRender();
@@ -1886,11 +1880,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         return bundleResult;
       },
       resolveDependencies: async (entryPath: string): Promise<string[]> => {
-        const extension = KernelWorker.getFileExtension(entryPath);
-        const bundler = await this.ensureBundlerForExtension(extension);
-
-        if (bundler.definition.resolveDependencies) {
-          return bundler.definition.resolveDependencies({ entryPath }, bundler.ctx);
+        const cached = this.bundleResultCache.get(entryPath);
+        if (cached) {
+          return cached.dependencies;
         }
 
         const result = await this.createBundlerFacade().bundle(entryPath);

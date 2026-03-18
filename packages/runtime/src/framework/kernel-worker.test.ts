@@ -259,79 +259,6 @@ describe('KernelWorker lifecycle', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Watch handler error resilience
-  // ---------------------------------------------------------------------------
-
-  describe('watch handler error resilience', () => {
-    it('should not propagate errors from onFilesChanged to the watch handler', () => {
-      const worker = createConfiguredWorker();
-
-      let capturedWatchCallback: ((event: { type: string; path: string }) => void) | undefined;
-      const mockWatch = vi
-        .fn()
-        .mockImplementation((_request: unknown, callback: (event: { type: string; path: string }) => void) => {
-          capturedWatchCallback = callback;
-          return () => {
-            capturedWatchCallback = undefined;
-          };
-        });
-
-      // @ts-expect-error - accessing private for test verification
-      worker.fileSystem = { watch: mockWatch, dispose: vi.fn(), listen: vi.fn() };
-
-      worker.updateWatchSet(['/projects/test/main.ts']);
-      expect(capturedWatchCallback).toBeDefined();
-
-      worker.onFilesChanged = () => {
-        throw new Error('Handler error');
-      };
-
-      expect(() => {
-        capturedWatchCallback!({ type: 'change', path: '/projects/test/main.ts' });
-      }).not.toThrow();
-    });
-
-    it('should still schedule a render when onFilesChanged throws during a watch event', () => {
-      vi.useFakeTimers();
-      try {
-        const worker = createConfiguredWorker();
-
-        // @ts-expect-error - accessing private for test verification
-        worker.currentFile = createGeometryFile('main.ts');
-
-        let capturedWatchCallback: ((event: { type: string; path: string }) => void) | undefined;
-        const mockWatch = vi
-          .fn()
-          .mockImplementation((_request: unknown, callback: (event: { type: string; path: string }) => void) => {
-            capturedWatchCallback = callback;
-            return () => {
-              capturedWatchCallback = undefined;
-            };
-          });
-
-        // @ts-expect-error - accessing private for test verification
-        worker.fileSystem = { watch: mockWatch, dispose: vi.fn(), listen: vi.fn() };
-
-        worker.updateWatchSet(['/projects/test/main.ts']);
-        expect(capturedWatchCallback).toBeDefined();
-
-        // @ts-expect-error - accessing private method for test verification
-        const scheduleRenderSpy = vi.spyOn(worker, 'scheduleRender');
-
-        worker.onFilesChanged = () => {
-          throw new Error('Handler error');
-        };
-
-        capturedWatchCallback!({ type: 'change', path: '/projects/test/main.ts' });
-
-        expect(scheduleRenderSpy).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // render() error cleanup
   // ---------------------------------------------------------------------------
 
@@ -362,6 +289,30 @@ describe('KernelWorker lifecycle', () => {
       expect(worker.onProgress).toBeUndefined();
     });
 
+    it('should call _updateWatchSetFromCaches when render() throws', async () => {
+      const filesystem = createMockFileSystem();
+      filesystem.mocks.readFiles.mockResolvedValue({
+        '/projects/test/main.ts': new Uint8Array([1, 2, 3]),
+      });
+
+      const worker = new FailingKernelWorker({
+        middleware: [],
+        onLog: noopLog,
+        filesystem,
+      });
+
+      const updateWatchSetSpy = vi.spyOn(worker, 'updateWatchSet');
+
+      await expect(
+        worker.render({
+          file: createGeometryFile('main.ts'),
+          parameters: {},
+        }),
+      ).rejects.toThrow();
+
+      expect(updateWatchSetSpy).toHaveBeenCalled();
+    });
+
     it('should clear onProgress when executeRender fails via handleSetFile', async () => {
       const filesystem = createMockFileSystem();
       filesystem.mocks.readFiles.mockResolvedValue({
@@ -387,6 +338,62 @@ describe('KernelWorker lifecycle', () => {
 
       // @ts-expect-error - accessing private for test verification
       expect(worker.onProgress).toBeUndefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Bundler cache efficiency
+  // ---------------------------------------------------------------------------
+
+  describe('bundler cache efficiency', () => {
+    it('should return cached dependencies from resolveDependencies when bundleResultCache has a hit', async () => {
+      const worker = createConfiguredWorker();
+
+      // @ts-expect-error - accessing private method for test verification
+      worker.setBasePath(createGeometryFile('main.ts'));
+
+      const expectedDependencies = ['/projects/test/main.ts', '/projects/test/lib/box.ts'];
+
+      // Pre-populate the bundle cache with a known result
+      // @ts-expect-error - accessing private for test verification
+      worker.bundleResultCache.set('/projects/test/main.ts', {
+        code: 'bundled-code',
+        dependencies: expectedDependencies,
+        issues: [],
+        success: true,
+      });
+
+      const rawResolveDependenciesSpy = vi.fn().mockResolvedValue(['/projects/test/main.ts']);
+      const mockBundlerDefinition = {
+        name: 'MockBundler',
+        version: '1.0.0',
+        extensions: ['ts'],
+        initialize: vi.fn(),
+        detectImports: vi.fn(),
+        bundle: vi.fn(),
+        execute: vi.fn(),
+        registerModule: vi.fn(),
+        resolveDependencies: rawResolveDependenciesSpy,
+      };
+
+      // Inject mock bundler directly into loadedBundlers
+      // @ts-expect-error - accessing protected for test verification
+      worker.loadedBundlers.set('ts', { definition: mockBundlerDefinition, ctx: {} });
+
+      // Clear any cached facade so it rebuilds with our mock bundler
+      // @ts-expect-error - accessing private for test verification
+      worker.cachedBundlerFacade = undefined;
+      // @ts-expect-error - accessing private for test verification
+      worker.cachedRuntime = undefined;
+
+      // @ts-expect-error - accessing private for test verification
+      const facade = worker.createBundlerFacade();
+      const result = await facade.resolveDependencies('/projects/test/main.ts');
+
+      // The facade should return the cached dependencies
+      expect(result).toEqual(expectedDependencies);
+      // The raw bundler's resolveDependencies should NOT have been called
+      expect(rawResolveDependenciesSpy).not.toHaveBeenCalled();
     });
   });
 

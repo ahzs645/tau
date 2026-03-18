@@ -91,12 +91,6 @@ export type OnTelemetryCallback = (entries: PerformanceEntryData[]) => void;
 export type OnProgressCallback = (phase: RenderPhase, detail?: Record<string, unknown>) => void;
 
 /**
- * Callback when the runtime worker detects file changes via its watch subscription.
- * @public
- */
-export type OnFilesChangedCallback = (paths: string[]) => void;
-
-/**
  * Callback for worker state changes (idle, rendering, error).
  * @public
  */
@@ -112,7 +106,6 @@ export class RuntimeWorkerClient {
   private readonly transport: RuntimeTransport;
   private readonly onLog: OnLogCallback;
   private readonly onTelemetry?: OnTelemetryCallback;
-  private readonly onFilesChanged?: OnFilesChangedCallback;
   private readonly onStateChanged?: OnStateChangedCallback;
   private readonly onGeometryComputed?: (result: HashedGeometryResult) => void;
   private readonly onParametersResolvedCb?: (result: GetParametersResult) => void;
@@ -152,7 +145,6 @@ export class RuntimeWorkerClient {
     onLog: OnLogCallback,
     options?: {
       onTelemetry?: OnTelemetryCallback;
-      onFilesChanged?: OnFilesChangedCallback;
       onStateChanged?: OnStateChangedCallback;
       onGeometryComputed?: (result: HashedGeometryResult) => void;
       onParametersResolved?: (result: GetParametersResult) => void;
@@ -163,7 +155,6 @@ export class RuntimeWorkerClient {
     this.transport = transport;
     this.onLog = onLog;
     this.onTelemetry = options?.onTelemetry;
-    this.onFilesChanged = options?.onFilesChanged;
     this.onStateChanged = options?.onStateChanged;
     this.onGeometryComputed = options?.onGeometryComputed;
     this.onParametersResolvedCb = options?.onParametersResolved;
@@ -516,11 +507,6 @@ export class RuntimeWorkerClient {
 
       case 'stateChanged': {
         this.onStateChanged?.(response.state, response.detail);
-        break;
-      }
-
-      case 'filesChanged': {
-        this.onFilesChanged?.(response.paths);
         break;
       }
     }

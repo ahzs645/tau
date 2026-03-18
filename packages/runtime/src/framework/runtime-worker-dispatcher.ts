@@ -108,10 +108,6 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
             worker.setSignalBuffer(signalBuffer);
           }
 
-          worker.onFilesChanged = (paths: string[]) => {
-            respond({ type: 'filesChanged', paths });
-          };
-
           worker.onStateChanged = (state, detail) => {
             respond({ type: 'stateChanged', state, detail });
           };

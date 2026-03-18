@@ -327,20 +327,6 @@ describe('RuntimeWorkerClient', () => {
       expect(onStateChanged).toHaveBeenCalledWith('idle', 'render complete');
     });
 
-    it('should call onFilesChanged when filesChanged response received', () => {
-      const transport = createMockTransport();
-      const onFilesChanged = vi.fn();
-      const client = new RuntimeWorkerClient(transport, vi.fn(), { onFilesChanged });
-      expect(client).toBeDefined();
-
-      transport.simulateResponse({
-        type: 'filesChanged',
-        paths: ['/src/main.ts', '/src/util.ts'],
-      } as RuntimeResponse);
-
-      expect(onFilesChanged).toHaveBeenCalledWith(['/src/main.ts', '/src/util.ts']);
-    });
-
     it('should call onError callback when error received with no pending operations', () => {
       const transport = createMockTransport();
       const onError = vi.fn();
