@@ -279,7 +279,6 @@ export class ChatRpcService implements OnModuleDestroy {
     this.logger.debug(`Sending RPC request ${requestId} for ${rpcName} to chat ${chatId}`);
 
     const startTime = performance.now();
-    /* eslint-disable-next-line @typescript-eslint/naming-convention -- OTEL semantic convention attribute */
     this.metrics.rpcActiveCalls.add(1, { [AttributeKey.RPC_METHOD]: rpcName });
 
     try {
@@ -408,7 +407,6 @@ export class ChatRpcService implements OnModuleDestroy {
     return { success: false, error: validationError };
   }
 
-  /* eslint-disable @typescript-eslint/naming-convention -- OTEL semantic convention attribute names */
   private recordRpcDuration(
     startTime: number,
     rpcMethod: string,
@@ -420,12 +418,11 @@ export class ChatRpcService implements OnModuleDestroy {
       [AttributeKey.RPC_STATUS]: options.status,
     };
     if (options.errorType) {
-      attributes['error.type'] = options.errorType;
+      attributes[AttributeKey.ERROR_TYPE] = options.errorType;
     }
     this.metrics.rpcCallDuration.record(durationSeconds, attributes);
     this.metrics.rpcActiveCalls.add(-1, { [AttributeKey.RPC_METHOD]: rpcMethod });
   }
-  /* eslint-enable @typescript-eslint/naming-convention -- end OTEL attribute names block */
 
   /**
    * Schedule cleanup of the aborted chat entry after a short delay.
