@@ -9,11 +9,8 @@ import { providerMetadataSchema } from '#schemas/message-provider.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
 import { usageDataSchema } from '#schemas/message-data.schema.js';
 import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
-import {
-  testModelOutputSchema,
-  editTestsInputSchema,
-  editTestsOutputSchema,
-} from '#schemas/tools/test-model.tool.schema.js';
+import { testModelOutputSchema } from '@taucad/testing';
+import { editTestsInputSchema, editTestsOutputSchema } from '#schemas/tools/test-model.tool.schema.js';
 import { webBrowserInputSchema, webBrowserOutputSchema } from '#schemas/tools/web-browser.tool.schema.js';
 import { webSearchInputSchema, webSearchOutputSchema } from '#schemas/tools/web-search.tool.schema.js';
 import { readFileInputSchema, readFileOutputSchema } from '#schemas/tools/read-file.tool.schema.js';

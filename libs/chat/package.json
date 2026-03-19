@@ -27,6 +27,7 @@
     }
   },
   "dependencies": {
+    "@taucad/testing": "workspace:*",
     "@taucad/types": "workspace:*",
     "@taucad/runtime": "workspace:*"
   },
