@@ -22,6 +22,7 @@ type ProviderOptionsMap = {
   sambanova: ChatOpenAIFields;
   vertexai: ChatVertexAIInput & { model: string };
   cerebras: ChatCerebrasInput;
+  together: ChatOpenAIFields;
 };
 
 // Enhanced type that includes the createClass method
@@ -138,6 +139,17 @@ export class ProviderService {
         inputTokensIncludesCacheWriteTokens: false,
         streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatCerebras(options),
+      },
+      together: {
+        provider: 'together',
+        configuration: {
+          apiKey: configService.get('TOGETHER_API_KEY', { infer: true }),
+          baseURL: 'https://api.together.xyz/v1',
+        },
+        inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
+        createClass: (options) => new ChatOpenAI(options),
       },
     };
   }
