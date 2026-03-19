@@ -166,9 +166,10 @@ export const evaluateRequirement = (requirement: MeasurementTestRequirement, sta
     }
 
     default: {
+      const _exhaustive: never = requirement.check;
       return {
         passed: false,
-        reason: `Unknown check type: ${String(requirement.check)}`,
+        reason: `Unknown check type: ${String(_exhaustive)}`,
         suggestion: 'Use one of: boundingBox, meshCount, connectedComponents, vertexCount, watertight',
       };
     }

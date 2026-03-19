@@ -69,12 +69,13 @@ Write deterministic measurement requirements. Each should test one measurable pr
     { "id": "req_width", "type": "measurement", "description": "Box is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
     { "id": "req_height", "type": "measurement", "description": "Box is 25mm tall", "check": "boundingBox", "expected": { "size": { "z": 25 } }, "tolerance": 1 },
     { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
-    { "id": "req_mesh", "type": "measurement", "description": "Single solid mesh", "check": "meshCount", "expected": { "count": 1 } }
+    { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } },
+    { "id": "req_watertight", "type": "measurement", "description": "Mesh is watertight", "check": "watertight" }
   ]
 }
 \`\`\`
 
-Available checks: \`boundingBox\` (size/center — specify only the axes you care about), \`meshCount\`, \`vertexCount\`.
+Available checks: \`boundingBox\` (size/center — specify only the axes you care about), \`meshCount\` (number of returned shapes), \`connectedComponents\` (number of disconnected pieces — use for "single solid" checks), \`vertexCount\`, \`watertight\` (closed manifold with no boundary edges).
 </test_requirements>`
     : '';
 
@@ -95,7 +96,7 @@ ${config.codeStandards}
 </code_standards>
 
 <error_handling>
-On errors: analyze root cause, fix incrementally, preserve working geometry.${testingEnabled ? '\nOn test failures: review the failure reason and suggestion, then fix the specific issue.' : ''}
+On errors: analyze root cause, fix incrementally, preserve working geometry.${testingEnabled ? '\nOn test failures: review the failure reason and suggestion, then fix the specific issue. For geometry failures (connectedComponents, boundingBox), use screenshot to see where the problem is before fixing.' : ''}
 Tool failures: stop after 1-2 retries and explain the issue to the user.
 
 ${config.languageName} patterns: ${config.commonErrorPatterns}

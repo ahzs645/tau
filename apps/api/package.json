@@ -10,7 +10,8 @@
     "@taucad/types": "workspace:*",
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*",
-    "@taucad/telemetry": "workspace:*"
+    "@taucad/telemetry": "workspace:*",
+    "@taucad/testing": "workspace:*"
   },
   "devDependencies": {
     "@taucad/vite": "workspace:*"

@@ -1,8 +1,10 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { testModelInputSchema, testFileSchema, isRpcClientError } from '@taucad/chat';
+import { testModelInputSchema, isRpcClientError } from '@taucad/chat';
 import { assertRpcExecution, assertRpcSuccess } from '@taucad/chat/utils';
-import type { ChatTool, TestModelInput, TestModelOutput } from '@taucad/chat';
+import type { ChatTool, TestModelInput } from '@taucad/chat';
+import { testFileSchema } from '@taucad/testing';
+import type { TestModelOutput } from '@taucad/testing';
 import { rpcName, toolName } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
@@ -10,7 +12,7 @@ export const testModelToolDefinition = {
   name: toolName.testModel,
   description: `Run all tests from test.json against the current 3D model.
 
-Fetches the model geometry and evaluates measurement requirements (bounding box, mesh count, vertex count) deterministically.
+Fetches the model geometry and evaluates measurement requirements (bounding box, mesh count, connected components, vertex count) deterministically.
 
 Returns:
 - failures: Array of failed tests with actionable feedback (reason + suggestion)
