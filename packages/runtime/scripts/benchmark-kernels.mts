@@ -1,5 +1,3 @@
-/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
-
 /**
  * Kernel Benchmarking CLI
  *
@@ -20,6 +18,7 @@ import { filterBenchmarks, benchmarkCategories } from '#benchmarks/benchmark-sui
 import { runBenchmarks } from '#benchmarks/benchmark-runner.js';
 import type { BenchmarkRunResult, BuildProvenance } from '#benchmarks/benchmark-runner.js';
 import { generateHtmlReport, serializeRunResult } from '#benchmarks/benchmark-report.js';
+import process from 'node:process';
 
 // ── ANSI color helpers ──────────────────────────────────────────────
 

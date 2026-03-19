@@ -1,5 +1,4 @@
 // oxlint-disable complexity -- CLI script with deeply nested benchmark comparison logic
-/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
 
 /**
  * Terminal benchmark comparison — prints a table comparing the latest
@@ -12,6 +11,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { parseArgs } from 'node:util';
+import process from 'node:process';
 
 const { values } = parseArgs({
   options: {

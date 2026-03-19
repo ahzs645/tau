@@ -1,5 +1,3 @@
-/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
-/* oxlint-disable unicorn/no-process-exit -- CLI script uses process.exit for error codes */
 /**
  * Build Matrix Report Generator
  *
@@ -18,6 +16,7 @@ import { join, resolve, basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { BenchmarkRunResult, BuildProvenance } from '#benchmarks/benchmark-runner.js';
 import { benchmarkSuite } from '#benchmarks/benchmark-suite.js';
+import process from 'node:process';
 
 const { values } = parseArgs({
   options: {
