@@ -5,11 +5,13 @@ import type { ChatMode } from '@taucad/chat/constants';
 import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
-import { ChatModeSelector } from '#components/chat/chat-mode-selector.js';
+import { ChatAgentSelector, toggleModeKeyCombination } from '#components/chat/chat-mode-selector.js';
 import { Button } from '#components/ui/button.js';
+import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { Textarea } from '#components/ui/textarea.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
+import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatContextActions } from '#components/chat/chat-context-actions.js';
 import { ChatTextareaContextMenu } from '#components/chat/chat-textarea-context-menu.js';
@@ -370,5 +372,36 @@ function ChatTextareaModeControl(): React.JSX.Element | undefined {
     return undefined;
   }
 
-  return <ChatModeSelector mode={mode} onModeChange={setDraftMode} />;
+  return (
+    <Tooltip>
+      <ChatAgentSelector
+        data-chat-textarea-focustrap
+        mode={mode}
+        onModeChange={setDraftMode}
+        popoverProperties={{ align: 'start' }}
+      >
+        {({ currentConfig }) => (
+          <TooltipTrigger asChild>
+            <Button
+              variant='outline'
+              size='sm'
+              className={cn(
+                'h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2',
+                currentConfig.activeClass,
+              )}
+            >
+              <currentConfig.icon className='size-4' />
+              <span className='hidden text-xs @[22rem]:block'>{currentConfig.label}</span>
+            </Button>
+          </TooltipTrigger>
+        )}
+      </ChatAgentSelector>
+      <TooltipContent>
+        <span className='flex items-center gap-1.5'>
+          Switch agent mode
+          <KeyShortcut variant='tooltip'>{formatKeyCombination(toggleModeKeyCombination)}</KeyShortcut>
+        </span>
+      </TooltipContent>
+    </Tooltip>
+  );
 }
