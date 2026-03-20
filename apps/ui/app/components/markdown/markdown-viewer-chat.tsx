@@ -1,8 +1,10 @@
 import { memo, useMemo } from 'react';
 import type { ComponentProps } from 'react';
-import type { StreamdownProps } from 'streamdown';
+import type { ControlsConfig, StreamdownProps } from 'streamdown';
 import { cn } from '#utils/ui.utils.js';
 import { defaultMarkdownControls, MarkdownViewer } from '#components/markdown/markdown-viewer.js';
+
+const chatMarkdownControls: ControlsConfig = { ...defaultMarkdownControls, table: false };
 
 type HeadingTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 
@@ -64,7 +66,7 @@ export const MarkdownViewerChat = memo(function ({
       className={className}
       isStreaming={isStreaming}
       components={memoizedComponents}
-      controls={{ ...defaultMarkdownControls, table: false }}
+      controls={chatMarkdownControls}
     >
       {children}
     </MarkdownViewer>

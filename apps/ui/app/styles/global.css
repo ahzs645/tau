@@ -5,6 +5,7 @@
 
 @import 'tw-animate-css';
 @source '../../../../node_modules/@daveyplate/better-auth-ui';
+@source '../../../../node_modules/streamdown/dist';
 
 /* Typography is provided by fumadocs-ui/css/preset.css (forked @tailwindcss/typography with fd-* color support) */
 

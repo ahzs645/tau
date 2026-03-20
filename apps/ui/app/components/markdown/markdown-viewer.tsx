@@ -1,5 +1,7 @@
-import { Streamdown } from 'streamdown';
+import 'katex/dist/katex.min.css';
+import { defaultRehypePlugins, defaultRemarkPlugins as streamdownRemarkPlugins, Streamdown } from 'streamdown';
 import type { ControlsConfig, StreamdownProps } from 'streamdown';
+import remarkMath from 'remark-math';
 import { memo, useMemo } from 'react';
 import { cn } from '#utils/ui.utils.js';
 import { MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
@@ -28,6 +30,14 @@ export const defaultMarkdownControls = {
   code: false,
   table: false,
 } as const satisfies ControlsConfig;
+
+const tauRemarkPlugins: StreamdownProps['remarkPlugins'] = Object.values({
+  ...streamdownRemarkPlugins,
+  math: [remarkMath, { singleDollarTextMath: true }],
+});
+
+const { sanitize: _sanitize, ...unsanitizedRehypePlugins } = defaultRehypePlugins;
+const tauRehypePlugins: StreamdownProps['rehypePlugins'] = Object.values(unsanitizedRehypePlugins);
 
 export const MarkdownViewer = memo(function ({
   children,
@@ -58,6 +68,8 @@ export const MarkdownViewer = memo(function ({
         mode={isStreaming ? 'streaming' : 'static'}
         components={memoizedComponents}
         controls={controls}
+        remarkPlugins={tauRemarkPlugins}
+        rehypePlugins={tauRehypePlugins}
         shikiTheme={['github-light', 'github-dark']}
       >
         {children}
