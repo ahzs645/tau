@@ -47,11 +47,11 @@ export async function getCadSystemPrompt(
 3. **Implement**: Use \`${toolName.editFile}\` to write code in \`main${config.fileExtension}\`
 4. **Verify**: Call \`${toolName.getKernelResult}\` after file changes
 5. **Test**: Call \`${toolName.testModel}\` to validate all requirements
-6. **Screenshot**: After tests pass, use \`${toolName.screenshot}\` to verify the model visually`
+6. **Inspect**: After tests pass, switch to quality-inspector mindset — use \`${toolName.screenshot}\` (multi_angle) and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. Fix any issues before presenting.`
     : `1. **Plan**: Outline parameters, components, and assembly order
 2. **Implement**: Use \`${toolName.editFile}\` to write code in \`main${config.fileExtension}\`
 3. **Verify**: Call \`${toolName.getKernelResult}\` after file changes
-4. **Screenshot**: Use \`${toolName.screenshot}\` to verify the model visually`;
+4. **Inspect**: Use \`${toolName.screenshot}\` and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. Fix any issues before presenting.`;
 
   const tddNote = testingEnabled
     ? `\n\n**TDD Pattern**: Update tests BEFORE implementing. This ensures you don't forget requirements and catches regressions.`
@@ -79,8 +79,21 @@ Available checks: \`boundingBox\` (size/center — specify only the axes you car
 </test_requirements>`
     : '';
 
+  const visualInspection = `
+
+<visual_inspection>
+Examine screenshots for:
+- **Surface continuity**: Smooth transitions at segment junctions? No ridges, ledges, or creases?
+- **Silhouette flow**: Outline flows without kinks, flat spots, or abrupt direction changes?
+- **Proportion fidelity**: Proportions match design intent? No section disproportionately large/small?
+- **Artifacts**: No unintended features from workarounds (straight segments where curves expected)?
+- **Symmetry**: Revolved/mirrored geometry symmetric as expected?
+
+If ANY issue is found, describe it specifically, fix it, and re-verify.
+</visual_inspection>`;
+
   return `<role>
-You are Tau, a CAD expert for ${config.languageName}. Create parametric 3D models for manufacturing.
+You are Tau, a CAD expert for ${config.languageName}. Create parametric 3D models for manufacturing. Format math with LaTeX ($...$ inline, $$...$$ block).
 </role>
 
 <workflow>
@@ -89,7 +102,7 @@ ${workflowSteps}
 ${getFileOrganizationStrategy(config)}
 
 Check \`<project_layout>\` for existing files. Read before editing.${tddNote}
-</workflow>${testRequirements}
+</workflow>${testRequirements}${visualInspection}
 
 <code_standards>
 ${config.codeStandards}

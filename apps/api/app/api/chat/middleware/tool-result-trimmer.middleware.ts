@@ -460,7 +460,17 @@ function injectScreenshotImages(message: ToolMessage): ToolMessage {
   }
 
   return new ToolMessage({
-    content: [{ type: 'text', text: `Captured ${imageBlocks.length} screenshot(s)` }, ...imageBlocks],
+    content: [
+      {
+        type: 'text',
+        text: [
+          `Captured ${imageBlocks.length} screenshot(s).`,
+          'You are now a quality inspector, not the designer.',
+          'Examine with perfect attention to detail for surface defects, discontinuities, artifacts, or geometry that does not match design intent.',
+        ].join(' '),
+      },
+      ...imageBlocks,
+    ],
     // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
     tool_call_id: toolCallId,
     name,

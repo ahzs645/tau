@@ -587,9 +587,13 @@ describe('toolResultTrimmerMiddleware', () => {
         _trimmed: true,
       });
 
-      // Latest screenshot: converted to multimodal image blocks (not trimmed to JSON)
-      const latestContent = toolMessages[1]!.content;
+      // Latest screenshot: converted to multimodal image blocks with inspection directive
+      const latestContent = toolMessages[1]!.content as Array<Record<string, unknown>>;
       expect(Array.isArray(latestContent)).toBe(true);
+      expect(latestContent[0]).toHaveProperty('type', 'text');
+      expect(latestContent[0]).toHaveProperty('text');
+      expect(latestContent[0]!['text']).toContain('quality inspector');
+      expect(latestContent[1]).toHaveProperty('type', 'image_url');
     });
 
     it('should trim screenshot by content shape detection when name is missing', async () => {
