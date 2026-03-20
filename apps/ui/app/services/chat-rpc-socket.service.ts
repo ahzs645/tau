@@ -451,9 +451,11 @@ export class ChatRpcSocketService {
       return;
     }
 
+    const { traceContext } = request;
+
     try {
       const response = await handler(request);
-      ack(response);
+      ack({ ...response, ...(traceContext ? { traceContext } : {}) });
     } catch (execError) {
       ack({
         type: 'rpc_response',
@@ -461,6 +463,7 @@ export class ChatRpcSocketService {
         toolCallId: request.toolCallId,
         result: undefined,
         error: execError instanceof Error ? execError.message : 'Unknown error',
+        ...(traceContext ? { traceContext } : {}),
       });
     }
   }
