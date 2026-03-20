@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import type { ActorRefFrom } from 'xstate';
+import { waitFor, type ActorRefFrom } from 'xstate';
 import type { Geometry } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import type { JSONSchema7 } from 'json-schema';
@@ -102,7 +102,7 @@ export function CadPreviewProvider({
   kernelOptions,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
-  const { writeFiles, exists, fileManagerRef } = useFileManager();
+  const { fileManagerRef } = useFileManager();
 
   const cadRef = useActorRef(cadMachine, {
     input: {
@@ -129,18 +129,31 @@ export function CadPreviewProvider({
   });
 
   // Orchestration machine -- file preparation + cadRef initialization.
-  // prepareFiles actor is injected via .provide(), capturing writeFiles/exists
-  // from useFileManager() in the closure (same pattern as projectMachine's loadProjectActor).
+  // prepareFiles actor is injected via .provide(), using fileManagerRef (stable actor ref)
+  // to wait for the file manager to be ready and access services directly from the snapshot.
+  // This avoids stale closures: useActorRef creates the actor once, so closured callbacks
+  // from useFileManager() would permanently capture the initial undefined services.
   const previewRef = useActorRef(
     cadPreviewMachine.provide({
       actors: {
         prepareFiles: fromSafeAsync(async ({ input, signal }) => {
           if (input.files) {
-            const firstFilePath = Object.keys(input.files)[0];
+            const snapshot = await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
+
+            if (snapshot.matches('error')) {
+              throw new Error(snapshot.context.error?.message ?? 'File manager initialization failed');
+            }
 
             signal.throwIfAborted();
+
+            const { treeService, contentService } = snapshot.context;
+            if (!treeService || !contentService) {
+              throw new Error('File manager services not available after initialization');
+            }
+
+            const firstFilePath = Object.keys(input.files)[0];
             const alreadyExists =
-              firstFilePath && (await exists(joinPath('/projects', input.projectId, firstFilePath)));
+              firstFilePath && treeService.exists(joinPath('/projects', input.projectId, firstFilePath));
 
             signal.throwIfAborted();
             if (!alreadyExists) {
@@ -151,7 +164,7 @@ export function CadPreviewProvider({
                 };
               }
 
-              await writeFiles(projectFiles);
+              await contentService.writeFiles(projectFiles, 'machine');
             }
           }
         }),
