@@ -8,6 +8,7 @@ export const modelFamilySchema = z.enum(['gpt', 'claude', 'gemini', 'deepseek', 
 
 export const providerSchema = z.object({
   provider: providerIdSchema,
+  otelProviderName: z.string().describe('OTEL semantic convention well-known provider name (gen_ai.provider.name)'),
   inputTokensIncludesCacheReadTokens: z.boolean().describe('Whether the input tokens include cached read tokens'),
   inputTokensIncludesCacheWriteTokens: z
     .boolean()

@@ -212,7 +212,6 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
   },
-
   vertexai: {
     'gemini-3.1-pro': {
       id: 'google-gemini-3.1-pro',
@@ -267,7 +266,335 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       configuration: {
         streaming: true,
         temperature: 1,
-        thinkingLevel: 'HIGH',
+        thinkingLevel: 'MEDIUM',
+      },
+    },
+  },
+
+  together: {
+    'deepseek-v3.1': {
+      id: 'together-deepseek-v3.1',
+      name: 'DeepSeek V3.1',
+      slug: 'deepseek-v3.1',
+      description: 'Best open-source coder with native thinking-in-tool-use, great for complex CAD code generation.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'deepseek-ai/DeepSeek-V3.1',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'deepseek',
+        families: ['deepseek'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.6,
+          outputTokens: 1.7,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'deepseek-r1': {
+      id: 'together-deepseek-r1',
+      name: 'DeepSeek R1',
+      slug: 'deepseek-r1',
+      description: 'Best open-source reasoning model for complex geometry and multi-step assembly design.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'deepseek-ai/DeepSeek-R1',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'deepseek',
+        families: ['deepseek'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 3,
+          outputTokens: 7,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'glm-5': {
+      id: 'together-glm-5',
+      name: 'GLM-5',
+      slug: 'glm-5',
+      description: '#1 open-source coding model (LMSYS 1447 Elo) with parallel tool calling for CAD workflows.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'zai-org/GLM-5',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'glm',
+        families: ['glm'],
+        contextWindow: 202_752,
+        maxTokens: 128_000,
+        cost: {
+          inputTokens: 1,
+          outputTokens: 3.2,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'qwen-3.5-397b': {
+      id: 'together-qwen-3.5-397b',
+      name: 'Qwen 3.5 397B',
+      slug: 'qwen-3.5-397b',
+      description: 'Near-linear attention with 262K context and native multimodal, strong for large CAD projects.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'Qwen/Qwen3.5-397B-A17B',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'qwen',
+        families: ['qwen'],
+        contextWindow: 262_144,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.6,
+          outputTokens: 3.6,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'qwen-3.5-9b': {
+      id: 'together-qwen-3.5-9b',
+      name: 'Qwen 3.5 9B',
+      slug: 'qwen-3.5-9b',
+      description: 'Fast and cheap open-source model, ideal for quick CAD edits and small design changes.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'Qwen/Qwen3.5-9B',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'qwen',
+        families: ['qwen'],
+        contextWindow: 262_144,
+        maxTokens: 32_768,
+        cost: {
+          inputTokens: 0.1,
+          outputTokens: 0.15,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'llama-4-maverick': {
+      id: 'together-llama-4-maverick',
+      name: 'Llama 4 Maverick',
+      slug: 'llama-4-maverick',
+      description: 'Strong general-purpose and coding model with 1M context window and massive ecosystem support.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'llama',
+        families: ['llama'],
+        contextWindow: 1_048_576,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.27,
+          outputTokens: 0.85,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+  },
+
+  cerebras: {
+    'glm-4.7': {
+      id: 'cerebras-glm-4.7',
+      name: 'GLM 4.7',
+      slug: 'cerebras-glm-4.7',
+      description: '#2 open-source coding model (1439 Elo) running at ~1,000 tok/s on Cerebras hardware.',
+      provider: {
+        id: 'cerebras',
+        name: 'Cerebras',
+      },
+      model: 'zai-glm-4.7',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'glm',
+        families: ['glm'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.6,
+          outputTokens: 0.6,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'qwen-3-235b': {
+      id: 'cerebras-qwen-3-235b',
+      name: 'Qwen 3 235B',
+      slug: 'cerebras-qwen-3-235b',
+      description: 'Strong reasoning model running at ~1,400 tok/s, great for iterative CAD design.',
+      provider: {
+        id: 'cerebras',
+        name: 'Cerebras',
+      },
+      model: 'qwen-3-235b-a22b-instruct-2507',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'qwen',
+        families: ['qwen'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.4,
+          outputTokens: 0.8,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+  },
+
+  sambanova: {
+    'deepseek-v3.1': {
+      id: 'sambanova-deepseek-v3.1',
+      name: 'DeepSeek V3.1',
+      slug: 'sambanova-deepseek-v3.1',
+      description: 'Enterprise-grade path to the best open-source coder on SambaNova infrastructure.',
+      provider: {
+        id: 'sambanova',
+        name: 'SambaNova',
+      },
+      model: 'DeepSeek-V3.1',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'deepseek',
+        families: ['deepseek'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 3,
+          outputTokens: 4.5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'deepseek-r1': {
+      id: 'sambanova-deepseek-r1',
+      name: 'DeepSeek R1',
+      slug: 'sambanova-deepseek-r1',
+      description: 'Enterprise-grade reasoning model for complex geometry on SambaNova infrastructure.',
+      provider: {
+        id: 'sambanova',
+        name: 'SambaNova',
+      },
+      model: 'DeepSeek-R1-0528',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'deepseek',
+        families: ['deepseek'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 2,
+          outputTokens: 6,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'llama-4-maverick': {
+      id: 'sambanova-llama-4-maverick',
+      name: 'Llama 4 Maverick',
+      slug: 'sambanova-llama-4-maverick',
+      description: 'Enterprise-grade Llama 4 flagship model on SambaNova infrastructure.',
+      provider: {
+        id: 'sambanova',
+        name: 'SambaNova',
+      },
+      model: 'Llama-4-Maverick-17B-128E-Instruct',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'llama',
+        families: ['llama'],
+        contextWindow: 1_048_576,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.3,
+          outputTokens: 0.9,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
       },
     },
   },

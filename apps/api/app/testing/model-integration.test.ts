@@ -5,7 +5,6 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { Server as SocketIoServer } from 'socket.io';
 import { io as ioClient } from 'socket.io-client';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
-import { TracerService } from '#telemetry/tracer.service.js';
 import { MetricsService } from '#telemetry/metrics.js';
 import { collectStreamChunks, collectFinalMessage } from '#testing/stream-consumer.js';
 import {
@@ -795,7 +794,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
   it('should complete RPC round-trip with large geometry payload over real Socket.IO', async () => {
     const { serverIo, listen } = createTestServer({ maxHttpBufferSize: 10e6 });
 
-    const chatRpcService = new ChatRpcService(new TracerService(), new MetricsService());
+    const chatRpcService = new ChatRpcService(new MetricsService());
     const chatId = 'chat_rpc_test_001';
 
     serverIo.on('connection', (socket) => {
@@ -860,7 +859,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
   it('should complete emitWithAck round-trip with geometry payload', async () => {
     const { serverIo, listen } = createTestServer({ maxHttpBufferSize: 10e6 });
 
-    const chatRpcService = new ChatRpcService(new TracerService(), new MetricsService());
+    const chatRpcService = new ChatRpcService(new MetricsService());
     const chatId = 'chat_ack_roundtrip';
 
     serverIo.on('connection', (socket) => {
@@ -915,7 +914,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
   it('should return TIMEOUT when client does not ack emitWithAck within timeout', async () => {
     const { serverIo, listen } = createTestServer();
 
-    const chatRpcService = new ChatRpcService(new TracerService(), new MetricsService());
+    const chatRpcService = new ChatRpcService(new MetricsService());
     const chatId = 'chat_ack_timeout';
 
     serverIo.on('connection', (socket) => {
@@ -959,7 +958,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
   it('should return CLIENT_DISCONNECTED when client disconnects during emitWithAck', async () => {
     const { serverIo, listen } = createTestServer();
 
-    const chatRpcService = new ChatRpcService(new TracerService(), new MetricsService());
+    const chatRpcService = new ChatRpcService(new MetricsService());
     const chatId = 'chat_ack_disconnect';
 
     serverIo.on('connection', (socket) => {

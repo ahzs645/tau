@@ -52,6 +52,7 @@ export class ProviderService {
     return {
       openai: {
         provider: 'openai',
+        otelProviderName: 'openai',
         configuration: {
           apiKey: configService.get('OPENAI_API_KEY', { infer: true }),
         },
@@ -62,6 +63,7 @@ export class ProviderService {
       },
       ollama: {
         provider: 'ollama',
+        otelProviderName: 'ollama',
         configuration: {
           baseURL: 'http://localhost:11434',
         },
@@ -72,6 +74,7 @@ export class ProviderService {
       },
       sambanova: {
         provider: 'sambanova',
+        otelProviderName: 'sambanova',
         configuration: {
           apiKey: configService.get('SAMBA_API_KEY', { infer: true }),
           baseURL: 'https://api.sambanova.ai/v1',
@@ -83,6 +86,7 @@ export class ProviderService {
       },
       anthropic: {
         provider: 'anthropic',
+        otelProviderName: 'anthropic',
         configuration: {
           apiKey: configService.get('ANTHROPIC_API_KEY', { infer: true }),
         },
@@ -108,6 +112,7 @@ export class ProviderService {
 
       vertexai: {
         provider: 'vertexai',
+        otelProviderName: 'gcp.vertex_ai',
         configuration: {
           apiKey: undefined,
         },
@@ -132,6 +137,7 @@ export class ProviderService {
       },
       cerebras: {
         provider: 'cerebras',
+        otelProviderName: 'cerebras',
         configuration: {
           apiKey: configService.get('CEREBRAS_API_KEY', { infer: true }),
         },
@@ -142,6 +148,7 @@ export class ProviderService {
       },
       together: {
         provider: 'together',
+        otelProviderName: 'together',
         configuration: {
           apiKey: configService.get('TOGETHER_API_KEY', { infer: true }),
           baseURL: 'https://api.together.xyz/v1',
