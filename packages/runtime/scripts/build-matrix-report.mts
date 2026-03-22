@@ -362,8 +362,14 @@ function buildReportData(experiments: ExperimentData[], baseline?: ExperimentDat
     }
   }
 
+  const maxBenchCount = Math.max(...experiments.map((e) => e.benchmark?.results.length ?? 0));
+  const minRequired = Math.ceil(maxBenchCount * 0.8);
+  const withBenchmarks = experiments.filter(
+    (experiment) => experiment.benchmark && experiment.benchmark.results.length >= minRequired,
+  );
+
   return {
-    experiments: experiments.map((experiment) => buildExperimentRecord(experiment)),
+    experiments: withBenchmarks.map((experiment) => buildExperimentRecord(experiment)),
     baseline: baseline ? buildExperimentRecord(baseline) : undefined,
     benchmarks: orderedBenchmarks,
     categories: [...categorySet].sort(),
@@ -470,9 +476,15 @@ document.addEventListener('alpine:init', function() {
       if (d === null) return '';
       var a = Math.abs(d);
       if (a < 2) return '#F9FAFB';
-      if (d < -10) return '#D1FAE5';
-      if (d < 0) return '#ECFDF5';
-      return d > 10 ? '#FEE2E2' : '#FEF2F2';
+      var t = Math.min(a, 50) / 50;
+      if (d < 0) {
+        var l = 95 - t * 45;
+        var s = 60 + t * 20;
+        return 'hsl(152,' + s + '%,' + l + '%)';
+      }
+      var l = 95 - t * 40;
+      var s = 70 + t * 15;
+      return 'hsl(0,' + s + '%,' + l + '%)';
     },
     deltaTextColor: function(d) {
       if (d === null) return '#6B7280';
@@ -623,14 +635,14 @@ document.addEventListener('alpine:init', function() {
       showPct: function() { return this.display === 'both' || this.display === 'percentage'; },
       showTime: function() { return this.display === 'both' || this.display === 'time'; },
 
-      cellText: function(exp, bench) {
+      cellHtml: function(exp, bench) {
         var d = this.delta(exp, bench);
         var t = this.expTime(exp, bench);
         if (d === null && t === null) return '\u2014';
         var parts = [];
-        if (this.showPct() && d !== null) parts.push(_fmt.pct(d));
-        if (this.showTime() && t !== null) parts.push(_fmt.ms(t));
-        return parts.join(' ');
+        if (this.showPct() && d !== null) parts.push('<span style="font-weight:600">' + _fmt.pct(d) + '</span>');
+        if (this.showTime() && t !== null) parts.push('<span style="opacity:0.7">' + _fmt.ms(t) + '</span>');
+        return parts.join('<br>');
       },
 
       benchmarks: function() {
@@ -767,12 +779,10 @@ ${generateAlpineScript()}
     <div x-data="heatmap()">
       <p class="explanation">Each cell shows the change in median time relative to the reference. <span style="color:#10B981">Green = faster</span>, <span style="color:#EF4444">red = slower</span>. <strong>Click any experiment column header</strong> to set it as the reference. Currently comparing against: <strong x-text="refLabel()"></strong></p>
       <div style="display:flex;align-items:center;gap:1.5rem;margin:0.75rem 0 1rem;flex-wrap:wrap">
-        <div class="legend" style="margin:0">
-          <span class="legend-item"><span class="legend-swatch" style="background:#D1FAE5"></span> &gt;10% faster</span>
-          <span class="legend-item"><span class="legend-swatch" style="background:#ECFDF5"></span> 2-10% faster</span>
-          <span class="legend-item"><span class="legend-swatch" style="background:#F9FAFB"></span> Within 2%</span>
-          <span class="legend-item"><span class="legend-swatch" style="background:#FEF2F2"></span> 2-10% slower</span>
-          <span class="legend-item"><span class="legend-swatch" style="background:#FEE2E2"></span> &gt;10% slower</span>
+        <div class="legend" style="margin:0;align-items:center">
+          <span style="font-size:0.75rem;color:#6B7280">50%+ faster</span>
+          <span style="display:inline-block;width:200px;height:14px;border-radius:3px;background:linear-gradient(to right,hsl(152,80%,50%),hsl(152,65%,75%),hsl(152,60%,93%),#F9FAFB,hsl(0,73%,93%),hsl(0,78%,75%),hsl(0,85%,55%))"></span>
+          <span style="font-size:0.75rem;color:#6B7280">50%+ slower</span>
         </div>
         <div class="filter-bar" style="margin:0">
           <button class="filter-btn" :class="{ 'active': display === 'both' }" @click="display = 'both'">Both</button>
@@ -797,9 +807,9 @@ ${generateAlpineScript()}
                 <td><strong x-text="bench"></strong></td>
                 <td style="text-align:center;font-size:0.8rem;background:#F3F4F6;font-weight:500" x-text="refTime(bench) !== null ? _fmt.ms(refTime(bench)) : '—'"></td>
                 <template x-for="(exp, index) in $store.data.experiments" :key="exp.name + '-' + bench">
-                  <td style="text-align:center;font-size:0.8rem"
+                  <td style="text-align:center;font-size:0.8rem;line-height:1.3"
                       :style="'background:' + _fmt.deltaColor(delta(exp, bench))"
-                      x-text="cellText(exp, bench)"></td>
+                      x-html="cellHtml(exp, bench)"></td>
                 </template>
               </tr>
             </template>
