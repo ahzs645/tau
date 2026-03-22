@@ -273,10 +273,13 @@ BENCH_ITERATIONS=$(parse_yaml_field "benchmark.iterations" "10")
 BENCH_FILTER=$(parse_yaml_field "benchmark.filter" "")
 EXP_CLOSURE=$(parse_yaml_field "optimizations.closure" "false")
 EXP_EVAL_CTORS=$(parse_yaml_field "optimizations.evalCtors" "false")
+EXP_EVAL_CTORS_LEVEL=$(parse_yaml_field "optimizations.evalCtorsLevel" "1")
 EXP_CONVERGE=$(parse_yaml_field "optimizations.converge" "false")
 EXP_DEFINES=$(parse_yaml_field "compilation.defines" "")
 EXP_UNDEFINES=$(parse_yaml_field "compilation.undefines" "")
 EXP_PATCH_DUMP=$(parse_yaml_field "optimizations.patchDump" "false")
+EXP_SIMD=$(parse_yaml_field "optimizations.simd" "false")
+EXP_BIGINT=$(parse_yaml_field "optimizations.bigint" "false")
 
 LTO_FLAG="0"
 if [ "$EXP_LTO" = "true" ]; then
@@ -333,6 +336,16 @@ echo "═══ Step 1: Build WASM (YAML: $YAML_PATH) ═══"
 
 # ── Step 2: Build WASM ───────────────────────────────────────────────
 
+SIMD_FLAG="0"
+if [ "$EXP_SIMD" = "true" ]; then
+  SIMD_FLAG="1"
+fi
+
+BIGINT_FLAG="0"
+if [ "$EXP_BIGINT" = "true" ]; then
+  BIGINT_FLAG="1"
+fi
+
 cd "$OCJS_DIR"
 OCJS_OPT="$EXP_OPT" \
 OCJS_LTO="$LTO_FLAG" \
@@ -341,10 +354,13 @@ THREADING="$EXP_THREADING" \
 OCJS_WASM_OPT_LEVEL="$EXP_WASM_OPT" \
 OCJS_CLOSURE="$EXP_CLOSURE" \
 OCJS_EVAL_CTORS="$EXP_EVAL_CTORS" \
+OCJS_EVAL_CTORS_LEVEL="$EXP_EVAL_CTORS_LEVEL" \
 OCJS_CONVERGE="$EXP_CONVERGE" \
 OCJS_DEFINES="$EXP_DEFINES" \
 OCJS_UNDEFINES="$EXP_UNDEFINES" \
 OCJS_PATCH_DUMP="$EXP_PATCH_DUMP" \
+OCJS_SIMD="$SIMD_FLAG" \
+OCJS_BIGINT="$BIGINT_FLAG" \
   ./build-wasm.sh full "$YAML_PATH"
 
 WASM_OUT_DIR="$(dirname "$YAML_PATH")"
