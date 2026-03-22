@@ -191,7 +191,8 @@ export async function runBenchmarks(
       telemetryBatches.push(entries);
     });
 
-    const totalRuns = iterations + 1; // +1 for warmup run (discarded)
+    const warmupRuns = 3;
+    const totalRuns = iterations + warmupRuns;
     for (let iter = 0; iter < totalRuns; iter++) {
       performance.clearMeasures();
       performance.clearMarks();
@@ -217,8 +218,8 @@ export async function runBenchmarks(
         throw new Error(`Benchmark "${benchCase.name}" render failed (iteration ${iter}): ${messages}`);
       }
 
-      if (iter === 0) {
-        continue; // Discard warmup iteration to avoid cold-start skew
+      if (iter < warmupRuns) {
+        continue; // Discard warmup iterations to avoid cold-start skew
       }
 
       timings.push(elapsed);
