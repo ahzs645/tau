@@ -1526,11 +1526,11 @@ importers:
         specifier: 'catalog:'
         version: 1.2.0
       replicad:
-        specifier: file:../../tarballs/replicad-0.21.0-v8.38.tgz
-        version: file:tarballs/replicad-0.21.0-v8.38.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977)
+        specifier: file:../../tarballs/replicad-0.21.0-v8.39.tgz
+        version: file:tarballs/replicad-0.21.0-v8.39.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977)
       replicad-opencascadejs:
-        specifier: file:../../tarballs/replicad-opencascadejs-0.21.0-v8.38.tgz
-        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.38.tgz
+        specifier: file:../../tarballs/replicad-opencascadejs-0.21.0-v8.39.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.39.tgz
       source-map-js:
         specifier: 'catalog:'
         version: 1.2.1
@@ -16357,17 +16357,9 @@ packages:
     resolution: {integrity: sha512-yD5BHCe7quCgBph4rMQ+0KkIRKwWCrHDOX1p1Gp6HwjPM5kVoCdKGNhN7ydqqsX6lJEnQDKZ/tFMiEdQ1dvPEw==}
     engines: {node: '>= 0.10'}
 
-  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.38.tgz:
-    resolution: {integrity: sha512-5C98X78ft+3x1OC9EeADCdIjUNAX5DiwOzhaa1ePVLC+nGDI/WCneRq65wpX7QbrQ8zB8yWYME6NjAYQ2RH5Mg==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.38.tgz}
-    version: 0.21.0-v8.38
-
   replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.39.tgz:
     resolution: {integrity: sha512-BNX6JPGU5hHwCHZml/WFEmRSyel8Bs7X4y6o1epL03zWg92+BcgBS+3YOiYKQcrEBg9G37WDGKMCXUNHzuspsw==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.39.tgz}
     version: 0.21.0-v8.39
-
-  replicad@file:tarballs/replicad-0.21.0-v8.38.tgz:
-    resolution: {integrity: sha512-FWQP6LalRJySlSq9QTBFN+EoasAFM0Air821uCLchVYsm31IUM4caJJJZuBZQL4qDoTZ2OlB6tSmmk6mm6XoyQ==, tarball: file:tarballs/replicad-0.21.0-v8.38.tgz}
-    version: 0.21.0-v8.38
 
   replicad@file:tarballs/replicad-0.21.0-v8.39.tgz:
     resolution: {integrity: sha512-HzNO+StIBy1nYCz/XRRzHgFeqVg0AB9IMUlXk3mqOeGoCExSaFcO9xuaq2ccloUHBh/X7Na/b0v9TJa/kKzaGg==, tarball: file:tarballs/replicad-0.21.0-v8.39.tgz}
@@ -35516,15 +35508,7 @@ snapshots:
 
   replace-ext@1.0.1: {}
 
-  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.38.tgz: {}
-
   replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.39.tgz: {}
-
-  replicad@file:tarballs/replicad-0.21.0-v8.38.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977):
-    dependencies:
-      '@types/opentype.js': 1.3.4
-      flatbush: 4.5.0
-      opentype.js: 1.3.4
 
   replicad@file:tarballs/replicad-0.21.0-v8.39.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977):
     dependencies:
