@@ -264,17 +264,22 @@ export function formatRuntimeErrorWithOc({
 
   if (isWebAssemblyException(error)) {
     const decoded = decodeWebAssemblyException(error, ocInstance as Partial<EmscriptenExceptionHelpers>);
-    if (decoded) {
-      const stackFrames = applySourceMaps(parseStackTrace(new Error(decoded.message)));
-      const location = deriveLocation(stackFrames, sourceMap);
-      return {
-        message: decoded.message,
-        location,
-        type: 'kernel',
-        severity: 'error',
-        stackFrames,
-      };
-    }
+    const message = decoded?.message ?? 'KernelError: The geometry kernel threw an undecodable C++ exception';
+
+    // WebAssembly.Exception is not an Error and has no .stack — parseStackTrace
+    // returns []. This is intentional: the OC proxy should have already
+    // converted it to an OcKernelError with Error.captureStackTrace. If we
+    // reach here, the exception bypassed the proxy; returning empty frames is
+    // more honest than manufacturing misleading framework frames.
+    const stackFrames = applySourceMaps(parseStackTrace(error));
+    const location = deriveLocation(stackFrames, sourceMap);
+    return {
+      message,
+      location,
+      type: 'kernel',
+      severity: 'error',
+      stackFrames,
+    };
   }
 
   const wasmException = extractWasmException(error);

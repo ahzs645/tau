@@ -172,11 +172,24 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
         return { success: false, issues: error.issues as KernelIssue[] };
       }
 
+      let message: string;
+      if (error instanceof Error) {
+        message = error.message;
+      } else if (
+        typeof WebAssembly !== 'undefined' &&
+        typeof WebAssembly.Exception === 'function' &&
+        error instanceof WebAssembly.Exception
+      ) {
+        message = 'KernelError: The geometry kernel threw an undecodable C++ exception';
+      } else {
+        message = String(error);
+      }
+
       return {
         success: false,
         issues: [
           {
-            message: error instanceof Error ? error.message : String(error),
+            message,
             type: 'kernel',
             severity: 'error',
           },

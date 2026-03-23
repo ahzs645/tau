@@ -93,6 +93,63 @@ function isCallable(value: unknown): value is GenericFunction {
   return typeof value === 'function';
 }
 
+/**
+ * Checks whether a value is an OC namespace object — a plain (non-null) object
+ * that is NOT callable and NOT an Emscripten record (no `delete()` method).
+ * Namespace objects like `BRepLib` contain static methods that need exception
+ * interception but are not themselves WASM-allocated objects.
+ */
+function isOcNamespace(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !isCallable(value) &&
+    typeof (value as Record<string, unknown>)['delete'] !== 'function'
+  );
+}
+
+/**
+ * Wraps an OC namespace object so that its callable properties are intercepted
+ * for exception conversion. Handles nested namespaces recursively.
+ */
+function createNamespaceWrapper(rethrowIfWasmException: (error: unknown) => never): (value: unknown) => unknown {
+  const wrappedNamespaces = new WeakSet<Record<string, unknown>>();
+
+  function wrapNamespace(ns: Record<string, unknown>): Record<string, unknown> {
+    if (wrappedNamespaces.has(ns)) {
+      return ns;
+    }
+    wrappedNamespaces.add(ns);
+
+    return new Proxy(ns, {
+      get(target, property, receiver): unknown {
+        const member: unknown = Reflect.get(target, property, receiver);
+        if (isCallable(member)) {
+          return function (this: unknown, ...args: unknown[]): unknown {
+            checkAbort();
+            try {
+              return Reflect.apply(member, target, args);
+            } catch (error) {
+              return rethrowIfWasmException(error);
+            }
+          };
+        }
+        if (isOcNamespace(member)) {
+          return wrapNamespace(member);
+        }
+        return member;
+      },
+    });
+  }
+
+  return (value: unknown): unknown => {
+    if (isOcNamespace(value)) {
+      return wrapNamespace(value);
+    }
+    return value;
+  };
+}
+
 /** V8-only `Error.captureStackTrace` — not present in all runtimes. */
 type V8ErrorConstructor = {
   captureStackTrace?(target: Error, constructorOpt: GenericFunction): void;
@@ -137,6 +194,12 @@ function createRethrowFunction(decoder: ExceptionDecoder | undefined): (error: u
         if (decodeError instanceof OcKernelError) {
           throw decodeError;
         }
+
+        // Decoding failed — still wrap as OcKernelError to preserve the
+        // JS call stack from the proxy call site (which includes user code).
+        const fallback = new OcKernelError('', 'Unknown C++ exception');
+        (Error as V8ErrorConstructor).captureStackTrace?.(fallback, rethrowIfWasmException);
+        throw fallback;
       }
     }
 
@@ -180,8 +243,10 @@ function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => nev
           }
         };
 
-        const className = (target as { constructor?: { name?: string } }).constructor?.name ?? 'OC';
-        return named(`${className}.${String(property)}`, wrapper);
+        return named(
+          `${(target as { constructor?: { name?: string } }).constructor?.name ?? 'OC'}.${String(property)}`,
+          wrapper,
+        );
       },
     });
   }
@@ -208,6 +273,7 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
 
   const rethrowIfWasmException = createRethrowFunction(decoder);
   const wrapEmscriptenResult = createEmscriptenWrapper(rethrowIfWasmException);
+  const wrapIfNamespace = createNamespaceWrapper(rethrowIfWasmException);
 
   const cache = new Map<string, unknown>();
   return new Proxy(oc, {
@@ -248,6 +314,12 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
         });
         cache.set(property, wrapped);
         return wrapped;
+      }
+
+      const wrappedNs = wrapIfNamespace(value);
+      if (wrappedNs !== value) {
+        cache.set(property, wrappedNs);
+        return wrappedNs;
       }
 
       return value;
@@ -351,6 +423,7 @@ export function wrapOcWithTracing(
   }
 
   const wrapFunction = config.mode === 'summary' ? wrapFunctionForSummary : wrapFunctionForPerCall;
+  const wrapIfNamespace = createNamespaceWrapper(rethrowIfWasmException);
 
   const classProxyCache = new Map<string, unknown>();
 
@@ -371,6 +444,12 @@ export function wrapOcWithTracing(
         const wrapped = wrapFunction(value, property);
         classProxyCache.set(property, wrapped);
         return wrapped;
+      }
+
+      const wrappedNs = wrapIfNamespace(value);
+      if (wrappedNs !== value) {
+        classProxyCache.set(property, wrappedNs);
+        return wrappedNs;
       }
 
       return value;
