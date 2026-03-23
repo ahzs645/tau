@@ -388,35 +388,6 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         streaming: true,
       },
     },
-    'qwen-3.5-9b': {
-      id: 'together-qwen-3.5-9b',
-      name: 'Qwen 3.5 9B',
-      slug: 'qwen-3.5-9b',
-      description: 'Fast and cheap open-source model, ideal for quick CAD edits and small design changes.',
-      provider: {
-        id: 'together',
-        name: 'Together AI',
-      },
-      model: 'Qwen/Qwen3.5-9B',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'qwen',
-        families: ['qwen'],
-        contextWindow: 262_144,
-        maxTokens: 32_768,
-        cost: {
-          inputTokens: 0.1,
-          outputTokens: 0.15,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-        },
-      },
-      configuration: {
-        streaming: true,
-      },
-    },
     'llama-4-maverick': {
       id: 'together-llama-4-maverick',
       name: 'Llama 4 Maverick',
@@ -449,35 +420,6 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
   },
 
   cerebras: {
-    'glm-4.7': {
-      id: 'cerebras-glm-4.7',
-      name: 'GLM 4.7',
-      slug: 'cerebras-glm-4.7',
-      description: '#2 open-source coding model (1439 Elo) running at ~1,000 tok/s on Cerebras hardware.',
-      provider: {
-        id: 'cerebras',
-        name: 'Cerebras',
-      },
-      model: 'zai-glm-4.7',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'glm',
-        families: ['glm'],
-        contextWindow: 128_000,
-        maxTokens: 64_000,
-        cost: {
-          inputTokens: 0.6,
-          outputTokens: 0.6,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-        },
-      },
-      configuration: {
-        streaming: true,
-      },
-    },
     'qwen-3-235b': {
       id: 'cerebras-qwen-3-235b',
       name: 'Qwen 3 235B',
@@ -499,96 +441,6 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         cost: {
           inputTokens: 0.4,
           outputTokens: 0.8,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-        },
-      },
-      configuration: {
-        streaming: true,
-      },
-    },
-  },
-
-  sambanova: {
-    'deepseek-v3.1': {
-      id: 'sambanova-deepseek-v3.1',
-      name: 'DeepSeek V3.1',
-      slug: 'sambanova-deepseek-v3.1',
-      description: 'Enterprise-grade path to the best open-source coder on SambaNova infrastructure.',
-      provider: {
-        id: 'sambanova',
-        name: 'SambaNova',
-      },
-      model: 'DeepSeek-V3.1',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'deepseek',
-        families: ['deepseek'],
-        contextWindow: 128_000,
-        maxTokens: 64_000,
-        cost: {
-          inputTokens: 3,
-          outputTokens: 4.5,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-        },
-      },
-      configuration: {
-        streaming: true,
-      },
-    },
-    'deepseek-r1': {
-      id: 'sambanova-deepseek-r1',
-      name: 'DeepSeek R1',
-      slug: 'sambanova-deepseek-r1',
-      description: 'Enterprise-grade reasoning model for complex geometry on SambaNova infrastructure.',
-      provider: {
-        id: 'sambanova',
-        name: 'SambaNova',
-      },
-      model: 'DeepSeek-R1-0528',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'deepseek',
-        families: ['deepseek'],
-        contextWindow: 128_000,
-        maxTokens: 64_000,
-        cost: {
-          inputTokens: 2,
-          outputTokens: 6,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-        },
-      },
-      configuration: {
-        streaming: true,
-      },
-    },
-    'llama-4-maverick': {
-      id: 'sambanova-llama-4-maverick',
-      name: 'Llama 4 Maverick',
-      slug: 'sambanova-llama-4-maverick',
-      description: 'Enterprise-grade Llama 4 flagship model on SambaNova infrastructure.',
-      provider: {
-        id: 'sambanova',
-        name: 'SambaNova',
-      },
-      model: 'Llama-4-Maverick-17B-128E-Instruct',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'llama',
-        families: ['llama'],
-        contextWindow: 1_048_576,
-        maxTokens: 64_000,
-        cost: {
-          inputTokens: 0.3,
-          outputTokens: 0.9,
           cacheReadTokens: 0,
           cacheWriteTokens: 0,
         },

@@ -19,7 +19,6 @@ type ProviderOptionsMap = {
   openai: ChatOpenAIFields;
   ollama: ChatOllamaInput;
   anthropic: ChatAnthropicCallOptions;
-  sambanova: ChatOpenAIFields;
   vertexai: ChatVertexAIInput & { model: string };
   cerebras: ChatCerebrasInput;
   together: ChatOpenAIFields;
@@ -71,18 +70,6 @@ export class ProviderService {
         inputTokensIncludesCacheWriteTokens: false,
         streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOllama(options),
-      },
-      sambanova: {
-        provider: 'sambanova',
-        otelProviderName: 'sambanova',
-        configuration: {
-          apiKey: configService.get('SAMBA_API_KEY', { infer: true }),
-          baseURL: 'https://api.sambanova.ai/v1',
-        },
-        inputTokensIncludesCacheReadTokens: false,
-        inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
-        createClass: (options) => new ChatOpenAI(options),
       },
       anthropic: {
         provider: 'anthropic',
