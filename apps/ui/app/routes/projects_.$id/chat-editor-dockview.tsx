@@ -19,10 +19,9 @@ import {
   tauEditorPanelDragMime,
   tauViewerPanelDragMime,
 } from '@taucad/types/constants';
-import { CodeEditor } from '#components/code/code-editor.client.js';
+import type { CodeEditor } from '#components/code/code-editor.client.js';
 import { FileSelector } from '#components/files/file-selector.js';
 import { Loader } from '#components/ui/loader.js';
-import { ChatEditorBreadcrumbs } from '#routes/projects_.$id/chat-editor-breadcrumbs.js';
 import { useProject } from '#hooks/use-project.js';
 import { Dockview } from '#components/panes/dockview.js';
 import { DockviewWatermark } from '#components/panes/dockview-watermark.js';
@@ -43,6 +42,8 @@ import { useFileTreeMap } from '#hooks/use-file-tree.js';
 import { useViewContext } from '#routes/projects_.$id/chat-interface-view-context.js';
 import { useMonacoServices } from '#hooks/use-monaco-model-service.js';
 import { useKernelDiagnostics } from '#hooks/use-kernel-diagnostics.js';
+import { useFeature } from '#flags/use-feature.js';
+import { resolveViewer } from '#routes/projects_.$id/chat-editor-viewer-registry.js';
 import { Button } from '#components/ui/button.js';
 
 /**
@@ -50,13 +51,6 @@ import { Button } from '#components/ui/button.js';
  */
 function createMonacoUri(monaco: typeof Monaco, relativePath: string): Monaco.Uri {
   return monaco.Uri.file(`/${relativePath}`);
-}
-
-/**
- * Create a root-level path string for the Monaco Editor path prop.
- */
-function createMonacoPath(relativePath: string): string {
-  return `/${relativePath}`;
 }
 
 /**
@@ -95,6 +89,7 @@ const FileEditor = memo(function ({
   const fileManager = useFileManager();
   const [forceOpenBinary, setForceOpenBinary] = useState(false);
   const { modelService, markerService } = useMonacoServices();
+  const planModeEnabled = useFeature('planMode');
 
   // Kernel diagnostics
   const { handleValidate } = useKernelDiagnostics({
@@ -233,15 +228,14 @@ const FileEditor = memo(function ({
     return <ChatEditorBinaryWarning onForceOpen={handleForceOpenBinary} />;
   }
 
+  const ViewerComponent = resolveViewer(activeFile, { planModeEnabled });
+
   return (
     <div className='flex h-full flex-col bg-background'>
-      <ChatEditorBreadcrumbs filePath={filePath} />
-      <CodeEditor
-        loading={<Loader className='size-20 stroke-1 text-primary' />}
-        className='h-full bg-background'
-        defaultLanguage={activeFile.language}
-        defaultValue={editorContent}
-        path={createMonacoPath(activeFile.path)}
+      <ViewerComponent
+        filePath={filePath}
+        content={editorContent}
+        language={activeFile.language}
         onChange={handleCodeChange}
         onValidate={handleValidate}
       />

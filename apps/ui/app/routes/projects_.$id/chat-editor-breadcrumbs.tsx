@@ -9,9 +9,10 @@ import { FileSelector } from '#components/files/file-selector.js';
 
 type ChatEditorBreadcrumbsProperties = {
   readonly filePath: string;
+  readonly children?: ReactNode;
 };
 
-export function ChatEditorBreadcrumbs({ filePath }: ChatEditorBreadcrumbsProperties): ReactNode {
+export function ChatEditorBreadcrumbs({ filePath, children }: ChatEditorBreadcrumbsProperties): ReactNode {
   const { editorRef } = useProject();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -96,6 +97,7 @@ export function ChatEditorBreadcrumbs({ filePath }: ChatEditorBreadcrumbsPropert
           <span className='opacity-0'>placeholder</span>
         )}
       </div>
+      {children}
     </div>
   );
 }
