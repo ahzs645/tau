@@ -326,14 +326,16 @@ const runMain = named('runMain', async function <
     return { success: false, issues: [issue] };
   }
 });
-
-function enrichIssueLocation(issues: Array<KernelIssue>, fallbackFileName: string): KernelIssue[] {
+function enrichIssueLocation(
+  issues: Array<{ message: string; severity: string; location?: unknown }>,
+  fallbackFileName: string,
+): KernelIssue[] {
   return issues.map((issue) => ({
     ...issue,
     message: issue.message,
     type: 'runtime',
     severity: issue.severity === 'warning' ? 'warning' : 'error',
-    location: issue.location ?? {
+    location: (issue.location as KernelIssue['location']) ?? {
       fileName: fallbackFileName,
       startLineNumber: 1,
       startColumn: 1,
@@ -525,91 +527,106 @@ export default defineKernel({
     const { tracer } = runtime;
     const relativeFilePath = resolveToRelative(filePath, basePath);
 
-    const bundleResult = await runtime.bundler.bundle(filePath);
-    if (!bundleResult.success) {
-      throw new ReplicadBuildError(enrichIssueLocation(bundleResult.issues, relativeFilePath));
-    }
+    try {
+      const bundleResult = await runtime.bundler.bundle(filePath);
+      if (!bundleResult.success) {
+        throw new ReplicadBuildError(enrichIssueLocation(bundleResult.issues, relativeFilePath));
+      }
 
-    const executeResult = await runtime.execute(bundleResult.code);
-    if (!executeResult.success) {
-      throw new ReplicadBuildError(enrichIssueLocation(executeResult.issues, relativeFilePath));
-    }
+      const executeResult = await runtime.execute(bundleResult.code);
+      if (!executeResult.success) {
+        throw new ReplicadBuildError(enrichIssueLocation(executeResult.issues, relativeFilePath));
+      }
 
-    const module = executeResult.value as RuntimeModuleExports;
-    const mainSpan = tracer.startSpan('replicad.run-main', {
-      phase: 'computingGeometry',
-    });
-    const mainResult = await runMain<MainResultShapes>({
-      module,
-      parameters,
-      context,
-      sourceMapJson: bundleResult.sourceMap,
-      projectPath: basePath,
-    });
-    mainSpan.end();
-
-    if (context.tracingSummary) {
-      context.tracingSummary.flush();
-    }
-
-    if (!mainResult.success) {
-      throw new ReplicadBuildError(mainResult.issues);
-    }
-
-    const shapes = mainResult.value;
-
-    if (shapes === undefined) {
-      return {
-        geometry: [],
-        nativeHandle: [],
-        issues: [
-          {
-            message: 'main() did not return any shapes. Did you forget to add a return statement?',
-            location: {
-              fileName: relativeFilePath,
-              startLineNumber: 1,
-              startColumn: 1,
-            },
-            type: 'runtime',
-            severity: 'info',
-          },
-        ],
-      };
-    }
-
-    const defaultName = extractDefaultName(module);
-
-    let nativeHandle: InputShape[] = [];
-    const renderedShapes = renderOutput({
-      shapes,
-      beforeRender(shapesArray) {
-        nativeHandle = shapesArray;
-        return shapesArray;
-      },
-      defaultName,
-      tessellation,
-      withBrepEdges: context.withBrepEdges,
-    });
-
-    const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');
-    const shapes2d = renderedShapes.filter((shape): shape is GeometrySvg => shape.format === 'svg');
-
-    if (shapes3d.length === 0 && shapes2d.length === 0) {
-      return { geometry: [], nativeHandle: [] };
-    }
-
-    const gltfShapes: GeometryGltf[] = [];
-    if (shapes3d.length > 0) {
-      const gltfSpan = tracer.startSpan('replicad.mesh-to-gltf', {
-        shapeCount: shapes3d.length,
+      const module = executeResult.value as RuntimeModuleExports;
+      const mainSpan = tracer.startSpan('replicad.run-main', {
         phase: 'computingGeometry',
       });
-      const gltfBlob = await convertReplicadGeometriesToGltf(shapes3d, 'glb');
-      gltfSpan.end();
-      gltfShapes.push({ format: 'gltf', content: gltfBlob });
-    }
+      const mainResult = await runMain<MainResultShapes>({
+        module,
+        parameters,
+        context,
+        sourceMapJson: bundleResult.sourceMap,
+        projectPath: basePath,
+      });
+      mainSpan.end();
 
-    return { geometry: [...gltfShapes, ...shapes2d], nativeHandle };
+      if (context.tracingSummary) {
+        context.tracingSummary.flush();
+      }
+
+      if (!mainResult.success) {
+        throw new ReplicadBuildError(mainResult.issues);
+      }
+
+      const shapes = mainResult.value;
+
+      if (shapes === undefined) {
+        return {
+          geometry: [],
+          nativeHandle: [],
+          issues: [
+            {
+              message: 'main() did not return any shapes. Did you forget to add a return statement?',
+              location: {
+                fileName: relativeFilePath,
+                startLineNumber: 1,
+                startColumn: 1,
+              },
+              type: 'runtime',
+              severity: 'info',
+            },
+          ],
+        };
+      }
+
+      const defaultName = extractDefaultName(module);
+
+      let nativeHandle: InputShape[] = [];
+      const renderedShapes = renderOutput({
+        shapes,
+        beforeRender(shapesArray) {
+          nativeHandle = shapesArray;
+          return shapesArray;
+        },
+        defaultName,
+        tessellation,
+        withBrepEdges: context.withBrepEdges,
+      });
+
+      const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');
+      const shapes2d = renderedShapes.filter((shape): shape is GeometrySvg => shape.format === 'svg');
+
+      if (shapes3d.length === 0 && shapes2d.length === 0) {
+        return { geometry: [], nativeHandle: [] };
+      }
+
+      const gltfShapes: GeometryGltf[] = [];
+      if (shapes3d.length > 0) {
+        const gltfSpan = tracer.startSpan('replicad.mesh-to-gltf', {
+          shapeCount: shapes3d.length,
+          phase: 'computingGeometry',
+        });
+        const gltfBlob = await convertReplicadGeometriesToGltf(shapes3d, 'glb');
+        gltfSpan.end();
+        gltfShapes.push({ format: 'gltf', content: gltfBlob });
+      }
+
+      return { geometry: [...gltfShapes, ...shapes2d], nativeHandle };
+    } catch (error) {
+      if (error instanceof ReplicadBuildError) {
+        throw error;
+      }
+
+      const issue = formatRuntimeErrorWithOc({
+        error,
+        ocInstance: context.openCascade,
+        parseStackTrace: (errorToFormat) => parseError(errorToFormat, undefined, basePath),
+        applySourceMaps: (frames) => resolveLibraryFrames(frames, context),
+        deriveLocation: (frames) => deriveLocation(frames, undefined, basePath),
+      });
+      throw new ReplicadBuildError([issue]);
+    }
   },
 
   async exportGeometry({ fileType, tessellation, nativeHandle }, _runtime, _context) {

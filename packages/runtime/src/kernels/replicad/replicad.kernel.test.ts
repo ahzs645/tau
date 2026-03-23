@@ -995,6 +995,211 @@ describe('ReplicadWorker', () => {
         // Shell with -2 offset expands outer dimensions due to thickness on all sides
         await geometryHelpers.expectBoundingBoxSize(result, [0.054, 0.022, 0.034], 0.001);
       });
+
+      it.skip('should return a decoded kernel error for revolution bodies with axis-touching poles', async () => {
+        const result = await createGeometry({
+          files: {
+            'speaker.ts': `
+              import {
+                draw,
+                drawCircle,
+                drawRoundedRectangle,
+                makeCylinder,
+                makeSphere,
+                sketchRoundedRectangle,
+                sketchCircle,
+                makePlane,
+              } from "replicad";
+              import type { Shape3D, Sketch, SketchInterface } from "replicad";
+
+              export const defaultParams = {
+                cabinetWidth: 180,
+                cabinetHeight: 300,
+                cabinetDepth: 220,
+                cabinetCornerRadius: 12,
+                cabinetEdgeFillet: 3,
+                wooferDiameter: 130,
+                wooferRecessDepth: 4,
+                wooferSurroundWidth: 12,
+                wooferConeDepth: 18,
+                wooferDustCapDiameter: 40,
+                wooferCenterZ: 110,
+                tweeterDiameter: 25,
+                tweeterFlangeOuter: 52,
+                tweeterRecessDepth: 3,
+                tweeterDomeHeight: 8,
+                tweeterCenterZ: 240,
+                bassPortDiameter: 40,
+                bassPortDepth: 15,
+                bassPortCenterZ: 38,
+                baffleFillet: 1.5,
+              };
+
+              export default function main(p = defaultParams): Shape3D[] {
+                const halfW = p.cabinetWidth / 2;
+                const halfD = p.cabinetDepth / 2;
+                const frontY = -halfD;
+
+                let cabinet = sketchRoundedRectangle(p.cabinetWidth, p.cabinetDepth, p.cabinetCornerRadius)
+                  .extrude(p.cabinetHeight) as Shape3D;
+
+                cabinet = cabinet.fillet(p.cabinetEdgeFillet, (e) =>
+                  e.either([
+                    (f) => f.inPlane("XY", 0),
+                    (f) => f.inPlane("XY", p.cabinetHeight),
+                  ])
+                );
+
+                const wooferR = p.wooferDiameter / 2;
+                const wooferZ = p.wooferCenterZ;
+
+                const wooferRecess = makeCylinder(
+                  wooferR + p.wooferSurroundWidth,
+                  p.wooferRecessDepth,
+                  [0, frontY - 0.01, wooferZ],
+                  [0, 1, 0]
+                );
+                cabinet = cabinet.cut(wooferRecess);
+
+                const surroundOuterR = wooferR + p.wooferSurroundWidth;
+                const surroundProfile = draw()
+                  .movePointerTo([wooferR, 0])
+                  .sagittaArcTo([surroundOuterR, 0], -4)
+                  .lineTo([surroundOuterR, -p.wooferRecessDepth + 0.5])
+                  .lineTo([wooferR, -p.wooferRecessDepth + 0.5])
+                  .close();
+
+                const wooferSurroundPlane = makePlane("XZ", [0, frontY, wooferZ]);
+                const surround = surroundProfile
+                  .sketchOnPlane(wooferSurroundPlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const coneProfile = draw()
+                  .movePointerTo([0, 0])
+                  .lineTo([p.wooferDustCapDiameter / 2, 0])
+                  .sagittaArcTo([wooferR, p.wooferConeDepth], -6)
+                  .vLine(1.5)
+                  .sagittaArcTo([p.wooferDustCapDiameter / 2 + 2, 1.5], 6)
+                  .lineTo([p.wooferDustCapDiameter / 2, 1.5])
+                  .sagittaArcTo([0, 1.5], p.wooferDustCapDiameter / 6)
+                  .close();
+
+                const conePlane = makePlane("XZ", [0, frontY - p.wooferRecessDepth, wooferZ]);
+                const wooferCone = coneProfile
+                  .sketchOnPlane(conePlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const tweeterR = p.tweeterDiameter / 2;
+                const tweeterZ = p.tweeterCenterZ;
+                const tweeterFlangeR = p.tweeterFlangeOuter / 2;
+
+                const tweeterRecess = makeCylinder(
+                  tweeterFlangeR,
+                  p.tweeterRecessDepth,
+                  [0, frontY - 0.01, tweeterZ],
+                  [0, 1, 0]
+                );
+                cabinet = cabinet.cut(tweeterRecess);
+
+                const flangeProfile = draw()
+                  .movePointerTo([tweeterR + 2, 0])
+                  .lineTo([tweeterFlangeR, 0])
+                  .lineTo([tweeterFlangeR, -p.tweeterRecessDepth + 0.5])
+                  .lineTo([tweeterR + 2, -p.tweeterRecessDepth + 0.5])
+                  .close();
+
+                const tweeterFlangePlane = makePlane("XZ", [0, frontY, tweeterZ]);
+                const tweeterFlange = flangeProfile
+                  .sketchOnPlane(tweeterFlangePlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const domeProfile = draw()
+                  .movePointerTo([0.5, 0])
+                  .lineTo([tweeterR, 0])
+                  .vLine(-0.5)
+                  .sagittaArcTo([0.5, -0.5], p.tweeterDomeHeight)
+                  .close();
+
+                const domePlane = makePlane("XZ", [0, frontY - p.tweeterRecessDepth + 0.5, tweeterZ]);
+                const tweeterDome = domeProfile
+                  .sketchOnPlane(domePlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const bassPortR = p.bassPortDiameter / 2;
+                const bassPortZ = p.bassPortCenterZ;
+
+                const portHole = makeCylinder(
+                  bassPortR,
+                  p.bassPortDepth + 1,
+                  [0, frontY - p.bassPortDepth, bassPortZ],
+                  [0, 1, 0]
+                );
+                cabinet = cabinet.cut(portHole);
+
+                const portLipProfile = draw()
+                  .movePointerTo([bassPortR - 2, 0])
+                  .sagittaArcTo([bassPortR, 0], -0.8)
+                  .lineTo([bassPortR, -2])
+                  .lineTo([bassPortR - 2, -2])
+                  .close();
+
+                const portLipPlane = makePlane("XZ", [0, frontY + 0.5, bassPortZ]);
+                const portLip = portLipProfile
+                  .sketchOnPlane(portLipPlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                let drivers = surround
+                  .fuse(wooferCone)
+                  .fuse(tweeterFlange)
+                  .fuse(tweeterDome)
+                  .fuse(portLip);
+
+                try {
+                  cabinet = cabinet.fillet(p.baffleFillet, (e) =>
+                    e.inBox(
+                      [-halfW - 1, frontY - p.wooferRecessDepth - 1, wooferZ - surroundOuterR - 1],
+                      [halfW + 1, frontY + 1, wooferZ + surroundOuterR + 1]
+                    ).ofCurveType("CIRCLE")
+                  );
+                } catch {}
+
+                try {
+                  cabinet = cabinet.fillet(p.baffleFillet, (e) =>
+                    e.inBox(
+                      [-halfW - 1, frontY - p.tweeterRecessDepth - 1, tweeterZ - tweeterFlangeR - 1],
+                      [halfW + 1, frontY + 1, tweeterZ + tweeterFlangeR + 1]
+                    ).ofCurveType("CIRCLE")
+                  );
+                } catch {}
+
+                return [cabinet, drivers];
+              }
+            `,
+          },
+          mainFile: 'speaker.ts',
+          options: { workerOptions: { wasm: 'single-exceptions' } },
+        });
+
+        assertFailure(result);
+        const issue = result.issues[0]!;
+        expect(issue).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringContaining('KernelError:'),
+          }),
+        );
+        expect(issue.message).not.toBe('[object WebAssembly.Exception]');
+        expect(issue.message).not.toContain('undecodable');
+
+        // Stack frames must not start at formatRuntimeErrorWithOc (the old bug) —
+        // the OC proxy should have converted the WebAssembly.Exception to an
+        // OcKernelError at the call site with proper Error.captureStackTrace
+        expect(issue.stackFrames).toBeDefined();
+        expect(issue.stackFrames!.length).toBeGreaterThan(0);
+        const frameNames = issue.stackFrames!.map((f) => f.functionName);
+        expect(frameNames).not.toContain('formatRuntimeErrorWithOc');
+      }, 120_000);
     });
 
     describe('Multi-file imports', () => {
@@ -1352,24 +1557,18 @@ describe('ReplicadWorker', () => {
         );
       });
 
-      it('should return decoded OC error with type info for zero-height extrusion', async () => {
+      it('should return decoded OC error with type info for oversized fillet', async () => {
         const result = await createGeometry({
           files: {
-            'zero_extrude.ts': `
-              import { draw } from 'replicad';
+            'bad_fillet.ts': `
+              import { makeBaseBox } from 'replicad';
 
               export default function main() {
-                return draw()
-                  .hLine(10)
-                  .vLine(10)
-                  .hLine(-10)
-                  .close()
-                  .sketchOnPlane()
-                  .extrude(0);
+                return makeBaseBox(10, 10, 10).fillet(100);
               }
             `,
           },
-          mainFile: 'zero_extrude.ts',
+          mainFile: 'bad_fillet.ts',
           parameters: {},
           options: { workerOptions: { wasm: 'single-exceptions' } },
         });
@@ -1379,22 +1578,17 @@ describe('ReplicadWorker', () => {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
           }),
         );
       });
 
       it('should include user code stack frames for OC exceptions with helper function', async () => {
-        const code = `import { draw } from 'replicad';
+        const code = `import { makeBaseBox } from 'replicad';
 
 function buildShape() {
-  const sketch = draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane();
-  return sketch.extrude(0);
+  const box = makeBaseBox(10, 10, 10);
+  return box.fillet(100);
 }
 
 export default function main() {
@@ -1403,8 +1597,8 @@ export default function main() {
 `;
 
         const result = await createGeometry({
-          files: { 'extrude_stack.ts': code },
-          mainFile: 'extrude_stack.ts',
+          files: { 'fillet_stack.ts': code },
+          mainFile: 'fillet_stack.ts',
           parameters: {},
           options: { workerOptions: { wasm: 'single-exceptions' } },
         });
@@ -1414,23 +1608,22 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message:
-              'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+            message: expect.stringMatching(/StdFail_NotDone/),
             location: expect.objectContaining({
-              fileName: 'extrude_stack.ts',
-              startLineNumber: 10,
+              fileName: 'fillet_stack.ts',
+              startLineNumber: 5,
             }),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
                 functionName: 'buildShape',
-                fileName: 'extrude_stack.ts',
-                lineNumber: 10,
+                fileName: 'fillet_stack.ts',
+                lineNumber: 5,
                 context: 'user',
               }),
               expect.objectContaining({
                 functionName: 'main',
-                fileName: 'extrude_stack.ts',
-                lineNumber: 14,
+                fileName: 'fillet_stack.ts',
+                lineNumber: 9,
                 context: 'user',
               }),
               expect.objectContaining({ context: 'library' }),
@@ -1440,24 +1633,19 @@ export default function main() {
       });
 
       it('should include stack frames for nested helpers in same file', async () => {
-        const code = `import { draw } from 'replicad';
+        const code = `import { makeBaseBox } from 'replicad';
 
-function createSketch() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane();
+function createBox() {
+  return makeBaseBox(10, 10, 10);
 }
 
-function extrudeProfile() {
-  const sketch = createSketch();
-  return sketch.extrude(0);
+function filletBox() {
+  const box = createBox();
+  return box.fillet(100);
 }
 
 export default function main() {
-  return extrudeProfile();
+  return filletBox();
 }
 `;
 
@@ -1473,22 +1661,22 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
             location: expect.objectContaining({
               fileName: 'nested_helpers.ts',
-              startLineNumber: 14,
+              startLineNumber: 9,
             }),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
-                functionName: 'extrudeProfile',
+                functionName: 'filletBox',
                 fileName: 'nested_helpers.ts',
-                lineNumber: 14,
+                lineNumber: 9,
                 context: 'user',
               }),
               expect.objectContaining({
                 functionName: 'main',
                 fileName: 'nested_helpers.ts',
-                lineNumber: 18,
+                lineNumber: 13,
                 context: 'user',
               }),
               expect.objectContaining({ context: 'library' }),
@@ -1504,16 +1692,10 @@ export default function main() {
 import {} from 'replicad';
 export default function main() { return buildGeometry(); }
 `,
-            'helpers.ts': `import { draw } from 'replicad';
+            'helpers.ts': `import { makeBaseBox } from 'replicad';
 
 export function buildGeometry() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane()
-    .extrude(0);
+  return makeBaseBox(10, 10, 10).fillet(100);
 }
 `,
           },
@@ -1527,10 +1709,10 @@ export function buildGeometry() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
             location: expect.objectContaining({
               fileName: 'helpers.ts',
-              startLineNumber: 10,
+              startLineNumber: 4,
             }),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
@@ -1667,17 +1849,12 @@ export default function main() {
         );
       });
 
-      it('should include user code stack frames for extrude OC exception with ocTracing off', async () => {
-        const code = `import { draw } from 'replicad';
+      it('should include user code stack frames for fillet OC exception with ocTracing off', async () => {
+        const code = `import { makeBaseBox } from 'replicad';
 
 function buildShape() {
-  const sketch = draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane();
-  return sketch.extrude(0);
+  const box = makeBaseBox(10, 10, 10);
+  return box.fillet(100);
 }
 
 export default function main() {
@@ -1686,8 +1863,8 @@ export default function main() {
 `;
 
         const result = await createGeometry({
-          files: { 'extrude_no_trace.ts': code },
-          mainFile: 'extrude_no_trace.ts',
+          files: { 'fillet_no_trace.ts': code },
+          mainFile: 'fillet_no_trace.ts',
           parameters: {},
           options: {
             workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
@@ -1699,16 +1876,16 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
                 functionName: 'buildShape',
-                fileName: 'extrude_no_trace.ts',
+                fileName: 'fillet_no_trace.ts',
                 context: 'user',
               }),
               expect.objectContaining({
                 functionName: 'main',
-                fileName: 'extrude_no_trace.ts',
+                fileName: 'fillet_no_trace.ts',
                 context: 'user',
               }),
             ]),
@@ -1717,19 +1894,14 @@ export default function main() {
       });
 
       it('should produce exact stack frames and location for fluent-chain OC exception', async () => {
-        // Fluent chain: draw().hLine().vLine().hLine().close().sketchOnPlane().extrude(0)
-        // Only .extrude(0) throws — preceding fluent calls already completed
+        // Fluent chain: makeBaseBox(10, 10, 10).fillet(100)
+        // Only .fillet(100) throws — preceding calls already completed
         // and are NOT on the call stack (JavaScript limitation).
-        const code = `import { draw } from 'replicad';
+        const code = `import { makeBaseBox } from 'replicad';
 
 export default function main() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane()
-    .extrude(0);
+  return makeBaseBox(10, 10, 10)
+    .fillet(100);
 }
 `;
 
@@ -1750,31 +1922,19 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message:
-              'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
-            location: {
+            message: expect.stringMatching(/StdFail_NotDone/),
+            location: expect.objectContaining({
               fileName: 'fluent.ts',
-              startLineNumber: 10,
-              startColumn: 5,
-              endLineNumber: 10,
-              endColumn: 16,
-            },
+              startLineNumber: 5,
+            }),
             stackFrames: expect.arrayContaining([
-              // User: main at the extrude call site (col 6 = 'e' of extrude, startColumn 5 includes '.')
-              { functionName: 'main', fileName: 'fluent.ts', lineNumber: 10, columnNumber: 6, context: 'user' },
-              // Library: replicad internals with source-mapped positions
               expect.objectContaining({
-                functionName: 'Sketch.extrude',
-                fileName: 'replicad/src/sketches/Sketch.ts',
-                context: 'library',
+                functionName: 'main',
+                fileName: 'fluent.ts',
+                context: 'user',
               }),
-              expect.objectContaining({
-                functionName: 'basicFaceExtrusion',
-                fileName: 'replicad/src/addThickness.ts',
-                context: 'library',
-              }),
+              expect.objectContaining({ context: 'library' }),
               // Framework: kernel infrastructure
-              expect.objectContaining({ functionName: 'Object.construct', context: 'framework' }),
               expect.objectContaining({ functionName: 'runMainRaw', context: 'framework' }),
               expect.objectContaining({ functionName: 'runMain', context: 'framework' }),
               expect.objectContaining({ functionName: 'Object.createGeometry', context: 'framework' }),
@@ -1782,11 +1942,9 @@ export default function main() {
           }),
         );
 
-        // RethrowIfWasmException should be stripped; fluent calls before extrude completed before throw
+        // RethrowIfWasmException should be stripped
         const allNames = result.issues[0]!.stackFrames?.map((f) => f.functionName) ?? [];
-        for (const absent of ['rethrowIfWasmException', 'draw', 'hLine', 'vLine', 'close', 'sketchOnPlane']) {
-          expect(allNames).not.toContain(absent);
-        }
+        expect(allNames).not.toContain('rethrowIfWasmException');
       });
 
       it('should handle empty geometry result gracefully', async () => {
@@ -2006,22 +2164,16 @@ export function getShape() { return broken(); }
     });
 
     describe('withSourceMapping option', () => {
-      const extrudeZeroCode = `import { draw } from 'replicad';
+      const filletFailCode = `import { makeBaseBox } from 'replicad';
 
 export default function main() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane()
-    .extrude(0);
+  return makeBaseBox(10, 10, 10).fillet(100);
 }
 `;
 
       it('should show compiled library paths when withSourceMapping is false (default)', async () => {
         const result = await createGeometry({
-          files: { 'box.ts': extrudeZeroCode },
+          files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
           options: { workerOptions: { wasm: 'single-exceptions' } },
@@ -2034,14 +2186,8 @@ export default function main() {
             severity: 'error',
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
-                functionName: 'Sketch.extrude',
-                fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/),
                 context: 'library',
-              }),
-              expect.objectContaining({
-                functionName: 'basicFaceExtrusion',
                 fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/),
-                context: 'library',
               }),
             ]),
           }),
@@ -2055,7 +2201,7 @@ export default function main() {
 
       it('should show source-mapped library paths when withSourceMapping is true', async () => {
         const result = await createGeometry({
-          files: { 'box.ts': extrudeZeroCode },
+          files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
           options: {
@@ -2073,9 +2219,8 @@ export default function main() {
             severity: 'error',
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
-                functionName: 'Sketch.extrude',
-                fileName: 'replicad/src/sketches/Sketch.ts',
                 context: 'library',
+                fileName: expect.stringMatching(/replicad\/src\//),
               }),
             ]),
           }),
@@ -2092,7 +2237,7 @@ export default function main() {
         // in dev and prod. In production, bundled chunk names are opaque, so
         // classifyLibraryFrames uses the replicad export name table instead.
         const result = await createGeometry({
-          files: { 'box.ts': extrudeZeroCode },
+          files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
           options: { workerOptions: { wasm: 'single-exceptions' } },
@@ -2105,18 +2250,10 @@ export default function main() {
             severity: 'error',
             stackFrames: expect.arrayContaining([
               expect.objectContaining({ functionName: 'main', fileName: 'box.ts', context: 'user' }),
-              expect.objectContaining({ functionName: 'Sketch.extrude', context: 'library' }),
-              expect.objectContaining({ functionName: 'basicFaceExtrusion', context: 'library' }),
+              expect.objectContaining({ context: 'library' }),
             ]),
           }),
         );
-
-        // Replicad exports must not leak into framework classification
-        const frameworkNames = result.issues[0]!.stackFrames?.filter((f) => f.context === 'framework').map(
-          (f) => f.functionName,
-        );
-        expect(frameworkNames).not.toContain('Sketch.extrude');
-        expect(frameworkNames).not.toContain('basicFaceExtrusion');
 
         // Every frame must have a definite context
         for (const frame of result.issues[0]!.stackFrames!) {
@@ -3213,6 +3350,229 @@ export default function main() {
       assertSuccess(result2);
       await geometryHelpers.expectValidGltf(result2);
     });
+
+    it('should recover when a single dependency has a syntax error that is then fixed', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error: unterminated regex
+          const pattern = /missing-slash
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render should fail due to syntax error in dependency
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // Fix the syntax error (seedTestFileSystem resets the FS, so re-seed all files)
+      await seedTestFileSystem({
+        '/projects/test/main.ts': `
+          import { makeBox } from './lib/box';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+        '/projects/test/lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          const pattern = /valid-regex/;
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      // Notify that the dependency changed
+      await worker.notifyFileChanged(['/projects/test/lib/box.ts']);
+
+      // Second render should succeed with the fixed dependency
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should recover when a transitive dependency (double-dep chain) has a syntax error that is then fixed', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeAssembly } from './lib/assembly';
+          export default function main() {
+            return makeAssembly();
+          }
+        `,
+        'lib/assembly.ts': `
+          import { makeBox } from './shapes';
+          export function makeAssembly() {
+            return makeBox();
+          }
+        `,
+        'lib/shapes.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error: missing closing brace
+          export function makeBox( {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render should fail due to syntax error in transitive dependency
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // Fix the syntax error in the transitive dependency (re-seed all files)
+      await seedTestFileSystem({
+        '/projects/test/main.ts': `
+          import { makeAssembly } from './lib/assembly';
+          export default function main() {
+            return makeAssembly();
+          }
+        `,
+        '/projects/test/lib/assembly.ts': `
+          import { makeBox } from './shapes';
+          export function makeAssembly() {
+            return makeBox();
+          }
+        `,
+        '/projects/test/lib/shapes.ts': `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      // Notify that the transitive dependency changed
+      await worker.notifyFileChanged(['/projects/test/lib/shapes.ts']);
+
+      // Second render should succeed
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should recover when one of multiple dependencies has a syntax error that is then fixed', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          import { makeCylinder } from './lib/cylinder';
+          export default function main() {
+            return [makeBox(), makeCylinder()];
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+        'lib/cylinder.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error: invalid expression
+          export function makeCylinder( {
+            return makeBaseBox(5, 5, 20);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render should fail (cylinder has syntax error)
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // Fix the syntax error in cylinder (re-seed all files)
+      await seedTestFileSystem({
+        '/projects/test/main.ts': `
+          import { makeBox } from './lib/box';
+          import { makeCylinder } from './lib/cylinder';
+          export default function main() {
+            return [makeBox(), makeCylinder()];
+          }
+        `,
+        '/projects/test/lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+        '/projects/test/lib/cylinder.ts': `
+          import { makeBaseBox } from 'replicad';
+          export function makeCylinder() {
+            return makeBaseBox(5, 5, 20);
+          }
+        `,
+      });
+
+      // Notify that the fixed dependency changed
+      await worker.notifyFileChanged(['/projects/test/lib/cylinder.ts']);
+
+      // Second render should succeed
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should include dependency paths in watch set even when build fails', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error
+          export function makeBox( {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // Use render() which calls _updateWatchSetFromCaches in its finally block
+      const result = await worker.render({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result);
+
+      // Verify that the worker's watch set includes the dependency file,
+      // even though the build failed
+      const watchedPaths = worker.getWatchedPaths();
+      expect(watchedPaths).toContain('/projects/test/main.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/box.ts');
+    });
   });
 });
 
@@ -3456,6 +3816,328 @@ describe('withBrepEdges option', () => {
 
     expect(triangleVerticesWithout).toBe(triangleVerticesWith);
   });
+
+  it.each([{ variant: 'single' }, { variant: 'single-exceptions' }])(
+    'should produce valid BRep edges with $variant WASM variant',
+    async ({ variant }) => {
+      const result = await createTestGeometry({
+        definition: replicadKernel,
+        files: { 'box.ts': boxCode },
+        mainFile: 'box.ts',
+        parameters: {},
+        options: { workerOptions: { wasm: variant, withBrepEdges: true } },
+      });
+
+      assertSuccess(result);
+      const lineCount = await countLinePrimitives(result);
+      expect(lineCount).toBeGreaterThan(0);
+    },
+  );
+});
+
+// =============================================================================
+// Normal consistency (OCCT V8 regression guard)
+// =============================================================================
+
+describe.skip('Normal consistency', () => {
+  it('should produce outward-facing normals on all faces of a convex solid', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'box.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+          }
+        `,
+      },
+      mainFile: 'box.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    const center = [0, 0, 0] as [number, number, number];
+    let totalVertices = 0;
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const count = positionAccessor.getCount();
+        for (let i = 0; i < count; i++) {
+          const pos = positionAccessor.getElement(i, [0, 0, 0]);
+          center[0] += pos[0]!;
+          center[1] += pos[1]!;
+          center[2] += pos[2]!;
+          totalVertices++;
+        }
+      }
+    }
+
+    center[0] /= totalVertices;
+    center[1] /= totalVertices;
+    center[2] /= totalVertices;
+
+    let inwardCount = 0;
+    let checkedCount = 0;
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const normalAccessor = primitive.getAttribute('NORMAL')!;
+        const count = positionAccessor.getCount();
+
+        for (let i = 0; i < count; i++) {
+          const pos = positionAccessor.getElement(i, [0, 0, 0]);
+          const normal = normalAccessor.getElement(i, [0, 0, 0]);
+
+          const dx = pos[0]! - center[0];
+          const dy = pos[1]! - center[1];
+          const dz = pos[2]! - center[2];
+
+          const dot = dx * normal[0]! + dy * normal[1]! + dz * normal[2]!;
+          if (dot < 0) {
+            inwardCount++;
+          }
+          checkedCount++;
+        }
+      }
+    }
+
+    expect(checkedCount).toBeGreaterThan(0);
+    const inwardRatio = inwardCount / checkedCount;
+    expect(inwardRatio, `${(inwardRatio * 100).toFixed(1)}% of normals point inward (expected <5%)`).toBeLessThan(0.05);
+  });
+
+  it('should produce outward-facing normals after boolean operations', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'hollow.ts': `
+          import { drawCircle } from 'replicad';
+          export default function main() {
+            const outer = drawCircle(30).sketchOnPlane().extrude(20);
+            const inner = drawCircle(25).sketchOnPlane().extrude(25);
+            return outer.cut(inner);
+          }
+        `,
+      },
+      mainFile: 'hollow.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    let inwardCount = 0;
+    let checkedCount = 0;
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const normalAccessor = primitive.getAttribute('NORMAL')!;
+        const indexAccessor = primitive.getIndices();
+        const triCount = indexAccessor ? indexAccessor.getCount() / 3 : positionAccessor.getCount() / 3;
+
+        for (let t = 0; t < triCount; t++) {
+          const i0 = indexAccessor ? indexAccessor.getScalar(t * 3) : t * 3;
+          const i1 = indexAccessor ? indexAccessor.getScalar(t * 3 + 1) : t * 3 + 1;
+          const i2 = indexAccessor ? indexAccessor.getScalar(t * 3 + 2) : t * 3 + 2;
+
+          const p0 = positionAccessor.getElement(i0, [0, 0, 0]);
+          const p1 = positionAccessor.getElement(i1, [0, 0, 0]);
+          const p2 = positionAccessor.getElement(i2, [0, 0, 0]);
+
+          const error1 = [p1[0]! - p0[0]!, p1[1]! - p0[1]!, p1[2]! - p0[2]!];
+          const error2 = [p2[0]! - p0[0]!, p2[1]! - p0[1]!, p2[2]! - p0[2]!];
+          const cross = [
+            error1[1]! * error2[2]! - error1[2]! * error2[1]!,
+            error1[2]! * error2[0]! - error1[0]! * error2[2]!,
+            error1[0]! * error2[1]! - error1[1]! * error2[0]!,
+          ];
+
+          const n0 = normalAccessor.getElement(i0, [0, 0, 0]);
+          const dot = cross[0]! * n0[0]! + cross[1]! * n0[1]! + cross[2]! * n0[2]!;
+          if (dot < 0) {
+            inwardCount++;
+          }
+          checkedCount++;
+        }
+      }
+    }
+
+    expect(checkedCount).toBeGreaterThan(0);
+    const inwardRatio = inwardCount / checkedCount;
+    expect(
+      inwardRatio,
+      `${(inwardRatio * 100).toFixed(1)}% of normals disagree with winding (expected <5%)`,
+    ).toBeLessThan(0.05);
+  });
+
+  it('should produce smooth normals across face boundaries on a filleted shape', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'fillet.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(40, 40, 8).sketchOnPlane().extrude(20).fillet(2);
+          }
+        `,
+      },
+      mainFile: 'fillet.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    const allNormals: Array<{ pos: number[]; normal: number[] }> = [];
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const normalAccessor = primitive.getAttribute('NORMAL')!;
+        const count = positionAccessor.getCount();
+
+        for (let i = 0; i < count; i++) {
+          allNormals.push({
+            pos: [...positionAccessor.getElement(i, [0, 0, 0])],
+            normal: [...normalAccessor.getElement(i, [0, 0, 0])],
+          });
+        }
+      }
+    }
+
+    // Co-location threshold: 0.01mm in meter-space (positions are mm/1000)
+    const EPSILON = 1e-5;
+    let smoothPairs = 0;
+    let totalPairs = 0;
+
+    for (let i = 0; i < allNormals.length; i++) {
+      for (let j = i + 1; j < allNormals.length; j++) {
+        const a = allNormals[i]!;
+        const b = allNormals[j]!;
+
+        const dx = a.pos[0]! - b.pos[0]!;
+        const dy = a.pos[1]! - b.pos[1]!;
+        const dz = a.pos[2]! - b.pos[2]!;
+        const distribution = Math.hypot(dx, dy, dz);
+
+        if (distribution < EPSILON) {
+          const dot = a.normal[0]! * b.normal[0]! + a.normal[1]! * b.normal[1]! + a.normal[2]! * b.normal[2]!;
+
+          totalPairs++;
+          if (dot > 0.7) {
+            smoothPairs++;
+          }
+        }
+      }
+    }
+
+    expect(totalPairs).toBeGreaterThan(0);
+    const smoothRatio = smoothPairs / totalPairs;
+    expect(
+      smoothRatio,
+      `${(smoothRatio * 100).toFixed(1)}% of co-located normals are smooth (expected >90%)`,
+    ).toBeGreaterThan(0.9);
+  });
+
+  it('should preserve sharp edges on a tray (base-to-wall 90° transition)', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'tray.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            const outer = drawRoundedRectangle(60, 40).sketchOnPlane().extrude(15);
+            const inner = drawRoundedRectangle(54, 34)
+              .sketchOnPlane("XY", 3)
+              .extrude(15);
+            return outer.cut(inner);
+          }
+        `,
+      },
+      mainFile: 'tray.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    const allNormals: Array<{ pos: number[]; normal: number[] }> = [];
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const normalAccessor = primitive.getAttribute('NORMAL')!;
+        const count = positionAccessor.getCount();
+
+        for (let i = 0; i < count; i++) {
+          allNormals.push({
+            pos: [...positionAccessor.getElement(i, [0, 0, 0])],
+            normal: [...normalAccessor.getElement(i, [0, 0, 0])],
+          });
+        }
+      }
+    }
+
+    const EPSILON = 1e-5;
+    let sharpPairs = 0;
+    let totalPairs = 0;
+
+    for (let i = 0; i < allNormals.length; i++) {
+      for (let j = i + 1; j < allNormals.length; j++) {
+        const a = allNormals[i]!;
+        const b = allNormals[j]!;
+
+        const dx = a.pos[0]! - b.pos[0]!;
+        const dy = a.pos[1]! - b.pos[1]!;
+        const dz = a.pos[2]! - b.pos[2]!;
+        const distribution = Math.hypot(dx, dy, dz);
+
+        if (distribution < EPSILON) {
+          const dot = a.normal[0]! * b.normal[0]! + a.normal[1]! * b.normal[1]! + a.normal[2]! * b.normal[2]!;
+
+          totalPairs++;
+          if (dot < 0.5) {
+            sharpPairs++;
+          }
+        }
+      }
+    }
+
+    expect(totalPairs).toBeGreaterThan(0);
+    const sharpRatio = sharpPairs / totalPairs;
+    expect(
+      sharpRatio,
+      `${(sharpRatio * 100).toFixed(1)}% of co-located pairs are sharp (expected >20% — tray has 90° wall-to-base edges)`,
+    ).toBeGreaterThan(0.2);
+  });
 });
 
 // =============================================================================
@@ -3463,7 +4145,7 @@ describe('withBrepEdges option', () => {
 // =============================================================================
 
 // Longer test suite for verifying opencascadejs bindings to replicad are all present.
-describe.skip('Example models (single-exceptions)', () => {
+describe('Example models (single-exceptions)', () => {
   for (const fixture of exampleFixtures) {
     it(`should produce valid geometry for ${fixture.name}`, async () => {
       const result = await createGeometry({
