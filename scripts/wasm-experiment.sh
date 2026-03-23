@@ -346,24 +346,34 @@ if [ "$EXP_BIGINT" = "true" ]; then
   BIGINT_FLAG="1"
 fi
 
+EXP_CONFIG=$(parse_yaml_field "configuration" "")
+
 cd "$OCJS_DIR"
-OCJS_OPT="$EXP_OPT" \
-OCJS_LTO="$LTO_FLAG" \
-OCJS_EXCEPTIONS="$EXC_FLAG" \
-THREADING="$EXP_THREADING" \
-OCJS_WASM_OPT_LEVEL="$EXP_WASM_OPT" \
-OCJS_CLOSURE="$EXP_CLOSURE" \
-OCJS_EVAL_CTORS="$EXP_EVAL_CTORS" \
-OCJS_EVAL_CTORS_LEVEL="$EXP_EVAL_CTORS_LEVEL" \
-OCJS_CONVERGE="$EXP_CONVERGE" \
-OCJS_DEFINES="$EXP_DEFINES" \
-OCJS_UNDEFINES="$EXP_UNDEFINES" \
-OCJS_PATCH_DUMP="$EXP_PATCH_DUMP" \
-OCJS_SIMD="$SIMD_FLAG" \
-OCJS_BIGINT="$BIGINT_FLAG" \
-  ./build-wasm.sh full "$YAML_PATH"
+
+# Use --config if experiment specifies a named configuration; otherwise set env vars directly
+BUILD_ARGS=()
+if [ -n "$EXP_CONFIG" ] && [ "$EXP_CONFIG" != "None" ]; then
+  BUILD_ARGS+=(--config "$EXP_CONFIG")
+else
+  export OCJS_OPT="$EXP_OPT"
+  export OCJS_LTO="$LTO_FLAG"
+  export OCJS_EXCEPTIONS="$EXC_FLAG"
+  export THREADING="$EXP_THREADING"
+  export OCJS_WASM_OPT_LEVEL="$EXP_WASM_OPT"
+  export OCJS_CLOSURE="$EXP_CLOSURE"
+  export OCJS_EVAL_CTORS="$EXP_EVAL_CTORS"
+  export OCJS_EVAL_CTORS_LEVEL="$EXP_EVAL_CTORS_LEVEL"
+  export OCJS_CONVERGE="$EXP_CONVERGE"
+  export OCJS_DEFINES="$EXP_DEFINES"
+  export OCJS_UNDEFINES="$EXP_UNDEFINES"
+  export OCJS_PATCH_DUMP="$EXP_PATCH_DUMP"
+  export OCJS_SIMD="$SIMD_FLAG"
+  export OCJS_BIGINT="$BIGINT_FLAG"
+fi
 
 WASM_OUT_DIR="$(dirname "$YAML_PATH")"
+export OCJS_OUTPUT_DIR="$WASM_OUT_DIR"
+./build-wasm.sh "${BUILD_ARGS[@]}" full "$YAML_PATH"
 
 # Verify WASM was actually produced
 WASM_COUNT=0

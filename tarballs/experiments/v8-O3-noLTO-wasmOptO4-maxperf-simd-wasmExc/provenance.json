@@ -1,7 +1,7 @@
 {
   "schema": "wasm-build-provenance-v1",
-  "buildId": "20260320T031844-O3-noLTO-single",
-  "timestamp": "2026-03-20T03:18:44.708342+00:00",
+  "buildId": "20260322T202401-O3-noLTO-single",
+  "timestamp": "2026-03-22T20:24:01.358253+00:00",
   "toolchain": {
     "emscripten": "5.0.1",
     "llvm": "17",
@@ -10,7 +10,7 @@
   },
   "source": {
     "occtCommit": "48ebca0f70a5e4b936548b695bc3583363898da4",
-    "opencascadejsCommit": "55dcf253bf68ed7e7811bd1521516c0102a07654",
+    "opencascadejsCommit": "508e00a836cd5ae3b0c2befc6bdbae8d2e3c897b",
     "filterPackagesHash": "8b12ca608181",
     "pinnedDeps": {
       "occt": {
@@ -50,12 +50,12 @@
       "-msimd128"
     ],
     "sourceFiles": 0,
-    "bindingFiles": 4446,
-    "compileDuration_s": 1307
+    "bindingFiles": 4448,
+    "compileDuration_s": 873
   },
   "linking": {
     "yamlConfig": "replicad_with_exceptions.js",
-    "yamlConfigHash": "5c7332edbf56",
+    "yamlConfigHash": "a1a8a03d486d",
     "boundSymbols": 218,
     "symbolList": [
       "Message_ProgressRange",
@@ -278,7 +278,6 @@
       "Standard_Failure"
     ],
     "emccFlags": [
-      "-flto",
       "-fwasm-exceptions",
       "-sEXPORT_EXCEPTION_HANDLING_HELPERS",
       "-sEXPORT_ES6=1",
@@ -292,13 +291,10 @@
       "-sERROR_ON_UNDEFINED_SYMBOLS=0",
       "-Wl,--allow-undefined",
       "-sSTACK_SIZE=8388608",
-      "-sWASM_BIGINT",
-      "-sEVAL_CTORS=2",
-      "-msimd128",
-      "-mrelaxed-simd",
-      "-O3"
+      "-O3",
+      "-g2"
     ],
-    "linkDuration_s": 59.8
+    "linkDuration_s": 40.2
   },
   "postProcessing": {
     "wasmOptFlags": [
@@ -314,36 +310,36 @@
       "--enable-simd",
       "--enable-relaxed-simd"
     ],
-    "preOptSize": 21815196,
-    "postOptSize": 21802684,
-    "optReduction": "0.1%",
-    "wasmOptDuration_s": 141.3
+    "preOptSize": 24625529,
+    "postOptSize": 21738594,
+    "optReduction": "11.7%",
+    "wasmOptDuration_s": 76.6
   },
   "output": {
     "replicad_single.wasm": {
-      "size": 24550326,
-      "sha256": "2435b4582b0610c0"
+      "size": 20163258,
+      "sha256": "0a613250bacd2169"
     },
     "replicad_with_exceptions.wasm": {
-      "size": 21802684,
-      "sha256": "10afa19b7da3696f"
+      "size": 21738594,
+      "sha256": "693044375400cea9"
     },
     "replicad_single.js": {
-      "size": 133652
+      "size": 54212
     },
     "replicad_with_exceptions.js": {
-      "size": 53575
+      "size": 215722
     },
     "custom-wrappers.d.ts": {
       "size": 647,
       "lines": 22
     },
     "replicad_single.d.ts": {
-      "size": 961045,
-      "lines": 20939
+      "size": 969086,
+      "lines": 21041
     },
     "replicad_with_exceptions.d.ts": {
-      "size": 968336,
+      "size": 970340,
       "lines": 21069
     }
   },
@@ -351,5 +347,5 @@
   "filtering": {
     "excludedPackages": []
   },
-  "totalDuration_s": 1525
+  "totalDuration_s": 1002
 }
