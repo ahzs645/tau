@@ -207,11 +207,12 @@ async function runMadge(): Promise<CheckResult> {
 }
 
 async function runSizeLimit(): Promise<CheckResult> {
-  if (!packageJson['size-limit']) {
+  const hasSizeLimitConfig = packageJson['size-limit'] || existsSync(join(absoluteRoot, '.size-limit.json'));
+  if (!hasSizeLimitConfig) {
     return {
       name: 'size-limit',
       status: 'skip',
-      details: ['no config found in package.json'],
+      details: ['no config found in package.json or .size-limit.json'],
     };
   }
 

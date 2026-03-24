@@ -44,6 +44,7 @@
     "repos:status": "node scripts/dist/repos.js status --all",
     "docs:validate": "nx run scripts:validate-frontmatter",
     "projects:validate": "nx run scripts:validate-project-names",
+    "size:build": "node tools/size-build.mjs",
     "prepare": "husky"
   },
   "dependencies": {
@@ -119,6 +120,7 @@
     "@shikijs/monaco": "^3.22.0",
     "@shikijs/themes": "^3.22.0",
     "@shikijs/transformers": "^3.22.0",
+    "@size-limit/file": "catalog:",
     "@socket.io/redis-streams-adapter": "catalog:",
     "@statelyai/inspect": "^0.4.0",
     "@tanstack/react-query": "^4.43.0",
@@ -222,6 +224,7 @@
     "rxjs": "^7.8.2",
     "safe-regex": "^2.1.1",
     "shiki": "^3.22.0",
+    "size-limit": "catalog:",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "sonner": "^2.0.7",
