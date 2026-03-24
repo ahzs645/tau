@@ -18,6 +18,7 @@ import { filterBenchmarks, benchmarkCategories } from '#benchmarks/benchmark-sui
 import { runBenchmarks } from '#benchmarks/benchmark-runner.js';
 import type { BenchmarkRunResult, BuildProvenance } from '#benchmarks/benchmark-runner.js';
 import { generateHtmlReport, serializeRunResult } from '#benchmarks/benchmark-report.js';
+import type { ProfiledCaseData } from '#benchmarks/profile-report.js';
 import process from 'node:process';
 
 // ── ANSI color helpers ──────────────────────────────────────────────
@@ -68,6 +69,8 @@ const { values } = parseArgs({
     'wasm-variant': { type: 'string', default: 'single' },
     ocProfile: { type: 'boolean', default: false },
     noTracing: { type: 'boolean', default: false },
+    cpuProfile: { type: 'boolean', default: false },
+    profileInterval: { type: 'string', default: '100' },
     help: { type: 'boolean', short: 'h', default: false },
   },
   strict: true,
@@ -91,6 +94,8 @@ ${c.dim}Options:${c.reset}
       ${c.cyan}--wasm-variant${c.reset} <v>  WASM variant name: single (default) or single-exceptions
       ${c.cyan}--ocProfile${c.reset}         Use per-call OC tracing for deep profiling
       ${c.cyan}--noTracing${c.reset}         Disable OC tracing entirely for pure timing
+      ${c.cyan}--cpuProfile${c.reset}        Enable V8 CPU profiling for per-function timing breakdown
+      ${c.cyan}--profileInterval${c.reset} <us>  CPU profiler sampling interval in microseconds (default: 100)
   ${c.cyan}-h${c.reset}, ${c.cyan}--help${c.reset}              Show this help message
 `);
   process.exit(0);
@@ -237,6 +242,54 @@ function writeResults(result: BenchmarkRunResult): void {
   }
 }
 
+// ── CPU profile output ──────────────────────────────────────────────
+
+async function writeProfileResults(result: BenchmarkRunResult): Promise<void> {
+  const outputDirectory = resolve(values.output);
+  if (!existsSync(outputDirectory)) {
+    mkdirSync(outputDirectory, { recursive: true });
+  }
+
+  const timestamp = result.timestamp.replaceAll(/[.:]/g, '-');
+  const profileDir = join(outputDirectory, `profiles-${timestamp}`);
+  mkdirSync(profileDir, { recursive: true });
+
+  const profiledCases: ProfiledCaseData[] = [];
+
+  for (const r of result.results) {
+    if (r.cpuProfile) {
+      const profilePath = join(profileDir, `${r.name}.cpuprofile`);
+      writeFileSync(profilePath, JSON.stringify(r.cpuProfile));
+      success(`Profile written: ${profilePath}`);
+    }
+
+    if (r.profileAnalysis) {
+      profiledCases.push({
+        name: r.name,
+        analysis: r.profileAnalysis,
+        profile: r.cpuProfile,
+      });
+    }
+  }
+
+  if (profiledCases.length > 0) {
+    const { generateProfileHtmlReport } = await import('#benchmarks/profile-report.js');
+    const profileHtmlPath = join(outputDirectory, `cpu-profile-${timestamp}.html`);
+    writeFileSync(profileHtmlPath, generateProfileHtmlReport(profiledCases, result.timestamp));
+
+    heading('CPU Profile Report');
+    label('HTML', profileHtmlPath);
+    label('Profiles', profileDir);
+    label('Cases', `${profiledCases.length}`);
+
+    for (const pc of profiledCases) {
+      const overhead = pc.analysis.frameworkOverheadPct;
+      const overheadColor = overhead > 20 ? c.red : overhead > 10 ? c.yellow : c.green;
+      label(pc.name, `${overheadColor}${overhead.toFixed(1)}% framework overhead${c.reset}`);
+    }
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -272,11 +325,18 @@ async function runSuite(): Promise<void> {
     printProvenanceBanner(provenance);
   }
 
+  const enableCpuProfile = values.cpuProfile;
+  const cpuProfileInterval = Number.parseInt(values.profileInterval, 10);
+
   heading('Benchmark Run');
   label('Benchmarks', `${cases.length}`);
   label('Iterations', `${iterations}`);
   label('Tracing', ocTracing);
   label('WASM', typeof wasmOption === 'string' ? wasmOption : 'custom');
+  if (enableCpuProfile) {
+    label('CPU Profile', `enabled (${cpuProfileInterval}us interval)`);
+  }
+
   console.log('');
 
   const result = await runBenchmarks(cases, {
@@ -284,6 +344,8 @@ async function runSuite(): Promise<void> {
     ocTracing,
     wasm: wasmOption,
     onProgress: onBenchmarkProgress,
+    cpuProfile: enableCpuProfile,
+    cpuProfileInterval,
   });
 
   if (provenance) {
@@ -292,6 +354,11 @@ async function runSuite(): Promise<void> {
   }
 
   writeResults(result);
+
+  if (enableCpuProfile) {
+    await writeProfileResults(result);
+  }
+
   printSummaryTable(result);
 }
 
