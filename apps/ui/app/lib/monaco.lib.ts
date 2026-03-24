@@ -51,7 +51,7 @@ export const configureMonaco = async (): Promise<void> => {
 
   globalThis.self.MonacoEnvironment = {
     getWorker(_, label) {
-      if (label === 'json') {
+      if (label === 'json' || label === 'jsonc') {
         return new JsonWorker();
       }
 
@@ -110,7 +110,14 @@ export const configureMonaco = async (): Promise<void> => {
   // Override Shiki's JSON tokenizer to preserve TextMate scope granularity
   // and add depth-based key colorization.
   const jsonGrammar = highlighter.getLanguage('json');
-  monaco.languages.setTokensProvider('json', createJsonTokensProvider(jsonGrammar));
+  const jsonTokensProvider = createJsonTokensProvider(jsonGrammar);
+  monaco.languages.setTokensProvider('json', jsonTokensProvider);
+
+  // JSONL (newline-delimited JSON): register as a distinct language so it
+  // gets JSON syntax highlighting without the JSON language service validation
+  // that would flag multi-root documents as errors.
+  monaco.languages.register({ id: 'jsonl', aliases: ['JSON Lines'], extensions: ['.jsonl'] });
+  monaco.languages.setTokensProvider('jsonl', jsonTokensProvider);
 
   // Augment GitHub themes with JSON-specific depth and value rules
   // derived from each theme's own scope colors.
