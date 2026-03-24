@@ -61,6 +61,7 @@ import { RuntimeTracer } from '#framework/runtime-tracer.js';
 import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
 import type { KernelMiddleware } from '#middleware/runtime-middleware.js';
 import { createMiddlewareRuntime } from '#middleware/runtime-middleware.js';
+import { clearExecuteCache } from '#bundler/esbuild-core.js';
 
 const tauVersion = '0.1.0';
 
@@ -1026,6 +1027,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           this.fileHashCache.clear();
           this.fileContentCache.clear();
           this.bundleResultCache.clear();
+          clearExecuteCache();
           this.onFileChanged([]);
           if (this.currentFile) {
             this.scheduleRender(fileChangeDebounceMs);
@@ -1452,6 +1454,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     }
     for (const [entryPath, result] of this.bundleResultCache) {
       if (changedPaths.includes(entryPath) || result.dependencies.some((dep) => changedPaths.includes(dep))) {
+        clearExecuteCache(result.code);
         this.bundleResultCache.delete(entryPath);
       }
     }

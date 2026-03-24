@@ -1007,14 +1007,42 @@ export function extractExternalImports(metafile: Metafile | undefined): string[]
 // Execution
 // =============================================================================
 
+const executeCacheMap = new Map<string, unknown>();
+
+/**
+ * Clear the module execute cache.
+ *
+ * When called with a specific code string, only that entry is removed.
+ * When called with no arguments, all entries are cleared.
+ *
+ * @param code - optional code string to clear a specific cache entry
+ *
+ * @public
+ */
+export function clearExecuteCache(code?: string): void {
+  if (code === undefined) {
+    executeCacheMap.clear();
+  } else {
+    executeCacheMap.delete(code);
+  }
+}
+
 /**
  * Execute bundled JS/TS code via dynamic import.
- * Browser uses Blob URL, Node.js uses data URL.
+ * Browser uses Blob URL, Node.js uses URL-encoded data URL.
+ *
+ * Results are cached by code string — identical code returns the same
+ * module object without re-evaluating. Use `clearExecuteCache` to invalidate.
  *
  * @param code - bundled JavaScript code to execute
  * @returns execution result with exported module and cleanup function
  */
 export async function executeCode(code: string): Promise<ExecuteResult> {
+  const cached = executeCacheMap.get(code);
+  if (cached !== undefined) {
+    return { success: true, value: cached };
+  }
+
   const isNodejsRuntime = isNode();
 
   try {
@@ -1022,10 +1050,7 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
     let shouldRevoke = false;
 
     if (isNodejsRuntime) {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- class
-      const { Buffer: NodeBuffer } = await import('node:buffer');
-      const base64Code = NodeBuffer.from(code).toString('base64');
-      url = `data:application/javascript;base64,${base64Code}`;
+      url = `data:text/javascript;charset=utf-8,${encodeURIComponent(code)}`;
     } else {
       const blob = new Blob([code], { type: 'application/javascript' });
       url = URL.createObjectURL(blob);
@@ -1034,6 +1059,7 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
 
     try {
       const moduleExports: unknown = await import(/* @vite-ignore */ url);
+      executeCacheMap.set(code, moduleExports);
       return { success: true, value: moduleExports };
     } finally {
       if (shouldRevoke) {
