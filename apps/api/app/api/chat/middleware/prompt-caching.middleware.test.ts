@@ -248,6 +248,169 @@ describe('promptCachingMiddleware', () => {
     });
   });
 
+  describe('AIMessage metadata preservation', () => {
+    it('should preserve response_metadata when caching AIMessage with string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: 'Response text',
+          response_metadata: responseMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when caching AIMessage with string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_token_details: { cache_read: 80, cache_creation: 20 },
+      };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: 'Response text',
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve response_metadata when caching AIMessage with array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'gpt-4o-2024-05-13' };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: [{ type: 'text', text: 'Array response' }],
+          response_metadata: responseMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when caching AIMessage with array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: [{ type: 'text', text: 'Array response' }],
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve response_metadata when caching AIMessage with only tool_calls', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022' };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'read_file', args: {} }],
+          response_metadata: responseMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when caching AIMessage with only tool_calls', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 50,
+        output_tokens: 25,
+        total_tokens: 75,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'read_file', args: {} }],
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve all metadata properties together when caching AIMessage', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const toolCalls = [{ id: 'call_1', name: 'read_file', args: {} }];
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const usageMetadata = {
+        input_tokens: 300,
+        output_tokens: 150,
+        total_tokens: 450,
+        input_token_details: { cache_read: 200, cache_creation: 100 },
+      };
+      const additionalKwargs = { custom: 'value' };
+
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: 'Full metadata test',
+          id: 'msg_cache_full',
+          tool_calls: toolCalls,
+          additional_kwargs: additionalKwargs,
+          response_metadata: responseMetadata,
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+
+      expect(result.id).toBe('msg_cache_full');
+      expect(result.tool_calls).toEqual(toolCalls);
+      expect(result.additional_kwargs).toEqual(additionalKwargs);
+      expect(result.response_metadata).toEqual(responseMetadata);
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+  });
+
   describe('agent turn simulation (multiple tool calls)', () => {
     it('should cache the last message in a typical agent turn flow', async () => {
       // Simulate: User → AI with tool_calls → Tool results (last message)

@@ -340,6 +340,118 @@ describe('newlineTrimmerMiddleware', () => {
       expect(result.content).toBe('Response');
       expect(result.additional_kwargs).toEqual({ custom: 'value' });
     });
+
+    it('should preserve response_metadata after trimming string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      handler.mockResolvedValue(
+        new AIMessage({
+          content: '\n\nResponse',
+          response_metadata: responseMetadata,
+        }),
+      );
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      const result = await callWrapModelCall({ messages: [] }, handler);
+
+      expect(result.content).toBe('Response');
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata after trimming string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_token_details: { cache_read: 80, cache_creation: 20 },
+      };
+      handler.mockResolvedValue(
+        new AIMessage({
+          content: '\n\nResponse',
+          usage_metadata: usageMetadata,
+        }),
+      );
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      const result = await callWrapModelCall({ messages: [] }, handler);
+
+      expect(result.content).toBe('Response');
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve all metadata properties together when trimming string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const toolCalls = [{ id: 'call_1', name: 'read_file', args: { path: '/main.ts' } }];
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022' };
+      const usageMetadata = {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_token_details: { cache_read: 80, cache_creation: 20 },
+      };
+      const additionalKwargs = { custom: 'value' };
+
+      handler.mockResolvedValue(
+        new AIMessage({
+          content: '\n\nTrimmed response',
+          id: 'msg_full_check',
+          tool_calls: toolCalls,
+          additional_kwargs: additionalKwargs,
+          response_metadata: responseMetadata,
+          usage_metadata: usageMetadata,
+        }),
+      );
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      const result = await callWrapModelCall({ messages: [] }, handler);
+
+      expect(result.content).toBe('Trimmed response');
+      expect(result.id).toBe('msg_full_check');
+      expect(result.tool_calls).toEqual(toolCalls);
+      expect(result.additional_kwargs).toEqual(additionalKwargs);
+      expect(result.response_metadata).toEqual(responseMetadata);
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve all metadata properties together when trimming array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const toolCalls = [{ id: 'call_2', name: 'edit_file', args: {} }];
+      const responseMetadata = { model: 'gpt-4o-2024-05-13' };
+      const usageMetadata = {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const additionalKwargs = { function_call: { name: 'test' } };
+
+      handler.mockResolvedValue(
+        new AIMessage({
+          content: [
+            { type: 'reasoning', reasoning: '\n\nLet me think' },
+            { type: 'text', text: '\n\nHere is my answer' },
+          ],
+          id: 'msg_array_check',
+          tool_calls: toolCalls,
+          additional_kwargs: additionalKwargs,
+          response_metadata: responseMetadata,
+          usage_metadata: usageMetadata,
+        }),
+      );
+      /* eslint-enable @typescript-eslint/naming-convention */
+
+      const result = await callWrapModelCall({ messages: [] }, handler);
+
+      const blocks = result.content as Array<{ type: string; reasoning?: string; text?: string }>;
+      expect(blocks[0]!.reasoning).toBe('Let me think');
+      expect(blocks[1]!.text).toBe('Here is my answer');
+      expect(result.id).toBe('msg_array_check');
+      expect(result.tool_calls).toEqual(toolCalls);
+      expect(result.additional_kwargs).toEqual(additionalKwargs);
+      expect(result.response_metadata).toEqual(responseMetadata);
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
   });
 
   // ===========================================================================

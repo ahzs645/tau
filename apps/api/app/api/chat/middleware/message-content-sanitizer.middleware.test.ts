@@ -339,6 +339,119 @@ describe('messageContentSanitizerMiddleware', () => {
       const [request] = handler.mock.calls[0] as [TestRequest];
       expect(request.messages[0]?.additional_kwargs).toEqual({ custom: 'value' });
     });
+
+    it('should preserve response_metadata when adding placeholder to array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const aiMessage = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: 'Thinking...' }],
+        response_metadata: responseMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when adding placeholder to array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_token_details: { cache_read: 80, cache_creation: 20 },
+      };
+      const aiMessage = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: 'Thinking...' }],
+        usage_metadata: usageMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve response_metadata when adding placeholder to empty content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022' };
+      const aiMessage = new AIMessage({
+        content: '',
+        response_metadata: responseMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when adding placeholder to empty content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 50,
+        output_tokens: 10,
+        total_tokens: 60,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const aiMessage = new AIMessage({
+        content: '',
+        usage_metadata: usageMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve all metadata properties together when sanitizing', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const usageMetadata = {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        input_token_details: { cache_read: 150, cache_creation: 50 },
+      };
+      const additionalKwargs = { custom: 'data' };
+      const aiMessage = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: 'Interrupted thinking...' }],
+        id: 'msg_full_metadata',
+        additional_kwargs: additionalKwargs,
+        response_metadata: responseMetadata,
+        usage_metadata: usageMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const result = request.messages[0] as AIMessage;
+
+      const contentBlocks = result.content as TestContentBlock[];
+      expect(contentBlocks).toHaveLength(2);
+      expect(contentBlocks[1]).toEqual({ type: 'text', text: '[interrupted]' });
+
+      expect(result.id).toBe('msg_full_metadata');
+      expect(result.additional_kwargs).toEqual(additionalKwargs);
+      expect(result.response_metadata).toEqual(responseMetadata);
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
   });
 
   describe('immutability', () => {
