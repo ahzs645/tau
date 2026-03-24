@@ -22,7 +22,7 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TAU_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TAU_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OCJS_DIR="$TAU_ROOT/repos/opencascade.js"
 REPLICAD_OCJS_DIR="$TAU_ROOT/repos/replicad/packages/replicad-opencascadejs"
 REPLICAD_DIR="$TAU_ROOT/repos/replicad/packages/replicad"
@@ -373,7 +373,7 @@ fi
 
 WASM_OUT_DIR="$(dirname "$YAML_PATH")"
 export OCJS_OUTPUT_DIR="$WASM_OUT_DIR"
-./build-wasm.sh "${BUILD_ARGS[@]}" full "$YAML_PATH"
+./build-wasm.sh ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} full "$YAML_PATH"
 
 # Verify WASM was actually produced
 WASM_COUNT=0

@@ -1,0 +1,26 @@
+name: 'v8-Os-LTO-wasmOptO3-simd'
+description: 'R5 experiment: -Os compile + LTO (matching upstream v7 pipeline) + -O3 wasm-opt + SIMD'
+
+compilation:
+  optimization: '-Os'
+  lto: true
+  exceptions: 'none'
+  threading: 'single-threaded'
+  defines: ['OCCT_NO_DUMP']
+  undefines: ['OCC_CONVERT_SIGNALS']
+
+linking:
+  yaml: 'custom_build_single_v8.yml'
+  wasmOptLevel: '-O3'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  evalCtorsLevel: 2
+  converge: true
+  patchDump: true
+  simd: true
+  bigint: true
+
+benchmark:
+  iterations: 50
