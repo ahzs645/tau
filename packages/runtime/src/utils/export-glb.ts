@@ -1,8 +1,8 @@
-import type { Primitive } from '@gltf-transform/core';
-import { Document, NodeIO } from '@gltf-transform/core';
 import { cadMaterialDefaults } from '@taucad/types/constants';
 import type { Color, IndexedPolyhedron } from '#framework/common.js';
 import { transformVerticesGltf } from '#framework/common.js';
+import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
+import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
 
 /**
  * Geometry data for a single color group, optimized for glTF primitive creation.
@@ -47,7 +47,6 @@ function calculateTriangleNormal(
   v2: readonly [number, number, number],
   v3: readonly [number, number, number],
 ): [number, number, number] {
-  // Calculate two edge vectors
   const edge1X = v2[0] - v1[0];
   const edge1Y = v2[1] - v1[1];
   const edge1Z = v2[2] - v1[2];
@@ -56,57 +55,17 @@ function calculateTriangleNormal(
   const edge2Y = v3[1] - v1[1];
   const edge2Z = v3[2] - v1[2];
 
-  // Calculate cross product: edge1 × edge2
   const normalX = edge1Y * edge2Z - edge1Z * edge2Y;
   const normalY = edge1Z * edge2X - edge1X * edge2Z;
   const normalZ = edge1X * edge2Y - edge1Y * edge2X;
 
-  // Normalize the vector
   const length = Math.hypot(normalX, normalY, normalZ);
 
   if (length === 0) {
-    // Degenerate triangle, return arbitrary normal
     return [0, 0, 1];
   }
 
   return [normalX / length, normalY / length, normalZ / length];
-}
-
-/**
- * Create a primitive from color group geometry data.
- * Each color group gets its own material with the correct alphaMode.
- *
- * @param document - the glTF document to create the primitive in
- * @param geometry - the color group geometry with positions, indices, normals, and color
- * @returns the constructed glTF primitive
- */
-function createPrimitiveFromColorGroup(document: Document, geometry: ColorGroupGeometry): Primitive {
-  const { color, positions, indices, normals } = geometry;
-
-  // Set alpha mode based on whether THIS color has transparency
-  const alphaMode = color[3] < 1 ? 'BLEND' : 'OPAQUE';
-
-  const material = document
-    .createMaterial()
-    .setDoubleSided(true)
-    .setAlphaMode(alphaMode)
-    .setMetallicFactor(cadMaterialDefaults.metallicFactor)
-    .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
-    .setBaseColorFactor(color);
-
-  // Name the material for debugging
-  const colorString = `rgba(${Math.round(color[0] * 255)},${Math.round(color[1] * 255)},${Math.round(color[2] * 255)},${color[3].toFixed(2)})`;
-  material.setName(colorString);
-
-  const primitive = document
-    .createPrimitive()
-    .setMode(4) // TRIANGLES mode
-    .setMaterial(material)
-    .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(positions))
-    .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(normals))
-    .setIndices(document.createAccessor().setType('SCALAR').setArray(indices));
-
-  return primitive;
 }
 
 /**
@@ -136,14 +95,13 @@ type TriangleData = {
 function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
   const { vertices, faces, colors } = meshData;
 
-  // First pass: group triangles by color
   const colorGroups = new Map<string, { color: Color; triangles: TriangleData[] }>();
 
   for (const [faceIndex, face] of faces.entries()) {
-    const faceColor: Color = colors[faceIndex] ?? [1, 1, 1, 1]; // Default to opaque white
+    const faceColor: Color = colors[faceIndex] ?? [1, 1, 1, 1];
 
     if (face.length < 3) {
-      continue; // Skip invalid faces
+      continue;
     }
 
     const colorKey = colorToKey(faceColor);
@@ -154,7 +112,6 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
 
     const group = colorGroups.get(colorKey)!;
 
-    // Triangulate face using fan triangulation
     for (let index = 1; index < face.length - 1; index++) {
       const index1 = face[0];
       const index2 = face[index];
@@ -172,12 +129,10 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
         continue;
       }
 
-      // Transform vertices from z-up to y-up coordinate system and convert units (mm to m)
       const transformedV1 = transformVerticesGltf(v1);
       const transformedV2 = transformVerticesGltf(v2);
       const transformedV3 = transformVerticesGltf(v3);
 
-      // Calculate normal for this triangle (after transformation)
       const normal = calculateTriangleNormal(transformedV1, transformedV2, transformedV3);
 
       group.triangles.push({
@@ -189,7 +144,6 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
     }
   }
 
-  // Second pass: convert each color group to geometry arrays
   const geometries: ColorGroupGeometry[] = [];
 
   for (const { color, triangles } of colorGroups.values()) {
@@ -208,7 +162,6 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
     for (let triIndex = 0; triIndex < numberTriangles; triIndex++) {
       const tri = triangles[triIndex]!;
 
-      // Add positions
       positions[positionIndex++] = tri.v1[0];
       positions[positionIndex++] = tri.v1[1];
       positions[positionIndex++] = tri.v1[2];
@@ -221,7 +174,6 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
       positions[positionIndex++] = tri.v3[1];
       positions[positionIndex++] = tri.v3[2];
 
-      // Add normals (same normal for all vertices of this triangle - flat shading)
       normals[normalIndex++] = tri.normal[0];
       normals[normalIndex++] = tri.normal[1];
       normals[normalIndex++] = tri.normal[2];
@@ -234,7 +186,6 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
       normals[normalIndex++] = tri.normal[1];
       normals[normalIndex++] = tri.normal[2];
 
-      // Add triangle indices (non-indexed, each triangle uses its own vertices)
       indices[triIndex * 3] = triIndex * 3;
       indices[triIndex * 3 + 1] = triIndex * 3 + 1;
       indices[triIndex * 3 + 2] = triIndex * 3 + 2;
@@ -252,56 +203,70 @@ function groupFacesByColor(meshData: IndexedPolyhedron): ColorGroupGeometry[] {
 }
 
 /**
- * Create a GLTF document from mesh data (shared between GLB and GLTF exports).
+ * Convert a ColorGroupGeometry into a GlbPrimitive with material properties.
  *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- *
- * Uses the Replicad approach: each unique color gets its own primitive with its own material.
- * This ensures opaque geometry uses OPAQUE mode and transparent geometry uses BLEND mode.
+ * @param geometry - color-grouped mesh data with positions, normals, and indices
+ * @returns primitive ready for GLB serialization
+ */
+function colorGroupToPrimitive(geometry: ColorGroupGeometry): GlbPrimitive {
+  const { color, positions, indices, normals } = geometry;
+
+  const colorString = `rgba(${Math.round(color[0] * 255)},${Math.round(color[1] * 255)},${Math.round(color[2] * 255)},${color[3].toFixed(2)})`;
+
+  return {
+    mode: 4,
+    positions,
+    normals,
+    indices,
+    material: {
+      baseColorFactor: color,
+      metallicFactor: cadMaterialDefaults.metallicFactor,
+      roughnessFactor: cadMaterialDefaults.roughnessFactor,
+      doubleSided: true,
+      alphaMode: color[3] < 1 ? 'BLEND' : 'OPAQUE',
+      name: colorString,
+    },
+  };
+}
+
+/**
+ * Build a GlbInput from an IndexedPolyhedron.
  *
  * @param meshData - the indexed polyhedron to convert
- * @returns the constructed glTF document
+ * @returns the GlbInput for the writer
  */
-function createGltfDocument(meshData: IndexedPolyhedron): Document {
-  const document = new Document();
-  document.createBuffer();
-
-  const scene = document.createScene();
-  const mesh = document.createMesh();
-
-  // Group faces by color and create geometry for each group
+function buildGlbInput(meshData: IndexedPolyhedron): GlbInput {
   const colorGroups = groupFacesByColor(meshData);
+  const nodes: GlbNode[] = [];
 
+  const primitives: GlbPrimitive[] = [];
   if (colorGroups.length === 0) {
-    // Create a simple point if no geometry
-    const emptyGeometry: ColorGroupGeometry = {
-      color: [1, 1, 1, 1],
+    primitives.push({
+      mode: 4,
       positions: new Float32Array([0, 0, 0]),
       normals: new Float32Array([0, 0, 1]),
       indices: new Uint32Array([0]),
-    };
-    const primitive = createPrimitiveFromColorGroup(document, emptyGeometry);
-    mesh.addPrimitive(primitive);
+      material: {
+        baseColorFactor: [1, 1, 1, 1],
+        metallicFactor: cadMaterialDefaults.metallicFactor,
+        roughnessFactor: cadMaterialDefaults.roughnessFactor,
+        doubleSided: true,
+        alphaMode: 'OPAQUE',
+        name: 'default',
+      },
+    });
   } else {
-    // Create a primitive for each color group
     for (const colorGroup of colorGroups) {
-      const primitive = createPrimitiveFromColorGroup(document, colorGroup);
-      mesh.addPrimitive(primitive);
+      primitives.push(colorGroupToPrimitive(colorGroup));
     }
   }
 
-  const node = document.createNode().setMesh(mesh);
-  scene.addChild(node);
+  nodes.push({ primitives });
 
-  // Add lines as a separate mesh if available
   if (meshData.lines?.positions.length) {
-    const linesMesh = document.createMesh();
-
-    // Create line geometry - convert flat positions to Float32Array and transform coordinates
     const originalLinePositions = meshData.lines.positions;
     const linePositions = new Float32Array(originalLinePositions.length);
 
-    // Transform line positions from z-up to y-up coordinate system and convert units (mm to m)
     for (let index = 0; index < originalLinePositions.length; index += 3) {
       const x = originalLinePositions[index];
       const y = originalLinePositions[index + 1];
@@ -318,35 +283,30 @@ function createGltfDocument(meshData: IndexedPolyhedron): Document {
       linePositions[index + 2] = transformed[2];
     }
 
-    // Create line indices - each pair of positions forms a line
     const lineIndices = new Uint32Array(linePositions.length / 3);
     for (let index = 0; index < lineIndices.length; index++) {
       lineIndices[index] = index;
     }
 
-    const lineMaterial = document
-      .createMaterial()
-      .setDoubleSided(true)
-      .setAlphaMode('OPAQUE')
-      .setMetallicFactor(0)
-      .setRoughnessFactor(1)
-      .setBaseColorFactor([0.141, 0.259, 0.141, 1]); // #244224 color
-
-    const linePrimitive = document
-      .createPrimitive()
-      .setMode(1) // LINES mode
-      .setMaterial(lineMaterial)
-      .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(linePositions))
-      .setIndices(document.createAccessor().setType('SCALAR').setArray(lineIndices));
-
-    linesMesh.addPrimitive(linePrimitive);
-
-    // Add lines mesh to scene with a special name for identification
-    const linesNode = document.createNode().setMesh(linesMesh);
-    scene.addChild(linesNode);
+    nodes.push({
+      primitives: [
+        {
+          mode: 1,
+          positions: linePositions,
+          indices: lineIndices,
+          material: {
+            baseColorFactor: [0.141, 0.259, 0.141, 1],
+            metallicFactor: 0,
+            roughnessFactor: 1,
+            doubleSided: true,
+            alphaMode: 'OPAQUE',
+          },
+        },
+      ],
+    });
   }
 
-  return document;
+  return { nodes };
 }
 
 /**
@@ -357,10 +317,9 @@ function createGltfDocument(meshData: IndexedPolyhedron): Document {
  * @param meshData - the polyhedron geometry to encode
  * @returns the GLB binary as a byte array
  */
-export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array<ArrayBuffer>> {
-  const document = createGltfDocument(meshData);
-  const glbBuffer = await new NodeIO().writeBinary(document);
-  return glbBuffer;
+export function createGlb(meshData: IndexedPolyhedron): Uint8Array<ArrayBuffer> {
+  const input = buildGlbInput(meshData);
+  return writeGlb(input);
 }
 
 /**
@@ -371,41 +330,7 @@ export async function createGlb(meshData: IndexedPolyhedron): Promise<Uint8Array
  * @param meshData - the polyhedron geometry to encode
  * @returns the glTF JSON as a UTF-8-encoded byte array
  */
-export async function createGltf(meshData: IndexedPolyhedron): Promise<Uint8Array<ArrayBuffer>> {
-  const document = createGltfDocument(meshData);
-
-  // Use writeJSON which returns both the JSON and binary data
-  const gltfData = await new NodeIO().writeJSON(document);
-
-  // For a self-contained GLTF file, we need to embed the binary data as base64
-  // This creates a single .gltf file that doesn't require separate .bin files
-  const gltfJson = gltfData.json;
-
-  // If there are resources, embed them as data URIs
-  const { resources } = gltfData;
-  const buffers = gltfJson.buffers ?? [];
-
-  for (const [resourceKey, resourceData] of Object.entries(resources)) {
-    // Find the buffer that references this resource
-    const bufferIndex = buffers.findIndex((buffer) => buffer.uri === resourceKey);
-    const buffer = buffers[bufferIndex];
-    if (buffer) {
-      // Convert binary data to base64 using browser-compatible method
-      const uint8Array = resourceData;
-      let binaryString = '';
-      for (const byte of uint8Array) {
-        binaryString += String.fromCodePoint(byte);
-      }
-
-      // oxlint-disable-next-line no-restricted-globals -- btoa is available in browsers
-      const base64Data = btoa(binaryString);
-
-      buffer.uri = `data:application/octet-stream;base64,${base64Data}`;
-    }
-  }
-
-  // Convert to pretty-printed JSON string
-  const gltfEmbeddedData = new TextEncoder().encode(JSON.stringify(gltfJson, undefined, 2));
-
-  return gltfEmbeddedData;
+export function createGltf(meshData: IndexedPolyhedron): Uint8Array<ArrayBuffer> {
+  const input = buildGlbInput(meshData);
+  return writeGltfJson(input);
 }
