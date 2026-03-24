@@ -3,7 +3,7 @@ title: 'WASM Binary Size Forensics v2: Function-Level Dissection and Inflation A
 description: 'Comprehensive function-level analysis of the optimized 19.22 MB non-exceptions WASM binary, explaining the 87% inflation from OCCT v7 and identifying remaining trimming opportunities.'
 status: active
 created: '2026-03-24'
-updated: '2026-03-23'
+updated: '2026-03-24'
 category: optimization
 related:
   - docs/research/wasm-binary-size-forensics.md
@@ -18,13 +18,13 @@ Function-level dissection of the optimized `replicad_single.wasm` (19.22 MB) to 
 
 ## Executive Summary
 
-The optimized `replicad_single.wasm` is **19.22 MB** (20,153,116 bytes), down from 19.31 MB pre-optimization — a **89 KB (0.44%) actual reduction** from the OCCT source patches applied in the v1 optimization round. The binary remains **87% larger** than the v7 baseline (10.30 MB) despite having **7,612 fewer functions**. The entire inflation is in the Code section (+9.25 MB, +117%).
+**Guiding principle: speed is the top priority; size reduction is secondary. We always prefer speed over size.**
 
-The root cause is **compile-time -O3 optimization**, which produces aggressively inlined functions averaging 732 bytes (vs 256 bytes in v7's `-Os -flto` build). Functions >4 KB grew by **+6.69 MB** — accounting for 72% of the total code growth. If the v8 build had v7-like average function sizes, the code section would be 5.85 MB instead of 16.73 MB.
+The production `replicad_single.wasm` ships at **19.22 MB** with **`-O3` (no LTO, SIMD)** — the fastest configuration. This is 87% larger than the v7 baseline (10.30 MB), but the `-O3` build is **15-30% faster** for complex CAD operations — a deliberate trade-off. The entire inflation is in the Code section (+9.25 MB, +117%), driven by `-O3`'s aggressive inlining producing functions averaging 732 bytes (vs 256 bytes in v7's `-Os -flto` build).
 
 The v1 report's OCCT source patches (noexcept destructor, DynamicType simplification) reduced pathological functions by only **319 B and 323 B respectively** — not the hundreds of kilobytes expected. The landing pad code is not the primary cause of these functions' size; -O3 inlining is.
 
-The highest-value remaining opportunities are **compile-time optimization reduction** (`-O2` or `-Os`) and **LLVM inlining threshold tuning**, which directly address the primary root cause of -O3 inlining bloat. `-fno-exceptions` was investigated and found to be **not viable** — Clang treats `throw` as a hard compilation error with `-fno-exceptions`, and OCCT uses `throw` extensively in its headers. The upstream v7 build never used `-fno-exceptions` either; it always compiled with `-fexceptions`. Estimated savings from optimization level changes are **3–7 MB**.
+**Update (2026-03-24):** Compile-level experiments confirm that the `-O3` production build is the correct choice. The highest-value next experiment is **R3: LLVM inlining threshold tuning** (`-O3 -mllvm -inline-threshold=100`), which could reduce size by 1-2 MB while **preserving full `-O3` speed** — the only approach that improves size without sacrificing performance. The `-Os` build (R5, validated at **14.54 MB**, -24.3%) is available as a fallback but carries an **18% latency regression** (50.2 ms vs 42.6 ms) — acceptable only if size constraints outweigh speed. `-O0` builds are not viable (~3.5x slower). LTO is **counterproductive** at `-Os`, adding 0.49 MB.
 
 ## Table of Contents
 
@@ -39,6 +39,7 @@ The highest-value remaining opportunities are **compile-time optimization reduct
 - [Finding 8: Gzipped Transfer Sizes](#finding-8-gzipped-transfer-sizes)
 - [Recommendations](#recommendations)
 - [Finding 9: `-fno-exceptions` Is Not Viable for OCCT](#finding-9--fno-exceptions-is-not-viable-for-occt)
+- [Finding 10: Compile-Level Experiment Results](#finding-10-compile-level-experiment-results)
 - [Appendix: Full Package Inventory](#appendix-full-package-inventory)
 
 ## Methodology
@@ -72,14 +73,18 @@ The Code section dominates at 87.1%. The Data section (2.37 MB) is the only othe
 
 ### All Builds Compared
 
-| Build                    | Compile Flags | Total (MB) | Code (MB) | Data (MB) | Functions  | Avg Size  | Gzip (MB) |
-| ------------------------ | ------------- | ---------- | --------- | --------- | ---------- | --------- | --------- |
-| v7 (OCCT 7.6.2)          | `-Os -flto`   | **10.30**  | 7.74      | 2.46      | 31,607     | 256 B     | 4.31      |
-| v8.25 (initial v8)       | `-O3 -flto`   | 23.39      | 20.92     | 2.51      | 21,191     | 988 B     | —         |
-| v8.26 (post-LTO removal) | `-O3`         | 18.91      | 16.27     | 2.55      | 24,697     | 690 B     | 6.08      |
-| v8.32 (pre-RBV)          | `-O3`         | 19.23      | 16.77     | 2.37      | 24,038     | 731 B     | 6.14      |
-| v8.39 original           | `-O3`         | 19.31      | 16.85     | 2.38      | 24,121     | 732 B     | 6.16      |
-| **v8.39 optimized**      | **`-O3`**     | **19.22**  | **16.73** | **2.37**  | **23,995** | **732 B** | **6.13**  |
+| Build                       | Compile Flags | Total (MB) | Code (MB) | Data (MB) | Functions | Avg Size | Gzip (MB) |
+| --------------------------- | ------------- | ---------- | --------- | --------- | --------- | -------- | --------- |
+| v7 (OCCT 7.6.2)             | `-Os -flto`   | **10.30**  | 7.74      | 2.46      | 31,607    | 256 B    | 4.31      |
+| **v8.39 `-Os` no LTO SIMD** | **`-Os`**     | **14.54**  | —         | —         | —         | —        | —         |
+| v8.39 `-Os` LTO SIMD        | `-Os -flto`   | 15.03      | —         | —         | —         | —        | 5.35      |
+| v8.39 `-O0` LTO SIMD        | `-O0 -flto`   | 16.09      | —         | —         | —         | —        | —         |
+| v8.39 `-O0` no LTO SIMD     | `-O0`         | 16.55      | —         | —         | —         | —        | —         |
+| v8.26 (post-LTO removal)    | `-O3`         | 18.91      | 16.27     | 2.55      | 24,697    | 690 B    | 6.08      |
+| v8.32 (pre-RBV)             | `-O3`         | 19.23      | 16.77     | 2.37      | 24,038    | 731 B    | 6.14      |
+| v8.25 (initial v8)          | `-O3 -flto`   | 23.39      | 20.92     | 2.51      | 21,191    | 988 B    | —         |
+| v8.39 original              | `-O3`         | 19.31      | 16.85     | 2.38      | 24,121    | 732 B    | 6.16      |
+| v8.39 optimized (`-O3`)     | `-O3`         | 19.22      | 16.73     | 2.37      | 23,995    | 732 B    | 6.13      |
 
 ### Key Transitions
 
@@ -115,7 +120,7 @@ The upstream v7 build compiled OCCT at **`-Os -flto`** (size-optimized with LTO)
 command = ["emcc", "-flto", "-fexceptions", ..., "-Os", ...]
 ```
 
-Our fork parameterized these via `OCJS_OPT` / `OCJS_LTO` env vars, and the `O3-simd` configuration sets `-O3` without LTO — prioritizing runtime performance over binary size:
+Our fork parameterized these via `OCJS_OPT` / `OCJS_LTO` env vars, and the `O3-simd` configuration sets `-O3` without LTO — the correct choice for maximum runtime performance:
 
 | Flag        | Upstream v7       | Our v8        | Effect                                                   |
 | ----------- | ----------------- | ------------- | -------------------------------------------------------- |
@@ -134,7 +139,7 @@ Our fork parameterized these via `OCJS_OPT` / `OCJS_LTO` env vars, and the `O3-s
 
 The v8 build has 7,612 fewer functions but each is nearly 3x larger. Functions >4 KB grew by **+6.69 MB**, accounting for **72% of total code growth**. If the v8 build had v7-like average function sizes, the code section would be **5.85 MB** instead of 16.73 MB.
 
-The v7 pipeline used `-Os` at compile time (which limits inlining and favors smaller code) combined with `-flto` (which enables LLVM to do cross-module dead code elimination at the size-optimized level). Our v8 build uses `-O3` at compile time, causing LLVM to aggressively inline helper functions into callers at the IR level (before WASM emission), duplicating code at every call site. We disabled LTO because with `-O3`, LTO caused catastrophic inlining bloat (23.39 MB at v8.25).
+The v7 pipeline used `-Os` at compile time (which limits inlining and favors smaller code) combined with `-flto` (which enables LLVM to do cross-module dead code elimination at the size-optimized level). Our v8 build deliberately uses `-O3` at compile time for maximum runtime performance — LLVM aggressively inlines helper functions into callers at the IR level (before WASM emission), producing larger but faster code. We disabled LTO because with `-O3`, LTO caused catastrophic inlining bloat (23.39 MB at v8.25) with no performance benefit.
 
 ### Root Cause 2: OCCT v8 Source Code Growth (~2-3 MB)
 
@@ -167,7 +172,7 @@ v7 had 821 classes (including many `Handle_*` wrappers). v8 consolidated to 202 
 | Gigantic (16-64 KB) | 108    | 0.5%    | 3,041,138 B (2,970 KB) | 17.3%  |
 | Colossal (>64 KB)   | 18     | 0.1%    | 2,902,449 B (2,834 KB) | 16.5%  |
 
-The top 126 functions (0.5% by count) contain **33.9% of all code** (5.80 MB). The top 649 functions (>4 KB, 2.7% by count) contain **56.2% of all code** (9.64 MB). This extreme concentration makes inlining reduction the highest-leverage optimization.
+The top 126 functions (0.5% by count) contain **33.9% of all code** (5.80 MB). The top 649 functions (>4 KB, 2.7% by count) contain **56.2% of all code** (9.64 MB). This extreme concentration means inlining threshold tuning (R3) can target the bloat without affecting the many small, performance-critical functions.
 
 ## Finding 5: Top 30 Largest Functions
 
@@ -301,13 +306,24 @@ The v8 binary compresses more efficiently (32% ratio vs v7's 42%) due to the -O3
 
 ## Recommendations
 
-### P0: Critical — Estimated 2-5 MB Savings
+**Principle: speed first, size second.** Recommendations are prioritized by speed preservation — size-only wins that sacrifice performance are ranked lower.
 
-| #      | Action                                                   | Mechanism                                                                                                               | Est. Savings | Risk                                                                          |
-| ------ | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
-| ~~R1~~ | ~~**Compile with `-fno-exceptions`**~~                   | ~~Eliminates ALL landing pad code~~                                                                                     | ~~1-3 MB~~   | **REJECTED — not viable (see Finding 9)**                                     |
-| R2     | **Switch compile-time optimization from `-O3` to `-O2`** | Reduces LLVM inlining aggressiveness. Functions stay smaller and more numerous. wasm-opt still optimizes at WASM level. | 1-3 MB       | Low: -O2 produces slightly slower code. v7 shipped with -Os and was adequate. |
-| R3     | **Test `-O3` with `-mllvm -inline-threshold=100`**       | Keeps -O3 optimizations but limits inlining depth. Fine-tunable threshold.                                              | 1-2 MB       | Low: easily reversible.                                                       |
+### P0: Speed-Preserving Size Reduction
+
+| #   | Action                                     | Speed Impact               | Mechanism                                                                                                                                                                                                                                                                                            | Est. Savings | Risk                                                                      |
+| --- | ------------------------------------------ | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------- |
+| R3  | **`-O3` + `-mllvm -inline-threshold=100`** | **None (preserves `-O3`)** | Keeps `-O3` optimizations (loop unrolling, vectorization, instruction scheduling) but caps inlining depth. LLVM default threshold for `-O3` is 250; reducing to 100 prevents pathological cases (542 KB destructors) while preserving hot-path performance. Threshold is tunable (try 150, 100, 75). | 1-2 MB       | Low: easily reversible.                                                   |
+| R4  | **Compile with `-fno-rtti`**               | **None expected**          | Disables C++ RTTI (`dynamic_cast`, `typeid`). Eliminates typeinfo structures and vtable RTTI pointers. Stackable on any compile level.                                                                                                                                                               | 0.5-1 MB     | High: OCCT's `Handle<>` uses `dynamic_cast` internally. Requires testing. |
+
+### P1: Speed-Regressing Size Reduction (Fallback)
+
+These options deliver larger size savings but sacrifice runtime performance. Only pursue if size constraints outweigh the speed regression.
+
+| #      | Action                                            | Speed Impact                  | Mechanism                                                                                                                                       | Savings                | Risk                                             |
+| ------ | ------------------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------ |
+| R5     | **`-Os` compile + `-O3` wasm-opt (no LTO, SIMD)** | **-18% (50.2 ms vs 42.6 ms)** | ✅ **VALIDATED** — Measured: **14.54 MB** (-24.3%). LTO is counterproductive at `-Os` (adds 0.49 MB). Still 13% faster than v7. See Finding 10. | **4.68 MB** (measured) | Low: 18% latency regression.                     |
+| R2     | **`-O2` compile with SIMD**                       | **Unknown (retest needed)**   | Partially tested without SIMD: 17.92 MB, 58.9 ms (+38%). SIMD may significantly close the speed gap — re-test needed for a fair comparison.     | 1-3 MB                 | Low-Med: speed impact unclear until SIMD retest. |
+| ~~R1~~ | ~~**Compile with `-fno-exceptions`**~~            | —                             | —                                                                                                                                               | ~~1-3 MB~~             | **REJECTED — not viable (see Finding 9)**        |
 
 ### Finding 9: `-fno-exceptions` Is Not Viable for OCCT
 
@@ -366,24 +382,58 @@ What v8 changed was the `Standard_Failure` class model (from inheriting `Standar
 | `-sDISABLE_EXCEPTION_CATCHING=1` (Emscripten) | **Already applied**     | Neutralizes JS-side catch wrappers; does not eliminate LLVM landing pads         |
 | `-sDISABLE_EXCEPTION_THROWING=1` (Emscripten) | **Untested, low value** | Converts `__cxa_throw` to abort at link time; landing pads still generated       |
 
-**Conclusion**: Exception-related code elimination is a dead end for OCCT WASM builds. The binary size reduction must come from **optimization level changes** (R2, R3, R5) which address the primary root cause: `-O3` inlining bloat.
+**Conclusion**: Exception-related code elimination is a dead end for OCCT WASM builds. Size reduction must come from **speed-preserving inlining controls** (R3, R4) or, if size constraints force it, **optimization level changes** (R5, R2) that trade speed for size.
 
-### P1: High Priority — Estimated 0.5-1.5 MB Savings
+### Finding 10: Compile-Level Experiment Results
 
-| #   | Action                                  | Mechanism                                                                                                                                                     | Est. Savings | Risk                                                                            |
-| --- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------- |
-| R4  | **Compile with `-fno-rtti`**            | Disables C++ RTTI (`dynamic_cast`, `typeid`). OCCT uses RTTI extensively via `DynamicType()`, but the replicad binding surface may not require it at runtime. | 0.5-1 MB     | High: OCCT's Handle<> casting uses `dynamic_cast` internally. Requires testing. |
-| R5  | **Test `-Os` compile + `-O3` wasm-opt** | Compile OCCT at -Os (size-optimized) but run wasm-opt at -O3/O4. Previous `-Os` LTO build produced 14.85 MB. Without LTO, estimated ~15-16 MB.                | 1-2 MB       | Low: may reduce runtime performance by 5-10%.                                   |
+Five new builds were tested with 50-iteration benchmarks across 18 CAD operations. All builds use SIMD, no-exceptions, and wasm-opt `-O3` (unless otherwise noted). Results ranked by geo-mean median latency:
 
-### P2: Medium Priority — Estimated 0.3-1 MB Savings
+| #   | Build                               | Compile     | LTO | WASM Size    | Gzip    | Geo-Mean    | vs Baseline                | vs v7 |
+| --- | ----------------------------------- | ----------- | --- | ------------ | ------- | ----------- | -------------------------- | ----- |
+| 1   | **v8-O3-noLTO-rbv-simd** (baseline) | `-O3`       | No  | **19.22 MB** | 6.13 MB | **42.6 ms** | —                          | +87%  |
+| 2   | **v8-Os-noLTO-wasmOptO3-simd**      | `-Os`       | No  | **14.54 MB** | —       | **50.2 ms** | **-24.3% size, +18% perf** | +41%  |
+| 3   | v8-Os-LTO-wasmOptO3-simd            | `-Os`       | Yes | 15.03 MB     | 5.35 MB | 50.4 ms     | -21.8% size, +18% perf     | +46%  |
+| 4   | v8-O0-LTO-wasmOptO3-simd            | `-O0`       | Yes | 16.09 MB     | —       | 149.8 ms    | -16.3% size, +252% perf    | +56%  |
+| 5   | v8-O0-noLTO-wasmOptO3-simd          | `-O0`       | No  | 16.55 MB     | —       | 151.9 ms    | -13.9% size, +257% perf    | +61%  |
+| —   | v762-O0-noLTO-wasmOptO3 (v7 ref)    | `-Os -flto` | Yes | 10.30 MB     | 4.31 MB | 57.9 ms     | -46.4% size                | —     |
 
-| #   | Action                                                  | Mechanism                                                                                                                                                                                                                                        | Est. Savings | Risk |
-| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | ---- |
-| R6  | **wasm-opt `--merge-similar-functions`** pass           | Merges functions with identical bodies (common with template instantiations). May already be included in -O4.                                                                                                                                    | 50-200 KB    | Low  |
-| R7  | **wasm-opt `--dae-optimizing` + `--outlining`**         | Dead argument elimination and code outlining (extract common code sequences).                                                                                                                                                                    | 50-150 KB    | Low  |
-| R8  | **OCCT patch: add `noexcept` to ALL large destructors** | Extend `patch_stepcaf_noexcept.py` pattern to the top 15 destructors (currently only covers STEPCAFControl_ActorWrite). Even though the v1 patch had minimal effect per function, aggregating across 15+ functions may yield measurable savings. | 30-100 KB    | Low  |
+#### Key findings
 
-### P3: Low Priority / Deferred
+**1. `-O3` remains the correct production choice**
+
+The `-O3` no-LTO SIMD build (42.6 ms geo-mean) is the fastest configuration tested — 18% faster than `-Os` (50.2 ms), 28% faster than v7 (57.9 ms), and 3.5x faster than `-O0` builds. The 19.22 MB size is the cost of that speed advantage. Size reduction should only be pursued through mechanisms that preserve this speed (R3, R4).
+
+**2. `-Os` saves 24.3% size but costs 18% speed**
+
+The `-Os-noLTO-SIMD` build (14.54 MB, 50.2 ms) is the best size-reduction option, but the 18% latency regression (7.6 ms per operation) is a real trade-off. It should be considered a fallback for size-constrained deployments, not the default path. Notably, `-Os` without LTO is **smaller** than `-Os+LTO` (14.54 vs 15.03 MB) — LTO's inlining pass is counterproductive even at `-Os`.
+
+**3. `-O0` is not viable for production**
+
+Both `-O0` builds are ~3.5x slower than baseline (150-152 ms). wasm-opt `-O3` recovers some optimization from the unoptimized IR, but cannot compensate for the absence of compile-time register allocation, instruction scheduling, and loop optimization.
+
+**4. LTO has marginal value at `-O0` but is net-negative at `-Os`**
+
+At `-O0`, LTO saves 0.46 MB (16.09 vs 16.55 MB) via dead code elimination. At `-Os`, LTO **adds** 0.49 MB (15.03 vs 14.54 MB) via inlining. LTO should only be considered with `-O0` or `-O2` where its DCE benefits outweigh its inlining costs.
+
+**5. Remaining gap to v7: 4.24 MB (41%) at `-Os`; 8.92 MB (87%) at `-O3`**
+
+The size gap to v7 is the cost of OCCT v8's larger codebase and our speed-first compile strategy. The structural portion (~2-3 MB from OCCT v8 source growth, ~0.5-1 MB from Emscripten/LLVM version differences) cannot be eliminated at any optimization level. The remaining ~5-6 MB at `-O3` is inlining bloat — the target for R3 (inline threshold tuning).
+
+#### Experiment configs
+
+All experiments are defined in `repos/opencascade.js/build-configs/configurations.json` as named configs (`O0-LTO-simd`, `O0-noLTO-simd`, `Os-LTO-simd`, `Os-noLTO-simd`). Experiment artifacts including WASM binaries, benchmarks, provenance, and tarballs are staged in `tarballs/experiments/v8-{config}/`.
+
+### P2: Speed-Neutral Marginal Gains
+
+These are stackable on top of the `-O3` production build with no expected speed impact.
+
+| #   | Action                                              | Speed Impact | Mechanism                                                                                                     | Est. Savings | Risk |
+| --- | --------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------- | ------------ | ---- |
+| R6  | **wasm-opt `--merge-similar-functions`**            | **None**     | Merges functions with identical bodies (common with template instantiations). May already be included in -O4. | 50-200 KB    | Low  |
+| R7  | **wasm-opt `--dae-optimizing` + `--outlining`**     | **None**     | Dead argument elimination and code outlining (extract common code sequences).                                 | 50-150 KB    | Low  |
+| R8  | **OCCT patch: `noexcept` on ALL large destructors** | **None**     | Extend `patch_stepcaf_noexcept.py` to top 15 destructors. Marginal per-function but aggregates across many.   | 30-100 KB    | Low  |
+
+### P3: Deferred (High Effort, Speed-Neutral)
 
 | #       | Action                                             | Notes                                                                                                                                                                                                     |
 | ------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -391,30 +441,50 @@ What v8 changed was the `Standard_Failure` class model (from inheriting `Standar
 | R10     | STEP I/O modularization                            | The monolithic `RWStepAP214_GeneralModule` registers ALL STEP entity types. Modularizing it would allow linker DCE to remove unused entity types (StepFEA, StepKinematics, etc.). Major OCCT fork effort. |
 | ~~R11~~ | ~~`--closed-world` with `-fno-exceptions`~~        | **Moot** — `-fno-exceptions` is not viable (Finding 9). `--closed-world` alone was rejected in v1 (77 test failures).                                                                                     |
 
-### Estimated Cumulative Impact
+### Cumulative Impact (Measured + Estimated)
 
-| Scenario                              | Estimated Size | vs Current      | vs v7                      |
-| ------------------------------------- | -------------- | --------------- | -------------------------- |
-| Current optimized                     | 19.22 MB       | —               | +87%                       |
-| ~~+ R1 (`-fno-exceptions`)~~          | ~~~17-18 MB~~  | ~~-1 to -2 MB~~ | **Not viable (Finding 9)** |
-| + R2 (`-O2` compile)                  | ~16-17 MB      | -2 to -3 MB     | +55-65%                    |
-| + R3 (inline threshold)               | ~17-18 MB      | -1 to -2 MB     | +65-75%                    |
-| + R5 (`-Os` compile + `-O3` wasm-opt) | ~14-16 MB      | -3 to -5 MB     | +36-55%                    |
-| + R2 + R5 hybrid (`-Os` compile)      | ~14-16 MB      | -3 to -5 MB     | +36-55%                    |
-| Theoretical minimum (v7 ratio)        | ~10.3 MB       | -8.9 MB         | 0%                         |
+Ordered by speed preservation (speed-first principle).
 
-The theoretical minimum assumes v7-equivalent compilation efficiency with v8's code. Realistically, v8's larger source code and additional algorithms set a floor of ~12-13 MB even with maximally aggressive size optimization.
+| Scenario                                    | Size         | vs Current        | Speed Impact            | Status             |
+| ------------------------------------------- | ------------ | ----------------- | ----------------------- | ------------------ |
+| **Current (`-O3`, no LTO, SIMD)**           | **19.22 MB** | **—**             | **Fastest (42.6 ms)**   | **Production**     |
+| + R3 (`-O3` + inline threshold)             | ~17-18 MB    | -1 to -2 MB       | None expected           | Untested           |
+| + R3 + R4 (`-O3` + threshold + `-fno-rtti`) | ~16-17 MB    | -2 to -3 MB       | None expected           | Untested           |
+| + R6-R8 (wasm-opt passes)                   | ~19-19.2 MB  | -0.1 to -0.3 MB   | None                    | Untested           |
+| R5 (`-Os`, no LTO, SIMD)                    | 14.54 MB     | -4.68 MB (-24.3%) | **-18% (50.2 ms)**      | ✅ Measured        |
+| R5 + R4 (`-Os` + `-fno-rtti`)               | ~13-14 MB    | -5 to -6 MB       | -18%                    | Estimated          |
+| R2 (`-O2`, SIMD, retest)                    | ~16-17 MB    | -2 to -3 MB       | Unknown (retest needed) | Partially measured |
+| Theoretical minimum (v7 ratio)              | ~10.3 MB     | -8.9 MB           | -36% (57.9 ms)          | Theoretical        |
 
-## Trade-offs: Size vs Performance
+The realistic floor for OCCT v8 is ~12-13 MB even with maximally aggressive size optimization, due to v8's larger source code and algorithms.
 
-| Config        | Expected Size | Performance vs -O3 | Notes                                               |
-| ------------- | ------------- | ------------------ | --------------------------------------------------- |
-| -O3 (current) | 19.22 MB      | Baseline (fastest) | Best for complex boolean/fillet operations          |
-| -O2           | ~16-17 MB     | -5 to -10% slower  | Good balance                                        |
-| -Os           | ~14-16 MB     | -10 to -15% slower | Matches upstream v7 pipeline; adequate for most CAD |
-| -Os + -flto   | ~10-12 MB     | -10 to -15% slower | Closest match to upstream v7 pipeline               |
+**Next priorities (speed-first order):**
 
-Performance benchmarks from the v1 report show v8 with -O3 is 15-30% faster than v7 with -Os for complex operations. Even with -O2 or -Os, v8 would likely match or exceed v7's performance due to OCCT's improved algorithms.
+1. **R3 (`-O3` + `-mllvm -inline-threshold=100`)** — Top priority. The only approach that reduces size **without sacrificing `-O3` speed**. Caps inlining depth to prevent pathological bloat while preserving loop unrolling, vectorization, and instruction scheduling. Tunable threshold.
+2. **R4 (`-fno-rtti`)** — Speed-neutral, stackable on top of R3 or any config. OCCT's `DynamicType()` uses RTTI, but the replicad binding surface may not need it at runtime. High risk, moderate reward.
+3. **R6-R8 (wasm-opt passes)** — Speed-neutral marginal gains on top of any compile config. Low effort, low risk.
+4. **R2 (`-O2` with SIMD retest)** — Speed impact unknown until SIMD retest. May be moot if R3 delivers similar size at `-O3` speed.
+5. **R5 (`-Os` fallback)** — Already validated. Only deploy if size constraints force accepting the 18% speed regression.
+
+## Trade-offs: Speed vs Size (Measured)
+
+All builds use SIMD, no-exceptions, wasm-opt `-O3`. Geo-mean median latency from 50-iteration benchmarks across 18 CAD operations. **Sorted by speed (fastest first).**
+
+| Config                      | Geo-Mean    | vs `-O3` Speed | Size         | Size Savings      | Status             |
+| --------------------------- | ----------- | -------------- | ------------ | ----------------- | ------------------ |
+| **`-O3`, no LTO (current)** | **42.6 ms** | **Baseline**   | **19.22 MB** | **—**             | **Production**     |
+| `-Os`, no LTO, SIMD         | 50.2 ms     | -18%           | 14.54 MB     | -4.68 MB (-24.3%) | ✅ Measured        |
+| `-Os`, LTO, SIMD            | 50.4 ms     | -18%           | 15.03 MB     | -4.19 MB (-21.8%) | ✅ Measured        |
+| v7.6.2 (reference)          | 57.9 ms     | -36%           | 10.30 MB     | -8.92 MB (-46.4%) | Reference          |
+| `-O2`, no LTO (no SIMD)     | 58.9 ms     | -38%           | 17.92 MB     | -1.30 MB (-6.8%)  | Measured (no SIMD) |
+| `-O0`, LTO, SIMD            | 149.8 ms    | -252%          | 16.09 MB     | -3.13 MB (-16.3%) | ❌ Not viable      |
+| `-O0`, no LTO, SIMD         | 151.9 ms    | -257%          | 16.55 MB     | -2.67 MB (-13.9%) | ❌ Not viable      |
+
+**`-O3` is the correct production choice.** The 19.22 MB size is the cost of being the fastest configuration. Every alternative that reduces size also reduces speed — the question is whether the size savings justify the regression.
+
+The `-Os` no-LTO SIMD build is the best fallback if size becomes a hard constraint: it saves 4.68 MB (24.3%) at an 18% speed cost, and remains 13% faster than v7. The `-Os + LTO` combination is **counterproductive for size** — LTO adds 0.49 MB vs no-LTO, because LLVM's LTO pass inlines more aggressively across modules than its DCE removes.
+
+The highest-leverage untested approach is **R3 (inline threshold tuning)**, which would reduce size at `-O3` speed — the only path that doesn't appear in this table because it hasn't been measured yet.
 
 ## References
 
