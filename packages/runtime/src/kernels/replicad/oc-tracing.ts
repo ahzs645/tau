@@ -98,6 +98,9 @@ function isCallable(value: unknown): value is GenericFunction {
  * that is NOT callable and NOT an Emscripten record (no `delete()` method).
  * Namespace objects like `BRepLib` contain static methods that need exception
  * interception but are not themselves WASM-allocated objects.
+ *
+ * @param value - Value to classify as an OC namespace or not
+ * @returns Whether `value` is a non-callable namespace object without `delete`
  */
 function isOcNamespace(value: unknown): value is Record<string, unknown> {
   return (
@@ -111,10 +114,19 @@ function isOcNamespace(value: unknown): value is Record<string, unknown> {
 /**
  * Wraps an OC namespace object so that its callable properties are intercepted
  * for exception conversion. Handles nested namespaces recursively.
+ *
+ * @param rethrowIfWasmException - Converts or rethrows errors from WASM calls
+ * @returns Function that wraps namespace values with exception interception
  */
 function createNamespaceWrapper(rethrowIfWasmException: (error: unknown) => never): (value: unknown) => unknown {
   const wrappedNamespaces = new WeakSet<Record<string, unknown>>();
 
+  /**
+   * Recursively proxies a namespace object's members for exception handling.
+   *
+   * @param ns - OC namespace object to wrap
+   * @returns Proxied namespace with intercepted callables
+   */
   function wrapNamespace(ns: Record<string, unknown>): Record<string, unknown> {
     if (wrappedNamespaces.has(ns)) {
       return ns;

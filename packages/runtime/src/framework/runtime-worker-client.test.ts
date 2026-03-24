@@ -8,6 +8,7 @@ import { createRuntimeClient } from '#client/runtime-client.js';
 import { signalSlot } from '#types/runtime-protocol.types.js';
 import type { RuntimeTransport } from '#transport/runtime-transport.js';
 import type { RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
+import { createMockFileSystem } from '#testing/kernel-testing.utils.js';
 
 function createMockTransport(): RuntimeTransport & {
   simulateResponse: (response: RuntimeResponse) => void;
@@ -463,18 +464,7 @@ describe('RuntimeWorkerClient', () => {
     it('should deliver worker error events to subscribed error handlers', async () => {
       const transport = createMockTransport();
       const errorHandler = vi.fn();
-      const stubFs = {
-        readFile: vi.fn(),
-        writeFile: vi.fn(),
-        mkdir: vi.fn(),
-        readdir: vi.fn(),
-        unlink: vi.fn(),
-        rmdir: vi.fn(),
-        rename: vi.fn(),
-        stat: vi.fn(),
-        lstat: vi.fn(),
-        exists: vi.fn(),
-      } as never;
+      const stubFs = createMockFileSystem();
 
       const runtimeClient = createRuntimeClient({
         kernels: [],

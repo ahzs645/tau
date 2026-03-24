@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
 import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
-import type { GlbInput, GlbNode } from '#utils/glb-writer.js';
+import type { GlbInput } from '#utils/glb-writer.js';
 
 // =============================================================================
 // Fixtures
@@ -20,7 +20,7 @@ function createTrianglePrimitive(
       metallicFactor: 0,
       roughnessFactor: 0.35,
       doubleSided: true,
-      alphaMode: options.alphaMode ?? ('OPAQUE' as const),
+      alphaMode: options.alphaMode ?? 'OPAQUE',
     },
   };
 }
@@ -61,7 +61,7 @@ function createLinesInput(): GlbInput {
               metallicFactor: 0,
               roughnessFactor: 1,
               doubleSided: true,
-              alphaMode: 'OPAQUE' as const,
+              alphaMode: 'OPAQUE',
             },
           },
         ],
@@ -113,7 +113,7 @@ describe('writeGlb', () => {
           primitives: [
             {
               mode: 4,
-              positions: new Float32Array([1.5, -2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+              positions: new Float32Array([1.5, -2, 3, 4, 5, 6, 7, 8, 9]),
               normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
               indices: new Uint32Array([0, 1, 2]),
               material: {
@@ -135,13 +135,13 @@ describe('writeGlb', () => {
 
     const vertex0 = positions.getElement(0, [0, 0, 0]);
     expect(vertex0[0]).toBeCloseTo(1.5);
-    expect(vertex0[1]).toBeCloseTo(-2.0);
-    expect(vertex0[2]).toBeCloseTo(3.0);
+    expect(vertex0[1]).toBeCloseTo(-2);
+    expect(vertex0[2]).toBeCloseTo(3);
 
     const vertex1 = positions.getElement(1, [0, 0, 0]);
-    expect(vertex1[0]).toBeCloseTo(4.0);
-    expect(vertex1[1]).toBeCloseTo(5.0);
-    expect(vertex1[2]).toBeCloseTo(6.0);
+    expect(vertex1[0]).toBeCloseTo(4);
+    expect(vertex1[1]).toBeCloseTo(5);
+    expect(vertex1[2]).toBeCloseTo(6);
   });
 
   it('should store normals correctly', async () => {
@@ -206,7 +206,7 @@ describe('writeGlb', () => {
 
     expect(indices.getCount()).toBe(6);
     const indexArray = indices.getArray()!;
-    expect(Array.from(indexArray)).toEqual([0, 1, 2, 1, 3, 2]);
+    expect([...indexArray]).toEqual([0, 1, 2, 1, 3, 2]);
   });
 
   it('should compute correct min/max on POSITION accessors', async () => {
@@ -422,7 +422,7 @@ describe('writeGlb', () => {
                 metallicFactor: 0,
                 roughnessFactor: 1,
                 doubleSided: true,
-                alphaMode: 'OPAQUE' as const,
+                alphaMode: 'OPAQUE',
               },
             },
           ],

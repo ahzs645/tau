@@ -251,14 +251,14 @@ async function writeProfileResults(result: BenchmarkRunResult): Promise<void> {
   }
 
   const timestamp = result.timestamp.replaceAll(/[.:]/g, '-');
-  const profileDir = join(outputDirectory, `profiles-${timestamp}`);
-  mkdirSync(profileDir, { recursive: true });
+  const profileDirectory = join(outputDirectory, `profiles-${timestamp}`);
+  mkdirSync(profileDirectory, { recursive: true });
 
   const profiledCases: ProfiledCaseData[] = [];
 
   for (const r of result.results) {
     if (r.cpuProfile) {
-      const profilePath = join(profileDir, `${r.name}.cpuprofile`);
+      const profilePath = join(profileDirectory, `${r.name}.cpuprofile`);
       writeFileSync(profilePath, JSON.stringify(r.cpuProfile));
       success(`Profile written: ${profilePath}`);
     }
@@ -279,7 +279,7 @@ async function writeProfileResults(result: BenchmarkRunResult): Promise<void> {
 
     heading('CPU Profile Report');
     label('HTML', profileHtmlPath);
-    label('Profiles', profileDir);
+    label('Profiles', profileDirectory);
     label('Cases', `${profiledCases.length}`);
 
     for (const pc of profiledCases) {

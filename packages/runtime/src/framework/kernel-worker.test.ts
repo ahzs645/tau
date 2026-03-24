@@ -7,12 +7,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { OnWorkerLog } from '@taucad/types';
 import type { CreateGeometryResult } from '#types/runtime.types.js';
 import type { KernelRuntime, CreateGeometryInput } from '#types/runtime-kernel.types.js';
-import {
-  MockKernelWorker,
-  createMockFileSystem,
-  createGeometryFile,
-  type MockKernelWorkerOptions,
-} from '#testing/kernel-testing.utils.js';
+import type { MockKernelWorkerOptions } from '#testing/kernel-testing.utils.js';
+import { MockKernelWorker, createMockFileSystem, createGeometryFile } from '#testing/kernel-testing.utils.js';
 
 // =============================================================================
 // Test Helpers
@@ -20,12 +16,13 @@ import {
 
 async function flushMicrotasks(iterations = 100): Promise<void> {
   for (let i = 0; i < iterations; i++) {
+    // oxlint-disable-next-line no-await-in-loop -- Intentionally draining microtask queue
     await Promise.resolve();
   }
 }
 
 const noopLog: OnWorkerLog = () => {
-  /* no-op */
+  /* No-op */
 };
 
 function createConfiguredWorker(overrides?: Partial<MockKernelWorkerOptions>) {
@@ -81,7 +78,9 @@ describe('KernelWorker lifecycle', () => {
 
       const renderComplete = new Promise<void>((resolve) => {
         worker.onStateChanged = (state) => {
-          if (state === 'error' || state === 'idle') resolve();
+          if (state === 'error' || state === 'idle') {
+            resolve();
+          }
         };
       });
 
@@ -137,13 +136,8 @@ describe('KernelWorker lifecycle', () => {
         class GatedKernelWorker extends MockKernelWorker {
           protected override async onCreateGeometry(): Promise<CreateGeometryResult> {
             createGeometryCallCount++;
-            if (createGeometryCallCount === 1) {
-              // Render A blocks in createGeometry
-              await gateA;
-            } else {
-              // Render B blocks in createGeometry
-              await gateB;
-            }
+            // Render A blocks in createGeometry on first call; render B on second
+            await (createGeometryCallCount === 1 ? gateA : gateB);
             return { success: true, data: [], issues: [] };
           }
         }
@@ -329,7 +323,9 @@ describe('KernelWorker lifecycle', () => {
 
       const renderComplete = new Promise<void>((resolve) => {
         worker.onStateChanged = (state) => {
-          if (state === 'error' || state === 'idle') resolve();
+          if (state === 'error' || state === 'idle') {
+            resolve();
+          }
         };
       });
 
@@ -465,10 +461,10 @@ describe('KernelWorker lifecycle', () => {
         worker.onStateChanged = vi.fn();
         worker.onGeometryComputed = vi.fn();
 
-        // handleSetFile starts executeRender which blocks in createGeometry
+        // Starts executeRender via handleSetFile, which blocks in createGeometry
         worker.handleSetFile(createGeometryFile('main.ts'), {});
 
-        // updateWatchSet should have been called immediately (Phase 1)
+        // Should have called updateWatchSet immediately (Phase 1)
         // BEFORE createGeometry completes
         expect(updateWatchSetSpy).toHaveBeenCalled();
         const firstCallArgs = updateWatchSetSpy.mock.calls[0]![0];

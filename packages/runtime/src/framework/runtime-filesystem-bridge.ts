@@ -296,6 +296,20 @@ export function createBridgeCall(port: MessagePort): {
   const pending = new Map<number, PendingEntry>();
   const eventListeners = new Map<string, Set<(data: unknown) => void>>();
 
+  function dispatchBridgeEventHandlers(
+    handlers: Set<(data: unknown) => void>,
+    eventName: string,
+    eventData: unknown,
+  ): void {
+    for (const handler of handlers) {
+      try {
+        handler(eventData);
+      } catch (error) {
+        console.error(`[BridgeCall] Event listener error for '${eventName}':`, error);
+      }
+    }
+  }
+
   // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
   port.onmessage = (event: MessageEvent<BridgeMessage>): void => {
     const { data } = event;
@@ -305,13 +319,7 @@ export function createBridgeCall(port: MessagePort): {
         const eventMessage = data;
         const handlers = eventListeners.get(eventMessage.event);
         if (handlers) {
-          for (const handler of handlers) {
-            try {
-              handler(eventMessage.data);
-            } catch (error) {
-              console.error(`[BridgeCall] Event listener error for '${eventMessage.event}':`, error);
-            }
-          }
+          dispatchBridgeEventHandlers(handlers, eventMessage.event, eventMessage.data);
         }
         return;
       }
@@ -436,8 +444,8 @@ export function createBridgeCall(port: MessagePort): {
  *
  * @param port - MessagePort for bridge communication.
  * @returns Proxy that forwards method calls over the bridge.
+ * @public
  */
-/** @public */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
 export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
   port: MessagePort,

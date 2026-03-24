@@ -318,6 +318,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
    * @param runtime - the kernel runtime context for initialization
    * @returns the selected kernel and selection method, or undefined if no kernel matches
    */
+  // oxlint-disable-next-line complexity -- Multi-pass kernel selection requires sequential checks
   private async selectKernel(filePath: string, runtime: KernelRuntime): Promise<KernelSelection | undefined> {
     const cached = this.selectionCache.get(filePath);
     if (cached) {
@@ -412,6 +413,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
             const primaryKernel = await this.loadKernelModule(primaryConfig, runtime.tracer);
             await this.ensureKernelInitialized(primaryKernel, runtime);
 
+            // oxlint-disable-next-line max-depth -- Deeply nested within kernel selection passes
             for (const config of matchingConfigs.slice(1)) {
               const kernel = await this.loadKernelModule(config, runtime.tracer);
               await this.ensureKernelInitialized(kernel, runtime);

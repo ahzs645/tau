@@ -362,7 +362,7 @@ function buildReportData(experiments: ExperimentData[], baseline?: ExperimentDat
     }
   }
 
-  const maxBenchCount = Math.max(...experiments.map((e) => e.benchmark?.results.length ?? 0));
+  const maxBenchCount = Math.max(...experiments.map((experiment) => experiment.benchmark?.results.length ?? 0));
   const minRequired = Math.ceil(maxBenchCount * 0.8);
   const withBenchmarks = experiments.filter(
     (experiment) => experiment.benchmark && experiment.benchmark.results.length >= minRequired,

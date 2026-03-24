@@ -29,11 +29,23 @@ type KernelPluginConfig = Omit<KernelPlugin, 'options'>;
  * @public
  */
 export function createKernelPlugin(config: KernelPluginConfig): () => KernelPlugin;
-/** @public */
+/**
+ * Wraps a kernel plugin config or factory into a resolved plugin constructor.
+ *
+ * @param config - Plugin configuration object or factory function
+ * @returns A plugin constructor function
+ * @public
+ */
 export function createKernelPlugin<Options extends Record<string, unknown>>(
   config: KernelPluginConfig | ((options: Options | undefined) => KernelPluginConfig),
 ): Partial<Options> extends Options ? (options?: Options) => KernelPlugin : (options: Options) => KernelPlugin;
-/** @public */
+/**
+ * Wraps a kernel plugin config or factory into a resolved plugin constructor.
+ *
+ * @param config - Plugin configuration object or factory function
+ * @returns A plugin constructor function
+ * @public
+ */
 export function createKernelPlugin(
   config: KernelPluginConfig | ((options?: Record<string, unknown>) => KernelPluginConfig),
 ): (options?: Record<string, unknown>) => KernelPlugin {
@@ -55,11 +67,23 @@ type MiddlewarePluginConfig = Omit<MiddlewarePlugin, 'options'>;
  * @public
  */
 export function createMiddlewarePlugin(config: MiddlewarePluginConfig): () => MiddlewarePlugin;
-/** @public */
+/**
+ * Wraps a middleware plugin config or factory into a resolved plugin constructor.
+ *
+ * @param config - Plugin configuration object or factory function
+ * @returns A plugin constructor function
+ * @public
+ */
 export function createMiddlewarePlugin<Options extends Record<string, unknown>>(
   config: MiddlewarePluginConfig | ((options: Options | undefined) => MiddlewarePluginConfig),
 ): Partial<Options> extends Options ? (options?: Options) => MiddlewarePlugin : (options: Options) => MiddlewarePlugin;
-/** @public */
+/**
+ * Wraps a middleware plugin config or factory into a resolved plugin constructor.
+ *
+ * @param config - Plugin configuration object or factory function
+ * @returns A plugin constructor function
+ * @public
+ */
 export function createMiddlewarePlugin(
   config: MiddlewarePluginConfig | ((options?: Record<string, unknown>) => MiddlewarePluginConfig),
 ): (options?: Record<string, unknown>) => MiddlewarePlugin {
@@ -81,11 +105,23 @@ type BundlerPluginConfig = Omit<BundlerPlugin, 'options'>;
  * @public
  */
 export function createBundlerPlugin(config: BundlerPluginConfig): () => BundlerPlugin;
-/** @public */
+/**
+ * Wraps a bundler plugin config or factory into a resolved plugin constructor.
+ *
+ * @param config - Plugin configuration object or factory function
+ * @returns A plugin constructor function
+ * @public
+ */
 export function createBundlerPlugin<Options extends Record<string, unknown>>(
   config: BundlerPluginConfig | ((options: Options | undefined) => BundlerPluginConfig),
 ): Partial<Options> extends Options ? (options?: Options) => BundlerPlugin : (options: Options) => BundlerPlugin;
-/** @public */
+/**
+ * Wraps a bundler plugin config or factory into a resolved plugin constructor.
+ *
+ * @param config - Plugin configuration object or factory function
+ * @returns A plugin constructor function
+ * @public
+ */
 export function createBundlerPlugin(
   config: BundlerPluginConfig | ((options?: Record<string, unknown>) => BundlerPluginConfig),
 ): (options?: Record<string, unknown>) => BundlerPlugin {

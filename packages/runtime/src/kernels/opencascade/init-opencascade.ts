@@ -9,8 +9,9 @@ import { compileWasmStreaming } from '#framework/wasm-loader.js';
  *
  * Contains the default export (factory function) that produces an
  * `OpenCascadeInstance` when awaited.
+ *
+ * @public
  */
-/** @public */
 // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() is the only way to reference this module's namespace type
 export type OpenCascadeModule = typeof import('#kernels/opencascade/wasm/opencascade_full.js');
 // oxlint-disable-next-line no-barrel-files/no-barrel-files -- type re-export from WASM binding, not a barrel file

@@ -1,5 +1,5 @@
 /**
- * @taucad/runtime/filesystem -- advanced filesystem bridge primitives.
+ * Advanced filesystem bridge primitives (`taucad/runtime/filesystem` subpath).
  *
  * Low-level primitives for custom filesystem bridge setups, plus high-level
  * wrappers for zero-config worker-to-worker communication.

@@ -277,8 +277,28 @@ describe('createRuntimeClientOptions', () => {
 
   describe('scalar field replacement', () => {
     it('should replace transport entirely', () => {
-      const transport1 = { send: () => {}, onMessage: () => {}, close: () => {} };
-      const transport2 = { send: () => {}, onMessage: () => {}, close: () => {} };
+      const transport1 = {
+        send: () => {
+          /* Noop */
+        },
+        onMessage: () => {
+          /* Noop */
+        },
+        close: () => {
+          /* Noop */
+        },
+      };
+      const transport2 = {
+        send: () => {
+          /* Noop */
+        },
+        onMessage: () => {
+          /* Noop */
+        },
+        close: () => {
+          /* Noop */
+        },
+      };
       const base = baseOptions({ transport: transport1 });
 
       const result = createRuntimeClientOptions(base, { transport: transport2 });
@@ -287,7 +307,9 @@ describe('createRuntimeClientOptions', () => {
     });
 
     it('should replace fileSystem entirely', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test stub: empty object for identity-equality check
       const fs1 = {} as RuntimeClientOptions['fileSystem'];
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test stub: empty object for identity-equality check
       const fs2 = {} as RuntimeClientOptions['fileSystem'];
       const base = baseOptions({ fileSystem: fs1 });
 

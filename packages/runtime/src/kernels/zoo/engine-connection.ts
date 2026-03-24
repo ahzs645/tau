@@ -8,8 +8,8 @@ import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 
 /**
  * The KCL WASM module, loaded via dynamic import, providing parse and execute entry points.
+ * @public
  */
-/** @public */
 // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- typeof import() required for module type
 export type WasmModule = typeof import('@taucad/kcl-wasm-lib');
 
@@ -520,9 +520,11 @@ export class EngineConnection {
 
       // Process each individual response in the batch
       for (const [commandId, response] of Object.entries(message.resp.data.responses)) {
-        if (typeof response !== 'object' || !('response' in response)) {
+        if (!('response' in response)) {
           continue;
         }
+
+        const modelingResponse = response.response;
 
         // Create individual response message for this command
         const individualResponse = {
@@ -533,7 +535,7 @@ export class EngineConnection {
             type: 'modeling',
             data: {
               // eslint-disable-next-line @typescript-eslint/naming-convention -- this is the expected signature.
-              modeling_response: response.response,
+              modeling_response: modelingResponse,
             },
           },
         } as const satisfies WebSocketResponse;
@@ -569,6 +571,7 @@ export class EngineConnection {
     if (!message.success) {
       // The engine always sends auth_token_missing regardless of whether the auth handshake succeeds.
       // This appears to be a bug in the auth handshake.
+      // oxlint-disable-next-line no-warning-comments -- remove when upstream auth handshake no longer sends spurious auth_token_missing
       // TODO: Remove this once the auth handshake is fixed.
       if (message.errors[0]?.error_code === 'auth_token_missing') {
         log.debug('Received auth_token_missing - ignoring as auth may succeed later');
@@ -576,7 +579,7 @@ export class EngineConnection {
       }
 
       const errorsString = message.errors
-        .map((error) => {
+        .map((error: { error_code: string; message: string }) => {
           return `  - ${error.error_code}: ${error.message}`;
         })
         .join('\n');

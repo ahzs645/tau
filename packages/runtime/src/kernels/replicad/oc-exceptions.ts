@@ -186,8 +186,7 @@ function extractStandardFailureData(
 ): { message: string; typeName: string; cppStack: string } {
   const oc = ocInstance as OpenCascadeWithExceptions;
   return withWasmObject(oc.OCJS.getStandard_FailureData(errorPointer), (errorData) => {
-    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
-    const errorMessage = errorData.GetMessageString();
+    const errorMessage = errorData.what();
     // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
     const cppStack = errorData.GetStackString();
     const typeName = extractExceptionTypeName(errorData);

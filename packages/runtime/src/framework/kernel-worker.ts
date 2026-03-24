@@ -62,7 +62,6 @@ import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
 import type { KernelMiddleware } from '#middleware/runtime-middleware.js';
 import { createMiddlewareRuntime } from '#middleware/runtime-middleware.js';
 import { clearExecuteCache } from '#bundler/esbuild-core.js';
-
 const tauVersion = '0.1.0';
 
 function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
@@ -76,7 +75,6 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   }
   return true;
 }
-
 /**
  * A resolved middleware instance paired with its parsed options.
  * @public
@@ -976,6 +974,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Get the current set of watched file paths.
    * Primarily for test assertions — production code should not depend on this.
+   * @returns A copy of the internal watched-path set.
    */
   public getWatchedPaths(): Set<string> {
     return new Set(this.watchedPaths);
@@ -1445,6 +1444,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Invalidate file-level caches for the given changed paths.
    * Shared by both `notifyFileChanged` (command-driven) and the watch handler (autonomous).
+   * @param changedPaths - Absolute paths of files that changed.
    */
   private _invalidateCachesForPaths(changedPaths: string[]): void {
     for (const path of changedPaths) {

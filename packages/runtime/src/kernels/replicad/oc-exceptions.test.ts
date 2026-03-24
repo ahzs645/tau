@@ -122,8 +122,8 @@ describe('decodeOcException', () => {
     const mockOcInstance = {
       OCJS: {
         getStandard_FailureData: vi.fn().mockReturnValue({
-          // oxlint-disable-next-line new-cap -- Mock of OpenCASCADE C++ bindings
-          GetMessageString: () => 'shape is null',
+          // `what()` is the supported API; deprecated `GetMessageString` is omitted from the mock.
+          what: () => 'shape is null',
           // oxlint-disable-next-line new-cap -- Mock of OpenCASCADE C++ bindings
           GetStackString: () => 'at BRepAlgoAPI_Fuse',
           // oxlint-disable-next-line new-cap -- Mock of OpenCASCADE C++ bindings
