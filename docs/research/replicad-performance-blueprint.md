@@ -1,18 +1,16 @@
 ---
-
-## title: 'Replicad Performance Blueprint'
-
+title: 'Replicad Performance Blueprint'
 description: 'Comprehensive blueprint for accelerating replicad internals via OCCT v8 features, native C++ batch helpers, parallelism, and JS↔WASM boundary elimination — cross-referenced with brepjs and zalo patterns'
 status: draft
 created: '2026-03-24'
 updated: '2026-03-24'
 category: architecture
 related:
-
-- docs/research/replicad-occt-v8-opportunities.md
-- docs/research/replicad-occt-usage-refinement.md
-- docs/research/zalo-occt-v8-fork-analysis.md
-- docs/research/occt-v8-migration.md
+  - docs/research/replicad-occt-v8-opportunities.md
+  - docs/research/replicad-occt-usage-refinement.md
+  - docs/research/zalo-occt-v8-fork-analysis.md
+  - docs/research/occt-v8-migration.md
+---
 
 # Replicad Performance Blueprint
 
