@@ -1,6 +1,5 @@
 ---
-
-## title: 'Observability Implementation Status'
+title: 'Observability Implementation Status'
 description: 'Comprehensive audit of implemented observability features against the target architecture, accounting for infrastructure changes since the original design'
 status: active
 created: '2026-03-19'
@@ -11,6 +10,7 @@ related:
   - docs/research/grafana-observability-gaps.md
   - docs/research/socketio-production-resilience.md
   - docs/research/rpc-best-practices.md
+---
 
 # Observability Implementation Status
 
