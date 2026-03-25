@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react';
-import { useMemo } from 'react';
-import type { DockviewTheme } from 'dockview-react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import type { DockviewApi, DockviewReadyEvent, DockviewTheme } from 'dockview-react';
 import { DockviewReact } from 'dockview-react';
 import { cn } from '#utils/ui.utils.js';
 import { DockviewSplitAction } from '#components/panes/dockview-split-action.js';
@@ -255,6 +255,39 @@ const dockviewTailwindOverrides = cn(
 );
 
 /**
+ * Scroll the active tab fully into view within its group's tab bar.
+ *
+ * Dockview's built-in scroll fires synchronously before the browser
+ * reflows newly added tabs, so their widths can be zero. This helper
+ * runs after layout to correct the scroll position.
+ */
+export function scrollActiveTabIntoView(api: DockviewApi): void {
+  requestAnimationFrame(() => {
+    const group = api.activeGroup;
+    if (!group) {
+      return;
+    }
+
+    const tabsContainer = group.element.querySelector<HTMLElement>('.dv-tabs-container');
+    const activeTab = tabsContainer?.querySelector<HTMLElement>('.dv-tab.dv-active-tab');
+    if (!tabsContainer || !activeTab) {
+      return;
+    }
+
+    const tabLeft = activeTab.offsetLeft;
+    const tabRight = tabLeft + activeTab.offsetWidth;
+    const { scrollLeft } = tabsContainer;
+    const visibleRight = scrollLeft + tabsContainer.clientWidth;
+
+    if (tabLeft < scrollLeft) {
+      tabsContainer.scrollLeft = tabLeft;
+    } else if (tabRight > visibleRight) {
+      tabsContainer.scrollLeft = tabRight - tabsContainer.clientWidth;
+    }
+  });
+}
+
+/**
  * Themed Dockview wrapper.
  *
  * Renders `DockviewReact` with the `tauDockviewTheme` applied automatically.
@@ -272,15 +305,38 @@ const dockviewTailwindOverrides = cn(
  * `.dv-groupview`).  This keeps the content inside the groupview DOM tree,
  * allowing plain CSS `.dv-groupview:hover` to fire for both the tab bar and
  * the content area of every split pane.
+ *
+ * Also wires a post-layout scroll correction so that the active tab is always
+ * fully visible after panel activation — working around Dockview's synchronous
+ * scroll that fires before the browser reflows newly-added tab elements.
  */
-export function Dockview({ className, ...properties }: DockviewProperties): React.JSX.Element {
+export function Dockview({ className, onReady, ...properties }: DockviewProperties): React.JSX.Element {
   const mergedClassName = useMemo(() => cn(dockviewTailwindOverrides, className), [className]);
+  const disposableRef = useRef<{ dispose(): void } | undefined>(undefined);
+
+  const handleReady = useCallback(
+    (event: DockviewReadyEvent) => {
+      disposableRef.current?.dispose();
+      disposableRef.current = event.api.onDidActivePanelChange(() => {
+        scrollActiveTabIntoView(event.api);
+      });
+      onReady(event);
+    },
+    [onReady],
+  );
+
+  useEffect(() => {
+    return () => {
+      disposableRef.current?.dispose();
+    };
+  }, []);
 
   return (
     <DockviewReact
       {...properties}
       className={mergedClassName}
       theme={tauDockviewTheme}
+      onReady={handleReady}
       rightHeaderActionsComponent={properties.rightHeaderActionsComponent ?? DockviewSplitAction}
     />
   );
