@@ -105,6 +105,11 @@ export class ModelService implements OnModuleInit {
     };
   }
 
+  public getContextWindow(modelId: string): number | undefined {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    return modelConfig?.details.contextWindow;
+  }
+
   public getModelCost(modelId: string, usage: ChatUsageTokens): ChatUsageCost {
     const modelConfig = this.models.find((model) => model.id === modelId);
     if (!modelConfig) {

@@ -158,6 +158,33 @@ export function expectReasoningTokensInUsage(chunks: UIMessageChunk[]): void {
 }
 
 /**
+ * Extract context compaction data objects from raw stream chunks.
+ * Compaction data is written by the compactionMiddleware as custom data chunks.
+ */
+export function extractContextCompactionData(chunks: UIMessageChunk[]): Array<Record<string, unknown>> {
+  const compactionChunks: Array<Record<string, unknown>> = [];
+
+  for (const chunk of chunks) {
+    if ('data' in chunk && typeof chunk.data === 'object' && chunk.data !== null) {
+      const data = chunk.data as Record<string, unknown>;
+      if (data['type'] === 'context-compaction') {
+        compactionChunks.push(data);
+      }
+    }
+  }
+
+  return compactionChunks;
+}
+
+/**
+ * Assert that at least one context compaction event was emitted.
+ */
+export function expectContextCompaction(chunks: UIMessageChunk[]): void {
+  const compactionChunks = extractContextCompactionData(chunks);
+  expect(compactionChunks.length, 'Expected at least one context compaction data chunk').toBeGreaterThan(0);
+}
+
+/**
  * Assert that cache token normalization is plausible: when cacheReadTokens > 0,
  * inputTokens should represent only non-cached input (the cached portion was
  * subtracted by normalizeUsageTokens).

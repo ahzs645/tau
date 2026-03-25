@@ -5,6 +5,7 @@ import { ChatService } from '#api/chat/chat.service.js';
 import { ModelService } from '#api/models/model.service.js';
 import { ToolService } from '#api/tools/tool.service.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
+import { CompactionService } from '#api/chat/compaction.service.js';
 import { MetricsService } from '#telemetry/metrics.js';
 
 // Mock other dependencies
@@ -62,6 +63,7 @@ describe('ChatService', () => {
         { provide: ModelService, useValue: mockModelService },
         { provide: ToolService, useValue: mockToolService },
         { provide: MetricsService, useValue: new MetricsService() },
+        { provide: CompactionService, useValue: { compact: vi.fn() } },
       ],
     }).compile();
 

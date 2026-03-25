@@ -12,7 +12,7 @@ import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 @Module({
   imports: [ModelModule, ToolModule, FileEditModule, AnalysisModule],
   controllers: [ChatController],
-  providers: [CheckpointerService, ChatService, ChatRpcService, ChatRpcGateway],
+  providers: [CheckpointerService, ChatService, ChatRpcService, ChatRpcGateway, CompactionService],
   exports: [ChatService, ChatRpcService],
 })
 export class ChatModule {}

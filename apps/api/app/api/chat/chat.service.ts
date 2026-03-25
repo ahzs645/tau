@@ -24,7 +24,9 @@ import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-tr
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
 import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
+import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
+import { CompactionService } from '#api/chat/compaction.service.js';
 import { Span } from '#telemetry/tracer.service.js';
 
 @Injectable()
@@ -34,6 +36,7 @@ export class ChatService {
     private readonly toolService: ToolService,
     private readonly checkpointerService: CheckpointerService,
     private readonly metricsService: MetricsService,
+    private readonly compactionService: CompactionService,
   ) {}
 
   @Span()
@@ -102,19 +105,23 @@ export class ChatService {
       systemPrompt,
       checkpointer,
       middleware: [
-        // Record tool invocation metrics (runs before error handler to count all calls)
+        // --- Metrics and error handling ---
         createToolMetricsMiddleware(this.metricsService),
-        // Handle tool errors and convert to structured JSON (must wrap tool calls)
         toolErrorHandlerMiddleware,
         // Trim tool results (e.g., remove base64 images) before sending to the LLM
         toolResultTrimmerMiddleware,
-        // Ensure all AIMessages have text content (fixes interrupted thinking blocks)
+
+        // --- Context compaction ---
+        createCompactionMiddleware(this.compactionService, this.rpcBackendFactory, this.chatRpcService),
+
+        // --- Message processing ---
         messageContentSanitizerMiddleware,
-        // Strip leading/trailing/excessive newlines from model output
         newlineTrimmerMiddleware,
-        // Add cache_control to last message for incremental caching (breakpoint 2)
+
+        // --- Prompt caching (must follow compaction) ---
         promptCachingMiddleware,
-        // Log messages before each model call (for debugging)
+
+        // --- Logging and observability ---
         messageLoggingMiddleware,
         // Measure LLM operation duration and time-to-first-token
         createLlmTimingMiddleware(this.metricsService),
