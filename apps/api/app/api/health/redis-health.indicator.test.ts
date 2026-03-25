@@ -28,7 +28,7 @@ describe('RedisHealthIndicator', () => {
 
   it('should report up when Redis responds with PONG within threshold', async () => {
     const result = await indicator.isHealthy();
-    expect(result['redis']?.['status']).toBe('up');
+    expect(result['redis']?.status).toBe('up');
     expect(result['redis']).toHaveProperty('responseTimeMs');
   });
 
@@ -36,14 +36,14 @@ describe('RedisHealthIndicator', () => {
     mockPing.mockResolvedValue('UNEXPECTED');
 
     const result = await indicator.isHealthy();
-    expect(result['redis']?.['status']).toBe('down');
+    expect(result['redis']?.status).toBe('down');
   });
 
   it('should report down when Redis connection fails', async () => {
     mockPing.mockRejectedValue(new Error('Connection refused'));
 
     const result = await indicator.isHealthy();
-    expect(result['redis']?.['status']).toBe('down');
+    expect(result['redis']?.status).toBe('down');
     expect(result['redis']?.['message']).toBe('Connection refused');
   });
 });

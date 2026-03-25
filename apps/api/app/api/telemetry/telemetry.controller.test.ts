@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/naming-convention -- OTEL semantic convention attribute names use dot-notation */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ZodValidationPipe } from 'nestjs-zod';
 import type { MetricsService } from '#telemetry/metrics.js';
@@ -97,6 +96,7 @@ describe('TelemetryController', () => {
 
     it('should reject entries with unknown names', () => {
       expect(() =>
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- pipe.transform return type is any from NestJS ValidationPipe
         pipe.transform(
           { entries: [{ name: 'unknown.metric', duration: 100 }] },
           { type: 'body', metatype: IngestPayloadDto },
@@ -105,7 +105,10 @@ describe('TelemetryController', () => {
     });
 
     it('should reject empty entries array', () => {
-      expect(() => pipe.transform({ entries: [] }, { type: 'body', metatype: IngestPayloadDto })).toThrow();
+      expect(() =>
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- pipe.transform return type is any from NestJS ValidationPipe
+        pipe.transform({ entries: [] }, { type: 'body', metatype: IngestPayloadDto }),
+      ).toThrow();
     });
   });
 });

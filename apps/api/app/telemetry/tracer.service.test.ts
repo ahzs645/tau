@@ -1,5 +1,4 @@
 /* oxlint-disable new-cap -- NestJS decorators use PascalCase */
-/* eslint-disable @typescript-eslint/naming-convention -- OTEL attribute names use dot-notation */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';

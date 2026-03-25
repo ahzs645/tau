@@ -1,3 +1,4 @@
+// oxlint-disable import/first -- unhandled rejection needs to run first.
 // oxlint-disable-next-line import/no-unassigned-import -- reflect-metadata has intentional side effects
 import 'reflect-metadata';
 

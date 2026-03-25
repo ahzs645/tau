@@ -369,12 +369,13 @@ async function runSingleBenchmark({
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- Generic type parameter convention
 async function runWithConcurrency<TItem, TResult>(
-  items: Array<TItem>,
+  items: TItem[],
   handler: (item: TItem) => Promise<TResult>,
   limit: number,
-): Promise<Array<TResult>> {
-  const results: Array<TResult> = [];
+): Promise<TResult[]> {
+  const results: TResult[] = [];
   let index = 0;
 
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -382,6 +383,7 @@ async function runWithConcurrency<TItem, TResult>(
       const currentIndex = index++;
       const item = items[currentIndex];
       if (item !== undefined) {
+        // oxlint-disable-next-line no-await-in-loop -- Sequential execution is intentional for concurrency-limited pool
         results[currentIndex] = await handler(item);
       }
     }
@@ -427,7 +429,7 @@ async function runGeometryPhase(
 
       const benchmarkCase = caseMap.get(result.caseName)!;
       const mainFile = findMainFile(result.filesCreated)!;
-      // eslint-disable-next-line no-await-in-loop -- sequential by design: shared runtime client is not thread-safe
+      // oxlint-disable-next-line no-await-in-loop -- Sequential geometry validation with shared runtime client
       const validation = await validateGeometry({
         client,
         files: result.filesCreated,
@@ -524,13 +526,10 @@ export async function runModelBenchmarks({
       return result;
     };
 
-    let activeResults: ModelBenchmarkResult[];
-
-    if (concurrency === Infinity || concurrency >= totalActive) {
-      activeResults = await Promise.all(tasks.map((task) => runTask(task)));
-    } else {
-      activeResults = await runWithConcurrency(tasks, runTask, concurrency);
-    }
+    const activeResults: ModelBenchmarkResult[] =
+      concurrency === Infinity || concurrency >= totalActive
+        ? await Promise.all(tasks.map(async (task) => runTask(task)))
+        : await runWithConcurrency(tasks, runTask, concurrency);
 
     results.push(...activeResults);
   } finally {

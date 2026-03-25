@@ -81,21 +81,21 @@ const sdk = new NodeSDK({
 sdk.start();
 
 if (process.env['PYROSCOPE_SERVER_ADDRESS']) {
-  import('@pyroscope/nodejs')
-    .then(({ default: Pyroscope }) => {
-      Pyroscope.init({
-        serverAddress: process.env['PYROSCOPE_SERVER_ADDRESS']!,
-        appName: 'tau-api',
-        tags: {
-          region: process.env['FLY_REGION'] ?? 'local',
-          version: process.env['FLY_IMAGE_REF'] ?? 'dev',
-        },
-      });
-      Pyroscope.start();
-    })
-    .catch(() => {
-      // Pyroscope is optional; silently skip if unavailable
+  try {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Module default export name
+    const { default: Pyroscope } = await import('@pyroscope/nodejs');
+    Pyroscope.init({
+      serverAddress: process.env['PYROSCOPE_SERVER_ADDRESS'],
+      appName: 'tau-api',
+      tags: {
+        region: process.env['FLY_REGION'] ?? 'local',
+        version: process.env['FLY_IMAGE_REF'] ?? 'dev',
+      },
     });
+    Pyroscope.start();
+  } catch {
+    // Pyroscope is optional; silently skip if unavailable
+  }
 }
 
 export { sdk };

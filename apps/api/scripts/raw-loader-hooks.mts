@@ -49,7 +49,7 @@ export async function load(
   nextLoad: NextLoad,
 ): Promise<{ source: string; format: string; shortCircuit?: boolean }> {
   if (!url.endsWith(rawSuffix)) {
-    return nextLoad(url, context);
+    return nextLoad(url, context) as Promise<{ source: string; format: string; shortCircuit?: boolean }>;
   }
 
   const cleanUrl = url.slice(0, -rawSuffix.length);

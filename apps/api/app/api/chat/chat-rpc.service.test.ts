@@ -28,14 +28,15 @@ function createMockSocket(id: string, connected = true): Socket {
   const emitWithAck = vi.fn();
   const timeoutFunction = vi.fn(() => ({ emitWithAck }));
   const socket = mock<Socket>({ id, connected, emit: vi.fn() });
-  /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest mock for timeout().emitWithAck chain */
-  socket.timeout = timeoutFunction as any; // eslint-disable-line @typescript-eslint/no-explicit-any -- vitest mock for timeout().emitWithAck chain
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- vitest mock for timeout().emitWithAck chain
+  socket.timeout = timeoutFunction as any;
   Object.defineProperty(socket, '_emitWithAck', { value: emitWithAck });
   return socket;
 }
 
 function getEmitWithAck(socket: Socket): ReturnType<typeof vi.fn> {
-  return (socket as any)._emitWithAck; // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- test helper
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- accessing private mock property
+  return (socket as any)._emitWithAck;
 }
 
 describe('ChatRpcService', () => {

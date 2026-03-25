@@ -195,7 +195,7 @@ export class ChatRpcGateway
       this.metrics.wsActiveConnections.add(1);
       socket.on('disconnect', (reason) => {
         this.metrics.wsActiveConnections.add(-1);
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- OTEL semantic convention attribute
+        // oxlint-disable-next-line @typescript-eslint/naming-convention -- OTEL semantic convention attribute
         this.metrics.wsDisconnections.add(1, { [AttributeKey.WS_CLOSE_REASON]: reason });
       });
     });

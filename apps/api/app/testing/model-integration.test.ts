@@ -895,8 +895,8 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     client.connect();
     await connected;
 
-    await new Promise<void>((r) => {
-      setTimeout(r, 100);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
     });
 
     const result = await chatRpcService.sendRpcRequest({
@@ -934,14 +934,14 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     });
 
     client.on('rpc_request', () => {
-      // intentionally not calling ack — simulates unresponsive client
+      // Intentionally not calling ack — simulates unresponsive client
     });
 
     client.connect();
     await connected;
 
-    await new Promise<void>((r) => {
-      setTimeout(r, 100);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
     });
 
     const result = await chatRpcService.sendRpcRequest({
@@ -987,8 +987,8 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     client.connect();
     await connected;
 
-    await new Promise<void>((r) => {
-      setTimeout(r, 100);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
     });
 
     const result = await chatRpcService.sendRpcRequest({
@@ -1013,8 +1013,8 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     const client = createTestClient(port, { reconnection: false });
 
     const connectError = new Promise<Error>((resolve) => {
-      client.on('connect_error', (err) => {
-        resolve(err);
+      client.on('connect_error', (error) => {
+        resolve(error);
       });
     });
 
@@ -1056,7 +1056,9 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
         }, 100);
       });
       client.on('connect', () => {
-        if (connectionCount >= 2) resolve();
+        if (connectionCount >= 2) {
+          resolve();
+        }
       });
     });
 

@@ -52,7 +52,9 @@ let geometryPassed = 0;
 let geometryFailed = 0;
 
 function detectMainFile(directory: string): string {
-  if (existsSync(join(directory, 'main.scad'))) return 'main.scad';
+  if (existsSync(join(directory, 'main.scad'))) {
+    return 'main.scad';
+  }
   return 'main.ts';
 }
 

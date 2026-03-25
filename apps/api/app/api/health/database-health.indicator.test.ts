@@ -10,6 +10,7 @@ describe('DatabaseHealthIndicator', () => {
   let mockExecute: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- PostgreSQL column name
     mockExecute = vi.fn().mockResolvedValue([{ '?column?': 1 }]);
 
     const module: TestingModule = await Test.createTestingModule({
@@ -28,7 +29,7 @@ describe('DatabaseHealthIndicator', () => {
 
   it('should report up when database responds within threshold', async () => {
     const result = await indicator.isHealthy();
-    expect(result['database']?.['status']).toBe('up');
+    expect(result['database']?.status).toBe('up');
     expect(result['database']).toHaveProperty('responseTimeMs');
   });
 
@@ -36,7 +37,7 @@ describe('DatabaseHealthIndicator', () => {
     mockExecute.mockRejectedValue(new Error('Connection refused'));
 
     const result = await indicator.isHealthy();
-    expect(result['database']?.['status']).toBe('down');
+    expect(result['database']?.status).toBe('down');
     expect(result['database']?.['message']).toBe('Connection refused');
   });
 });

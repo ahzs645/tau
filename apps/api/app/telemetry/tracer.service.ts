@@ -43,25 +43,27 @@ export function Span(name?: string): MethodDecorator {
           const result = originalMethod.apply(this, args);
 
           if (result instanceof Promise) {
-            // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- must use .then/.finally to preserve Promise chain without wrapping in async
-            return result
-              .then(
-                (value) => {
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  // oxlint-disable-next-line typescript-eslint/no-unsafe-return -- generic Promise chain preserves original type
-                  return value;
-                },
-                (error: unknown) => {
-                  span.setStatus({ code: SpanStatusCode.ERROR });
-                  if (error instanceof Error) {
-                    span.recordException(error);
-                  }
-                  throw error;
-                },
-              )
-              .finally(() => {
-                span.end();
-              });
+            return (
+              result
+                // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- must use .then/.finally to preserve Promise chain without wrapping in async
+                .then(
+                  (value) => {
+                    span.setStatus({ code: SpanStatusCode.OK });
+                    // oxlint-disable-next-line typescript-eslint/no-unsafe-return -- generic Promise chain preserves original type
+                    return value;
+                  },
+                  (error: unknown) => {
+                    span.setStatus({ code: SpanStatusCode.ERROR });
+                    if (error instanceof Error) {
+                      span.recordException(error);
+                    }
+                    throw error;
+                  },
+                )
+                .finally(() => {
+                  span.end();
+                })
+            );
           }
 
           span.setStatus({ code: SpanStatusCode.OK });

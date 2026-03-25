@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/naming-convention -- OTEL semantic convention attribute names use dot-notation */
+/* oxlint-disable @typescript-eslint/naming-convention -- OTEL semantic convention attribute names use dot-notation */
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { AttributeKey, GenAiToolStatus } from '@taucad/telemetry';
