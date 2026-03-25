@@ -71,10 +71,10 @@ describe('applyMeshClipping', () => {
 
     applyMeshClipping(mesh, { enable: true, plane: testPlane });
 
-    expect(materials[0].side).toBe(THREE.DoubleSide);
-    expect(materials[0].clippingPlanes).toHaveLength(1);
-    expect(materials[1].side).toBe(THREE.FrontSide);
-    expect(materials[1].clippingPlanes).toHaveLength(1);
+    expect(materials[0]!.side).toBe(THREE.DoubleSide);
+    expect(materials[0]!.clippingPlanes).toHaveLength(1);
+    expect(materials[1]!.side).toBe(THREE.FrontSide);
+    expect(materials[1]!.clippingPlanes).toHaveLength(1);
   });
 });
 
@@ -453,7 +453,7 @@ describe('enforceMaterialClipping', () => {
     enforceMaterialClipping([mesh], testPlane, true);
 
     expect(mat.clippingPlanes).toHaveLength(1);
-    expect(mat.clippingPlanes![0]).toBe(testPlane);
+    expect(mat.clippingPlanes[0]).toBe(testPlane);
   });
 
   it('should clear clippingPlanes when enableMesh is false', () => {
@@ -486,10 +486,10 @@ describe('enforceMaterialClipping', () => {
 
     enforceMaterialClipping([mesh], testPlane, true);
 
-    expect(materials[0].clippingPlanes).toHaveLength(1);
-    expect(materials[0].clippingPlanes![0]).toBe(testPlane);
-    expect(materials[1].clippingPlanes).toHaveLength(1);
-    expect(materials[1].clippingPlanes![0]).toBe(testPlane);
+    expect(materials[0]!.clippingPlanes).toHaveLength(1);
+    expect(materials[0]!.clippingPlanes![0]).toBe(testPlane);
+    expect(materials[1]!.clippingPlanes).toHaveLength(1);
+    expect(materials[1]!.clippingPlanes![0]).toBe(testPlane);
   });
 
   it('should handle multiple meshes', () => {
