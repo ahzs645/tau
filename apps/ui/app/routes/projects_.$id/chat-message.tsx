@@ -7,6 +7,7 @@ import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { serializeMessage } from '#utils/chat.utils.js';
 import { ChatMessageReasoning } from '#routes/projects_.$id/chat-message-reasoning.js';
 import { ChatMessageDataUsage } from '#routes/projects_.$id/chat-message-data-usage.js';
+import { ChatMessageContextCompaction } from '#routes/projects_.$id/chat-message-context-compaction.js';
 import { ChatMessageText } from '#routes/projects_.$id/chat-message-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
 import { CopyButton } from '#components/copy-button.js';
@@ -330,6 +331,20 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
 
                   case 'data-usage': {
                     // Usage data parts are rendered separately in the footer
+                    return null;
+                  }
+
+                  case 'data-context-compaction': {
+                    return (
+                      <ChatMessageContextCompaction
+                        // oxlint-disable-next-line react/no-array-index-key -- Index is stable
+                        key={`${displayMessage.id}-compaction-${index}`}
+                        data={part.data}
+                      />
+                    );
+                  }
+
+                  case 'data-context-usage': {
                     return null;
                   }
 

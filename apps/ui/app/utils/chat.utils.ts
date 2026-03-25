@@ -263,6 +263,14 @@ function serializePart(part: MyMessagePart): string {
       return '';
     }
 
+    case 'data-context-compaction': {
+      return '';
+    }
+
+    case 'data-context-usage': {
+      return '';
+    }
+
     case 'dynamic-tool': {
       const rawInput = part.input;
       const inputString =
