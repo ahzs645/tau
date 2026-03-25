@@ -52,6 +52,9 @@ function createMockFileManager() {
       .fn<(path: string, data: Uint8Array<ArrayBuffer>, options: { source: string }) => Promise<void>>()
       .mockResolvedValue(undefined),
     deleteFile: vi.fn<(path: string, options: { source: string }) => Promise<void>>().mockResolvedValue(undefined),
+    stat: vi
+      .fn<(path: string) => Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>>()
+      .mockResolvedValue({ type: 'file', size: 0, mtimeMs: Date.now() }),
   };
 }
 
@@ -286,11 +289,14 @@ describe('rpc-handlers', () => {
         expect(entries).toHaveLength(3);
         expect(entries).toEqual(
           expect.arrayContaining([
-            { name: 'main.ts', type: 'file', size: 200 },
-            { name: 'utils.ts', type: 'file', size: 150 },
-            { name: 'lib', type: 'directory', size: 0 },
+            expect.objectContaining({ name: 'main.ts', type: 'file', size: 200 }),
+            expect.objectContaining({ name: 'utils.ts', type: 'file', size: 150 }),
+            expect.objectContaining({ name: 'lib', type: 'directory', size: 0 }),
           ]),
         );
+        for (const entry of entries) {
+          expect(entry).toHaveProperty('modifiedAt', expect.any(String));
+        }
       });
 
       it('should return empty array when no entries match', async () => {
@@ -306,7 +312,7 @@ describe('rpc-handlers', () => {
 
         const entries = await fileSystem.readdir('src');
 
-        expect(entries).toEqual([{ name: 'components', type: 'directory', size: 100 }]);
+        expect(entries).toEqual([expect.objectContaining({ name: 'components', type: 'directory', size: 100 })]);
       });
 
       it('should return root-level entries for empty string path', async () => {
@@ -314,7 +320,7 @@ describe('rpc-handlers', () => {
 
         const entries = await fileSystem.readdir('');
 
-        expect(entries).toEqual([{ name: 'main.scad', type: 'file', size: 300 }]);
+        expect(entries).toEqual([expect.objectContaining({ name: 'main.scad', type: 'file', size: 300 })]);
       });
 
       it('should not return entries from nested subdirectories', async () => {

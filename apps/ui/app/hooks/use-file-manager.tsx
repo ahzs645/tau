@@ -3,7 +3,7 @@ import { createContext, useContext, useMemo, useCallback, useEffect, useRef, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { SnapshotFrom } from 'xstate';
-import type { FileTreeEntry, FileSystemBackend, FileStatEntry } from '@taucad/types';
+import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource, FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { FileTreeNode } from '@taucad/filesystem';
@@ -59,6 +59,7 @@ type FileManagerContextType = {
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   duplicateFile: (sourcePath: string, destinationPath: string) => Promise<void>;
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
+  stat: (path: string) => Promise<FileStat>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
   getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
@@ -209,6 +210,16 @@ export function FileManagerProvider({
         throw new Error('Tree service not initialized');
       }
       return treeService.readdir(path);
+    },
+    [treeService],
+  );
+
+  const stat = useCallback(
+    async (path: string): Promise<FileStat> => {
+      if (!treeService) {
+        throw new Error('Tree service not initialized');
+      }
+      return treeService.stat(path);
     },
     [treeService],
   );
@@ -367,6 +378,7 @@ export function FileManagerProvider({
       renameFile,
       duplicateFile,
       deleteFile,
+      stat,
       exists,
       readdir,
       getDirectoryStat,
@@ -389,6 +401,7 @@ export function FileManagerProvider({
       renameFile,
       duplicateFile,
       deleteFile,
+      stat,
       exists,
       readdir,
       getDirectoryStat,
