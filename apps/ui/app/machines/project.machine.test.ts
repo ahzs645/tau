@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
-import type { Build } from '@taucad/types';
+import type { Project } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { projectMachine } from '#machines/project.machine.js';
 import type { ProjectContext } from '#machines/project.machine.js';
@@ -15,7 +15,7 @@ vi.mock('#constants/browser.constants.js', () => ({
 // Stubs
 // ---------------------------------------------------------------------------
 
-const stubProject: Build = {
+const stubProject: Project = {
   id: 'test-project',
   name: 'Test Project',
   description: 'A test project',
@@ -25,9 +25,9 @@ const stubProject: Build = {
   createdAt: 1000,
   updatedAt: 2000,
   assets: {},
-} satisfies Build;
+} satisfies Project;
 
-const stubProjectWithMechanical: Build = {
+const stubProjectWithMechanical: Project = {
   ...stubProject,
   assets: {
     mechanical: {
@@ -42,7 +42,7 @@ const stubProjectWithMechanical: Build = {
 // ---------------------------------------------------------------------------
 
 function createTestActor(options?: {
-  loadResult?: Build | (() => Promise<Build>);
+  loadResult?: Project | (() => Promise<Project>);
   writeResult?: () => Promise<void>;
   shouldAutoLoad?: boolean;
   shouldLoadModelOnStart?: boolean;
@@ -241,10 +241,10 @@ describe('projectMachine', () => {
     });
 
     it('should accept view graphics events during loading', async () => {
-      let resolveLoad!: (value: Build) => void;
+      let resolveLoad!: (value: Project) => void;
       const actor = createTestActor({
         loadResult: async () =>
-          new Promise<Build>((resolve) => {
+          new Promise<Project>((resolve) => {
             resolveLoad = resolve;
           }),
       });
