@@ -10,15 +10,23 @@ const circumference = 2 * Math.PI * radius;
 
 /** @public */
 export function getFillColor(percent: number): string {
-  if (percent >= 85) return 'stroke-destructive';
-  if (percent >= 60) return 'stroke-warning';
+  if (percent >= 85) {
+    return 'stroke-destructive';
+  }
+  if (percent >= 60) {
+    return 'stroke-warning';
+  }
   return 'stroke-foreground/50';
 }
 
 /** @public */
 export function getTrackColor(percent: number): string {
-  if (percent >= 85) return 'stroke-destructive/20';
-  if (percent >= 60) return 'stroke-warning/20';
+  if (percent >= 85) {
+    return 'stroke-destructive/20';
+  }
+  if (percent >= 60) {
+    return 'stroke-warning/20';
+  }
   return 'stroke-foreground/10';
 }
 
@@ -81,7 +89,7 @@ export function ChatContextIndicatorDisplay({ data }: { readonly data: ContextUs
  * Connected component that reads the latest context-usage data from chat state
  * and renders the indicator. Returns null when no usage data is available.
  */
-export function ChatContextIndicator(): React.JSX.Element | null {
+export function ChatContextIndicator(): React.JSX.Element | undefined {
   const usage = useChatSelector((state) => {
     for (let i = state.messages.length - 1; i >= 0; i--) {
       const message = state.messages[i]!;
@@ -97,7 +105,7 @@ export function ChatContextIndicator(): React.JSX.Element | null {
   });
 
   if (!usage) {
-    return null;
+    return undefined;
   }
 
   return <ChatContextIndicatorDisplay data={usage} />;
