@@ -1507,9 +1507,9 @@ function TreeItem({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  variant='ghost'
+                  variant='secondary'
                   size='icon'
-                  className='absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100'
+                  className='absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-50 hover:bg-secondary hover:opacity-100'
                   onClick={(event) => {
                     event.stopPropagation();
                   }}
