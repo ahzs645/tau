@@ -231,6 +231,68 @@ describe('editorMachine', () => {
       expect(context.panelState.openPanels.chat).toBe(true);
       actor.stop();
     });
+
+    it('should shallow-merge kernelPaneview into panel state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          kernelPaneview: { 'main.ts': { isExpanded: true, size: 200 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.kernelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+      });
+
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          kernelPaneview: { 'other.ts': { isExpanded: false, size: 80 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.kernelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+        'other.ts': { isExpanded: false, size: 80 },
+      });
+      actor.stop();
+    });
+
+    it('should shallow-merge parametersPaneview into panel state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          parametersPaneview: { 'index.ts': { isExpanded: true, size: 150 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.parametersPaneview).toEqual({
+        'index.ts': { isExpanded: true, size: 150 },
+      });
+      actor.stop();
+    });
+
+    it('should preserve other panel state fields when merging paneview state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: { openPanels: { files: true } },
+      });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          kernelPaneview: { 'main.ts': { isExpanded: true, size: 200 } },
+        },
+      });
+
+      const { panelState } = actor.getSnapshot().context;
+      expect(panelState.openPanels.files).toBe(true);
+      expect(panelState.openPanels.chat).toBe(true);
+      expect(panelState.kernelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+      });
+      expect(panelState.parametersPaneview).toEqual({});
+      actor.stop();
+    });
   });
 
   // =========================================================================

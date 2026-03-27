@@ -207,8 +207,12 @@ export const defaultPanelState = {
     details: 300,
   },
   mobileActiveTab: 'chat',
+  kernelPaneview: {},
+  parametersPaneview: {},
 } as const satisfies {
   openPanels: Record<DesktopPanelId, boolean>;
   panelSizes: Record<PanelId, number>;
   mobileActiveTab: PanelId;
+  kernelPaneview: Record<string, never>;
+  parametersPaneview: Record<string, never>;
 };

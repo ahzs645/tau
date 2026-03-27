@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useSelector } from '@xstate/react';
+import type { PaneviewApi } from 'dockview-react';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import type { chatTabs } from '#routes/projects_.$id/chat-interface-nav.js';
@@ -7,6 +8,7 @@ import { useViewContext } from '#routes/projects_.$id/chat-interface-view-contex
 import { useProject } from '#hooks/use-project.js';
 import type { PanelId } from '#constants/editor.constants.js';
 import { allotmentPanelOrder, mobileDrawerSnapPoints } from '#constants/editor.constants.js';
+import type { PaneviewPanelState, PanelState } from '#types/editor.types.js';
 
 export type ChatInterfaceState = {
   // Loading state
@@ -162,6 +164,73 @@ export function useChatInterfaceState(): ChatInterfaceState {
     handleTabChange,
     toggleFullHeightPanel,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Paneview persistence hook
+// ---------------------------------------------------------------------------
+
+type PaneviewKey = 'kernelPaneview' | 'parametersPaneview';
+
+/**
+ * Reads the saved paneview panel state for a given panel ID, returning
+ * `isExpanded` and `size` for use as initial `addPanel` options.
+ */
+export function getInitialPanelOptions(
+  saved: Record<string, PaneviewPanelState>,
+  panelId: string,
+  defaults: { isExpanded: boolean; size?: number },
+): { isExpanded: boolean; size?: number } {
+  const entry = saved[panelId];
+  if (!entry) {
+    return defaults;
+  }
+  return { isExpanded: entry.isExpanded, size: entry.size };
+}
+
+/**
+ * Persists PaneviewReact panel states (expansion + size) through the editor
+ * machine, following the same pattern as Allotment panel sizes.
+ *
+ * Call `connectApi` inside the PaneviewReact `onReady` callback so the hook
+ * can subscribe to `onDidLayoutChange` and snapshot panel state on every change.
+ */
+export function usePaneviewPersistence(paneviewKey: PaneviewKey): {
+  savedState: Record<string, PaneviewPanelState>;
+  connectApi: (api: PaneviewApi) => void;
+} {
+  const { editorRef } = useProject();
+  const savedState = useSelector(editorRef, (state) => state.context.panelState[paneviewKey]);
+  const [api, setApi] = useState<PaneviewApi | undefined>(undefined);
+
+  const connectApi = useCallback((paneviewApi: PaneviewApi) => {
+    setApi(paneviewApi);
+  }, []);
+
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const disposable = api.onDidLayoutChange(() => {
+      const record: Record<string, PaneviewPanelState> = {};
+      for (const panel of api.panels) {
+        record[panel.id] = {
+          isExpanded: panel.api.isExpanded,
+          size: panel.height,
+        };
+      }
+
+      const panelState: Partial<PanelState> = { [paneviewKey]: record };
+      editorRef.send({ type: 'setPanelState', panelState });
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [editorRef, paneviewKey, api]);
+
+  return { savedState, connectApi };
 }
 
 type UsePanePositionObserverOptions = {

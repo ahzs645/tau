@@ -40,7 +40,14 @@ type FileEntryOptions = {
 };
 
 function createFileEntry(options: FileEntryOptions): FileEntry {
-  return { path: options.path, name: options.name, type: options.type, size: options.size ?? 100, isLoaded: false };
+  return {
+    path: options.path,
+    name: options.name,
+    type: options.type,
+    size: options.size ?? 100,
+    mtimeMs: 0,
+    isLoaded: false,
+  };
 }
 
 type FileManagerWriteCall = [string, Uint8Array<ArrayBuffer>, { source: string }];

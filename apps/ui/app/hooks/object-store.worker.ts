@@ -82,6 +82,14 @@ const objectStoreWorker = {
           ...options.editorState?.panelState?.panelSizes,
         },
         mobileActiveTab: options.editorState?.panelState?.mobileActiveTab ?? defaultPanelState.mobileActiveTab,
+        kernelPaneview: {
+          ...defaultPanelState.kernelPaneview,
+          ...options.editorState?.panelState?.kernelPaneview,
+        },
+        parametersPaneview: {
+          ...defaultPanelState.parametersPaneview,
+          ...options.editorState?.panelState?.parametersPaneview,
+        },
       };
 
       await storage.updateEditorState({

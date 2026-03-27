@@ -29,6 +29,14 @@ function deepMergePanelState(current: PanelState, update: PartialDeep<PanelState
       ...update.panelSizes,
     },
     mobileActiveTab: update.mobileActiveTab ?? current.mobileActiveTab,
+    kernelPaneview: {
+      ...current.kernelPaneview,
+      ...(update.kernelPaneview as PanelState['kernelPaneview'] | undefined),
+    },
+    parametersPaneview: {
+      ...current.parametersPaneview,
+      ...(update.parametersPaneview as PanelState['parametersPaneview'] | undefined),
+    },
   };
 }
 

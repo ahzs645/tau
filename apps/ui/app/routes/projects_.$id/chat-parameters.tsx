@@ -1,6 +1,9 @@
 import { XIcon, SlidersHorizontal, Search, ChevronRight, RefreshCcw } from 'lucide-react';
-import { useCallback, memo, useState } from 'react';
+import { useCallback, memo, useState, useMemo } from 'react';
 import { useSelector } from '@xstate/react';
+import type { ActorRefFrom } from 'xstate';
+import type { PaneviewApi, PaneviewPanelApi } from 'dockview-react';
+import { PaneviewReact } from 'dockview-react';
 import { hasJsonSchemaObjectProperties } from '@taucad/utils/schema';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
@@ -16,18 +19,287 @@ import {
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
 import { cn } from '#utils/ui.utils.js';
+import {
+  PaneviewHeader,
+  PaneviewHeaderAction,
+  PaneviewHeaderActionGroup,
+  paneviewStyleOverrides,
+} from '#components/panes/paneview-header.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useProject, useMainGraphics } from '#hooks/use-project.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
+import type { cadMachine } from '#machines/cad.machine.js';
+import { getActiveSetValues } from '#utils/parameter-config.utils.js';
+import { sortCompilationEntries } from '#routes/projects_.$id/compilation-unit.utils.js';
+import { usePaneviewPersistence, getInitialPanelOptions } from '#routes/projects_.$id/use-chat-interface-state.js';
 
 const toggleParametersKeyCombination = {
   key: 'x',
   ctrlKey: true,
 } satisfies KeyCombination;
 
-// Parameters Trigger Component
+// ---------------------------------------------------------------------------
+// Parameter set selector (dropdown for switching active set)
+// ---------------------------------------------------------------------------
+
+function ParameterSetSelector({
+  filePath,
+  sets,
+  activeSet,
+}: {
+  readonly filePath: string;
+  readonly sets: Record<string, { values: Record<string, unknown> }>;
+  readonly activeSet: string;
+}): React.JSX.Element {
+  const { switchParameterSet } = useProject();
+  const setNames = Object.keys(sets);
+
+  const handleChange = useCallback(
+    (event: React.ChangeEvent<HTMLSelectElement>) => {
+      switchParameterSet(filePath, event.target.value);
+    },
+    [switchParameterSet, filePath],
+  );
+
+  if (setNames.length <= 1) {
+    return <span className='text-[10px] text-muted-foreground'>{activeSet}</span>;
+  }
+
+  return (
+    <select
+      className='h-5 rounded border border-border bg-background px-1 text-[10px] text-foreground'
+      value={activeSet}
+      onChange={handleChange}
+    >
+      {setNames.map((name) => (
+        <option key={name} value={name}>
+          {name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CU parameters panel body (used in both flat and paneview modes)
+// ---------------------------------------------------------------------------
+
+function CompilationUnitParameters({
+  entryFile,
+  cadRef,
+  enableSearch,
+  isAllExpanded,
+}: {
+  readonly entryFile: string;
+  readonly cadRef: ActorRefFrom<typeof cadMachine>;
+  readonly enableSearch: boolean;
+  readonly isAllExpanded: boolean;
+}): React.JSX.Element {
+  const { parameterConfig, setCompilationUnitParameters } = useProject();
+  const graphicsActor = useMainGraphics();
+
+  const parameters = useMemo(
+    () => (parameterConfig ? getActiveSetValues(parameterConfig, entryFile) : {}),
+    [parameterConfig, entryFile],
+  );
+
+  const defaultParameters = useSelector(cadRef, (state) => state.context.defaultParameters);
+  const jsonSchema = useSelector(cadRef, (state) => state.context.jsonSchema);
+  const units = useSelector(graphicsActor, (state) => state?.context.units) ?? {
+    length: { symbol: 'mm', factor: 1 },
+  };
+
+  const handleParametersChange = useCallback(
+    (newParams: Record<string, unknown>) => {
+      setCompilationUnitParameters(entryFile, newParams);
+    },
+    [setCompilationUnitParameters, entryFile],
+  );
+
+  return (
+    <Parameters
+      parameters={parameters}
+      defaultParameters={defaultParameters}
+      jsonSchema={jsonSchema}
+      units={units}
+      enableSearch={enableSearch}
+      isAllExpanded={isAllExpanded}
+      onParametersChange={handleParametersChange}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Paneview panel body
+// ---------------------------------------------------------------------------
+
+type ParametersPanelParams = {
+  entryFile: string;
+  cadRef: ActorRefFrom<typeof cadMachine>;
+  enableSearch: boolean;
+  isAllExpanded: boolean;
+};
+
+function ParametersPanelBody({ params }: { readonly params: ParametersPanelParams }): React.JSX.Element {
+  return (
+    <CompilationUnitParameters
+      entryFile={params.entryFile}
+      cadRef={params.cadRef}
+      enableSearch={params.enableSearch}
+      isAllExpanded={params.isAllExpanded}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Paneview panel header: file name + set selector
+// ---------------------------------------------------------------------------
+
+function ParametersPanelHeader({
+  api,
+  params,
+}: {
+  readonly api: PaneviewPanelApi;
+  readonly params: ParametersPanelParams;
+}): React.JSX.Element {
+  const { parameterConfig, setCompilationUnitParameters } = useProject();
+  const fileEntry = parameterConfig?.files[params.entryFile];
+
+  const hasModifiedParameters = useMemo(() => {
+    if (!parameterConfig) {
+      return false;
+    }
+    return Object.keys(getActiveSetValues(parameterConfig, params.entryFile)).length > 0;
+  }, [parameterConfig, params.entryFile]);
+
+  const handleReset = useCallback(() => {
+    setCompilationUnitParameters(params.entryFile, {});
+  }, [setCompilationUnitParameters, params.entryFile]);
+
+  return (
+    <PaneviewHeader
+      api={api}
+      title={params.entryFile}
+      actions={
+        hasModifiedParameters ? (
+          <PaneviewHeaderActionGroup>
+            <PaneviewHeaderAction tooltip='Reset parameters' aria-label='Reset parameters' onClick={handleReset}>
+              <RefreshCcw />
+            </PaneviewHeaderAction>
+          </PaneviewHeaderActionGroup>
+        ) : undefined
+      }
+    >
+      {fileEntry ? (
+        <ParameterSetSelector filePath={params.entryFile} sets={fileEntry.sets} activeSet={fileEntry.activeSet} />
+      ) : undefined}
+    </PaneviewHeader>
+  );
+}
+
+const paneviewComponents = { parametersPanel: ParametersPanelBody };
+const paneviewHeaderComponents = { parametersHeader: ParametersPanelHeader };
+
+// ---------------------------------------------------------------------------
+// Multi-CU Paneview layout
+// ---------------------------------------------------------------------------
+
+function ParametersPaneview({
+  entries,
+  mainEntryFile,
+  enableSearch,
+  isAllExpanded,
+}: {
+  readonly entries: Array<[string, ActorRefFrom<typeof cadMachine>]>;
+  readonly mainEntryFile: string;
+  readonly enableSearch: boolean;
+  readonly isAllExpanded: boolean;
+}): React.JSX.Element {
+  const { savedState, connectApi } = usePaneviewPersistence('parametersPaneview');
+
+  const sortedEntries = useMemo(() => sortCompilationEntries(entries, mainEntryFile), [entries, mainEntryFile]);
+
+  const handleReady = useCallback(
+    (event: { api: PaneviewApi }) => {
+      connectApi(event.api);
+
+      for (const [entryFile, cadRef] of sortedEntries) {
+        const isMain = entryFile === mainEntryFile;
+        const initial = getInitialPanelOptions(savedState, entryFile, {
+          isExpanded: isMain,
+          size: isMain ? 200 : undefined,
+        });
+
+        event.api.addPanel({
+          id: entryFile,
+          title: entryFile,
+          component: 'parametersPanel',
+          headerComponent: 'parametersHeader',
+          isExpanded: initial.isExpanded,
+          minimumBodySize: 80,
+          size: initial.size,
+          params: { entryFile, cadRef, enableSearch, isAllExpanded } satisfies ParametersPanelParams,
+        });
+      }
+    },
+    [sortedEntries, mainEntryFile, enableSearch, isAllExpanded, savedState, connectApi],
+  );
+
+  return (
+    <PaneviewReact
+      className={paneviewStyleOverrides}
+      components={paneviewComponents}
+      headerComponents={paneviewHeaderComponents}
+      onReady={handleReady}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Parameters content: single vs multi CU
+// ---------------------------------------------------------------------------
+
+function ParametersContent({
+  enableSearch,
+  isAllExpanded,
+}: {
+  readonly enableSearch: boolean;
+  readonly isAllExpanded: boolean;
+}): React.JSX.Element {
+  const { compilationUnits, mainEntryFile } = useProject();
+  const entries = useMemo(() => [...compilationUnits.entries()], [compilationUnits]);
+
+  if (entries.length <= 1) {
+    const [entryFile, cadRef] = entries[0] ?? [mainEntryFile, undefined];
+    if (!cadRef) {
+      return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
+    }
+    return (
+      <CompilationUnitParameters
+        entryFile={entryFile}
+        cadRef={cadRef}
+        enableSearch={enableSearch}
+        isAllExpanded={isAllExpanded}
+      />
+    );
+  }
+
+  return (
+    <ParametersPaneview
+      entries={entries}
+      mainEntryFile={mainEntryFile}
+      enableSearch={enableSearch}
+      isAllExpanded={isAllExpanded}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Exports
+// ---------------------------------------------------------------------------
+
 export const ChatParametersTrigger = memo(function ({
   isOpen,
   onToggle,
@@ -56,23 +328,13 @@ export const ChatParameters = memo(function (props: {
   readonly isExpanded?: boolean;
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
-  const { projectRef, compilationUnits, mainEntryFile, setParameters } = useProject();
+  const { mainEntryFile } = useProject();
   const { className, isExpanded = true, setIsExpanded } = props;
-  const graphicsActor = useMainGraphics();
-  const cadActor = compilationUnits.get(mainEntryFile);
-  const parameters = useSelector(projectRef, (state) => state.context.project?.assets.mechanical?.parameters ?? {});
-  const defaultParameters = useSelector(cadActor, (state) => state?.context.defaultParameters ?? {});
-  const jsonSchema = useSelector(cadActor, (state) => state?.context.jsonSchema ?? undefined);
 
-  // Build CadUnits object reactively from graphics state
-  const units = useSelector(graphicsActor, (state) => state?.context.units) ?? {
-    length: { symbol: 'mm', factor: 1 },
-  };
+  const mainCadRef = useProject().compilationUnits.get(mainEntryFile);
+  const jsonSchema = useSelector(mainCadRef, (state) => state?.context.jsonSchema ?? undefined);
 
-  // State to toggle search visibility
   const [isSearchVisible, setIsSearchVisible] = useState(false);
-
-  // State to toggle expand/collapse all
   const [isAllExpanded, setIsAllExpanded] = useState(true);
 
   const toggleSearch = useCallback(() => {
@@ -82,12 +344,6 @@ export const ChatParameters = memo(function (props: {
   const toggleAllExpanded = useCallback(() => {
     setIsAllExpanded((current) => !current);
   }, []);
-
-  const resetAllParameters = useCallback(() => {
-    setParameters({});
-  }, [setParameters]);
-
-  const hasModifiedParameters = Object.keys(parameters).length > 0;
 
   const toggleParametersOpen = useCallback(() => {
     setIsExpanded?.((current) => !current);
@@ -113,15 +369,6 @@ export const ChatParameters = memo(function (props: {
               >
                 <Search className='size-4' />
               </FloatingPanelMenuButton>
-              {hasModifiedParameters ? (
-                <FloatingPanelMenuButton
-                  aria-label='Reset all parameters'
-                  tooltip='Reset all parameters'
-                  onClick={resetAllParameters}
-                >
-                  <RefreshCcw className='size-4' />
-                </FloatingPanelMenuButton>
-              ) : null}
               {jsonSchema && hasJsonSchemaObjectProperties(jsonSchema) ? (
                 <FloatingPanelMenuButton
                   aria-expanded={isAllExpanded}
@@ -148,15 +395,7 @@ export const ChatParameters = memo(function (props: {
         </FloatingPanelContentHeader>
 
         <FloatingPanelContentBody className='overflow-y-hidden'>
-          <Parameters
-            parameters={parameters}
-            defaultParameters={defaultParameters}
-            jsonSchema={jsonSchema}
-            units={units}
-            enableSearch={isSearchVisible}
-            isAllExpanded={isAllExpanded}
-            onParametersChange={setParameters}
-          />
+          <ParametersContent enableSearch={isSearchVisible} isAllExpanded={isAllExpanded} />
         </FloatingPanelContentBody>
       </FloatingPanelContent>
     </FloatingPanel>
