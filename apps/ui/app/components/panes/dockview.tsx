@@ -282,7 +282,7 @@ export function scrollActiveTabIntoView(api: DockviewApi): void {
     if (tabLeft < scrollLeft) {
       tabsContainer.scrollLeft = tabLeft;
     } else if (tabRight > visibleRight) {
-      tabsContainer.scrollLeft = tabRight - tabsContainer.clientWidth;
+      tabsContainer.scrollLeft = Math.min(tabLeft, tabRight - tabsContainer.clientWidth);
     }
   });
 }

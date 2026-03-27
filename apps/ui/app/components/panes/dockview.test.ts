@@ -241,6 +241,72 @@ describe('scrollActiveTabIntoView', () => {
     });
   });
 
+  // ── Full-tab visibility ──
+
+  describe('full-tab visibility', () => {
+    it('should prefer the left edge when the tab is wider than the container and clipped right', () => {
+      const { api, tabsContainer } = buildApi({
+        tabs: [
+          { offsetLeft: 0, width: 100, isActive: false },
+          { offsetLeft: 100, width: 400, isActive: true },
+        ],
+        container: { scrollLeft: 0, clientWidth: 300 },
+      });
+
+      scrollActiveTabIntoView(api);
+      flushRaf();
+
+      // Tab at [100, 500] doesn't fit in 300px container.
+      // Left edge alignment: scrollLeft = 100
+      expect(tabsContainer!.scrollLeft).toBe(100);
+    });
+
+    it('should prefer the left edge when a very wide tab is clipped right', () => {
+      const { api, tabsContainer } = buildApi({
+        tabs: [{ offsetLeft: 50, width: 1000, isActive: true }],
+        container: { scrollLeft: 0, clientWidth: 200 },
+      });
+
+      scrollActiveTabIntoView(api);
+      flushRaf();
+
+      // Tab at [50, 1050] much wider than 200px container.
+      // Left edge alignment: scrollLeft = 50
+      expect(tabsContainer!.scrollLeft).toBe(50);
+    });
+
+    it('should show the entire tab when it fits and is clipped right', () => {
+      const { api, tabsContainer } = buildApi({
+        tabs: [
+          { offsetLeft: 0, width: 250, isActive: false },
+          { offsetLeft: 250, width: 100, isActive: true },
+        ],
+        container: { scrollLeft: 0, clientWidth: 300 },
+      });
+
+      scrollActiveTabIntoView(api);
+      flushRaf();
+
+      // Tab at [250, 350] fits in 300px container.
+      // Right edge alignment: scrollLeft = 350 - 300 = 50
+      expect(tabsContainer!.scrollLeft).toBe(50);
+    });
+
+    it('should prefer the left edge when the tab is wider than the container and clipped left', () => {
+      const { api, tabsContainer } = buildApi({
+        tabs: [{ offsetLeft: 0, width: 500, isActive: true }],
+        container: { scrollLeft: 100, clientWidth: 300 },
+      });
+
+      scrollActiveTabIntoView(api);
+      flushRaf();
+
+      // Tab at [0, 500] wider than 300px container, left edge clipped.
+      // Left edge alignment: scrollLeft = 0
+      expect(tabsContainer!.scrollLeft).toBe(0);
+    });
+  });
+
   // ── requestAnimationFrame deferral ──
 
   describe('requestAnimationFrame deferral', () => {
