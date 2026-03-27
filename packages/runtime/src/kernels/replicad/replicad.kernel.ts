@@ -5,10 +5,6 @@
  * Uses runtime.bundler for JS/TS bundling and runtime.execute for evaluation.
  * Registers replicad as a built-in module and loads OpenCASCADE WASM for geometry.
  *
- * Uses ES Module Asset Injection (two-tier dynamic import) to code-split WASM
- * variants. Only the selected variant's JS glue (~112KB) is loaded on-demand,
- * shrinking the worker bundle by ~225KB vs. static imports of both variants.
- *
  * @see docs/policy/es-module-policy.md
  */
 
@@ -51,11 +47,10 @@ import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
 const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href;
 const replicadSourceMapUrl = new URL('sourcemaps/replicad.js.map', import.meta.url).href;
 
-// WASM URLs using universal pattern for browsers and bundlers.
-// Static string literals so bundlers detect and copy the assets at build time.
+// WASM URL using universal pattern for browsers and bundlers.
+// Static string literal so bundlers detect and copy the asset at build time.
 // @see https://web.dev/articles/bundling-non-js-resources#universal_pattern_for_browsers_and_bundlers
 const singleWasmUrl = new URL('wasm/replicad_single.wasm', import.meta.url).href;
-const exceptionsWasmUrl = new URL('wasm/replicad_with_exceptions.wasm', import.meta.url).href;
 
 // =============================================================================
 // WASM resolution (two-tier dynamic import pattern)
@@ -71,9 +66,8 @@ type WasmOption = string | { wasmUrl: string; wasmBindingsUrl: string };
 /**
  * Resolve the WASM variant into a concrete URL and loaded bindings factory.
  *
- * - **Presets** (`'single'` / `'single-exceptions'`): Uses static-string `import()` so the
- *   bundler creates a code-split chunk loaded on-demand. Only the selected ~112KB chunk
- *   is loaded at runtime, shrinking the worker bundle by ~225KB.
+ * - **Preset** (`'single'`): Uses static-string `import()` so the bundler creates a
+ *   code-split chunk loaded on-demand.
  *
  * - **Custom config** (`{ wasmUrl, wasmBindingsUrl }`): Uses variable `import()` with
  *   `@vite-ignore` to bypass bundler analysis. Works in Node.js for any module format.
@@ -89,14 +83,6 @@ async function resolveWasm(wasm: WasmOption, tracer?: RuntimeSpanTracer): Promis
 
   try {
     if (typeof wasm === 'string') {
-      if (wasm === 'single-exceptions') {
-        const module_ = await import('replicad-opencascadejs/src/replicad_with_exceptions.js');
-        return {
-          wasmUrl: exceptionsWasmUrl,
-          bindingsFactory: resolveCjsDefault(module_.default) as OpenCascadeModuleFactory,
-        };
-      }
-
       const module_ = await import('replicad-opencascadejs/src/replicad_single.js');
       return {
         wasmUrl: singleWasmUrl,
@@ -367,13 +353,12 @@ export type ReplicadOptions = {
   /**
    * WASM build variant or custom build configuration.
    *
-   * - `'single'` (default) -- compact build (~17 MB), OC errors abort rather than throw
-   * - `'single-exceptions'` -- exceptions-enabled build (~20 MB) with human-readable OC error messages
+   * - `'single'` (default) -- exceptions-enabled build with human-readable OC error messages
    * - `ReplicadWasmConfig` -- custom WASM/JS URLs for runtime injection (Node.js tooling)
    *
    * @default 'single'
    */
-  wasm?: 'single' | 'single-exceptions' | ReplicadWasmConfig;
+  wasm?: 'single' | ReplicadWasmConfig;
   /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
   ocTracing?: 'off' | 'summary' | 'per-call';
   /** Include Boundary Representation (BRep) edge lines in the generated GLTF geometry. Defaults to `false`. */
@@ -389,7 +374,7 @@ const wasmConfigSchema = z.object({
 
 const replicadOptionsSchema = z.object({
   wasm: z
-    .union([z.enum(['single', 'single-exceptions']), wasmConfigSchema])
+    .union([z.enum(['single']), wasmConfigSchema])
     .optional()
     .default('single'),
   ocTracing: z.enum(['off', 'summary', 'per-call']).optional().default('summary'),
@@ -421,13 +406,13 @@ export default defineKernel({
     let openCascade = await initOpenCascade(resolved.wasmUrl, resolved.bindingsFactory, { tracer });
     let tracingSummary: OcTracingSummary | undefined;
 
-    if (ocTracing !== 'off') {
+    if (ocTracing === 'summary' || ocTracing === 'per-call') {
       const traced = wrapOcWithTracing(openCascade, tracer, {
         mode: ocTracing,
       });
       openCascade = traced.tracedInstance;
       tracingSummary = traced.summary;
-    } else if (wasm !== 'single') {
+    } else {
       openCascade = wrapOcForExceptions(openCascade);
     }
 

@@ -9,7 +9,6 @@
  */
 
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
-import type { OpenCascadeInstance as OpenCascadeWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/runtime.types.js';
 import { OcKernelError, formatOcExceptionMessage } from '#kernels/replicad/oc-kernel-error.js';
 
@@ -155,7 +154,7 @@ function decodeWebAssemblyException(
  * @returns the exception type name, or empty string on failure
  */
 function extractExceptionTypeName(
-  errorData: ReturnType<OpenCascadeWithExceptions['OCJS']['getStandard_FailureData']>,
+  errorData: ReturnType<OpenCascadeInstance['OCJS']['getStandard_FailureData']>,
 ): string {
   try {
     // oxlint-disable-next-line new-cap, @typescript-eslint/consistent-type-assertions -- OpenCASCADE C++ bindings use PascalCase methods; WASM binding type mismatch
@@ -184,7 +183,7 @@ function extractStandardFailureData(
   ocInstance: OpenCascadeInstance,
   errorPointer: number,
 ): { message: string; typeName: string; cppStack: string } {
-  const oc = ocInstance as OpenCascadeWithExceptions;
+  const oc = ocInstance;
   return withWasmObject(oc.OCJS.getStandard_FailureData(errorPointer), (errorData) => {
     const errorMessage = errorData.what();
     // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods

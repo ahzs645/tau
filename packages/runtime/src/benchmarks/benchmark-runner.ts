@@ -43,8 +43,6 @@ export type BenchmarkResult = {
 export type WasmSizeInfo = {
   singleWasmBytes: number;
   singleJsBytes: number;
-  exceptionsWasmBytes?: number;
-  exceptionsJsBytes?: number;
 };
 
 /** Build provenance metadata linking benchmark results to build configuration. */
@@ -76,7 +74,7 @@ export type BenchmarkRunnerOptions = {
   iterations: number;
   ocTracing?: 'off' | 'summary' | 'per-call';
   /** WASM variant or custom config. Defaults to `'single'`. */
-  wasm?: 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindingsUrl: string };
+  wasm?: 'single' | { wasmUrl: string; wasmBindingsUrl: string };
   onProgress?: (completed: number, total: number, caseName: string) => void;
   /** Enable V8 CPU profiling for per-function timing breakdown. */
   cpuProfile?: boolean;
@@ -325,8 +323,6 @@ async function collectWasmSizes(): Promise<WasmSizeInfo | undefined> {
     return {
       singleWasmBytes: singleWasm,
       singleJsBytes: jsSize('replicad_single.js'),
-      exceptionsWasmBytes: stat('replicad_with_exceptions.wasm'),
-      exceptionsJsBytes: jsSize('replicad_with_exceptions.js') || undefined,
     };
   } catch {
     return undefined;

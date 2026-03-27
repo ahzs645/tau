@@ -91,7 +91,7 @@ ${c.dim}Options:${c.reset}
   ${c.cyan}-o${c.reset}, ${c.cyan}--output${c.reset} <dir>      Output directory (default: reports)
   ${c.cyan}-p${c.reset}, ${c.cyan}--provenance${c.reset} <file> Attach build provenance JSON to results
       ${c.cyan}--wasm-dir${c.reset} <path>   Inject custom WASM from directory (contains .wasm + .js files)
-      ${c.cyan}--wasm-variant${c.reset} <v>  WASM variant name: single (default) or single-exceptions
+      ${c.cyan}--wasm-variant${c.reset} <v>  WASM variant name: single (default)
       ${c.cyan}--ocProfile${c.reset}         Use per-call OC tracing for deep profiling
       ${c.cyan}--noTracing${c.reset}         Disable OC tracing entirely for pure timing
       ${c.cyan}--cpuProfile${c.reset}        Enable V8 CPU profiling for per-function timing breakdown
@@ -142,10 +142,10 @@ function formatFileSize(bytes: number): string {
 
 // ── WASM resolution ─────────────────────────────────────────────────
 
-type WasmOptionResult = 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindingsUrl: string };
+type WasmOptionResult = 'single' | { wasmUrl: string; wasmBindingsUrl: string };
 
 function resolveWasmOption(): WasmOptionResult {
-  const wasmVariant = values['wasm-variant'] as 'single' | 'single-exceptions' | undefined;
+  const wasmVariant = values['wasm-variant'] as 'single' | undefined;
   const wasmDirectory = values['wasm-dir'];
 
   if (!wasmDirectory) {
@@ -158,7 +158,7 @@ function resolveWasmOption(): WasmOptionResult {
     process.exit(1);
   }
 
-  const variant = wasmVariant === 'single-exceptions' ? 'replicad_with_exceptions' : 'replicad_single';
+  const variant = 'replicad_single';
   const wasmPath = join(absDirectory, `${variant}.wasm`);
   const jsPath = join(absDirectory, `${variant}.js`);
 
@@ -234,11 +234,6 @@ function writeResults(result: BenchmarkRunResult): void {
     const singleSize = formatFileSize(result.wasmSizes.singleWasmBytes);
     const singleJs = formatFileSize(result.wasmSizes.singleJsBytes);
     label('single.wasm', `${singleSize} ${c.dim}(JS: ${singleJs})${c.reset}`);
-    if (result.wasmSizes.exceptionsWasmBytes) {
-      const excSize = formatFileSize(result.wasmSizes.exceptionsWasmBytes);
-      const excJs = formatFileSize(result.wasmSizes.exceptionsJsBytes ?? 0);
-      label('exceptions.wasm', `${excSize} ${c.dim}(JS: ${excJs})${c.reset}`);
-    }
   }
 }
 

@@ -1177,7 +1177,7 @@ describe('ReplicadWorker', () => {
             `,
           },
           mainFile: 'speaker.ts',
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1533,7 +1533,7 @@ describe('ReplicadWorker', () => {
         expect(typeof result.success).toBe('boolean');
       });
 
-      it('should decode OpenCASCADE numeric exceptions into human-readable messages when wasm is single-exceptions', async () => {
+      it('should decode OpenCASCADE numeric exceptions into human-readable messages', async () => {
         const result = await createGeometry({
           files: {
             'oc_exception.ts': `
@@ -1544,7 +1544,7 @@ describe('ReplicadWorker', () => {
           },
           mainFile: 'oc_exception.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1570,7 +1570,7 @@ describe('ReplicadWorker', () => {
           },
           mainFile: 'bad_fillet.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1600,7 +1600,7 @@ export default function main() {
           files: { 'fillet_stack.ts': code },
           mainFile: 'fillet_stack.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1653,7 +1653,7 @@ export default function main() {
           files: { 'nested_helpers.ts': code },
           mainFile: 'nested_helpers.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1701,7 +1701,7 @@ export function buildGeometry() {
           },
           mainFile: 'main.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1753,7 +1753,7 @@ export default function main() {
           files: { 'fillet_fail.ts': code },
           mainFile: 'fillet_fail.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1812,7 +1812,7 @@ export default function main() {
           mainFile: 'fillet_no_trace.ts',
           parameters: {},
           options: {
-            workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
+            workerOptions: { wasm: 'single', ocTracing: 'off' },
           },
         });
 
@@ -1867,7 +1867,7 @@ export default function main() {
           mainFile: 'fillet_no_trace.ts',
           parameters: {},
           options: {
-            workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
+            workerOptions: { wasm: 'single', ocTracing: 'off' },
           },
         });
 
@@ -1911,7 +1911,7 @@ export default function main() {
           parameters: {},
           options: {
             workerOptions: {
-              wasm: 'single-exceptions',
+              wasm: 'single',
               withSourceMapping: true,
             },
           },
@@ -2176,7 +2176,7 @@ export default function main() {
           files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -2206,7 +2206,7 @@ export default function main() {
           parameters: {},
           options: {
             workerOptions: {
-              wasm: 'single-exceptions',
+              wasm: 'single',
               withSourceMapping: true,
             },
           },
@@ -2240,7 +2240,7 @@ export default function main() {
           files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -3817,22 +3817,19 @@ describe('withBrepEdges option', () => {
     expect(triangleVerticesWithout).toBe(triangleVerticesWith);
   });
 
-  it.each([{ variant: 'single' }, { variant: 'single-exceptions' }])(
-    'should produce valid BRep edges with $variant WASM variant',
-    async ({ variant }) => {
-      const result = await createTestGeometry({
-        definition: replicadKernel,
-        files: { 'box.ts': boxCode },
-        mainFile: 'box.ts',
-        parameters: {},
-        options: { workerOptions: { wasm: variant, withBrepEdges: true } },
-      });
+  it('should produce valid BRep edges', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: { 'box.ts': boxCode },
+      mainFile: 'box.ts',
+      parameters: {},
+      options: { workerOptions: { wasm: 'single', withBrepEdges: true } },
+    });
 
-      assertSuccess(result);
-      const lineCount = await countLinePrimitives(result);
-      expect(lineCount).toBeGreaterThan(0);
-    },
-  );
+    assertSuccess(result);
+    const lineCount = await countLinePrimitives(result);
+    expect(lineCount).toBeGreaterThan(0);
+  });
 });
 
 // =============================================================================
@@ -4145,13 +4142,13 @@ describe.skip('Normal consistency', () => {
 // =============================================================================
 
 // Longer test suite for verifying opencascadejs bindings to replicad are all present.
-describe('Example models (single-exceptions)', () => {
+describe('Example models', () => {
   for (const fixture of exampleFixtures) {
     it(`should produce valid geometry for ${fixture.name}`, async () => {
       const result = await createGeometry({
         files: fixture.files,
         mainFile: fixture.mainFile,
-        options: { workerOptions: { wasm: 'single-exceptions' } },
+        options: { workerOptions: { wasm: 'single' } },
       });
 
       assertSuccess(result);

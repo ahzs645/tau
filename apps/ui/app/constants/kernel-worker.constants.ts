@@ -45,7 +45,6 @@ export const defaultKernelOptions = createRuntimeClientOptions({
 export const debugKernelOptions = createRuntimeClientOptions(defaultKernelOptions, {
   kernels: [
     replicad({
-      wasm: 'single-exceptions',
       withBrepEdges: true,
       withSourceMapping: true,
     }),
