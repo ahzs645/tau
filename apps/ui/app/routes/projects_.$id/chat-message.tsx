@@ -5,6 +5,10 @@ import { messageRole } from '@taucad/chat/constants';
 import type { UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { serializeMessage } from '#utils/chat.utils.js';
+import { parseInlineReferences } from '#utils/at-reference.utils.js';
+import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
+import { ContextChip } from '#components/chat/context-chip.js';
+import { defaultSkills } from '#components/chat/tiptap/slash-command-suggestion.js';
 import { ChatMessageReasoning } from '#routes/projects_.$id/chat-message-reasoning.js';
 import { ChatMessageDataUsage } from '#routes/projects_.$id/chat-message-data-usage.js';
 import { ChatMessageContextCompaction } from '#routes/projects_.$id/chat-message-context-compaction.js';
@@ -42,6 +46,94 @@ import { ChatMessagePartUnknown } from '#routes/projects_.$id/chat-message-tool-
 import { ChatMessageToolTransfer } from '#routes/projects_.$id/chat-message-tool-transfer.js';
 import { ChatMessageFile } from '#routes/projects_.$id/chat-message-file.js';
 import { ChatMessagePlanning } from '#routes/projects_.$id/chat-message-planning.js';
+
+const knownSkillIds = new Set(defaultSkills.map((s) => s.id));
+
+/**
+ * Split a line into chunks of `maxLen` characters without breaking `@path` or `/command` references.
+ * When a split point falls inside a reference, the chunk extends to include the full reference.
+ */
+function splitLinePreservingReferences(line: string, maxLength: number, out: string[]): void {
+  const segments = parseInlineReferences(line);
+  let currentChunk = '';
+
+  for (const segment of segments) {
+    const isAtomic = segment.type !== 'text';
+    const text =
+      segment.type === 'text'
+        ? segment.value
+        : segment.type === 'atReference'
+          ? `@${segment.path}`
+          : `/${segment.commandId}`;
+
+    if (currentChunk.length + text.length <= maxLength) {
+      currentChunk += text;
+    } else if (isAtomic) {
+      if (currentChunk.length > 0) {
+        out.push(currentChunk);
+        currentChunk = '';
+      }
+      currentChunk = text;
+    } else {
+      let remaining = text;
+      while (remaining.length > 0) {
+        const space = maxLength - currentChunk.length;
+        if (space <= 0) {
+          out.push(currentChunk);
+          currentChunk = '';
+          continue;
+        }
+        currentChunk += remaining.slice(0, space);
+        remaining = remaining.slice(space);
+        if (currentChunk.length >= maxLength) {
+          out.push(currentChunk);
+          currentChunk = '';
+        }
+      }
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    out.push(currentChunk);
+  }
+}
+
+function segmentKey(segment: ReturnType<typeof parseInlineReferences>[number], index: number): string {
+  if (segment.type === 'atReference') {
+    return `at-${segment.path}`;
+  }
+  if (segment.type === 'slashCommand') {
+    return `slash-${segment.commandId}`;
+  }
+  return `text-${index}`;
+}
+
+function TextWithAtReferences({ text }: { readonly text: string }): React.JSX.Element {
+  const segments = parseInlineReferences(text);
+  const hasReferences = segments.some((s) => s.type !== 'text');
+
+  if (!hasReferences) {
+    return <span>{text}</span>;
+  }
+
+  return (
+    <>
+      {segments.map((segment, i) => {
+        const key = segmentKey(segment, i);
+        if (segment.type === 'text') {
+          return <span key={key}>{segment.value}</span>;
+        }
+        if (segment.type === 'atReference') {
+          return <AtReferenceChip key={key} data-at-reference={segment.path} />;
+        }
+        if (knownSkillIds.has(segment.commandId)) {
+          return <ContextChip key={key} label={`/${segment.commandId}`} chipType='skill' />;
+        }
+        return <span key={key}>{`/${segment.commandId}`}</span>;
+      })}
+    </>
+  );
+}
 
 type ChatMessageProperties = {
   readonly messageId: string;
@@ -95,9 +187,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
           continue;
         }
 
-        for (let start = 0; start < line.length; start += 220) {
-          rows.push(line.slice(start, start + 220));
-        }
+        splitLinePreservingReferences(line, 220, rows);
       }
     }
 
@@ -132,7 +222,11 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
         return null;
       }
 
-      return <p className='text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-foreground/90'>{row}</p>;
+      return (
+        <p className='text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-foreground/90'>
+          <TextWithAtReferences text={row} />
+        </p>
+      );
     },
     [collapsedUserRows],
   );
@@ -368,7 +462,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               className='size-7'
             />
             <Tooltip>
-              <DropdownMenu>
+              <DropdownMenu modal={false}>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
                     <Button size='xs' variant='ghost' className='h-7 gap-1 has-[>svg]:px-1.5'>

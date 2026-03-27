@@ -197,33 +197,46 @@ export function useChatTextareaLogic({
     [mode, removeDraftImage, removeEditDraftImage],
   );
 
-  const handleSubmit = async (): Promise<void> => {
-    // If there is no text or images, do not submit
-    if ((inputText.trim().length === 0 && images.length === 0) || isSubmitting) {
+  // Refs for stable handleSubmit — prevents re-render cascades through memo'd children
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+  const isSubmittingRef = useRef(isSubmitting);
+  isSubmittingRef.current = isSubmitting;
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+  const selectedModelRef = useRef(selectedModel);
+  selectedModelRef.current = selectedModel;
+  const selectedToolChoiceRef = useRef(selectedToolChoice);
+  selectedToolChoiceRef.current = selectedToolChoice;
+  const selectedModeRef = useRef(selectedMode);
+  selectedModeRef.current = selectedMode;
+
+  const handleSubmit = useCallback(async (): Promise<void> => {
+    if ((inputTextRef.current.trim().length === 0 && imagesRef.current.length === 0) || isSubmittingRef.current) {
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // The useChat hook will handle cancelling any ongoing stream
-      await onSubmit({
-        content: inputText,
-        model: selectedModel?.id ?? '',
+      await onSubmitRef.current({
+        content: inputTextRef.current,
+        model: selectedModelRef.current?.id ?? '',
         metadata: {
-          toolChoice: selectedToolChoice,
-          mode: selectedMode,
+          toolChoice: selectedToolChoiceRef.current,
+          mode: selectedModeRef.current,
         },
-        imageUrls: images,
+        imageUrls: imagesRef.current,
       });
-      // Draft will be cleared by the machine's submit action
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, []);
 
-  const handleCancelClick = (): void => {
+  const handleCancelClick = useCallback((): void => {
     stop();
-  };
+  }, [stop]);
 
   // Register keyboard shortcut for cancellation
   const { formattedKeyCombination: formattedCancelKeyCombination } = useKeybinding(
@@ -235,37 +248,45 @@ export function useChatTextareaLogic({
     },
   );
 
-  const handleTextareaKeyDown = (event: React.KeyboardEvent): void => {
-    if (showContextMenu && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter')) {
-      // Let the ChatContextActions component handle these keys
-      return;
-    }
+  const showContextMenuRef = useRef(showContextMenu);
+  showContextMenuRef.current = showContextMenu;
+  const onEscapePressedRef = useRef(onEscapePressed);
+  onEscapePressedRef.current = onEscapePressed;
 
-    if (showContextMenu && event.key === 'Escape') {
-      // Close the context menu if it's open
-      event.preventDefault();
-      setShowContextMenu(false);
-      setAtSymbolPosition(-1);
-      setSelectedMenuIndex(0);
-      return;
-    }
+  const handleTextareaKeyDown = useCallback(
+    (event: React.KeyboardEvent): void => {
+      if (
+        showContextMenuRef.current &&
+        (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter')
+      ) {
+        return;
+      }
 
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void handleSubmit();
-    } else if (
-      event.key === 'Backspace' &&
-      textareaReference.current?.selectionStart === 0 &&
-      textareaReference.current.selectionEnd === 0 &&
-      images.length > 0
-    ) {
-      // Delete the last image when backspace is pressed at the beginning of the textarea
-      event.preventDefault();
-      removeImage(images.length - 1);
-    } else if (event.key === 'Escape') {
-      onEscapePressed?.();
-    }
-  };
+      if (showContextMenuRef.current && event.key === 'Escape') {
+        event.preventDefault();
+        setShowContextMenu(false);
+        setAtSymbolPosition(-1);
+        setSelectedMenuIndex(0);
+        return;
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        void handleSubmit();
+      } else if (
+        event.key === 'Backspace' &&
+        textareaReference.current?.selectionStart === 0 &&
+        textareaReference.current.selectionEnd === 0 &&
+        imagesRef.current.length > 0
+      ) {
+        event.preventDefault();
+        removeImage(imagesRef.current.length - 1);
+      } else if (event.key === 'Escape') {
+        onEscapePressedRef.current?.();
+      }
+    },
+    [handleSubmit, removeImage],
+  );
 
   const handleDragOver = useCallback((event: React.DragEvent): void => {
     event.preventDefault();
@@ -543,14 +564,11 @@ export function useChatTextareaLogic({
     };
   }, [showContextMenu]);
 
-  const handlePointerDown = (event: React.MouseEvent<HTMLDivElement>): void => {
-    // Only prevent default when clicking outside the textarea
-    // This allows cursor positioning within the textarea while preventing
-    // focus changes when clicking on the container padding/margins
+  const handlePointerDown = useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
     if (event.target !== textareaReference.current) {
       event.preventDefault();
     }
-  };
+  }, []);
 
   const handleTextareaBlur = useCallback((): void => {
     // Use requestAnimationFrame to check focus after the browser has finished

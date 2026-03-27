@@ -3,8 +3,12 @@ import type { ComponentProps } from 'react';
 import type { ControlsConfig, StreamdownProps } from 'streamdown';
 import { cn } from '#utils/ui.utils.js';
 import { defaultMarkdownControls, MarkdownViewer } from '#components/markdown/markdown-viewer.js';
+import { rehypeAtReferences } from '#components/markdown/rehype-at-references.js';
+import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
 
 const chatMarkdownControls: ControlsConfig = { ...defaultMarkdownControls, table: false };
+
+const chatRehypePlugins: StreamdownProps['rehypePlugins'] = [rehypeAtReferences];
 
 type HeadingTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 
@@ -56,6 +60,7 @@ export const MarkdownViewerChat = memo(function ({
   const memoizedComponents = useMemo(
     () => ({
       ...chatHeaderComponents,
+      mark: AtReferenceChip,
       ...components,
     }),
     [components],
@@ -67,6 +72,7 @@ export const MarkdownViewerChat = memo(function ({
       isStreaming={isStreaming}
       components={memoizedComponents}
       controls={chatMarkdownControls}
+      rehypePlugins={chatRehypePlugins}
     >
       {children}
     </MarkdownViewer>

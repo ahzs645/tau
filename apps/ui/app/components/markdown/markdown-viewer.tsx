@@ -44,15 +44,20 @@ export const MarkdownViewer = memo(function ({
   isStreaming = false,
   controls = defaultMarkdownControls,
   components,
+  rehypePlugins: additionalRehypePlugins,
   className,
 }: MarkdownViewerProps): React.JSX.Element {
-  // Memoize components object to prevent unnecessary re-renders
   const memoizedComponents = useMemo(
     () => ({
       ...defaultMarkdownComponents,
       ...components,
     }),
     [components],
+  );
+
+  const mergedRehypePlugins = useMemo(
+    () => (additionalRehypePlugins ? [...tauRehypePlugins, ...additionalRehypePlugins] : tauRehypePlugins),
+    [additionalRehypePlugins],
   );
 
   return (
@@ -69,7 +74,7 @@ export const MarkdownViewer = memo(function ({
         components={memoizedComponents}
         controls={controls}
         remarkPlugins={tauRemarkPlugins}
-        rehypePlugins={tauRehypePlugins}
+        rehypePlugins={mergedRehypePlugins}
         shikiTheme={['github-light', 'github-dark']}
       >
         {children}

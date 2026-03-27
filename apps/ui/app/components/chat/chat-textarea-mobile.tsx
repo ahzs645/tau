@@ -11,7 +11,6 @@ import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
 import { ChatContextActions } from '#components/chat/chat-context-actions.js';
-import { ChatTextareaContextMenu } from '#components/chat/chat-textarea-context-menu.js';
 import { ChatTextareaMobileImages } from '#components/chat/chat-textarea-mobile-images.js';
 import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-button.js';
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
@@ -359,21 +358,25 @@ export const ChatTextareaMobile = memo(function ({
         </div>
       </div>
 
-      {/* Context Menu */}
+      {/* Context Menu (inline popover for @ mentions) */}
       {showContextMenu ? (
-        <ChatTextareaContextMenu
-          searchQuery={contextSearchQuery}
-          selectedIndex={selectedMenuIndex}
-          onSelectedIndexChange={setSelectedMenuIndex}
-          onAddImage={handleContextImageAdd}
-          onAddText={handleContextMenuSelect}
-          onClose={() => {
-            setShowContextMenu(false);
-            setAtSymbolPosition(-1);
-            setContextSearchQuery('');
-            setSelectedMenuIndex(0);
-          }}
-        />
+        <div className='absolute bottom-full left-0 z-50 mb-1 w-full rounded-md border bg-popover p-1 shadow-md'>
+          <ChatContextActions
+            asPopoverMenu
+            searchQuery={contextSearchQuery}
+            selectedIndex={selectedMenuIndex}
+            onSelectedIndexChange={setSelectedMenuIndex}
+            addImage={handleContextImageAdd}
+            addText={handleContextMenuSelect}
+            onSelectItem={handleContextMenuSelect}
+            onClose={() => {
+              setShowContextMenu(false);
+              setAtSymbolPosition(-1);
+              setContextSearchQuery('');
+              setSelectedMenuIndex(0);
+            }}
+          />
+        </div>
       ) : null}
 
       {/* Drag and drop feedback */}
