@@ -15,6 +15,7 @@ import type { Environment } from '#config/environment.config.js';
 @Injectable()
 export class CheckpointerService implements OnModuleInit, OnModuleDestroy {
   private checkpointer!: PostgresSaver;
+  private destroyed = false;
 
   public constructor(private readonly configService: ConfigService<Environment, true>) {}
 
@@ -24,9 +25,14 @@ export class CheckpointerService implements OnModuleInit, OnModuleDestroy {
       schema: 'langgraph',
     });
     await this.checkpointer.setup();
+    this.destroyed = false;
   }
 
   public async onModuleDestroy(): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
     await this.checkpointer.end();
   }
 

@@ -32,10 +32,12 @@ Stop after creating the plan. Do not begin implementation until the user approve
  * Follows context-engineering.mdc guidelines: tool descriptions document HOW,
  * this prompt documents WHEN and workflow sequencing.
  */
+// oxlint-disable-next-line max-params -- Parameters match independent concerns (kernel, mode, testing, options)
 export async function getCadSystemPrompt(
   kernel: KernelProvider,
   mode: ChatMode = 'agent',
   testingEnabled = true,
+  options: { chatId?: string } = {},
 ): Promise<string> {
   const config = getKernelConfig(kernel);
 
@@ -121,5 +123,18 @@ ${config.canonicalExample}
 
 <research_capabilities>
 Use \`${toolName.webSearch}\` for external information, then \`${toolName.webBrowser}\` for full page content if needed.
-</research_capabilities>${modeSection}`;
+</research_capabilities>
+
+<transcript_search>
+Your conversation transcript is stored at \`.tau/transcripts/${options.chatId ?? '{chatId}'}.jsonl\`.
+Each line is a JSON object with a \`role\` field ("user", "assistant", "tool", or "compaction").
+
+When you need to recall earlier context from the current conversation:
+1. **Grep first**: Search for keywords (task names, file paths, error messages, tool names)
+2. **Read a window**: Read 5–10 lines around each match to reconstruct context
+3. **Never scan linearly**: Transcript files can be large; do not read end-to-end
+
+Full user and assistant message text is available for keyword search.
+Tool results are stored as metadata only (name + content length, not full output).
+</transcript_search>${modeSection}`;
 }

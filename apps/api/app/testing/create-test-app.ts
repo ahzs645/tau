@@ -23,6 +23,7 @@ import { authInstanceKey } from '#constants/auth.constant.js';
 import { MetricsService } from '#telemetry/metrics.js';
 import { TracerService } from '#telemetry/tracer.service.js';
 import { CompactionService } from '#api/chat/compaction.service.js';
+import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
 import { HeadlessChatRpcService } from '#testing/headless-chat-rpc.service.js';
 import { createHeadlessRpcFileSystem } from '#testing/headless-rpc-filesystem.js';
 import { createHeadlessRuntimeClient } from '#testing/headless-runtime-client.js';
@@ -77,6 +78,7 @@ const mockAuthInstance = {
     TracerService,
     CheckpointerService,
     CompactionService,
+    TauRpcBackendFactory,
     { provide: authInstanceKey, useValue: mockAuthInstance },
     { provide: APP_PIPE, useClass: ZodValidationPipe },
   ],

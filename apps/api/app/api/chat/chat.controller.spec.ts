@@ -220,6 +220,7 @@ describe('ChatController', () => {
 
       // Assert
       expect(chatService.createAgent).toHaveBeenCalledWith({
+        chatId: 'chat_123',
         modelId: 'test-model',
         kernel: 'openscad',
         mode: 'agent',
@@ -260,6 +261,7 @@ describe('ChatController', () => {
 
       // Assert
       expect(chatService.createAgent).toHaveBeenCalledWith({
+        chatId: 'chat_tool_choice',
         modelId: 'test-model',
         kernel: 'openscad',
         mode: 'agent',

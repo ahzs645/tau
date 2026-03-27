@@ -4,7 +4,7 @@ import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { UIMessageChunk } from 'ai';
 import type { FastifyReply } from 'fastify';
 import type { ReactAgent } from 'langchain';
-import type { ToolSelection, ChatSnapshot } from '@taucad/chat';
+import type { ToolSelection, ChatSnapshot, ContextPayload } from '@taucad/chat';
 import type { KernelProvider } from '@taucad/runtime';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -32,6 +32,7 @@ type ChatRequestConfig = {
   modelId: string;
   kernel: KernelProvider;
   snapshot: ChatSnapshot | undefined;
+  contextPayload: ContextPayload | undefined;
   mode: 'agent' | 'plan';
   tools: {
     choice: ToolSelection;
@@ -59,7 +60,7 @@ export class ChatController {
   public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
-    const { modelId, kernel, snapshot, mode, tools } = this.extractRequestConfig(body);
+    const { modelId, kernel, snapshot, contextPayload, mode, tools } = this.extractRequestConfig(body);
 
     // Handle simple model streams (name generator, commit generator).
     // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages.
@@ -76,7 +77,7 @@ export class ChatController {
     }
 
     const langchainMessages = await this.prepareMessages(body.messages, snapshot);
-    const agent = await this.chatService.createAgent({ modelId, kernel, mode, tools });
+    const agent = await this.chatService.createAgent({ chatId: body.id, modelId, kernel, mode, tools, contextPayload });
 
     return this.streamAgentResponse({
       chatId: body.id,
@@ -141,6 +142,7 @@ export class ChatController {
           streamMode: ['values', 'messages', 'custom'],
           callbacks: [ttftHandler],
           context: {
+            chatId,
             modelId,
             modelService: this.modelService,
             logger: this.logger,
@@ -207,6 +209,7 @@ export class ChatController {
       modelId: messageModel,
       kernel: lastHumanMessage.metadata?.kernel ?? 'openscad',
       snapshot: lastHumanMessage.metadata?.snapshot,
+      contextPayload: lastHumanMessage.metadata?.contextPayload,
       mode: lastHumanMessage.metadata?.mode ?? 'agent',
       tools: {
         choice: lastHumanMessage.metadata?.toolChoice ?? 'auto',

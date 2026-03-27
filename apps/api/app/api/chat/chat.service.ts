@@ -5,7 +5,7 @@ import type { ReactAgent } from 'langchain';
 import { streamText } from 'ai';
 import type { ModelMessage } from 'ai';
 import type { KernelProvider } from '@taucad/runtime';
-import type { ToolSelection } from '@taucad/chat';
+import type { ToolSelection, ContextPayload } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';
 import { createUsageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
@@ -25,8 +25,14 @@ import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.mid
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
 import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
 import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
+import { createToolOffloadingMiddleware } from '#api/chat/middleware/tool-offloading.middleware.js';
+import { createTranscriptMiddleware } from '#api/chat/middleware/transcript.middleware.js';
+import { createContextUsageMiddleware } from '#api/chat/middleware/context-usage.middleware.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 import { CompactionService } from '#api/chat/compaction.service.js';
+import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
+import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
+import { createClientContextMiddleware } from '#api/chat/middleware/client-context.middleware.js';
 import { Span } from '#telemetry/tracer.service.js';
 
 @Injectable()
@@ -37,10 +43,13 @@ export class ChatService {
     private readonly checkpointerService: CheckpointerService,
     private readonly metricsService: MetricsService,
     private readonly compactionService: CompactionService,
+    private readonly rpcBackendFactory: TauRpcBackendFactory,
+    private readonly chatRpcService: ChatRpcService,
   ) {}
 
   @Span()
   public async createAgent(options: {
+    chatId: string;
     modelId: string;
     kernel: KernelProvider;
     mode?: ChatMode;
@@ -48,8 +57,9 @@ export class ChatService {
       choice: ToolSelection;
       testingEnabled?: boolean;
     };
+    contextPayload?: ContextPayload;
   }): Promise<ReactAgent> {
-    const { modelId, kernel, mode = 'agent' } = options;
+    const { chatId, modelId, kernel, mode = 'agent', contextPayload } = options;
     const { choice, testingEnabled = true } = options.tools;
     const { tools } = this.toolService.getTools(choice);
 
@@ -96,7 +106,7 @@ export class ChatService {
     // strategy ensures the stable system prompt is cached separately from
     // the dynamic conversation, maximizing cache hits.
     // ==========================================================================
-    const systemPromptText = await getCadSystemPrompt(kernel, mode, testingEnabled);
+    const systemPromptText = await getCadSystemPrompt(kernel, mode, testingEnabled, { chatId });
     const systemPrompt = createCachedSystemMessage(systemPromptText);
 
     const agent = createAgent({
@@ -108,7 +118,9 @@ export class ChatService {
         // --- Metrics and error handling ---
         createToolMetricsMiddleware(this.metricsService),
         toolErrorHandlerMiddleware,
-        // Trim tool results (e.g., remove base64 images) before sending to the LLM
+
+        // --- Context prevention (offload large tool results before trimming) ---
+        createToolOffloadingMiddleware(this.rpcBackendFactory),
         toolResultTrimmerMiddleware,
 
         // --- Context compaction ---
@@ -123,12 +135,16 @@ export class ChatService {
 
         // --- Logging and observability ---
         messageLoggingMiddleware,
-        // Measure LLM operation duration and time-to-first-token
         createLlmTimingMiddleware(this.metricsService),
-        // Count agent loop iterations per request
         createAgentIterationsMiddleware(this.metricsService),
-        // Track token usage and costs after each model call
         createUsageTrackingMiddleware(this.metricsService),
+        createContextUsageMiddleware(),
+
+        // --- Transcript (captures final state) ---
+        createTranscriptMiddleware(this.chatRpcService),
+
+        // --- Client-side context injection (skills catalog + AGENTS.md memory) ---
+        createClientContextMiddleware(contextPayload),
       ],
     });
 
