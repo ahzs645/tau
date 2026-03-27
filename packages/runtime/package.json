@@ -310,7 +310,7 @@
     "esbuild-wasm": "catalog:",
     "json-schema-default": "catalog:",
     "manifold-3d": "catalog:",
-    "opencascade.js": "file:../../tarballs/opencascade.js-2.0.0-beta.b5ff984.tgz",
+    "opencascade.js": "file:../../tarballs/opencascade.js-3.0.0-beta.fdd1879.tgz",
     "openscad-wasm-prebuilt": "catalog:",
     "replicad": "file:../../tarballs/replicad-0.21.0-v8.39.tgz",
     "replicad-opencascadejs": "file:../../tarballs/replicad-opencascadejs-0.21.0-v8.39.tgz",

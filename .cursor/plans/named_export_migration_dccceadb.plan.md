@@ -371,16 +371,16 @@ No longer returns `OpenCascadeInstance` -- the module namespace object IS the in
 Update all ~14 inline code strings from:
 
 ```typescript
-`import oc from 'opencascade';\nexport default function main() { return new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`
+`import oc from 'opencascade.js';\nexport default function main() { return new oc.BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`
 ```
 
 to:
 
 ```typescript
-`import { BRepPrimAPI_MakeBox_2 } from 'opencascade';\nexport default function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`
+`import { BRepPrimAPI_MakeBox_2 } from 'opencascade.js';\nexport default function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`
 ```
 
-Also update the `require('opencascade')` CJS test case.
+Also update the `require('opencascade.js')` CJS test case.
 
 ### 9b. Prompt example
 

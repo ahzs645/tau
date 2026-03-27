@@ -117,14 +117,13 @@ function getModuleRegistry(): Map<string, Record<string, unknown>> {
 function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void {
   const registry = getModuleRegistry();
   const ocRecord = oc as Record<string, unknown>;
-  registry.set('opencascade', ocRecord);
+  registry.set('opencascade.js', ocRecord);
 
   const exportNames = Object.keys(ocRecord).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
-  const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('opencascade');\n${namedExports}\nexport default function init() {}\n`;
+  const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('opencascade.js');\n${namedExports}\nexport default function init() {}\n`;
 
-  runtime.bundler.registerModule('opencascade', { code, version: '2.0.0' });
-  runtime.bundler.registerModule('opencascade.js', { code, version: '2.0.0' });
+  runtime.bundler.registerModule('opencascade.js', { code, version: '3.0.0' });
 }
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -408,7 +407,7 @@ export default defineKernel({
         const filePath = `/tmp/export_${Date.now()}.stl`;
         const writer = new oc.StlAPI_Writer();
         const progress = new oc.Message_ProgressRange();
-        writer.Write_1(entry.shape, filePath, progress);
+        writer.Write(entry.shape, filePath, progress);
         const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
         const data = new Uint8Array(rawData);
         oc.FS.unlink(filePath);

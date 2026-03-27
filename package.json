@@ -195,7 +195,7 @@
     "nestjs-zod": "^5.1.1",
     "ollama": "^0.5.18",
     "openai": "^4.104.0",
-    "opencascade.js": "file:tarballs/opencascade.js-2.0.0-beta.b5ff984.tgz",
+    "opencascade.js": "file:tarballs/opencascade.js-3.0.0-beta.fdd1879.tgz",
     "openscad-wasm-prebuilt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",

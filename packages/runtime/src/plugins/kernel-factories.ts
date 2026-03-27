@@ -71,8 +71,8 @@ export const opencascade = createKernelPlugin<OpenCascadeOptions>({
   id: 'opencascade',
   moduleUrl: new URL('../kernels/opencascade/opencascade.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
-  detectImport: /import.*from\s+["']opencascade(\.js)?["']/s,
-  builtinModuleNames: ['opencascade', 'opencascade.js'],
+  detectImport: /import.*from\s+["']opencascade\.js["']/s,
+  builtinModuleNames: ['opencascade.js'],
 });
 
 /**

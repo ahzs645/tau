@@ -45,7 +45,7 @@ export function meshShapesToGltf(
   shapes: ShapeEntry[],
   options: MeshOptions,
 ): Uint8Array<ArrayBuffer> {
-  const documentName = new oc.TCollection_ExtendedString_1();
+  const documentName = new oc.TCollection_ExtendedString();
   const document = new oc.TDocStd_Document(documentName);
   const mainLabel = document.Main();
   const shapeTool = oc.XCAFDoc_DocumentTool.ShapeTool(mainLabel);
@@ -72,8 +72,8 @@ export function meshShapesToGltf(
 
     if (entry.color) {
       const [r, g, b] = parseHexColor(entry.color);
-      const color = new oc.Quantity_Color_3(r, g, b, oc.Quantity_TypeOfColor.Quantity_TOC_sRGB);
-      colorTool.SetColor_2(label, color, oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
+      const color = new oc.Quantity_Color(r, g, b, oc.Quantity_TypeOfColor.Quantity_TOC_sRGB);
+      colorTool.SetColor(label, color, oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
       color.delete();
     }
 
@@ -81,14 +81,14 @@ export function meshShapesToGltf(
   }
 
   const outputPath = `/tmp/export_${Date.now()}.glb`;
-  const writerPath = new oc.TCollection_AsciiString_3(outputPath);
+  const writerPath = new oc.TCollection_AsciiString(outputPath);
   const writer = new oc.RWGltf_CafWriter(writerPath, true);
 
   const converter = new oc.RWMesh_CoordinateSystemConverter();
   converter.SetInputLengthUnit(0.001);
-  converter.SetInputCoordinateSystem_2(oc.RWMesh_CoordinateSystem.RWMesh_CoordinateSystem_Zup);
+  converter.SetInputCoordinateSystem(oc.RWMesh_CoordinateSystem.RWMesh_CoordinateSystem_Zup);
   converter.SetOutputLengthUnit(1);
-  converter.SetOutputCoordinateSystem_2(oc.RWMesh_CoordinateSystem.RWMesh_CoordinateSystem_glTF);
+  converter.SetOutputCoordinateSystem(oc.RWMesh_CoordinateSystem.RWMesh_CoordinateSystem_glTF);
   writer.SetCoordinateSystemConverter(converter);
 
   const progress = new oc.Message_ProgressRange();

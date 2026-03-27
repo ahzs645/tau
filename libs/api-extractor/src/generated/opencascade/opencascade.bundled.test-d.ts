@@ -14,12 +14,11 @@ import type {
   OpenCascadeInstance,
 } from 'opencascade.js';
 import type initOC from 'opencascade.js';
-import type initAlias from 'opencascade';
 
 describe('opencascade.js module resolution', () => {
   it('default export is an init function returning Promise<OpenCascadeInstance>', () => {
     expectTypeOf<typeof initOC>().toBeFunction();
-    expectTypeOf<ReturnType<typeof initOC>>().toMatchTypeOf<Promise<OpenCascadeInstance>>();
+    expectTypeOf<ReturnType<typeof initOC>>().toEqualTypeOf<Promise<OpenCascadeInstance>>();
   });
 
   it('exports key OCCT class types', () => {
@@ -43,12 +42,5 @@ describe('opencascade.js module resolution', () => {
     expectTypeOf<gp_Pnt>().toHaveProperty(Symbol.dispose);
     expectTypeOf<BRepPrimAPI_MakeBox>().toHaveProperty(Symbol.dispose);
     expectTypeOf<TopoDS_Shape>().toHaveProperty(Symbol.dispose);
-  });
-});
-
-describe('opencascade alias module resolution', () => {
-  it('alias default export resolves to the same init function', () => {
-    expectTypeOf<typeof initAlias>().toBeFunction();
-    expectTypeOf<typeof initAlias>().toEqualTypeOf<typeof initOC>();
   });
 });
